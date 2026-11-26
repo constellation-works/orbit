@@ -102,37 +102,6 @@ const CLI_OPTIONS_PARAM: ParamSpec = ParamSpec {
     cli: None,
 };
 
-const fn flag_with_delimiter(
-    long: &'static str,
-    aliases: &'static [&'static str],
-    value_name: Option<&'static str>,
-) -> CliArgKind {
-    CliArgKind::Flag {
-        long,
-        delimiter: Some(','),
-        aliases,
-        visible_aliases: &[],
-        value_name,
-        multiple: false,
-    }
-}
-
-const fn flag_named(long: &'static str, value_name: &'static str) -> CliArgKind {
-    CliArgKind::Flag {
-        long,
-        delimiter: None,
-        aliases: &[],
-        visible_aliases: &[],
-        value_name: Some(value_name),
-        multiple: false,
-    }
-}
-
-const fn path(mut param: ParamSpec) -> ParamSpec {
-    param.redact = Redaction::Path;
-    param
-}
-
 /// `not_before` on `orbit.task.add`.
 const NOT_BEFORE_MCP_HELP: &str = "Earliest start (RFC 3339).";
 
@@ -156,7 +125,6 @@ pub(super) const ADD: TaskOperation = TaskOperation {
     tool_description: "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-*.md` references.",
     cli_about: "Create a new task",
     cli_help: CliHelp {
-        constraints: &[],
         long_about: None,
         after_help: Some(
             "Status, grant, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields-*.md` references.",
@@ -187,6 +155,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             "origin",
             "model",
         ],
+        constraints: &[],
     },
     effect: Effect::Write,
     params: &[
@@ -417,7 +386,6 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
     tool_description: "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-*.md` references.",
     cli_about: "Update task fields, or take the next approval step with `--approve` (proposed -> backlog, review -> done)",
     cli_help: CliHelp {
-        constraints: &[],
         long_about: None,
         after_help: Some(
             "Lifecycle, override, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields-projections.md` (Human CLI task update).",
@@ -459,6 +427,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             "allow_drop_system_tags",
             "repilot",
         ],
+        constraints: &[],
     },
     effect: Effect::Write,
     params: &[
@@ -737,3 +706,34 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Task,
 };
+
+const fn flag_with_delimiter(
+    long: &'static str,
+    aliases: &'static [&'static str],
+    value_name: Option<&'static str>,
+) -> CliArgKind {
+    CliArgKind::Flag {
+        long,
+        delimiter: Some(','),
+        aliases,
+        visible_aliases: &[],
+        value_name,
+        multiple: false,
+    }
+}
+
+const fn flag_named(long: &'static str, value_name: &'static str) -> CliArgKind {
+    CliArgKind::Flag {
+        long,
+        delimiter: None,
+        aliases: &[],
+        visible_aliases: &[],
+        value_name: Some(value_name),
+        multiple: false,
+    }
+}
+
+const fn path(mut param: ParamSpec) -> ParamSpec {
+    param.redact = Redaction::Path;
+    param
+}

@@ -64,6 +64,326 @@ pub struct GenerationUpdate {
     pub(super) admission: Record,
 }
 
+impl GenerationUpdate {
+    /// Refuse before installation/resource/store writes if a long-lived
+    /// process is live or a generation switch is pending. Short-lived
+    /// participants are waited for, up to [`quiesce_bound`].
+    pub fn acquire(env: &crate::Env, root: &Path) -> Result<Self, OrbitError> {
+        let (update, handover) = Self::admit(quiesce_bound(env), root, None, None)?;
+        debug_assert!(handover.is_empty(), "no candidate, so nothing hands over");
+        Ok(update)
+    }
+
+    /// Admit an updater that renames nothing and re-pins `installed`: as
+    /// [`Self::acquire`], except that a long-lived participant already
+    /// running exactly that digest and compatibility identity, with a resume
+    /// capability, is admitted beside and named in
+    /// [`CurrentAdmission::current`]. Any other long-lived participant, one
+    /// that never registered, or a pending switch still refuses.
+    ///
+    /// When any is admitted beside, a pending refresh is recorded under the
+    /// exclusive admission: those participants hand over to the installed
+    /// executable at their next idle boundary, and every other newcomer of
+    /// another identity is refused while it stands.
+    pub fn acquire_current(
+        env: &crate::Env,
+        root: &Path,
+        installed: &InstalledGeneration<'_>,
+    ) -> Result<CurrentAdmission, OrbitError> {
+        let (update, current) = Self::admit(quiesce_bound(env), root, None, Some(installed))?;
+        let refresh = match (current.is_empty(), installed.identity) {
+            (false, Some(identity)) => {
+                let bound = update.bound;
+                let requested_at = chrono::Utc::now();
+                let switch = PendingSwitch {
+                    pid: std::process::id(),
+                    role: ParticipantRole::Command,
+                    digest: installed.digest.to_string(),
+                    target: identity.clone(),
+                    requested_at,
+                    deadline: chrono::Duration::from_std(bound)
+                        .ok()
+                        .and_then(|bound| requested_at.checked_add_signed(bound))
+                        .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
+                    refresh: true,
+                };
+                Some(registry::claim_pending(&update.root, &switch)?)
+            }
+            _ => None,
+        };
+        Ok(CurrentAdmission {
+            update,
+            digest: installed.digest.to_string(),
+            current,
+            refresh,
+        })
+    }
+
+    /// Admit an installer that will rename `candidate` over the executable:
+    /// as [`Self::acquire`], except that a long-lived participant registered
+    /// with a resume capability the candidate reports is admitted beside,
+    /// and named in [`CandidateAdmission::handover`].
+    pub fn acquire_for_candidate(
+        env: &crate::Env,
+        root: &Path,
+        candidate: &HandoverCandidate,
+    ) -> Result<CandidateAdmission, OrbitError> {
+        let (update, handover) = Self::admit(quiesce_bound(env), root, Some(candidate), None)?;
+        Ok(CandidateAdmission { update, handover })
+    }
+
+    /// Take exclusive admission and then the generation lock, unless every
+    /// live participant will hand over to `candidate`, or already runs
+    /// `installed`. Returns those participants; when it is empty, the
+    /// generation is held exclusively.
+    fn admit(
+        bound: Duration,
+        root: &Path,
+        candidate: Option<&HandoverCandidate>,
+        installed: Option<&InstalledGeneration<'_>>,
+    ) -> Result<(Self, Vec<ParticipantRecord>), OrbitError> {
+        // New joiners queue behind this from here on, so the participants
+        // already live are the only ones left to wait for.
+        let admission = admission(root, Admission::Exclusive, bound, None)?;
+        refuse_pending_switch(root)?;
+        let mut generation = open(root, GENERATION_LOCK)?;
+        let handover = quiesce_holders(bound, root, &generation, candidate, installed)?;
+        read_generation(&mut generation.file)?;
+        Ok((
+            Self {
+                bound,
+                root: validated_generation_root(root)?,
+                generation,
+                admission,
+            },
+            handover,
+        ))
+    }
+
+    /// Turn the updater's own unregistered `pin` on `root` into exclusive
+    /// admission and an exclusive generation lock: the same fence
+    /// [`Self::acquire`] takes, without the updater's pin counting as a holder
+    /// against it.
+    ///
+    /// Exclusive admission is taken first, so no process joins between the
+    /// pin's release and the exclusive generation lock, and the record keeps
+    /// naming the pinned generation throughout. Every other live holder is
+    /// judged as [`Self::acquire`] judges it: a short-lived one is waited for,
+    /// a long-lived one or one that never registered refuses. On refusal the
+    /// generation is pinned again, shared, before admission is released, and
+    /// the restored pin is returned in the [`FenceRefusal`].
+    pub fn fence_pinned(
+        env: &crate::Env,
+        root: &Path,
+        pin: GenerationGuard,
+    ) -> Result<Self, Box<FenceRefusal>> {
+        let bound = quiesce_bound(env);
+        let admission = match admission(root, Admission::Exclusive, bound, None) {
+            Ok(admission) => admission,
+            Err(error) => return Err(FenceRefusal::boxed(Some(pin), error)),
+        };
+        if let Err(error) = refuse_pending_switch(root) {
+            return Err(FenceRefusal::boxed(Some(pin), error));
+        }
+        let (generation, validated) = match open(root, GENERATION_LOCK).and_then(|generation| {
+            validated_generation_root(root).map(|validated| (generation, validated))
+        }) {
+            Ok(opened) => opened,
+            Err(error) => return Err(FenceRefusal::boxed(Some(pin), error)),
+        };
+        // Nobody joins while admission is exclusive, so releasing the pin
+        // here leaves no gap a newcomer could use.
+        drop(pin);
+        match quiesce_holders(bound, root, &generation, None, None).and_then(|beside| {
+            // Without a candidate or an installed generation nothing stands
+            // beside the updater, so an empty set means the lock is held.
+            beside
+                .is_empty()
+                .then_some(())
+                .ok_or_else(|| holders_refused(&beside, None))
+        }) {
+            Ok(()) => Ok(Self {
+                bound,
+                root: validated,
+                generation,
+                admission,
+            }),
+            Err(error) => {
+                let restored = FileExt::try_lock_shared(&generation.file)
+                    .is_ok()
+                    .then(|| GenerationGuard::holding(generation, false));
+                drop(admission);
+                Err(FenceRefusal::boxed(restored, error))
+            }
+        }
+    }
+
+    /// Refuse while a generation switch is pending on this authority.
+    pub(super) fn refuse_pending_switch(&self) -> Result<(), OrbitError> {
+        refuse_pending_switch(&self.root)
+    }
+
+    /// Whether this process still holds both locks of this admission
+    /// exclusively. Taking an exclusive lock its own open description already
+    /// holds succeeds at once; on a description that lost it, it succeeds only
+    /// when nobody else holds the lock, and then holds it again.
+    pub fn ensure_still_exclusive(&self) -> Result<(), OrbitError> {
+        FileExt::try_lock_exclusive(&self.admission.file)
+            .and_then(|()| FileExt::try_lock_exclusive(&self.generation.file))
+            .map_err(|error| {
+                refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, format!(
+                    "the update's exclusive hold on this generation authority was lost while it \
+                     was lent to a convergence step ({error})"
+                ))
+            })
+    }
+}
+
+impl GenerationUpdate {
+    /// Take the generation exclusively once every participant admitted beside
+    /// this update has released it. Nobody joins meanwhile, so the live set
+    /// only shrinks.
+    fn await_handover(&self) -> Result<(), OrbitError> {
+        let bound = self.bound;
+        let deadline = Instant::now() + bound;
+        loop {
+            if FileExt::try_lock_exclusive(&self.generation.file).is_ok() {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                let live = registry::live_participants(&self.root, None, false);
+                return Err(handover_outlasted(bound, &live));
+            }
+            std::thread::sleep(SETTLE_POLL);
+        }
+    }
+
+    /// Take the generation exclusively once every participant admitted beside
+    /// an updater that renames nothing has handed over in place. Nobody joins
+    /// meanwhile, so the live set only shrinks; once it is empty and no
+    /// record is releasing, a hold that outlasts a joiner's probe belongs to
+    /// a process that never registered, and refuses at once.
+    fn await_refresh(&self, current: &[ParticipantRecord]) -> Result<(), OrbitError> {
+        let bound = self.bound;
+        let deadline = Instant::now() + bound;
+        let mut unregistered_since = None;
+        loop {
+            if FileExt::try_lock_exclusive(&self.generation.file).is_ok() {
+                return Ok(());
+            }
+            let live = registry::live_participants(&self.root, None, false);
+            if live.is_empty() && !registry::releasing(&self.root) {
+                let since = *unregistered_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= PROBE_SETTLE {
+                    return Err(holders_refused(&[], None));
+                }
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+            unregistered_since = None;
+            if Instant::now() >= deadline {
+                return Err(refresh_outlasted(bound, current, &live));
+            }
+            std::thread::sleep(SETTLE_POLL);
+        }
+    }
+
+    /// Refuse an admission that could never record a candidate generation.
+    ///
+    /// [`Self::pin`] repeats this check, but an updater only reaches `pin`
+    /// after it has already replaced the executable. A caller that admits
+    /// against several authorities asks each of them this up front, so a root
+    /// whose record is read-only refuses the run while nothing is staged.
+    pub fn ensure_can_record(&self) -> Result<(), OrbitError> {
+        if self.generation.writable {
+            return Ok(());
+        }
+        Err(refusal::upgrade_admission_unwritable(
+            UpgradeAdmissionRefusalKind::Other,
+            "this authority's generation record cannot be written from here, so a \
+             candidate generation could never be recorded there",
+        ))
+    }
+
+    /// After replacement, pin the candidate through convergence. Old pinned
+    /// executables cannot enter between the updater and its candidate children.
+    ///
+    /// `identity` is the candidate's reported compatibility; with it, other
+    /// compatible builds may join once the updater releases its pin. Without
+    /// it (a candidate that only speaks `executable-generation-v1`) the record
+    /// admits only that digest.
+    pub fn pin(
+        self,
+        digest: &str,
+        identity: Option<&CompatibilityIdentity>,
+    ) -> Result<GenerationGuard, OrbitError> {
+        self.pin_as(
+            digest,
+            identity.map(|identity| (identity, Access::Write)),
+            None,
+        )
+    }
+
+    /// Record `digest` (and, with it, the envelope of `identity`) and hold
+    /// the generation shared, registering `participant` before admission is
+    /// released.
+    pub(super) fn pin_as(
+        mut self,
+        digest: &str,
+        identity: Option<(&CompatibilityIdentity, Access)>,
+        participant: Option<&Participant<'_>>,
+    ) -> Result<GenerationGuard, OrbitError> {
+        if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(refusal::upgrade_admission_refusal(
+                UpgradeAdmissionRefusalKind::Other,
+                "invalid executable digest",
+            ));
+        }
+        if !self.generation.writable {
+            // Admitting here would leave joiners reading a record that names
+            // a generation other than the one actually running.
+            return Err(refusal::upgrade_admission_unwritable(
+                UpgradeAdmissionRefusalKind::Other,
+                "this executable generation differs from the recorded one and the record \
+                 cannot be written from here",
+            ));
+        }
+        if let Some((identity, access)) = identity {
+            // Before the record: a crash in between leaves a compat record
+            // naming a digest the record does not, which reads as absent.
+            write_compat(&self.root, digest, &Envelope::of(identity, access))?;
+        }
+        self.generation
+            .file
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| {
+                refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+            })?;
+        self.generation
+            .file
+            .write_all(format!("1:{digest}\n").as_bytes())
+            .map_err(|error| {
+                refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+            })?;
+        self.generation.file.set_len(67).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
+        crate::fs::io::sync_file(&self.generation.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
+        FileExt::lock_shared(&self.generation.file).map_err(|error| {
+            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
+        })?;
+        let guard = GenerationGuard::holding(self.generation, false);
+        let guard = match participant {
+            Some(participant) => guard.registered(&self.root, participant),
+            None => guard,
+        };
+        drop(self.admission);
+        Ok(guard)
+    }
+}
+
 /// Exclusive admission for an installer that renames `candidate` over the
 /// executable: every live participant either exited or will hand over to
 /// the candidate once it is installed. It reserves nothing after it drops.
@@ -234,181 +554,6 @@ pub(super) fn standing(
     }
 }
 
-impl GenerationUpdate {
-    /// Refuse before installation/resource/store writes if a long-lived
-    /// process is live or a generation switch is pending. Short-lived
-    /// participants are waited for, up to [`quiesce_bound`].
-    pub fn acquire(env: &crate::Env, root: &Path) -> Result<Self, OrbitError> {
-        let (update, handover) = Self::admit(quiesce_bound(env), root, None, None)?;
-        debug_assert!(handover.is_empty(), "no candidate, so nothing hands over");
-        Ok(update)
-    }
-
-    /// Admit an updater that renames nothing and re-pins `installed`: as
-    /// [`Self::acquire`], except that a long-lived participant already
-    /// running exactly that digest and compatibility identity, with a resume
-    /// capability, is admitted beside and named in
-    /// [`CurrentAdmission::current`]. Any other long-lived participant, one
-    /// that never registered, or a pending switch still refuses.
-    ///
-    /// When any is admitted beside, a pending refresh is recorded under the
-    /// exclusive admission: those participants hand over to the installed
-    /// executable at their next idle boundary, and every other newcomer of
-    /// another identity is refused while it stands.
-    pub fn acquire_current(
-        env: &crate::Env,
-        root: &Path,
-        installed: &InstalledGeneration<'_>,
-    ) -> Result<CurrentAdmission, OrbitError> {
-        let (update, current) = Self::admit(quiesce_bound(env), root, None, Some(installed))?;
-        let refresh = match (current.is_empty(), installed.identity) {
-            (false, Some(identity)) => {
-                let bound = update.bound;
-                let requested_at = chrono::Utc::now();
-                let switch = PendingSwitch {
-                    pid: std::process::id(),
-                    role: ParticipantRole::Command,
-                    digest: installed.digest.to_string(),
-                    target: identity.clone(),
-                    requested_at,
-                    deadline: chrono::Duration::from_std(bound)
-                        .ok()
-                        .and_then(|bound| requested_at.checked_add_signed(bound))
-                        .unwrap_or(chrono::DateTime::<chrono::Utc>::MAX_UTC),
-                    refresh: true,
-                };
-                Some(registry::claim_pending(&update.root, &switch)?)
-            }
-            _ => None,
-        };
-        Ok(CurrentAdmission {
-            update,
-            digest: installed.digest.to_string(),
-            current,
-            refresh,
-        })
-    }
-
-    /// Admit an installer that will rename `candidate` over the executable:
-    /// as [`Self::acquire`], except that a long-lived participant registered
-    /// with a resume capability the candidate reports is admitted beside,
-    /// and named in [`CandidateAdmission::handover`].
-    pub fn acquire_for_candidate(
-        env: &crate::Env,
-        root: &Path,
-        candidate: &HandoverCandidate,
-    ) -> Result<CandidateAdmission, OrbitError> {
-        let (update, handover) = Self::admit(quiesce_bound(env), root, Some(candidate), None)?;
-        Ok(CandidateAdmission { update, handover })
-    }
-
-    /// Take exclusive admission and then the generation lock, unless every
-    /// live participant will hand over to `candidate`, or already runs
-    /// `installed`. Returns those participants; when it is empty, the
-    /// generation is held exclusively.
-    fn admit(
-        bound: Duration,
-        root: &Path,
-        candidate: Option<&HandoverCandidate>,
-        installed: Option<&InstalledGeneration<'_>>,
-    ) -> Result<(Self, Vec<ParticipantRecord>), OrbitError> {
-        // New joiners queue behind this from here on, so the participants
-        // already live are the only ones left to wait for.
-        let admission = admission(root, Admission::Exclusive, bound, None)?;
-        refuse_pending_switch(root)?;
-        let mut generation = open(root, GENERATION_LOCK)?;
-        let handover = quiesce_holders(bound, root, &generation, candidate, installed)?;
-        read_generation(&mut generation.file)?;
-        Ok((
-            Self {
-                bound,
-                root: validated_generation_root(root)?,
-                admission,
-                generation,
-            },
-            handover,
-        ))
-    }
-
-    /// Turn the updater's own unregistered `pin` on `root` into exclusive
-    /// admission and an exclusive generation lock: the same fence
-    /// [`Self::acquire`] takes, without the updater's pin counting as a holder
-    /// against it.
-    ///
-    /// Exclusive admission is taken first, so no process joins between the
-    /// pin's release and the exclusive generation lock, and the record keeps
-    /// naming the pinned generation throughout. Every other live holder is
-    /// judged as [`Self::acquire`] judges it: a short-lived one is waited for,
-    /// a long-lived one or one that never registered refuses. On refusal the
-    /// generation is pinned again, shared, before admission is released, and
-    /// the restored pin is returned in the [`FenceRefusal`].
-    pub fn fence_pinned(
-        env: &crate::Env,
-        root: &Path,
-        pin: GenerationGuard,
-    ) -> Result<Self, Box<FenceRefusal>> {
-        let bound = quiesce_bound(env);
-        let admission = match admission(root, Admission::Exclusive, bound, None) {
-            Ok(admission) => admission,
-            Err(error) => return Err(FenceRefusal::boxed(Some(pin), error)),
-        };
-        if let Err(error) = refuse_pending_switch(root) {
-            return Err(FenceRefusal::boxed(Some(pin), error));
-        }
-        let (generation, validated) = match open(root, GENERATION_LOCK).and_then(|generation| {
-            validated_generation_root(root).map(|validated| (generation, validated))
-        }) {
-            Ok(opened) => opened,
-            Err(error) => return Err(FenceRefusal::boxed(Some(pin), error)),
-        };
-        // Nobody joins while admission is exclusive, so releasing the pin
-        // here leaves no gap a newcomer could use.
-        drop(pin);
-        match quiesce_holders(bound, root, &generation, None, None).and_then(|beside| {
-            // Without a candidate or an installed generation nothing stands
-            // beside the updater, so an empty set means the lock is held.
-            beside
-                .is_empty()
-                .then_some(())
-                .ok_or_else(|| holders_refused(&beside, None))
-        }) {
-            Ok(()) => Ok(Self {
-                bound,
-                root: validated,
-                admission,
-                generation,
-            }),
-            Err(error) => {
-                let restored = FileExt::try_lock_shared(&generation.file)
-                    .is_ok()
-                    .then(|| GenerationGuard::holding(generation, false));
-                drop(admission);
-                Err(FenceRefusal::boxed(restored, error))
-            }
-        }
-    }
-
-    /// Refuse while a generation switch is pending on this authority.
-    pub(super) fn refuse_pending_switch(&self) -> Result<(), OrbitError> {
-        refuse_pending_switch(&self.root)
-    }
-
-    /// Whether this process still holds both locks of this admission
-    /// exclusively. Taking an exclusive lock its own open description already
-    /// holds succeeds at once; on a description that lost it, it succeeds only
-    /// when nobody else holds the lock, and then holds it again.
-    pub fn ensure_still_exclusive(&self) -> Result<(), OrbitError> {
-        FileExt::try_lock_exclusive(&self.admission.file)
-            .and_then(|()| FileExt::try_lock_exclusive(&self.generation.file))
-            .map_err(|error| {
-                refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, format!(
-                    "the update's exclusive hold on this generation authority was lost while it \
-                     was lent to a convergence step ({error})"
-                ))
-            })
-    }
-}
-
 fn refuse_pending_switch(root: &Path) -> Result<(), OrbitError> {
     match pending_switch(root) {
         Some(switch) => Err(refusal::upgrade_admission_refusal(
@@ -480,150 +625,5 @@ fn quiesce_holders(
             return Err(holders_outlasted(bound, &live, candidate));
         }
         std::thread::sleep(SETTLE_POLL);
-    }
-}
-
-impl GenerationUpdate {
-    /// Take the generation exclusively once every participant admitted beside
-    /// this update has released it. Nobody joins meanwhile, so the live set
-    /// only shrinks.
-    fn await_handover(&self) -> Result<(), OrbitError> {
-        let bound = self.bound;
-        let deadline = Instant::now() + bound;
-        loop {
-            if FileExt::try_lock_exclusive(&self.generation.file).is_ok() {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                let live = registry::live_participants(&self.root, None, false);
-                return Err(handover_outlasted(bound, &live));
-            }
-            std::thread::sleep(SETTLE_POLL);
-        }
-    }
-
-    /// Take the generation exclusively once every participant admitted beside
-    /// an updater that renames nothing has handed over in place. Nobody joins
-    /// meanwhile, so the live set only shrinks; once it is empty and no
-    /// record is releasing, a hold that outlasts a joiner's probe belongs to
-    /// a process that never registered, and refuses at once.
-    fn await_refresh(&self, current: &[ParticipantRecord]) -> Result<(), OrbitError> {
-        let bound = self.bound;
-        let deadline = Instant::now() + bound;
-        let mut unregistered_since = None;
-        loop {
-            if FileExt::try_lock_exclusive(&self.generation.file).is_ok() {
-                return Ok(());
-            }
-            let live = registry::live_participants(&self.root, None, false);
-            if live.is_empty() && !registry::releasing(&self.root) {
-                let since = *unregistered_since.get_or_insert_with(Instant::now);
-                if since.elapsed() >= PROBE_SETTLE {
-                    return Err(holders_refused(&[], None));
-                }
-                std::thread::sleep(Duration::from_millis(1));
-                continue;
-            }
-            unregistered_since = None;
-            if Instant::now() >= deadline {
-                return Err(refresh_outlasted(bound, current, &live));
-            }
-            std::thread::sleep(SETTLE_POLL);
-        }
-    }
-
-    /// Refuse an admission that could never record a candidate generation.
-    ///
-    /// [`Self::pin`] repeats this check, but an updater only reaches `pin`
-    /// after it has already replaced the executable. A caller that admits
-    /// against several authorities asks each of them this up front, so a root
-    /// whose record is read-only refuses the run while nothing is staged.
-    pub fn ensure_can_record(&self) -> Result<(), OrbitError> {
-        if self.generation.writable {
-            return Ok(());
-        }
-        Err(refusal::upgrade_admission_unwritable(
-            UpgradeAdmissionRefusalKind::Other,
-            "this authority's generation record cannot be written from here, so a \
-             candidate generation could never be recorded there",
-        ))
-    }
-
-    /// After replacement, pin the candidate through convergence. Old pinned
-    /// executables cannot enter between the updater and its candidate children.
-    ///
-    /// `identity` is the candidate's reported compatibility; with it, other
-    /// compatible builds may join once the updater releases its pin. Without
-    /// it (a candidate that only speaks `executable-generation-v1`) the record
-    /// admits only that digest.
-    pub fn pin(
-        self,
-        digest: &str,
-        identity: Option<&CompatibilityIdentity>,
-    ) -> Result<GenerationGuard, OrbitError> {
-        self.pin_as(
-            digest,
-            identity.map(|identity| (identity, Access::Write)),
-            None,
-        )
-    }
-
-    /// Record `digest` (and, with it, the envelope of `identity`) and hold
-    /// the generation shared, registering `participant` before admission is
-    /// released.
-    pub(super) fn pin_as(
-        mut self,
-        digest: &str,
-        identity: Option<(&CompatibilityIdentity, Access)>,
-        participant: Option<&Participant<'_>>,
-    ) -> Result<GenerationGuard, OrbitError> {
-        if digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(refusal::upgrade_admission_refusal(
-                UpgradeAdmissionRefusalKind::Other,
-                "invalid executable digest",
-            ));
-        }
-        if !self.generation.writable {
-            // Admitting here would leave joiners reading a record that names
-            // a generation other than the one actually running.
-            return Err(refusal::upgrade_admission_unwritable(
-                UpgradeAdmissionRefusalKind::Other,
-                "this executable generation differs from the recorded one and the record \
-                 cannot be written from here",
-            ));
-        }
-        if let Some((identity, access)) = identity {
-            // Before the record: a crash in between leaves a compat record
-            // naming a digest the record does not, which reads as absent.
-            write_compat(&self.root, digest, &Envelope::of(identity, access))?;
-        }
-        self.generation
-            .file
-            .seek(SeekFrom::Start(0))
-            .map_err(|error| {
-                refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
-            })?;
-        self.generation
-            .file
-            .write_all(format!("1:{digest}\n").as_bytes())
-            .map_err(|error| {
-                refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
-            })?;
-        self.generation.file.set_len(67).map_err(|error| {
-            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
-        })?;
-        crate::fs::io::sync_file(&self.generation.file).map_err(|error| {
-            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
-        })?;
-        FileExt::lock_shared(&self.generation.file).map_err(|error| {
-            refusal::upgrade_admission_refusal(UpgradeAdmissionRefusalKind::Other, error)
-        })?;
-        let guard = GenerationGuard::holding(self.generation, false);
-        let guard = match participant {
-            Some(participant) => guard.registered(&self.root, participant),
-            None => guard,
-        };
-        drop(self.admission);
-        Ok(guard)
     }
 }

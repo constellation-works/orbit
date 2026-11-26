@@ -16,22 +16,6 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-operation_registry! {
-    noun: MEMORY;
-    /// The crew memory verbs.
-    pub enum MemoryVerb;
-    /// Crew memory operations.
-    pub const MEMORY_OPERATIONS;
-    {
-        /// One space's current or chosen revision (memory runs only).
-        Show => SHOW,
-        /// Replace one space's files with a new revision (dreaming runs only).
-        Write => WRITE,
-        /// Propose a note for the global memory (dreaming runs only).
-        Propose => PROPOSE,
-    }
-}
-
 /// The crew memory noun's shared declaration. It has no CLI command.
 pub const MEMORY: NounSpec<MemoryVerb> = NounSpec {
     cli_name: "memory",
@@ -140,3 +124,19 @@ const PROPOSE: OperationSpec<MemoryVerb> = OperationSpec {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
+
+operation_registry! {
+    noun: MEMORY;
+    /// The crew memory verbs.
+    pub enum MemoryVerb;
+    /// Crew memory operations.
+    pub const MEMORY_OPERATIONS;
+    {
+        /// One space's current or chosen revision (memory runs only).
+        Show => SHOW,
+        /// Replace one space's files with a new revision (dreaming runs only).
+        Write => WRITE,
+        /// Propose a note for the global memory (dreaming runs only).
+        Propose => PROPOSE,
+    }
+}

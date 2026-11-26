@@ -8,51 +8,6 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 #[cfg(unix)]
 const PRIVATE_DIR_MODE: u32 = 0o700;
 
-/// Creates a directory tree for secret-bearing Orbit state.
-///
-/// On Unix, every directory this call creates is immediately restricted to the
-/// current user (`0o700`) instead of relying on the process umask. Existing
-/// directories are left unchanged so callers do not unexpectedly chmod a
-/// workspace root or home directory.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "non-Unix fallback for the private-directory helper; Unix uses an explicit owner-only mode"
-)]
-pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        create_private_dir_all_unix(path)
-    }
-    #[cfg(not(unix))]
-    {
-        fs::create_dir_all(path)
-    }
-}
-
-/// Creates one secret-bearing Orbit state directory without relying on umask.
-///
-/// Unlike [`create_private_dir_all`], this preserves [`fs::create_dir`]'s
-/// exclusive-create behavior and returns `AlreadyExists` for an existing path.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "non-Unix fallback for the private-directory helper; Unix uses an explicit owner-only mode"
-)]
-pub fn create_private_dir(path: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-
-        let mut builder = fs::DirBuilder::new();
-        builder.mode(PRIVATE_DIR_MODE);
-        builder.create(path)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_DIR_MODE))
-    }
-    #[cfg(not(unix))]
-    {
-        fs::create_dir(path)
-    }
-}
-
 /// Why [`create_private_dir_chain`] refused a directory chain.
 #[derive(Debug)]
 pub enum PrivateDirError {
@@ -135,6 +90,51 @@ impl std::error::Error for PrivateDirError {
             Self::Io { source, .. } => Some(source),
             _ => None,
         }
+    }
+}
+
+/// Creates a directory tree for secret-bearing Orbit state.
+///
+/// On Unix, every directory this call creates is immediately restricted to the
+/// current user (`0o700`) instead of relying on the process umask. Existing
+/// directories are left unchanged so callers do not unexpectedly chmod a
+/// workspace root or home directory.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "non-Unix fallback for the private-directory helper; Unix uses an explicit owner-only mode"
+)]
+pub fn create_private_dir_all(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        create_private_dir_all_unix(path)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir_all(path)
+    }
+}
+
+/// Creates one secret-bearing Orbit state directory without relying on umask.
+///
+/// Unlike [`create_private_dir_all`], this preserves [`fs::create_dir`]'s
+/// exclusive-create behavior and returns `AlreadyExists` for an existing path.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "non-Unix fallback for the private-directory helper; Unix uses an explicit owner-only mode"
+)]
+pub fn create_private_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(PRIVATE_DIR_MODE);
+        builder.create(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_DIR_MODE))
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(path)
     }
 }
 

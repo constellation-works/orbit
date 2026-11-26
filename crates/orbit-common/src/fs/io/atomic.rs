@@ -19,6 +19,152 @@ pub use crate::env_vars::ORBIT_TEST_RELAXED_DURABILITY as RELAXED_DURABILITY_ENV
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+static RELAXED_DURABILITY: OnceLock<bool> = OnceLock::new();
+
+/// Live [`crate::test_env::require_durable_syncs`] guards. Any one of them
+/// restores real syncs process-wide.
+pub(crate) static DURABLE_SYNC_HOLDS: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// Durability syncs requested on this thread, relaxed or not.
+    static DURABILITY_SYNCS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// A staged write that can be committed or dropped. Useful when a caller
+/// needs to perform additional validation between staging and commit.
+///
+/// Drop before `commit()` removes the temp file.
+pub struct StagedTextFile {
+    target_path: PathBuf,
+    temp_path: PathBuf,
+    parent_dir: Option<File>,
+    sync_parent: bool,
+    committed: bool,
+}
+
+impl StagedTextFile {
+    /// Stage a durable write. `commit()` renames and fsyncs the parent dir.
+    pub fn new(target_path: &Path, content: &str) -> io::Result<Self> {
+        Self::new_internal(target_path, content.as_bytes(), true)
+    }
+
+    fn new_internal(target_path: &Path, content: &[u8], durable: bool) -> io::Result<Self> {
+        Self::new_internal_with_permissions(target_path, content, durable, true)
+    }
+
+    fn new_internal_with_permissions(
+        target_path: &Path,
+        content: &[u8],
+        durable: bool,
+        preserve_existing_permissions: bool,
+    ) -> io::Result<Self> {
+        Self::stage_with(
+            target_path,
+            durable,
+            preserve_existing_permissions,
+            |file| file.write_all(content),
+        )
+    }
+
+    fn stage_with<F>(
+        target_path: &Path,
+        durable: bool,
+        preserve_existing_permissions: bool,
+        write: F,
+    ) -> io::Result<Self>
+    where
+        F: FnOnce(&mut File) -> io::Result<()>,
+    {
+        let parent = target_path.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("no parent dir for {}", target_path.display()),
+            )
+        })?;
+        create_private_dir_all(parent)?;
+        let canonical_target = validated_atomic_target(target_path)?;
+        let canonical_parent = canonical_target.parent().ok_or_else(|| {
+            io::Error::other("validated atomic target is missing its parent directory")
+        })?;
+
+        let temp_path = temp_path_for(&canonical_target);
+        let mut file = create_new_private_file(&temp_path)?;
+        let mut cleanup = TempFileCleanup::new(temp_path.clone());
+
+        if preserve_existing_permissions && let Ok(metadata) = fs::metadata(&canonical_target) {
+            fs::set_permissions(&temp_path, metadata.permissions())?;
+        }
+
+        write(&mut file)?;
+        if durable {
+            sync_file(&file)?;
+        }
+        drop(file);
+
+        let parent_dir = durable.then(|| File::open(canonical_parent)).transpose()?;
+
+        cleanup.disarm();
+
+        Ok(Self {
+            target_path: canonical_target,
+            temp_path,
+            parent_dir,
+            sync_parent: durable,
+            committed: false,
+        })
+    }
+
+    /// Rename the staged file into place. A durable write can report a directory sync failure
+    /// after the rename succeeded.
+    pub fn commit(&mut self) -> io::Result<()> {
+        fs::rename(&self.temp_path, &self.target_path)?;
+        self.committed = true;
+        if self.sync_parent {
+            let Some(parent_dir) = self.parent_dir.as_ref() else {
+                return Err(io::Error::other(
+                    "durable staged file is missing its parent directory handle",
+                ));
+            };
+            sync_parent_dir(parent_dir)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for StagedTextFile {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let _ = fs::remove_file(&self.temp_path);
+    }
+}
+
+/// Removes a newly-created staging file if setup or writing fails before the
+/// staged file can take ownership of cleanup.
+struct TempFileCleanup {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl TempFileCleanup {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for TempFileCleanup {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
 /// Atomically write `content` to `path`, then fsync the parent directory so
 /// the rename survives a crash. Creates parent directories as needed.
 pub fn atomic_write_text(path: &Path, content: &str) -> io::Result<()> {
@@ -215,107 +361,6 @@ pub fn atomic_write_text_volatile(path: &Path, content: &str) -> io::Result<()> 
     staged.commit()
 }
 
-/// A staged write that can be committed or dropped. Useful when a caller
-/// needs to perform additional validation between staging and commit.
-///
-/// Drop before `commit()` removes the temp file.
-pub struct StagedTextFile {
-    target_path: PathBuf,
-    temp_path: PathBuf,
-    parent_dir: Option<File>,
-    sync_parent: bool,
-    committed: bool,
-}
-
-impl StagedTextFile {
-    /// Stage a durable write. `commit()` renames and fsyncs the parent dir.
-    pub fn new(target_path: &Path, content: &str) -> io::Result<Self> {
-        Self::new_internal(target_path, content.as_bytes(), true)
-    }
-
-    fn new_internal(target_path: &Path, content: &[u8], durable: bool) -> io::Result<Self> {
-        Self::new_internal_with_permissions(target_path, content, durable, true)
-    }
-
-    fn new_internal_with_permissions(
-        target_path: &Path,
-        content: &[u8],
-        durable: bool,
-        preserve_existing_permissions: bool,
-    ) -> io::Result<Self> {
-        Self::stage_with(
-            target_path,
-            durable,
-            preserve_existing_permissions,
-            |file| file.write_all(content),
-        )
-    }
-
-    fn stage_with<F>(
-        target_path: &Path,
-        durable: bool,
-        preserve_existing_permissions: bool,
-        write: F,
-    ) -> io::Result<Self>
-    where
-        F: FnOnce(&mut File) -> io::Result<()>,
-    {
-        let parent = target_path.parent().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("no parent dir for {}", target_path.display()),
-            )
-        })?;
-        create_private_dir_all(parent)?;
-        let canonical_target = validated_atomic_target(target_path)?;
-        let canonical_parent = canonical_target.parent().ok_or_else(|| {
-            io::Error::other("validated atomic target is missing its parent directory")
-        })?;
-
-        let temp_path = temp_path_for(&canonical_target);
-        let mut file = create_new_private_file(&temp_path)?;
-        let mut cleanup = TempFileCleanup::new(temp_path.clone());
-
-        if preserve_existing_permissions && let Ok(metadata) = fs::metadata(&canonical_target) {
-            fs::set_permissions(&temp_path, metadata.permissions())?;
-        }
-
-        write(&mut file)?;
-        if durable {
-            sync_file(&file)?;
-        }
-        drop(file);
-
-        let parent_dir = durable.then(|| File::open(canonical_parent)).transpose()?;
-
-        cleanup.disarm();
-
-        Ok(Self {
-            target_path: canonical_target,
-            temp_path,
-            parent_dir,
-            sync_parent: durable,
-            committed: false,
-        })
-    }
-
-    /// Rename the staged file into place. A durable write can report a directory sync failure
-    /// after the rename succeeded.
-    pub fn commit(&mut self) -> io::Result<()> {
-        fs::rename(&self.temp_path, &self.target_path)?;
-        self.committed = true;
-        if self.sync_parent {
-            let Some(parent_dir) = self.parent_dir.as_ref() else {
-                return Err(io::Error::other(
-                    "durable staged file is missing its parent directory handle",
-                ));
-            };
-            sync_parent_dir(parent_dir)?;
-        }
-        Ok(())
-    }
-}
-
 /// Resolve an atomic write target to a canonical parent and a single file
 /// component.
 ///
@@ -359,40 +404,6 @@ fn validated_atomic_target(path: &Path) -> io::Result<PathBuf> {
     Ok(canonical_target)
 }
 
-/// Removes a newly-created staging file if setup or writing fails before the
-/// staged file can take ownership of cleanup.
-struct TempFileCleanup {
-    path: PathBuf,
-    armed: bool,
-}
-
-impl TempFileCleanup {
-    fn new(path: PathBuf) -> Self {
-        Self { path, armed: true }
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for TempFileCleanup {
-    fn drop(&mut self) {
-        if self.armed {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
-}
-
-impl Drop for StagedTextFile {
-    fn drop(&mut self) {
-        if self.committed {
-            return;
-        }
-        let _ = fs::remove_file(&self.temp_path);
-    }
-}
-
 fn temp_path_for(target_path: &Path) -> PathBuf {
     let file_name = target_path
         .file_name()
@@ -425,12 +436,6 @@ pub fn sync_parent_dir(parent_dir: &File) -> io::Result<()> {
 // Durability syncs
 // ---------------------------------------------------------------------------
 
-static RELAXED_DURABILITY: OnceLock<bool> = OnceLock::new();
-
-/// Live [`crate::test_env::require_durable_syncs`] guards. Any one of them
-/// restores real syncs process-wide.
-pub(crate) static DURABLE_SYNC_HOLDS: AtomicUsize = AtomicUsize::new(0);
-
 /// Whether a [`RELAXED_DURABILITY_ENV`] value relaxes durability in a build
 /// that does (`debug_build`) or does not carry debug assertions.
 ///
@@ -459,11 +464,6 @@ pub fn durability_syncs_relaxed() -> bool {
     }
     RELAXED_DURABILITY.get().copied().unwrap_or(false)
         && DURABLE_SYNC_HOLDS.load(Ordering::SeqCst) == 0
-}
-
-thread_local! {
-    /// Durability syncs requested on this thread, relaxed or not.
-    static DURABILITY_SYNCS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// How many durability syncs ([`sync_file`], [`sync_file_data`]) this thread

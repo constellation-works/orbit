@@ -19,24 +19,6 @@ use std::sync::Arc;
 /// Prefix of the test hooks, which only tests and `test-support` builds read.
 const TEST_HOOK_PREFIX: &str = "ORBIT_TEST_";
 
-/// Set a process environment variable for the scoped test environment helpers.
-///
-/// # Safety
-/// The caller must prevent concurrent access to the process environment.
-pub(crate) unsafe fn set_process_var(name: &str, value: &str) {
-    // SAFETY: the caller upholds the process-environment synchronization contract.
-    unsafe { std::env::set_var(name, value) }
-}
-
-/// Remove a process environment variable for the test-process startup scrub.
-///
-/// # Safety
-/// The caller must prevent concurrent access to the process environment.
-pub(crate) unsafe fn remove_process_var(name: &str) {
-    // SAFETY: the caller upholds the process-environment synchronization contract.
-    unsafe { std::env::remove_var(name) }
-}
-
 /// An immutable snapshot of the process environment.
 ///
 /// Cloning shares the snapshot. Nothing changes it after construction, so a
@@ -125,4 +107,22 @@ impl fmt::Debug for Env {
             .field("names", &self.vars.keys().collect::<Vec<_>>())
             .finish()
     }
+}
+
+/// Set a process environment variable for the scoped test environment helpers.
+///
+/// # Safety
+/// The caller must prevent concurrent access to the process environment.
+pub(crate) unsafe fn set_process_var(name: &str, value: &str) {
+    // SAFETY: the caller upholds the process-environment synchronization contract.
+    unsafe { std::env::set_var(name, value) }
+}
+
+/// Remove a process environment variable for the test-process startup scrub.
+///
+/// # Safety
+/// The caller must prevent concurrent access to the process environment.
+pub(crate) unsafe fn remove_process_var(name: &str) {
+    // SAFETY: the caller upholds the process-environment synchronization contract.
+    unsafe { std::env::remove_var(name) }
 }

@@ -656,36 +656,6 @@ const _: () = assert!(
     "OrbitError exceeds its 128-byte size budget; box multi-field variant payloads"
 );
 
-fn not_found_message(kind: NotFoundKind, id: &str, guidance: Option<&str>) -> String {
-    // This synthetic partition represents an initialized data root without a
-    // registered workspace. It is an internal routing key, so show the setup
-    // action instead of presenting that key as a workspace the operator can
-    // find.
-    if kind == NotFoundKind::Workspace && id == "ws_unbound-data-dir" {
-        return "workspace not found; run `orbit workspace init` from a project or pass `--workspace <workspace>`".to_string();
-    }
-
-    // Explicit guidance (for example a spelling suggestion or an artifact's
-    // owning task) is more specific than the default listing.
-    let default_guidance;
-    let guidance = guidance.unwrap_or(match kind {
-        NotFoundKind::Task => "; see `orbit task list` for valid task IDs",
-        NotFoundKind::JobRun => {
-            if orbit_types::task::is_valid_orb_task_id(id) {
-                default_guidance = format!("; see `orbit run history` for valid run IDs, or use `orbit task show {id} --fields delivery` for a task's delivery run");
-                &default_guidance
-            } else {
-                "; see `orbit run history` for valid run IDs"
-            }
-        }
-        NotFoundKind::Job => "; see `orbit job list` for valid job IDs",
-        NotFoundKind::Tool => "; see `orbit tool list` or MCP `tools/list` for valid tool names",
-        NotFoundKind::Workspace => "; see `orbit workspace list` for registered workspaces",
-        _ => "",
-    });
-    format!("{kind} not found: {id}{guidance}")
-}
-
 impl OrbitError {
     /// Render task/run remedies using the advertised MCP tool names and JSON
     /// arguments. Explicit not-found guidance still takes precedence.
@@ -727,6 +697,36 @@ impl OrbitError {
             _ => self.to_string(),
         }
     }
+}
+
+fn not_found_message(kind: NotFoundKind, id: &str, guidance: Option<&str>) -> String {
+    // This synthetic partition represents an initialized data root without a
+    // registered workspace. It is an internal routing key, so show the setup
+    // action instead of presenting that key as a workspace the operator can
+    // find.
+    if kind == NotFoundKind::Workspace && id == "ws_unbound-data-dir" {
+        return "workspace not found; run `orbit workspace init` from a project or pass `--workspace <workspace>`".to_string();
+    }
+
+    // Explicit guidance (for example a spelling suggestion or an artifact's
+    // owning task) is more specific than the default listing.
+    let default_guidance;
+    let guidance = guidance.unwrap_or(match kind {
+        NotFoundKind::Task => "; see `orbit task list` for valid task IDs",
+        NotFoundKind::JobRun => {
+            if orbit_types::task::is_valid_orb_task_id(id) {
+                default_guidance = format!("; see `orbit run history` for valid run IDs, or use `orbit task show {id} --fields delivery` for a task's delivery run");
+                &default_guidance
+            } else {
+                "; see `orbit run history` for valid run IDs"
+            }
+        }
+        NotFoundKind::Job => "; see `orbit job list` for valid job IDs",
+        NotFoundKind::Tool => "; see `orbit tool list` or MCP `tools/list` for valid tool names",
+        NotFoundKind::Workspace => "; see `orbit workspace list` for registered workspaces",
+        _ => "",
+    });
+    format!("{kind} not found: {id}{guidance}")
 }
 
 fn task_delivery_unavailable_message(task_id: &str, remedy: &str) -> String {

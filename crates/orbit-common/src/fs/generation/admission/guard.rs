@@ -17,6 +17,10 @@ use super::super::registry::{
 use super::lock::quiesce_bound;
 use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
+static PARTICIPATION: OnceLock<Participation> = OnceLock::new();
+
+static PROCESS_JOINS: Mutex<Vec<ProcessJoin>> = Mutex::new(Vec::new());
+
 /// A shared generation pin. Retain until all operations and replies finish.
 ///
 /// Guards that [`GenerationGuard::for_process`] hands out for one
@@ -27,202 +31,6 @@ pub struct GenerationGuard {
     /// True when this process joined a recorded generation other than its own
     /// digest, without rewriting the record (read-only same-schema join).
     joined_foreign: bool,
-}
-
-/// The generation lock a join holds shared, and its registration.
-struct Hold {
-    /// Released in the order [`Hold::release`] gives.
-    registration: Option<Registration>,
-    record: Record,
-    released: bool,
-}
-
-/// One process asking to participate under the v2 protocol.
-pub struct Participant<'a> {
-    /// SHA-256 of the running executable image.
-    pub digest: &'a str,
-    /// The state compatibility it was compiled with.
-    pub identity: &'a CompatibilityIdentity,
-    /// Invocation role used to decide whether the participant can be waited out.
-    pub role: ParticipantRole,
-    /// Access mode requested against the pinned generation.
-    pub access: Access,
-    /// The resume capability it hands over with when a candidate is renamed
-    /// over its executable, if it can (see [`ParticipantRecord::handover`]).
-    pub handover: Option<&'a str>,
-    /// Whether it runs inside an Orbit-managed activity: an agent's nested
-    /// `orbit`, which may be a newer binary than the drain that started the
-    /// step. It never records a pending switch nor waits behind one, since
-    /// that drain yields only at the step boundary, which waits on this
-    /// process. It is refused at once, under
-    /// [`UPGRADE_PENDING_MARKER`](orbit_types::workflow::UPGRADE_PENDING_MARKER),
-    /// which the step settles as transient.
-    pub in_activity: bool,
-}
-
-/// A process's requested participation for [`GenerationGuard::for_process`]:
-/// everything the join needs besides the environment, the authority root,
-/// and the store-schema probe.
-pub struct ParticipantRequest<'a> {
-    /// The state compatibility it was compiled with.
-    pub identity: &'a CompatibilityIdentity,
-    /// Invocation role used to decide whether the participant can be waited out.
-    pub role: ParticipantRole,
-    /// The resume capability it hands over with when a candidate is renamed
-    /// over its executable, if it can (see [`ParticipantRecord::handover`]).
-    pub handover: Option<&'a str>,
-    /// Access mode requested against the pinned generation.
-    pub access: Access,
-    /// Whether it runs inside an Orbit-managed activity: an agent's nested
-    /// `orbit`, which may be a newer binary than the drain that started the
-    /// step. It never records a pending switch nor waits behind one, since
-    /// that drain yields only at the step boundary, which waits on this
-    /// process. It is refused at once, under
-    /// [`UPGRADE_PENDING_MARKER`](orbit_types::workflow::UPGRADE_PENDING_MARKER),
-    /// which the step settles as transient.
-    pub in_activity: bool,
-}
-
-/// The process-wide participation, for safe-point yield checks.
-struct Participation {
-    root: PathBuf,
-    identity: CompatibilityIdentity,
-    role: ParticipantRole,
-    handover: Option<String>,
-}
-
-static PARTICIPATION: OnceLock<Participation> = OnceLock::new();
-
-/// A live [`GenerationGuard::for_process`] join, which later joins of the
-/// same root by this process reuse instead of registering again.
-struct ProcessJoin {
-    root: PathBuf,
-    identity: CompatibilityIdentity,
-    role: ParticipantRole,
-    handover: Option<String>,
-    access: Access,
-    /// The digest `.generation.lock` recorded when this join was admitted.
-    /// It cannot change while the join holds the lock shared.
-    recorded: String,
-    hold: Weak<Hold>,
-}
-
-static PROCESS_JOINS: Mutex<Vec<ProcessJoin>> = Mutex::new(Vec::new());
-
-/// The authority root and role this process joined as, once it has.
-pub fn process_participation() -> Option<(&'static Path, ParticipantRole)> {
-    PARTICIPATION
-        .get()
-        .map(|participation| (participation.root.as_path(), participation.role))
-}
-
-/// The resume capability this process registered to hand over with, once it
-/// has joined.
-pub fn process_handover() -> Option<&'static str> {
-    PARTICIPATION.get()?.handover.as_deref()
-}
-
-/// A switch this process should yield to at its next safe point: pending on
-/// the authority it joined, requested by another process for an identity
-/// other than its own.
-pub fn pending_switch_for_this_process() -> Option<PendingSwitch> {
-    live_joined_authorities()
-        .into_iter()
-        .find_map(|(root, identity)| {
-            pending_switch(&root)
-                .filter(|switch| switch.pid != std::process::id() && switch.target != identity)
-        })
-}
-
-/// Every authority this process joined that it still holds: the first one it
-/// ever joined, plus each other root with a live generation guard.
-fn live_joined_authorities() -> Vec<(PathBuf, CompatibilityIdentity)> {
-    let Some(participation) = PARTICIPATION.get() else {
-        return Vec::new();
-    };
-    let mut joined = vec![(participation.root.clone(), participation.identity.clone())];
-    joined.extend(
-        PROCESS_JOINS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .filter(|join| join.hold.strong_count() > 0)
-            .map(|join| (join.root.clone(), join.identity.clone())),
-    );
-    joined
-}
-
-/// Whether an updater that renames nothing asked this process to hand over
-/// to its own installed executable: a refresh is pending on an authority this
-/// process joined, for exactly the digest and identity it runs, and it
-/// registered a resume capability (`capability`, when the caller names one).
-/// Exec'ing releases every generation hold it
-/// has, which is how the updater proves that nothing else holds the
-/// generation before re-pinning it; the new image queues behind the updater
-/// and joins what it pinned.
-pub(in super::super) fn refresh_requested_for_this_process(
-    env: &crate::Env,
-    capability: Option<&str>,
-) -> bool {
-    let Some(participation) = PARTICIPATION.get() else {
-        return false;
-    };
-    let resumes = participation
-        .handover
-        .as_deref()
-        .is_some_and(|handover| capability.is_none_or(|capability| capability == handover));
-    if !resumes {
-        return false;
-    }
-    let Ok(digest) = process_digest(env, None, false) else {
-        return false;
-    };
-    let joined = live_joined_authorities();
-    joined.iter().any(|(root, identity)| {
-        pending_switch(root).is_some_and(|switch| {
-            switch.refresh
-                && switch.pid != std::process::id()
-                && switch.digest == digest
-                && switch.target == *identity
-        })
-    })
-}
-
-impl Hold {
-    /// Release the generation lock, then withdraw the registration.
-    ///
-    /// Two inferences read the registry against the generation lock. A shared
-    /// join takes a live record to mean its owner holds the lock, so the
-    /// authority is not empty. An updater that finds the lock held and no
-    /// record visible refuses the holder as unregistered. Withdrawing first
-    /// broke the second: a holder descheduled between withdrawing and
-    /// releasing, for longer than the updater's settle, was refused as an
-    /// unregistered v1 process instead of waited for [ORB-14869]. Releasing
-    /// first would break the first. So the record is renamed to its releasing
-    /// name, still locked: joiners stop counting it, an updater waits for it,
-    /// and only after the lock is released is it withdrawn.
-    /// `paused` runs between the rename and the release.
-    fn release(&mut self, paused: impl FnOnce()) {
-        if std::mem::replace(&mut self.released, true) {
-            return;
-        }
-        if let Some(registration) = self.registration.as_mut()
-            && !registration.begin_release()
-        {
-            // Without the releasing name, a live record must still mean a
-            // held lock.
-            self.registration = None;
-        }
-        paused();
-        let _ = FileExt::unlock(&self.record.file);
-        self.registration = None;
-    }
-}
-
-impl Drop for Hold {
-    fn drop(&mut self) {
-        self.release(|| {});
-    }
 }
 
 impl GenerationGuard {
@@ -389,4 +197,196 @@ impl GenerationGuard {
             joined_foreign,
         }))
     }
+}
+
+/// The generation lock a join holds shared, and its registration.
+struct Hold {
+    /// Released in the order [`Hold::release`] gives.
+    registration: Option<Registration>,
+    record: Record,
+    released: bool,
+}
+
+impl Hold {
+    /// Release the generation lock, then withdraw the registration.
+    ///
+    /// Two inferences read the registry against the generation lock. A shared
+    /// join takes a live record to mean its owner holds the lock, so the
+    /// authority is not empty. An updater that finds the lock held and no
+    /// record visible refuses the holder as unregistered. Withdrawing first
+    /// broke the second: a holder descheduled between withdrawing and
+    /// releasing, for longer than the updater's settle, was refused as an
+    /// unregistered v1 process instead of waited for [ORB-14869]. Releasing
+    /// first would break the first. So the record is renamed to its releasing
+    /// name, still locked: joiners stop counting it, an updater waits for it,
+    /// and only after the lock is released is it withdrawn.
+    /// `paused` runs between the rename and the release.
+    fn release(&mut self, paused: impl FnOnce()) {
+        if std::mem::replace(&mut self.released, true) {
+            return;
+        }
+        if let Some(registration) = self.registration.as_mut()
+            && !registration.begin_release()
+        {
+            // Without the releasing name, a live record must still mean a
+            // held lock.
+            self.registration = None;
+        }
+        paused();
+        let _ = FileExt::unlock(&self.record.file);
+        self.registration = None;
+    }
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        self.release(|| {});
+    }
+}
+
+/// One process asking to participate under the v2 protocol.
+pub struct Participant<'a> {
+    /// SHA-256 of the running executable image.
+    pub digest: &'a str,
+    /// The state compatibility it was compiled with.
+    pub identity: &'a CompatibilityIdentity,
+    /// Invocation role used to decide whether the participant can be waited out.
+    pub role: ParticipantRole,
+    /// Access mode requested against the pinned generation.
+    pub access: Access,
+    /// The resume capability it hands over with when a candidate is renamed
+    /// over its executable, if it can (see [`ParticipantRecord::handover`]).
+    pub handover: Option<&'a str>,
+    /// Whether it runs inside an Orbit-managed activity: an agent's nested
+    /// `orbit`, which may be a newer binary than the drain that started the
+    /// step. It never records a pending switch nor waits behind one, since
+    /// that drain yields only at the step boundary, which waits on this
+    /// process. It is refused at once, under
+    /// [`UPGRADE_PENDING_MARKER`](orbit_types::workflow::UPGRADE_PENDING_MARKER),
+    /// which the step settles as transient.
+    pub in_activity: bool,
+}
+
+/// A process's requested participation for [`GenerationGuard::for_process`]:
+/// everything the join needs besides the environment, the authority root,
+/// and the store-schema probe.
+pub struct ParticipantRequest<'a> {
+    /// The state compatibility it was compiled with.
+    pub identity: &'a CompatibilityIdentity,
+    /// Invocation role used to decide whether the participant can be waited out.
+    pub role: ParticipantRole,
+    /// The resume capability it hands over with when a candidate is renamed
+    /// over its executable, if it can (see [`ParticipantRecord::handover`]).
+    pub handover: Option<&'a str>,
+    /// Access mode requested against the pinned generation.
+    pub access: Access,
+    /// Whether it runs inside an Orbit-managed activity: an agent's nested
+    /// `orbit`, which may be a newer binary than the drain that started the
+    /// step. It never records a pending switch nor waits behind one, since
+    /// that drain yields only at the step boundary, which waits on this
+    /// process. It is refused at once, under
+    /// [`UPGRADE_PENDING_MARKER`](orbit_types::workflow::UPGRADE_PENDING_MARKER),
+    /// which the step settles as transient.
+    pub in_activity: bool,
+}
+
+/// The process-wide participation, for safe-point yield checks.
+struct Participation {
+    root: PathBuf,
+    identity: CompatibilityIdentity,
+    role: ParticipantRole,
+    handover: Option<String>,
+}
+
+/// A live [`GenerationGuard::for_process`] join, which later joins of the
+/// same root by this process reuse instead of registering again.
+struct ProcessJoin {
+    root: PathBuf,
+    identity: CompatibilityIdentity,
+    role: ParticipantRole,
+    handover: Option<String>,
+    access: Access,
+    /// The digest `.generation.lock` recorded when this join was admitted.
+    /// It cannot change while the join holds the lock shared.
+    recorded: String,
+    hold: Weak<Hold>,
+}
+
+/// The authority root and role this process joined as, once it has.
+pub fn process_participation() -> Option<(&'static Path, ParticipantRole)> {
+    PARTICIPATION
+        .get()
+        .map(|participation| (participation.root.as_path(), participation.role))
+}
+
+/// The resume capability this process registered to hand over with, once it
+/// has joined.
+pub fn process_handover() -> Option<&'static str> {
+    PARTICIPATION.get()?.handover.as_deref()
+}
+
+/// A switch this process should yield to at its next safe point: pending on
+/// the authority it joined, requested by another process for an identity
+/// other than its own.
+pub fn pending_switch_for_this_process() -> Option<PendingSwitch> {
+    live_joined_authorities()
+        .into_iter()
+        .find_map(|(root, identity)| {
+            pending_switch(&root)
+                .filter(|switch| switch.pid != std::process::id() && switch.target != identity)
+        })
+}
+
+/// Every authority this process joined that it still holds: the first one it
+/// ever joined, plus each other root with a live generation guard.
+fn live_joined_authorities() -> Vec<(PathBuf, CompatibilityIdentity)> {
+    let Some(participation) = PARTICIPATION.get() else {
+        return Vec::new();
+    };
+    let mut joined = vec![(participation.root.clone(), participation.identity.clone())];
+    joined.extend(
+        PROCESS_JOINS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|join| join.hold.strong_count() > 0)
+            .map(|join| (join.root.clone(), join.identity.clone())),
+    );
+    joined
+}
+
+/// Whether an updater that renames nothing asked this process to hand over
+/// to its own installed executable: a refresh is pending on an authority this
+/// process joined, for exactly the digest and identity it runs, and it
+/// registered a resume capability (`capability`, when the caller names one).
+/// Exec'ing releases every generation hold it
+/// has, which is how the updater proves that nothing else holds the
+/// generation before re-pinning it; the new image queues behind the updater
+/// and joins what it pinned.
+pub(in super::super) fn refresh_requested_for_this_process(
+    env: &crate::Env,
+    capability: Option<&str>,
+) -> bool {
+    let Some(participation) = PARTICIPATION.get() else {
+        return false;
+    };
+    let resumes = participation
+        .handover
+        .as_deref()
+        .is_some_and(|handover| capability.is_none_or(|capability| capability == handover));
+    if !resumes {
+        return false;
+    }
+    let Ok(digest) = process_digest(env, None, false) else {
+        return false;
+    };
+    let joined = live_joined_authorities();
+    joined.iter().any(|(root, identity)| {
+        pending_switch(root).is_some_and(|switch| {
+            switch.refresh
+                && switch.pid != std::process::id()
+                && switch.digest == digest
+                && switch.target == *identity
+        })
+    })
 }

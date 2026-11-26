@@ -10,6 +10,8 @@ use crate::fs::io::{create_new_private_file, create_private_dir_all};
 #[cfg(doc)]
 use super::probe_file_lock;
 
+static LEASE_STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
 /// A file whose name says some work is in progress and whose exclusive lock
 /// says the process doing it is still alive.
 ///
@@ -28,8 +30,6 @@ pub struct LeaseFile {
     path: PathBuf,
     file: File,
 }
-
-static LEASE_STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 impl LeaseFile {
     /// Name a lease at `path`, locked by this process, creating the parent

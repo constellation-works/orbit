@@ -50,17 +50,6 @@ pub struct FileLockGuard {
     hold: Option<HoldReport>,
 }
 
-/// A direct exclusive lock whose release reports wait until after its
-/// descriptor closes. The guard is thread-affine because report scopes are
-/// tracked per thread.
-#[must_use = "the advisory lock and report scope are released as soon as the guard is dropped"]
-pub struct ReportScopedFileLockGuard {
-    // Drop the descriptor before the report scope can emit queued reports.
-    _guard: FileLockGuard,
-    _reports: LockReportScope,
-    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
-}
-
 impl Drop for FileLockGuard {
     fn drop(&mut self) {
         hold_step("holder cleanup", || {
@@ -80,6 +69,85 @@ impl Drop for FileLockGuard {
         if let Some(hold) = self.hold.take() {
             hold.report();
         }
+    }
+}
+
+/// A direct exclusive lock whose release reports wait until after its
+/// descriptor closes. The guard is thread-affine because report scopes are
+/// tracked per thread.
+#[must_use = "the advisory lock and report scope are released as soon as the guard is dropped"]
+pub struct ReportScopedFileLockGuard {
+    // Drop the descriptor before the report scope can emit queued reports.
+    _guard: FileLockGuard,
+    _reports: LockReportScope,
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+/// What [`probe_file_lock`] found at a lock path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileLockProbe {
+    /// Nothing is named there.
+    Absent,
+    /// Some open file description holds the lock.
+    Held,
+    /// The file is there and nobody holds its lock.
+    Free,
+}
+
+struct AcquisitionTiming(Instant);
+
+impl Drop for AcquisitionTiming {
+    fn drop(&mut self) {
+        crate::fs::lock_wait::record(self.0.elapsed());
+    }
+}
+
+/// One acquisition's deadline, contention warning and retry pacing, shared by
+/// its turnstile and lock waits so the two together stay within one deadline.
+struct ContentionWait<'a> {
+    lock_path: &'a Path,
+    label: &'a str,
+    options: FileLockOptions,
+    started: Instant,
+    warned: bool,
+    /// The pause before the next attempt; see [`CONTENDED_RETRY_FIRST`].
+    retry: Duration,
+}
+
+impl<'a> ContentionWait<'a> {
+    fn new(lock_path: &'a Path, label: &'a str, options: FileLockOptions) -> Self {
+        Self {
+            lock_path,
+            label,
+            options,
+            started: Instant::now(),
+            warned: false,
+            retry: CONTENDED_RETRY_FIRST,
+        }
+    }
+
+    /// Account for one refusal: time out past the deadline, warn once past
+    /// the warning threshold naming `holder()`, otherwise sleep before the
+    /// next attempt.
+    fn refused(&mut self, holder: impl FnOnce() -> String) -> io::Result<()> {
+        let elapsed = self.started.elapsed();
+        if elapsed >= self.options.timeout {
+            let timeout = FileLockTimeout {
+                lock_path: self.lock_path.to_path_buf(),
+                label: self.label.to_string(),
+                timeout_ms: duration_millis(self.options.timeout),
+                holder: read_file_lock_holder(self.lock_path),
+                shared_holders: read_shared_file_lock_holders(self.lock_path),
+            };
+            return Err(io::Error::new(io::ErrorKind::TimedOut, timeout));
+        }
+        if !self.warned && elapsed >= self.options.warn_after {
+            self.warned = true;
+            warn_for_contention(self.lock_path, self.label, elapsed, &holder());
+        }
+        std::thread::sleep(self.retry.min(self.options.timeout - elapsed));
+        self.retry = (self.retry * 2).min(CONTENDED_RETRY_LONGEST);
+        Ok(())
     }
 }
 
@@ -207,17 +275,6 @@ fn warn_for_unclaimed_refusal(lock_path: &Path, label: &str, elapsed: Duration) 
         waited_ms = duration_millis(elapsed),
         "advisory file lock refused with no holder recorded; treating as contention",
     );
-}
-
-/// What [`probe_file_lock`] found at a lock path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileLockProbe {
-    /// Nothing is named there.
-    Absent,
-    /// Some open file description holds the lock.
-    Held,
-    /// The file is there and nobody holds its lock.
-    Free,
 }
 
 /// Whether anyone holds an advisory lock on the file at the exact
@@ -365,63 +422,6 @@ fn acquire_file_lock(
                 }));
             }
         }
-    }
-}
-
-struct AcquisitionTiming(Instant);
-
-impl Drop for AcquisitionTiming {
-    fn drop(&mut self) {
-        crate::fs::lock_wait::record(self.0.elapsed());
-    }
-}
-
-/// One acquisition's deadline, contention warning and retry pacing, shared by
-/// its turnstile and lock waits so the two together stay within one deadline.
-struct ContentionWait<'a> {
-    lock_path: &'a Path,
-    label: &'a str,
-    options: FileLockOptions,
-    started: Instant,
-    warned: bool,
-    /// The pause before the next attempt; see [`CONTENDED_RETRY_FIRST`].
-    retry: Duration,
-}
-
-impl<'a> ContentionWait<'a> {
-    fn new(lock_path: &'a Path, label: &'a str, options: FileLockOptions) -> Self {
-        Self {
-            lock_path,
-            label,
-            options,
-            started: Instant::now(),
-            warned: false,
-            retry: CONTENDED_RETRY_FIRST,
-        }
-    }
-
-    /// Account for one refusal: time out past the deadline, warn once past
-    /// the warning threshold naming `holder()`, otherwise sleep before the
-    /// next attempt.
-    fn refused(&mut self, holder: impl FnOnce() -> String) -> io::Result<()> {
-        let elapsed = self.started.elapsed();
-        if elapsed >= self.options.timeout {
-            let timeout = FileLockTimeout {
-                lock_path: self.lock_path.to_path_buf(),
-                label: self.label.to_string(),
-                timeout_ms: duration_millis(self.options.timeout),
-                holder: read_file_lock_holder(self.lock_path),
-                shared_holders: read_shared_file_lock_holders(self.lock_path),
-            };
-            return Err(io::Error::new(io::ErrorKind::TimedOut, timeout));
-        }
-        if !self.warned && elapsed >= self.options.warn_after {
-            self.warned = true;
-            warn_for_contention(self.lock_path, self.label, elapsed, &holder());
-        }
-        std::thread::sleep(self.retry.min(self.options.timeout - elapsed));
-        self.retry = (self.retry * 2).min(CONTENDED_RETRY_LONGEST);
-        Ok(())
     }
 }
 

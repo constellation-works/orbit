@@ -4,23 +4,6 @@ use crate::governance::operation::{
     ToolOnlyRegistration, UnknownFields, both, operation_registry, required,
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
-operation_registry! {
-    noun: EVOLUTION;
-    /// Evolution ledger verbs.
-    pub enum EvolutionVerb;
-    /// Evolution operations in CLI order.
-    pub const EVOLUTION_OPERATIONS;
-    {
-        /// Record a cost outside a checkpoint.
-        Add => ADD,
-        /// List signature aggregates.
-        List => LIST,
-        /// Inspect a signature and its occurrences.
-        Show => SHOW,
-        /// Suppress proposals for a signature (operator only).
-        Decline => DECLINE,
-    }
-}
 /// Shared evolution surface declaration.
 pub const EVOLUTION: NounSpec<EvolutionVerb> = NounSpec {
     cli_name: "evolution",
@@ -151,3 +134,21 @@ const DECLINE: OperationSpec<EvolutionVerb> = OperationSpec {
         "an evolution record id is workspace-local and carries no host prefix",
     ),
 };
+
+operation_registry! {
+    noun: EVOLUTION;
+    /// Evolution ledger verbs.
+    pub enum EvolutionVerb;
+    /// Evolution operations in CLI order.
+    pub const EVOLUTION_OPERATIONS;
+    {
+        /// Record a cost outside a checkpoint.
+        Add => ADD,
+        /// List signature aggregates.
+        List => LIST,
+        /// Inspect a signature and its occurrences.
+        Show => SHOW,
+        /// Suppress proposals for a signature (operator only).
+        Decline => DECLINE,
+    }
+}

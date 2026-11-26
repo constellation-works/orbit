@@ -11,18 +11,6 @@ use std::ffi::OsStr;
 
 use crate::env::Env;
 
-/// Documentation for one fixed process environment variable.
-pub struct EnvVarDoc {
-    /// The name used for the process environment lookup.
-    pub name: &'static str,
-    /// What the variable controls.
-    pub meaning: &'static str,
-    /// The behavior when the variable is unset.
-    pub default: &'static str,
-    /// How the variable relates to an existing CLI flag, if any.
-    pub flag: Option<&'static str>,
-}
-
 macro_rules! env_vars {
     ($(
         $(#[$hook:ident])?
@@ -718,4 +706,16 @@ env_vars! {
         "XDG runtime directory used to locate IPC sockets and forwarded to GitHub CLI.",
         "Unset.",
     );
+}
+
+/// Documentation for one fixed process environment variable.
+pub struct EnvVarDoc {
+    /// The name used for the process environment lookup.
+    pub name: &'static str,
+    /// What the variable controls.
+    pub meaning: &'static str,
+    /// The behavior when the variable is unset.
+    pub default: &'static str,
+    /// How the variable relates to an existing CLI flag, if any.
+    pub flag: Option<&'static str>,
 }

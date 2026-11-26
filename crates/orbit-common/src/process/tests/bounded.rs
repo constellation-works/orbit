@@ -13,6 +13,93 @@ use crate::process::shell::quote_posix_arg;
 use crate::process::{run_bounded, run_bounded_capped};
 
 #[cfg(unix)]
+const FLOOD_WRITERS: usize = 16;
+
+/// Kills recorded children if the supervisor does not, including when an
+/// assertion panics or a drain fails to return. A pid is signalled only when
+/// its argv can be read and contains every required marker, including its
+/// unique recorded path. Unreadable argv authorizes nothing. Cleanup signals
+/// individual pids, never a discovered group.
+#[cfg(unix)]
+struct FloodCleanup {
+    cancel: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+    leader_path: PathBuf,
+    kids_dir: PathBuf,
+    leader_marker: Vec<u8>,
+}
+
+#[cfg(unix)]
+impl FloodCleanup {
+    fn arm(
+        leader_path: PathBuf,
+        kids_dir: PathBuf,
+        leader_marker: Vec<u8>,
+        hard: Duration,
+    ) -> Self {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&cancel);
+        let leader = leader_path.clone();
+        let kids = kids_dir.clone();
+        let marker = leader_marker.clone();
+        let handle = thread::spawn(move || {
+            let deadline = Instant::now() + hard;
+            while Instant::now() < deadline {
+                if flag.load(Ordering::SeqCst) {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            if flag.load(Ordering::SeqCst) {
+                return;
+            }
+            reap_recorded(&leader, &marker, &kids);
+        });
+        Self {
+            cancel,
+            handle: Some(handle),
+            leader_path,
+            kids_dir,
+            leader_marker,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for FloodCleanup {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+        reap_recorded(&self.leader_path, &self.leader_marker, &self.kids_dir);
+    }
+}
+
+/// What a platform argv read can honestly say about one pid.
+#[derive(Debug, PartialEq, Eq)]
+enum ArgvInspection {
+    /// Argv bytes, NUL-separated, with no environment trailer.
+    Present(Vec<u8>),
+    /// The pid is gone or is an unreaped zombie (`process_is_alive` is false).
+    NoProcess,
+    /// The process may still be running, but its argv could not be read or
+    /// was empty.
+    Unavailable(String),
+}
+
+/// How the leak assertion treats one inspection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReapVerdict {
+    /// Gone, zombie, or a live pid whose argv no longer contains the marker.
+    Reaped,
+    /// Alive and still the recorded command.
+    StillRecorded,
+    /// Inspection failed. This is not evidence that the process exited.
+    Uncertain,
+}
+
+#[cfg(unix)]
 #[test]
 fn bounded_run_returns_when_a_descendant_holds_either_pipe() {
     // Each case leaves a descendant holding exactly one of the output pipes
@@ -177,9 +264,6 @@ fn read_pid(path: &std::path::Path) -> u32 {
 }
 
 #[cfg(unix)]
-const FLOOD_WRITERS: usize = 16;
-
-#[cfg(unix)]
 fn write_flood_script(
     script: &Path,
     leader: &Path,
@@ -238,67 +322,6 @@ fn write_flood_script(
     fs::write(script, body).expect("script");
 }
 
-/// Kills recorded children if the supervisor does not, including when an
-/// assertion panics or a drain fails to return. A pid is signalled only when
-/// its argv can be read and contains every required marker, including its
-/// unique recorded path. Unreadable argv authorizes nothing. Cleanup signals
-/// individual pids, never a discovered group.
-#[cfg(unix)]
-struct FloodCleanup {
-    cancel: Arc<AtomicBool>,
-    handle: Option<thread::JoinHandle<()>>,
-    leader_path: PathBuf,
-    kids_dir: PathBuf,
-    leader_marker: Vec<u8>,
-}
-
-#[cfg(unix)]
-impl FloodCleanup {
-    fn arm(
-        leader_path: PathBuf,
-        kids_dir: PathBuf,
-        leader_marker: Vec<u8>,
-        hard: Duration,
-    ) -> Self {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&cancel);
-        let leader = leader_path.clone();
-        let kids = kids_dir.clone();
-        let marker = leader_marker.clone();
-        let handle = thread::spawn(move || {
-            let deadline = Instant::now() + hard;
-            while Instant::now() < deadline {
-                if flag.load(Ordering::SeqCst) {
-                    return;
-                }
-                thread::sleep(Duration::from_millis(20));
-            }
-            if flag.load(Ordering::SeqCst) {
-                return;
-            }
-            reap_recorded(&leader, &marker, &kids);
-        });
-        Self {
-            cancel,
-            handle: Some(handle),
-            leader_path,
-            kids_dir,
-            leader_marker,
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for FloodCleanup {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-        reap_recorded(&self.leader_path, &self.leader_marker, &self.kids_dir);
-    }
-}
-
 #[cfg(unix)]
 fn reap_recorded(leader_path: &Path, leader_marker: &[u8], kids_dir: &Path) {
     if let Some(pid) = read_pid_optional(leader_path) {
@@ -331,29 +354,6 @@ fn kill_if_cmdline(pid: u32, markers: &[&[u8]]) {
     unsafe {
         libc::kill(pid, libc::SIGKILL);
     }
-}
-
-/// What a platform argv read can honestly say about one pid.
-#[derive(Debug, PartialEq, Eq)]
-enum ArgvInspection {
-    /// Argv bytes, NUL-separated, with no environment trailer.
-    Present(Vec<u8>),
-    /// The pid is gone or is an unreaped zombie (`process_is_alive` is false).
-    NoProcess,
-    /// The process may still be running, but its argv could not be read or
-    /// was empty.
-    Unavailable(String),
-}
-
-/// How the leak assertion treats one inspection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReapVerdict {
-    /// Gone, zombie, or a live pid whose argv no longer contains the marker.
-    Reaped,
-    /// Alive and still the recorded command.
-    StillRecorded,
-    /// Inspection failed. This is not evidence that the process exited.
-    Uncertain,
 }
 
 fn reap_verdict(inspection: &ArgvInspection, marker: &[u8]) -> ReapVerdict {

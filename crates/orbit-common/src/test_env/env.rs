@@ -11,56 +11,6 @@ thread_local! {
     static SCOPED_ENV_HELD: Cell<bool> = const { Cell::new(false) };
 }
 
-struct ScopedEnvThreadOwner;
-
-impl ScopedEnvThreadOwner {
-    fn acquire() -> Self {
-        SCOPED_ENV_HELD.with(|held| {
-            assert!(
-                !held.replace(true),
-                "only one `ScopedEnv` may be held per scope; combine variables into one `scoped` call"
-            );
-        });
-        Self
-    }
-}
-
-impl Drop for ScopedEnvThreadOwner {
-    fn drop(&mut self) {
-        SCOPED_ENV_HELD.with(|held| held.set(false));
-    }
-}
-
-pub(crate) fn scoped_env_active() -> bool {
-    ACTIVE_SCOPED_ENVS.load(Ordering::SeqCst) != 0
-}
-
-/// Restore real durability syncs, process-wide, until the returned guard drops.
-///
-/// Test runs set [`RELAXED_DURABILITY_ENV`](crate::fs::io::RELAXED_DURABILITY_ENV),
-/// so `fs::io::sync_file`, `sync_file_data` and `sqlite_synchronous` skip
-/// their flush. A test whose subject is the sync itself, or a durability or
-/// crash-recovery path that should exercise the real call, holds this guard.
-/// It is process-wide because a sync can run on another thread, so tests
-/// running beside it only pay for real syncs again. A SQLite connection keeps
-/// the level it was opened with, so take the guard before opening the store.
-/// An `orbit` child the test spawns reads its own environment: remove the
-/// variable from that child's command instead.
-#[must_use = "real syncs last only while the guard lives"]
-pub fn require_durable_syncs() -> DurableSyncs {
-    crate::fs::io::DURABLE_SYNC_HOLDS.fetch_add(1, Ordering::SeqCst);
-    DurableSyncs(())
-}
-
-/// Guard from [`require_durable_syncs`].
-pub struct DurableSyncs(());
-
-impl Drop for DurableSyncs {
-    fn drop(&mut self) {
-        crate::fs::io::DURABLE_SYNC_HOLDS.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
 /// The variables an `orbit-engine` managed run exports into every spawned
 /// activity (see `orbit-engine/src/context/env.rs`): job/task/session
 /// identity plus the "this is a managed run" marker. A test that asserts
@@ -163,22 +113,32 @@ pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     env_vars::ORBIT_PLUGIN_BROKER,
 ];
 
-/// Clear every [`INHERITED_AUTHORITY_ENV`] variable from a child command.
-///
-/// `clear` is the command builder's `env_remove`. Passing it as a closure
-/// keeps this crate free of a test-harness dependency while still giving every
-/// fixture one shared list to drift against:
-///
-/// ```ignore
-/// let mut command = cargo_bin_cmd!("orbit");
-/// test_env::clear_inherited_authority(|name| {
-///     command.env_remove(name);
-/// });
-/// command.current_dir(work).env("HOME", home);
-/// ```
-pub fn clear_inherited_authority(mut clear: impl FnMut(&str)) {
-    for name in INHERITED_AUTHORITY_ENV {
-        clear(name);
+struct ScopedEnvThreadOwner;
+
+impl ScopedEnvThreadOwner {
+    fn acquire() -> Self {
+        SCOPED_ENV_HELD.with(|held| {
+            assert!(
+                !held.replace(true),
+                "only one `ScopedEnv` may be held per scope; combine variables into one `scoped` call"
+            );
+        });
+        Self
+    }
+}
+
+impl Drop for ScopedEnvThreadOwner {
+    fn drop(&mut self) {
+        SCOPED_ENV_HELD.with(|held| held.set(false));
+    }
+}
+
+/// Guard from [`require_durable_syncs`].
+pub struct DurableSyncs(());
+
+impl Drop for DurableSyncs {
+    fn drop(&mut self) {
+        crate::fs::io::DURABLE_SYNC_HOLDS.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -196,6 +156,61 @@ pub struct ScopedEnv {
     _thread_owner: ScopedEnvThreadOwner,
     _lock: MutexGuard<'static, ()>,
     saved: Vec<(String, Option<String>)>,
+}
+
+impl Drop for ScopedEnv {
+    fn drop(&mut self) {
+        // SAFETY: the guard still holds the process-wide lock here.
+        unsafe {
+            for (name, value) in &self.saved {
+                match value {
+                    Some(value) => crate::env::set_process_var(name, value),
+                    None => crate::env::remove_process_var(name),
+                }
+            }
+        }
+        ACTIVE_SCOPED_ENVS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+pub(crate) fn scoped_env_active() -> bool {
+    ACTIVE_SCOPED_ENVS.load(Ordering::SeqCst) != 0
+}
+
+/// Restore real durability syncs, process-wide, until the returned guard drops.
+///
+/// Test runs set [`RELAXED_DURABILITY_ENV`](crate::fs::io::RELAXED_DURABILITY_ENV),
+/// so `fs::io::sync_file`, `sync_file_data` and `sqlite_synchronous` skip
+/// their flush. A test whose subject is the sync itself, or a durability or
+/// crash-recovery path that should exercise the real call, holds this guard.
+/// It is process-wide because a sync can run on another thread, so tests
+/// running beside it only pay for real syncs again. A SQLite connection keeps
+/// the level it was opened with, so take the guard before opening the store.
+/// An `orbit` child the test spawns reads its own environment: remove the
+/// variable from that child's command instead.
+#[must_use = "real syncs last only while the guard lives"]
+pub fn require_durable_syncs() -> DurableSyncs {
+    crate::fs::io::DURABLE_SYNC_HOLDS.fetch_add(1, Ordering::SeqCst);
+    DurableSyncs(())
+}
+
+/// Clear every [`INHERITED_AUTHORITY_ENV`] variable from a child command.
+///
+/// `clear` is the command builder's `env_remove`. Passing it as a closure
+/// keeps this crate free of a test-harness dependency while still giving every
+/// fixture one shared list to drift against:
+///
+/// ```ignore
+/// let mut command = cargo_bin_cmd!("orbit");
+/// test_env::clear_inherited_authority(|name| {
+///     command.env_remove(name);
+/// });
+/// command.current_dir(work).env("HOME", home);
+/// ```
+pub fn clear_inherited_authority(mut clear: impl FnMut(&str)) {
+    for name in INHERITED_AUTHORITY_ENV {
+        clear(name);
+    }
 }
 
 /// Clear `names` for the returned guard's lifetime, restoring prior values on
@@ -252,20 +267,5 @@ pub fn scoped<'a>(vars: impl IntoIterator<Item = (&'a str, Option<&'a str>)>) ->
         _thread_owner: thread_owner,
         _lock: lock,
         saved,
-    }
-}
-
-impl Drop for ScopedEnv {
-    fn drop(&mut self) {
-        // SAFETY: the guard still holds the process-wide lock here.
-        unsafe {
-            for (name, value) in &self.saved {
-                match value {
-                    Some(value) => crate::env::set_process_var(name, value),
-                    None => crate::env::remove_process_var(name),
-                }
-            }
-        }
-        ACTIVE_SCOPED_ENVS.fetch_sub(1, Ordering::SeqCst);
     }
 }

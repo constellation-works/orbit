@@ -37,6 +37,9 @@ const IN_ACTIVITY: &str = "This command runs inside an Orbit-managed activity, w
 const CONTENDED: &str = "Retry the command; nothing is upgrading. If startups on this host \
      routinely take this long, raise the admission wait";
 
+const UNREGISTERED: &str = "processes that did not register (executable-generation-v1 \
+     binaries, or sandboxed children that cannot write the Orbit root)";
+
 pub(crate) fn upgrade_admission_refusal(
     kind: UpgradeAdmissionRefusalKind,
     detail: impl std::fmt::Display,
@@ -134,9 +137,6 @@ pub(super) fn quiesce_timeout(
         ),
     )
 }
-
-const UNREGISTERED: &str = "processes that did not register (executable-generation-v1 \
-     binaries, or sandboxed children that cannot write the Orbit root)";
 
 /// Live participants keep an updater out: each named with its role and what
 /// would end its hold. With none registered, the holder never registered.

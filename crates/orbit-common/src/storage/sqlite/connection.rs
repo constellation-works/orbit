@@ -36,6 +36,42 @@ pub struct OpenedConnection {
     pub currency: ObservationCurrency,
 }
 
+/// Result of [`apply_default_pragmas`]: what SQLite actually settled on for
+/// the best-effort settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PragmaOutcome {
+    /// Journal mode active after the WAL request, lowercased by SQLite
+    /// convention (`wal`, `memory` for in-memory databases, or a fallback
+    /// such as `delete` when the filesystem refuses WAL sidecars).
+    pub journal_mode: String,
+    /// The connection refused a persistence pragma because its backing store
+    /// is read-only. Callers that need sidecar-free reads should reopen it
+    /// with [`open_observational`].
+    pub write_denied: bool,
+}
+
+/// Whether a connection keeps up with commits another process makes after the
+/// connection was opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservationCurrency {
+    /// Ordinary access: every statement re-reads the database files, so a
+    /// commit that lands after this connection was opened becomes visible to
+    /// the next query.
+    Live,
+    /// `immutable=1`: the connection reads the main database file alone and is
+    /// free to cache it forever.
+    ///
+    /// It is not a guaranteed snapshot. It ignores every `-wal`, including one
+    /// a writer creates after the open, so later commits stay invisible; and
+    /// because `immutable=1` promises SQLite that the bytes never change, a
+    /// writer that later checkpoints into the main file can leave this
+    /// connection returning results that are not merely stale but internally
+    /// inconsistent. It is only sound for a database published as a static
+    /// file set, which Orbit accepts when opening read-only storage.
+    /// Observing current state again means opening a new connection.
+    MainFileOnly,
+}
+
 /// Open an Orbit SQLite database without exposing its persisted state.
 ///
 /// Writable databases are created or repaired to owner-only access on Unix.
@@ -113,20 +149,6 @@ fn open_private_read_only(
     open_observational(&path)
 }
 
-/// Result of [`apply_default_pragmas`]: what SQLite actually settled on for
-/// the best-effort settings.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PragmaOutcome {
-    /// Journal mode active after the WAL request, lowercased by SQLite
-    /// convention (`wal`, `memory` for in-memory databases, or a fallback
-    /// such as `delete` when the filesystem refuses WAL sidecars).
-    pub journal_mode: String,
-    /// The connection refused a persistence pragma because its backing store
-    /// is read-only. Callers that need sidecar-free reads should reopen it
-    /// with [`open_observational`].
-    pub write_denied: bool,
-}
-
 /// Apply the Orbit-wide SQLite connection defaults:
 ///
 /// - `journal_mode=WAL` — best-effort: when the database file is read-only
@@ -181,28 +203,6 @@ fn apply_default_pragmas_inner(
         journal_mode,
         write_denied,
     })
-}
-
-/// Whether a connection keeps up with commits another process makes after the
-/// connection was opened.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ObservationCurrency {
-    /// Ordinary access: every statement re-reads the database files, so a
-    /// commit that lands after this connection was opened becomes visible to
-    /// the next query.
-    Live,
-    /// `immutable=1`: the connection reads the main database file alone and is
-    /// free to cache it forever.
-    ///
-    /// It is not a guaranteed snapshot. It ignores every `-wal`, including one
-    /// a writer creates after the open, so later commits stay invisible; and
-    /// because `immutable=1` promises SQLite that the bytes never change, a
-    /// writer that later checkpoints into the main file can leave this
-    /// connection returning results that are not merely stale but internally
-    /// inconsistent. It is only sound for a database published as a static
-    /// file set, which Orbit accepts when opening read-only storage.
-    /// Observing current state again means opening a new connection.
-    MainFileOnly,
 }
 
 /// Open an existing SQLite database for reads that must not write to it, and

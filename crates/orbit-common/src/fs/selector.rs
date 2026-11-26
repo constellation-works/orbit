@@ -27,17 +27,6 @@ pub struct SelectorParseError {
     pub reason: String,
 }
 
-/// Translate a [`SelectorParseError`] into the workspace-public [`OrbitError`]
-/// surface at crate boundaries.
-///
-/// A parse failure is always caller input, so it maps to
-/// [`OrbitError::InvalidInput`]. Callers translate with
-/// `.map_err(selector_error_to_orbit)?` per
-/// `docs/design-patterns/error_translation.md` [ORB-10013].
-pub fn selector_error_to_orbit(error: SelectorParseError) -> OrbitError {
-    OrbitError::InvalidInput(format!("invalid selector: {error}"))
-}
-
 /// Canonical selector.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Selector {
@@ -216,111 +205,6 @@ impl FromStr for Selector {
     }
 }
 
-/// Convert a selector or legacy path-like input into canonical selector form.
-///
-/// Accepted inputs are canonical selectors (`file:`, `dir:`, `symbol:`,
-/// `module:`, `command:`), raw paths, and raw `path:line` / `path:start-end`
-/// references. Legacy path references canonicalize to `file:<path>` unless
-/// they end with `/` or point at `.` / `..`, in which case they canonicalize
-/// to `dir:<path>`.
-pub fn canonical_selector(input: &str) -> Result<String, SelectorParseError> {
-    Ok(match ParsedScope::parse(input)? {
-        ParsedScope::Selector(selector) => selector.to_string(),
-        ParsedScope::LegacyPath { path, is_dir_hint } => {
-            if is_dir_hint {
-                format!("dir:{path}")
-            } else {
-                format!("file:{path}")
-            }
-        }
-    })
-}
-
-/// Canonicalize a selector or legacy path against a workspace root.
-///
-/// This is stricter than [`canonical_selector`]: absolute anchors inside the
-/// workspace are rewritten to workspace-relative form, and legacy paths that
-/// resolve to directories on disk canonicalize to `dir:<path>`.
-pub fn canonical_selector_in_workspace(
-    input: &str,
-    workspace: &Path,
-) -> Result<String, SelectorParseError> {
-    let parsed = ParsedScope::parse(input)?;
-    match parsed {
-        ParsedScope::Selector(selector) => {
-            if let Some(anchor) = selector.anchor_path() {
-                let (path, _) = normalize_workspace_anchor(anchor, workspace)?;
-                Ok(selector.with_path(path).to_string())
-            } else {
-                Ok(selector.to_string())
-            }
-        }
-        ParsedScope::LegacyPath { path, is_dir_hint } => {
-            // Use the already-validated, canonicalized anchor for the
-            // filesystem check instead of re-deriving a path from the
-            // caller-provided string: that avoids a second, unchecked
-            // filesystem access built from tainted input.
-            let (path, resolved) = normalize_workspace_anchor(path.as_str(), workspace)?;
-            if is_dir_hint || resolved.is_dir() {
-                Ok(format!("dir:{path}"))
-            } else {
-                Ok(format!("file:{path}"))
-            }
-        }
-    }
-}
-
-/// Return the filesystem anchor path for a selector or legacy path-like input.
-///
-/// For `symbol:` selectors this strips the symbol metadata and returns only the
-/// backing file path. Legacy `path:line` references are reduced to their file
-/// path anchor. `module:` / `command:` selectors have no filesystem anchor and
-/// return an error.
-pub fn anchor_path(selector: &str) -> Result<PathBuf, SelectorParseError> {
-    let parsed = ParsedScope::parse(selector)?;
-    parsed
-        .anchor_path()
-        .map(PathBuf::from)
-        .ok_or_else(|| SelectorParseError {
-            input: selector.to_string(),
-            reason: "selector has no filesystem anchor".to_string(),
-        })
-}
-
-/// Return whether a selector's filesystem anchor exists in the given workspace.
-///
-/// Relative anchors are resolved against `workspace`; absolute anchors are
-/// checked as-is. Invalid selector strings and anchor-less selectors return
-/// `false`. For `symbol:` this is the backing file only; the `#name:kind`
-/// half is not looked up.
-pub fn exists_in_workspace(selector: &str, workspace: &Path) -> bool {
-    let Ok(anchor) = anchor_path(selector) else {
-        return false;
-    };
-    let Ok(workspace) = workspace.canonicalize() else {
-        return false;
-    };
-    let Ok(resolved) = resolve_workspace_path(&workspace, anchor.as_path()).canonicalize() else {
-        return false;
-    };
-    resolved.starts_with(workspace)
-}
-
-/// Return whether two selector/path scopes overlap on the same filesystem
-/// anchor or on an ancestor/descendant boundary.
-///
-/// `symbol:file.rs#one:function` overlaps `symbol:file.rs#two:function` and
-/// `file:file.rs`. `dir:src` overlaps any selector anchored under `src/`.
-/// Legacy raw paths are treated conservatively and may overlap descendants.
-/// Anchor-less selectors (`module:` / `command:`) overlap only on exact
-/// textual equality.
-pub fn overlaps(a: &str, b: &str) -> bool {
-    match (OverlapScope::parse(a), OverlapScope::parse(b)) {
-        (Some(left), Some(right)) => left.overlaps(&right),
-        _ => false,
-    }
-}
-
 /// One side of an [`overlaps`] comparison, parsed once.
 ///
 /// [`overlaps`] parses both selectors on every call, which is fine for a
@@ -465,6 +349,122 @@ impl ParsedScope {
 
     fn can_contain_descendants(&self) -> bool {
         matches!(self.kind(), ParsedScopeKind::Dir | ParsedScopeKind::Legacy)
+    }
+}
+
+/// Translate a [`SelectorParseError`] into the workspace-public [`OrbitError`]
+/// surface at crate boundaries.
+///
+/// A parse failure is always caller input, so it maps to
+/// [`OrbitError::InvalidInput`]. Callers translate with
+/// `.map_err(selector_error_to_orbit)?` per
+/// `docs/design-patterns/error_translation.md` [ORB-10013].
+pub fn selector_error_to_orbit(error: SelectorParseError) -> OrbitError {
+    OrbitError::InvalidInput(format!("invalid selector: {error}"))
+}
+
+/// Convert a selector or legacy path-like input into canonical selector form.
+///
+/// Accepted inputs are canonical selectors (`file:`, `dir:`, `symbol:`,
+/// `module:`, `command:`), raw paths, and raw `path:line` / `path:start-end`
+/// references. Legacy path references canonicalize to `file:<path>` unless
+/// they end with `/` or point at `.` / `..`, in which case they canonicalize
+/// to `dir:<path>`.
+pub fn canonical_selector(input: &str) -> Result<String, SelectorParseError> {
+    Ok(match ParsedScope::parse(input)? {
+        ParsedScope::Selector(selector) => selector.to_string(),
+        ParsedScope::LegacyPath { path, is_dir_hint } => {
+            if is_dir_hint {
+                format!("dir:{path}")
+            } else {
+                format!("file:{path}")
+            }
+        }
+    })
+}
+
+/// Canonicalize a selector or legacy path against a workspace root.
+///
+/// This is stricter than [`canonical_selector`]: absolute anchors inside the
+/// workspace are rewritten to workspace-relative form, and legacy paths that
+/// resolve to directories on disk canonicalize to `dir:<path>`.
+pub fn canonical_selector_in_workspace(
+    input: &str,
+    workspace: &Path,
+) -> Result<String, SelectorParseError> {
+    let parsed = ParsedScope::parse(input)?;
+    match parsed {
+        ParsedScope::Selector(selector) => {
+            if let Some(anchor) = selector.anchor_path() {
+                let (path, _) = normalize_workspace_anchor(anchor, workspace)?;
+                Ok(selector.with_path(path).to_string())
+            } else {
+                Ok(selector.to_string())
+            }
+        }
+        ParsedScope::LegacyPath { path, is_dir_hint } => {
+            // Use the already-validated, canonicalized anchor for the
+            // filesystem check instead of re-deriving a path from the
+            // caller-provided string: that avoids a second, unchecked
+            // filesystem access built from tainted input.
+            let (path, resolved) = normalize_workspace_anchor(path.as_str(), workspace)?;
+            if is_dir_hint || resolved.is_dir() {
+                Ok(format!("dir:{path}"))
+            } else {
+                Ok(format!("file:{path}"))
+            }
+        }
+    }
+}
+
+/// Return the filesystem anchor path for a selector or legacy path-like input.
+///
+/// For `symbol:` selectors this strips the symbol metadata and returns only the
+/// backing file path. Legacy `path:line` references are reduced to their file
+/// path anchor. `module:` / `command:` selectors have no filesystem anchor and
+/// return an error.
+pub fn anchor_path(selector: &str) -> Result<PathBuf, SelectorParseError> {
+    let parsed = ParsedScope::parse(selector)?;
+    parsed
+        .anchor_path()
+        .map(PathBuf::from)
+        .ok_or_else(|| SelectorParseError {
+            input: selector.to_string(),
+            reason: "selector has no filesystem anchor".to_string(),
+        })
+}
+
+/// Return whether a selector's filesystem anchor exists in the given workspace.
+///
+/// Relative anchors are resolved against `workspace`; absolute anchors are
+/// checked as-is. Invalid selector strings and anchor-less selectors return
+/// `false`. For `symbol:` this is the backing file only; the `#name:kind`
+/// half is not looked up.
+pub fn exists_in_workspace(selector: &str, workspace: &Path) -> bool {
+    let Ok(anchor) = anchor_path(selector) else {
+        return false;
+    };
+    let Ok(workspace) = workspace.canonicalize() else {
+        return false;
+    };
+    let Ok(resolved) = resolve_workspace_path(&workspace, anchor.as_path()).canonicalize() else {
+        return false;
+    };
+    resolved.starts_with(workspace)
+}
+
+/// Return whether two selector/path scopes overlap on the same filesystem
+/// anchor or on an ancestor/descendant boundary.
+///
+/// `symbol:file.rs#one:function` overlaps `symbol:file.rs#two:function` and
+/// `file:file.rs`. `dir:src` overlaps any selector anchored under `src/`.
+/// Legacy raw paths are treated conservatively and may overlap descendants.
+/// Anchor-less selectors (`module:` / `command:`) overlap only on exact
+/// textual equality.
+pub fn overlaps(a: &str, b: &str) -> bool {
+    match (OverlapScope::parse(a), OverlapScope::parse(b)) {
+        (Some(left), Some(right)) => left.overlaps(&right),
+        _ => false,
     }
 }
 

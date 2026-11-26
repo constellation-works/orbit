@@ -1,72 +1,26 @@
 //  Public reverse-reader boundary and resource regression coverage.
-//  This binary owns its allocator so allocation volume can detect repeated
-//  carry copies deterministically, without timing limits or synthetic load.
-
-thread_local! {
-    static ALLOCATED: Cell<Option<usize>> = const { Cell::new(None) };
-}
-
-struct CountingAllocator;
-
-fn count_allocation(size: usize) {
-    let _ = ALLOCATED.try_with(|count| {
-        if let Some(total) = count.get() {
-            count.set(Some(total.saturating_add(size)));
-        }
-    });
-}
-
-// SAFETY: Every allocation operation delegates unchanged to System. The
-// thread-local counter is allocation-free and does not inspect pointers.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        count_allocation(layout.size());
-        // SAFETY: The caller supplies the layout required by System.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        count_allocation(layout.size());
-        // SAFETY: The caller supplies the layout required by System.
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: The pointer and layout are forwarded to their allocator.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        count_allocation(new_size);
-        // SAFETY: The original pointer, layout and new size are unchanged.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-struct Counting<'a> {
-    inner: Cursor<&'a [u8]>,
-    bytes_read: &'a Cell<usize>,
-}
-
-impl Read for Counting<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let read = self.inner.read(buf)?;
-        self.bytes_read.set(self.bytes_read.get() + read);
-        Ok(read)
-    }
-}
-
-impl Seek for Counting<'_> {
-    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
-        self.inner.seek(pos)
-    }
-}
 
 #[test]
 fn reverse_scans_preserve_lines_and_bound_reads_and_copy_allocations() {
+    struct Counting<'a> {
+        inner: Cursor<&'a [u8]>,
+        bytes_read: &'a Cell<usize>,
+    }
+
+    impl Read for Counting<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let read = self.inner.read(buf)?;
+            self.bytes_read.set(self.bytes_read.get() + read);
+            Ok(read)
+        }
+    }
+
+    impl Seek for Counting<'_> {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
     // Cross every delimiter, UTF-8 and cap boundary with different block sizes.
     for bytes in [
         "",

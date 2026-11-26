@@ -21,6 +21,10 @@ use super::paths::{IMAGE_DIGEST_CACHE, validated_generation_record_path};
 use super::refusal;
 use crate::{OrbitError, UpgradeAdmissionRefusalKind};
 
+/// The digest [`process_digest`] hashed to record under a generation root
+/// that did not exist yet, and the cache path it belongs at.
+static UNREMEMBERED: Mutex<Option<(PathBuf, image_digest::Unremembered)>> = Mutex::new(None);
+
 /// SHA-256 of the executable bytes, including checkout builds with equal versions.
 pub fn executable_generation(path: &Path) -> Result<String, OrbitError> {
     hash_executable(File::open(path).map_err(|error| {
@@ -47,10 +51,6 @@ fn hash_executable(mut file: File) -> Result<String, OrbitError> {
 pub fn process_generation(env: &crate::Env) -> Result<&'static str, OrbitError> {
     process_digest(env, None, false)
 }
-
-/// The digest [`process_digest`] hashed to record under a generation root
-/// that did not exist yet, and the cache path it belongs at.
-static UNREMEMBERED: Mutex<Option<(PathBuf, image_digest::Unremembered)>> = Mutex::new(None);
 
 /// [`process_generation`], answered from the digest cache under `cache_root`
 /// for as long as the running image's file identity is unchanged (see

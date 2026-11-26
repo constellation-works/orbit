@@ -159,6 +159,43 @@ impl Drop for Registration {
     }
 }
 
+/// A generation switch waiting for the live participants to yield.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingSwitch {
+    /// The waiting process.
+    pub pid: u32,
+    /// Role of the requester waiting for exclusive admission.
+    pub role: ParticipantRole,
+    /// Executable digest of the waiting binary.
+    pub digest: String,
+    /// The identity it will record once admitted.
+    pub target: CompatibilityIdentity,
+    /// UTC instant at which the waiter registered the pending switch.
+    pub requested_at: DateTime<Utc>,
+    /// When the waiter gives up and refuses.
+    pub deadline: DateTime<Utc>,
+    /// Set by an updater that renames nothing: it asks the long-lived
+    /// participants already running `digest` as `target` to hand over to
+    /// their own installed executable, so the generation is proven free of
+    /// every other holder before it is re-pinned. Builds that predate it read
+    /// the record without the field, as a switch to their own identity.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh: bool,
+}
+
+/// The waiter's hold on the pending record. Dropping it clears the switch.
+pub(super) struct PendingClaim {
+    file: File,
+}
+
+impl Drop for PendingClaim {
+    fn drop(&mut self) {
+        let _ = self.file.set_len(0);
+        let _ = crate::fs::io::sync_file_data(&self.file);
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
 /// Register `record` under `root`. Call with admission held, shared or
 /// exclusive.
 ///
@@ -341,43 +378,6 @@ fn read_record<T: for<'de> Deserialize<'de>>(file: &mut File) -> Option<T> {
     file.seek(SeekFrom::Start(0)).ok()?;
     file.read_to_string(&mut raw).ok()?;
     serde_json::from_str(&raw).ok()
-}
-
-/// A generation switch waiting for the live participants to yield.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PendingSwitch {
-    /// The waiting process.
-    pub pid: u32,
-    /// Role of the requester waiting for exclusive admission.
-    pub role: ParticipantRole,
-    /// Executable digest of the waiting binary.
-    pub digest: String,
-    /// The identity it will record once admitted.
-    pub target: CompatibilityIdentity,
-    /// UTC instant at which the waiter registered the pending switch.
-    pub requested_at: DateTime<Utc>,
-    /// When the waiter gives up and refuses.
-    pub deadline: DateTime<Utc>,
-    /// Set by an updater that renames nothing: it asks the long-lived
-    /// participants already running `digest` as `target` to hand over to
-    /// their own installed executable, so the generation is proven free of
-    /// every other holder before it is re-pinned. Builds that predate it read
-    /// the record without the field, as a switch to their own identity.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub refresh: bool,
-}
-
-/// The waiter's hold on the pending record. Dropping it clears the switch.
-pub(super) struct PendingClaim {
-    file: File,
-}
-
-impl Drop for PendingClaim {
-    fn drop(&mut self) {
-        let _ = self.file.set_len(0);
-        let _ = crate::fs::io::sync_file_data(&self.file);
-        let _ = FileExt::unlock(&self.file);
-    }
 }
 
 /// Record `switch` as pending. Call with exclusive admission held, after

@@ -6,11 +6,9 @@
 // The gate is a FIFO the writer opens on its first line, so the queue fills
 // before any byte is stored. No retries and no weaker count.
 
-const AGENT_FEED_CHILD: &str = "agent_feed_keeps_lines_while_its_writer_is_stalled_child";
-const AGENT_FEED_TARGET: &str = "orbit.test.agent_feed";
-
 #[test]
 fn agent_feed_keeps_lines_while_its_writer_is_stalled() {
+    const AGENT_FEED_CHILD: &str = "agent_feed_keeps_lines_while_its_writer_is_stalled_child";
     assert_child_test_exists(AGENT_FEED_CHILD);
     let home = tempfile::tempdir().expect("temp home");
     let gate = home.path().join("agent-write.gate");
@@ -42,6 +40,7 @@ fn agent_feed_keeps_lines_while_its_writer_is_stalled() {
 #[test]
 #[ignore = "re-executed by agent_feed_keeps_lines_while_its_writer_is_stalled"]
 fn agent_feed_keeps_lines_while_its_writer_is_stalled_child() {
+    const AGENT_FEED_TARGET: &str = "orbit.test.agent_feed";
     let lines = logging::JSONL_QUEUE_LINES + 2;
     logging::init_subscriber_with_file_filter(&orbit_common::Env::capture(), "error", "info");
 

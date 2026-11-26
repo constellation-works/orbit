@@ -23,42 +23,6 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-operation_registry! {
-    noun: DECISION;
-    /// The decision-request verbs.
-    pub enum DecisionVerb;
-    /// Decision operations in declaration order.
-    pub const DECISION_OPERATIONS;
-    {
-        /// Open decision requests across the workspace.
-        List => LIST,
-        /// One decision request with its answers and binding.
-        Show => SHOW,
-        /// Raise a multiple-choice decision request on a human-crew task.
-        Raise => RAISE,
-        /// Answer one open decision request (operator CLI only).
-        Answer => ANSWER,
-        /// Re-open a precedent or model answer (operator CLI only).
-        Reverse => REVERSE,
-        /// Set auto on one current corpus rule (operator CLI only).
-        RuleAuto => RULE_AUTO,
-        /// Propose corpus rule edits without writing them (operator CLI only).
-        Consolidate => CONSOLIDATE,
-        /// Submit a human's answer through a registered decision channel.
-        Submit => SUBMIT,
-        /// Raise missing approval requests and return the decision digest.
-        Digest => DIGEST,
-        /// Register a decision channel on this host (operator CLI only).
-        ChannelRegister => CHANNEL_REGISTER,
-        /// List this host's decision channels (operator CLI only).
-        ChannelList => CHANNEL_LIST,
-        /// Revoke a decision channel on this host (operator CLI only).
-        ChannelRevoke => CHANNEL_REVOKE,
-        /// Rotate a decision channel's token key (operator CLI only).
-        ChannelRotateKey => CHANNEL_ROTATE_KEY,
-    }
-}
-
 /// The decision noun's shared declaration.
 pub const DECISION: NounSpec<DecisionVerb> = NounSpec {
     cli_name: "decision",
@@ -513,3 +477,39 @@ const CHANNEL_ROTATE_KEY: OperationSpec<DecisionVerb> = OperationSpec {
     mcp_scope: None,
     id_route: McpIdRouteDeclaration::Unspecified,
 };
+
+operation_registry! {
+    noun: DECISION;
+    /// The decision-request verbs.
+    pub enum DecisionVerb;
+    /// Decision operations in declaration order.
+    pub const DECISION_OPERATIONS;
+    {
+        /// Open decision requests across the workspace.
+        List => LIST,
+        /// One decision request with its answers and binding.
+        Show => SHOW,
+        /// Raise a multiple-choice decision request on a human-crew task.
+        Raise => RAISE,
+        /// Answer one open decision request (operator CLI only).
+        Answer => ANSWER,
+        /// Re-open a precedent or model answer (operator CLI only).
+        Reverse => REVERSE,
+        /// Set auto on one current corpus rule (operator CLI only).
+        RuleAuto => RULE_AUTO,
+        /// Propose corpus rule edits without writing them (operator CLI only).
+        Consolidate => CONSOLIDATE,
+        /// Submit a human's answer through a registered decision channel.
+        Submit => SUBMIT,
+        /// Raise missing approval requests and return the decision digest.
+        Digest => DIGEST,
+        /// Register a decision channel on this host (operator CLI only).
+        ChannelRegister => CHANNEL_REGISTER,
+        /// List this host's decision channels (operator CLI only).
+        ChannelList => CHANNEL_LIST,
+        /// Revoke a decision channel on this host (operator CLI only).
+        ChannelRevoke => CHANNEL_REVOKE,
+        /// Rotate a decision channel's token key (operator CLI only).
+        ChannelRotateKey => CHANNEL_ROTATE_KEY,
+    }
+}

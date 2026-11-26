@@ -40,6 +40,41 @@ pub struct CapturedOutput {
     pub stderr: Vec<u8>,
 }
 
+/// Why a bounded run produced no output.
+#[derive(Debug)]
+pub enum BoundedRunError {
+    /// The OS refused to start the child. The error keeps its
+    /// [`io::ErrorKind`], so a caller can retry `ExecutableFileBusy` or tell
+    /// "program missing" from "permission denied".
+    Spawn(io::Error),
+    /// The child started, then waiting or output capture failed, or the deadline
+    /// elapsed ([`OrbitError::ProcessTimeout`]).
+    Run(OrbitError),
+}
+
+impl From<BoundedRunError> for OrbitError {
+    fn from(error: BoundedRunError) -> Self {
+        match error {
+            BoundedRunError::Spawn(error) => OrbitError::Execution(error.to_string()),
+            BoundedRunError::Run(error) => error,
+        }
+    }
+}
+
+/// Keep a prefix while continuing to read all later output.
+struct PrefixSink(BoundedOutputCapture);
+
+impl OutputSink for PrefixSink {
+    fn push(&mut self, bytes: &[u8]) -> SinkVerdict {
+        self.0.push(bytes);
+        SinkVerdict::Continue
+    }
+
+    fn finish(self: Box<Self>) -> Vec<u8> {
+        self.0.into_bytes()
+    }
+}
+
 /// Spawn `command` and wait at most `deadline`.
 ///
 /// Stdin is null and both output streams are captured, matching
@@ -79,27 +114,6 @@ pub fn run_bounded_capped(
     output_limit: usize,
 ) -> Result<CapturedOutput, OrbitError> {
     run_bounded_capped_typed(command, deadline, output_limit).map_err(OrbitError::from)
-}
-
-/// Why a bounded run produced no output.
-#[derive(Debug)]
-pub enum BoundedRunError {
-    /// The OS refused to start the child. The error keeps its
-    /// [`io::ErrorKind`], so a caller can retry `ExecutableFileBusy` or tell
-    /// "program missing" from "permission denied".
-    Spawn(io::Error),
-    /// The child started, then waiting or output capture failed, or the deadline
-    /// elapsed ([`OrbitError::ProcessTimeout`]).
-    Run(OrbitError),
-}
-
-impl From<BoundedRunError> for OrbitError {
-    fn from(error: BoundedRunError) -> Self {
-        match error {
-            BoundedRunError::Spawn(error) => OrbitError::Execution(error.to_string()),
-            BoundedRunError::Run(error) => error,
-        }
-    }
 }
 
 /// [`run_bounded_capped`] that reports a failed spawn as its [`io::Error`].
@@ -191,20 +205,6 @@ fn run_with_completion(
         stdout: outcome.stdout,
         stderr: outcome.stderr,
     })
-}
-
-/// Keep a prefix while continuing to read all later output.
-struct PrefixSink(BoundedOutputCapture);
-
-impl OutputSink for PrefixSink {
-    fn push(&mut self, bytes: &[u8]) -> SinkVerdict {
-        self.0.push(bytes);
-        SinkVerdict::Continue
-    }
-
-    fn finish(self: Box<Self>) -> Vec<u8> {
-        self.0.into_bytes()
-    }
 }
 
 #[cfg(unix)]

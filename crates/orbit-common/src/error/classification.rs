@@ -18,6 +18,11 @@ pub const JSON_RPC_INVALID_PARAMS_CODE: i64 = -32602;
 /// never searched inside a formatted message.
 const UNKNOWN_INTERNAL_DRAIN_OPERATION_RPC_MESSAGE: &str = "unknown internal drain operation";
 
+/// The stable tool error code for a call that lost only to a lock-wait
+/// deadline ([`OrbitError::is_lock_busy`]). Retryable: unlike
+/// `internal_error`, it says the call can succeed unchanged later.
+pub const LOCK_BUSY_ERROR_CODE: &str = RemoteToolCode::LockBusy.as_str();
+
 impl OrbitError {
     /// Whether this is a store refusal from an observation-only open whose
     /// remedy is one ordinary writable open (for example `orbit task list`).
@@ -842,11 +847,6 @@ impl OrbitError {
         }
     }
 }
-
-/// The stable tool error code for a call that lost only to a lock-wait
-/// deadline ([`OrbitError::is_lock_busy`]). Retryable: unlike
-/// `internal_error`, it says the call can succeed unchanged later.
-pub const LOCK_BUSY_ERROR_CODE: &str = RemoteToolCode::LockBusy.as_str();
 
 /// Whether an error's text says it lost only to a lock-wait deadline, for an
 /// error that reached this process as text rather than as a typed

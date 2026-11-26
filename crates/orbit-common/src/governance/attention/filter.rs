@@ -26,21 +26,7 @@ pub struct AttentionFilter {
     /// Whether the federated aggregator asked for its candidate read.
     pub candidate_read: bool,
 }
-/// One string or an array of strings under `key`; anything else is empty.
-pub fn attention_strings(input: &Value, key: &str) -> Vec<String> {
-    input
-        .get(key)
-        .map(|value| match value {
-            Value::String(value) => vec![value.clone()],
-            Value::Array(values) => values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect(),
-            _ => Vec::new(),
-        })
-        .unwrap_or_default()
-}
+
 impl AttentionFilter {
     /// Validate an input against the operation spec and the closed vocabularies.
     pub fn parse(input: Value) -> Result<Self, OrbitError> {
@@ -163,4 +149,20 @@ impl AttentionFilter {
         }
         true
     }
+}
+
+/// One string or an array of strings under `key`; anything else is empty.
+pub fn attention_strings(input: &Value, key: &str) -> Vec<String> {
+    input
+        .get(key)
+        .map(|value| match value {
+            Value::String(value) => vec![value.clone()],
+            Value::Array(values) => values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            _ => Vec::new(),
+        })
+        .unwrap_or_default()
 }

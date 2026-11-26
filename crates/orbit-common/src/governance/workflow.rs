@@ -11,32 +11,6 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-operation_registry! {
-    noun: WORKFLOW;
-    /// The workflow-run verbs, joining their specs to exhaustive surface tables.
-    pub enum WorkflowVerb;
-    /// Operations in tool-name order.
-    pub const WORKFLOW_OPERATIONS;
-    {
-        /// `orbit.workflow.auto`.
-        Auto => AUTO,
-        /// `orbit.workflow.land`.
-        Land => LAND,
-        /// `orbit.workflow.refresh`.
-        Refresh => REFRESH,
-        /// `orbit.workflow.run.list`.
-        RunList => RUN_LIST,
-        /// `orbit.workflow.run.observe`.
-        RunObserve => RUN_OBSERVE,
-        /// `orbit.workflow.run.resume`.
-        RunResume => RUN_RESUME,
-        /// `orbit.workflow.run.show`.
-        RunShow => RUN_SHOW,
-        /// `orbit.workflow.ship`.
-        Ship => SHIP,
-    }
-}
-
 /// The tool-only workflow-run noun.
 pub const WORKFLOW: NounSpec<WorkflowVerb> = NounSpec {
     cli_name: "run",
@@ -370,6 +344,32 @@ const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
+
+operation_registry! {
+    noun: WORKFLOW;
+    /// The workflow-run verbs, joining their specs to exhaustive surface tables.
+    pub enum WorkflowVerb;
+    /// Operations in tool-name order.
+    pub const WORKFLOW_OPERATIONS;
+    {
+        /// `orbit.workflow.auto`.
+        Auto => AUTO,
+        /// `orbit.workflow.land`.
+        Land => LAND,
+        /// `orbit.workflow.refresh`.
+        Refresh => REFRESH,
+        /// `orbit.workflow.run.list`.
+        RunList => RUN_LIST,
+        /// `orbit.workflow.run.observe`.
+        RunObserve => RUN_OBSERVE,
+        /// `orbit.workflow.run.resume`.
+        RunResume => RUN_RESUME,
+        /// `orbit.workflow.run.show`.
+        RunShow => RUN_SHOW,
+        /// `orbit.workflow.ship`.
+        Ship => SHIP,
+    }
+}
 
 /// Refuse malformed or incompatible explicit modes before generic optional
 /// field normalization can turn a supplied null into an omitted setting.

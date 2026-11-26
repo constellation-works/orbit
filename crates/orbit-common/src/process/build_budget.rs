@@ -35,6 +35,96 @@ struct WaitSnapshot {
     finished: bool,
 }
 
+/// Resolved host slot capacity and the operator's settings path.
+pub struct BuildBudgetCapacity {
+    /// Resolved slot count after applying environment, settings and default precedence.
+    pub slots: u32,
+    /// Whether the host's build admission wrapper is enabled.
+    pub enabled: bool,
+    /// Path to the slot-count settings file, even if the override or default won.
+    pub settings_file: PathBuf,
+}
+
+impl BuildBudgetCapacity {
+    /// Read the same environment/file/default precedence as build-budget.py.
+    pub fn read(env: &crate::Env) -> Result<Self, OrbitError> {
+        let directory = env
+            .orbit_build_budget_dir()
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .map(|path| {
+                if let Ok(rest) = path.strip_prefix("~/") {
+                    crate::fs::path::home_dir(env).map(|home| home.join(rest))
+                } else {
+                    Ok(path)
+                }
+            })
+            .transpose()?
+            .unwrap_or(crate::fs::path::home_dir(env)?.join(".orbit/cache/build-budget"));
+        if directory.is_symlink() {
+            return Err(OrbitError::InvalidInput(format!(
+                "build-budget directory is a symbolic link: {}",
+                directory.display()
+            )));
+        }
+        let settings_file = directory.join("slots");
+        let raw = match env.orbit_build_slots() {
+            Some(value) => value
+                .to_str()
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(format!(
+                        "ORBIT_BUILD_SLOTS: {}",
+                        std::env::VarError::NotUnicode(value.to_owned())
+                    ))
+                })?
+                .to_owned(),
+            None => match std::fs::read_to_string(&settings_file) {
+                Ok(value) => value.trim().to_string(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => "2".to_string(),
+                Err(error) => {
+                    return Err(OrbitError::Io(format!(
+                        "read {}: {error}",
+                        settings_file.display()
+                    )));
+                }
+            },
+        };
+        let slots = raw
+            .parse::<u32>()
+            .ok()
+            .filter(|slots| (1..=128).contains(slots));
+        let slots = slots
+            .filter(|_| !raw.starts_with('0') && raw.bytes().all(|b| b.is_ascii_digit()))
+            .ok_or_else(|| {
+                OrbitError::InvalidInput(format!(
+                    "ORBIT_BUILD_SLOTS must be a decimal integer from 1 through 128; got {raw:?}"
+                ))
+            })?;
+        let enabled = match env.orbit_build_budget().map(std::ffi::OsStr::to_str) {
+            Some(Some("0")) => false,
+            Some(Some("1")) | None => true,
+            _ => {
+                return Err(OrbitError::InvalidInput(
+                    "ORBIT_BUILD_BUDGET must be 0 or 1".into(),
+                ));
+            }
+        };
+        Ok(Self {
+            slots,
+            enabled,
+            settings_file,
+        })
+    }
+
+    /// Capacity warning with both counts and the concrete remedy.
+    pub fn warning(&self, concurrency: u64) -> Option<String> {
+        (self.enabled && concurrency > u64::from(self.slots)).then(|| format!(
+            "Drain concurrency {concurrency} exceeds host build slots {}. Change ORBIT_BUILD_SLOTS or {} to adjust slots, or lower drain concurrency with orbit run concurrency.",
+            self.slots, self.settings_file.display()
+        ))
+    }
+}
+
 // Match the wrapper's cross-process clock without using civil time.
 #[cfg(unix)]
 fn monotonic_ms() -> Option<u64> {
@@ -128,94 +218,4 @@ pub fn read_waits(directory: &Path, timeout_ms: u64) -> BuildBudgetWaits {
     }
     stats.deadline_extension_ms = stats.queued_wall_ms.min(timeout_ms);
     stats
-}
-
-/// Resolved host slot capacity and the operator's settings path.
-pub struct BuildBudgetCapacity {
-    /// Resolved slot count after applying environment, settings and default precedence.
-    pub slots: u32,
-    /// Whether the host's build admission wrapper is enabled.
-    pub enabled: bool,
-    /// Path to the slot-count settings file, even if the override or default won.
-    pub settings_file: PathBuf,
-}
-
-impl BuildBudgetCapacity {
-    /// Read the same environment/file/default precedence as build-budget.py.
-    pub fn read(env: &crate::Env) -> Result<Self, OrbitError> {
-        let directory = env
-            .orbit_build_budget_dir()
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .map(|path| {
-                if let Ok(rest) = path.strip_prefix("~/") {
-                    crate::fs::path::home_dir(env).map(|home| home.join(rest))
-                } else {
-                    Ok(path)
-                }
-            })
-            .transpose()?
-            .unwrap_or(crate::fs::path::home_dir(env)?.join(".orbit/cache/build-budget"));
-        if directory.is_symlink() {
-            return Err(OrbitError::InvalidInput(format!(
-                "build-budget directory is a symbolic link: {}",
-                directory.display()
-            )));
-        }
-        let settings_file = directory.join("slots");
-        let raw = match env.orbit_build_slots() {
-            Some(value) => value
-                .to_str()
-                .ok_or_else(|| {
-                    OrbitError::InvalidInput(format!(
-                        "ORBIT_BUILD_SLOTS: {}",
-                        std::env::VarError::NotUnicode(value.to_owned())
-                    ))
-                })?
-                .to_owned(),
-            None => match std::fs::read_to_string(&settings_file) {
-                Ok(value) => value.trim().to_string(),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => "2".to_string(),
-                Err(error) => {
-                    return Err(OrbitError::Io(format!(
-                        "read {}: {error}",
-                        settings_file.display()
-                    )));
-                }
-            },
-        };
-        let slots = raw
-            .parse::<u32>()
-            .ok()
-            .filter(|slots| (1..=128).contains(slots));
-        let slots = slots
-            .filter(|_| !raw.starts_with('0') && raw.bytes().all(|b| b.is_ascii_digit()))
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!(
-                    "ORBIT_BUILD_SLOTS must be a decimal integer from 1 through 128; got {raw:?}"
-                ))
-            })?;
-        let enabled = match env.orbit_build_budget().map(std::ffi::OsStr::to_str) {
-            Some(Some("0")) => false,
-            Some(Some("1")) | None => true,
-            _ => {
-                return Err(OrbitError::InvalidInput(
-                    "ORBIT_BUILD_BUDGET must be 0 or 1".into(),
-                ));
-            }
-        };
-        Ok(Self {
-            slots,
-            enabled,
-            settings_file,
-        })
-    }
-
-    /// Capacity warning with both counts and the concrete remedy.
-    pub fn warning(&self, concurrency: u64) -> Option<String> {
-        (self.enabled && concurrency > u64::from(self.slots)).then(|| format!(
-            "Drain concurrency {concurrency} exceeds host build slots {}. Change ORBIT_BUILD_SLOTS or {} to adjust slots, or lower drain concurrency with orbit run concurrency.",
-            self.slots, self.settings_file.display()
-        ))
-    }
 }

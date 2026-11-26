@@ -42,34 +42,6 @@ pub(super) struct DrainStop {
     running_rx: Receiver<()>,
 }
 
-/// Raises the stop when dropped, on settling or on an early return.
-struct StopSignal {
-    stopped: Arc<AtomicBool>,
-    #[cfg(unix)]
-    _wakeup: Option<UnixStream>,
-}
-
-impl Drop for StopSignal {
-    fn drop(&mut self) {
-        // The wakeup end closes after this, so a worker woken by it always
-        // sees the flag set too.
-        self.stopped.store(true, Ordering::Release);
-    }
-}
-
-/// Worker half of the drain bound; dropping it reports the worker finished.
-pub(super) struct StopWatch {
-    #[cfg(all(test, unix))]
-    output_failure: Option<super::seam::OutputFailure>,
-    #[cfg(unix)]
-    stopped: Arc<AtomicBool>,
-    #[cfg(unix)]
-    stop: Option<UnixStream>,
-    // Never sent on: the supervisor sees every worker gone once all clones
-    // are dropped.
-    _running: SyncSender<()>,
-}
-
 impl DrainStop {
     pub(super) fn new() -> Self {
         // Nothing is ever sent; the channel only reports when the last
@@ -130,6 +102,34 @@ impl DrainStop {
     }
 }
 
+/// Raises the stop when dropped, on settling or on an early return.
+struct StopSignal {
+    stopped: Arc<AtomicBool>,
+    #[cfg(unix)]
+    _wakeup: Option<UnixStream>,
+}
+
+impl Drop for StopSignal {
+    fn drop(&mut self) {
+        // The wakeup end closes after this, so a worker woken by it always
+        // sees the flag set too.
+        self.stopped.store(true, Ordering::Release);
+    }
+}
+
+/// Worker half of the drain bound; dropping it reports the worker finished.
+pub(super) struct StopWatch {
+    #[cfg(all(test, unix))]
+    output_failure: Option<super::seam::OutputFailure>,
+    #[cfg(unix)]
+    stopped: Arc<AtomicBool>,
+    #[cfg(unix)]
+    stop: Option<UnixStream>,
+    // Never sent on: the supervisor sees every worker gone once all clones
+    // are dropped.
+    _running: SyncSender<()>,
+}
+
 #[cfg(all(test, unix))]
 impl StopWatch {
     pub(super) fn with_output_failure(mut self, pid: u32) -> Self {
@@ -143,14 +143,6 @@ impl StopWatch {
             None => Ok(()),
         }
     }
-}
-
-#[cfg(unix)]
-fn wakeup_pair() -> io::Result<(UnixStream, UnixStream)> {
-    if super::seam::no_wakeup_pair() {
-        return Err(io::Error::from_raw_os_error(libc::EMFILE));
-    }
-    UnixStream::pair()
 }
 
 /// A pipe end the workers can wait on together with their [`StopWatch`].
@@ -167,6 +159,20 @@ impl<T> PipeFd for T {}
 pub(super) enum DrainEvent {
     SinkStop(ProcessStopCause),
     CaptureFailed,
+}
+
+#[cfg(unix)]
+enum Ready {
+    Io,
+    Stopped,
+}
+
+#[cfg(unix)]
+fn wakeup_pair() -> io::Result<(UnixStream, UnixStream)> {
+    if super::seam::no_wakeup_pair() {
+        return Err(io::Error::from_raw_os_error(libc::EMFILE));
+    }
+    UnixStream::pair()
 }
 
 /// Drain until EOF, a sink stop or the drain bound. Report capture failures
@@ -281,12 +287,6 @@ fn read_buffered<R: Read + AsFd>(
         }
     }
     Ok(())
-}
-
-#[cfg(unix)]
-enum Ready {
-    Io,
-    Stopped,
 }
 
 /// Block until `fd` reports `events` (or an error/hang-up the next I/O call

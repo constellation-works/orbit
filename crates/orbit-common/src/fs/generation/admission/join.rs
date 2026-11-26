@@ -242,8 +242,8 @@ impl GenerationGuard {
         GenerationUpdate {
             bound,
             root: validated_generation_root(root)?,
-            admission,
             generation,
+            admission,
         }
         .pin_as(
             participant.digest,
@@ -303,8 +303,8 @@ impl GenerationGuard {
                     let pinned = GenerationUpdate {
                         bound,
                         root: validated_generation_root(root)?,
-                        admission: held,
                         generation,
+                        admission: held,
                     }
                     .pin_as(
                         participant.digest,

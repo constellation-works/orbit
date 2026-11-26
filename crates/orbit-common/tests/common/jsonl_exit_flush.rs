@@ -1,18 +1,20 @@
 //  The JSONL feed keeps the last records a process logs before it exits.
-// 
+//
 //  The feed is written by a background worker that opens the file on its first
 //  record, so a warning logged right before exit is still queued when the
 //  process ends. The child is a fresh process that installs the global
 //  subscriber, logs one warning, and exits through `std::process::exit`.
-// 
+//
 //  The feed opens its file through the private append, so a symlink planted at
 //  the feed path is refused rather than followed.
 
-const JSONL_EXIT_CHILD: &str = "warn_then_exit_child";
-const EXIT_CODE: i32 = 7;
+const fn jsonl_exit_code() -> i32 {
+    7
+}
 
 /// Run the child with `home` as its home, so its feed is the one under it.
 fn warn_then_exit_in(home: &Path) {
+    const JSONL_EXIT_CHILD: &str = "warn_then_exit_child";
     assert_child_test_exists(JSONL_EXIT_CHILD);
     let mut command = Command::new(std::env::current_exe().unwrap());
     clear_inherited_authority(|key| {
@@ -27,7 +29,7 @@ fn warn_then_exit_in(home: &Path) {
         .expect("run child");
     assert_eq!(
         output.status.code(),
-        Some(EXIT_CODE),
+        Some(jsonl_exit_code()),
         "child must leave through process exit, not a test result:\n{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -52,7 +54,7 @@ fn final_record_before_process_exit_reaches_the_jsonl_feed() {
         "the warning logged right before exit must reach {feed:?}: {raw:?}"
     );
     assert_eq!(records[0]["level"], "WARN");
-    assert_eq!(records[0]["fields"]["code"], EXIT_CODE);
+    assert_eq!(records[0]["fields"]["code"], jsonl_exit_code());
 }
 
 #[cfg(unix)]
@@ -86,8 +88,12 @@ fn private_append_rejects_a_final_symlink() {
 #[ignore = "re-executed by the feed tests above"]
 fn warn_then_exit_child() {
     logging::init_default_subscriber(&orbit_common::Env::capture(), "warn");
-    tracing::warn!(target: "orbit.test.exit", code = EXIT_CODE, "last words before exit");
-    logging::exit(EXIT_CODE);
+    tracing::warn!(
+        target: "orbit.test.exit",
+        code = jsonl_exit_code(),
+        "last words before exit"
+    );
+    logging::exit(jsonl_exit_code());
 }
 
 /// Sparse relay archives model 400 MiB/day without writing gigabytes. The

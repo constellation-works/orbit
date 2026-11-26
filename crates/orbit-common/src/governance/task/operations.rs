@@ -35,76 +35,14 @@ use crate::governance::operation::{
 use crate::protocol::tool_input::required_string;
 use serde_json::{Map, Value};
 
-operation_registry! {
-    noun: TASK;
-    /// Every verb of the task noun: one per task tool.
-    ///
-    /// The join between the spec table here and the handler table in
-    /// `orbit-core`: a new variant fails to compile in every exhaustive
-    /// surface table until the verb is wired.
-    pub enum TaskVerb;
-    /// The task operations. `orbit task --help` lists every task
-    /// command from its own template, so this order is not `--help` order.
-    /// Within a spec, parameter order is the MCP tool schema order.
-    pub const TASK_OPERATIONS;
-    {
-        /// Create a task.
-        Add => ADD,
-        /// Update a task's fields, or move it through its lifecycle.
-        Update => UPDATE,
-        /// List tasks.
-        List => LIST,
-        /// List the backlog and proposed tasks no in-flight work blocks.
-        Eligible => ELIGIBLE,
-        /// Show one task.
-        Show => SHOW,
-        /// Lint one task, or sweep active tasks for context needing repair.
-        Lint => LINT,
-        /// Store an artifact.
-        ArtifactPut => ARTIFACT_PUT,
-        /// Read an artifact.
-        ArtifactGet => ARTIFACT_GET,
-        /// List active locks.
-        LocksList => LOCKS_LIST,
-        /// Reserve a lock surface.
-        LocksReserve => LOCKS_RESERVE,
-        /// Release a reservation.
-        LocksRelease => LOCKS_RELEASE,
-        /// Renew one review lineage's budget, as an operator decision.
-        ReviewReset => REVIEW_RESET,
-        /// Validate and review a recovered delivery's changed merged head.
-        ReconcileReview => RECONCILE_REVIEW,
-        /// Requeue a blocked task onto its published candidate, as an
-        /// operator decision.
-        Requeue => REQUEUE,
-        /// Continue a blocked delivery in a bounded recovery leaf.
-        ResumeDelivery => RESUME_DELIVERY,
-        /// Explicitly request one new task-pilot assessment.
-        Repilot => REPILOT,
-        /// Read escalated blocks awaiting triage, or record one triage
-        /// decision within the shared final-recovery requeue bound.
-        BlockTriage => BLOCK_TRIAGE,
-        /// Retry a stopped or uncertain authorized owner handoff.
-        RetryHandoff => RETRY_HANDOFF,
-        /// Recover a live claim to a lifecycle-valid status, as an operator decision.
-        RecoverClaim => RECOVER_CLAIM,
-        /// Revoke a handoff's completion authority, as an operator decision.
-        RevokeHandoff => REVOKE_HANDOFF,
-        /// Reject a task.
-        Reject => REJECT,
-        /// Permanently delete a task.
-        Delete => DELETE,
-    }
-}
-
 /// The task noun.
 pub const TASK: NounSpec<TaskVerb> = NounSpec {
     cli_name: "task",
     tool_prefix: "orbit.task",
+    tool_only_registration: ToolOnlyRegistration::Inactive,
     cli_about: "Create, update, and manage tasks",
     audit_target_type: "task",
     audit_target_param: "id",
-    tool_only_registration: ToolOnlyRegistration::Inactive,
     cli_groups: &[
         CliGroup {
             name: "artifact",
@@ -131,9 +69,6 @@ pub const TASK: NounSpec<TaskVerb> = NounSpec {
     ],
     operations: TASK_OPERATIONS,
 };
-
-/// A task operation specification.
-pub type TaskOperation = OperationSpec<TaskVerb>;
 
 /// `TaskType` as the CLI offers it.
 pub const TASK_TYPE_VALUES: &[EnumValue] = &[
@@ -223,7 +158,6 @@ const LIST: TaskOperation = TaskOperation {
     tool_description: "List tasks as {tasks, total, truncated}; rules: installed Orbit skill `references/task-fields-projections.md`.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
-        constraints: &[],
         long_about: None,
         after_help: Some(
             "Status meanings, lifecycle and listing-order rules: installed Orbit skill `references/task-fields-projections.md`.\n\nExamples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --origin operator_request\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
@@ -249,6 +183,7 @@ const LIST: TaskOperation = TaskOperation {
             "ops",
             "full",
         ],
+        constraints: &[],
     },
     effect: Effect::Read,
     params: &[&[
@@ -453,7 +388,6 @@ const ELIGIBLE: TaskOperation = TaskOperation {
     tool_description: "List backlog and proposed tasks with no lock conflict against work in flight (read-only). Rules and fields: the orbit skill's task-fields-projections.md reference, section `Task lifecycle and listing`.",
     cli_about: "List backlog/proposed tasks you can pick up without colliding with work in flight",
     cli_help: CliHelp {
-        constraints: &[],
         long_about: Some(
             "List backlog/proposed tasks you can pick up without colliding with work in flight\n\nA task is eligible when its context-file lock surface overlaps no in-progress or review task's surface — the same lock test automatic dispatch applies. Nothing else is checked: not dependencies, complexity, groups or crew, and candidates are not checked against each other. Read-only: nothing is reserved, reconciled or changed.",
         ),
@@ -461,6 +395,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
             "Examples:\n  orbit task eligible\n  orbit task eligible --status proposed\n  orbit task eligible --path crates/orbit-cli\n  orbit task eligible --explain\n  orbit task eligible --json",
         ),
         flag_order: &[],
+        constraints: &[],
     },
     effect: Effect::Read,
     params: &[&[
@@ -558,7 +493,6 @@ const SHOW: TaskOperation = TaskOperation {
                     "Keyed response fields (`delivery`, `snapshot` or task). Rejects `view`, claimed pagination.",
                 )),
                 cli: Some(crate::governance::operation::CliBinding {
-                    required: false,
                     kind: CliArgKind::Flag {
                         long: "fields",
                         delimiter: Some(','),
@@ -570,6 +504,7 @@ const SHOW: TaskOperation = TaskOperation {
                     help: Description::Static(
                         "Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields-projections.md`. No pagination with a projection on a claimed read: drop the projection to page the full task, or drop pagination for a projection.",
                     ),
+                    required: false,
                 }),
             },
             mcp_only(
@@ -623,12 +558,12 @@ const LINT: TaskOperation = TaskOperation {
     tool_description: "Lint tasks for stale paths, vague acceptance criteria and stale repository names (`restore_pruned` re-declares pruned selectors). Details: the orbit skill's task-fields-projections.md reference, section `Task lifecycle and listing`.",
     cli_about: "Lint tasks for context-file and acceptance-criteria problems; `--restore-pruned` re-declares recorded selectors",
     cli_help: CliHelp {
-        constraints: &[],
         long_about: None,
         after_help: Some(
             "Status meanings and lifecycle rules: installed Orbit skill `references/task-fields-projections.md`.\n\nExamples:\n  orbit task lint <TASK_ID>                   # findings for one task\n  orbit task lint                             # sweep active tasks for context that needs repair\n  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded\n  orbit task lint --restore-pruned            # apply the restoration across the sweep\n  orbit task lint --status review",
         ),
         flag_order: &[],
+        constraints: &[],
     },
     // Writes only with `restore_pruned`; the CLI opens the read-only runtime
     // without it.
@@ -679,6 +614,83 @@ const LINT: TaskOperation = TaskOperation {
 pub const TASK_ID_WIRE_ALIAS: &str = "task_id";
 
 const TASK_ID_ALIASES: &[&str] = &[TASK_ID_WIRE_ALIAS];
+
+/// The globally unique task id `show` addresses.
+const TASK_ID_PARAM: ParamSpec = ParamSpec {
+    required: true,
+    ..aliased_task_id(both(
+        "id",
+        ParamType::String,
+        "Globally unique task ID.",
+        CliArgKind::Positional,
+        "Task ID",
+    ))
+};
+
+operation_registry! {
+    noun: TASK;
+    /// Every verb of the task noun: one per task tool.
+    ///
+    /// The join between the spec table here and the handler table in
+    /// `orbit-core`: a new variant fails to compile in every exhaustive
+    /// surface table until the verb is wired.
+    pub enum TaskVerb;
+    /// The task operations. `orbit task --help` lists every task
+    /// command from its own template, so this order is not `--help` order.
+    /// Within a spec, parameter order is the MCP tool schema order.
+    pub const TASK_OPERATIONS;
+    {
+        /// Create a task.
+        Add => ADD,
+        /// Update a task's fields, or move it through its lifecycle.
+        Update => UPDATE,
+        /// List tasks.
+        List => LIST,
+        /// List the backlog and proposed tasks no in-flight work blocks.
+        Eligible => ELIGIBLE,
+        /// Show one task.
+        Show => SHOW,
+        /// Lint one task, or sweep active tasks for context needing repair.
+        Lint => LINT,
+        /// Store an artifact.
+        ArtifactPut => ARTIFACT_PUT,
+        /// Read an artifact.
+        ArtifactGet => ARTIFACT_GET,
+        /// List active locks.
+        LocksList => LOCKS_LIST,
+        /// Reserve a lock surface.
+        LocksReserve => LOCKS_RESERVE,
+        /// Release a reservation.
+        LocksRelease => LOCKS_RELEASE,
+        /// Renew one review lineage's budget, as an operator decision.
+        ReviewReset => REVIEW_RESET,
+        /// Validate and review a recovered delivery's changed merged head.
+        ReconcileReview => RECONCILE_REVIEW,
+        /// Requeue a blocked task onto its published candidate, as an
+        /// operator decision.
+        Requeue => REQUEUE,
+        /// Continue a blocked delivery in a bounded recovery leaf.
+        ResumeDelivery => RESUME_DELIVERY,
+        /// Explicitly request one new task-pilot assessment.
+        Repilot => REPILOT,
+        /// Read escalated blocks awaiting triage, or record one triage
+        /// decision within the shared final-recovery requeue bound.
+        BlockTriage => BLOCK_TRIAGE,
+        /// Retry a stopped or uncertain authorized owner handoff.
+        RetryHandoff => RETRY_HANDOFF,
+        /// Recover a live claim to a lifecycle-valid status, as an operator decision.
+        RecoverClaim => RECOVER_CLAIM,
+        /// Revoke a handoff's completion authority, as an operator decision.
+        RevokeHandoff => REVOKE_HANDOFF,
+        /// Reject a task.
+        Reject => REJECT,
+        /// Permanently delete a task.
+        Delete => DELETE,
+    }
+}
+
+/// A task operation specification.
+pub type TaskOperation = OperationSpec<TaskVerb>;
 
 /// Attach the unadvertised `task_id` wire alias to a task operation's `id`
 /// parameter (ORB-26989 exception to `#8734`).
@@ -739,18 +751,6 @@ pub fn task_id_alias_str(input: &Value) -> Option<&str> {
         .map(str::trim)
         .filter(|id| !id.is_empty())
 }
-
-/// The globally unique task id `show` addresses.
-const TASK_ID_PARAM: ParamSpec = ParamSpec {
-    required: true,
-    ..aliased_task_id(both(
-        "id",
-        ParamType::String,
-        "Globally unique task ID.",
-        CliArgKind::Positional,
-        "Task ID",
-    ))
-};
 
 fn show_run_id_description() -> String {
     format!(

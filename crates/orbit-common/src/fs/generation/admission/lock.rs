@@ -29,17 +29,6 @@ pub(in super::super) const PROBE_SETTLE: Duration = Duration::from_millis(20);
 /// behind exactly such a pin and must not mistake it for an update.
 const EXCLUSIVE_SETTLE: Duration = Duration::from_millis(250);
 
-/// The configured wait for a breaking upgrade, and for an updater waiting
-/// on short-lived participants (see [`super::super::QUIESCE_TIMEOUT_ENV`]), at most
-/// [`MAX_QUIESCE_TIMEOUT`].
-pub fn quiesce_bound(env: &crate::Env) -> Duration {
-    env.orbit_upgrade_quiesce_secs()
-        .and_then(std::ffi::OsStr::to_str)
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map_or(DEFAULT_QUIESCE_TIMEOUT, Duration::from_secs)
-        .min(MAX_QUIESCE_TIMEOUT)
-}
-
 /// How a process holds `.generation-admission.lock`.
 ///
 /// Ordinary joins that write nothing shared hold it shared, so they never
@@ -50,6 +39,17 @@ pub fn quiesce_bound(env: &crate::Env) -> Duration {
 pub(in super::super) enum Admission {
     Shared,
     Exclusive,
+}
+
+/// The configured wait for a breaking upgrade, and for an updater waiting
+/// on short-lived participants (see [`super::super::QUIESCE_TIMEOUT_ENV`]), at most
+/// [`MAX_QUIESCE_TIMEOUT`].
+pub fn quiesce_bound(env: &crate::Env) -> Duration {
+    env.orbit_upgrade_quiesce_secs()
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map_or(DEFAULT_QUIESCE_TIMEOUT, Duration::from_secs)
+        .min(MAX_QUIESCE_TIMEOUT)
 }
 
 /// Take admission in `mode`, waiting up to `wait` while other startups hold

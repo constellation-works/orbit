@@ -10,30 +10,6 @@ use crate::governance::operation::{
     ToolOnlyRegistration, UnknownFields, mcp_only, operation_registry, required,
 };
 
-operation_registry! {
-    noun: DRAIN;
-    /// The drain verbs, joining their specs to exhaustive surface tables.
-    pub enum DrainVerb;
-    /// Operations in their original registration order.
-    pub const DRAIN_OPERATIONS;
-    {
-        /// `orbit.drain.probe`.
-        Probe => PROBE,
-        /// `orbit.drain.receipt.lookup`.
-        ReceiptLookup => RECEIPT_LOOKUP,
-        /// `orbit.task.pull`.
-        Pull => PULL,
-        /// `orbit.drain.claim.bind`.
-        ClaimBind => CLAIM_BIND,
-        /// `orbit.drain.claim.settle`.
-        ClaimSettle => CLAIM_SETTLE,
-        /// `orbit.drain.claims`.
-        Claims => CLAIMS,
-        /// `orbit.drain.claim.effort`.
-        ClaimEffort => CLAIM_EFFORT,
-    }
-}
-
 /// The tool-only drain noun.
 /// The common `orbit` prefix accommodates the historical `orbit.task.pull`
 /// name alongside `orbit.drain.*`; full tool names live on each operation.
@@ -363,3 +339,27 @@ const CLAIM_EFFORT: OperationSpec<DrainVerb> = OperationSpec {
     mcp_scope: None,
     id_route: McpIdRouteDeclaration::Unspecified,
 };
+
+operation_registry! {
+    noun: DRAIN;
+    /// The drain verbs, joining their specs to exhaustive surface tables.
+    pub enum DrainVerb;
+    /// Operations in their original registration order.
+    pub const DRAIN_OPERATIONS;
+    {
+        /// `orbit.drain.probe`.
+        Probe => PROBE,
+        /// `orbit.drain.receipt.lookup`.
+        ReceiptLookup => RECEIPT_LOOKUP,
+        /// `orbit.task.pull`.
+        Pull => PULL,
+        /// `orbit.drain.claim.bind`.
+        ClaimBind => CLAIM_BIND,
+        /// `orbit.drain.claim.settle`.
+        ClaimSettle => CLAIM_SETTLE,
+        /// `orbit.drain.claims`.
+        Claims => CLAIMS,
+        /// `orbit.drain.claim.effort`.
+        ClaimEffort => CLAIM_EFFORT,
+    }
+}

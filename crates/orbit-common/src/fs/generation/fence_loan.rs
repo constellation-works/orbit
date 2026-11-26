@@ -92,8 +92,8 @@ mod lent {
             Some(GenerationUpdate {
                 bound: super::super::quiesce_bound(env),
                 root: validated.clone(),
-                admission,
                 generation,
+                admission,
             })
         })
     }
@@ -128,13 +128,14 @@ mod lent {
         }
         // A description that already holds the lock exclusively takes it
         // again at once; any other succeeds only when nobody holds it.
+        let writable = {
+            // SAFETY: `dup` is open and owned by `file`; this reads flags.
+            let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+            flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDWR
+        };
         let record = Record {
-            writable: {
-                // SAFETY: `dup` is open and owned by `file`; this reads flags.
-                let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
-                flags >= 0 && flags & libc::O_ACCMODE == libc::O_RDWR
-            },
             file,
+            writable,
             borrowed: true,
         };
         FileExt::try_lock_exclusive(&record.file).ok()?;

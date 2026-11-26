@@ -1,14 +1,13 @@
 //  Shared libtest re-exec guards at their public boundary. Ignored child entry
 //  points live in this area binary beside the other orbit-common cases.
 
-const CHILD: &str = "guard_child";
-const MISSING: &str = "removed_child_entry_point";
-const NESTED_ENV_GUARD_CHILD: &str = "nested_env_guard_child";
-const CONTENDED_ENV_GUARD_CHILD: &str = "contended_env_guard_child";
-const CONTENDED_ENV: &str = "ORBIT_COMMON_CONTENDED_ENV_TEST";
+const fn contended_env() -> &'static str {
+    "ORBIT_COMMON_CONTENDED_ENV_TEST"
+}
 
 #[test]
 fn a_nested_test_env_guard_panics_within_a_bounded_time() {
+    const NESTED_ENV_GUARD_CHILD: &str = "nested_env_guard_child";
     let dir = tempfile::tempdir().unwrap();
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command.args([
@@ -54,6 +53,7 @@ fn nested_env_guard_child() {
 
 #[test]
 fn a_test_env_guard_on_another_thread_waits_and_restores_values() {
+    const CONTENDED_ENV_GUARD_CHILD: &str = "contended_env_guard_child";
     let dir = tempfile::tempdir().unwrap();
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
@@ -63,7 +63,7 @@ fn a_test_env_guard_on_another_thread_waits_and_restores_values() {
             "--ignored",
             "--nocapture",
         ])
-        .env(CONTENDED_ENV, "baseline");
+        .env(contended_env(), "baseline");
     let output = orbit_common::test_env::run_child_test_within(
         &mut command,
         CONTENDED_ENV_GUARD_CHILD,
@@ -82,18 +82,18 @@ fn a_test_env_guard_on_another_thread_waits_and_restores_values() {
 #[test]
 #[ignore = "re-executed by the cross-thread test_env guard regression"]
 fn contended_env_guard_child() {
-    let first = orbit_common::test_env::scoped([(CONTENDED_ENV, Some("outer"))]);
-    assert_eq!(std::env::var(CONTENDED_ENV).as_deref(), Ok("outer"));
+    let first = orbit_common::test_env::scoped([(contended_env(), Some("outer"))]);
+    assert_eq!(std::env::var(contended_env()).as_deref(), Ok("outer"));
 
     let (attempting_tx, attempting_rx) = std::sync::mpsc::channel();
     let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
     let other = std::thread::spawn(move || {
         attempting_tx.send(()).unwrap();
-        let second = orbit_common::test_env::scoped([(CONTENDED_ENV, Some("inner"))]);
-        assert_eq!(std::env::var(CONTENDED_ENV).as_deref(), Ok("inner"));
+        let second = orbit_common::test_env::scoped([(contended_env(), Some("inner"))]);
+        assert_eq!(std::env::var(contended_env()).as_deref(), Ok("inner"));
         acquired_tx.send(()).unwrap();
         drop(second);
-        assert_eq!(std::env::var(CONTENDED_ENV).as_deref(), Ok("baseline"));
+        assert_eq!(std::env::var(contended_env()).as_deref(), Ok("baseline"));
     });
 
     attempting_rx
@@ -113,11 +113,13 @@ fn contended_env_guard_child() {
     other
         .join()
         .expect("the other thread should restore the baseline value");
-    assert_eq!(std::env::var(CONTENDED_ENV).as_deref(), Ok("baseline"));
+    assert_eq!(std::env::var(contended_env()).as_deref(), Ok("baseline"));
 }
 
 #[test]
 fn reexec_guard_rejects_missing_ignored_and_failed_children() {
+    const CHILD: &str = "guard_child";
+    const MISSING: &str = "removed_child_entry_point";
     // ORB-13911: libtest exits zero when an exact filter no longer exists.
     for (name, ignored, fail, should_pass) in [
         (CHILD, true, false, true),
@@ -159,52 +161,52 @@ fn reexec_guard_rejects_missing_ignored_and_failed_children() {
     assert!(panic_message(error).contains(MISSING));
 }
 
-/// Every variable `clear_inherited_authority` removed when the claimed
-/// executor's affected gate stopped passing the worker-binding marker to test
-/// processes. Fixtures that spawn `orbit` still rely on this list; the gate
-/// change must not narrow it.
-const CLEARED_AUTHORITY: &[&str] = &[
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_COMMON_DIR",
-    "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    "ORBIT_ROOT",
-    "ORBIT_REGISTRY_ROOT",
-    "ORBIT_WORKSPACE",
-    "ORBIT_WORKSPACE_CLAIM_TOKEN",
-    "ORBIT_WORKTREE_ROOT",
-    "ORBIT_JOB_DIR",
-    "ORBIT_ACTIVITY_DIR",
-    "ORBIT_MANAGED_RUN_CONTEXT",
-    "ORBIT_WORKER_CONTEXT_REQUIRED",
-    "ORBIT_RUN_ID",
-    "ORBIT_TASK_ID",
-    "ORBIT_ACTIVE_TASK_ID",
-    "ORBIT_SESSION_ID",
-    "ORBIT_ACTIVITY_ID",
-    "ORBIT_STEP_INDEX",
-    "ORBIT_AGENT_NAME",
-    "ORBIT_AGENT_MODEL",
-    "ORBIT_ACTOR",
-    "ORBIT_OPERATOR",
-    "ORBIT_TASK_ACTOR_KIND",
-    "ORBIT_ACTIVITY_TOOLS",
-    "ORBIT_ACTIVITY_TOOL_POLICY",
-    "ORBIT_ACTIVITY_TOOLS_DENY",
-    "ORBIT_ACTIVITY_NAME",
-    "ORBIT_ACTIVITY_FS_PROFILE",
-    "ORBIT_ACTIVITY_DEADLINE_UNIX_MS",
-    "ORBIT_PROC_ALLOWED_PROGRAMS",
-    "ORBIT_PROC_PROGRAM_POLICY",
-    "ORBIT_PROC_DISALLOWED_PROGRAMS",
-    "ORBIT_BIN",
-    "ORBIT_PLUGIN_BROKER",
-];
-
 #[test]
 fn inherited_authority_is_removed_from_a_child_command() {
+    /// Every variable `clear_inherited_authority` removed when the claimed
+    /// executor's affected gate stopped passing the worker-binding marker to test
+    /// processes. Fixtures that spawn `orbit` still rely on this list; the gate
+    /// change must not narrow it.
+    const CLEARED_AUTHORITY: &[&str] = &[
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "ORBIT_ROOT",
+        "ORBIT_REGISTRY_ROOT",
+        "ORBIT_WORKSPACE",
+        "ORBIT_WORKSPACE_CLAIM_TOKEN",
+        "ORBIT_WORKTREE_ROOT",
+        "ORBIT_JOB_DIR",
+        "ORBIT_ACTIVITY_DIR",
+        "ORBIT_MANAGED_RUN_CONTEXT",
+        "ORBIT_WORKER_CONTEXT_REQUIRED",
+        "ORBIT_RUN_ID",
+        "ORBIT_TASK_ID",
+        "ORBIT_ACTIVE_TASK_ID",
+        "ORBIT_SESSION_ID",
+        "ORBIT_ACTIVITY_ID",
+        "ORBIT_STEP_INDEX",
+        "ORBIT_AGENT_NAME",
+        "ORBIT_AGENT_MODEL",
+        "ORBIT_ACTOR",
+        "ORBIT_OPERATOR",
+        "ORBIT_TASK_ACTOR_KIND",
+        "ORBIT_ACTIVITY_TOOLS",
+        "ORBIT_ACTIVITY_TOOL_POLICY",
+        "ORBIT_ACTIVITY_TOOLS_DENY",
+        "ORBIT_ACTIVITY_NAME",
+        "ORBIT_ACTIVITY_FS_PROFILE",
+        "ORBIT_ACTIVITY_DEADLINE_UNIX_MS",
+        "ORBIT_PROC_ALLOWED_PROGRAMS",
+        "ORBIT_PROC_PROGRAM_POLICY",
+        "ORBIT_PROC_DISALLOWED_PROGRAMS",
+        "ORBIT_BIN",
+        "ORBIT_PLUGIN_BROKER",
+    ];
+
     let mut command = Command::new("true");
     for name in CLEARED_AUTHORITY {
         command.env(name, "inherited");

@@ -11,22 +11,6 @@ use crate::governance::operation::{
     operation_registry,
 };
 
-operation_registry! {
-    noun: WORKSPACE_CLAIM;
-    /// The workspace claim verbs, joining their specs to exhaustive surface tables.
-    pub enum WorkspaceClaimVerb;
-    /// Operations in their original registration order.
-    pub const WORKSPACE_CLAIM_OPERATIONS;
-    {
-        /// `orbit.workspace.claim.acquire`.
-        Acquire => ACQUIRE,
-        /// `orbit.workspace.claim.release`.
-        Release => RELEASE,
-        /// `orbit.workspace.claim.show`.
-        Show => SHOW,
-    }
-}
-
 /// The tool-only workspace claim noun.
 pub const WORKSPACE_CLAIM: NounSpec<WorkspaceClaimVerb> = NounSpec {
     cli_name: "workspace-claim",
@@ -122,3 +106,19 @@ const SHOW: OperationSpec<WorkspaceClaimVerb> = OperationSpec {
     mcp_scope: None,
     id_route: McpIdRouteDeclaration::Unspecified,
 };
+
+operation_registry! {
+    noun: WORKSPACE_CLAIM;
+    /// The workspace claim verbs, joining their specs to exhaustive surface tables.
+    pub enum WorkspaceClaimVerb;
+    /// Operations in their original registration order.
+    pub const WORKSPACE_CLAIM_OPERATIONS;
+    {
+        /// `orbit.workspace.claim.acquire`.
+        Acquire => ACQUIRE,
+        /// `orbit.workspace.claim.release`.
+        Release => RELEASE,
+        /// `orbit.workspace.claim.show`.
+        Show => SHOW,
+    }
+}

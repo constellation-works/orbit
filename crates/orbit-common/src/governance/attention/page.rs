@@ -14,21 +14,6 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The cap on hashes one cursor carries; older entries beyond it are dropped.
 const CURSOR_SEEN_CAP: usize = 1000;
 
-/// Severity descending, then `since` ascending (`null` last), then `id`.
-pub fn attention_order(items: &mut [AttentionItem]) {
-    items.sort_by(|a, b| {
-        b.severity
-            .cmp(&a.severity)
-            .then_with(|| match (&a.since, &b.since) {
-                (Some(a), Some(b)) => a.cmp(b),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            })
-            .then_with(|| a.id.cmp(&b.id))
-    });
-}
-
 /// Everything a public response is built from: the complete merged candidate
 /// set, the sources that could not be read, and the echoed filters.
 pub struct AttentionPageInput {
@@ -50,6 +35,21 @@ pub struct AttentionPageCursor<'a> {
     pub since: Option<&'a str>,
     /// Public response limit.
     pub limit: usize,
+}
+
+/// Severity descending, then `since` ascending (`null` last), then `id`.
+pub fn attention_order(items: &mut [AttentionItem]) {
+    items.sort_by(|a, b| {
+        b.severity
+            .cmp(&a.severity)
+            .then_with(|| match (&a.since, &b.since) {
+                (Some(a), Some(b)) => a.cmp(b),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| a.id.cmp(&b.id))
+    });
 }
 
 /// Order the candidates, select the delta against `since`, cut the public

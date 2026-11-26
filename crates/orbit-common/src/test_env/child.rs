@@ -2,6 +2,165 @@ use std::io::Write;
 
 use super::{clear_inherited_authority, host_load, orphan_watchdog};
 
+/// How long [`run_child_test`] lets a re-executed child test go without
+/// printing anything before it kills the child and fails.
+///
+/// A hang guard, not a speed budget. A fixture slows by an order of magnitude
+/// on a CPU-saturated host: a default-concurrency nextest run beside a busy
+/// drain, or an instrumented `cargo llvm-cov` run. Fixed one- and two-minute
+/// deadlines failed passing children there (ORB-14659). It is measured from
+/// the child's latest output, and the window opens at the first byte, so
+/// exec and libtest startup do not consume it (ORB-16411). A child that
+/// reports progress (a [`FixtureProgress`] fixture) is not killed for being
+/// slow while it still advances. Write-latency spikes on a loaded macOS host
+/// stretched a progressing golden fixture past a deadline measured from its
+/// start (ORB-15293). A child that has not printed yet is bounded only by
+/// [`CHILD_TEST_CEILING`].
+pub const CHILD_TEST_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// The longest [`run_child_test`] lets a child run, even one that keeps
+/// printing. It stays below nextest's ten-minute termination in
+/// `.config/nextest.toml`, so the parent still reports the child's output
+/// instead of being killed silently.
+pub const CHILD_TEST_CEILING: std::time::Duration = std::time::Duration::from_secs(540);
+
+/// How long a [`FixtureProgress`] fixture may go without advancing before it
+/// fails naming the phase it was in.
+///
+/// Inside [`CHILD_TEST_DEADLINE`], so a fixture in an isolated child reports
+/// its own phase before the parent kills it as silent.
+pub const FIXTURE_STALL_DEADLINE: std::time::Duration =
+    CHILD_TEST_DEADLINE.saturating_sub(std::time::Duration::from_secs(30));
+
+/// The longest a [`FixtureProgress`] fixture may run, even one that keeps
+/// advancing. Inside [`CHILD_TEST_CEILING`], so a fixture in an isolated child
+/// reports its own phase before the parent kills it, and inside nextest's
+/// ten-minute termination for a fixture that runs in process.
+pub const FIXTURE_CEILING: std::time::Duration =
+    CHILD_TEST_CEILING.saturating_sub(std::time::Duration::from_secs(30));
+
+/// How long one fixture step, a readiness wait, a single CLI command or HTTP
+/// request, may take before the fixture treats it as hung.
+///
+/// A hang guard, not a speed budget, for the reason [`CHILD_TEST_DEADLINE`]
+/// gives: a handover, server start or `orbit workspace init` that takes
+/// seconds on an idle host took over a minute on a saturated one, where fixed
+/// 5-, 30- and 60-second step bounds failed passing fixtures (ORB-15238).
+/// Inside [`FIXTURE_STALL_DEADLINE`], so a step in an isolated child fails
+/// with its own message before the parent kills the child.
+pub const FIXTURE_STEP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Phase progress for a large fixture, such as one that seeds thousands of
+/// tasks before it measures anything.
+///
+/// Without it, a stalled fixture prints only `running 1 test` before its
+/// deadline, so a slow seed cannot be told from a slow measured section
+/// (ORB-14818). Each phase is reported on stderr when it starts, at most every
+/// few seconds while it advances, and when it ends. An [`advance`] that comes
+/// later than the stall deadline after the previous one (or the phase start),
+/// or past [`FIXTURE_CEILING`], panics with the phase, the items done, the
+/// elapsed time and the host load. The deadline is measured from the last
+/// progress so a fixture slowed by host load still passes while it advances
+/// (ORB-15293).
+///
+/// [`advance`]: FixtureProgress::advance
+pub struct FixtureProgress {
+    fixture: String,
+    deadline: std::time::Duration,
+    started: std::time::Instant,
+    phase: &'static str,
+    phase_started: std::time::Instant,
+    advanced: std::time::Instant,
+    done: usize,
+    total: usize,
+    reported: std::time::Instant,
+}
+
+impl FixtureProgress {
+    const REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Track `fixture` under [`FIXTURE_STALL_DEADLINE`].
+    pub fn start(fixture: &str) -> Self {
+        Self::with_deadline(fixture, FIXTURE_STALL_DEADLINE)
+    }
+
+    /// Track `fixture`, failing an advance more than `deadline` after the
+    /// previous progress.
+    pub fn with_deadline(fixture: &str, deadline: std::time::Duration) -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            fixture: fixture.to_string(),
+            deadline,
+            started: now,
+            phase: "setup",
+            phase_started: now,
+            advanced: now,
+            done: 0,
+            total: 0,
+            reported: now,
+        }
+    }
+
+    /// End the current phase and start `phase`, which will advance `total`
+    /// times.
+    pub fn phase(&mut self, phase: &'static str, total: usize) {
+        self.report("done");
+        let now = std::time::Instant::now();
+        (self.phase, self.phase_started, self.done, self.total) = (phase, now, 0, total);
+        self.advanced = now;
+        self.report("started");
+    }
+
+    /// Count one item of the current phase; fail the fixture if the item
+    /// took longer than its deadline or the fixture has run past
+    /// [`FIXTURE_CEILING`].
+    pub fn advance(&mut self) {
+        self.done += 1;
+        let elapsed = self.started.elapsed();
+        let stalled = self.advanced.elapsed();
+        self.advanced = std::time::Instant::now();
+        assert!(
+            stalled <= self.deadline && elapsed <= FIXTURE_CEILING,
+            "fixture `{}` overran its {:?} stall deadline or {:?} ceiling in phase `{}`: \
+             {}/{} done after {:.1?} in the phase, {:.1?} since the previous item, {:.1?} \
+             in total ({})",
+            self.fixture,
+            self.deadline,
+            FIXTURE_CEILING,
+            self.phase,
+            self.done,
+            self.total,
+            self.phase_started.elapsed(),
+            stalled,
+            elapsed,
+            host_load()
+        );
+        if self.reported.elapsed() >= Self::REPORT_EVERY {
+            self.report("running");
+        }
+    }
+
+    /// End the last phase.
+    pub fn finish(mut self) {
+        self.report("done");
+    }
+
+    fn report(&mut self, state: &str) {
+        self.reported = std::time::Instant::now();
+        // Bypass libtest capture: an overrun's kill must not lose the line.
+        let _ = writeln!(
+            std::io::stderr(),
+            "fixture `{}`: phase `{}` {state}, {}/{} after {:.1?} ({:.1?} total)",
+            self.fixture,
+            self.phase,
+            self.done,
+            self.total,
+            self.phase_started.elapsed(),
+            self.started.elapsed()
+        );
+    }
+}
+
 /// Require a successful re-exec to have run exactly one test, not merely exited
 /// successfully with a missing or ignored exact filter (ORB-13911).
 ///
@@ -53,28 +212,6 @@ pub fn assert_child_test_passed(
 pub fn record_scenario_pass(name: &str) {
     let _ = writeln!(std::io::stderr(), "qa-scenario-pass: {name}");
 }
-
-/// How long [`run_child_test`] lets a re-executed child test go without
-/// printing anything before it kills the child and fails.
-///
-/// A hang guard, not a speed budget. A fixture slows by an order of magnitude
-/// on a CPU-saturated host: a default-concurrency nextest run beside a busy
-/// drain, or an instrumented `cargo llvm-cov` run. Fixed one- and two-minute
-/// deadlines failed passing children there (ORB-14659). It is measured from
-/// the child's latest output, and the window opens at the first byte, so
-/// exec and libtest startup do not consume it (ORB-16411). A child that
-/// reports progress (a [`FixtureProgress`] fixture) is not killed for being
-/// slow while it still advances. Write-latency spikes on a loaded macOS host
-/// stretched a progressing golden fixture past a deadline measured from its
-/// start (ORB-15293). A child that has not printed yet is bounded only by
-/// [`CHILD_TEST_CEILING`].
-pub const CHILD_TEST_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
-
-/// The longest [`run_child_test`] lets a child run, even one that keeps
-/// printing. It stays below nextest's ten-minute termination in
-/// `.config/nextest.toml`, so the parent still reports the child's output
-/// instead of being killed silently.
-pub const CHILD_TEST_CEILING: std::time::Duration = std::time::Duration::from_secs(540);
 
 /// Run a re-executed child test with its output in files under `output_dir`.
 ///
@@ -190,31 +327,7 @@ pub fn run_child_test_within(
         stderr,
     }
 }
-/// How long a [`FixtureProgress`] fixture may go without advancing before it
-/// fails naming the phase it was in.
-///
-/// Inside [`CHILD_TEST_DEADLINE`], so a fixture in an isolated child reports
-/// its own phase before the parent kills it as silent.
-pub const FIXTURE_STALL_DEADLINE: std::time::Duration =
-    CHILD_TEST_DEADLINE.saturating_sub(std::time::Duration::from_secs(30));
 
-/// The longest a [`FixtureProgress`] fixture may run, even one that keeps
-/// advancing. Inside [`CHILD_TEST_CEILING`], so a fixture in an isolated child
-/// reports its own phase before the parent kills it, and inside nextest's
-/// ten-minute termination for a fixture that runs in process.
-pub const FIXTURE_CEILING: std::time::Duration =
-    CHILD_TEST_CEILING.saturating_sub(std::time::Duration::from_secs(30));
-
-/// How long one fixture step, a readiness wait, a single CLI command or HTTP
-/// request, may take before the fixture treats it as hung.
-///
-/// A hang guard, not a speed budget, for the reason [`CHILD_TEST_DEADLINE`]
-/// gives: a handover, server start or `orbit workspace init` that takes
-/// seconds on an idle host took over a minute on a saturated one, where fixed
-/// 5-, 30- and 60-second step bounds failed passing fixtures (ORB-15238).
-/// Inside [`FIXTURE_STALL_DEADLINE`], so a step in an isolated child fails
-/// with its own message before the parent kills the child.
-pub const FIXTURE_STEP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
 /// Fail a fixture whose command `what` was killed at its
 /// [`FIXTURE_STEP_DEADLINE`] guard after running for `elapsed`.
 ///
@@ -232,117 +345,6 @@ pub fn assert_step_finished(
          {}); killed with {status}",
         host_load()
     );
-}
-
-/// Phase progress for a large fixture, such as one that seeds thousands of
-/// tasks before it measures anything.
-///
-/// Without it, a stalled fixture prints only `running 1 test` before its
-/// deadline, so a slow seed cannot be told from a slow measured section
-/// (ORB-14818). Each phase is reported on stderr when it starts, at most every
-/// few seconds while it advances, and when it ends. An [`advance`] that comes
-/// later than the stall deadline after the previous one (or the phase start),
-/// or past [`FIXTURE_CEILING`], panics with the phase, the items done, the
-/// elapsed time and the host load. The deadline is measured from the last
-/// progress so a fixture slowed by host load still passes while it advances
-/// (ORB-15293).
-///
-/// [`advance`]: FixtureProgress::advance
-pub struct FixtureProgress {
-    fixture: String,
-    deadline: std::time::Duration,
-    started: std::time::Instant,
-    phase: &'static str,
-    phase_started: std::time::Instant,
-    advanced: std::time::Instant,
-    done: usize,
-    total: usize,
-    reported: std::time::Instant,
-}
-
-impl FixtureProgress {
-    const REPORT_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
-
-    /// Track `fixture` under [`FIXTURE_STALL_DEADLINE`].
-    pub fn start(fixture: &str) -> Self {
-        Self::with_deadline(fixture, FIXTURE_STALL_DEADLINE)
-    }
-
-    /// Track `fixture`, failing an advance more than `deadline` after the
-    /// previous progress.
-    pub fn with_deadline(fixture: &str, deadline: std::time::Duration) -> Self {
-        let now = std::time::Instant::now();
-        Self {
-            fixture: fixture.to_string(),
-            deadline,
-            started: now,
-            phase: "setup",
-            phase_started: now,
-            advanced: now,
-            done: 0,
-            total: 0,
-            reported: now,
-        }
-    }
-
-    /// End the current phase and start `phase`, which will advance `total`
-    /// times.
-    pub fn phase(&mut self, phase: &'static str, total: usize) {
-        self.report("done");
-        let now = std::time::Instant::now();
-        (self.phase, self.phase_started, self.done, self.total) = (phase, now, 0, total);
-        self.advanced = now;
-        self.report("started");
-    }
-
-    /// Count one item of the current phase; fail the fixture if the item
-    /// took longer than its deadline or the fixture has run past
-    /// [`FIXTURE_CEILING`].
-    pub fn advance(&mut self) {
-        self.done += 1;
-        let elapsed = self.started.elapsed();
-        let stalled = self.advanced.elapsed();
-        self.advanced = std::time::Instant::now();
-        assert!(
-            stalled <= self.deadline && elapsed <= FIXTURE_CEILING,
-            "fixture `{}` overran its {:?} stall deadline or {:?} ceiling in phase `{}`: \
-             {}/{} done after {:.1?} in the phase, {:.1?} since the previous item, {:.1?} \
-             in total ({})",
-            self.fixture,
-            self.deadline,
-            FIXTURE_CEILING,
-            self.phase,
-            self.done,
-            self.total,
-            self.phase_started.elapsed(),
-            stalled,
-            elapsed,
-            host_load()
-        );
-        if self.reported.elapsed() >= Self::REPORT_EVERY {
-            self.report("running");
-        }
-    }
-
-    /// End the last phase.
-    pub fn finish(mut self) {
-        self.report("done");
-    }
-
-    fn report(&mut self, state: &str) {
-        self.reported = std::time::Instant::now();
-        // Bypass libtest capture: an overrun's kill must not lose the line.
-        let _ = writeln!(
-            std::io::stderr(),
-            "fixture `{}`: phase `{}` {state}, {}/{} after {:.1?} ({:.1?} total)",
-            self.fixture,
-            self.phase,
-            self.done,
-            self.total,
-            self.phase_started.elapsed(),
-            self.started.elapsed()
-        );
-    }
 }
 
 /// Verify the exact entry point before starting a child that will be killed or

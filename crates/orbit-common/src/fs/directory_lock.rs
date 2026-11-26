@@ -13,6 +13,9 @@ use fs2::FileExt;
 
 use super::io::{create_private_dir, create_private_dir_all, open_read_only_no_follow};
 
+static DIRECTORY_LOCK_WAIT_OBSERVER: Mutex<Option<DirectoryLockWaitObserver>> = Mutex::new(None);
+static DIRECTORY_LOCK_WAIT_ARMED: AtomicBool = AtomicBool::new(false);
+
 /// Timing policy for a proper-lockfile-compatible directory lock.
 #[derive(Debug, Clone, Copy)]
 pub struct DirectoryLockOptions {
@@ -38,9 +41,6 @@ impl Default for DirectoryLockOptions {
 
 type DirectoryLockWaitObserver = Arc<dyn Fn(&Path) + Send + Sync>;
 
-static DIRECTORY_LOCK_WAIT_OBSERVER: Mutex<Option<DirectoryLockWaitObserver>> = Mutex::new(None);
-static DIRECTORY_LOCK_WAIT_ARMED: AtomicBool = AtomicBool::new(false);
-
 /// Notified when acquisition sees another holder and is about to wait.
 ///
 /// Unset unless a test installs it. The callback runs on the acquiring thread,
@@ -49,20 +49,6 @@ static DIRECTORY_LOCK_WAIT_ARMED: AtomicBool = AtomicBool::new(false);
 #[doc(hidden)]
 pub struct DirectoryLockWaitGuard {
     observer: DirectoryLockWaitObserver,
-}
-
-/// Install a test observer for contended directory locks, replacing the previous observer.
-/// Drop the returned guard to unregister this observer if it is still installed.
-#[doc(hidden)]
-pub fn observe_directory_lock_waits(
-    observer: impl Fn(&Path) + Send + Sync + 'static,
-) -> DirectoryLockWaitGuard {
-    let observer: DirectoryLockWaitObserver = Arc::new(observer);
-    *DIRECTORY_LOCK_WAIT_OBSERVER
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&observer));
-    DIRECTORY_LOCK_WAIT_ARMED.store(true, Ordering::Release);
-    DirectoryLockWaitGuard { observer }
 }
 
 impl Drop for DirectoryLockWaitGuard {
@@ -76,87 +62,6 @@ impl Drop for DirectoryLockWaitGuard {
         {
             *slot = None;
             DIRECTORY_LOCK_WAIT_ARMED.store(false, Ordering::Release);
-        }
-    }
-}
-
-fn notify_directory_lock_wait(path: &Path) {
-    if !DIRECTORY_LOCK_WAIT_ARMED.load(Ordering::Acquire) {
-        return;
-    }
-    let observer = DIRECTORY_LOCK_WAIT_OBSERVER
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
-    if let Some(observer) = observer {
-        observer(path);
-    }
-}
-
-/// Run `op` with exclusive ownership of the directory `<target_path>.lock`.
-///
-/// Acquisition uses atomic mkdir, never flock. The directory's mtime is
-/// refreshed while held and the empty directory is removed on return or
-/// unwinding. Abandoned regular-file locks from older Orbit versions are
-/// removed only after the stale window and an exclusive flock check.
-/// This protocol is independent of Orbit's private advisory file locks.
-pub fn with_directory_lock<T, E, F>(target_path: &Path, label: &str, op: F) -> Result<T, E>
-where
-    F: FnOnce() -> Result<T, E>,
-    E: From<io::Error>,
-{
-    with_directory_lock_options(target_path, label, DirectoryLockOptions::default(), op)
-}
-
-/// [`with_directory_lock`] with an explicit acquisition and refresh policy.
-///
-/// The update interval must be positive and at most half the stale window.
-/// Like proper-lockfile, stale reclamation relies on timely scheduling and
-/// a shared filesystem clock. A compromised lock is reported at release;
-/// a synchronous operation already running cannot be interrupted.
-pub fn with_directory_lock_options<T, E, F>(
-    target_path: &Path,
-    label: &str,
-    options: DirectoryLockOptions,
-    op: F,
-) -> Result<T, E>
-where
-    F: FnOnce() -> Result<T, E>,
-    E: From<io::Error>,
-{
-    if options.update_interval.is_zero() || options.update_interval > options.stale_after / 2 {
-        return Err(
-            io::Error::new(io::ErrorKind::InvalidInput, "invalid directory lock timing").into(),
-        );
-    }
-    let parent = crate::fs::path::parent_dir_or_current(target_path).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "directory lock target has no parent",
-        )
-    })?;
-    let mut name = target_path
-        .file_name()
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "directory lock target has no file name",
-            )
-        })?
-        .to_os_string();
-    name.push(".lock");
-    create_private_dir_all(parent)?;
-    let path = fs::canonicalize(parent)?.join(name);
-    let mut guard = DirectoryLockGuard::acquire(path, label, options)?;
-    let result = op();
-    let release = guard.release();
-    match result {
-        Ok(value) => release.map(|()| value).map_err(E::from),
-        Err(error) => {
-            if let Err(release_error) = release {
-                crate::tracing::warn!(%release_error, label, "failed to release directory lock");
-            }
-            Err(error)
         }
     }
 }
@@ -258,6 +163,101 @@ impl Drop for DirectoryLockGuard {
             && let Err(error) = self.release()
         {
             crate::tracing::warn!(%error, lock_path = %self.path.display(), "failed to release directory lock");
+        }
+    }
+}
+
+/// Install a test observer for contended directory locks, replacing the previous observer.
+/// Drop the returned guard to unregister this observer if it is still installed.
+#[doc(hidden)]
+pub fn observe_directory_lock_waits(
+    observer: impl Fn(&Path) + Send + Sync + 'static,
+) -> DirectoryLockWaitGuard {
+    let observer: DirectoryLockWaitObserver = Arc::new(observer);
+    *DIRECTORY_LOCK_WAIT_OBSERVER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&observer));
+    DIRECTORY_LOCK_WAIT_ARMED.store(true, Ordering::Release);
+    DirectoryLockWaitGuard { observer }
+}
+
+fn notify_directory_lock_wait(path: &Path) {
+    if !DIRECTORY_LOCK_WAIT_ARMED.load(Ordering::Acquire) {
+        return;
+    }
+    let observer = DIRECTORY_LOCK_WAIT_OBSERVER
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if let Some(observer) = observer {
+        observer(path);
+    }
+}
+
+/// Run `op` with exclusive ownership of the directory `<target_path>.lock`.
+///
+/// Acquisition uses atomic mkdir, never flock. The directory's mtime is
+/// refreshed while held and the empty directory is removed on return or
+/// unwinding. Abandoned regular-file locks from older Orbit versions are
+/// removed only after the stale window and an exclusive flock check.
+/// This protocol is independent of Orbit's private advisory file locks.
+pub fn with_directory_lock<T, E, F>(target_path: &Path, label: &str, op: F) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    with_directory_lock_options(target_path, label, DirectoryLockOptions::default(), op)
+}
+
+/// [`with_directory_lock`] with an explicit acquisition and refresh policy.
+///
+/// The update interval must be positive and at most half the stale window.
+/// Like proper-lockfile, stale reclamation relies on timely scheduling and
+/// a shared filesystem clock. A compromised lock is reported at release;
+/// a synchronous operation already running cannot be interrupted.
+pub fn with_directory_lock_options<T, E, F>(
+    target_path: &Path,
+    label: &str,
+    options: DirectoryLockOptions,
+    op: F,
+) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+    E: From<io::Error>,
+{
+    if options.update_interval.is_zero() || options.update_interval > options.stale_after / 2 {
+        return Err(
+            io::Error::new(io::ErrorKind::InvalidInput, "invalid directory lock timing").into(),
+        );
+    }
+    let parent = crate::fs::path::parent_dir_or_current(target_path).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "directory lock target has no parent",
+        )
+    })?;
+    let mut name = target_path
+        .file_name()
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "directory lock target has no file name",
+            )
+        })?
+        .to_os_string();
+    name.push(".lock");
+    create_private_dir_all(parent)?;
+    let path = fs::canonicalize(parent)?.join(name);
+    let mut guard = DirectoryLockGuard::acquire(path, label, options)?;
+    let result = op();
+    let release = guard.release();
+    match result {
+        Ok(value) => release.map(|()| value).map_err(E::from),
+        Err(error) => {
+            if let Err(release_error) = release {
+                crate::tracing::warn!(%release_error, label, "failed to release directory lock");
+            }
+            Err(error)
         }
     }
 }

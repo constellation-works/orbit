@@ -70,6 +70,10 @@ macro_rules! operation_registry {
             $( $(#[$variant_meta:meta])* $variant:ident => $spec:ident ),+ $(,)?
         }
     ) => {
+        $(#[$list_meta])*
+        $list_vis const $list: &[$crate::governance::operation::OperationSpec<$verb>] =
+            &[ $( $spec ),+ ];
+
         $(#[$enum_meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         $enum_vis enum $verb {
@@ -87,10 +91,6 @@ macro_rules! operation_registry {
                 }
             }
         }
-
-        $(#[$list_meta])*
-        $list_vis const $list: &[$crate::governance::operation::OperationSpec<$verb>] =
-            &[ $( $spec ),+ ];
     };
 }
 

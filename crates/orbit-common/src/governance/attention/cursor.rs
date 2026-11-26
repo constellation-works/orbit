@@ -6,6 +6,11 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
+/// Hours an issued cursor stays valid.
+///
+/// The former `attention.cursor_ttl_hours` default, fixed when the key was removed [ORB-22808].
+pub const ATTENTION_CURSOR_TTL_HOURS: u32 = 24;
+
 /// Seen-set entries a cursor carries: 8-byte hashes of `id` and `fingerprint`.
 pub type Seen = BTreeSet<[u8; 8]>;
 
@@ -56,10 +61,6 @@ pub fn attention_seen_hash(item: &AttentionItem) -> [u8; 8] {
     entry.copy_from_slice(&digest[..8]);
     entry
 }
-/// Hours an issued cursor stays valid.
-///
-/// The former `attention.cursor_ttl_hours` default, fixed when the key was removed [ORB-22808].
-pub const ATTENTION_CURSOR_TTL_HOURS: u32 = 24;
 /// Decode a caller's token; every unusable token restarts the full list.
 pub fn decode_attention_cursor(token: Option<&str>, now: u64) -> (AttentionCursorStatus, Seen) {
     use AttentionCursorStatus as S;

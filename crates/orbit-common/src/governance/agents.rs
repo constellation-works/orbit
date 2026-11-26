@@ -8,22 +8,6 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-operation_registry! {
-    noun: AGENTS;
-    /// The agent scorecard verbs.
-    pub enum AgentsVerb;
-    /// Agent scorecard operations in declaration order.
-    pub const AGENTS_OPERATIONS;
-    {
-        /// One role's scorecard rows.
-        Scorecard => SCORECARD,
-        /// One row with the tasks behind each count.
-        Show => SHOW,
-        /// Required-check failures on candidate heads, recorded by cause.
-        CiFailures => CI_FAILURES,
-    }
-}
-
 /// The agents noun's shared declaration.
 pub const AGENTS: NounSpec<AgentsVerb> = NounSpec {
     cli_name: "agents",
@@ -271,3 +255,19 @@ const CI_FAILURES: OperationSpec<AgentsVerb> = OperationSpec {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
+
+operation_registry! {
+    noun: AGENTS;
+    /// The agent scorecard verbs.
+    pub enum AgentsVerb;
+    /// Agent scorecard operations in declaration order.
+    pub const AGENTS_OPERATIONS;
+    {
+        /// One role's scorecard rows.
+        Scorecard => SCORECARD,
+        /// One row with the tasks behind each count.
+        Show => SHOW,
+        /// Required-check failures on candidate heads, recorded by cause.
+        CiFailures => CI_FAILURES,
+    }
+}

@@ -24,39 +24,6 @@ mod escaped {
     const SLACK: Duration = Duration::from_secs(3);
     const TIMEOUT: Duration = Duration::from_secs(3);
 
-    /// Holder side; a no-op unless launched by a fixture below.
-    #[test]
-    fn escaped_pipe_holder() {
-        let Some(dir) = std::env::var_os(HOLDER_DIR_ENV).map(PathBuf::from) else {
-            return;
-        };
-        // SAFETY: `setsid` only moves this process into a new session and
-        // process group — out of the supervised child's group.
-        assert_ne!(unsafe { libc::setsid() }, -1, "setsid");
-        let pid_tmp = dir.join("holder.pid.tmp");
-        std::fs::write(&pid_tmp, std::process::id().to_string()).expect("write pid");
-        std::fs::rename(&pid_tmp, dir.join("holder.pid")).expect("publish pid");
-
-        // Report once the supervisor's ends of the held pipes are closed.
-        let deadline = Instant::now() + HOLDER_LIFETIME;
-        let (mut stdout_open, mut stderr_open) = (true, true);
-        while Instant::now() < deadline {
-            stdout_open = stdout_open && write_probe(libc::STDOUT_FILENO);
-            stderr_open = stderr_open && write_probe(libc::STDERR_FILENO);
-            let released = !stdout_open && !stderr_open;
-            if released {
-                let _ = std::fs::write(dir.join("released"), b"");
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    fn write_probe(fd: libc::c_int) -> bool {
-        // SAFETY: writes one byte from a live buffer to a standard stream.
-        let rc = unsafe { libc::write(fd, b".".as_ptr().cast(), 1) };
-        rc == 1 || std::io::Error::last_os_error().raw_os_error() != Some(libc::EPIPE)
-    }
-
     /// Kills the escaped holder on every exit path, including panics.
     struct HolderGuard {
         dir: PathBuf,
@@ -133,6 +100,39 @@ sleep 60"#
         }
     }
 
+    /// Holder side; a no-op unless launched by a fixture below.
+    #[test]
+    fn escaped_pipe_holder() {
+        let Some(dir) = std::env::var_os(HOLDER_DIR_ENV).map(PathBuf::from) else {
+            return;
+        };
+        // SAFETY: `setsid` only moves this process into a new session and
+        // process group — out of the supervised child's group.
+        assert_ne!(unsafe { libc::setsid() }, -1, "setsid");
+        let pid_tmp = dir.join("holder.pid.tmp");
+        std::fs::write(&pid_tmp, std::process::id().to_string()).expect("write pid");
+        std::fs::rename(&pid_tmp, dir.join("holder.pid")).expect("publish pid");
+
+        // Report once the supervisor's ends of the held pipes are closed.
+        let deadline = Instant::now() + HOLDER_LIFETIME;
+        let (mut stdout_open, mut stderr_open) = (true, true);
+        while Instant::now() < deadline {
+            stdout_open = stdout_open && write_probe(libc::STDOUT_FILENO);
+            stderr_open = stderr_open && write_probe(libc::STDERR_FILENO);
+            let released = !stdout_open && !stderr_open;
+            if released {
+                let _ = std::fs::write(dir.join("released"), b"");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn write_probe(fd: libc::c_int) -> bool {
+        // SAFETY: writes one byte from a live buffer to a standard stream.
+        let rc = unsafe { libc::write(fd, b".".as_ptr().cast(), 1) };
+        rc == 1 || std::io::Error::last_os_error().raw_os_error() != Some(libc::EPIPE)
+    }
+
     fn supervise() {
         let fixture = Fixture::new();
         let child = fixture.spawn();
@@ -186,6 +186,16 @@ mod stopped_descendants {
     const SELF_STOPPING_CHILD: &str = "sh -c 'kill -STOP $$; echo resumed' & child=$!; echo \"child=$child\"; \
          wait $child; echo \"wait=$?\"; exit 0";
 
+    /// A process outside the supervised tree, in its own group, reaped on drop.
+    struct Bystander(Child);
+
+    impl Drop for Bystander {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
     fn supervise_with(
         child: Child,
         threshold: Duration,
@@ -220,16 +230,6 @@ mod stopped_descendants {
             "{case}: the supervisor must not end anything: {:?}",
             result.stopped_descendants
         );
-    }
-
-    /// A process outside the supervised tree, in its own group, reaped on drop.
-    struct Bystander(Child);
-
-    impl Drop for Bystander {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
     }
 
     fn wait_for_state(pid: u32, state: char) -> bool {
@@ -850,7 +850,17 @@ fn redirected_output_stops_when_the_periodic_check_crosses_its_limit() {
             stdout: Stream::Redirected,
             stderr: Stream::Redirected,
             timeout: Some(Duration::from_secs(5)),
+            extendable_deadline: None,
             clock: None,
+            termination: Termination::KillNow,
+            cancelled: None,
+            intercept_signals: false,
+            drain_budget: DRAIN_BUDGET,
+            cap_drain_at_deadline: false,
+            require_eof: false,
+            stopped_descendants: None,
+            on_stopped_descendant: None,
+            on_spawn: None,
             every: Some(Periodic {
                 interval: Duration::from_millis(10),
                 run: &mut || {
@@ -861,16 +871,6 @@ fn redirected_output_stops_when_the_periodic_check_crosses_its_limit() {
                     over.then_some(ProcessStopCause::Periodic)
                 },
             }),
-            termination: Termination::KillNow,
-            cancelled: None,
-            intercept_signals: false,
-            drain_budget: DRAIN_BUDGET,
-            cap_drain_at_deadline: false,
-            require_eof: false,
-            stopped_descendants: None,
-            on_spawn: None,
-            on_stopped_descendant: None,
-            extendable_deadline: None,
         })
         .expect("supervise redirected writer");
     assert!(

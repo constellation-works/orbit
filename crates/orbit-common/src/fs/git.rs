@@ -75,6 +75,54 @@ const _: () = assert!(
 /// commit headers and worktree lists, all far smaller.
 pub const GIT_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 
+/// `-c` overrides `run_git` accepts, as `(key, required value)`. Keys compare
+/// case-insensitively, as Git's do. None of them names a program for Git to
+/// run, and `core.hooksPath` is admitted only when it disables hooks.
+const ADMITTED_CONFIG_OVERRIDES: &[(&str, Option<&str>)] = &[
+    ("core.hooksPath", Some("/dev/null")),
+    ("core.fsmonitor", Some("false")),
+    // An integer worker count for parallel checkout; it names no program.
+    ("checkout.workers", None),
+    ("gc.auto", None),
+    ("protocol.file.allow", None),
+    ("user.name", None),
+    ("user.email", None),
+];
+
+/// The read, checkout and history plumbing `run_git` drives. Commands that
+/// exist to run caller-named programs (`rebase -x`, `bisect run`,
+/// `submodule foreach`, `difftool -x`, `archive --exec`) and aliases stay out.
+const ADMITTED_SUBCOMMANDS: &[&str] = &[
+    "add",
+    "branch",
+    "cat-file",
+    "checkout",
+    "commit",
+    "fetch",
+    "for-each-ref",
+    "init",
+    "log",
+    "ls-tree",
+    "ls-remote",
+    "merge-base",
+    "remote",
+    "rev-parse",
+    "status",
+    "symbolic-ref",
+    "update-ref",
+    "worktree",
+];
+
+/// Long options that hand Git a program to execute. Git accepts any unique
+/// prefix of a long option, so a prefix of these is refused too.
+const PROGRAM_OPTIONS: &[&str] = &[
+    "upload-pack",
+    "receive-pack",
+    "exec",
+    "ext-diff",
+    "textconv",
+];
+
 /// What the checkout's HEAD resolves to, distinguishing detached and unresolved states.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CurrentBranchStatus {
@@ -84,6 +132,35 @@ pub enum CurrentBranchStatus {
     DetachedHead,
     /// Git reported neither a branch name nor a resolvable HEAD.
     NoCurrentBranch,
+}
+
+/// What `git merge-base --is-ancestor` answered, as [`git_ancestry`] reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitAncestry {
+    /// Exit 0: the first commit is an ancestor of (or equal to) the second.
+    Ancestor,
+    /// Exit 1: it is not.
+    NotAncestor,
+    /// Any other exit (such as 128, an unresolvable revision): Git could not
+    /// answer. `code` is `None` when a signal ended the process.
+    Unanswered {
+        /// Child exit code, or `None` if the process was terminated by a signal.
+        code: Option<i32>,
+        /// Git's diagnostic for why it could not answer the ancestry question.
+        stderr: String,
+    },
+}
+
+/// A completed Git subprocess. Nonzero exit is available to callers as data.
+pub struct GitCommandOutput {
+    /// Whether Git exited normally with status zero.
+    pub success: bool,
+    /// Git's exit status; `None` when a signal ended the process.
+    pub code: Option<i32>,
+    /// Captured standard output decoded with lossy UTF-8.
+    pub stdout: String,
+    /// Captured diagnostic output decoded with lossy UTF-8.
+    pub stderr: String,
 }
 
 /// Read symbolic HEAD first, then probe the commit to distinguish a detached checkout.
@@ -300,54 +377,6 @@ fn looks_like_remote_auth_or_network_failure(stderr_lower: &str) -> bool {
         || stderr_lower.contains("the requested url returned error: 403")
 }
 
-/// `-c` overrides `run_git` accepts, as `(key, required value)`. Keys compare
-/// case-insensitively, as Git's do. None of them names a program for Git to
-/// run, and `core.hooksPath` is admitted only when it disables hooks.
-const ADMITTED_CONFIG_OVERRIDES: &[(&str, Option<&str>)] = &[
-    ("core.hooksPath", Some("/dev/null")),
-    ("core.fsmonitor", Some("false")),
-    // An integer worker count for parallel checkout; it names no program.
-    ("checkout.workers", None),
-    ("gc.auto", None),
-    ("protocol.file.allow", None),
-    ("user.name", None),
-    ("user.email", None),
-];
-
-/// The read, checkout and history plumbing `run_git` drives. Commands that
-/// exist to run caller-named programs (`rebase -x`, `bisect run`,
-/// `submodule foreach`, `difftool -x`, `archive --exec`) and aliases stay out.
-const ADMITTED_SUBCOMMANDS: &[&str] = &[
-    "add",
-    "branch",
-    "cat-file",
-    "checkout",
-    "commit",
-    "fetch",
-    "for-each-ref",
-    "init",
-    "log",
-    "ls-tree",
-    "ls-remote",
-    "merge-base",
-    "remote",
-    "rev-parse",
-    "status",
-    "symbolic-ref",
-    "update-ref",
-    "worktree",
-];
-
-/// Long options that hand Git a program to execute. Git accepts any unique
-/// prefix of a long option, so a prefix of these is refused too.
-const PROGRAM_OPTIONS: &[&str] = &[
-    "upload-pack",
-    "receive-pack",
-    "exec",
-    "ext-diff",
-    "textconv",
-];
-
 /// Admit an argv for `git` before it reaches the process boundary.
 ///
 /// `run_git` never goes through a shell, so an argument can only become a
@@ -531,23 +560,6 @@ pub fn run_git_bytes_within(
     })
 }
 
-/// What `git merge-base --is-ancestor` answered, as [`git_ancestry`] reads it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GitAncestry {
-    /// Exit 0: the first commit is an ancestor of (or equal to) the second.
-    Ancestor,
-    /// Exit 1: it is not.
-    NotAncestor,
-    /// Any other exit (such as 128, an unresolvable revision): Git could not
-    /// answer. `code` is `None` when a signal ended the process.
-    Unanswered {
-        /// Child exit code, or `None` if the process was terminated by a signal.
-        code: Option<i32>,
-        /// Git's diagnostic for why it could not answer the ancestry question.
-        stderr: String,
-    },
-}
-
 /// Ask Git whether `ancestor` is an ancestor of `descendant` in `repo`.
 ///
 /// Spawn and timeout failures propagate as [`run_git`] reports them. Each
@@ -578,16 +590,4 @@ pub fn git_ancestry(
             stderr: answer.stderr,
         },
     })
-}
-
-/// A completed Git subprocess. Nonzero exit is available to callers as data.
-pub struct GitCommandOutput {
-    /// Whether Git exited normally with status zero.
-    pub success: bool,
-    /// Git's exit status; `None` when a signal ended the process.
-    pub code: Option<i32>,
-    /// Captured standard output decoded with lossy UTF-8.
-    pub stdout: String,
-    /// Captured diagnostic output decoded with lossy UTF-8.
-    pub stderr: String,
 }

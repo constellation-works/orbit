@@ -3,21 +3,6 @@
 use std::io::{self, Read};
 use std::path::{Component, Path};
 
-/// Return the reason a member path must be refused, if it can escape the root.
-pub fn member_path_refusal(path: &Path) -> Option<&'static str> {
-    if path.components().next().is_none() {
-        return Some("has an empty path");
-    }
-    for component in path.components() {
-        match component {
-            Component::Normal(_) | Component::CurDir => {}
-            Component::ParentDir => return Some("traverses out of the archive root with `..`"),
-            Component::RootDir | Component::Prefix(_) => return Some("is an absolute path"),
-        }
-    }
-    None
-}
-
 /// A reader that fails after the stream passes its limit.
 ///
 /// One byte of headroom preserves the existing exact-limit behavior.
@@ -50,4 +35,19 @@ impl<R: Read> Read for BoundedReader<R> {
         self.remaining -= read as u64;
         Ok(read)
     }
+}
+
+/// Return the reason a member path must be refused, if it can escape the root.
+pub fn member_path_refusal(path: &Path) -> Option<&'static str> {
+    if path.components().next().is_none() {
+        return Some("has an empty path");
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(_) | Component::CurDir => {}
+            Component::ParentDir => return Some("traverses out of the archive root with `..`"),
+            Component::RootDir | Component::Prefix(_) => return Some("is an absolute path"),
+        }
+    }
+    None
 }

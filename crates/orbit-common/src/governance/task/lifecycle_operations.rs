@@ -42,27 +42,6 @@ const WORKSPACE_PARAM: ParamSpec = mcp_only(
     crate::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION,
 );
 
-const fn flag_named(long: &'static str, value_name: &'static str) -> CliArgKind {
-    CliArgKind::Flag {
-        long,
-        delimiter: None,
-        aliases: &[],
-        visible_aliases: &[],
-        value_name: Some(value_name),
-        multiple: false,
-    }
-}
-
-/// An action's task id positional.
-const fn action_id(help: &'static str) -> ParamSpec {
-    required(cli_only(
-        "id",
-        ParamType::String,
-        CliArgKind::Positional,
-        help,
-    ))
-}
-
 const RECONCILE_ACTION_VALUES: &[EnumValue] = &[
     EnumValue::plain("inspect"),
     EnumValue::plain("submit"),
@@ -698,3 +677,24 @@ pub(super) const RETRY_HANDOFF: TaskOperation = TaskOperation {
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };
+
+const fn flag_named(long: &'static str, value_name: &'static str) -> CliArgKind {
+    CliArgKind::Flag {
+        long,
+        delimiter: None,
+        aliases: &[],
+        visible_aliases: &[],
+        value_name: Some(value_name),
+        multiple: false,
+    }
+}
+
+/// An action's task id positional.
+const fn action_id(help: &'static str) -> ParamSpec {
+    required(cli_only(
+        "id",
+        ParamType::String,
+        CliArgKind::Positional,
+        help,
+    ))
+}
