@@ -1,11 +1,12 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use orbit_common::process::ancestry::process_start_key;
 use reqwest::blocking::Response;
@@ -672,6 +673,168 @@ fn remote_access_caps_devices_and_refusal_keys_at_capacity() {
             }
             let body = super::support::json_ok(server.get("/api/remote-access"));
             assert_eq!(body["connections"]["open_streams"], 0);
+        },
+    );
+}
+
+/// A `tailscale` stub that logs each call to `calls.log`. Its `serve status`
+/// blocks reading the `gate` FIFO, so the test decides when that probe ends.
+fn gated_tailscale_stub(fixture: &Fixture) -> (std::path::PathBuf, Gate) {
+    let bin = fixture.path("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let script = bin.join("tailscale");
+    fs::write(
+        &script,
+        r#"#!/bin/sh
+dir="$(dirname "$0")"
+case "$1" in
+serve)
+    echo serve >> "$dir/calls.log"
+    read -r _ < "$dir/gate"
+    cat "$dir/serve.json" ;;
+whois)
+    echo "whois $3" >> "$dir/calls.log"
+    echo '{"Node":{"ComputedName":"phone","Name":"phone.tailnet.ts.net."},"UserProfile":{"LoginName":"alice@example.com"}}' ;;
+*) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let gate = bin.join("gate");
+    let c_gate = std::ffi::CString::new(gate.as_os_str().as_bytes()).unwrap();
+    // SAFETY: `c_gate` is a NUL-terminated path that outlives the call.
+    let made = unsafe { libc::mkfifo(c_gate.as_ptr(), 0o600) };
+    assert_eq!(made, 0, "mkfifo: {}", std::io::Error::last_os_error());
+    (bin, Gate(gate))
+}
+
+/// Releases the `serve status` probes a [`gated_tailscale_stub`] holds. Dropping
+/// it releases any probe a failed test left blocked, so no stub outlives it.
+struct Gate(std::path::PathBuf);
+
+impl Gate {
+    /// Lets every probe waiting at the gate finish. Fails when none is waiting,
+    /// since a non-blocking open for writing needs a reader.
+    fn release(&self) -> std::io::Result<()> {
+        let mut gate = fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&self.0)?;
+        gate.write_all(&[b'\n'; 16])
+    }
+}
+
+impl Drop for Gate {
+    fn drop(&mut self) {
+        let _ = self.release();
+    }
+}
+
+fn tailscale_calls(bin: &Path) -> Vec<String> {
+    fs::read_to_string(bin.join("calls.log"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+fn spawn_remote_access_read(origin: &str) -> thread::JoinHandle<Response> {
+    let url = format!("{origin}/api/remote-access");
+    thread::spawn(move || {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .unwrap()
+    })
+}
+
+/// ORB-28660: overlapping `GET /api/remote-access` reads share one in-flight
+/// Serve probe and one whois probe per device. A read that misses the cache
+/// while a probe is running waits for that probe instead of starting another
+/// `tailscale` process.
+#[test]
+fn remote_access_overlapping_reads_share_one_tailscale_probe() {
+    isolated(
+        "remote_access::remote_access_overlapping_reads_share_one_tailscale_probe",
+        || {
+            let fixture = Fixture::new();
+            let (bin, gate) = gated_tailscale_stub(&fixture);
+            let config = fixture.global.join("config.toml");
+            let base = fs::read_to_string(&config).unwrap();
+            fs::write(
+                &config,
+                format!(
+                    "{base}\n[machine.web]\ntrusted_hosts = [\"dash.tailnet.ts.net\"]\n\
+                     trusted_logins = [\"alice@example.com\"]\n"
+                ),
+            )
+            .unwrap();
+            let server = fixture.server_with_path(false, &bin);
+            serve_json(&bin, "dash.tailnet.ts.net", &server.origin, "127.0.0.1");
+            // One trusted request records the device, so each read names it through whois.
+            assert!(
+                send_trusted(
+                    &server,
+                    "/api/tasks?workspace=ws_http_fixture",
+                    "alice@example.com",
+                    "100.64.0.7",
+                )
+                .status()
+                .is_success()
+            );
+
+            // The first read starts the serve probe, which the stub holds at the gate.
+            let first = spawn_remote_access_read(&server.origin);
+            let waited_since = Instant::now();
+            while !tailscale_calls(&bin)
+                .iter()
+                .any(|call| call.as_str() == "serve")
+            {
+                assert!(
+                    waited_since.elapsed() < Duration::from_secs(10),
+                    "the first read never started a serve probe"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+
+            // Overlapping reads arrive while that probe is still held.
+            let overlapping: Vec<_> = (0..2)
+                .map(|_| spawn_remote_access_read(&server.origin))
+                .collect();
+            thread::sleep(Duration::from_millis(300));
+            let calls = tailscale_calls(&bin);
+            assert_eq!(
+                calls.iter().filter(|call| call.as_str() == "serve").count(),
+                1,
+                "overlapping reads must wait on the probe in flight: {calls:?}"
+            );
+
+            gate.release().unwrap();
+            for response in std::iter::once(first).chain(overlapping) {
+                let body = super::support::json_ok(response.join().unwrap());
+                assert_eq!(
+                    body["connections"]["devices"][0]["device"], "phone",
+                    "{body}"
+                );
+            }
+            let calls = tailscale_calls(&bin);
+            assert_eq!(
+                calls.iter().filter(|call| call.as_str() == "serve").count(),
+                1,
+                "{calls:?}"
+            );
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call.as_str() == "whois 100.64.0.7")
+                    .count(),
+                1,
+                "{calls:?}"
+            );
         },
     );
 }

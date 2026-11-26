@@ -29,6 +29,9 @@ pub(crate) const ACTIVE_WINDOW_MINUTES: i64 = 15;
 pub(crate) const REFUSAL_WINDOW_HOURS: i64 = 24;
 /// Longest attempted login kept with an unlisted-login refusal.
 const MAX_LOGIN_CHARS: usize = 128;
+/// `tailscale whois` probes the server runs at once, across every request.
+/// A device past the limit waits for a later poll.
+const WHOIS_PROBES: usize = 8;
 
 /// Why a request on the trusted-host path was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -107,6 +110,12 @@ impl RemoteAccess {
         self.activity.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    fn tailscale_cache(&self) -> std::sync::MutexGuard<'_, TailscaleCache> {
+        self.tailscale
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Count one admitted trusted-host request from `device` as `login`.
     pub(crate) fn record_admitted(&self, device: Option<IpAddr>, login: &str) {
         self.activity().admit(device_key(device), login, Utc::now());
@@ -152,49 +161,92 @@ impl RemoteAccess {
         self.activity().snapshot(Utc::now())
     }
 
-    /// A cached `tailscale serve status` reading younger than `ttl`.
-    pub(crate) fn cached_serve_status(&self, ttl: Duration) -> Option<TailscaleReading> {
-        let cache = self
-            .tailscale
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        cache
+    /// The `tailscale serve status` reading: a cached one younger than `ttl`,
+    /// else the result of one `probe` that overlapping callers share. The
+    /// cache lock is not held while the probe runs.
+    pub(crate) fn serve_status_or_probe(
+        &self,
+        ttl: Duration,
+        probe: impl FnOnce() -> TailscaleReading,
+    ) -> TailscaleReading {
+        let flight = {
+            let mut cache = self.tailscale_cache();
+            if let Some((at, reading)) = &cache.serve_status
+                && at.elapsed() < ttl
+            {
+                return reading.clone();
+            }
+            Arc::clone(cache.serve_probe.get_or_insert_with(Arc::default))
+        };
+        let (started, reading) = flight.get_or_init(|| (Instant::now(), probe()));
+        let mut cache = self.tailscale_cache();
+        if cache
+            .serve_probe
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &flight))
+        {
+            cache.serve_probe = None;
+        }
+        // A probe that started before the published one never replaces it.
+        if cache
             .serve_status
             .as_ref()
-            .filter(|(at, _)| at.elapsed() < ttl)
-            .map(|(_, reading)| reading.clone())
-    }
-
-    pub(crate) fn store_serve_status(&self, reading: TailscaleReading) {
-        let mut cache = self
-            .tailscale
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        cache.serve_status = Some((Instant::now(), reading));
-    }
-
-    /// A cached `tailscale whois` reading for `ip` younger than `ttl`.
-    pub(crate) fn cached_whois(&self, ip: IpAddr, ttl: Duration) -> Option<TailscaleReading> {
-        let cache = self
-            .tailscale
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        cache
-            .whois
-            .get(&ip)
-            .filter(|(at, _)| at.elapsed() < ttl)
-            .map(|(_, reading)| reading.clone())
-    }
-
-    pub(crate) fn store_whois(&self, ip: IpAddr, reading: TailscaleReading) {
-        let mut cache = self
-            .tailscale
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if cache.whois.len() >= MAX_DEVICES && !cache.whois.contains_key(&ip) {
-            cache.whois.clear();
+            .is_none_or(|(at, _)| at < started)
+        {
+            cache.serve_status = Some((*started, reading.clone()));
         }
-        cache.whois.insert(ip, (Instant::now(), reading));
+        reading.clone()
+    }
+
+    /// The `tailscale whois` reading for `ip`: a cached one younger than
+    /// `ttl`, else the result of one `probe` that overlapping callers share.
+    /// Starting a probe spends one of the caller's `budget` and needs a free
+    /// slot among the [`WHOIS_PROBES`] the server runs at once. Joining a probe
+    /// already in flight costs nothing. `None` means no reading is available
+    /// yet.
+    pub(crate) fn whois_or_probe(
+        &self,
+        ip: IpAddr,
+        ttl: Duration,
+        budget: &mut usize,
+        probe: impl FnOnce() -> TailscaleReading,
+    ) -> Option<TailscaleReading> {
+        let flight = {
+            let mut cache = self.tailscale_cache();
+            if let Some((at, reading)) = cache.whois.get(&ip)
+                && at.elapsed() < ttl
+            {
+                return Some(reading.clone());
+            }
+            match cache.whois_probes.get(&ip).map(Arc::clone) {
+                Some(flight) => flight,
+                None => {
+                    if *budget == 0 || cache.whois_probes.len() >= WHOIS_PROBES {
+                        return None;
+                    }
+                    *budget -= 1;
+                    let flight = Probe::default();
+                    cache.whois_probes.insert(ip, Arc::clone(&flight));
+                    flight
+                }
+            }
+        };
+        let (started, reading) = flight.get_or_init(|| (Instant::now(), probe()));
+        let mut cache = self.tailscale_cache();
+        if cache
+            .whois_probes
+            .get(&ip)
+            .is_some_and(|current| Arc::ptr_eq(current, &flight))
+        {
+            cache.whois_probes.remove(&ip);
+        }
+        if cache.whois.get(&ip).is_none_or(|(at, _)| at < started) {
+            if cache.whois.len() >= MAX_DEVICES && !cache.whois.contains_key(&ip) {
+                cache.whois.clear();
+            }
+            cache.whois.insert(ip, (*started, reading.clone()));
+        }
+        Some(reading.clone())
     }
 }
 
@@ -208,10 +260,19 @@ pub(crate) enum TailscaleReading {
     Error(String),
 }
 
+/// A `tailscale` probe in flight. `OnceLock` runs its initializer once, so the
+/// first caller runs the probe and overlapping callers wait for its result. The
+/// reading carries the instant its probe started, which orders publication.
+type Probe = Arc<OnceLock<(Instant, TailscaleReading)>>;
+
+/// Published readings, each with the instant its probe started, and the probes
+/// in flight.
 #[derive(Debug, Default)]
 struct TailscaleCache {
     serve_status: Option<(Instant, TailscaleReading)>,
+    serve_probe: Option<Probe>,
     whois: HashMap<IpAddr, (Instant, TailscaleReading)>,
+    whois_probes: HashMap<IpAddr, Probe>,
 }
 
 /// Decrements a device's open live streams when the response body ends.
