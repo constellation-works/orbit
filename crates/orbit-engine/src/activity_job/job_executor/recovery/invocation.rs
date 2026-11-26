@@ -20,6 +20,15 @@ pub(super) struct RecoveryDispatch {
     pub(super) recovery_model: Option<String>,
 }
 
+/// The outcome of preparing or dispatching a step recovery activity.
+pub(super) enum RecoveryDispatchError {
+    Failed {
+        phase: &'static str,
+        message: String,
+    },
+    FootprintUnavailable(DispatchError),
+}
+
 /// Ask the host for this invocation's decision slot and name it in the
 /// recovery input. Only `step_failure_recovery` carries the contract.
 fn allocate_recovery_decision(
@@ -66,7 +75,9 @@ pub(super) fn dispatch_recovery(
     failure: &StepFailure,
     attempt: u32,
     max_attempts: u32,
-) -> Result<RecoveryDispatch, (&'static str, String)> {
+) -> Result<RecoveryDispatch, RecoveryDispatchError> {
+    let fail =
+        |phase: &'static str, message: String| RecoveryDispatchError::Failed { phase, message };
     let mut input = serde_json::json!({
         "failed_step_id": step.id,
         "activity_name": step_activity_name(step),
@@ -148,12 +159,12 @@ pub(super) fn dispatch_recovery(
         STEP_FAILURE_RECOVERY_ACTIVITY | PR_CONFLICT_RECOVERY_ACTIVITY
     ) {
         bind_recovery_context(step, ctx, &mut input)
-            .map_err(|error| ("input", error.to_string()))?;
+            .map_err(|error| fail("input", error.to_string()))?;
         if recovery.name == STEP_FAILURE_RECOVERY_ACTIVITY {
             validate_bound_recovery_context(&input)
-                .map_err(|error| ("input", error.to_string()))?;
+                .map_err(|error| fail("input", error.to_string()))?;
         }
-        inject_recovery_evidence(ctx, &mut input).map_err(|error| ("input", error))?;
+        inject_recovery_evidence(ctx, &mut input).map_err(|error| fail("input", error))?;
         // An `--auto-fix` run repairs its pull request, check or conflict,
         // with the crew drawn from the auto-fix purpose pool (the low pool
         // while it is unset), the draw its admission recorded.
@@ -180,14 +191,14 @@ pub(super) fn dispatch_recovery(
         }
     }
     let slot = allocate_recovery_decision(step, ctx, recovery, attempt, &mut input)
-        .map_err(|error| ("decision", error.to_string()))?;
+        .map_err(|error| fail("decision", error.to_string()))?;
     // A conflict leaf states an unchanged keep-side or delete resolution of
     // a modify/delete conflict in this invocation's own slot; the boundary
     // guard verifies it before adopting the path [F2026-11-277].
     if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
         && input.get("recovery_kind").and_then(Value::as_str) == Some("vcs_conflict")
         && let Some(binding) = allocate_resolution_intent(&input, &ctx.run_id, &step.id, attempt)
-            .map_err(|error| ("resolution_intent", error.to_string()))?
+            .map_err(|error| fail("resolution_intent", error.to_string()))?
     {
         input["resolution_intent"] = binding;
     }
@@ -201,7 +212,7 @@ pub(super) fn dispatch_recovery(
         )
     });
     let crew_overridden_spec = crew_overridden_recovery_spec(recovery, ctx, &input)
-        .map_err(|error| ("crew", error.to_string()))?;
+        .map_err(|error| fail("crew", error.to_string()))?;
     let spec = crew_overridden_spec.as_ref().unwrap_or(&recovery.spec);
     let recovery_model = match spec {
         ActivityV2Spec::AgentLoop(agent) => agent.model.clone(),
@@ -227,7 +238,10 @@ pub(super) fn dispatch_recovery(
                 recovery_model,
             })
         }
-        Err(error) => Err(("dispatch", error.to_string())),
+        Err(error @ DispatchError::FootprintUnavailable(_)) => {
+            Err(RecoveryDispatchError::FootprintUnavailable(error))
+        }
+        Err(error) => Err(fail("dispatch", error.to_string())),
     }
 }
 

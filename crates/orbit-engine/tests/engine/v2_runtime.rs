@@ -1870,3 +1870,274 @@ fn null_runtime_host_forwards_capability_overrides() {
     );
     assert!(RuntimeHost::authenticate_completion_tail(&host, "run", "task", "step").unwrap());
 }
+
+#[test]
+fn step_recovery_footprint_unavailable_bypasses_final_recovery_and_failure_handoff() {
+    use orbit_common::RecoverableVcsConflict;
+    use orbit_engine::activity_job::load_job_asset;
+    use orbit_engine::{
+        FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, execute_job_with_resume,
+        resolve_job_catalog_refs_for_execution,
+    };
+    use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
+    use orbit_types::workflow::{
+        ActivityV2, PR_CONFLICT_RECOVERY_ACTIVITY, STEP_FAILURE_RECOVERY_ACTIVITY,
+    };
+
+    enum FootprintResponse {
+        Ok,
+        WaitExpired(String),
+        RunStopped(String),
+    }
+
+    struct RecoveryHost {
+        footprint: FootprintResponse,
+        fail_with_conflict: bool,
+        workspace_path: std::path::PathBuf,
+        deterministic_calls: Mutex<Vec<String>>,
+        final_recovery_calls: Mutex<usize>,
+    }
+
+    impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
+        fn acquire_deferred_footprint(
+            &self,
+            _run_id: &str,
+            activity_name: &str,
+        ) -> Result<(), DispatchError> {
+            match &self.footprint {
+                FootprintResponse::Ok => Ok(()),
+                FootprintResponse::WaitExpired(holder) => {
+                    Err(DispatchError::FootprintUnavailable(format!(
+                        "footprint_unavailable: `{activity_name}` may edit the resumed published delivery only once its context locks are free, and after 0s they are still held: {holder}"
+                    )))
+                }
+                FootprintResponse::RunStopped(message) => {
+                    Err(DispatchError::CliInvocationPermanent(message.clone()))
+                }
+            }
+        }
+
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            _input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.deterministic_calls
+                .lock()
+                .unwrap()
+                .push(action.to_string());
+            if action == "setup" {
+                return Ok(json!({
+                    "workspace_path": self.workspace_path,
+                    "base_ref": "main",
+                }));
+            }
+            if self.fail_with_conflict {
+                return Err(DispatchError::RecoverableVcsConflict(Box::new(
+                    RecoverableVcsConflict {
+                        operation: "git_rebase".to_string(),
+                        original_base_sha: "orig".to_string(),
+                        target_base_sha: "target".to_string(),
+                        conflicting_paths: vec!["feature.txt".to_string()],
+                        conflicting_files: Vec::new(),
+                        diagnostic: "conflict".to_string(),
+                    },
+                )));
+            }
+            Err(DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: "original validation failure".to_string(),
+            })
+        }
+
+        fn admit_final_recovery(
+            &self,
+            _run_id: &str,
+            _request: &FinalRecoveryAdmissionRequest,
+        ) -> Result<FinalRecoveryAdmission, OrbitError> {
+            *self.final_recovery_calls.lock().unwrap() += 1;
+            Ok(FinalRecoveryAdmission::Admitted)
+        }
+
+        fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+            Ok(None)
+        }
+    }
+
+    let deterministic_activity = |action: &str| ActivityV2 {
+        description: String::new(),
+        input_schema_json: Value::Null,
+        output_schema_json: Value::Null,
+        fs_profile: None,
+        spec: ActivityV2Spec::Deterministic(DeterministicSpec {
+            action: action.to_string(),
+            config: json!({}),
+        }),
+    };
+
+    let build_job = |recovery_activity: &str, workspace_path: &std::path::Path| {
+        let step_id = if recovery_activity == PR_CONFLICT_RECOVERY_ACTIVITY {
+            "sync_base"
+        } else {
+            "work"
+        };
+        let mut job = load_job_asset(
+            &json!({
+                "schemaVersion": 2,
+                "kind": "Job",
+                "metadata": { "name": "recovery_unit_fixture" },
+                "spec": {
+                    "state": "enabled",
+                    "kind": "workflow",
+                    "failure_activity": "pr_failure_handoff",
+                    "final_recovery_activity": "final_recovery",
+                    "steps": [
+                        {
+                            "id": "setup",
+                            "spec": { "type": "deterministic", "action": "setup", "config": {} },
+                        },
+                        {
+                            "id": step_id,
+                            "recovery_activity": recovery_activity,
+                            "spec": { "type": "deterministic", "action": "work", "config": {} },
+                            "default_input": {
+                                "task_id": "ORB-1",
+                                "workspace_path": workspace_path,
+                                "repo_root": workspace_path,
+                            },
+                        },
+                    ],
+                },
+            })
+            .to_string(),
+        )
+        .unwrap()
+        .spec;
+
+        let mut catalog = V2ActivityCatalog::new();
+        catalog.insert(
+            recovery_activity.to_string(),
+            ActivityV2 {
+                description: String::new(),
+                input_schema_json: Value::Null,
+                output_schema_json: Value::Null,
+                fs_profile: None,
+                spec: ActivityV2Spec::AgentLoop(AgentLoopSpec::for_provider(
+                    "recover".to_string(),
+                    Provider::Codex,
+                    10,
+                )),
+            },
+        );
+        catalog.insert(
+            "pr_failure_handoff".to_string(),
+            deterministic_activity("pr_failure_handoff"),
+        );
+        catalog.insert(
+            "final_recovery".to_string(),
+            deterministic_activity("final_recovery"),
+        );
+        resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+        job
+    };
+
+    let run_with =
+        |footprint: FootprintResponse, fail_with_conflict: bool, recovery_activity: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            let (audit, _, _) = build_writer_and_sinks(dir.path(), "run-recovery");
+            let host = RecoveryHost {
+                footprint,
+                fail_with_conflict,
+                workspace_path: dir.path().to_path_buf(),
+                deterministic_calls: Mutex::new(Vec::new()),
+                final_recovery_calls: Mutex::new(0),
+            };
+            let result = execute_job_with_resume(
+                &build_job(recovery_activity, dir.path()),
+                json!({ "task_ids": ["ORB-1"] }),
+                "run-recovery",
+                audit.clone(),
+                &host,
+                None,
+            );
+            let events = audit.events_snapshot().unwrap();
+            let final_recovery_calls = *host.final_recovery_calls.lock().unwrap();
+            let deterministic_calls = host.deterministic_calls.lock().unwrap().clone();
+            (result, events, final_recovery_calls, deterministic_calls)
+        };
+
+    for (activity, conflict) in [
+        (PR_CONFLICT_RECOVERY_ACTIVITY, true),
+        (STEP_FAILURE_RECOVERY_ACTIVITY, false),
+    ] {
+        let (result, events, final_recovery_calls, deterministic_calls) = run_with(
+            FootprintResponse::WaitExpired("ORB-2".to_string()),
+            conflict,
+            activity,
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, DispatchError::FootprintUnavailable(ref msg) if msg.contains("ORB-2")),
+            "{activity}: expected FootprintUnavailable, got {err:?} events={events:?}"
+        );
+        assert!(
+            has_event(&events, |kind| matches!(
+                kind,
+                V2AuditEventKind::StepRecoveryAttempted {
+                    recovery_activity,
+                    recovery_succeeded: false,
+                    failure_phase: Some(phase),
+                    error_message: Some(message),
+                    ..
+                } if recovery_activity == activity
+                    && phase == "dispatch"
+                    && message.contains("footprint_unavailable")
+            )),
+            "{activity}: expected StepRecoveryAttempted dispatch hold in {events:?}"
+        );
+        assert_eq!(
+            final_recovery_calls, 0,
+            "{activity}: final_recovery must not be admitted"
+        );
+        assert_eq!(
+            deterministic_calls,
+            ["setup", "work"],
+            "{activity}: pr_failure_handoff must not run"
+        );
+    }
+
+    let (result, _, final_recovery_calls, deterministic_calls) = run_with(
+        FootprintResponse::RunStopped(
+            "footprint_unavailable: run stopped while `pr_conflict_recovery` waited for its context locks"
+                .to_string(),
+        ),
+        true,
+        PR_CONFLICT_RECOVERY_ACTIVITY,
+    );
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, DispatchError::RecoverableVcsConflict(_)),
+        "run-stopped refusal must keep the original conflict error, got {err:?}"
+    );
+    assert_eq!(
+        final_recovery_calls, 1,
+        "final_recovery still runs for non-hold recovery failures"
+    );
+    assert_eq!(
+        deterministic_calls,
+        ["setup", "work", "final_recovery"],
+        "final_recovery still runs for non-hold recovery failures"
+    );
+
+    let (result, _, final_recovery_calls, deterministic_calls) =
+        run_with(FootprintResponse::Ok, false, STEP_FAILURE_RECOVERY_ACTIVITY);
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, DispatchError::DeterministicActionFailed { .. }),
+        "ordinary recovery dispatch error (no CLI executor) must keep the original error, got {err:?}"
+    );
+    assert_eq!(final_recovery_calls, 1);
+    assert_eq!(deterministic_calls, ["setup", "work", "final_recovery"]);
+}

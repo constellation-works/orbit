@@ -273,6 +273,10 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
                 emit_audit(pending_audit.take());
                 return failure.into_blocked(&blocker);
             }
+            RecoveryAdmission::FootprintUnavailable(error) => {
+                emit_audit(pending_audit.take());
+                return Err(error);
+            }
         };
         // [ORB-14822] The agent cannot commit its repair; the host does,
         // and the retry below runs on that commit.
