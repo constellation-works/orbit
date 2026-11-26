@@ -13,6 +13,7 @@ mod tasks;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
@@ -27,7 +28,7 @@ use serde_json::Value;
 
 use super::exec::{self, App, Operation};
 use crate::application::seeding_policy::SeedingPolicyExclusions;
-use crate::application::task::{TaskCandidateKeys, TaskListFilter, TaskRow};
+use crate::application::task::{TaskListFilter, TaskRow};
 use crate::application::workspace_preset::AppliedWorkspacePreset;
 use crate::{Core, ShipMode};
 
@@ -88,19 +89,10 @@ pub enum Command<'a> {
         /// The teardown itself.
         teardown: HostFlow<'a>,
     },
-    /// Select the bound workspace's task candidates for a fleet task page.
-    TaskCandidates {
-        /// Each section's filter, limit and pilot-warning selection.
-        sections: Vec<CandidateSection>,
-        /// Select every section in one indexed batch when the index answers.
-        batch: bool,
-    },
-    /// Read the listed rows of these tasks, with what a fleet page shows
-    /// beside them.
-    TaskRows(Vec<String>),
-    /// The dependency statuses of these tasks, from the coordination
-    /// registry every workspace shares.
-    DependencyStatuses(Vec<orbit_types::task::Task>),
+    /// Aggregate task pages across the bound workspace and its peers:
+    /// select candidates concurrently, merge in workspace order, hydrate
+    /// surviving rows and read the shared dependency status index.
+    AggregateTasks(AggregateTaskRequest<'a>),
     /// A workspace-claim tool verb the generic tool entry admitted.
     Claim {
         /// The verb.
@@ -114,11 +106,40 @@ pub enum Command<'a> {
     },
 }
 
-/// One section of a fleet task selection.
-pub struct CandidateSection {
-    /// The section's filter.
+/// Inputs for one aggregate task listing across registered workspaces.
+pub struct AggregateTaskRequest<'a> {
+    /// Workspaces in response order, each with its opened entry or open failure.
+    pub workspaces: Vec<AggregateWorkspace<'a>>,
+    /// Sections to read: one for an ungrouped page, or one per requested status.
+    pub sections: Vec<AggregateTaskSection>,
+    /// Index in `workspaces` where a continuation cursor resumes; earlier
+    /// workspaces contribute only to `total`.
+    pub resume_index: usize,
+}
+
+/// One workspace slot in an aggregate task read, in response order.
+pub struct AggregateWorkspace<'a> {
+    /// The workspace's registered id, used for diagnostics and reporting.
+    pub id: &'a str,
+    /// How this workspace participates in the aggregate read.
+    pub source: AggregateWorkspaceSource<'a>,
+}
+
+/// How one workspace participates in an aggregate task read.
+pub enum AggregateWorkspaceSource<'a> {
+    /// The bound [`Core`] passed to [`exec`].
+    Bound,
+    /// Another opened workspace's [`Core`].
+    Peer(&'a Core),
+    /// A workspace that was inactive or could not be opened.
+    Unavailable(String),
+}
+
+/// One section of an aggregate task read.
+pub struct AggregateTaskSection {
+    /// The section's filter, including `scan_before` for the resume workspace.
     pub filter: TaskListFilter,
-    /// The most candidates the section reads.
+    /// The most rows this section returns.
     pub limit: usize,
     /// Whether the section selects tasks with pilot warnings.
     pub pilot_warnings: bool,
@@ -162,14 +183,57 @@ pub struct RoleAssignment {
     pub owner_machine_id: Option<String>,
 }
 
-/// The listed rows a fleet page read, with what it shows beside them.
-pub struct TaskRows {
-    /// Each requested task's row, in request order.
-    pub rows: Vec<Result<Option<TaskRow>, OrbitError>>,
-    /// Delivery attention by task id, over the rows that read.
-    pub delivery_attention: Result<BTreeMap<String, Value>, OrbitError>,
-    /// The branch each task's run recorded, over the rows that read.
-    pub run_branches: BTreeMap<String, String>,
+/// Hydrated sections returned by an aggregate task listing.
+pub struct AggregateTaskPages {
+    /// One page per requested section, in request order.
+    pub sections: Vec<AggregateTaskPage>,
+}
+
+/// One hydrated page of an aggregate task listing.
+pub struct AggregateTaskPage {
+    /// Hydrated rows in workspace-then-recency order.
+    pub rows: Vec<AggregateTaskRow>,
+    /// Pre-limit, pre-cursor matching count across answering workspaces.
+    pub total: usize,
+    /// Number of candidates selected before row hydration (for cursor offset).
+    pub candidate_count: usize,
+    /// Continuation anchor when more matching candidates remain after this page.
+    pub next_cursor: Option<AggregateCursorAnchor>,
+    /// Delivery attention per task id, keyed by workspace index.
+    pub delivery_attention: BTreeMap<usize, BTreeMap<String, Value>>,
+    /// Local run branches per task id, keyed by workspace index.
+    pub run_branches: BTreeMap<usize, BTreeMap<String, String>>,
+    /// Dependency statuses for this section's rows from the shared registry.
+    pub dependency_statuses: BTreeMap<String, TaskStatus>,
+    /// Workspaces that could not be opened or read for this section, once each.
+    pub unavailable: Vec<UnavailableWorkspace>,
+}
+
+/// One hydrated task row in page order, paired with its workspace index.
+pub struct AggregateTaskRow {
+    /// Index into [`AggregateTaskRequest::workspaces`].
+    pub workspace_index: usize,
+    /// The hydrated task row.
+    pub row: TaskRow,
+}
+
+/// Where the next aggregate page resumes when more candidates remain.
+pub struct AggregateCursorAnchor {
+    /// Index into [`AggregateTaskRequest::workspaces`] of the last candidate.
+    pub workspace_index: usize,
+    /// Creation time of the last candidate.
+    pub created_at: DateTime<Utc>,
+    /// Task id of the last candidate.
+    pub task_id: String,
+}
+
+/// One workspace an aggregate section could not read completely.
+#[derive(Clone)]
+pub struct UnavailableWorkspace {
+    /// Index into [`AggregateTaskRequest::workspaces`].
+    pub workspace_index: usize,
+    /// Why the workspace could not be opened or read.
+    pub error: String,
 }
 
 /// What the command produced, before the caller renders it.
@@ -211,14 +275,22 @@ pub enum Outcome {
     PublicationRemoved(Box<WorkspacePublicationBinding>),
     /// The caller's flow ran.
     Done,
-    /// Each section's task candidates.
-    TaskCandidates(Vec<Result<TaskCandidateKeys, OrbitError>>),
-    /// The listed task rows.
-    TaskRows(Box<TaskRows>),
-    /// Dependency statuses by task id.
-    DependencyStatuses(BTreeMap<String, TaskStatus>),
+    /// Hydrated sections of an aggregate task listing.
+    AggregateTasks(AggregateTaskPages),
     /// A tool verb's answer.
     Answer(Value),
+}
+
+impl Outcome {
+    /// Extract the aggregate task pages answered by [`Command::AggregateTasks`].
+    pub fn into_aggregate_tasks(self) -> Result<AggregateTaskPages, crate::Error> {
+        match self {
+            Self::AggregateTasks(pages) => Ok(pages),
+            _ => Err(OrbitError::Execution(
+                "workspace command answered an outcome other than AggregateTasks".to_string(),
+            )),
+        }
+    }
 }
 
 /// Why a workspace command failed.
@@ -235,11 +307,6 @@ impl From<Error> for crate::Error {
             Error::Flow(error) => error,
         }
     }
-}
-
-/// Authorize, audit and run one workspace command.
-pub fn exec(core: &Core, command: Command<'_>) -> Result<Outcome, crate::Error> {
-    exec::run::<WorkspaceApp<'_>>(core, command)
 }
 
 struct WorkspaceApp<'a>(std::marker::PhantomData<&'a ()>);
@@ -271,9 +338,7 @@ impl<'a> App for WorkspaceApp<'a> {
                     operation.without_command_row()
                 };
             }
-            Command::TaskCandidates { .. } => "task-candidates",
-            Command::TaskRows(_) => "task-rows",
-            Command::DependencyStatuses(_) => "dependency-statuses",
+            Command::AggregateTasks(_) => "aggregate-tasks",
             Command::Claim { verb, input, .. } => return Operation::of(*verb, input),
         };
         Operation::command("workspace", subcommand).target(Some("workspace"), None)
@@ -336,12 +401,8 @@ impl<'a> App for WorkspaceApp<'a> {
                 flow(&runtime.global_root())?;
                 Outcome::Done
             }
-            Command::TaskCandidates { sections, batch } => {
-                Outcome::TaskCandidates(tasks::candidates(core, &sections, batch)?)
-            }
-            Command::TaskRows(ids) => Outcome::TaskRows(Box::new(tasks::rows(core, &ids))),
-            Command::DependencyStatuses(tasks) => {
-                Outcome::DependencyStatuses(runtime.dependency_status_index(tasks.iter())?)
+            Command::AggregateTasks(request) => {
+                Outcome::AggregateTasks(tasks::aggregate(core, &request)?)
             }
             Command::Claim {
                 verb,
@@ -362,4 +423,9 @@ impl<'a> App for WorkspaceApp<'a> {
             }
         })
     }
+}
+
+/// Authorize, audit and run one workspace command.
+pub fn exec(core: &Core, command: Command<'_>) -> Result<Outcome, crate::Error> {
+    exec::run::<WorkspaceApp<'_>>(core, command)
 }
