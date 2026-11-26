@@ -8,11 +8,12 @@ use orbit_tools::plugin::stale_plugin_callback_session_count;
 use serde_json::Value;
 
 use super::{
-    self as plugin, PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
+    PluginAddOptions, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
     PluginRemoveOptions, PluginSecretStatus, PluginSummary, PluginSyncOutcome, PluginTestOptions,
     PluginTestReport, PluginUpgradeOptions, PluginUpgradeResult, PluginValidationReport,
 };
 use crate::OrbitRuntime;
+use crate::application::plugin;
 use crate::runtime::plugin::discovery::{self, PluginCliGroup};
 use crate::runtime::plugin::secrets::PluginSecretValue;
 
