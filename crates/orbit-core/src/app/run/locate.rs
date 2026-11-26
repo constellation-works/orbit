@@ -38,31 +38,6 @@ pub struct RunLookup<'a> {
     pub open: &'a dyn Fn(&str) -> Option<Arc<Core>>,
 }
 
-pub enum LookupError {
-    Absent(Option<Box<JobRunHolder>>),
-    Ambiguous(Vec<String>),
-    Unregistered(String),
-    Flow(OrbitError),
-}
-impl From<OrbitError> for LookupError {
-    fn from(value: OrbitError) -> Self {
-        Self::Flow(value)
-    }
-}
-
-enum Located {
-    Registered(OrbitRuntime, Box<JobRun>),
-    Recorded(OrbitRuntime, Box<RecordedJobRun>),
-}
-impl Located {
-    fn writable(self) -> Result<OrbitRuntime, LookupError> {
-        match self {
-            Self::Registered(rt, _) => Ok(rt),
-            Self::Recorded(_, recorded) => Err(LookupError::Unregistered(recorded.workspace_id)),
-        }
-    }
-}
-
 impl RunLookup<'_> {
     fn locate(&self, reader: &Core, settle: bool) -> Result<Located, LookupError> {
         let reader = reader.runtime();
@@ -106,6 +81,33 @@ impl RunLookup<'_> {
             .recorded_job_run(chosen, self.id)?
             .map(|record| Located::Recorded(reader.clone(), Box::new(record)))
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::JobRun, self.id.to_owned()).into())
+    }
+}
+
+pub enum LookupError {
+    Absent(Option<Box<JobRunHolder>>),
+    Ambiguous(Vec<String>),
+    Unregistered(String),
+    Flow(OrbitError),
+}
+
+impl From<OrbitError> for LookupError {
+    fn from(value: OrbitError) -> Self {
+        Self::Flow(value)
+    }
+}
+
+enum Located {
+    Registered(OrbitRuntime, Box<JobRun>),
+    Recorded(OrbitRuntime, Box<RecordedJobRun>),
+}
+
+impl Located {
+    fn writable(self) -> Result<OrbitRuntime, LookupError> {
+        match self {
+            Self::Registered(rt, _) => Ok(rt),
+            Self::Recorded(_, recorded) => Err(LookupError::Unregistered(recorded.workspace_id)),
+        }
     }
 }
 

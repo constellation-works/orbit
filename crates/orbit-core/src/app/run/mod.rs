@@ -2,30 +2,55 @@
 //! construct a command, pairing its operation with the work it authorizes.
 
 mod auto;
+
 mod catalog;
+
 mod command;
+
 mod dashboard_drain;
+
 mod detail;
+
 mod drain;
+
 mod failure;
+
 mod fields;
+
 mod fleet;
+
 mod history;
+
 mod inspection;
+
 mod job;
+
 mod lease;
+
 mod leaves;
+
 mod lineage;
+
 mod locate;
+
 mod lock_holders;
+
 mod logs;
+
 mod metrics;
+
 mod pipeline;
+
 mod read;
+
 mod script;
+
 mod show;
+
 mod submission;
+
 mod task_labels;
+
 mod workflow;
 
 use super::exec::{self, App, Operation};
@@ -49,18 +74,6 @@ pub struct Command<'a, T> {
     flow: Box<RunFlow<'a, T>>,
 }
 
-type RunFlow<'a, T> = dyn FnOnce(&Core) -> Result<Outcome<T>, OrbitError> + 'a;
-
-/// The read model or submission receipt, with its native command exit status.
-pub struct Outcome<T> {
-    /// The value the surface renders.
-    pub value: T,
-    exit_code: i32,
-}
-
-/// A run flow's error, preserved for surface-specific error rendering.
-pub type Error = OrbitError;
-
 impl<'a, T> Command<'a, T> {
     fn new(operation: Operation, flow: impl FnOnce(&Core) -> Result<T, Error> + 'a) -> Self {
         Self {
@@ -74,6 +87,18 @@ impl<'a, T> Command<'a, T> {
         }
     }
 }
+
+type RunFlow<'a, T> = dyn FnOnce(&Core) -> Result<Outcome<T>, OrbitError> + 'a;
+
+/// The read model or submission receipt, with its native command exit status.
+pub struct Outcome<T> {
+    /// The value the surface renders.
+    pub value: T,
+    exit_code: i32,
+}
+
+/// A run flow's error, preserved for surface-specific error rendering.
+pub type Error = OrbitError;
 
 struct RunApp<'a, T>(PhantomData<&'a T>);
 

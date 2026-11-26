@@ -31,6 +31,7 @@ impl Command<'static, RunHistory> {
         )
     }
 }
+
 /// One `--failures` row: a task and the root-cause run behind it.
 pub struct FailureRow {
     pub task_id: Option<String>,
@@ -39,6 +40,9 @@ pub struct FailureRow {
     pub crew: Option<String>,
     pub cause: Option<String>,
 }
+
+/// Task ids, failing step, crew and first cause line of the root-cause run.
+type FailureFacts = (Vec<String>, Option<String>, Option<String>, Option<String>);
 
 /// Fold the listing into one row per task and root cause.
 ///
@@ -109,15 +113,13 @@ fn failure_rows(
 
     (rows, paused_leaves.len())
 }
+
 fn is_reported_failure(state: JobRunState) -> bool {
     matches!(
         state,
         JobRunState::Failed | JobRunState::Held | JobRunState::Interrupted | JobRunState::Timeout
     )
 }
-
-/// Task ids, failing step, crew and first cause line of the root-cause run.
-type FailureFacts = (Vec<String>, Option<String>, Option<String>, Option<String>);
 
 /// Cache each root's facts so folded echoes share one checkpoint/audit read.
 /// Missing runs contribute nothing; the caller fills step and tasks from the

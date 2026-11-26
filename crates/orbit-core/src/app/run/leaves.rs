@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 
 /// The coordinator job whose leaves this summarizes.
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
+
 /// The per-task job a drain dispatches, one run per admitted task.
 const LEAF_JOB: &str = "task_auto_pipeline";
 
@@ -44,80 +45,6 @@ pub struct DrainLeafSummary {
     pub approvals: Option<DrainApprovalReport>,
     /// Shared occupancy at the last pass, separate from this drain's outcomes.
     pub capacity: Option<DrainCapacity>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FailedLeaf {
-    pub run_id: String,
-    pub state: JobRunState,
-    pub task_ids: Vec<String>,
-    pub error: Option<String>,
-    /// The run whose `orbit job resume` retries the failed work. A leaf fails
-    /// because a run beneath it did, and resuming the wrapper only re-checks
-    /// that failure, so this is the deepest resumable failed run, or the leaf
-    /// itself. Set by the caller, which can read the run tree.
-    pub resume_run_id: Option<String>,
-}
-
-/// One drain leaf whose task (or tasks) is held in review.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HeldReviewLeaf {
-    pub run_id: String,
-    pub tasks: Vec<HeldReviewTask>,
-}
-
-/// One task on a held-in-review leaf.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HeldReviewTask {
-    pub task_id: String,
-    pub hold: String,
-    /// Delivery refusal code, or the completion-hold rule label.
-    pub reason: String,
-    pub delivery_run_id: String,
-    pub pr_number: Option<String>,
-    pub field: Option<String>,
-    pub pattern: Option<String>,
-    pub matched: Option<String>,
-}
-
-/// Backlog tasks the drain's last admission pass left unstarted.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct WaitingBacklog {
-    /// Admissible tasks not admitted in the last pass. Local passes include
-    /// deferred tasks here; pull passes keep the owner's queue depth separate
-    /// from deferred tasks. `None` when the drain recorded no pass.
-    pub queued: Option<u64>,
-    /// Tasks deferred by a lock conflict or owner hold, with the blocking
-    /// tasks. They overlap `queued` for local passes, but not pull passes.
-    pub deferred: Vec<WaitingTask>,
-    /// The full count behind `deferred`, which a pull drain bounds. Records
-    /// that predate it read 0, so use [`Self::deferred_count`].
-    pub deferred_total: u64,
-    /// Backlog tasks the drain could not admit at all, with the reason.
-    pub excluded: Vec<WaitingTask>,
-    pub excluded_total: u64,
-    /// Host resource pressure that held the last pass [ORB-13901].
-    pub resource_throttle: Option<ResourceThrottle>,
-    pub recorded_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// When the lists above were read: the owner's answer, for a pull drain;
-    /// for a local one, the last completed pass, set only while its latest
-    /// pass was deferred on a busy lock.
-    pub waiting_recorded_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Whether deferred tasks are included in `queued` (local pass semantics).
-    pub deferred_in_queued: bool,
-    /// Tasks kept off this host by reason code, whole (pull drains).
-    pub by_reason: BTreeMap<String, u64>,
-    /// Consecutive owner answers that kept tasks off this host and claimed
-    /// none (pull drains).
-    pub idle_passes: u32,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WaitingTask {
-    pub task_id: String,
-    pub reason: Option<String>,
-    pub blocked_by: Vec<String>,
-    pub detail: Option<String>,
 }
 
 impl DrainLeafSummary {
@@ -198,6 +125,73 @@ impl DrainLeafSummary {
             .map(|task| task.task_id.as_str())
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FailedLeaf {
+    pub run_id: String,
+    pub state: JobRunState,
+    pub task_ids: Vec<String>,
+    pub error: Option<String>,
+    /// The run whose `orbit job resume` retries the failed work. A leaf fails
+    /// because a run beneath it did, and resuming the wrapper only re-checks
+    /// that failure, so this is the deepest resumable failed run, or the leaf
+    /// itself. Set by the caller, which can read the run tree.
+    pub resume_run_id: Option<String>,
+}
+
+/// One drain leaf whose task (or tasks) is held in review.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldReviewLeaf {
+    pub run_id: String,
+    pub tasks: Vec<HeldReviewTask>,
+}
+
+/// One task on a held-in-review leaf.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeldReviewTask {
+    pub task_id: String,
+    pub hold: String,
+    /// Delivery refusal code, or the completion-hold rule label.
+    pub reason: String,
+    pub delivery_run_id: String,
+    pub pr_number: Option<String>,
+    pub field: Option<String>,
+    pub pattern: Option<String>,
+    pub matched: Option<String>,
+}
+
+/// Backlog tasks the drain's last admission pass left unstarted.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct WaitingBacklog {
+    /// Admissible tasks not admitted in the last pass. Local passes include
+    /// deferred tasks here; pull passes keep the owner's queue depth separate
+    /// from deferred tasks. `None` when the drain recorded no pass.
+    pub queued: Option<u64>,
+    /// Tasks deferred by a lock conflict or owner hold, with the blocking
+    /// tasks. They overlap `queued` for local passes, but not pull passes.
+    pub deferred: Vec<WaitingTask>,
+    /// The full count behind `deferred`, which a pull drain bounds. Records
+    /// that predate it read 0, so use [`Self::deferred_count`].
+    pub deferred_total: u64,
+    /// Backlog tasks the drain could not admit at all, with the reason.
+    pub excluded: Vec<WaitingTask>,
+    pub excluded_total: u64,
+    /// Host resource pressure that held the last pass [ORB-13901].
+    pub resource_throttle: Option<ResourceThrottle>,
+    pub recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the lists above were read: the owner's answer, for a pull drain;
+    /// for a local one, the last completed pass, set only while its latest
+    /// pass was deferred on a busy lock.
+    pub waiting_recorded_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Whether deferred tasks are included in `queued` (local pass semantics).
+    pub deferred_in_queued: bool,
+    /// Tasks kept off this host by reason code, whole (pull drains).
+    pub by_reason: BTreeMap<String, u64>,
+    /// Consecutive owner answers that kept tasks off this host and claimed
+    /// none (pull drains).
+    pub idle_passes: u32,
+}
+
 impl WaitingBacklog {
     pub fn has_starved_tasks(&self) -> bool {
         self.queued.is_some_and(|queued| queued > 0)
@@ -222,6 +216,15 @@ impl WaitingBacklog {
         }
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WaitingTask {
+    pub task_id: String,
+    pub reason: Option<String>,
+    pub blocked_by: Vec<String>,
+    pub detail: Option<String>,
+}
+
 /// Summarize a drain's leaves, or `None` for any other run.
 ///
 /// `read_child` resolves a dispatched run id to its record; an unreadable one

@@ -8,10 +8,10 @@
 //! `application/` and are reached through `OrbitRuntime`.
 
 mod exec;
-pub use exec::dashboard_authorize;
 pub mod friction;
 pub mod plugin;
 pub mod run;
 pub mod task;
 pub(crate) mod tool_fields;
 pub mod workspace;
+pub use exec::dashboard_authorize;

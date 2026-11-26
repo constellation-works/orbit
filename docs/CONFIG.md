@@ -2147,7 +2147,10 @@ A transient read-only PR or repository observation failure gets one
 host-authenticated completion retry within the original completion deadline.
 The host checks the unchanged publication, validation receipts and captured
 review certificate first; the retried completion reads PR state again and
-checks the published head and base before merging. The recovery rationale
+checks the published head and base before merging. A host-certified managed
+rebase completed before publication is eligible when its successful sync
+receipt matches the published candidate; ambiguous, altered or later recovery
+remains governed. No source step or publication is replayed. The recovery rationale
 records `transient-observation`. Review provenance changes and the retired
 capture-only after-landing timing do not add review obligations. New
 validation captures bind non-review inputs separately so review-only config

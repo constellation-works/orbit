@@ -68,9 +68,11 @@ impl LogFollower {
     pub fn run_id(&self) -> &str {
         &self.run_id
     }
+
     pub fn step_filtered(&self) -> bool {
         self.step.is_some()
     }
+
     pub fn state(&self) -> Result<JobRun, OrbitError> {
         self.read.show(&self.runtime, &self.run_id)
     }

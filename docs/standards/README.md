@@ -18,6 +18,7 @@ fails CI on any edit; changes come only from a re-sync.
 | STD-06 | 2 | Design docs and feature tracking — one folder per feature, a delivery stage separate from doc approval, a generated feature board, admitted decisions, and tasks tagged with their feature | [STD-06-design-docs-and-feature-tracking/STD-06.md](STD-06-design-docs-and-feature-tracking/STD-06.md) |
 | STD-07 | 20 | UI and UX — consistent spacing, shared edges, one type scale, minimal words, show each thing once, honest charts, stable layouts, visible state | [STD-07-ui-ux/STD-07.md](STD-07-ui-ux/STD-07.md) |
 | STD-08 | 3 | Economy — bounded agent context, delta-only records, one channel per ask, bookkeeping off the page, one-line errors, complete stored records, size stated at design time | [STD-08-economy/STD-08.md](STD-08-economy/STD-08.md) |
+| STD-12 | 4 | Source style — names, vertical spacing, line width and the formatter gate, as a language-neutral core with one profile per language | [STD-12-source-style/STD-12.md](STD-12-source-style/STD-12.md) |
 
 Each standard is a directory. `STD-nn.md` holds its rules, where they apply and how to
 deviate: read it first. `why.md` explains each rule, `checks.md` names the gate that

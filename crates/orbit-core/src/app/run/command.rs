@@ -6,6 +6,18 @@ use orbit_common::protocol::tool_input::{optional_string, optional_u32_alias, re
 use orbit_types::identity::normalize_optional_attribution_label;
 use serde_json::Value;
 
+impl<'a> Command<'a, Value> {
+    pub(crate) fn remote_command(
+        input: Value,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Self {
+        Self::new(Operation::command("command", "exec"), move |core| {
+            exec(core.runtime(), input, agent, model)
+        })
+    }
+}
+
 fn exec(
     runtime: &OrbitRuntime,
     input: Value,
@@ -80,17 +92,5 @@ fn required_argv(input: &Value) -> Result<Vec<String>, OrbitError> {
         Some(_) => Err(OrbitError::InvalidInput(
             "`argv` must be a JSON array of argument strings".to_string(),
         )),
-    }
-}
-
-impl<'a> Command<'a, Value> {
-    pub(crate) fn remote_command(
-        input: Value,
-        agent: Option<String>,
-        model: Option<String>,
-    ) -> Self {
-        Self::new(Operation::command("command", "exec"), move |core| {
-            exec(core.runtime(), input, agent, model)
-        })
     }
 }

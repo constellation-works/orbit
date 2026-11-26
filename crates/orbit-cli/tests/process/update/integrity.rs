@@ -6,6 +6,10 @@
 //! generation record untouched. Admission waits for an in-flight clock tick,
 //! and a candidate that hangs while it is probed releases every authority.
 
+#[cfg(target_os = "linux")]
+#[path = "integrity/probes.rs"]
+mod probes;
+
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -28,10 +32,6 @@ use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 use super::output_of;
-
-#[cfg(target_os = "linux")]
-#[path = "integrity/probes.rs"]
-mod probes;
 
 const WAIT_SLICE: Duration = Duration::from_millis(20);
 
