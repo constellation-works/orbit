@@ -1487,6 +1487,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 0, result.stderr)
         core_counts = counts()
         assert_once(core_counts)
+        self.assertEqual(core_counts.get("check-rust-module-order.py"), 1)
         core_guards = set(core_counts)
         repeated_core = dict(core_counts)
         repeated_core[next(iter(repeated_core))] += 1

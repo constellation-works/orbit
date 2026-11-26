@@ -244,15 +244,76 @@ Remove a row when its occurrence is fixed. Preserve the evaluation order
 of initializer expressions before reordering named fields. Retire the
 baseline once these batches leave it empty.
 
-### Clippy coverage limits
+### Source order and review coverage
 
-Clippy's tests-last lint sees inline test modules and skips some subsequent
-items, including a subsequent module. The ordering lint skips some items
-such as underscore-prefixed declarations and external macro output.
-The literal lint sees source literals for structs defined in the current
-crate and skips expansions. Root required Clippy sees code selected by its
-Linux build. [ORB-29039] tracks these gaps. [ORB-28985] owns adoption of
-the shared checker, including §R21 impl adjacency and §R22 member order.
+**Recorded:** 2026-11-26 · [ORB-29039]
+
+[The source guard](../../../scripts/check-rust-module-order.py) supplements
+Clippy for STD-12@4 §R20. It reads file and inline-module scopes in `crates/`
+and `desktop/`, including underscore-prefixed items and written declarations
+in inactive platform and feature branches. Put test-only modules last whether
+their bodies are inline or in another file. The guard recognizes direct
+`cfg(test)` and positive `all`/`any` combinations that require `test`.
+Treat alternative cfg branches as part of the same written sequence. For
+example, group platform-specific types before the free functions.
+
+The repository guard job compares the working tree against the PR merge base
+(`CI_TEST_BASE`, with the `agent-main` merge-base fallback). It rejects new
+findings, including in added files. It tracks existing occurrences by module
+scope and declaration pair, so line shifts and detected renames preserve the
+temporary debt allowance. Checked-in source labeled `@generated` in the
+leading comments is exempt. Clippy retains the existing strict module/import
+and tests-last gates, as well as the root compiler baseline.
+
+A module-scope `#![expect(clippy::arbitrary_source_item_ordering, reason = "...")]`
+permits a lexical `macro_rules!` definition before a child module or its
+matching public macro re-export. Ordinary imports still follow the child
+declarations. The guard checks other inversions in that scope and checks
+tests-last placement. During review, confirm the named
+child actually uses the macro in lexical scope or the re-export names the
+local macro, and keep the expectation in the smallest affected module.
+
+[The shared checker candidate](https://github.com/constellation-works/orbit/pull/11375)
+parses source for §R21 impl adjacency and §R22 member ordering. §R20 group
+and test-module ordering and §R23 type resolution are outside its rule set.
+The complementary guard uses the repository's Rust tokenizer and leaves the
+shared checker and its pins independent.
+
+The [seeded tests](../../../scripts/test-rust-source-order.py) reproduced
+these results under Clippy 1.98.1.
+
+| Seed | Clippy | Source guard |
+| --- | --- | --- |
+| Function after out-of-line test module | Silent | Reports |
+| Module after inline test module | Silent | Reports |
+| Function after inline test module | Reports | Reports |
+| Misplaced underscore-prefixed constant or function | Silent | Reports |
+| Type after function in macOS/Windows/feature-gated branch | Silent on default Linux, reports with the feature | Reports in either build |
+| Constant emitted by an external macro after a type | Silent | Review generated item placement |
+| Reversed cross-crate literal or local literal emitted by a macro | Silent | Review literal order |
+| Reversed written literal of a local struct | Reports | Covered by Clippy |
+
+Apply these review rules for the parts of STD-12@4 §R20 and §R23 where
+accurate diagnostics need expansion, type resolution or another build:
+
+- **§R20 macro-generated items.** When a change moves or adds an item-producing
+  macro, inspect the invocation and emitted items in their containing module.
+  Follow `include!`, cfg-dispatch macros and attribute macros to the source or
+  inspect the expansion for the affected configuration. Check generated
+  declarations against the surrounding groups and keep test modules last.
+- **§R20 indirect test cfg.** When a changed module uses `cfg_attr` or indirect
+  predicates to compile only under `test`, verify tests-last placement in its
+  enclosing scope. Check the physical position of the declaration, including
+  when its body is in a separate file.
+- **§R23 literals outside Clippy's coverage.** For added or changed named-field
+  literals that build a cross-crate type, come from a macro, or compile outside
+  the linted target/feature matrix, resolve the actual type through the imports
+  or re-exports. Compare the written or emitted field list, including shorthand
+  fields, with the struct declaration in that configuration. When reordering
+  effectful initializers, bind the values first to preserve evaluation order.
+  Clippy checks compiled local structs in the existing root Linux and desktop
+  Linux/macOS lint jobs.
+
 [Clippy module order](https://github.com/rust-lang/rust/blob/1.98.0/src/tools/clippy/clippy_lints/src/arbitrary_source_item_ordering.rs),
 [tests-last lint](https://github.com/rust-lang/rust/blob/1.98.0/src/tools/clippy/clippy_lints/src/items_after_test_module.rs),
 [struct literal lint](https://github.com/rust-lang/rust/blob/1.98.0/src/tools/clippy/clippy_lints/src/inconsistent_struct_constructor.rs).
@@ -293,6 +354,7 @@ Routed tool calls do not go through the task access. `Run::claim_owner()` return
 - [ORB-28318] — carried the proposal to Daniel's approval.
 - [ORB-27886] — recorded the STD-02 deviations this restructure answers.
 - [ORB-28969] — adopted the STD-12 declaration and literal order gate with a shrinking root baseline.
+- [ORB-29039] — added the written module-order guard and review rules for remaining lint gaps.
 - [ORB-15932] — set the noun-by-noun order the conversions follow.
 - [ORB-28391] — chose a worker's task reads when `Stored` is built.
 - [ORB-28392] — chose coordination writes from the role.
