@@ -1,10 +1,3 @@
-use orbit_engine::RuntimeHost;
-use orbit_types::task::TaskStatus;
-use orbit_types::tool::ToolSessionContext;
-use serde_json::json;
-
-use crate::admission_audit::tool_support::{create_task, test_runtime};
-
 /// End-to-end coverage for the artifact read surface: attach through the
 /// canonical put tool, list compact metadata, then retrieve the payload.
 mod artifact_get {
@@ -118,6 +111,13 @@ mod artifact_get {
         }
     }
 }
+
+use orbit_engine::RuntimeHost;
+use orbit_types::task::TaskStatus;
+use orbit_types::tool::ToolSessionContext;
+use serde_json::json;
+
+use crate::admission_audit::tool_support::{create_task, test_runtime};
 
 fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution() {
     use orbit_tools::ToolContext;

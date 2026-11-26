@@ -1,14 +1,6 @@
 //! Cancelled owner-local source recovery through the public tool/runtime carrier.
 #![cfg(unix)]
 
-use chrono::Utc;
-use orbit_core::TaskStatus;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
-use orbit_types::workflow::JobRunState;
-use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::path::PathBuf;
-
 #[path = "source_repair/association.rs"]
 mod association;
 #[path = "source_repair/crew_redraw.rs"]
@@ -27,7 +19,7 @@ mod failed_publication;
 mod failed_successors;
 #[path = "source_repair/fixture.rs"]
 mod fixture;
-use fixture::{Fixture, git};
+
 #[path = "source_repair/completion.rs"]
 mod completion;
 #[path = "source_repair/generations.rs"]
@@ -68,6 +60,17 @@ mod reviewer_push;
 mod reviewers;
 #[path = "source_repair/unresumable_requeue.rs"]
 mod unresumable_requeue;
+
+use chrono::Utc;
+use orbit_core::TaskStatus;
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
+use orbit_types::workflow::JobRunState;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use fixture::{Fixture, git};
+
 use completion::mutation::{
     enabled_completion_refuses_repair_and_mutation_provenance,
     expired_completion_budget_never_merges,

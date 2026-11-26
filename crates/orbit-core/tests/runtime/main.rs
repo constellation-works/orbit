@@ -15,6 +15,13 @@
 
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
+// `scenario_table!` is a `macro_rules!` that most modules call by textual scope, which
+// reaches only what follows its definition, so its path re-export and every `mod` line
+// stay below it.
+#![expect(
+    clippy::arbitrary_source_item_ordering,
+    reason = "`macro_rules!` textual scope requires `scenario_table` before the modules that call it"
+)]
 
 #[path = "../support/admission.rs"]
 mod admission_test_support;

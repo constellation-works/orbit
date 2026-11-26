@@ -19,11 +19,25 @@
 //! claimed output carries, and the pipeline resumes after that step, as the
 //! no-diff fixture does. Every other step is the shipped one.
 
+#[path = "landing_worker.rs"]
+mod worker;
+
+#[path = "landing_retry.rs"]
+mod retry;
+
+#[path = "requeued_claim.rs"]
+mod requeued;
+
+#[path = "owner_repair_fallback.rs"]
+mod owner_fallback;
+
+#[cfg(unix)]
+#[path = "landing_waiting.rs"]
+mod waiting;
+
 use super::*;
 use std::io::Write;
 
-#[path = "landing_worker.rs"]
-mod worker;
 use worker::LandingWorkers;
 
 use orbit_types::tool::WorkerInvocation;
@@ -1151,16 +1165,3 @@ crate::scenario_table!(
     a_spent_repair_whose_candidate_fails_its_check_returns_to_the_backlog_until_blocked,
     a_ui_repair_waits_for_a_verified_browser_kit
 );
-
-#[path = "landing_retry.rs"]
-mod retry;
-
-#[path = "requeued_claim.rs"]
-mod requeued;
-
-#[path = "owner_repair_fallback.rs"]
-mod owner_fallback;
-
-#[cfg(unix)]
-#[path = "landing_waiting.rs"]
-mod waiting;

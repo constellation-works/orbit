@@ -4,26 +4,6 @@
 //! them. Fixtures run in isolated children with real stores and a real
 //! repository.
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use chrono::{Duration, Utc};
-use orbit_automation::delivery::digest;
-use orbit_core::application::automation::{
-    consumer_key, evaluate_routine, pin_attempt_source, release_unreferenced_attempt_pins,
-};
-use orbit_core::application::task::TaskAddParams;
-use orbit_core::runtime::JobRuns;
-use orbit_core::{OrbitRuntime, Task, TaskStatus};
-use orbit_engine::RuntimeHost;
-use orbit_store::contract::KeyedJobRunAdmission;
-use orbit_tools::ToolContext;
-use orbit_types::workflow::automation::AutomationState;
-use orbit_types::workflow::automation::members::{MemberAttempt, StateTriggerKind};
-use orbit_types::workflow::{JobRunState, PipelineState, RoutineDefinition};
-use serde_json::{Value, json};
-use tempfile::TempDir;
-
 mod admission;
 mod artifact_attachment;
 // The provider fixture is an executable script.
@@ -57,6 +37,26 @@ mod review_evidence;
 mod settlement;
 mod source_moves;
 mod standalone_repilot;
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use chrono::{Duration, Utc};
+use orbit_automation::delivery::digest;
+use orbit_core::application::automation::{
+    consumer_key, evaluate_routine, pin_attempt_source, release_unreferenced_attempt_pins,
+};
+use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::JobRuns;
+use orbit_core::{OrbitRuntime, Task, TaskStatus};
+use orbit_engine::RuntimeHost;
+use orbit_store::contract::KeyedJobRunAdmission;
+use orbit_tools::ToolContext;
+use orbit_types::workflow::automation::AutomationState;
+use orbit_types::workflow::automation::members::{MemberAttempt, StateTriggerKind};
+use orbit_types::workflow::{JobRunState, PipelineState, RoutineDefinition};
+use serde_json::{Value, json};
+use tempfile::TempDir;
 
 /// Read either generation of a pilot receipt through the public artifact API.
 pub(super) fn pilot_audit(

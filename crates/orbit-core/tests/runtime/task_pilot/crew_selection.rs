@@ -3,6 +3,8 @@
 //! draws and default fallbacks being mistaken for operator pins after a
 //! complexity assessment or pool configuration change.
 
+mod admitted_scope;
+
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{Task, TaskComplexity, TaskStatus};
 use orbit_store::contract::TaskDocumentUpdateParams;
@@ -426,5 +428,3 @@ crate::scenario_table!(
     pilot_redraws_automatic_assignments_and_preserves_add_and_update_pins,
     complexity_update_redraws_automatic_assignments_and_clear_draws_current_tier
 );
-
-mod admitted_scope;

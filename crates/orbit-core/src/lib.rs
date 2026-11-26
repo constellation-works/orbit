@@ -75,45 +75,21 @@ pub mod bootstrap;
 pub mod composition;
 pub mod metrics;
 pub mod runtime;
-use orbit_runtime::paths;
-
-/// Allow this production Orbit binary to re-execute itself as a pipeline
-/// worker. Call once from its `main` before it can submit any runs. Tests in
-/// other crates must install the `test-support` worker override instead.
-pub fn mark_process_as_pipeline_worker_binary() {
-    application::job::pipeline::mark_process_as_pipeline_worker_binary();
-}
 
 /// Hooks for tests in crates that depend on `orbit-core`, behind the
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
 pub mod test_support {
-    /// Supply a different caller snapshot while keeping the fixture's runtime state.
-    pub fn with_runtime_env(
-        runtime: crate::OrbitRuntime,
-        env: orbit_common::Env,
-    ) -> crate::OrbitRuntime {
-        crate::OrbitRuntime::from_kernel(runtime.into_kernel().with_test_env(env))
+    /// Review ledger operations for delivery fixtures that drive a reviewer directly.
+    pub mod review_ledger {
+        pub use crate::application::review::ledger::{
+            import_claimed_ledger, open_reconciliation, record_certificate, record_invocation,
+            release, reserve, review_reset, settle, update_reconciliation,
+        };
     }
-
-    /// Serve the production broker dispatch in an isolated test whose peer is the test process.
-    #[cfg(unix)]
-    pub fn start_test_run_broker(
-        runtime: &crate::OrbitRuntime,
-        run: orbit_engine::PluginBrokerRun,
-    ) -> Result<crate::runtime::plugin::broker::PluginBroker, orbit_common::OrbitError> {
-        use crate::runtime::plugin::broker::{PeerAnchor, PluginBroker};
-        let peer = orbit_common::process::ancestry::process_start_key(std::process::id())
-            .ok_or_else(|| orbit_common::OrbitError::Execution("test process has exited".into()))?;
-        let run_id = run.run_id.clone();
-        let dispatch = crate::adapter::command::RunDispatch::new(runtime.clone(), run);
-        let broker = PluginBroker::start(
-            &runtime.global_root(),
-            &run_id,
-            std::sync::Arc::new(dispatch),
-        )?;
-        broker.bind_anchor(PeerAnchor::Ancestor(peer));
-        Ok(broker)
+    /// Checkpoint operations for CLI lifecycle fixtures.
+    pub mod automation_checkpoint {
+        pub use orbit_automation::checkpoint::{commit_state, initialize, stall};
     }
 
     pub use crate::application::auto_tasks::completion_test_support::with_completion_adapter_run;
@@ -179,17 +155,6 @@ pub mod test_support {
     /// that drive a reviewer without running the whole delivery pipeline.
     pub use orbit_store::V2AuditEventInsertParams;
     pub use orbit_store::contract::{ReviewInvocationRecord, ReviewReserveRequest};
-    /// Review ledger operations for delivery fixtures that drive a reviewer directly.
-    pub mod review_ledger {
-        pub use crate::application::review::ledger::{
-            import_claimed_ledger, open_reconciliation, record_certificate, record_invocation,
-            release, reserve, review_reset, settle, update_reconciliation,
-        };
-    }
-    /// Checkpoint operations for CLI lifecycle fixtures.
-    pub mod automation_checkpoint {
-        pub use orbit_automation::checkpoint::{commit_state, initialize, stall};
-    }
     /// Canonical (artifact-hashing) task-bundle reads on this thread.
     pub use orbit_store::test_support::canonical_bundle_reads;
     /// Lightweight task-bundle reads on this thread, listing or by id.
@@ -206,6 +171,34 @@ pub mod test_support {
     use crate::application::routines::{
         RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
     };
+
+    /// Supply a different caller snapshot while keeping the fixture's runtime state.
+    pub fn with_runtime_env(
+        runtime: crate::OrbitRuntime,
+        env: orbit_common::Env,
+    ) -> crate::OrbitRuntime {
+        crate::OrbitRuntime::from_kernel(runtime.into_kernel().with_test_env(env))
+    }
+
+    /// Serve the production broker dispatch in an isolated test whose peer is the test process.
+    #[cfg(unix)]
+    pub fn start_test_run_broker(
+        runtime: &crate::OrbitRuntime,
+        run: orbit_engine::PluginBrokerRun,
+    ) -> Result<crate::runtime::plugin::broker::PluginBroker, orbit_common::OrbitError> {
+        use crate::runtime::plugin::broker::{PeerAnchor, PluginBroker};
+        let peer = orbit_common::process::ancestry::process_start_key(std::process::id())
+            .ok_or_else(|| orbit_common::OrbitError::Execution("test process has exited".into()))?;
+        let run_id = run.run_id.clone();
+        let dispatch = crate::adapter::command::RunDispatch::new(runtime.clone(), run);
+        let broker = PluginBroker::start(
+            &runtime.global_root(),
+            &run_id,
+            std::sync::Arc::new(dispatch),
+        )?;
+        broker.bind_anchor(PeerAnchor::Ancestor(peer));
+        Ok(broker)
+    }
 
     /// A claimed leaf's call to its owner on the host's own channel, the one
     /// the review gate writes its records on. The owner refuses the reserved
@@ -305,3 +298,12 @@ pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
 pub use orbit_store::contract::LandedDiffStats;
 pub use runtime::OrbitRuntime;
 pub use runtime::engine::ResolvedCrewProjection;
+
+use orbit_runtime::paths;
+
+/// Allow this production Orbit binary to re-execute itself as a pipeline
+/// worker. Call once from its `main` before it can submit any runs. Tests in
+/// other crates must install the `test-support` worker override instead.
+pub fn mark_process_as_pipeline_worker_binary() {
+    application::job::pipeline::mark_process_as_pipeline_worker_binary();
+}

@@ -35,6 +35,24 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 #![allow(missing_docs)]
 
+mod caller_env;
+mod crew_env;
+mod follower_claims;
+mod gap_fit;
+mod human_crew;
+mod load_failure;
+mod lock_busy_pass;
+mod perf_lane;
+mod provider_override;
+mod replay_crew;
+mod reservation_grants;
+mod shared_base_repair;
+mod sqlite_busy_pass;
+mod submission_notices;
+mod task_pilot_warning;
+mod unknown_footprint;
+mod unlocked_context;
+
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -58,24 +76,6 @@ use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
-
-mod caller_env;
-mod crew_env;
-mod follower_claims;
-mod gap_fit;
-mod human_crew;
-mod load_failure;
-mod lock_busy_pass;
-mod perf_lane;
-mod provider_override;
-mod replay_crew;
-mod reservation_grants;
-mod shared_base_repair;
-mod sqlite_busy_pass;
-mod submission_notices;
-mod task_pilot_warning;
-mod unknown_footprint;
-mod unlocked_context;
 
 /// Run `test` alone in a child of this binary with inherited Orbit authority
 /// cleared and a disposable `HOME`; `true` inside that child. The parent

@@ -9,6 +9,9 @@
 //! own probe script, so what the run proves is whatever the candidate's
 //! probe does; on macOS the probe applies a real Seatbelt profile.
 
+mod deferred;
+mod sandbox;
+
 use std::os::unix::fs::PermissionsExt;
 
 use super::claimed_review::ReviewedLeaf;
@@ -66,9 +69,6 @@ fn claimed_host_refuses_colliding_evidence_before_running() {
         assert!(leaf.owner_artifact(REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none());
     }
 }
-
-mod deferred;
-mod sandbox;
 
 /// A claimed leaf whose follower resolves `cargo` to a stand-in running
 /// `tests/host/<target>.sh` from the checkout it is started in, with the

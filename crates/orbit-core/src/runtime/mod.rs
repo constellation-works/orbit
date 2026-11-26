@@ -8,17 +8,17 @@
 //! kernel reaches those methods only through [`ApplicationPort`], which
 //! composition implements.
 
-use std::ops::{Deref, DerefMut};
-use std::sync::OnceLock;
-
-use orbit_common::Env;
-pub use orbit_runtime::*;
-
 mod builders;
 mod forwarders;
 
 #[cfg(test)]
 mod tests;
+
+use std::ops::{Deref, DerefMut};
+use std::sync::OnceLock;
+
+use orbit_common::Env;
+pub use orbit_runtime::*;
 
 /// The environment `main` captured, kept where runtimes and core operations
 /// resolve it.
