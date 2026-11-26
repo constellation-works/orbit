@@ -388,11 +388,6 @@ fn update_without_repilot(
         }
     }
     let note = optional_string(input, "note")?;
-    if note.is_some() && requested_status.is_none() {
-        return Err(OrbitError::InvalidInput(
-            "`note` requires a status change; use `comment` for free-form discussion".to_string(),
-        ));
-    }
     let mut params = task_update_params_from_input(input, requested_status)?;
     params.trusted_artifact_origin = origin;
     let written =
@@ -430,11 +425,6 @@ fn cli_update(
         )?;
         return screened_write_response(runtime, written, response_fields.as_ref());
     }
-    if note.is_some() {
-        return Err(OrbitError::InvalidInput(
-            "`note` is recorded on an approval; pass it with `approve`".to_string(),
-        ));
-    }
     let status = optional_string(input, "status")?
         .map(|value| parse_task_status("status", &value))
         .transpose()?;
@@ -454,7 +444,7 @@ fn cli_update(
     } else {
         TaskUpdateAuthority::Lifecycle
     };
-    let written = runtime.update_task_screened(
+    let written = runtime.update_task_screened_with_note(
         &id,
         params,
         &write_screen(
@@ -466,6 +456,7 @@ fn cli_update(
         authority,
         agent,
         model,
+        note,
     )?;
     screened_write_response(runtime, written, response_fields.as_ref())
 }

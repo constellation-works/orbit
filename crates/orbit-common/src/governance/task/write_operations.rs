@@ -574,7 +574,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 ParamType::String,
                 "Status transition note.",
                 CliArgKind::flag("note"),
-                "Note recorded on the approval's status history entry (with `--approve`)",
+                "Note recorded on the status history entry (with `--status` or `--approve`)",
             )),
             both(
                 "priority",

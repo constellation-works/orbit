@@ -906,6 +906,52 @@ fn show_and_title_update_bound_bundle_reads() {
     );
 }
 
+fn tool_status_notes_use_shared_validation() {
+    use serde_json::json;
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = OrbitRuntime::from_roots(
+        &root.path().join("global"),
+        &root.path().join("repo/.orbit"),
+    )
+    .unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Note validation".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let token = format!("ghp_{}", "a".repeat(36));
+    runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({"id":task.id,"status":"blocked","note":format!("GITHUB_TOKEN={token}")}),
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(
+        runtime
+            .get_task_history(&task.id)
+            .unwrap()
+            .iter()
+            .any(|event| event.note.as_deref() == Some("GITHUB_TOKEN=[REDACTED_SECRET]"))
+    );
+    for input in [
+        json!({"id":task.id,"note":"orphan"}),
+        json!({"id":task.id,"status":"blocked","note":"orphan"}),
+    ] {
+        let error = runtime
+            .execute_tool_command("orbit.task.update", input, None, None)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains(
+                "`note` requires a status change; use `comment` for free-form discussion"
+            ),
+            "{error}"
+        );
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     claim_refused_start_leaves_document_status_history_and_artifacts_unchanged_scenarios,
@@ -915,6 +961,7 @@ crate::scenario_table!(
     activity_updates_refuse_replica_writes_and_preserve_owner_updates_scenarios,
     activity_updates_refuse_replica_writes_and_preserve_owner_updates,
     guarded_start_and_activity_notes_redact_before_persistence,
+    tool_status_notes_use_shared_validation,
     rejected_artifacts_leave_status_document_and_history_unchanged,
     automation_persists_returned_summary_crew_and_run_history_without_status_change,
     pr_status_updates_share_admission_and_trim_before_storage,

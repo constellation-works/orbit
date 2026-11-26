@@ -116,7 +116,7 @@ Options:
           Take the next approval step (proposed -> backlog, review -> done); no field edits or `--status`
 
       --note <NOTE>
-          Note recorded on the approval's status history entry (with `--approve`)
+          Note recorded on the status history entry (with `--status` or `--approve`)
 
       --discard-candidate
           Discard the last failed run's preserved candidate; pair with `--status backlog` to requeue

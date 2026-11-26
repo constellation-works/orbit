@@ -76,11 +76,51 @@ fn task_updates_and_approval_redact_prose_before_persistence() {
         id,
         "--status",
         "in-progress",
+        "--note",
+        &text,
         "--comment",
         &text,
         "--json",
     ]);
     let persisted = fixture.json(&["task", "show", id, "--json"]);
+    assert!(
+        persisted["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["event"] == "status_changed" && event["note"] == safe)
+    );
+    for args in [
+        vec!["task", "update", id, "--note", "orphan", "--json"],
+        vec![
+            "task",
+            "update",
+            id,
+            "--status",
+            "in-progress",
+            "--note",
+            "orphan",
+            "--json",
+        ],
+    ] {
+        let output = fixture
+            .command(&args)
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        let message = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            message.contains(
+                "`note` requires a status change; use `comment` for free-form discussion"
+            ),
+            "{message}"
+        );
+    }
     let comments = persisted["comments"].as_array().unwrap();
     assert_eq!(comments.len(), 3);
     assert!(comments.iter().all(|comment| comment["message"] == safe));
