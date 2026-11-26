@@ -865,6 +865,13 @@ its recorded execution host; a bare `orbit run show <run-id>` reads the
 selected host's store. A settled claim fences the follower leaf, so an
 unrelated same-ID owner run does not prevent requeue.
 
+When `sync_base` fails, the handoff can still authenticate a published head
+that matches the owner's host-recorded commit or the handoff's single
+preservation commit directly above it. The publication identity and head
+lease must still match. A head whose provenance depends on synchronization
+requires a successful synchronization checkpoint. The successor prepares
+against the current base under the normal bounded synchronization budget.
+
 For an owner-local publication, requeue authenticates the handoff receipt
 before taking the task's write lock: the
 stopped run is this machine's own single-task delivery, conclusively stopped

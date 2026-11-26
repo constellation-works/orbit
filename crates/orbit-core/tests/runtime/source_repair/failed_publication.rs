@@ -245,7 +245,20 @@ pub(super) fn escalated_handoff_fixture_with(
     infra: Option<orbit_types::workflow::TransientInfrastructure>,
     mid_handoff: &dyn Fn(&Fixture),
 ) -> (Fixture, String) {
-    let mut f = if reviewer.is_some() {
+    escalated_handoff(reviewer, infra, mid_handoff, false)
+}
+
+pub(super) fn failed_sync_handoff_fixture() -> (Fixture, String) {
+    escalated_handoff(None, None, &|_| {}, true)
+}
+
+fn escalated_handoff(
+    reviewer: Option<bool>,
+    infra: Option<orbit_types::workflow::TransientInfrastructure>,
+    mid_handoff: &dyn Fn(&Fixture),
+    fail_sync: bool,
+) -> (Fixture, String) {
+    let mut f = if reviewer.is_some() || fail_sync {
         Fixture::with_policy("before-pr")
     } else {
         Fixture::handoff()
@@ -328,7 +341,66 @@ pub(super) fn escalated_handoff_fixture_with(
     let old_head = git(&checkout, &["rev-parse", "HEAD"]);
     let validation = json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],
         "workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]});
-    let (failed_index, failed_step, activity, error, parent) = if reviewer.is_some() {
+    let (failed_index, failed_step, activity, error, parent) = if fail_sync {
+        let prepared = f.action(
+            "pr_prepare",
+            json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],
+            "workspace_path":checkout,"base":"main","base_sync":"remote",
+            "authenticate_preparation":true}),
+        );
+        published_owner::checkpoint(&f, &run.run_id, 2, "prepare_branch", prepared.clone());
+        advance_origin_main(&f, "new-base.txt");
+        git(&checkout, &["fetch", "-q", "origin", "main"]);
+        let mut input = prepared.clone();
+        input["preparation"] = prepared;
+        input["step_id"] = json!("sync_base");
+        input["job_run_id"] = json!(run.run_id);
+        input["completed_task_ids"] = json!([f.task]);
+        input["workspace_path"] = json!(checkout);
+        let runtime = f.runtime.clone();
+        let run_id = run.run_id.clone();
+        let error = orbit_engine::test_support::with_prerequisite_clock(
+            move || {
+                // Expire the budget after the first refresh is recorded.
+                if runtime
+                    .rebase_recovery_attempts(&run_id, "sync_base_preparation")
+                    .unwrap()
+                    .is_empty()
+                {
+                    1000
+                } else {
+                    121_001
+                }
+            },
+            |_, _| {},
+            || {
+                execute_deterministic_action(
+                    &f.runtime,
+                    "git_rebase",
+                    &json!({}),
+                    &input,
+                    false,
+                    &HashMap::new(),
+                    None,
+                )
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("fresh preparation deadline exhausted"),
+            "{error}"
+        );
+        assert_eq!(
+            f.runtime
+                .rebase_recovery_attempts(&run.run_id, "sync_base_preparation")
+                .unwrap()
+                .len(),
+            1
+        );
+        (3, "sync_base", "git_rebase", error, old_head.clone())
+    } else if reviewer.is_some() {
         let parent = settle_and_publish_reviewer(&f, &run.run_id, &checkout, &setup, &validation);
         let open = json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],
             "workspace_path":checkout,"head":f.branch,"base":"main",
@@ -373,12 +445,16 @@ pub(super) fn escalated_handoff_fixture_with(
         (8, "validate", "candidate_validate", error, old_head.clone())
     };
     let mut state = f.runtime.read_run_state(&run.run_id).unwrap().unwrap();
+    let diagnostic = fail_sync.then(|| json!({"error":error.to_string()}));
     state.record_step(
         failed_index,
         JobRunState::Failed,
-        None,
+        diagnostic.clone(),
         Some(json!(error.to_string())),
     );
+    if let Some(diagnostic) = diagnostic {
+        state.record_pipeline_output(failed_step, diagnostic);
+    }
     f.runtime.write_run_state(&run.run_id, &state).unwrap();
     f.source = run.clone();
     // Escalated permits the real terminal hook; direct Requeued suppresses it.
@@ -767,9 +843,7 @@ fn settle_and_publish_reviewer(
     setup: &Value,
     validation: &Value,
 ) -> String {
-    use orbit_types::workflow::{
-        REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewTiming,
-    };
+    use orbit_types::workflow::{REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT};
     let prepared = f.action(
         "pr_prepare",
         json!({"job_run_id":id,"completed_task_ids":[f.task],"workspace_path":checkout,
@@ -784,26 +858,7 @@ fn settle_and_publish_reviewer(
     let sync = f.action("git_rebase", sync_input);
     published_owner::checkpoint(f, id, 3, "sync_base", sync.clone());
     let implementation = sync["head_sha"].clone();
-    let mut run = f.runtime.show_job_run_observed(id).unwrap();
-    let policy = f.runtime.operation_policy();
-    run.input.as_mut().unwrap()["review"] = json!(ReviewAdmission {
-        contract_version: REVIEW_CONTRACT_VERSION,
-        policy_version: policy.version,
-        timing: ReviewTiming::BeforePr,
-        timing_source: policy.review_before_pr.source.label().into(),
-        crew: policy.review_crew.value.first().cloned(),
-        crew_pool: Vec::new(),
-        crew_source: policy.review_crew.source.label().into(),
-        budget: policy.review_budget(),
-        required_validation_commands: Some(
-            f.runtime.workflow_required_validation_commands().to_vec()
-        ),
-        baseline_commands: f.runtime.review_baseline_commands().to_vec(),
-        host_evidence: policy.review_host_evidence.value.clone(),
-        selective_before_landing: None,
-        captured_at: Utc::now(),
-    });
-    published_owner::save_run(f, &run);
+    configure_before_pr_review(f, id);
     let mut gate = validation.clone();
     gate["base"] = json!("main");
     gate["base_sync"] = json!("remote");
@@ -845,6 +900,31 @@ fn settle_and_publish_reviewer(
     assert_eq!(pushed["local_sha"], settled["reviewed_head_sha"]);
     published_owner::checkpoint(f, id, 6, "push", pushed);
     settled["reviewed_head_sha"].as_str().unwrap().into()
+}
+
+pub(super) fn configure_before_pr_review(f: &Fixture, id: &str) {
+    use orbit_types::workflow::{REVIEW_CONTRACT_VERSION, ReviewAdmission, ReviewTiming};
+    let mut run = f.runtime.show_job_run_observed(id).unwrap();
+    let policy = f.runtime.operation_policy();
+    assert!(policy.review_before_pr.value);
+    run.input.as_mut().unwrap()["review"] = json!(ReviewAdmission {
+        contract_version: REVIEW_CONTRACT_VERSION,
+        policy_version: policy.version,
+        timing: ReviewTiming::BeforePr,
+        timing_source: policy.review_before_pr.source.label().into(),
+        crew: policy.review_crew.value.first().cloned(),
+        crew_pool: Vec::new(),
+        crew_source: policy.review_crew.source.label().into(),
+        budget: policy.review_budget(),
+        required_validation_commands: Some(
+            f.runtime.workflow_required_validation_commands().to_vec()
+        ),
+        baseline_commands: f.runtime.review_baseline_commands().to_vec(),
+        host_evidence: policy.review_host_evidence.value.clone(),
+        selective_before_landing: None,
+        captured_at: Utc::now(),
+    });
+    published_owner::save_run(f, &run);
 }
 
 fn validated_reviewer_handoffs_keep_identity_and_require_fresh_gates() {

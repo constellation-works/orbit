@@ -226,10 +226,17 @@ impl OrbitRuntime {
             && let Some(committed) = &commit.head_sha
         {
             allowed.push(committed.clone());
-            if state
-                .pipeline
-                .get("sync_base")
-                .is_some_and(|v| !v.is_null())
+            // A handoff at the owner's failed sync can preserve the exact
+            // host commit (or one preservation commit on it). In that case
+            // the failed step contributes no head evidence.
+            let preserved_before_sync = resumed.is_none()
+                && checkpoint.failed_step_id == "sync_base"
+                && parent == *committed;
+            if !preserved_before_sync
+                && state
+                    .pipeline
+                    .get("sync_base")
+                    .is_some_and(|v| !v.is_null())
             {
                 let prepared =
                     authenticated_checkpoint(definition, state, "prepare_branch", "pr_prepare")?;
