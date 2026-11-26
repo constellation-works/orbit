@@ -303,7 +303,7 @@ policy:
     backoff_minutes: 2
 ```
 
-`job:weekly_report_pipeline` is a placeholder: a routine whose target is not in the job catalog fails to load, so name a job from `orbit job list` or one you wrote.
+`job:weekly_report_pipeline` is a placeholder: a routine whose target is not in the job catalog fails to load. Replace it with a name from `orbit job list`, or add a job you wrote to the workspace's job catalog first.
 
 A cron routine runs on every machine that has this checkout registered as an owner and the clock on.
 
