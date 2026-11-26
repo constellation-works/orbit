@@ -25,7 +25,8 @@ use crate::contract::{
 use crate::store::{Snapshot, Tx};
 
 pub(crate) use executions::{
-    AgentExecutionSlotRow, UnidentifiedInvocationRow, UnidentifiedInvocationTarget,
+    AgentExecutionSlotRow, ExecutionSlotKey, UnidentifiedInvocationRow,
+    UnidentifiedInvocationTarget,
 };
 
 /// Concrete invocation and agent-execution repository scoped to a [`Snapshot`]
@@ -74,28 +75,16 @@ impl<'a, 'tx> InvocationRepository<'a, Tx<'tx>> {
     }
 
     /// Persist one backfilled launch identity with its provenance and launch timestamp.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn insert_agent_execution_with_backfill(
         &self,
         workspace: &str,
-        run_id: &str,
-        activity_id: &str,
-        provider: &str,
-        model: Option<&str>,
+        slot: &ExecutionSlotKey<'_>,
         started_at: DateTime<Utc>,
         identity: &AgentExecutionIdentity,
         backfill: &AgentExecutionBackfill,
     ) -> Result<i64, OrbitError> {
         executions::insert_agent_execution_with_backfill(
-            self.conn,
-            workspace,
-            run_id,
-            activity_id,
-            provider,
-            model,
-            started_at,
-            identity,
-            backfill,
+            self.conn, workspace, slot, started_at, identity, backfill,
         )
     }
 

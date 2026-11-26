@@ -25,10 +25,10 @@ use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskPriority, TaskS
 use tempfile::TempDir;
 
 use super::super::TaskCommitBoundary;
-use super::super::admission::ValidationHold;
 use super::super::boundary::section_probe::{SECTIONS, SectionCost};
 use super::super::selection::after_selection;
 use crate::Store;
+use crate::boundary::coordination::admission::{AdmissionCall, ValidationHold};
 use crate::boundary::v2::TaskV2Store;
 use crate::compose::workspace_coordinated_backends;
 use crate::contract::*;
@@ -195,20 +195,22 @@ impl Owner {
         SECTIONS.with(|sections| sections.borrow_mut().clear());
         let lookup = self
             .boundary
-            .admit_task(
-                &AdmissionIdentity::trusted_remote(ExecutionLocation {
+            .admit_task(AdmissionCall {
+                identity: &AdmissionIdentity::trusted_remote(ExecutionLocation {
                     machine_id: "machine-a".into(),
                     machine_name: None,
                 }),
-                &request(request_id),
-                &AdmissionOrdering::default(),
-                "test",
-                &self.repo,
-                &self.orbit_dir,
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                hold,
-            )
+                request: &request(request_id),
+                ordering: &AdmissionOrdering::default(),
+                owner_version: "test",
+                repo_root: &self.repo,
+                orbit_dir: &self.orbit_dir,
+                admission_holds: &BTreeMap::new(),
+                held: &BTreeMap::new(),
+                validation_hold: hold,
+                effective_task: None,
+                guidance_capture: None,
+            })
             .expect("admit");
         let AdmissionLookup::Found { receipt, .. } = lookup else {
             panic!("expected a receipt: {lookup:?}");

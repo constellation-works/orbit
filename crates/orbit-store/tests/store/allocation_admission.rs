@@ -176,17 +176,19 @@ impl Coordinated {
             machine_id: machine_id.into(),
             machine_name: Some("display".into()),
         };
-        self.backends.commit_boundary.admit_task(
-            &AdmissionIdentity::trusted_remote(location),
+        self.backends.commit_boundary.admit_task(orbit_store::AdmissionCall {
+            identity: &AdmissionIdentity::trusted_remote(location),
             request,
             ordering,
-            "test",
-            self.orbit_dir.parent().unwrap(),
-            &self.orbit_dir,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &|_, _, _| Ok(None),
-        )
+            owner_version: "test",
+            repo_root: self.orbit_dir.parent().unwrap(),
+            orbit_dir: &self.orbit_dir,
+            admission_holds: &BTreeMap::new(),
+            held: &BTreeMap::new(),
+            validation_hold: &|_, _, _| Ok(None),
+            effective_task: None,
+            guidance_capture: None,
+        })
     }
     fn pull(&self, request: &AdmissionRequest) -> AdmissionReceipt {
         match self.try_pull(request).expect("pull") {

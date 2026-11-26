@@ -79,20 +79,17 @@ impl TaskCommitBoundary {
     /// Pending repairs this executor may not take, or cannot run, are reported
     /// on `receipt` and left for one that can. Caller holds the admission
     /// boundary.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "mirrors the admission section state passed by admit_locked plus DependencyReach"
-    )]
     pub(super) fn admit_repair_locked(
         &self,
+        call: super::admission::AdmissionCall<'_>,
         screen: &Screen<'_>,
         receipt_key: &str,
-        orbit_dir: &Path,
         tasks: &[Task],
         receipt: &mut AdmissionReceipt,
-        guidance_capture: &super::admission::AdmissionGuidanceCapture<'_>,
         reach: DependencyReach,
     ) -> Result<Option<bool>, OrbitError> {
+        let orbit_dir = call.orbit_dir;
+        let guidance_capture = call.guidance_capture_or_default();
         let candidates = self.repair_candidates(screen, tasks, receipt)?;
         receipt.queue_depth += candidates.len();
         for candidate in candidates {

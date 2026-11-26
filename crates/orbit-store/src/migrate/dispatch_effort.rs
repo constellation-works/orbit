@@ -45,7 +45,7 @@ use serde::Serialize;
 use crate::Store;
 use crate::contract::AgentExecutionBackfill;
 use crate::repository::audit::v2::V2AuditRunEventRow;
-use crate::repository::invocation::AgentExecutionSlotRow;
+use crate::repository::invocation::{AgentExecutionSlotRow, ExecutionSlotKey};
 
 /// The audit event that records each provider launch and its rendered argv.
 const CLI_INVOCATION_STARTED_EVENT: &str = "cli.invocation.started";
@@ -463,10 +463,12 @@ fn record_backfilled_agent_execution(
         };
         let execution_id = invocations.insert_agent_execution_with_backfill(
             workspace_id,
-            &target.run_id,
-            &target.activity_id,
-            &target.provider,
-            target.model.as_deref(),
+            &ExecutionSlotKey {
+                run_id: &target.run_id,
+                activity_id: &target.activity_id,
+                provider: &target.provider,
+                model: target.model.as_deref(),
+            },
             launched_at,
             identity,
             backfill,
@@ -586,10 +588,12 @@ fn record_backfilled_launch_execution(
         }
         invocations.insert_agent_execution_with_backfill(
             workspace_id,
-            &group.run_id,
-            &group.activity_id,
-            &group.provider,
-            group.model.as_deref(),
+            &ExecutionSlotKey {
+                run_id: &group.run_id,
+                activity_id: &group.activity_id,
+                provider: &group.provider,
+                model: group.model.as_deref(),
+            },
             launch.started_at,
             identity,
             backfill,

@@ -23,6 +23,7 @@ use super::super::TaskCommitBoundary;
 use super::super::apply::slow_apply;
 use super::super::boundary::section_probe::{SECTIONS, SectionCost};
 use crate::Store;
+use crate::boundary::coordination::admission::AdmissionCall;
 use crate::boundary::v2::TaskV2Store;
 use crate::compose::workspace_coordinated_backends;
 use crate::contract::*;
@@ -176,20 +177,22 @@ impl Owner {
         let request = request(request_id);
         let lookup = self
             .boundary
-            .admit_task(
-                &AdmissionIdentity::trusted_remote(ExecutionLocation {
+            .admit_task(AdmissionCall {
+                identity: &AdmissionIdentity::trusted_remote(ExecutionLocation {
                     machine_id: MACHINE.into(),
                     machine_name: None,
                 }),
-                &request,
-                &AdmissionOrdering::default(),
-                "test",
-                &self.repo,
-                &self.orbit_dir,
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &|_, _, _| Ok(None),
-            )
+                request: &request,
+                ordering: &AdmissionOrdering::default(),
+                owner_version: "test",
+                repo_root: &self.repo,
+                orbit_dir: &self.orbit_dir,
+                admission_holds: &BTreeMap::new(),
+                held: &BTreeMap::new(),
+                validation_hold: &|_, _, _| Ok(None),
+                effective_task: None,
+                guidance_capture: None,
+            })
             .expect("admit");
         let AdmissionLookup::Found { receipt, .. } = lookup else {
             panic!("expected a receipt: {lookup:?}");
