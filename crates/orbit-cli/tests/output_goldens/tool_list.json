@@ -2501,7 +2501,7 @@
       },
       {
         "name": "since",
-        "description": "list: Lower RFC 3339 creation bound.",
+        "description": "list: Lower creation bound: RFC 3339, naive UTC, or relative duration (e.g. 24h, 7d).",
         "param_type": "string",
         "required": false
       },

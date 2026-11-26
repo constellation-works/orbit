@@ -256,6 +256,56 @@ fn seeded_run(
 }
 
 #[test]
+fn stdio_run_list_since_accepts_shared_windows_and_refuses_invalid_filters() {
+    let workspace = McpWorkspace::init();
+    let selector = workspace.work.to_str().unwrap();
+    seeded_run(
+        &workspace,
+        "jrun-since",
+        "task_pr_pipeline",
+        "success",
+        json!({}),
+    );
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    for since in ["24h", "7d", "2000-01-01T00:00:00", "2000-01-01T00:00:00Z"] {
+        let result = client.call_tool_ok(
+            "orbit_run",
+            json!({"action":"list", "workspace":selector, "since":since}),
+        );
+        assert!(
+            result["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["run_id"] == "jrun-since"),
+            "{since}: {result}"
+        );
+    }
+    for since in ["2999-01-01T00:00:00", "2999-01-01T00:00:00Z"] {
+        let result = client.call_tool_ok(
+            "orbit_run",
+            json!({"action":"list", "workspace":selector, "since":since}),
+        );
+        assert!(
+            result["items"].as_array().unwrap().is_empty(),
+            "{since}: {result}"
+        );
+    }
+    for since in ["bogus", "3600", "", "all"] {
+        let error = client.call_tool_err(
+            "orbit_run",
+            json!({"action":"list", "workspace":selector, "since":since}),
+        );
+        assert_eq!(error["code"], "invalid_input", "{since}: {error}");
+    }
+    let error = client.call_tool_err(
+        "orbit_run",
+        json!({"action":"list", "workspace":selector, "view":"bounded", "since":"24h"}),
+    );
+    assert_eq!(error["code"], "invalid_input", "{error}");
+}
+
+#[test]
 fn stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unauthorized_calls() {
     if crate::isolated_test::run_in_child(
         "mcp_roundtrip::transport_operations::stdio_workers_changes_one_running_record_and_preserves_it_on_stale_or_unauthorized_calls",

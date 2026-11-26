@@ -389,6 +389,12 @@ fn history_filters_before_limit_and_shows_tasks_and_duration() {
         assert_eq!(history(&filters), [expected], "{filters:?}");
     }
     assert_eq!(history(&["--state", "held"]), ["jrun-history-held"]);
+    for since in ["7d", "2000-01-01T00:00:00", "2000-01-01T00:00:00Z"] {
+        assert_eq!(history(&["--since", since]), ["jrun-history-unrelated"]);
+    }
+    for since in ["2999-01-01T00:00:00", "2999-01-01T00:00:00Z"] {
+        assert!(history(&["--since", since]).is_empty());
+    }
     let future = (now + Duration::hours(1)).to_rfc3339();
     assert!(history(&["--since", &future]).is_empty());
     let filtered = fixture.json(&[

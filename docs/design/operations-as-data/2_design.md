@@ -897,7 +897,9 @@ and served by `OperationTool<WorkflowVerb>`. The handler table in
 [workflow_tools.rs](../../../crates/orbit-core/src/adapter/tool_host/workflow_tools.rs)
 matches exhaustively on the verb; `auto` delegates to the drain control it
 always reached. The noun is tool-only, like drain: every operation has an
-empty `cli_path`, and no CLI or dashboard surface is derived from it.
+empty `cli_path`, and no CLI or dashboard surface is derived from it. Run list
+accepts `since` as an RFC 3339 instant, a naive UTC timestamp, or a relative
+duration such as `24h` or `7d`; bounded view does not accept this filter.
 
 The surface table in
 [workflow.rs](../../../crates/orbit-tools/src/builtin/orbit/workflow.rs)

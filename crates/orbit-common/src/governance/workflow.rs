@@ -244,7 +244,11 @@ const RUN_LIST: OperationSpec<WorkflowVerb> = OperationSpec {
             ParamType::String,
             "Run-state filter, or `terminal`.",
         ),
-        mcp_only("since", ParamType::String, "Lower RFC 3339 creation bound."),
+        mcp_only(
+            "since",
+            ParamType::String,
+            "Lower creation bound: RFC 3339, naive UTC, or relative duration (e.g. 24h, 7d).",
+        ),
         VIEW_PARAM,
         mcp_only("offset", ParamType::Integer, "Bounded list offset."),
         mcp_only("status", ParamType::String, "Bounded run-state filter."),
