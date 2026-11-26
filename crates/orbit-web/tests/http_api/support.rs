@@ -672,19 +672,23 @@ fn spawn_server_from(
         command.env("ORBIT_HTTP_TASK_QUERY_TRACE", path);
     }
     command.envs(env.iter().copied());
+    let process = Process(command.spawn().unwrap());
+    let task_query_log = task_query_log.map(Path::to_owned);
+    // A hang guard on each request, including an SSE stream's reads. It
+    // outlasts the dashboard's forward bound, so a forwarded request reports
+    // that typed failure instead of a client timeout.
+    let client = Client::builder()
+        .no_proxy()
+        .timeout(orbit_common::test_env::FIXTURE_STEP_DEADLINE)
+        .build()
+        .unwrap();
+    let origin = String::new();
     let mut server = Server {
-        process: Process(command.spawn().unwrap()),
-        task_query_log: task_query_log.map(Path::to_owned),
+        process,
+        task_query_log,
         log,
-        // A hang guard on each request, including an SSE stream's reads.
-        // It outlasts the dashboard's own forward bound, so a forwarded
-        // request reports that typed failure instead of a client timeout.
-        client: Client::builder()
-            .no_proxy()
-            .timeout(orbit_common::test_env::FIXTURE_STEP_DEADLINE)
-            .build()
-            .unwrap(),
-        origin: String::new(),
+        client,
+        origin,
     };
     let started = Instant::now();
     loop {
