@@ -75,6 +75,9 @@ mod execution_env;
 mod layering;
 #[path = "review_layers/machine.rs"]
 mod machine;
+
+#[path = "machine_web_setting.rs"]
+mod machine_web_setting;
 #[path = "review_layers/operation.rs"]
 mod operation;
 #[path = "config_paths/plugin_enablement.rs"]

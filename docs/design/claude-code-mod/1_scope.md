@@ -265,7 +265,8 @@ The plugin has no setting of its own.
 
 ## Phasing
 
-1. **Codex Desktop trial** ([ORB-28913], done). No code. It passed, so phase 4 may be built.
+1. **Codex Desktop trial** ([ORB-28913], done). No code. The trial passed.
+   Phase 4 can proceed once the address setting and permalinks land.
 2. **Dashboard permalinks and the address key.** `machine.web.public_url` ([ORB-28914], proposed);
    `GET /t/<id>`, both forms of `GET /r/<id>` and every redirect naming the host
    ([ORB-28915], proposed).

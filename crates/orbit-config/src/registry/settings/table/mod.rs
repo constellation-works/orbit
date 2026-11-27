@@ -45,7 +45,7 @@ use super::resolve::{
     resolve_optional_non_empty, resolve_pr_body_template, resolve_reclaim, resolve_retention_days,
     resolve_task_prefix, resolve_task_tag_labels, resolve_task_type_labels, resolve_test_paths,
     resolve_text_template, resolve_unlocked_context_paths,
-    resolve_unlocked_path_validation_commands, resolve_web_trusted_hosts,
+    resolve_unlocked_path_validation_commands, resolve_web_public_url, resolve_web_trusted_hosts,
     resolve_web_trusted_logins, resolve_worker_tasks_max,
 };
 use super::snapshot::AdmissionOptions;

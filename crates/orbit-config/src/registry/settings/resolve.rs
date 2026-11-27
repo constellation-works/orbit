@@ -715,6 +715,39 @@ pub(super) fn resolve_web_trusted_logins(
     Ok(logins)
 }
 
+/// `machine.web.public_url`: a normalized HTTP or HTTPS origin that readers
+/// can use to open dashboard links.
+pub(super) fn resolve_web_public_url(raw: Option<String>) -> Result<Option<String>, OrbitError> {
+    const KEY: &str = "machine.web.public_url";
+    let Some(value) = resolve_optional_non_empty(raw, KEY)? else {
+        return Ok(None);
+    };
+    let parsed = url::Url::parse(&value).map_err(|_| {
+        OrbitError::InvalidInput(format!(
+            "{KEY} must be an http or https origin without a path, query, or fragment; \
+             for example https://node.tailnet.ts.net"
+        ))
+    })?;
+    let authority = parsed
+        .as_str()
+        .split_once("://")
+        .map(|(_, remainder)| remainder.split('/').next().unwrap_or_default())
+        .unwrap_or_default();
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || authority.contains('@')
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "{KEY} must be an http or https origin without a path, query, or fragment; \
+             for example https://node.tailnet.ts.net"
+        )));
+    }
+    Ok(Some(parsed.origin().ascii_serialization()))
+}
+
 /// `machine.mcp.role`: unset, or one role name.
 pub(super) fn resolve_mcp_role(raw: Option<String>) -> Result<Option<String>, OrbitError> {
     let Some(raw) = resolve_optional_non_empty(raw, "machine.mcp.role")? else {
