@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use super::super::plan::ResumePlan;
 use crate::OrbitRuntime;
-use crate::application::contracts::EngineHostPort;
+use crate::application::contracts::{ConflictSourceRepairRoute, EngineHostPort};
 use crate::application::job::pipeline::PipelineSubmission;
 use crate::application::job::{ReviewAdmissionHook, RunOwnerLiveness, run_owner_liveness};
 use crate::runtime::run_input::carried_task_ids;
@@ -95,6 +95,70 @@ impl OrbitRuntime {
                 Ok(())
             })?;
         response.ok_or_else(|| refuse("admission lock did not execute"))
+    }
+
+    /// How explicit source repair can resolve a conflicting pipeline
+    /// publication given `task`'s current status and bound source run.
+    pub(crate) fn pipeline_conflict_source_repair_route(
+        &self,
+        task: &Task,
+    ) -> Result<ConflictSourceRepairRoute, OrbitError> {
+        let Some(source_id) = task.job_run_id.as_deref() else {
+            return Ok(ConflictSourceRepairRoute::Unavailable { source_state: None });
+        };
+        let Some(source) = self.get_job_run_backend(source_id)? else {
+            return Ok(ConflictSourceRepairRoute::Unavailable { source_state: None });
+        };
+        let source_state = Some(source.state);
+        let Some(state) = self.read_run_state(source_id)? else {
+            return Ok(ConflictSourceRepairRoute::Unavailable { source_state });
+        };
+        if !self.repairable_published_source(&source, &task.id)? {
+            return Ok(ConflictSourceRepairRoute::Unavailable { source_state });
+        }
+        if let Some(resumed) = self.resumed_recovery(&source, &task.id)?
+            && resumed.owner.run_id != source_id
+        {
+            return Ok(ConflictSourceRepairRoute::Unavailable { source_state });
+        }
+        let inline = source.state == JobRunState::Failed
+            && super::inline_publication::kept_inline_publication(&state);
+        let adopt_retained_edits = if inline {
+            if self
+                .observe_inline_repair_lineage(&source, task, None, false)
+                .is_ok()
+            {
+                false
+            } else if self
+                .observe_inline_repair_lineage(&source, task, None, true)
+                .is_ok()
+            {
+                true
+            } else {
+                return Ok(ConflictSourceRepairRoute::Unavailable { source_state });
+            }
+        } else {
+            false
+        };
+        let status_admitted = task.status == TaskStatus::Review
+            || inline
+            || matches!(
+                (source.state, task.status),
+                (
+                    JobRunState::Failed,
+                    TaskStatus::Backlog | TaskStatus::Blocked
+                ) | (JobRunState::Held, TaskStatus::Blocked)
+            );
+        if !status_admitted {
+            return Ok(ConflictSourceRepairRoute::Unavailable { source_state });
+        }
+        if super::inline_publication::requires_fresh_rework_authority(&source, &state) {
+            Ok(ConflictSourceRepairRoute::ReworkRequired {
+                adopt_retained_edits,
+            })
+        } else {
+            Ok(ConflictSourceRepairRoute::FieldFree)
+        }
     }
 
     // Task meaning and the immutable publication are bound separately. Keeping

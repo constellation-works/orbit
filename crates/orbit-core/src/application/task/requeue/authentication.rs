@@ -6,8 +6,10 @@ use orbit_types::workflow::SourceRepairBinding;
 
 use super::{HandoffReceipt, operator_discard_hint};
 use crate::OrbitRuntime;
+use crate::application::contracts::ConflictSourceRepairRoute;
 use crate::application::task::TaskJobPort;
 use crate::application::task::helpers;
+use orbit_types::task::TaskStatus;
 
 impl OrbitRuntime {
     /// Authenticate a plain blocked/review-to-backlog status update without a
@@ -152,52 +154,51 @@ impl OrbitRuntime {
             let authenticated = self
                 .escalated_publication_preservation(task)
                 .and_then(|(entry, binding)| Ok((self.preservation_append(task, entry)?, binding)));
-            return authenticated
-                .map(Some)
-                .map_err(|error| match error.job_validation_message() {
-                    // A refusal whose cause is a live non-terminal run:
-                    // discard fails until the run is cancelled.
-                    Some(refusal)
-                        if error.source_repair_run_state_refusal().is_some()
-                            && refusal.contains("orbit run cancel") =>
-                    {
-                        OrbitError::InvalidInput(format!("{refusal}. Nothing was changed."))
-                    }
-                    // A refusal whose cause is the run's state or changed spec,
-                    // not the pull request's checks: retrying later cannot pass.
-                    Some(refusal)
-                        if error.source_repair_run_state_refusal().is_some()
-                            || refusal.contains("the task specification changed") =>
-                    {
-                        OrbitError::InvalidInput(format!(
-                            "{refusal}. Nothing was changed. To {discard_hint}."
-                        ))
-                    }
-                    // A requeue cannot resume a conflicting pull request and
-                    // waiting does not clear a conflict: source repair is the
-                    // route that resolves it, and it supersedes an open
-                    // requeue request.
-                    Some(refusal) if refusal.contains("conflicts with its base") => {
-                        let run = task.job_run_id.as_deref().unwrap_or("<publishing-run>");
-                        OrbitError::InvalidInput(format!(
-                            "{refusal}. Nothing was changed. A requeue cannot resume a conflicting \
-                             pull request. Resolve the conflict with explicit source repair on run \
-                             `{run}`: `orbit.run` action `resume` with `source_repair` action \
-                             `inspect` for this task, then `submit` the returned binding with a \
-                             `request_key` and a `diagnosis` naming the conflict, leaving \
-                             `unmet_acceptance` and `policy_digest` unset. It supersedes an open \
-                             requeue request. Otherwise, {discard_hint}."
-                        ))
-                    }
-                    Some(refusal) => OrbitError::InvalidInput(format!(
-                        "{refusal}. Nothing was changed. The requeue resumes the pull request its \
+            let error = match authenticated {
+                Ok(pair) => return Ok(Some(pair)),
+                Err(error) => error,
+            };
+            return Err(match error.job_validation_message() {
+                // A refusal whose cause is a live non-terminal run:
+                // discard fails until the run is cancelled.
+                Some(refusal)
+                    if error.source_repair_run_state_refusal().is_some()
+                        && refusal.contains("orbit run cancel") =>
+                {
+                    OrbitError::InvalidInput(format!("{refusal}. Nothing was changed."))
+                }
+                // A refusal whose cause is the run's state or changed spec,
+                // not the pull request's checks: retrying later cannot pass.
+                Some(refusal)
+                    if error.source_repair_run_state_refusal().is_some()
+                        || refusal.contains("the task specification changed") =>
+                {
+                    OrbitError::InvalidInput(format!(
+                        "{refusal}. Nothing was changed. To {discard_hint}."
+                    ))
+                }
+                // A requeue cannot resume a conflicting pull request and
+                // waiting does not clear a conflict: guide the operator to
+                // the source-repair route that the current publication
+                // state and rework policy admit, or explain when unavailable.
+                Some(refusal) if refusal.contains("conflicts with its base") => {
+                    let route = self.conflict_source_repair_route(task)?;
+                    OrbitError::InvalidInput(conflict_recovery_message(
+                        task,
+                        &refusal,
+                        route,
+                        &discard_hint,
+                    ))
+                }
+                Some(refusal) => OrbitError::InvalidInput(format!(
+                    "{refusal}. Nothing was changed. The requeue resumes the pull request its \
                      run published once it is open at the recorded head with every required \
                      check passed: requeue again when they pass. If the pull request already \
                      merged, settle the task with `orbit task settle-merged`. Otherwise, \
                      {discard_hint}."
-                    )),
-                    None => error,
-                });
+                )),
+                None => error,
+            });
         }
         if self.unbound_publication(task)? {
             return Err(OrbitError::InvalidInput(format!(
@@ -225,4 +226,55 @@ pub(crate) fn current_run_requeue_stands(task: &Task, history: &[TaskHistoryEntr
         .map_or(0, |index| index + 1);
     helpers::authoritative_recovery_outcome(&history[after_discard..], run_id)
         == Some(&RecordedFinalRecovery::Requeued)
+}
+
+fn conflict_recovery_message(
+    task: &Task,
+    refusal: &str,
+    route: ConflictSourceRepairRoute,
+    discard_hint: &str,
+) -> String {
+    let run = task.job_run_id.as_deref().unwrap_or("<publishing-run>");
+    let supersedes = if task.status == TaskStatus::Blocked {
+        " It supersedes an open requeue request."
+    } else {
+        ""
+    };
+    match route {
+        ConflictSourceRepairRoute::FieldFree => format!(
+            "{refusal}. Nothing was changed. A requeue cannot resume a conflicting pull request. \
+             Resolve the conflict with explicit source repair on run `{run}`: `orbit.run` action \
+             `resume` with `source_repair` action `inspect` for this task, then `submit` the \
+             returned binding with a `request_key` and a `diagnosis` naming the conflict, leaving \
+             `unmet_acceptance` and `policy_digest` unset.{supersedes} Otherwise, {discard_hint}."
+        ),
+        ConflictSourceRepairRoute::ReworkRequired {
+            adopt_retained_edits,
+        } => {
+            let inspect_action = if adopt_retained_edits {
+                "action `inspect` (with `adopt_retained_edits: true` to carry retained uncommitted edits)"
+            } else {
+                "action `inspect`"
+            };
+            format!(
+                "{refusal}. Nothing was changed. A requeue cannot resume a conflicting pull \
+                 request. Resolve the conflict with explicit source repair on run `{run}`: \
+                 `orbit.run` action `resume` with `source_repair` {inspect_action} for this \
+                 task, then `submit` the returned binding with a `request_key`, a `diagnosis` \
+                 naming the conflict, `unmet_acceptance` evidence on this published candidate, \
+                 and the inspected `policy_digest`.{supersedes} Otherwise, {discard_hint}."
+            )
+        }
+        ConflictSourceRepairRoute::Unavailable { source_state } => {
+            let state_phrase = source_state
+                .map(|state| format!(" for a `{state}` run"))
+                .unwrap_or_default();
+            format!(
+                "{refusal}. Nothing was changed. A requeue cannot resume a conflicting pull \
+                 request, and explicit source repair on run `{run}` is unavailable while this \
+                 task is `{}`{state_phrase}. To {discard_hint}.",
+                task.status
+            )
+        }
+    }
 }
