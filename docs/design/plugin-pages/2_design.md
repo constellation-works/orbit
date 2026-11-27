@@ -174,10 +174,10 @@ whose manifest has pages lists them in the consent prompt.
 ## 8. Phasing
 
 1. **Local read-only pages.** The manifest key, validation, the bundle digest, the document
-   and call routes, the frame, the bridge, the kit and the secondary tabs. The contract is
-   measured in Chromium and WebKit; the phase does not close until Firefox is measured too
-   ([limitations](#10-concerns--honest-limitations)). The plugin standard's dashboard section
-   and its non-goal are amended in the same change.
+   and call routes, the frame, the bridge, the kit and the secondary tabs. The three-engine
+   probe for this phase was completed in Chromium, WebKit and Firefox
+   ([browser evidence](#10-concerns--honest-limitations)). The plugin standard's dashboard
+   section and its non-goal are amended in the same change.
 2. **Pages on other hosts.** The route that gives a page's parts, the forwarder writing the
    document from them, and the decision on a read-only call from a dashboard without the
    operator session.
