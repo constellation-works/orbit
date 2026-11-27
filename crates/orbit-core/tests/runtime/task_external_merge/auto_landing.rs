@@ -242,9 +242,12 @@ fn a_failed_merge_audit_stores_redacted_error_and_leaves_request_empty() {
     // The public owner landing path reaches `audited_forge_merge` and persists
     // the outcome rows through the runtime audit store.
     const TOKEN: &str = "fixture-merge-token-76f3d2";
+    let pattern_token = format!("ghp_{}", "A".repeat(36));
     let _token = orbit_common::test_env::scoped([("GITHUB_TOKEN", Some(TOKEN))]);
     let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
-    forge.fail_merge(Some(&format!("forge rejected merge with token {TOKEN}")));
+    forge.fail_merge(Some(&format!(
+        "forge rejected merge with token {TOKEN} and credential {pattern_token}"
+    )));
     delivery_run(&fx, &task, "done", JobRunState::Success, None);
 
     tick(&fx, false, false);
@@ -291,6 +294,14 @@ fn a_failed_merge_audit_stores_redacted_error_and_leaves_request_empty() {
         .expect("failed merge row stores its error message");
     assert!(message.contains("forge rejected merge with token [REDACTED_ENV]"));
     assert!(!message.contains(TOKEN), "credential survived: {message}");
+    assert!(
+        message.contains("credential [REDACTED_SECRET]"),
+        "pattern credential was not redacted: {message}"
+    );
+    assert!(
+        !message.contains(&pattern_token),
+        "pattern credential survived: {message}"
+    );
 }
 
 fn a_succeeded_authorised_run_with_a_passed_observation_is_merged() {
