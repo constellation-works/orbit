@@ -141,9 +141,9 @@ export function buildRiskChip(task) {
   });
   const chip = el("button", {
     class: `task-chip task-chip-risk ${chipClass(riskiness)}`,
-    type: "button", "aria-describedby": descriptionId,
+    type: "button", "aria-label": `Risk ${valueText(riskiness)}`, "aria-describedby": descriptionId,
   }, [
-    el("span", { text: "Risk" }),
+    el("span", { class: "risk-label", text: "Risk" }),
     el("span", { class: "risk-value", text: valueText(riskiness) }),
   ]);
   const hint = el("span", { class: "task-risk-hint" }, [chip, tooltip]);

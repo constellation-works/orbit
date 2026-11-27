@@ -4,7 +4,7 @@ type: design
 title: "User Interface — Decisions"
 owner: gemini
 created_date: 2026-04-26
-updated_date: 2026-11-05
+updated_date: 2026-11-27
 last_validated: 2026-10-28
 status: Draft
 feature: user-interface
@@ -256,6 +256,32 @@ Keep every route, endpoint and control, and change the presentation around them:
 - Bookmarks and copied links keep working because only labels and grouping moved.
 - Cost: two Ship buttons (row and detail) now share the duplicate-dispatch guard, and the rail's labels no longer match the route names one-to-one.
 
+## Task Detail Crew Pill Follows the Selection
+
+**Recorded:** 2026-11-27 · [ORB-29240]
+
+### Context
+
+The task detail crew select used its widest configured option for its width,
+which left a large gap after short crew names. The operator asked the detail
+pill to show only the crew name and fit its width to the current selection.
+
+### Decision
+
+In the task detail only, measure the selected crew name and resize the native
+select to that name when the selection changes. Keep the select's accessible
+name as "Crew". This is a scoped exception to STD-07@20 §R5 and §R42: the
+neighboring pills shift when the selected crew changes, and the select follows
+its current option instead of its longest option.
+
+### Consequences
+
+- Short crew names no longer reserve space for the longest configured crew,
+  while changing crews immediately resizes the pill.
+- The list-row and other crew selects retain their existing width behavior.
+- Cost: the task detail's lever positions can move when its selected crew
+  changes.
+
 ## Task References
 
 - [T20260427-29] — introduced the Canon Refined UI direction.
@@ -276,5 +302,6 @@ Keep every route, endpoint and control, and change the presentation around them:
 - [ORB-10627] — removed the planning duel subsystem and the UI surfaces and scoreboard projections it fed.
 - [ORB-15355] — replaced Audit › Policy with the Codebase analytics view.
 - [ORB-20662] — removed the Health rail denial badge; the count stays on the audit summary and Events.
+- [ORB-29240] — made the task detail crew pill follow its selected crew name.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
