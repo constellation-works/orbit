@@ -1368,3 +1368,31 @@ crate::scenario_table!(
     owned_pins_are_disjoint_across_roots_and_workspaces_sharing_git,
     unproven_ownership_and_moved_pins_retain_every_pin
 );
+
+#[test]
+fn bounded_migration_pilot_contract_preserves_overlap_protection() {
+    let asset = include_str!("../../assets/activities/task_pilot.yaml");
+    let guidance = asset
+        .split("    - Bounded Rust moves:")
+        .nth(1)
+        .and_then(|section| section.split("    - Derived companions:").next())
+        .expect("bounded migration guidance");
+    // The two examples are deliberately part of the pilot's own contract,
+    // so the fixture checks the instructions the agent will actually receive.
+    for requirement in [
+        "name match alone does not prove",
+        "recorded unfinished predecessor explicitly supplies the source",
+        "unlocked paths and\n      shared overlap points do not provide exclusive protection",
+        "widening alone is not a substitute for the bound",
+        "`dir:src/clients` without a hold",
+        "must retain a holding warning",
+        "name the missing evidence in\n      `evidence_gaps`",
+    ] {
+        assert!(
+            asset.contains(requirement),
+            "missing contract: {requirement}"
+        );
+    }
+    assert!(guidance.contains("specific directories"));
+    assert!(guidance.contains("substantive targets"));
+}

@@ -543,7 +543,9 @@ spec:
 
     `context_files_after` is the task's lock footprint: exact canonical `file:`,
     `dir:` or `symbol:` selectors for files the implementation will create,
-    modify or delete as a substantive part of the change.
+    modify or delete as a substantive part of the change. The bounded Rust
+    move rule below also reserves an evidenced region of possible call-site
+    companions when their exact files cannot yet be established.
 
     - Worker-selected batch inside a declared footprint: when the task's
       brief assigns batch selection to the executing worker, and the task
@@ -641,9 +643,35 @@ spec:
       reference docs that need at most an incidental line update. The
       implementer still updates such docs in the same PR.
     - Derive targets from evidence, never by sweeping a directory or crate. For
-      a removal or rename, propose the files that reference the symbol
-      (`rg -l '<symbol>'` at `source_revision`), not every module in the crate
-      that owns it.
+      a removal or rename, search for references at `source_revision`, then
+      verify which matches actually need edits. A name match alone does not prove
+      the receiver type or a change target; do not lock every matching file.
+    - Bounded Rust moves: identify the substantive move or rename anchors and
+      verified callers from pinned source evidence. Unknown call-site-only
+      companions may be left to the worker only when evidence bounds *all* of
+      them to existing, specific directories and the task makes no unbounded
+      substantive change there. Return those directories as `dir:` selectors
+      alongside the verified anchors; explain the bound, evidence and remaining
+      uncertainty in `assessment_rationale`. Do not infer a bound from a name
+      search alone. Check the workspace lock configuration: unlocked paths and
+      shared overlap points do not provide exclusive protection. If the bound
+      cannot protect possible overlaps under that configuration, hold instead.
+      A directory lock reserves possible companions before execution; delivery
+      widening records actual uncovered paths but does not retroactively prevent
+      concurrent edits, so widening alone is not a substitute for the bound.
+      If a recorded unfinished predecessor explicitly supplies the source,
+      inspect its scope and dependency chain, cite it and let the dependency
+      gate execution; do not require today's exact receiver-typed caller set.
+      Never invent missing targets or assume a generic dependency supplies them.
+      If substantive targets or the possible caller region cannot be bounded
+      from evidence, preserve verified selectors, name the missing evidence in
+      `evidence_gaps` and return a holding `utility_warnings` object.
+      For example, a move of a verified API in `src/api.rs` whose only possible
+      callers are proven inside existing `src/clients/`, including callers a
+      recorded predecessor will supply, can assess `file:src/api.rs` and
+      `dir:src/clients` without a hold when both are protected by the lock
+      configuration. A change whose substantive targets or caller region may
+      extend beyond any evidenced bound must retain a holding warning.
     - Derived companions: when the repository's generator or synchronization
       evidence shows a source change will alter an exact derived file, add that
       file and record the mapping and evidence in `assessment_rationale`. Add
