@@ -52,12 +52,14 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
         run_id,
         "invocation evidence",
     );
+    let url = runtime.run_permalink_url(run);
     let mut full = project_job_run(
         run,
         JobRunProjectionProfile::FullDetailSiblingSteps,
         JobRunProjectionEvidence {
             state: state.as_ref(),
             activity_evidence: Some(&evidence),
+            url: url.as_deref(),
             ..JobRunProjectionEvidence::default()
         },
     );
@@ -175,12 +177,18 @@ pub(super) fn recorded_run_detail_to_json(
     let run = &recorded.run;
     let run_id = run.run_id.as_str();
     let state = recorded.state.as_ref();
+    let url = reader.run_permalink_for_location(
+        &run.run_id,
+        run.executed_on.as_ref(),
+        Some(&recorded.workspace_id),
+    );
     let mut full = project_job_run(
         run,
         JobRunProjectionProfile::FullDetailSiblingSteps,
         JobRunProjectionEvidence {
             state,
             activity_evidence: Some(&[]),
+            url: url.as_deref(),
             ..JobRunProjectionEvidence::default()
         },
     );

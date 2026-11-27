@@ -176,6 +176,9 @@ fn task(
         runtime.desktop_task_snapshot_page(&id, comments, history, artifacts, limit, session)?;
     let mut value = serde_json::to_value(snapshot)
         .map_err(super::super::json::serialize_error("desktop task"))?;
+    if let Some(url) = runtime.task_permalink_url(&id) {
+        value["url"] = serde_json::Value::String(url);
+    }
     for (field, offset) in [
         ("comments", comments),
         ("history", history),
@@ -209,7 +212,7 @@ fn runs(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Or
         .list_job_runs_filtered(&query)?
         .iter()
         .skip(offset)
-        .map(run_summary)
+        .map(|run| run_summary(run, None))
         .collect::<Vec<_>>();
     Ok(
         json!({"pagination": pagination(offset, limit, items.len(), total, MAX_RUN_PREFIX),
@@ -217,11 +220,14 @@ fn runs(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Or
     )
 }
 
-fn run_summary(run: &JobRun) -> Value {
+fn run_summary(run: &JobRun, url: Option<&str>) -> Value {
     project_job_run(
         run,
         JobRunProjectionProfile::BoundedSummary,
-        JobRunProjectionEvidence::default(),
+        JobRunProjectionEvidence {
+            url,
+            ..JobRunProjectionEvidence::default()
+        },
     )
 }
 
@@ -230,7 +236,8 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
     let offset = number(input, "log_offset", 0)?;
     prefix_bound(offset, MAX_LOG_PREFIX, "log_offset")?;
     let run = runtime.show_job_run_observed(&id)?;
-    let mut value = run_summary(&run);
+    let url = runtime.run_permalink_url(&run);
+    let mut value = run_summary(&run, url.as_deref());
     let state = runtime.read_run_state(&id).ok().flatten();
     // Progress and the log page come from one bounded audit read; its total
     // is a store count, so a long history pages honestly.

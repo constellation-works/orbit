@@ -901,10 +901,11 @@ fn render(render: Render, value: Value, holder: &HostEntry) -> CommandOut {
 /// `Next:` and `Final Recovery:` use the same words as the local show.
 fn task_summary(task: &Value, holder: &HostEntry) -> String {
     let text = |key: &str| task.get(key).and_then(Value::as_str).unwrap_or_default();
-    let mut lines = vec![
-        format!("ID: {}", text("id")),
-        format!("Host: {} ({})", holder.name, holder.machine_id),
-    ];
+    let mut lines = vec![format!("ID: {}", text("id"))];
+    if !text("url").is_empty() {
+        lines.push(format!("URL: {}", text("url")));
+    }
+    lines.push(format!("Host: {} ({})", holder.name, holder.machine_id));
     if let Some(workspace) = task.get("workspace").and_then(Value::as_object) {
         let field = |key: &str| {
             workspace

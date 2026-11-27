@@ -8,9 +8,9 @@ client that renders MCP Apps shows it in or beside the conversation: the Tasks,
 Runs, Auto-drain and Automation views of a workspace, without leaving the agent
 session. The `orbit_ui` tool opens it.
 
-It is separate from the [desktop app](/how-to/desktop/), which is a native
-window around the web [dashboard](/how-to/dashboard/), and from the
-[Claude Code mod](/how-to/claude-code/), which draws in the terminal.
+The [desktop app](/how-to/desktop/) opens the [dashboard](/how-to/dashboard/)
+in a native window. The [Claude Code mod](/how-to/claude-code/) adds dashboard
+links to assistant replies.
 
 :::caution[Rendering depends on the client]
 Orbit serves the UI resource and marks the tool so a host can attach it.
@@ -204,4 +204,4 @@ surface:
 | Workspaces | `orbit_workspace_list` |
 | A browser view | The [dashboard](/how-to/dashboard/) |
 | A native window and tray | The [desktop app](/how-to/desktop/) |
-| A terminal band and board | The [Claude Code mod](/how-to/claude-code/) |
+| Dashboard links in Claude Code replies | The [Claude Code mod](/how-to/claude-code/) |

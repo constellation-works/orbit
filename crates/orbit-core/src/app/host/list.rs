@@ -55,9 +55,13 @@ pub fn list_registered_hosts(
     let mut hosts = vec![local_row(global_root, local)];
     let mut remotes = registry.hosts().entries().iter().collect::<Vec<_>>();
     remotes.sort_by_key(|target| target.name.to_ascii_lowercase());
-    hosts.extend(in_parallel(&remotes, |target| {
-        ports.probe.remote_row(target, &local.id, probe)
-    }));
+    if probe {
+        hosts.extend(in_parallel(&remotes, |target| {
+            ports.probe.remote_row(target, &local.id, true)
+        }));
+    } else {
+        hosts.extend(remotes.into_iter().map(entry_row));
+    }
     Ok(HostList {
         host_file: hosts_path(global_root),
         legacy: false,

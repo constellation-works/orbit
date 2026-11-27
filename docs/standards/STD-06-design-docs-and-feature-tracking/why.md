@@ -16,6 +16,8 @@ The Orbit evidence below cites tasks (`ORB-`) and Orbit's own design conventions
 
 **R9.** A hand-maintained board goes stale within a week, which is the failure the board is meant to fix. Generating it from the docs and checking it in CI (STD-04 §R11) means the board can only be wrong if a doc is, and a missing stage stops the change that adds the folder.
 
+A standalone feature board gives readers one predictable location and avoids embedding the board in an already lengthy index (scribe standard-30).
+
 **R10–R11.** Orbit once ran a separate decision store with ids and a lifecycle. Measured over 210 records, 39% were cited from code, 55% only from other docs and 24% from nowhere; the store cost ten CLI subcommands and an MCP write path whose supersede half-worked. It was retired by ORB-10726, which moved the bodies into each feature's `4_decisions.md`. The two doors are the admission test that came out of that review (CONVENTIONS §4a, §4b): the code-anchored door keeps entries that explain surprising code, and the second door keeps standing preferences, which a code-citation-only test had wrongly discarded. The `Cost:` line is the cheapest test of whether a decision was real.
 
 **R15.** Design docs tracked in public repositories are read outside the private team, where chat quotes leak internal transcripts while a factual approval record (role or owner, date, decision) gives every future reader what they need and leaves the raw words in the private scribe entry or task (ORB-29058, quote-scope Option A). Binding only new and changed text avoids churn across existing docs and requires no per-repo scrub (scribe standard-29).
