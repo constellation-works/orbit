@@ -1,9 +1,9 @@
 //! CLI entry point for Orbit: command parsing, dispatch, and output formatting.
 //!
-//! Parses command-line arguments with `clap`, initializes the [`OrbitRuntime`](orbit_core::OrbitRuntime),
-//! dispatches to the appropriate command handler, and formats results as JSON
-//! or human-readable table output. Wraps every command in an audit middleware
-//! that records success, failure, or policy-denial events.
+//! Parses command-line arguments with `clap`, has composition open the
+//! workspace's `Core`, hands each command to its app's `exec`, which
+//! authorizes and audits it, and formats results as JSON or human-readable
+//! table output.
 //!
 //! # Role
 //! The outermost crate in the dependency graph. Depends on `orbit-core` and
@@ -15,7 +15,7 @@
 //! - Bootstrap the runtime, including optional `--root` data-dir overrides and
 //!   `--workspace` selectors (registered name, logical id, or checkout path)
 //! - Emit machine-readable JSON or human-readable table output
-//! - Wrap command execution in audit logging so human and agent actions are recorded
+//! - Scope each invocation's audit settlement across dispatch and rendering
 //!
 //! # Dependency direction
 //! orbit-core, orbit-types → `orbit-cli` (binary crate, no dependents)
@@ -26,7 +26,6 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 #![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 
-mod audit_middleware;
 mod command;
 mod entry;
 mod help;

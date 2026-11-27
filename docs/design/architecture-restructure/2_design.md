@@ -88,7 +88,7 @@ render(outcome)                                           // render
 - A read model the dashboard needs (`query_task_rows`, `delivery_attention_map`, `list_job_runs`) is a read command of the app that owns the data, and its `Outcome` is the model.
 - The tool path keeps its JSON entry. Its handler match, which the operation registry already has for migrated nouns, calls `app::<noun>::exec`. A surface with typed input calls `exec` directly. Both end in the same function.
 
-**Status.** `Core` (`crates/orbit-core/src/composition/core.rs`) and the chokepoint `app/exec.rs` exist, and the `friction`, `task`, `run` and `plugin` apps are the entry for their surfaces [ORB-28396] to [ORB-28399]. The workspace, config, skill, audit, automation, agent, attention, codebase, search, notice, gc, crew memory, doctor, host and review apps [ORB-28400] to [ORB-28405], [ORB-28616], and the generic tool, MCP, operation and migrate entries [ORB-28406], are the entry for theirs. The CLI entry [ORB-28407] and the dashboard [ORB-28415] are filed and not built. `orbit-core` still exports `OrbitRuntime`, so a surface can still name it [ORB-28417].
+**Status.** `Core` (`crates/orbit-core/src/composition/core.rs`) and the chokepoint `app/exec.rs` exist, and the `friction`, `task`, `run` and `plugin` apps are the entry for their surfaces [ORB-28396] to [ORB-28399]. The workspace, config, skill, audit, automation, agent, attention, codebase, search, notice, gc, crew memory, doctor, host and review apps [ORB-28400] to [ORB-28405], [ORB-28616], and the generic tool, MCP, operation and migrate entries [ORB-28406], are the entry for theirs. The CLI entry no longer authorizes or audits [ORB-28407]: `entry/run.rs` parses, opens the `Core` through composition, dispatches and renders, and `audit_middleware.rs` is gone. Its `InvocationAuditScope` (`crates/orbit-core/src/app/invocation.rs`) settles each invocation's row after rendering and writes the row of one that never reached an `exec`, from the metadata the command declares. The dashboard [ORB-28415] is filed and not built. `orbit-core` still exports `OrbitRuntime`, so a surface can still name it [ORB-28417].
 
 ## 3. Apps: one unit per subject
 
@@ -112,13 +112,13 @@ pub enum Command { Add(NewTask), List(Filter), Show(TaskId), /* … */ }
 /// What a command produced.
 pub enum Outcome { Added(Task), Listed(TaskList), Shown(TaskDetail), /* … */ }
 
-/// Run one command: authorize it, audit it when it mutates, and return its outcome.
+/// Run one command: authorize it, audit it, and return its outcome.
 pub fn exec(core: &Core, command: Command) -> Result<Outcome, Error> {
     app::exec::run::<TaskApp>(core, command)
 }
 ```
 
-- **The chokepoint** (`app/exec.rs`) is written once, as in the template: it authorizes the command against the operation's governance row, starts the audit guard for a mutating command, runs the flow, tells the guard the outcome, and maps the app's typed error into `orbit-core`'s `Error`. An app supplies only what differs. No surface authorizes or audits, and none can skip it (STD-02 §R24). Its files and stages are in [The chokepoint's structure](#the-chokepoints-structure).
+- **The chokepoint** (`app/exec.rs`) is written once, as in the template: it authorizes the command against the operation's governance row, starts the audit guard for every governed command, reads as well as writes, as the CLI's guard did, runs the flow, tells the guard the outcome, and maps the app's typed error into `orbit-core`'s `Error`. An app supplies only what differs. No surface authorizes or audits, and none can skip it (STD-02 §R24). Its files and stages are in [The chokepoint's structure](#the-chokepoints-structure).
 - **A flow** is a function, not a method: `pub(super) fn add(rt: &Stored, new: NewTask) -> Result<Outcome, Error>`. Its first parameter is the lowest runtime layer it needs (§4). It follows load, decide, effect, commit (STD-02 §R41) where it can; one that cannot says why in its doc comment.
 - **`Command` and the registry.** For a noun in the operation registry, `Command` is the typed form of that noun's verb enum and parameters: the spec in `orbit-common` stays the cross-surface contract, and `Command` is what the handler builds from validated input. A noun that is not yet in the registry keeps its hand-written surface and changes only what it calls; moving it into the registry stays with operations-as-data [ORB-15932].
 - **Module privacy does the enforcing.** A flow file is a private child module, so a sibling app can call only what `mod.rs` exports. Today the same boundary needs a script that reads `impl` blocks.
@@ -396,7 +396,9 @@ orbit-store/src/
 
 **Today.** `orbit-cmd` is the composition tier. It owns `RegisteredRuntimeFactory`, which opens a runtime for a selected registered workspace, but also command groups that sequence domain and persistence calls (`doctor/`, `hosts/`, `update/`, `browser_kit/`, `workspace_removal.rs`), a deviation from STD-02 §R2 recorded in [ORB-27886].
 
-**Proposed.** `orbit-cmd` only constructs: given `Env`, flags and a workspace selection, it returns a `Core`. Its command groups become apps in `orbit-core` (`app/doctor/`, `app/host/`, `app/update/`), which already depends on `orbit-registry`. Whether `orbit-cmd` then remains a crate is an open question (3_vision.md).
+**Proposed.** `orbit-cmd` only constructs: given `Env`, flags and an optional workspace selection, it returns a `Core`.
+
+- **Routing before a workspace opens.** Composition reads the protected worker binding and routes the workspace a command opens from it, before opening it (`PreOpenWorkerBinding` in `crates/orbit-cmd/src/registry/runtime/selection.rs`) [ORB-28407]. A claimed worker's call to its owner opens the worker's bound checkout; any other command opens the selection, or the current directory's workspace without one. The binding is restored lazily, once per root: the global root for claimed-owner calls, bootstrap and host routing, the generation root for MCP. Refusals are unchanged, and a command that opens no workspace reads nothing. The CLI passes the `Env`, flags and selection and consumes the route. Daniel chose this, option A, on 2026-11-26 ([4_decisions.md](4_decisions.md#composition-routes-the-workspace-before-it-opens)). Its command groups become apps in `orbit-core` (`app/doctor/`, `app/host/`, `app/update/`), which already depends on `orbit-registry`. Whether `orbit-cmd` then remains a crate is an open question (3_vision.md).
 
 ## 10. Gates
 
@@ -507,7 +509,7 @@ Follow-ups filed while building: [ORB-28488] restored the writer-lock ratchet af
 - [ORB-28400] — is routing workspace commands through `app::workspace`.
 - [ORB-28401] — will route config, skill and audit commands through `exec`.
 - [ORB-28403] — routed agent, attention, codebase, search, notice, gc and crew memory commands through their apps.
-- [ORB-28407] — will remove authorization and audit from the CLI entry.
+- [ORB-28407] — removed authorization and audit from the CLI entry and moved pre-open routing into composition.
 - [ORB-28415] — will give the dashboard a `Core` instead of the runtime.
 - [ORB-28417] — will close `orbit-core`'s exports to `app`, `Core` and `Error`.
 - [ORB-28443] — will move the rest of `application/job` into `app::run`.

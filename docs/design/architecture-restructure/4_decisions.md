@@ -29,6 +29,7 @@ Daniel approved the design as proposed on 2026-11-25: "let's take it easy and go
 - **[One environment declaration and one capture](#one-environment-declaration-and-one-capture)** — Accepted.
 - **[Ratchets first, and the surface boundary before the inside of core](#ratchets-first-and-the-surface-boundary-before-the-inside-of-core)** — Accepted.
 - **[A worker's routed tool calls get their own path in `Run`](#a-workers-routed-tool-calls-get-their-own-path-in-run)** — Accepted.
+- **[Composition routes the workspace before it opens](#composition-routes-the-workspace-before-it-opens)** — Accepted.
 
 ## Surfaces hold an opaque `Core` and call one `exec`
 
@@ -350,6 +351,25 @@ Routed tool calls do not go through the task access. `Run::claim_owner()` return
 - Cost: `held_by_owner()` and `is_worker()` are true in the same processes, so which of the two a site asks is a judgement made per site.
 >
 
+## Composition routes the workspace before it opens
+
+**Recorded:** 2026-11-26 · [ORB-28407]
+**Code anchors:** `crates/orbit-cmd/src/registry/runtime/selection.rs`, `crates/orbit-cli/src/entry/resolved.rs`, `crates/orbit-cli/src/entry/run.rs`
+
+### Context
+
+The CLI entry read the worker binding itself (`OrbitRuntime::current_worker_invocation`) to choose which workspace to open: a claimed worker's owner call opens the worker's bound checkout, not the selected one. [ORB-28647] kept that read lazy under two roots, global for claimed-owner calls, bootstrap and host routing, generation for MCP. [ORB-28390] gives the role to `Base` after a workspace opens, so requiring an opened `Core` first would be circular, and a new public runtime accessor or crate edge would choose architecture. Asked "should orbit-cmd composition own the worker-binding read before a workspace opens?", Daniel answered "Yes, option A" in the chief's chat on 2026-11-26 at about 00:36Z, relayed on [ORB-28675].
+
+### Decision
+
+`orbit-cmd` composition owns pre-open routing. Given the captured `Env`, flags and an optional workspace selection, it reads the protected worker binding and returns the route (`PreOpenWorkerBinding::route`): the claimed-owner route, or the selection. The binding read and the routing decision stay together in composition. The CLI passes its inputs and consumes the result; it names no runtime type.
+
+### Consequences
+
+- Both root choices, lazy first use per root, the existing refusals and the commands that open no workspace are unchanged.
+- The MCP server and host routing read the binding through the same composition type, so the read has one home outside the runtime.
+- The read still calls the runtime's forwarder; it leaves when `orbit-core` closes its exports [ORB-28417].
+
 ## Shared source-style checker gates new findings
 
 **Recorded:** 2026-11-26 · [ORB-28985]
@@ -414,5 +434,10 @@ No R19 breach exists. A change that adds one of these findings fails the gate, i
 - [ORB-28391] — chose a worker's task reads when `Stored` is built.
 - [ORB-28392] — chose coordination writes from the role.
 - [ORB-28393] — folded the remaining worker-role checks and decided where routed tool calls belong.
+- [ORB-28407] — moved pre-open routing into composition.
+- [ORB-28675] — carried the pre-open routing question to Daniel.
+- [ORB-28647] — resolved the root, worker invocation and actor once in the CLI entry.
+- [ORB-28390] — resolved the process role once in `Base`.
+- [ORB-28417] — will close `orbit-core`'s exports.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

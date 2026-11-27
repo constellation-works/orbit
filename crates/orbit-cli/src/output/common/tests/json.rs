@@ -3,8 +3,8 @@ use std::process::Command;
 use chrono::Utc;
 use clap::Parser;
 use orbit_common::test_env;
+use orbit_core::OrbitError;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::TaskArtifact;
 use orbit_types::workflow::{RESIDENT_ACTION_EVENT, ResidentActionPhase, ResidentActionRow};
 use serde_json::{Value, json};
@@ -94,7 +94,8 @@ fn failed_terminal_resident_ledger_append_keeps_started_action_key() {
     git(&["add", "."]);
     git(&["commit", "-qm", "seed"]);
 
-    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).expect("runtime");
+    let runtime = orbit_core::test_support::runtime_from_roots(&global, &repo.join(".orbit"))
+        .expect("runtime");
     let watched = runtime
         .add_task(TaskAddParams {
             title: "Watched work".into(),

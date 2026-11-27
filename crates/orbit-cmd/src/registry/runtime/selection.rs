@@ -1,6 +1,9 @@
+use std::cell::OnceCell;
 use std::sync::Arc;
 
+use orbit_common::Env;
 use orbit_types::identity::{MACHINE_ID_PREFIX, WORKSPACE_ID_PREFIX};
+use orbit_types::tool::WorkerInvocation;
 
 use super::*;
 
@@ -50,6 +53,78 @@ impl RuntimeOpenInputs {
 pub(crate) struct OpenedSelectorInputs {
     pub(crate) identity: MachineIdentityState,
     pub(crate) registry: WorkspaceRegistry,
+}
+
+type WorkerCell = OnceCell<Result<Option<WorkerInvocation>, OrbitError>>;
+
+/// The process's worker binding, read before any workspace opens, so the
+/// workspace a command opens can depend on it.
+///
+/// The binding is restored from the host's protected invocation record on the
+/// first ask for each root and never again: from the global root for a
+/// claimed owner call, bootstrap and host routing, and from the generation
+/// root, which `--root` and `ORBIT_ROOT` move, for the MCP server.
+#[derive(Default)]
+pub struct PreOpenWorkerBinding {
+    global: WorkerCell,
+    generation: WorkerCell,
+}
+
+impl PreOpenWorkerBinding {
+    /// The worker binding in the global root.
+    pub fn in_global_root(
+        &self,
+        env: &Env,
+        global_root: Result<&Path, OrbitError>,
+    ) -> Result<Option<&WorkerInvocation>, OrbitError> {
+        restore_worker_binding(&self.global, global_root, env)
+    }
+
+    /// The worker binding as the MCP server reads it, in the generation root.
+    pub fn in_generation_root(
+        &self,
+        env: &Env,
+        generation_root: Result<&Path, OrbitError>,
+    ) -> Result<Option<&WorkerInvocation>, OrbitError> {
+        restore_worker_binding(&self.generation, generation_root, env)
+    }
+
+    /// Route a command to the workspace it opens. A claimed owner call
+    /// (`claimed_owner_call`) from a worker whose execution machine is not its
+    /// owner's takes the claimed-owner route; everything else opens
+    /// `selection`. Only a claimed owner call reads the binding.
+    pub fn route<'a>(
+        &self,
+        env: &Env,
+        global_root: Result<&Path, OrbitError>,
+        claimed_owner_call: bool,
+        selection: Option<&'a str>,
+    ) -> Result<PreOpenRoute<'a>, OrbitError> {
+        if !claimed_owner_call {
+            return Ok(PreOpenRoute::Selected(selection));
+        }
+        let claimed = self
+            .in_global_root(env, global_root)?
+            .is_some_and(|binding| binding.execution.machine_id != binding.owner_machine_id);
+        Ok(if claimed {
+            PreOpenRoute::ClaimedOwner
+        } else {
+            PreOpenRoute::Selected(selection)
+        })
+    }
+}
+
+/// Which workspace a command opens, decided before any is opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreOpenRoute<'a> {
+    /// A claimed worker's call to its owner. The follower's task registry
+    /// has no copy of the owner's task, so the worker's bound checkout opens
+    /// with a full runtime and Core carries the call over the run broker; a
+    /// request selector never chooses this path.
+    ClaimedOwner,
+    /// Open the workspace this selection names, or the current directory's
+    /// without one, as the command's runtime need says.
+    Selected(Option<&'a str>),
 }
 
 pub(crate) fn retry_pipeline_worker_bootstrap<T>(
@@ -675,4 +750,30 @@ pub(super) fn attach_registry_context(
         .unwrap_or_default();
     let runtime = runtime.with_registered_host_oses(registered);
     crate::worker_coordination::attach(runtime)
+}
+
+/// Read the worker binding under `root` once into `cell`.
+fn restore_worker_binding<'a>(
+    cell: &'a WorkerCell,
+    root: Result<&Path, OrbitError>,
+    env: &Env,
+) -> Result<Option<&'a WorkerInvocation>, OrbitError> {
+    let restored = cell.get_or_init(|| OrbitRuntime::current_worker_invocation(env, root?));
+    match restored {
+        Ok(binding) => Ok(binding.as_ref()),
+        Err(error) => Err(replay_refusal(error)),
+    }
+}
+
+/// A refusal as stored is not `Clone`; a caller asking again for a value that
+/// failed to resolve gets an equal error, with the variants root and binding
+/// resolution raise kept as they are.
+pub fn replay_refusal(error: &OrbitError) -> OrbitError {
+    match error {
+        OrbitError::InvalidInput(message) => OrbitError::InvalidInput(message.clone()),
+        OrbitError::WorkspaceError(message) => OrbitError::WorkspaceError(message.clone()),
+        OrbitError::PolicyDenied(message) => OrbitError::PolicyDenied(message.clone()),
+        OrbitError::Io(message) => OrbitError::Io(message.clone()),
+        other => OrbitError::Execution(other.to_string()),
+    }
 }

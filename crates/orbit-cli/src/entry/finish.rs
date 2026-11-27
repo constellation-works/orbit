@@ -1,5 +1,6 @@
+use orbit_core::app::InvocationAuditScope;
+
 use super::resolved::Resolved;
-use crate::audit_middleware;
 use crate::command;
 use crate::output;
 use crate::output::common::sink::{OutputMode, OutputSink};
@@ -40,7 +41,7 @@ pub(super) fn finish_command(
     result: command::CommandOut,
     sink: &OutputSink,
     json_error_preference: Option<bool>,
-    mut guard: Option<audit_middleware::AuditGuard<'_>>,
+    audit: Option<InvocationAuditScope>,
 ) {
     let exit_code = result
         .as_ref()
@@ -54,12 +55,17 @@ pub(super) fn finish_command(
     let rendered = result.and_then(|output| {
         output::common::pipe::catch_closed_stdout(|| output::common::render::emit(output, sink))
     });
-    if let Some(guard) = guard.as_mut() {
-        guard.mark_result(&rendered, exit_code, audit_message.as_deref());
-    }
     // logging::exit uses process::exit, which does not run destructors. Persist
     // the complete render/stream outcome and duration before any exit below.
-    drop(guard);
+    if let Some(audit) = audit
+        && let Err(failure) = audit.settle(
+            rendered.as_ref().copied(),
+            exit_code,
+            audit_message.as_deref(),
+        )
+    {
+        eprintln!("{failure}");
+    }
     if let Err(err) = rendered {
         print_error(&err, sink, json_error_preference);
         orbit_common::observability::logging::exit(1);

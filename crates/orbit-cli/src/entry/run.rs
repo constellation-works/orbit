@@ -1,4 +1,5 @@
-use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_cmd::registry_runtime::{PreOpenRoute, RegisteredRuntimeFactory};
+use orbit_core::app::InvocationAuditScope;
 use orbit_core::composition::pin_executable_generation_as;
 
 use super::classify::{
@@ -8,7 +9,6 @@ use super::classify::{
 use super::discover::{explicit_root_source, parse_cli};
 use super::finish::{finish_command, print_error, refuse_plugin_child_cli};
 use super::resolved::Resolved;
-use crate::audit_middleware;
 use crate::command;
 use crate::command::operation::{CommandOperation, DispatchContext, RuntimeNeed};
 use crate::output;
@@ -119,7 +119,6 @@ pub(crate) fn run(env: orbit_common::Env) {
         audit_meta,
         json_error_preference,
         dispatch,
-        governed,
         plugin_callback_entry_point: _,
     } = cli.command.operation(&env).attribute_to(actor);
     let clock_tick = is_clock_tick(&cli.command);
@@ -215,25 +214,25 @@ pub(crate) fn run(env: orbit_common::Env) {
     };
 
     // A claimed worker addresses the owner's task by ID, but the follower's
-    // task registry intentionally has no local copy. Bootstrap its owner
-    // calls in the worker's bound checkout so Core can carry them over the
-    // authenticated run broker. The worker binding is restored from the
-    // host's protected invocation record; request fields never select this
+    // task registry intentionally has no local copy. Composition reads the
+    // worker binding from the host's protected invocation record and routes
+    // its owner calls to the worker's bound checkout, so Core can carry them
+    // over the authenticated run broker; request fields never select this
     // path. ToolRunArgs validates any explicit selector against that binding.
-    let claimed_owner_call = claimed_owner_tool(&cli.command);
-    let claimed_owner_worker = if unusable_tool_input {
-        false
-    } else if claimed_owner_call {
-        match resolved.worker_binding(&env) {
-            Ok(binding) => binding
-                .is_some_and(|binding| binding.execution.machine_id != binding.owner_machine_id),
+    let route = if unusable_tool_input {
+        PreOpenRoute::Selected(workspace_selector.as_deref())
+    } else {
+        match resolved.route(
+            &env,
+            claimed_owner_tool(&cli.command),
+            workspace_selector.as_deref(),
+        ) {
+            Ok(route) => route,
             Err(error) => {
                 print_error(&error, &sink, json_error_preference);
                 orbit_common::observability::logging::exit(1);
             }
         }
-    } else {
-        false
     };
     if let command::Commands::Config(config) = &cli.command
         && let command::config::ConfigSubcommand::Set(args) = &config.command
@@ -249,21 +248,13 @@ pub(crate) fn run(env: orbit_common::Env) {
     }
     let bootstrapped = if let RuntimeNeed::UnusableToolInput { message } = &runtime_need {
         Err(orbit_core::OrbitError::InvalidInput(message.clone()))
-    } else if claimed_owner_worker {
-        RegisteredRuntimeFactory::initialize_with_overrides(root_override.as_deref(), None)
-    } else {
+    } else if let PreOpenRoute::Selected(selection) = route {
         match &runtime_need {
             RuntimeNeed::UnusableToolInput { message } => {
                 Err(orbit_core::OrbitError::InvalidInput(message.clone()))
             }
             RuntimeNeed::Forbidden => {
-                // A runtime-forbidden command has no store to authorize or audit
-                // against. None is governed; `Commands::operation` is exhaustive, so
-                // a future one that is would have to resolve this first.
-                debug_assert!(
-                    governed.is_none(),
-                    "a governed operation must be able to reach the authorization chokepoint"
-                );
+                // A runtime-forbidden command has no store to audit against.
                 let result = dispatch(
                     cli.command,
                     DispatchContext::without_runtime(
@@ -278,7 +269,7 @@ pub(crate) fn run(env: orbit_common::Env) {
             }
             RuntimeNeed::Required => RegisteredRuntimeFactory::initialize_with_overrides(
                 root_override.as_deref(),
-                workspace_selector.as_deref(),
+                selection,
             ),
             RuntimeNeed::SelectedWorkspace { selector } => {
                 RegisteredRuntimeFactory::initialize_with_overrides(
@@ -289,44 +280,47 @@ pub(crate) fn run(env: orbit_common::Env) {
             RuntimeNeed::PipelineWorker => {
                 RegisteredRuntimeFactory::initialize_pipeline_worker_with_overrides(
                     root_override.as_deref(),
-                    workspace_selector.as_deref(),
+                    selection,
                 )
             }
             RuntimeNeed::ReadOnly => match task_owner_id.as_deref() {
                 Some(task_id) => orbit_cmd::task_owner::initialize_for_task_show(
                     root_override.as_deref(),
-                    workspace_selector.as_deref(),
+                    selection,
                     task_id,
                 ),
                 None => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
                     root_override.as_deref(),
-                    workspace_selector.as_deref(),
+                    selection,
                 ),
             },
             RuntimeNeed::Inspection => {
                 RegisteredRuntimeFactory::initialize_observational_with_overrides(
                     root_override.as_deref(),
-                    workspace_selector.as_deref(),
+                    selection,
                 )
             }
             RuntimeNeed::PluginReadOnly => {
                 RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
                     root_override.as_deref(),
-                    workspace_selector.as_deref(),
+                    selection,
                 )
             }
             RuntimeNeed::HostReadOnly => {
                 RegisteredRuntimeFactory::initialize_host_read_only_with_overrides(
                     root_override.as_deref(),
-                    workspace_selector.as_deref(),
+                    selection,
                 )
             }
             RuntimeNeed::TaskOwner { task_id } => orbit_cmd::task_owner::initialize_for_task_show(
                 root_override.as_deref(),
-                workspace_selector.as_deref(),
+                selection,
                 task_id,
             ),
         }
+    } else {
+        // The claimed-owner route opens the worker's bound checkout.
+        RegisteredRuntimeFactory::initialize_with_overrides(root_override.as_deref(), None)
     };
 
     let runtime = match bootstrapped {
@@ -359,23 +353,11 @@ pub(crate) fn run(env: orbit_common::Env) {
         &env,
         &resolved,
     );
-    // ORB-10453: the CLI's single authorization chokepoint. Every command
-    // traverses it before dispatch, so a governed operation cannot be reached
-    // by adding a subcommand that forgets its own guard. A command that runs
-    // through an app's `exec` declares no governed operation here: `exec`
-    // authorizes it.
-    let authorize = |runtime: &orbit_core::OrbitRuntime| match governed {
-        Some(operation) => {
-            runtime.authorize_command_operation(operation.command, operation.subcommand)
-        }
-        None => Ok(()),
-    };
-    // The runtime appends telemetry separately from write-free state handles.
-    // Foreign-generation reads still need their native command outcome; the
-    // guard itself suppresses emission when tool dispatch or an app's `exec`
-    // already owns it.
-    let guard = audit_meta.map(|meta| audit_middleware::AuditGuard::new(&runtime, meta, &env));
-    let result = authorize(&runtime).and_then(|()| dispatch(cli.command, context));
+    // An app's `exec` authorizes and audits the command. The scope settles
+    // that row once rendering finishes, and writes the row of an invocation
+    // that never reached an `exec`.
+    let audit = audit_meta.map(|meta| InvocationAuditScope::enter(&core, meta));
+    let result = dispatch(cli.command, context);
 
-    finish_command(result, &sink, json_error_preference, guard);
+    finish_command(result, &sink, json_error_preference, audit);
 }

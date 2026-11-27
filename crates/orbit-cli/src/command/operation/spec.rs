@@ -17,6 +17,7 @@ use std::path::Path;
 use orbit_common::Env;
 use orbit_common::governance::operation::{Effect, OperationVerb};
 use orbit_common::governance::task::TaskVerb;
+pub use orbit_core::app::CommandMeta;
 use orbit_core::{ActorIdentity, Core, OrbitError};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
@@ -37,18 +38,6 @@ macro_rules! core_env_dispatch {
             _ => dispatch_mismatch(stringify!($variant)),
         }
     }};
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandMeta {
-    pub command: String,
-    pub subcommand: Option<String>,
-    pub tool_name: Option<String>,
-    pub target_type: Option<String>,
-    pub target_id: Option<String>,
-    pub role: String,
-    pub arguments_json: Option<String>,
-    pub job_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,17 +153,6 @@ pub struct CommandOperation {
     pub audit_meta: Option<CommandMeta>,
     pub json_error_preference: Option<bool>,
     pub dispatch: CommandDispatch,
-    /// The governed operation this invocation performs, when it performs one
-    /// [ORB-10453].
-    ///
-    /// An arm sets this to name *which* operation is being invoked; it never
-    /// names a capability. The requirement lives in
-    /// `orbit_common::governance::authorization::GOVERNED_OPERATIONS` and the decision is
-    /// made once, in `main`, before dispatch.
-    ///
-    /// Commands whose destruction is flag-gated (`--confirm`) set it only for
-    /// the destructive invocation, so the read-only report stays reachable.
-    pub governed: Option<GovernedCommand>,
     /// Whether this invocation is one of the paths a plugin backend may reach
     /// Orbit through (plugins design §4.2) [ORB-12876].
     ///
@@ -185,13 +163,6 @@ pub struct CommandOperation {
     /// opts in here; the default is refusal, which is what keeps a newly
     /// added command closed rather than silently open.
     pub plugin_callback_entry_point: bool,
-}
-
-/// A `<command> <subcommand>` pair to authorize before dispatch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GovernedCommand {
-    pub command: &'static str,
-    pub subcommand: &'static str,
 }
 
 impl CommandOperation {
@@ -207,7 +178,6 @@ impl CommandOperation {
             audit_meta,
             json_error_preference,
             dispatch,
-            governed: None,
             plugin_callback_entry_point: false,
         }
     }

@@ -172,6 +172,15 @@ pub mod test_support {
         RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
     };
 
+    /// Open a runtime over `global_root` and the workspace `.orbit` directory
+    /// `workspace_root`, for a fixture outside `orbit-core`.
+    pub fn runtime_from_roots(
+        global_root: &std::path::Path,
+        workspace_root: &std::path::Path,
+    ) -> Result<crate::OrbitRuntime, crate::OrbitError> {
+        crate::OrbitRuntime::from_roots(global_root, workspace_root)
+    }
+
     /// Supply a different caller snapshot while keeping the fixture's runtime state.
     pub fn with_runtime_env(
         runtime: crate::OrbitRuntime,

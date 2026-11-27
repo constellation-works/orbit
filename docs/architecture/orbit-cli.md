@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Architecture map for orbit-cli: what it owns, main modules, dependencies and entry points.
-last_validated: 2026-11-25
+last_validated: 2026-11-26
 tags: [architecture, orbit-cli]
 ---
 
@@ -13,7 +13,7 @@ Clap entry point (`orbit` binary) and client configuration. Assembles MCP, Regis
 
 ## Main modules and types
 
-`main.rs` (`fn main`), `command`, `entry`, `output`, `parse`, `help`, `plugin_cli`, `audit_middleware`. See ``crates/orbit-cli/src/main.rs``.
+`main.rs` (`fn main`), `command`, `entry`, `output`, `parse`, `help`, `plugin_cli`. See ``crates/orbit-cli/src/main.rs``.
 
 `command/tool/run.rs` owns `ToolRunShape`, the prepared operation name and
 output policy shared by local execution, host routing and workspace-less notice
@@ -40,9 +40,8 @@ Design intent: [docs/design/terminal-interface/](../../docs/design/terminal-inte
 
 ## Ownership by module
 
-- `audit_middleware`: RAII SQLite CLI-invocation audit guard (`AuditGuard`); imports `command`, `orbit-common`, and `orbit-core`.
 - `command`: Top-level CLI subcommand argument definitions and dispatch handlers; imports `output`, `parse`, `plugin_cli`, and workspace domain/composition crates.
-- `entry`: Process entry for the `orbit` binary that parses argv, classifies commands, admits a generation, dispatches, and reports results; imports sibling CLI modules and `orbit-cmd`, `orbit-common`, `orbit-core`, `orbit-mcp`, `orbit-types`.
+- `entry`: Process entry for the `orbit` binary that parses argv, classifies commands, admits a generation, takes the workspace route from composition, dispatches inside `orbit-core`'s invocation audit scope, and reports results; it authorizes and audits nothing itself; imports sibling CLI modules and `orbit-cmd`, `orbit-common`, `orbit-core`, `orbit-mcp`, `orbit-types`.
 - `help`: Compact inherited options and shared grouped command-list help templates; imports `clap` only.
 - `output`: CLI output formatting, color, table, JSON, pipe, and sink rendering; imports `orbit-cmd`, `orbit-common`, and `orbit-core`.
 - `parse`: Shared CLI argument parsers (CSV lists, positive limits, durations, and timestamps); imports `orbit-common` and `orbit-core`.

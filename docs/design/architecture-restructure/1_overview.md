@@ -134,7 +134,7 @@ The File column is where each concern lives after the restructure. The Task colu
 - [ORB-28399] — routed plugin commands through `app::plugin`.
 - [ORB-28400] — is routing workspace commands through `app::workspace`.
 - [ORB-28401] — will route config, skill and audit commands through `exec`.
-- [ORB-28407] — will remove authorization and audit from the CLI entry, the last task of the CLI family.
+- [ORB-28407] — removed authorization and audit from the CLI entry, the last task of the CLI family.
 - [ORB-28408] — will split `RuntimeHost` into five traits.
 - [ORB-28416] — will reduce `orbit-cmd` to opening a `Core`.
 - [ORB-28417] — will close `orbit-core`'s exports to `app`, `Core` and `Error`.
