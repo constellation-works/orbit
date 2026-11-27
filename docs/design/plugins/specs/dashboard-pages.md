@@ -1,26 +1,25 @@
 ---
-title: "Scope: plugin pages in the dashboard"
+title: "Spec: Plugin pages in the dashboard"
 owner: claude
 created_date: 2026-11-27
 updated_date: 2026-11-27
 last_validated: 2026-11-27
 status: Draft
-stage: designing
-next: "Operator approval of this scope [ORB-29504]"
-feature: plugin-pages
-doc_role: scope
+feature: plugins
+doc_role: spec
 type: design
-summary: "Scope: a plugin ships a static web bundle that the dashboard serves in a sandboxed frame as a sub-tab under Plugins, reading data only through the plugin's own tools"
-tags: [plugin-pages, plugins, dashboard, orbit-web]
+summary: "Spec (proposed): a plugin ships a static web bundle that the dashboard serves in a sandboxed frame as a sub-tab under Plugins, reading data only through the plugin's own tools"
+tags: [plugins, plugin-pages, dashboard, orbit-web]
 ---
 
-# Scope: plugin pages in the dashboard
+# Spec: Plugin pages in the dashboard
 
-Status: draft for the operator's approval. Nothing here is built.
-Bearing: the [plugin standard](../plugins/1_scope.md) gives a plugin one manifest, one sandboxed
+Status: a proposed mechanism for the plugin standard, draft for the operator's approval
+([ORB-29504]). Nothing here is built.
+Bearing: the [plugin standard](../1_scope.md) gives a plugin one manifest, one sandboxed
 backend, consented grants and audited tool calls. Its dashboard contribution is declarative:
 panels drawn by one generic renderer, and link tiles ([ORB-12738]). The
-[dashboard](../user-interface/2_design.md) is static assets compiled into the binary and served
+[dashboard](../../user-interface/2_design.md) is static assets compiled into the binary and served
 under a policy that runs only its own scripts. Another host's dashboard API is reached through
 this one over an SSH tunnel ([ORB-14679]), and bytes that arrive that way are served so they
 cannot run on this dashboard's origin.
@@ -154,7 +153,7 @@ The kit is always this dashboard's own.
 ### Why no server per plugin
 
 The first sketch had Orbit start a Node server for each plugin's page and show it in the tab.
-This scope does not, for these reasons:
+This design does not, for these reasons:
 
 | A server per plugin needs | Cost |
 |---|---|
@@ -223,10 +222,10 @@ whose manifest has pages lists them in the consent prompt.
 
 ## Open questions
 
-1. **A static bundle, or a server per plugin?** The scope recommends the bundle, for the
+1. **A static bundle, or a server per plugin?** This design recommends the bundle, for the
    reasons in the table above. The cost is that a page cannot hold server-side state or push;
    it asks its tools.
-2. **Actions in the first build, or after?** The scope recommends after, as phase 3. A page
+2. **Actions in the first build, or after?** This design recommends after, as phase 3. A page
    that can settle a request or close a room is plugin code acting with the operator's
    authority, and the confirmation drawn outside the frame is what keeps that honest. The cost
    of waiting is that the first Formation page reads and does not answer.
