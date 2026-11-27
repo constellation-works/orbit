@@ -93,10 +93,12 @@ and redirect within whatever address you opened, so they work at the
 | `/r/<run id>` | A lookup on this machine only. |
 
 Two hosts can hold a run with the same ID, so use the exact form when you
-know where the run executed. A prefix no host here claims, an id that is not
-a task or run id, and a `machine` this machine has not registered each show
-a not-found page that names it. A `machine` is never answered from this
-machine's own runs.
+know where the run executed. A prefix no host here claims and an id that is
+not a task or run id each show a not-found page that names it. The serving
+machine's own `[machine] id` resolves to a run here, and a registered remote
+machine ID opens that host's dashboard. An unregistered `machine` ID shows
+not found and never falls back to a local lookup, which could open an
+unrelated run with the same ID.
 
 ## Open it over Tailscale Serve
 
