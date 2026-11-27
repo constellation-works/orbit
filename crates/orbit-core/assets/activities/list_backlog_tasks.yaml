@@ -197,6 +197,7 @@ spec:
                 - awaiting_footprint
                 - awaiting_exclusive_slot
                 - no_drain_tag
+                - dependency_not_delivered
             detail:
               type: string
             conflicts:

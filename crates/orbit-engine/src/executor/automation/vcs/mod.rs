@@ -135,6 +135,7 @@ pub use worktree::with_host_target_removal_hook;
 pub use worktree::{
     WORKTREE_IDENTITY_INPUT_KEYS, WorktreeGcOptions, WorktreeGcRecovery, WorktreeGcResult,
     WorktreeReclaimReport, collect_worktrees, run_worktree_has_reclaim_output, run_worktree_paths,
+    undelivered_dependency_for_admission,
 };
 
 /// [ORB-26389] The engine-private operation that merges a pull request. A

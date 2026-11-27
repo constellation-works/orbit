@@ -449,6 +449,16 @@ pub(super) fn backlog_snapshot_in_mode(
             }
         }
     });
+    // A done dependency whose commits have not reached the base would fail
+    // worktree setup on every pass. Only admission refreshes a stale
+    // tracking ref; an observation never touches the network.
+    super::dependency_delivery::withhold_undelivered_dependencies(
+        runtime,
+        mode,
+        matches!(read_mode, BacklogReadMode::Admission { .. }),
+        &mut backlog,
+        &mut excluded,
+    );
     // [ORB-14168] A task that cleared the per-task gates would still fail
     // closed at local-route admission while `review.timing` is `before_pr` or
     // `before_landing` [ORB-14849]. Hold it here so the drain

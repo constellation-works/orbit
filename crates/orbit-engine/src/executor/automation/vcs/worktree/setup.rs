@@ -153,13 +153,33 @@ pub(in crate::executor::automation) fn setup_worktree<
     // exists on disk, so a refusal leaves no worktree, no branch, and every
     // task still in its pre-run status.
     if dependency_delivery_mode == DependencyDeliveryMode::Enforce {
-        ensure_dependencies_delivered_into_base(
+        match ensure_dependencies_delivered_into_base(
             host,
             repo_root,
             task_ids,
             &start_point,
             &base_sha,
-        )?;
+        ) {
+            // A backlog task waits for its dependency's commits to reach the
+            // base; failing it would only re-dispatch and fail it on every
+            // drain pass. A task already admitted by an earlier run keeps
+            // ordinary run failure handling: a held delivery refusal has no
+            // generic resume path for it.
+            Err(error @ OrbitError::DependencyNotDelivered(_))
+                if task_ids
+                    .iter()
+                    .map(|task_id| host.get_task(task_id))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .iter()
+                    .all(|task| task.status == TaskStatus::Backlog) =>
+            {
+                return Err(OrbitError::DeliveryRefused {
+                    refusal: DeliveryRefusal::DependencyNotDelivered,
+                    message: error.to_string(),
+                });
+            }
+            result => result?,
+        }
     }
 
     // ORB-11373: when delivering into a local checkout, verify that the landing

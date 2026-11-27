@@ -827,6 +827,7 @@ forge read can clear. Per code:
 | `delivery_landing_conflict` | no | Owner landing needs fresh validation and a new handoff. |
 | `base_chase_exhausted` | no | Orphan adoption already continues it. |
 | `delivery_origin_unavailable` | no | Backlog admission, no pull request. |
+| `delivery_dependency_not_delivered` | no | Backlog admission, no pull request. |
 | `delivery_check_repair_activity_absent` | no | Needs recovery configured and a new head. |
 | `delivery_landing_repair_requeue` | no | The claim already ended and the task returned to the backlog (or is blocked). Resuming the held run would land a revoked handoff. |
 | `delivery_visual_*` | no | Retired; nothing raises them. |

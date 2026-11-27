@@ -136,6 +136,13 @@ Two of its answers separate contention from capacity:
     (`orbit run ship`) is the exception: the gate un-defers those locks and
     records a `readiness_overridden` event naming the holders, so the run edits
     beside them without waiting.
+- `dependency_not_delivered` means a dependency is `done` but its commits exist
+  only on other refs than the base the delivery cuts from, typically because its
+  pull request has not merged. The task waits in `backlog`, and the drain admits
+  it once those commits reach the base; `detail` names the dependency and the
+  commits. Land the dependency's pull request, or ship the task with
+  `--ignore-dependency-delivery` when its work reached the base under another
+  commit message.
 - `awaiting_footprint` and `awaiting_exclusive_slot` mean the task declares
   no `context_files`, has no `no-diff-expected` tag and no operator
   `readiness-waived` tag, in a run with more than one slot. It would hold no
