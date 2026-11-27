@@ -378,11 +378,17 @@ pub(super) fn unreconciled_library_deferrals(
             continue;
         }
         let scope = recorded_cargo_scope(&record.command);
-        let library_pair = matches!(
-            scope,
-            Some(RecordedCargoScope::Library { .. } | RecordedCargoScope::Package { .. })
-        ) || (contains_cargo_test(&record.command)
-            && (has_lib_flag(&record.command) || has_lib_requirement));
+        let library_pair = match scope {
+            Some(RecordedCargoScope::Library { .. } | RecordedCargoScope::Package { .. }) => true,
+            Some(
+                RecordedCargoScope::Integration { .. }
+                | RecordedCargoScope::MultiIntegration { .. },
+            ) => false,
+            None => {
+                contains_cargo_test(&record.command)
+                    && (has_lib_flag(&record.command) || has_lib_requirement)
+            }
+        };
         if !library_pair {
             continue;
         }

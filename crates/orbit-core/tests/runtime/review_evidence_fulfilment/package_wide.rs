@@ -892,6 +892,142 @@ fn opaque_affected_test_record_names_all_uncovered_deferrals() {
     }
 }
 
+fn integration_deferral_with_lib_requirement_skips_library_diagnostic() {
+    let lib_req = lib_requirement(BROKER_LIB_TEST);
+    let integration_cases = [
+        (
+            "single-package integration record",
+            format!("cargo test -p {PACKAGE} --test sandbox"),
+        ),
+        (
+            "build-budget wrapped integration record",
+            format!("scripts/build-budget.py -- cargo test -p {PACKAGE} --test sandbox"),
+        ),
+        (
+            "multi-package integration record",
+            format!("cargo test -p orbit-cli -p {PACKAGE} --test sandbox"),
+        ),
+    ];
+
+    const SEATBELT_NOTICE: &str = "\
+        SKIP: sandbox-exec cannot apply a profile: \
+        another_runs_sandbox_and_the_host_are_refused_without_a_reply: \
+        seatbelt probe failed";
+
+    for (why, integration_cmd) in &integration_cases {
+        for (verdict, notice) in [("incomplete", BROKER_NOTICE), ("accept", SEATBELT_NOTICE)] {
+            let mut fixture = Fixture::new();
+            fixture.admit();
+            let mut body = v9_v12_report(
+                &fixture,
+                integration_cmd,
+                "passed",
+                &[notice],
+                Some((&lib_req, "not_run")),
+                &lib_req,
+            );
+            body["verdict"] = json!(verdict);
+            fixture.put_report(&body);
+
+            let refused = fixture
+                .settle()
+                .expect_err(&format!("{why} ({verdict}) blocks"))
+                .to_string();
+            assert!(
+                refused.contains("review_gate_blocked"),
+                "{why} ({verdict}): {refused}"
+            );
+            assert!(
+                fixture
+                    .runtime
+                    .get_task_artifact(&fixture.task_id, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+                    .unwrap()
+                    .is_none(),
+                "{why} ({verdict}): must not issue a hold"
+            );
+            let cert = certificate(&fixture);
+            assert!(!cert.verdict.passed(), "{why} ({verdict})");
+            assert!(cert.host_evidence.is_empty(), "{why} ({verdict})");
+            let escalation = cert.escalation.as_deref().unwrap_or_default();
+            assert!(
+                !escalation.contains("unreconciled_library_deferral")
+                    && !refused.contains("unreconciled_library_deferral"),
+                "{why} ({verdict}): integration record must not emit unreconciled_library_deferral: \
+                 escalation={escalation}, refused={refused}"
+            );
+            let record = broad_record(&cert, integration_cmd);
+            assert_eq!(record.deferred, [notice.to_string()], "{why} ({verdict})");
+            assert_eq!(
+                record.executed_outcome(),
+                ValidationOutcome::NotRun,
+                "{why} ({verdict})"
+            );
+        }
+    }
+
+    // When a report has both an unreconciled library record (V9) and an
+    // uncovered integration record (V10) alongside a `--lib` requirement (V12),
+    // `unreconciled_library_deferral` is emitted only for V9, never for V10.
+    let v9_lib = format!("scripts/build-budget.py -- cargo test -p {PACKAGE} --lib");
+    let v10_int = format!("cargo test -p {PACKAGE} --test sandbox");
+    let mut mixed = Fixture::new();
+    mixed.admit();
+    mixed.put_report(&json!({
+        "schema_version": 1,
+        "attempt_id": mixed.input["admission"]["attempt_id"],
+        "verdict": "incomplete",
+        "summary": "Both library and integration deferrals remain.",
+        "findings": [],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {
+                "id": "V9",
+                "command": v9_lib,
+                "outcome": "passed",
+                "role": "required",
+                "deferred": [SECOND_NOTICE],
+            },
+            {
+                "id": "V10",
+                "command": v10_int,
+                "outcome": "passed",
+                "role": "required",
+                "deferred": [BROKER_NOTICE],
+            },
+            {"id": "V12", "command": lib_req, "outcome": "not_run", "role": "required"},
+        ],
+        "external_evidence": [{
+            "kind": "host_sandbox_test",
+            "name": BROKER_LIB_TEST,
+            "command": lib_req,
+            "artifact": BROKER_ARTIFACT,
+            "os": "linux",
+        }],
+        "escalation": "Decision needed.",
+    }));
+    let refused = mixed
+        .settle()
+        .expect_err("mixed deferrals block")
+        .to_string();
+    let cert = certificate(&mixed);
+    let escalation = cert.escalation.as_deref().unwrap_or_default();
+    assert!(
+        escalation.contains("unreconciled_library_deferral")
+            && escalation.contains("`V9`")
+            && escalation.contains(
+                "cargo test -p orbit-runtime --lib another_deferred_lib_test -- --nocapture"
+            ),
+        "expected V9 library diagnostic: {escalation}"
+    );
+    assert!(
+        !escalation.contains("`V10`")
+            && !escalation.contains("only plain or `scripts/build-budget.py --` single-package")
+            && !refused.contains("`V10`"),
+        "V10 integration record must not trigger unreconciled_library_deferral: \
+         escalation={escalation}, refused={refused}"
+    );
+}
+
 crate::scenario_table!(
     package_wide_host_evidence_scenarios,
     a_package_wide_lib_deferral_is_received_when_settlement_runs_that_lib_test,
@@ -899,4 +1035,5 @@ crate::scenario_table!(
     budgeted_library_v9_v12_pair_holds_and_settles_with_authenticated_linux_evidence,
     unreconciled_v9_v12_library_pairs_refuse_and_name_v9_with_runnable_route,
     opaque_affected_test_record_names_all_uncovered_deferrals,
+    integration_deferral_with_lib_requirement_skips_library_diagnostic,
 );
