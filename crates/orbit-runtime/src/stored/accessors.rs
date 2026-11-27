@@ -47,23 +47,10 @@ impl RuntimeKernel {
             .write(|tx| tx.executor_def().put(def))
     }
 
-    pub fn list_policy_defs(&self) -> Result<Vec<orbit_types::policy::PolicyDef>, OrbitError> {
-        self.stores().policies().read().policy_def().list()
-    }
-
     pub fn get_policy_def(
         &self,
         name: &str,
     ) -> Result<Option<orbit_types::policy::PolicyDef>, OrbitError> {
         self.stores().policies().read().policy_def().get(name)
-    }
-
-    pub fn upsert_policy_def(
-        &self,
-        def: &orbit_types::policy::PolicyDef,
-    ) -> Result<(), OrbitError> {
-        self.stores()
-            .policies()
-            .write(|tx| tx.policy_def().put(def))
     }
 }
