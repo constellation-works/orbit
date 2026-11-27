@@ -51,6 +51,23 @@ pub(super) fn publish_and_stop(
     generation: usize,
     failed_open: bool,
 ) -> String {
+    publish_generation(f, id, Some(generation), failed_open)
+}
+
+/// Publish what the resumed checkout already holds, as the real commit step
+/// does when the implementer adds nothing to the applied edits.
+pub(super) fn publish_applied_and_cancel(f: &Fixture, id: &str) -> String {
+    publish_generation(f, id, None, false)
+}
+
+/// `generation` rewrites `source.txt` as the implementer's own edit; `None`
+/// leaves the checkout exactly as candidate resume left it.
+fn publish_generation(
+    f: &Fixture,
+    id: &str,
+    generation: Option<usize>,
+    failed_open: bool,
+) -> String {
     f.wait(id);
     f.start_actions(id);
     let setup = f.action(
@@ -63,11 +80,13 @@ pub(super) fn publish_and_stop(
     assert_ne!(setup["head_ref"], resumed["reused_branch"]);
     assert_eq!(resumed["reused_branch"], f.branch);
     checkpoint(f, id, "resume_candidate", resumed);
-    std::fs::write(
-        checkout.join("source.txt"),
-        format!("repair generation {generation}\n"),
-    )
-    .unwrap();
+    if let Some(generation) = generation {
+        std::fs::write(
+            checkout.join("source.txt"),
+            format!("repair generation {generation}\n"),
+        )
+        .unwrap();
+    }
     let commit = f.action("git_commit", json!({"job_run_id":id,"scope":"all","workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}));
     checkpoint(f, id, "commit", commit);
     let input = json!({"job_run_id":id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"branch":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"]});
