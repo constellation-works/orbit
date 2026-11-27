@@ -21,6 +21,9 @@ pub(in crate::adapter::tool_host) fn snapshot(
     let id = required_string(&input, &["id"], "id")?;
     let mut value = serde_json::to_value(runtime.desktop_task_snapshot(&id, session)?)
         .map_err(|error| OrbitError::Execution(format!("serialize desktop response: {error}")))?;
+    if let Some(url) = runtime.task_permalink_url(&id) {
+        value["url"] = serde_json::Value::String(url);
+    }
     value["workspace"] = input["workspace"].clone();
     Ok(value)
 }
@@ -39,6 +42,10 @@ pub(in crate::adapter::tool_host) fn write(
     let request: DesktopTaskRequest = serde_json::from_value(input)
         .map_err(|error| OrbitError::InvalidInput(format!("invalid desktop operation: {error}")))?;
     let outcome = runtime.desktop_task_write(request, agent, model, session);
+    let written_task_id = outcome
+        .as_ref()
+        .ok()
+        .map(|result| result.snapshot.task.id.clone());
     let mut value = match outcome {
         Ok(result) => serde_json::to_value(result),
         Err(OrbitError::DesktopWriteAccepted { task_id, reason }) => {
@@ -66,6 +73,11 @@ pub(in crate::adapter::tool_host) fn write(
         }
         Err(error) => return Err(error),
     }.map_err(|error: serde_json::Error| OrbitError::Execution(format!("serialize desktop response: {error}")))?;
+    if let Some(task_id) = written_task_id
+        && let Some(url) = runtime.task_permalink_url(&task_id)
+    {
+        value["url"] = serde_json::Value::String(url);
+    }
     value["workspace"] = workspace;
     Ok(value)
 }

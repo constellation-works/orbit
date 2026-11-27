@@ -105,13 +105,18 @@ pub(crate) fn run_show_payload(
         agent_activity_ids,
         waiting_tasks,
         worker_limit,
+        url,
     } = *detail;
     let steps_source = display_steps.source;
     let rescue_candidate = state
         .as_ref()
         .and_then(|state| state.pipeline.get("rescue_candidate").cloned());
-    let mut run_projection =
-        cli_job_run_to_json_with_activity_provenance(&effort_evidence, &run, state.as_ref());
+    let mut run_projection = cli_job_run_to_json_with_activity_provenance(
+        &effort_evidence,
+        &run,
+        state.as_ref(),
+        url.as_deref(),
+    );
     // [ORB-13899] The same audit scan holds the invocation's child: its live
     // progress, and the output reference a failed step never checkpoints.
     run_projection["agent_invocation"] = serde_json::to_value(agent_invoke_result(
@@ -164,7 +169,8 @@ pub(crate) fn run_show_payload(
 
     pull.append_pull_drain_sections(&mut doc);
 
-    let mut header = run_header_text_with_lock_holders(&run, state.as_ref(), &lock_holders);
+    let mut header =
+        run_header_text_with_lock_holders(&run, state.as_ref(), &lock_holders, url.as_deref());
     if checkpoint_unreadable {
         header.push_str(&format!(
             "\n{} pipeline checkpoint unreadable; pipeline state omitted",

@@ -21,15 +21,19 @@ pub(crate) fn run_header_text_with_lock_holders(
     run: &JobRun,
     state: Option<&PipelineState>,
     holders: &LockHolders,
+    url: Option<&str>,
 ) -> String {
     use crate::output::common::color::{Domain, bold, dimmed, text};
-    let mut lines = vec![
-        format!(
-            "{} {} ({})",
-            bold("Run ID:"),
-            run.run_id,
-            format_run_role(&run.run_id)
-        ),
+    let mut lines = vec![format!(
+        "{} {} ({})",
+        bold("Run ID:"),
+        run.run_id,
+        format_run_role(&run.run_id)
+    )];
+    if let Some(url) = url {
+        lines.push(format!("{} {url}", bold("URL:")));
+    }
+    lines.extend([
         format!("{} {}", bold("Job ID:"), run.job_id),
         format!(
             "{} {}",
@@ -47,7 +51,7 @@ pub(crate) fn run_header_text_with_lock_holders(
             dimmed(&format_timestamp(run.finished_at))
         ),
         format!("{} {}", bold("Duration:"), format_duration(run.duration_ms)),
-    ];
+    ]);
     if let Some(requested_crew) = run
         .input
         .as_ref()

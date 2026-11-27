@@ -44,6 +44,7 @@ pub struct RunDetail {
     pub agent_activity_ids: HashSet<String>,
     pub waiting_tasks: WaitingTasks,
     pub worker_limit: Option<orbit_store::contract::WorkerResourceLimitEvidence>,
+    pub url: Option<String>,
 }
 
 #[derive(Default)]
@@ -209,6 +210,7 @@ fn inspect_run(
         WaitingTasks::default()
     };
     let worker_limit = runtime.worker_resource_limit_evidence(&run.run_id)?;
+    let url = runtime.run_permalink_url(&run);
     Ok(ShownRun::Full(Box::new(RunDetail {
         run,
         state,
@@ -230,6 +232,7 @@ fn inspect_run(
         agent_activity_ids,
         waiting_tasks,
         worker_limit,
+        url,
     })))
 }
 
