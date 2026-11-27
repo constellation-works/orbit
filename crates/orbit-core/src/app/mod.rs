@@ -9,8 +9,8 @@
 //! invocation that never reached an `exec`.
 //! `agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`,
 //! `config`, `crew_memory`, `doctor`, `evolution`, `experiment`, `friction`, `gc`,
-//! `host`, `notice`, `plugin`, `resident`, `review`, `routine`, `run`, `search`,
-//! `skill`, `task`, `tool`, `update` and `workspace` are apps; `host` and `update`
+//! `host`, `notice`, `plugin`, `remote_command`, `resident`, `review`, `routine`,
+//! `run`, `search`, `skill`, `task`, `tool`, `update` and `workspace` are apps; `host` and `update`
 //! open no workspace, so they have no `exec` and their surfaces call them directly.
 //! The other subjects still live in `application/` and are reached through
 //! `OrbitRuntime`.
@@ -50,6 +50,8 @@ mod invocation;
 pub mod notice;
 
 pub mod plugin;
+
+pub mod remote_command;
 
 pub mod resident;
 

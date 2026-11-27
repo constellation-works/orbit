@@ -1,24 +1,14 @@
-use super::{Command, Operation};
-use crate::OrbitRuntime;
-use crate::runtime::command_exec::RemoteCommandParams;
+//! Remote command execution flow and `argv` validation.
+
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{optional_string, optional_u32_alias, required_string};
 use orbit_types::identity::normalize_optional_attribution_label;
 use serde_json::Value;
 
-impl<'a> Command<'a, Value> {
-    pub(crate) fn remote_command(
-        input: Value,
-        agent: Option<String>,
-        model: Option<String>,
-    ) -> Self {
-        Self::new(Operation::command("command", "exec"), move |core| {
-            exec(core.runtime(), input, agent, model)
-        })
-    }
-}
+use crate::OrbitRuntime;
+use crate::runtime::command_exec::RemoteCommandParams;
 
-fn exec(
+pub(super) fn exec(
     runtime: &OrbitRuntime,
     input: Value,
     agent: Option<String>,

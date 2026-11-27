@@ -193,5 +193,15 @@
     "identifier": "from_kernel_ref",
     "doc": "docs/design/architecture-restructure/2_design.md",
     "reason": "The architecture-restructure design doc names the removed from_kernel_ref cast as the before-state of the runtime section and in the record of its deletion."
+  },
+  {
+    "identifier": "remote_command",
+    "doc": "docs/architecture/orbit-core.md",
+    "reason": "Names the new `app::remote_command` module (`crates/orbit-core/src/app/remote_command/`) added in ORB-28971, rather than the removed `app::run::Command::remote_command` constructor."
+  },
+  {
+    "identifier": "remote_command",
+    "doc": "docs/design/architecture-restructure/2_design.md",
+    "reason": "Names the new `app::remote_command` module (`crates/orbit-core/src/app/remote_command/`) added in ORB-28971, rather than the removed `app::run::Command::remote_command` constructor."
   }
 ]
