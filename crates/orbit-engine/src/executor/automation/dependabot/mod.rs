@@ -10,14 +10,16 @@ mod query;
 use orbit_common::OrbitError;
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::github_host::{OUTCOME_CAPABILITY_UNAVAILABLE, query_root};
 
 const OUTCOME_NO_OPEN_ALERTS: &str = "no_open_alerts";
 const OUTCOME_OPEN_ALERTS: &str = "open_alerts";
 
-pub(super) fn collect_dependabot_alerts<H: RuntimeHost + ?Sized>(
+pub(super) fn collect_dependabot_alerts<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {

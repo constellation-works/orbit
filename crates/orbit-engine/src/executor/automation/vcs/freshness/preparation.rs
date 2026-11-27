@@ -14,8 +14,7 @@ use super::divergence::{commit_sha, remote_branch_sha};
 use super::rebase::prepare_pr_handoff_inner;
 use super::rebase_recovery::{RecoveredRewrite, ensure_clean_for_rewrite, recovered_rewrite};
 use crate::context::{
-    RebaseRecoveryAttemptScope, Recovery, ReviewGate, RunLifecycle, RuntimeHost,
-    RuntimeHostProcessEnvironment,
+    RebaseRecoveryAttemptScope, Recovery, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
 };
 use orbit_common::OrbitError;
 use orbit_types::workflow::DeliveryRefusal;
@@ -61,7 +60,7 @@ fn refusal(reason: impl std::fmt::Display) -> OrbitError {
 
 /// Sign the initial preparation separately from rewrite recovery. The whole
 /// payload is bound by the existing host authority; no new trust store exists.
-pub(super) fn certify_preparation<H: RuntimeHost + ?Sized>(
+pub(super) fn certify_preparation<H: RunLifecycle + ReviewGate + Recovery + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
@@ -89,7 +88,7 @@ pub(super) fn certify_preparation<H: RuntimeHost + ?Sized>(
 
 /// Project the authenticated refresh into conflict recovery's failed input as
 /// well as its retry. Neither consumer may recover against the superseded pin.
-pub(crate) fn refreshed_input<H: RuntimeHost + ?Sized>(
+pub(crate) fn refreshed_input<H: RunLifecycle + ReviewGate + Recovery + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {

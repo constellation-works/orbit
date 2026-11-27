@@ -12,7 +12,7 @@ use std::path::Path;
 use orbit_exec::spawn_owned_supervised_cancellable;
 use orbit_types::workflow::{DeferralProbe, NamespaceProbe};
 
-use crate::context::RuntimeHost;
+use crate::context::{Dispatch, HostEnvironment, RuntimeHostProcessEnvironment};
 use crate::sandbox_spawn::{prepare_sandbox_for_dispatch, spawn_child_with_optional_sandbox};
 
 /// Wall clock for one probe. Both probes exit at once when the kernel
@@ -21,7 +21,9 @@ const PROBE_TIMEOUT_MS: u64 = 10_000;
 
 /// Run `probe` in the implementer's lane for a host that explicitly supports
 /// [`crate::Dispatch::run_deferral_probe`].
-pub fn run_deferral_probe<H: RuntimeHost + ?Sized>(
+pub fn run_deferral_probe<
+    H: HostEnvironment + Dispatch + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     probe: &DeferralProbe,
     provider: Option<&str>,
@@ -37,7 +39,7 @@ pub fn run_deferral_probe<H: RuntimeHost + ?Sized>(
     }
 }
 
-fn spawn_probe<H: RuntimeHost + ?Sized>(
+fn spawn_probe<H: HostEnvironment + Dispatch + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     probe: &DeferralProbe,
     provider: Option<&str>,

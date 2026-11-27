@@ -12,7 +12,7 @@
 use super::super::rescue::{WorktreeGcRecovery, committed_recovery};
 use super::leftovers::worker_may_be_alive;
 use super::paths::attributed_task_ids;
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 use chrono::{DateTime, Utc};
 use orbit_types::workflow::JobRun;
 use std::path::Path;
@@ -31,7 +31,7 @@ impl Parked {
 /// Why a parked run's worktree must stay whatever its tree holds: the action
 /// and its detail. A claim that is not settled may still deliver the leaf's
 /// candidate to its owner, and a worker may still write it.
-pub(super) fn parked_hold<H: RuntimeHost + ?Sized>(
+pub(super) fn parked_hold<H: HostEnvironment + ?Sized>(
     host: &H,
     run: &JobRun,
 ) -> Option<(&'static str, Option<String>)> {

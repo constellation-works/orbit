@@ -9,7 +9,9 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+};
 use crate::executor::automation::input::input_string_field;
 
 use super::super::git::{
@@ -45,7 +47,9 @@ enum RegisteredWorktree {
 ///
 /// Generic automation — not tied to any specific workflow. Any
 /// pipeline can reuse this by passing a `branch_prefix`.
-pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn setup_worktree<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -251,7 +255,7 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
 
 /// The run `task_id` was last linked to, other than `job_run_id`: its id when
 /// this machine executed it, else the run and the machine that did.
-fn prior_run<H: RuntimeHost + ?Sized>(
+fn prior_run<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     task_id: &str,
     job_run_id: &str,
@@ -714,7 +718,9 @@ fn is_empty_dir(path: &Path) -> Result<bool, OrbitError> {
 /// The run's branch. A single task's follows `branch.name_template`
 /// (`<prefix>/<task>-<hash8>` by default); a bundle's is always
 /// `<prefix>/bundle-<hash8>`.
-fn branch_name_for_tasks<H: RuntimeHost + ?Sized>(
+fn branch_name_for_tasks<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     repo_root: &Path,
     branch_prefix: &str,

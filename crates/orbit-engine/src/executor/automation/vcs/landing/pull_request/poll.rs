@@ -8,7 +8,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::super::base::refresh::RefreshStep;
 use super::super::super::checks::{CheckRecovery, failed_checks};
@@ -37,7 +37,7 @@ pub(super) enum Step {
 
 /// One landing's poll: the state carried across observations of the pull
 /// request, plus the borrowed pass it lands.
-pub(super) struct LandingPoll<'a, H: RuntimeHost + ?Sized> {
+pub(super) struct LandingPoll<'a, H: ?Sized> {
     pub(super) host: &'a H,
     pub(super) context: &'a LandingPass,
     pub(super) view: &'a LandingView,
@@ -65,7 +65,9 @@ pub(super) struct LandingPoll<'a, H: RuntimeHost + ?Sized> {
     pub(super) diagnostic: Value,
 }
 
-impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
+impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>
+    LandingPoll<'a, H>
+{
     fn new(
         host: &'a H,
         context: &'a LandingPass,
@@ -327,7 +329,9 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
     }
 }
 
-pub(in crate::executor::automation::vcs::landing) fn land_pull_request<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::landing) fn land_pull_request<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     context: &LandingPass,
     number: u64,

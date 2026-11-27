@@ -4,7 +4,7 @@ use super::cache::{cache_paths, cached_base_check, read_cached};
 use super::compare::{
     BaseCommandResult, BaselineCheck, compare_with_base, hold_failures, not_comparable,
 };
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_bytes;
@@ -60,7 +60,7 @@ struct InconclusiveHoldAttempt {
 /// only a background run may ask: the owner's clock tick reads
 /// [`recorded_baseline_hold_status`] and leaves a miss to a detached refresh
 /// run [ORB-14739, ORB-14823].
-pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
+pub fn baseline_hold_status<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     repo: &Path,
     hold: &BaselineRedHold,
@@ -97,7 +97,9 @@ pub fn baseline_hold_status<H: RuntimeHost + ?Sized>(
 /// It still reads the base ref, refreshing it from `origin` as
 /// [`baseline_hold_status`] does, so it fits a short caller such as the clock
 /// tick, which holds the host's sweep lock.
-pub fn recorded_baseline_hold_status<H: RuntimeHost + ?Sized>(
+pub fn recorded_baseline_hold_status<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     repo: &Path,
     hold: &BaselineRedHold,
@@ -109,7 +111,7 @@ pub fn recorded_baseline_hold_status<H: RuntimeHost + ?Sized>(
     recorded_moved_base_status(host, repo, hold, &tip)
 }
 
-fn record_inconclusive_hold<H: RuntimeHost + ?Sized>(
+fn record_inconclusive_hold<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     repo: &Path,
     tip: &str,
@@ -143,7 +145,7 @@ fn record_inconclusive_hold<H: RuntimeHost + ?Sized>(
     }
 }
 
-fn recorded_moved_base_status<H: RuntimeHost + ?Sized>(
+fn recorded_moved_base_status<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     repo: &Path,
     hold: &BaselineRedHold,

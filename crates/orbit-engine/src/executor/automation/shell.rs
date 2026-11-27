@@ -39,8 +39,8 @@ use orbit_common::security::redaction::redact_all;
 use orbit_exec::spawn_owned_supervised_cancellable;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
 use crate::context::dispatch_contract::{DispatchError, ResolvedShellExecutor};
+use crate::context::{Dispatch, HostEnvironment, RuntimeHostProcessEnvironment};
 use crate::sandbox_spawn::{prepare_sandbox_for_dispatch, spawn_child_with_optional_sandbox};
 
 use super::StateExecutionContext;
@@ -84,7 +84,9 @@ struct ShellConfig {
     allow_nonzero_exit: bool,
 }
 
-pub(super) fn local_shell<H: RuntimeHost + Sync + ?Sized>(
+pub(super) fn local_shell<
+    H: HostEnvironment + Dispatch + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     config: &Value,
     input: &Value,
@@ -98,7 +100,9 @@ pub(super) fn local_shell<H: RuntimeHost + Sync + ?Sized>(
 }
 
 /// Preserve a failed command's summary without turning it into a success.
-pub(crate) fn dispatch_local_shell<H: RuntimeHost + Sync + ?Sized>(
+pub(crate) fn dispatch_local_shell<
+    H: HostEnvironment + Dispatch + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     config: &Value,
     input: &Value,
@@ -120,7 +124,7 @@ pub(crate) fn dispatch_local_shell<H: RuntimeHost + Sync + ?Sized>(
     Ok(output)
 }
 
-fn execute_local_shell<H: RuntimeHost + Sync + ?Sized>(
+fn execute_local_shell<H: HostEnvironment + Dispatch + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     config: &Value,
     input: &Value,
@@ -385,7 +389,7 @@ fn compose_argv(
 /// supplied one, otherwise the registered repository root. Same selector the
 /// deterministic VCS actions use, so a shell step and a `git_commit` step in
 /// one job always agree on which checkout they are looking at.
-fn resolve_workspace_root<H: RuntimeHost + ?Sized>(
+fn resolve_workspace_root<H: HostEnvironment + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<PathBuf, OrbitError> {

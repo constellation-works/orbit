@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::handoff::{HandoffDelivery, LandingWaitGate};
 use serde_json::{Value, json};
 
-use crate::context::{HandoffLandingContext, RuntimeHost};
+use crate::context::{HandoffLandingContext, HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::super::git::{fetch_remote_base, git_output};
 use super::super::operations::{self, CiCommitJobsAnswer, CiJobConclusion, CiJobStatus};
@@ -17,7 +17,7 @@ use super::super::pr::{
 /// Observe whether a stopped waiting gate has cleared without mutating the
 /// forge or candidate. This grants only a new attempt: normal landing rechecks
 /// every gate and identity before it may merge.
-pub fn landing_wait_gate_cleared<H: RuntimeHost + ?Sized>(
+pub fn landing_wait_gate_cleared<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
     gate: LandingWaitGate,

@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery};
 
-use crate::context::{HandoffLandingContext, RuntimeHost};
+use crate::context::{HandoffLandingContext, ReviewGate, RuntimeHostProcessEnvironment};
 
 use super::super::checks::verify_published_base_update;
 use super::super::git::{fetch_remote_base, git_command_success, git_output};
@@ -20,7 +20,7 @@ use super::run::LandingPass;
 /// A rewritten candidate, an unreachable base or a landing branch that no
 /// longer resolves are all the same answer: this owner will not land what it
 /// cannot verify, and the evidence says why.
-pub(super) fn observe_or_stop<H: RuntimeHost + ?Sized>(
+pub(super) fn observe_or_stop<H: ReviewGate + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     context: &LandingPass,
     status: Option<&PullRequestStatus>,

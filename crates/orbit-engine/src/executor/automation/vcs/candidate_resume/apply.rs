@@ -5,7 +5,7 @@ use orbit_store::contract::InterruptedReview;
 use orbit_types::task::{CANDIDATE_RESUME_EVENT, Task};
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{RunLifecycle, TaskAutomationUpdate};
 
 use super::super::git::{
     git_command_success, git_output, git_run, git_success, timeout_recovery_error,
@@ -359,7 +359,7 @@ fn candidate_available(
 }
 
 /// Write the outcome to the task's history.
-pub(super) fn record<H: RuntimeHost + ?Sized>(
+pub(super) fn record<H: RunLifecycle + ?Sized>(
     host: &H,
     task: &Task,
     run_id: &str,

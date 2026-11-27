@@ -34,7 +34,9 @@ use orbit_types::workflow::handoff::{
 };
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+};
 
 use super::super::super::ci::bounded_u64;
 use super::super::super::input::input_string_field;
@@ -68,7 +70,9 @@ enum NextPoll {
     TaskLeftReview(Value),
 }
 
-pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn pr_checks_watch<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -290,7 +294,7 @@ fn deadline_expired(error: &OrbitError) -> bool {
 /// Wait up to one poll interval or the remaining watch budget, whichever ends
 /// first. If the wait reaches the deadline after the task has left review,
 /// return `TaskLeftReview` so no stale observation is recorded.
-fn wait_for_next_poll<H: RuntimeHost + ?Sized>(
+fn wait_for_next_poll<H: RunLifecycle + ?Sized>(
     host: &H,
     task_id: &str,
     pr_number: &str,
@@ -332,7 +336,7 @@ fn pending_observation(
 }
 
 /// Record `observed` and report it as the watch's outcome.
-fn finish<H: RuntimeHost + ?Sized>(
+fn finish<H: RunLifecycle + ?Sized>(
     host: &H,
     task_id: &str,
     pr_number: &str,
@@ -384,7 +388,7 @@ fn ended(task_id: &str, pr_number: &str, reason: &str) -> Value {
     json!({"task_id": task_id, "pr_number": pr_number, "recorded": false, "ended": reason})
 }
 
-fn in_review<H: RuntimeHost + ?Sized>(host: &H, task_id: &str) -> Result<bool, OrbitError> {
+fn in_review<H: RunLifecycle + ?Sized>(host: &H, task_id: &str) -> Result<bool, OrbitError> {
     Ok(host.get_task(task_id)?.status == TaskStatus::Review)
 }
 
@@ -409,7 +413,7 @@ fn observation(
 /// The `failed` observation: the failed checks by name, and the landing's
 /// classification of them against the pull request's fork point and the
 /// base branch's current tip.
-fn failed_observation<H: RuntimeHost + ?Sized>(
+fn failed_observation<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     workspace: &Path,
@@ -489,7 +493,7 @@ fn fork_point(
 /// Append the observation once: an entry with the same replay key (the
 /// identical note of a resumed or repeated watch of the same head) is not
 /// written again.
-fn record<H: RuntimeHost + ?Sized>(
+fn record<H: RunLifecycle + ?Sized>(
     host: &H,
     task_id: &str,
     observed: &RecordedLandingChecksObservation,

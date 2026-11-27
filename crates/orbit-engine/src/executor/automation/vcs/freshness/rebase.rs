@@ -17,14 +17,16 @@ use super::rebase_recovery::{
     unmerged_paths,
 };
 use crate::context::{
-    HostEnvironment, Recovery, ReviewGate, RunLifecycle, RuntimeHost,
-    RuntimeHostProcessEnvironment as ProcessEnvironment,
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle,
+    RuntimeHostProcessEnvironment as ProcessEnvironment, RuntimeHostProcessEnvironment,
 };
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 use std::path::Path;
 
-pub(in crate::executor::automation) fn prepare_pr_handoff<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn prepare_pr_handoff<
+    H: RunLifecycle + ReviewGate + Recovery + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {

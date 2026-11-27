@@ -9,7 +9,7 @@ use orbit_types::workflow::{FailureHandoffDecision, JobRunState, PipelineState};
 use serde_json::Value;
 
 use crate::context::dispatch_contract::DispatchError;
-use crate::context::{Recovery, RunLifecycle, RuntimeHost, RuntimeHostProcessEnvironment};
+use crate::context::{Recovery, RunLifecycle, RuntimeHostProcessEnvironment};
 use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string,
 };
@@ -75,8 +75,10 @@ impl ResumePreparationRefresh {
 /// and the active run descends from the handoff run. The evidence stays in the
 /// durable run state for the later commit gate; no historical checkpoint or
 /// repository state is rewritten.
-pub(crate) fn reconcile_resumed_failure_handoff(
-    host: &dyn RuntimeHost,
+pub(crate) fn reconcile_resumed_failure_handoff<
+    H: RunLifecycle + Recovery + RuntimeHostProcessEnvironment + ?Sized,
+>(
+    host: &H,
     job: &JobV2,
     active_run_id: &str,
     resume: &PipelineState,
@@ -329,7 +331,9 @@ fn previous_refresh_attempt(prepared: &Value) -> Result<u64, OrbitError> {
     Ok(attempt)
 }
 
-fn validate_preparation_refresh_identity<H: RuntimeHost + ?Sized>(
+fn validate_preparation_refresh_identity<
+    H: RunLifecycle + Recovery + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     pipeline: &HashMap<String, Value>,
     evidence: &Value,
@@ -383,7 +387,7 @@ fn validate_preparation_refresh_identity<H: RuntimeHost + ?Sized>(
     Ok(())
 }
 
-fn ensure_run_is_resumable_owner<H: RuntimeHost + ?Sized>(
+fn ensure_run_is_resumable_owner<H: RunLifecycle + ?Sized>(
     host: &H,
     run_id: &str,
     label: &str,

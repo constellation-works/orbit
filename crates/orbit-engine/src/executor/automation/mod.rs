@@ -17,6 +17,8 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::{DeterministicAction, EngineDeterministicAction};
 use serde_json::{Value, json};
 
+use crate::context::RuntimeHost;
+
 #[derive(Debug, Clone, Default)]
 pub struct StateExecutionContext {
     pub run_id: Option<String>,
@@ -32,13 +34,7 @@ pub struct StateExecutionContext {
     pub fs_profile: Option<String>,
 }
 
-pub fn execute_action<
-    H: crate::context::RuntimeHost
-        + crate::context::RuntimeHost
-        + crate::context::RuntimeHost
-        + Sync
-        + ?Sized,
->(
+pub fn execute_action<H: RuntimeHost + ?Sized>(
     host: &H,
     action: &str,
     config: &Value,
@@ -55,13 +51,7 @@ pub fn execute_action<
     execute_engine_action(host, action, config, input, state_context)
 }
 
-pub(crate) fn execute_engine_action<
-    H: crate::context::RuntimeHost
-        + crate::context::RuntimeHost
-        + crate::context::RuntimeHost
-        + Sync
-        + ?Sized,
->(
+pub(crate) fn execute_engine_action<H: RuntimeHost + ?Sized>(
     host: &H,
     action: EngineDeterministicAction,
     config: &Value,

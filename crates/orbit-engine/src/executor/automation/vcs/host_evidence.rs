@@ -25,7 +25,7 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::baseline::in_detached_worktree;
 use super::build_output::bind_host_output;
@@ -72,7 +72,7 @@ impl HostEvidenceRun {
 /// repository, and judge it using the resolved workspace output contract. Only call this with a
 /// command [`HostSandboxCommand::admit`] admitted: it runs on the host,
 /// outside any agent sandbox.
-pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
+pub fn run_host_sandbox_test<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     candidate: &SourceRevision,
@@ -120,7 +120,7 @@ pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
     })
 }
 
-fn execute<H: RuntimeHost + ?Sized>(
+fn execute<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     checkout: &Path,
     command: &HostSandboxCommand,

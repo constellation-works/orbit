@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{AcceptedHandoff, HandoffCandidate, HandoffDelivery};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::super::git::{git_output, git_success};
 use super::super::pr_answers::{
@@ -79,7 +79,7 @@ pub(in crate::executor::automation::vcs) fn observe_accepted_revision(
 /// `landing_branch` is the one field carried from the submitted candidate: it
 /// is owner-resolved ship configuration captured at admission, not anything a
 /// pull request reports.
-pub fn observe_published_candidate<H: RuntimeHost + ?Sized>(
+pub fn observe_published_candidate<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     submitted: &HandoffCandidate,
@@ -91,7 +91,9 @@ pub fn observe_published_candidate<H: RuntimeHost + ?Sized>(
 /// The runtime supplies its immutable stored acceptance, never tool input.
 /// A different head requires the same fresh clean-base proof landing uses;
 /// the returned observation and every certificate remain on the accepted SHA.
-pub fn observe_accepted_published_handoff<H: RuntimeHost + ?Sized>(
+pub fn observe_accepted_published_handoff<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     accepted: &AcceptedHandoff,
@@ -126,7 +128,7 @@ pub fn verify_handoff_pull_request_head(
     Ok(())
 }
 
-fn observe_published<H: RuntimeHost + ?Sized>(
+fn observe_published<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     submitted: &HandoffCandidate,

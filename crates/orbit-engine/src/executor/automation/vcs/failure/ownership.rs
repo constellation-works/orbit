@@ -9,7 +9,10 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::context::{ReviewReleaseRequest, RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, ReviewGate, ReviewReleaseRequest, RunLifecycle, RuntimeHostProcessEnvironment,
+    TaskAutomationUpdate,
+};
 use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string,
 };
@@ -32,7 +35,7 @@ const LANDING_SETTLE_STEP: &str = "landing_review_gate_settle";
 /// `incomplete`.
 const INCOMPLETE_VERDICT_REFUSAL: &str = "review_gate_blocked: verdict incomplete";
 
-pub(super) fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
+pub(super) fn ensure_failure_handoff_ownership<H: RunLifecycle + ?Sized>(
     host: &H,
     input: &Value,
     task: &orbit_types::task::Task,
@@ -86,7 +89,9 @@ pub(super) fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
 /// not an incomplete settlement; otherwise the outcome, where a push that
 /// could not be made is recorded rather than raised so the original failure
 /// stays authoritative.
-pub(super) fn push_incomplete_landing_reviewer_commit<H: RuntimeHost + ?Sized>(
+pub(super) fn push_incomplete_landing_reviewer_commit<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     failed_step_id: &str,
@@ -105,7 +110,9 @@ pub(super) fn push_incomplete_landing_reviewer_commit<H: RuntimeHost + ?Sized>(
     )
 }
 
-fn push_landing_reviewer_commit<H: RuntimeHost + ?Sized>(
+fn push_landing_reviewer_commit<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -143,7 +150,9 @@ fn push_landing_reviewer_commit<H: RuntimeHost + ?Sized>(
 /// work onto `refs/orbit/candidates/<task>/<run>` (never pushing rejected or
 /// unvalidated commits to the PR head branch), or save an uncommitted diff as
 /// a task artifact when a commit/push fails.
-pub(super) fn preserve_landing_reviewer_repair<H: RuntimeHost + ?Sized>(
+pub(super) fn preserve_landing_reviewer_repair<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: &orbit_types::task::Task,
     run_id: &str,
@@ -165,7 +174,9 @@ pub(super) fn preserve_landing_reviewer_repair<H: RuntimeHost + ?Sized>(
     ))
 }
 
-fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
+fn preserve_landing_reviewer_repair_inner<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: &orbit_types::task::Task,
     run_id: &str,
@@ -395,7 +406,7 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
     }
 }
 
-pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
+pub(super) fn preserve_completion_failure<H: RunLifecycle + ?Sized>(
     host: &H,
     task: &orbit_types::task::Task,
     failure: PipelineFailure<'_>,
@@ -648,7 +659,7 @@ pub(super) fn prepared_attempt_owns_rebase(
 /// Leave a rebase this run did not start untouched: no abort, commit, push,
 /// or PR. The task is blocked with the rebase provenance so an operator can
 /// inspect the worktree; the original step error stays authoritative.
-pub(super) fn refuse_foreign_rebase<H: RuntimeHost + ?Sized>(
+pub(super) fn refuse_foreign_rebase<H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     task: &orbit_types::task::Task,
     run_id: &str,
@@ -705,7 +716,7 @@ pub(super) fn refuse_foreign_rebase<H: RuntimeHost + ?Sized>(
 /// Only the run's own admission checkpoints are read, so this needs no task
 /// ownership proof. The original failure stays authoritative: a release
 /// error is logged, not raised; the run's termination releases it again.
-pub(super) fn release_review_attempts<H: RuntimeHost + ?Sized>(
+pub(super) fn release_review_attempts<H: ReviewGate + ?Sized>(
     host: &H,
     input: &Value,
     run_id: &str,

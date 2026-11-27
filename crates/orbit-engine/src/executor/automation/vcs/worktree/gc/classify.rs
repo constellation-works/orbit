@@ -9,7 +9,7 @@ use super::rescue::{delete_run_branch, rescue_dirty_worktree};
 use super::sweep::{
     NOT_REGISTERED_REMEDY, WorktreeGcOptions, WorktreeGcReport, task_status_permits_deletion,
 };
-use crate::context::{RuntimeHost, WorktreeGcTaskLookup};
+use crate::context::{HostEnvironment, WorktreeGcTaskLookup};
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskStatus, task_id_prefix};
 use orbit_types::workflow::JobRun;
@@ -22,13 +22,13 @@ use std::path::{Path, PathBuf};
 /// owner route and task, so a down owner is contacted once per prefix while
 /// local and unroutable prefixes still get their own verdict. A missing route
 /// is not an outage and is not carried over: another run's claim may name a route.
-pub(super) struct SweepTaskLookups<'a, H: RuntimeHost + ?Sized> {
+pub(super) struct SweepTaskLookups<'a, H: ?Sized> {
     pub(super) host: &'a H,
     answers: RefCell<BTreeMap<(String, String), WorktreeGcTaskLookup>>,
     owner_unreachable: RefCell<BTreeMap<String, String>>,
 }
 
-impl<'a, H: RuntimeHost + ?Sized> SweepTaskLookups<'a, H> {
+impl<'a, H: HostEnvironment + ?Sized> SweepTaskLookups<'a, H> {
     pub(super) fn new(host: &'a H) -> Self {
         Self {
             host,
@@ -71,7 +71,7 @@ impl<'a, H: RuntimeHost + ?Sized> SweepTaskLookups<'a, H> {
     }
 }
 
-pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
+pub(super) fn classify_known<H: HostEnvironment + ?Sized>(
     process_env: &orbit_common::Env,
     repo_root: &Path,
     path: &Path,

@@ -10,7 +10,7 @@ use orbit_types::workflow::handoff::{
 };
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 use crate::executor::automation::input::input_string_field;
 
 use super::super::git::{git_output, git_output_raw};
@@ -52,7 +52,9 @@ enum HandoffChecks {
 }
 
 /// Build the typed handoff and record it as this claim's durable settlement.
-pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn claim_handoff<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -244,7 +246,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
 /// with its full text kept as the description, and the rewrite is recorded in
 /// the artifact and the owner's summary [ORB-14927]. Any other defect, such as
 /// a non-array field or a non-object, non-string entry, is still refused.
-fn attach_unfiled_findings<H: RuntimeHost + ?Sized>(
+fn attach_unfiled_findings<H: ReviewGate + ?Sized>(
     host: &H,
     context: &crate::context::ClaimExecutionContext,
     input: &Value,

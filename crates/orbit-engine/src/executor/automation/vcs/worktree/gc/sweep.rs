@@ -9,7 +9,7 @@ use super::paths::{
 };
 use super::reclaim::reclaim_patterns;
 use super::workers::{map_with_sweep_workers, sweep_scan_workers};
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::task::TaskStatus;
@@ -133,7 +133,7 @@ pub(super) fn task_status_permits_deletion(status: TaskStatus) -> bool {
     )
 }
 
-pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
+pub fn collect_worktrees<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     repo_root: &Path,
     runs: &[JobRun],
     task_host: &H,
@@ -324,7 +324,7 @@ pub fn collect_worktrees<H: RuntimeHost + ?Sized>(
 /// Classify one mapped path, and reclaim or measure it as the sweep asks.
 /// A path several runs map is reported once per selected run when one of
 /// them is still live.
-fn classify_candidate<H: RuntimeHost + ?Sized>(
+fn classify_candidate<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     repo_root: &Path,
     path: &Path,
     matching_runs: &[&JobRun],

@@ -6,7 +6,9 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+};
 use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string,
 };
@@ -47,7 +49,7 @@ use super::{
 /// The push step's handoff comment may already carry the recipe. This does
 /// not add another, and it does not invent a blocker kind: `decision` is the
 /// existing free-form failure-handoff field.
-fn review_repair_after_merge_handoff<H: RuntimeHost + ?Sized>(
+fn review_repair_after_merge_handoff<H: RunLifecycle + ?Sized>(
     host: &H,
     task: &orbit_types::task::Task,
     failed_step_id: &str,
@@ -110,7 +112,9 @@ fn review_repair_after_merge_handoff<H: RuntimeHost + ?Sized>(
 /// make the candidate recoverable and block the task for reconciliation.
 /// Completion failures after publication preserve that exact PR and keep the
 /// task in review so an operator can fix the named merge gate and safely retry.
-pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync + ?Sized>(
+pub(in crate::executor::automation) fn pr_failure_handoff<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {

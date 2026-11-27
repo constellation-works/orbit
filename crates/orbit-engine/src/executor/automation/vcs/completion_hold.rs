@@ -21,7 +21,7 @@ use orbit_types::workflow::{
     completion_hold_complexity_rank, current_completion_hold, normalize_instruction_tag,
 };
 
-use crate::context::{RunLifecycle, RuntimeHost, TaskAutomationUpdate};
+use crate::context::{ReviewGate, RunLifecycle, TaskAutomationUpdate};
 
 use super::git::{git_command_success, git_output_paths};
 
@@ -290,7 +290,7 @@ pub(crate) fn record_completion_hold<H: RunLifecycle + ?Sized>(
 /// [ORB-24233] [`record_completion_hold`] for the task of a live owner
 /// landing. The landing holds the claim in its handed-off phase, which refuses
 /// an unscoped task write, so the hold is recorded through that claim.
-pub(crate) fn record_landing_completion_hold<H: RuntimeHost + ?Sized>(
+pub(crate) fn record_landing_completion_hold<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     handoff_id: &str,
     task_id: &str,

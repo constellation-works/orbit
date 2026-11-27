@@ -22,7 +22,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::ReviewGateAdmissionOutput;
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::claim::push_candidate_ref;
 use super::commit::commit_worktree_detached;
@@ -303,7 +303,7 @@ pub fn preserve_interrupted_review(
 
 /// Push a kept repair commit to its ref on `origin`. The error is the
 /// bounded push diagnostic.
-pub fn carry_interrupted_review<H: RuntimeHost + ?Sized>(
+pub fn carry_interrupted_review<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     preserved: &PreservedReviewRepair,

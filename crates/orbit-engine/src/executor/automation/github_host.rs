@@ -12,7 +12,7 @@ use orbit_exec::{EnvironmentMode, ExecRequest};
 use orbit_tools::{github_cli, github_quota};
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 
 use super::ci::AuthStatus;
 use super::input::{canonicalize_existing_dir, input_string_field};
@@ -24,7 +24,7 @@ pub(super) const OUTCOME_CAPABILITY_UNAVAILABLE: &str = "capability_unavailable"
 
 /// Query from the explicit checkout when supplied, otherwise the workspace
 /// repository root. Both resolve to the same remote.
-pub(super) fn query_root<H: RuntimeHost + ?Sized>(
+pub(super) fn query_root<H: HostEnvironment + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<PathBuf, OrbitError> {
