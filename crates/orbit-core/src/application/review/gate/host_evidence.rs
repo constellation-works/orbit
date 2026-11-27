@@ -48,6 +48,7 @@ use serde_json::json;
 
 use crate::OrbitRuntime;
 use crate::application::contracts::EngineHostPort;
+use crate::application::review::cargo_target::CargoOwners;
 
 use super::super::evidence::{
     canonical_requirements, covers_deferral, satisfied_external_evidence,
@@ -95,7 +96,8 @@ impl Judgement {
         let Some(requirements) = canonical_requirements(&self.external_evidence) else {
             return Ok(satisfied);
         };
-        if !self.evidence_would_complete(&requirements, scope) {
+        let owners = CargoOwners::at(&context.workspace_path, &candidate.tree);
+        if !self.evidence_would_complete(&requirements, scope, &owners) {
             return Ok(satisfied);
         }
         let arrived = satisfied_external_evidence(runtime, task_id, candidate)?;
@@ -226,10 +228,9 @@ impl Judgement {
                         for validation in &mut self.validation {
                             // [ORB-17043] A broader run that deferred the
                             // failing test claimed a pass it never had.
-                            let covered = validation
-                                .deferred
-                                .iter()
-                                .any(|notice| covers_deferral(required, validation, notice));
+                            let covered = validation.deferred.iter().any(|notice| {
+                                covers_deferral(required, validation, notice, &owners)
+                            });
                             if (validation.command == required.command
                                 && validation.role == ValidationRole::Required)
                                 || covered

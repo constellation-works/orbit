@@ -13,6 +13,7 @@ use orbit_types::workflow::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::review::cargo_target::CargoOwners;
 use crate::application::review::evidence::{covers_deferral, unreconciled_library_deferrals};
 
 use super::{Judgement, SettlementInputs};
@@ -51,7 +52,8 @@ impl Judgement {
             return Ok(());
         };
         self.external_evidence = requirements;
-        if !self.evidence_would_complete(&self.external_evidence, scope) {
+        let owners = CargoOwners::at(&context.workspace_path, &candidate.tree);
+        if !self.evidence_would_complete(&self.external_evidence, scope, &owners) {
             if self.verdict == ReviewVerdict::Incomplete {
                 self.record_unreconciled_library_deferrals();
             }
@@ -107,7 +109,7 @@ impl Judgement {
                 let ran = record
                     .deferred
                     .iter()
-                    .filter(|notice| covers_deferral(required, record, notice))
+                    .filter(|notice| covers_deferral(required, record, notice, &owners))
                     .cloned()
                     .collect::<Vec<_>>();
                 if !ran.is_empty() {
@@ -140,11 +142,16 @@ impl Judgement {
         &self,
         requirements: &[ReviewEvidenceRequirement],
         scope: &[String],
+        owners: &CargoOwners,
     ) -> bool {
-        super::super::super::evidence::with_external_checks_passed(&self.validation, requirements)
-            .is_some_and(|validation| {
-                validation_evidence(&validation, &self.validation_context(scope)).is_ok()
-            })
+        crate::application::review::evidence::with_external_checks_passed(
+            &self.validation,
+            requirements,
+            owners,
+        )
+        .is_some_and(|validation| {
+            validation_evidence(&validation, &self.validation_context(scope)).is_ok()
+        })
     }
 
     /// Settle as a pass with nothing left to escalate: `accept_with_fixes`

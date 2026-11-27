@@ -838,6 +838,17 @@ selector for library runs, optionally prefixed with
 `scripts/build-budget.py --`). An unknown wrapper, a build-changing flag, a
 mismatched package or target, or a notice naming a different test cannot
 establish that match.
+A multi-package integration record such as `cargo test -p orbit-cli -p
+orbit-engine --test engine` is also covered when the candidate tree proves
+exactly one selected workspace package owns that integration target and each
+named requirement selects that package, target, and exact deferred test.
+Orbit reads the candidate’s explicit workspace members and test targets;
+unsupported or unreadable workspace layouts, missing packages, duplicate
+selections, or ambiguous target ownership remain uncovered. Multi-package
+library and package-wide records remain unsupported. Each named requirement
+still needs its own unavailable required record and passing, authenticated
+evidence on the candidate tree. Failed or missing evidence cannot settle it.
+
 These shapes still block; settlement does not infer missing records or erase
 uncovered deferrals. Open findings, failed required checks and an explicit
 owner `reject` also block without running anything. A refused command, OS

@@ -35,6 +35,7 @@ struct OpenAttemptJudgement {
     judgement: Judgement,
     scope: Vec<String>,
     task_count: usize,
+    owners: crate::application::review::cargo_target::CargoOwners,
 }
 
 /// The escalation reason settlement would record for the open attempt's
@@ -86,7 +87,7 @@ pub(crate) fn review_report_evidence_hold(
     else {
         return Ok(None);
     };
-    if !judgement.evidence_would_complete(&requirements, &judged.scope) {
+    if !judgement.evidence_would_complete(&requirements, &judged.scope, &judged.owners) {
         return Ok(None);
     }
     Ok(Some(
@@ -153,15 +154,20 @@ fn judge_open_attempt(
         &attempt.candidate.commit,
     )?;
     let judgement = Judgement::from_report(runtime, &context, attempt)?;
-    let scope = validation_scope(
-        &context,
-        &reviewed.commits,
-        None,
-        &uncommitted_paths(runtime.env(), &context.workspace_path)?,
-    )?;
+    let uncommitted = uncommitted_paths(runtime.env(), &context.workspace_path)?;
+    let owners = if uncommitted.is_empty() {
+        crate::application::review::cargo_target::CargoOwners::at(
+            &context.workspace_path,
+            &attempt.candidate.tree,
+        )
+    } else {
+        crate::application::review::cargo_target::CargoOwners::default()
+    };
+    let scope = validation_scope(&context, &reviewed.commits, None, &uncommitted)?;
     Ok(Some(OpenAttemptJudgement {
         judgement,
         scope,
         task_count: context.task_ids.len(),
+        owners,
     }))
 }
