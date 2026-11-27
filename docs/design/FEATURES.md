@@ -61,7 +61,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Operator Attention](./operator-attention/1_overview.md) | — | claude |
 | [Orbit Core](./orbit-core/1_overview.md) | — | codex |
 | [Task Search](./orbit-search/1_overview.md) | — | codex |
-| [Plugins](./plugins/1_scope.md) | — | claude |
+| [Plugins](./plugins/1_scope.md) | Operator approval of plugin pages [ORB-29504] | claude |
 | [Policy & Sandboxing](./policy-sandbox/1_overview.md) | — | claude |
 | [Process Supervision](./process-supervision/1_overview.md) | — | claude |
 | [Remote Access](./remote-access/1_overview.md) | — | codex |

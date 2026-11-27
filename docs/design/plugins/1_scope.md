@@ -11,7 +11,7 @@ created_date: 2026-09-20
 updated_date: 2026-11-15
 last_validated: 2026-11-15
 stage: shipped
-next: "—"
+next: "Operator approval of plugin pages [ORB-29504]"
 ---
 
 # Scope: Orbit plugin standard
@@ -1291,6 +1291,8 @@ Typed definition hashes retain their existing struct field order.
   `validate_structure` refuses other schemes and the renderer draws no tile for one.
 - Plugins cannot add tabs or toggle built-in features. `router.js` has one `plugins` entry, so
   new plugins need no frontend edits.
+  [Plugin pages in the dashboard](./specs/dashboard-pages.md) proposes sub-tabs a plugin can ship;
+  it is a draft and nothing in it is built [ORB-29504].
 
 ### 4.8 Compatibility
 
@@ -1453,5 +1455,6 @@ after these four phases. Neither is pending phase-5 provider work.
   callback refusal.
 - [ORB-25145] — admitted exact-file writes to workspace root files, including
   a final symlink whose checked target stays inside the worktree.
+- [ORB-29504] — drafted the plugin pages spec in `specs/dashboard-pages.md`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
