@@ -66,8 +66,7 @@ pub(crate) use super::pilot_coordination::{await_approval_pilot, record_proposed
 use crate::application::task::pilot::{
     ExplicitAssessmentReuse, FOOTPRINT_UNRESOLVED, UNRESOLVED_PILOT_EVENT,
     approval_disqualification, classify_explicit_assessment_reuse, held_classification,
-    live_execution_claim_tasks, promote_reusable_assessment, task_pilot_warnings,
-    unresolved_pilot_run_id,
+    live_execution_claim_tasks, promote_reusable_assessment, unresolved_pilot_run_id,
 };
 
 /// Most proposed tasks one pass pilots; the rest wait for the next pass.
@@ -221,10 +220,9 @@ pub(super) fn approval_snapshot(
             && !(classification == "changed_since_pilot" && !claimed_tasks.contains(&task.id))
         {
             let findings = if matches!(classification, "warnings" | FOOTPRINT_UNRESOLVED) {
-                task_pilot_warnings(
-                    task.status,
+                runtime.task_pilot_warning_findings(
+                    &task,
                     &runtime.get_task_pilot_comments(&task.id)?,
-                    &task.dependencies(),
                     &|id: &str| runtime.warning_prerequisite_is_done(id),
                 )
             } else {
@@ -290,10 +288,9 @@ pub(super) fn approval_snapshot(
                     // Fall through to the unresolved checks and candidacy.
                 } else {
                     let findings = if matches!(reason, "warnings" | FOOTPRINT_UNRESOLVED) {
-                        task_pilot_warnings(
-                            task.status,
+                        runtime.task_pilot_warning_findings(
+                            &task,
                             &runtime.get_task_pilot_comments(&task.id)?,
-                            &task.dependencies(),
                             &|id: &str| runtime.warning_prerequisite_is_done(id),
                         )
                     } else {

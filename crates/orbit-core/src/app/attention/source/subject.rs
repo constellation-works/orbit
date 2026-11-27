@@ -173,8 +173,9 @@ pub(super) fn derive_subject_kind(
     let runtime = subject.runtime;
     let (item, state, high) = match kind {
         AttentionKind::PilotWarning => {
+            let dependencies = runtime.pilot_dependency_closure(task)?;
             let Some(mut held) =
-                pilot::held_pilot_warnings(task.status, comments, &task.dependencies(), &|id| {
+                pilot::held_pilot_warnings(task.status, comments, &dependencies, &|id| {
                     runtime.warning_prerequisite_is_done(id)
                 })
             else {

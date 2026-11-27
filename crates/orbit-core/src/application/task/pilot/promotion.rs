@@ -119,12 +119,12 @@ impl crate::OrbitRuntime {
             return Vec::new();
         }
         match self.resolve_task_pilot_comments(&task.id, comments) {
-            Ok(resolved) => task_pilot_warnings(
-                task.status,
-                &resolved,
-                &task.dependencies(),
-                is_done,
-            ),
+            Ok(resolved) => {
+                let dependencies = self
+                    .pilot_dependency_closure(task)
+                    .unwrap_or_else(|_| task.dependencies());
+                task_pilot_warnings(task.status, &resolved, &dependencies, is_done)
+            }
             Err(_) => vec![DrainHoldFinding {
                 kind: PILOT_ASSESSMENT_UNAVAILABLE_KIND.into(),
                 text: "pilot assessment unavailable: its artifact is missing, unreadable, or does not match its receipt; re-pilot the task to rebuild it".into(),

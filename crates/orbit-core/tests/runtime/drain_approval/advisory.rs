@@ -709,6 +709,336 @@ fn explicit_start_prerequisites_hold_until_repilot_clears_them() {
     assert_eq!(workspace.status(&task), TaskStatus::Backlog);
 }
 
+fn transitive_dependency_warnings_agree_and_release_warning_holds() {
+    for sweep in [false, true] {
+        let workspace = Workspace::new();
+        let upstream = workspace.task(
+            "upstream prerequisite",
+            &[],
+            &["file:README.md"],
+            TaskComplexity::Low,
+        );
+        let intermediate = workspace.task(
+            "intermediate prerequisite",
+            &[],
+            &["file:README.md"],
+            TaskComplexity::Low,
+        );
+        workspace.edit(
+            &intermediate,
+            TaskUpdateParams {
+                dependencies: Some(vec![upstream.id.clone()]),
+                ..Default::default()
+            },
+        );
+        let relation_intermediate = workspace.task(
+            "relation intermediate prerequisite",
+            &[],
+            &["file:README.md"],
+            TaskComplexity::Low,
+        );
+        workspace.edit(
+            &relation_intermediate,
+            TaskUpdateParams {
+                relations: Some(vec![TaskRelation {
+                    relation_type: TaskRelationType::BlockedBy,
+                    target: upstream.id.clone(),
+                    regression: None,
+                }]),
+                ..Default::default()
+            },
+        );
+        let unfinished =
+            workspace.task("unrecorded", &[], &["file:README.md"], TaskComplexity::Low);
+
+        for (field, is_structured) in [
+            ("utility_warnings", true),
+            ("surface_warnings", true),
+            ("blocked_by", false),
+        ] {
+            let mut cases = vec![
+                (
+                    "transitive_dependencies",
+                    format!("Wait for {} to land", upstream.id),
+                    false,
+                ),
+                (
+                    "transitive_relations",
+                    format!("Wait for {} to land", upstream.id),
+                    false,
+                ),
+                ("missing", "Wait for ORB-999999999 to land".into(), true),
+            ];
+            if is_structured {
+                cases.extend([
+                    (
+                        "non_covered",
+                        format!("Wait for {} to land", unfinished.id),
+                        true,
+                    ),
+                    (
+                        "mixed",
+                        format!("Wait for {} and {} to land", upstream.id, unfinished.id),
+                        true,
+                    ),
+                ]);
+            }
+            for (case, text, holds) in cases {
+                let task = workspace.task(
+                    &format!("transitive {field} {case}"),
+                    &["ci-failure-sweep", "ci-failure:fixture-key"],
+                    &["file:README.md"],
+                    TaskComplexity::Low,
+                );
+                workspace.edit(
+                    &task,
+                    TaskUpdateParams {
+                        dependencies: (case != "transitive_relations")
+                            .then(|| vec![intermediate.id.clone()]),
+                        relations: (case == "transitive_relations").then(|| {
+                            vec![TaskRelation {
+                                relation_type: TaskRelationType::BlockedBy,
+                                target: relation_intermediate.id.clone(),
+                                regression: None,
+                            }]
+                        }),
+                        ..Default::default()
+                    },
+                );
+                let mut assessed = assessment(&task);
+                assessed[field] = if is_structured {
+                    json!([{"text": text, "holds_promotion": true}])
+                } else {
+                    json!([text])
+                };
+
+                // Persist without promotion authority first: `orbit.task.show`
+                // and triage must agree with promotion before approval runs.
+                let pilot = workspace.running("task_pilot_pipeline", json!({}));
+                let applied = workspace
+                    .apply(&pilot, vec![assessed.clone()], json!({}))
+                    .unwrap();
+                assert_eq!(applied["status"], "succeeded", "{applied}");
+                assert_eq!(workspace.status(&task), TaskStatus::Proposed);
+
+                let shown = workspace
+                    .runtime
+                    .run_tool("orbit.task.show", json!({"id": task.id}))
+                    .unwrap();
+                assert_eq!(
+                    shown["pilot_warnings"].as_array().unwrap().len(),
+                    usize::from(holds),
+                    "{field} {case}: {shown}"
+                );
+                let triage = workspace.runtime.pilot_warning_candidates_json().unwrap();
+                assert_eq!(
+                    triage["qualifying"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|candidate| candidate["task_id"] == task.id.as_str()),
+                    holds,
+                    "{field} {case}: {triage}"
+                );
+
+                let applied = apply_authority(&workspace, &task, assessed, sweep);
+                let key = if sweep {
+                    "ci_sweep_admission"
+                } else {
+                    "drain_approval"
+                };
+                assert_eq!(applied["status"], "succeeded", "{applied}");
+                assert_eq!(
+                    applied[key][0]["decision"],
+                    if holds { "withhold" } else { "promote" },
+                    "{field} {case}: {applied}"
+                );
+                assert_eq!(
+                    workspace.status(&task),
+                    if holds {
+                        TaskStatus::Proposed
+                    } else {
+                        TaskStatus::Backlog
+                    }
+                );
+                if !sweep {
+                    let selection = workspace.select(applied["fixture_drain"].as_str().unwrap());
+                    assert_eq!(
+                        held_reason(&selection, &task),
+                        holds.then_some("warnings"),
+                        "{field} {case}: {selection}"
+                    );
+                }
+            }
+        }
+    }
+
+    // An existing `DrainApprovalHeld { classification: "warnings" }` hold is
+    // cleared across `orbit.task.show`, `pilot_warning_candidates_json`, and
+    // `select_proposed_approvals` once its named prerequisite enters the
+    // task's transitive dependency closure, while non-covered and missing
+    // prerequisite holds remain held.
+    let workspace = Workspace::new();
+    let upstream = workspace.task("upstream", &[], &["file:README.md"], TaskComplexity::Low);
+    let intermediate = workspace.task(
+        "intermediate",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let unfinished = workspace.task("unfinished", &[], &["file:README.md"], TaskComplexity::Low);
+    let task = workspace.task(
+        "held transitive",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let non_covered = workspace.task(
+        "held non-covered",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let missing = workspace.task(
+        "held missing",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    for dependent in [&task, &non_covered, &missing] {
+        workspace.edit(
+            dependent,
+            TaskUpdateParams {
+                dependencies: Some(vec![intermediate.id.clone()]),
+                ..Default::default()
+            },
+        );
+    }
+
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let selection = workspace.select(&drain);
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let mut held_transitive = assessment(&task);
+    held_transitive["utility_warnings"] = json!([{
+        "text": format!("Wait for {} to supply the contract", upstream.id),
+        "holds_promotion": true,
+    }]);
+    let mut held_non_covered = assessment(&non_covered);
+    held_non_covered["utility_warnings"] = json!([{
+        "text": format!("Wait for {} to supply the contract", unfinished.id),
+        "holds_promotion": true,
+    }]);
+    let mut held_missing = assessment(&missing);
+    held_missing["blocked_by"] = json!(["Wait for ORB-999999999 to land"]);
+    let applied = workspace
+        .pilot(
+            &drain,
+            &pilot,
+            vec![held_transitive, held_non_covered, held_missing],
+        )
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    for decision in applied["drain_approval"].as_array().unwrap() {
+        assert_eq!(decision["classification"], "warnings", "{applied}");
+        assert_eq!(decision["decision"], "withhold", "{applied}");
+    }
+    for held_task in [&task, &non_covered, &missing] {
+        assert_eq!(workspace.status(held_task), TaskStatus::Proposed);
+        let selection = workspace.select(&drain);
+        assert_eq!(
+            held_reason(&selection, held_task),
+            Some("warnings"),
+            "{selection}"
+        );
+        let shown = workspace
+            .runtime
+            .run_tool("orbit.task.show", json!({"id": held_task.id}))
+            .unwrap();
+        assert_eq!(
+            shown["pilot_warnings"].as_array().unwrap().len(),
+            1,
+            "{shown}"
+        );
+        let triage = workspace.runtime.pilot_warning_candidates_json().unwrap();
+        assert!(
+            triage["qualifying"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|candidate| candidate["task_id"] == held_task.id.as_str()),
+            "{triage}"
+        );
+    }
+
+    // Linking `intermediate -> upstream` puts `upstream` into `task`'s
+    // transitive closure without touching `task` itself.
+    workspace.edit(
+        &intermediate,
+        TaskUpdateParams {
+            dependencies: Some(vec![upstream.id.clone()]),
+            ..Default::default()
+        },
+    );
+    let shown = workspace
+        .runtime
+        .run_tool("orbit.task.show", json!({"id": task.id}))
+        .unwrap();
+    assert_eq!(shown["pilot_warnings"], json!([]), "{shown}");
+    let triage = workspace.runtime.pilot_warning_candidates_json().unwrap();
+    assert!(
+        !triage["qualifying"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|candidate| candidate["task_id"] == task.id.as_str()),
+        "{triage}"
+    );
+    let selection = workspace.select(&drain);
+    assert!(held_reason(&selection, &task).is_none(), "{selection}");
+    assert!(
+        selection["task_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(task.id)),
+        "released transitive hold is selected for a fresh pilot: {selection}"
+    );
+    for held_task in [&non_covered, &missing] {
+        assert_eq!(
+            held_reason(&selection, held_task),
+            Some("warnings"),
+            "{selection}"
+        );
+        let shown = workspace
+            .runtime
+            .run_tool("orbit.task.show", json!({"id": held_task.id}))
+            .unwrap();
+        assert_eq!(
+            shown["pilot_warnings"].as_array().unwrap().len(),
+            1,
+            "{shown}"
+        );
+        assert!(
+            triage["qualifying"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|candidate| candidate["task_id"] == held_task.id.as_str()),
+            "{triage}"
+        );
+    }
+
+    // The subsequent pilot approves `task` without any edit to `task`.
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let applied = workspace
+        .pilot(&drain, &pilot, vec![assessment(&task)])
+        .unwrap();
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["drain_approval"][0]["approved"], true, "{applied}");
+    assert_eq!(workspace.status(&task), TaskStatus::Backlog);
+    assert_eq!(workspace.status(&non_covered), TaskStatus::Proposed);
+    assert_eq!(workspace.status(&missing), TaskStatus::Proposed);
+}
+
 crate::scenario_table!(
     advisory_promotion_scenarios,
     explicit_start_prerequisites_hold_until_repilot_clears_them,
@@ -716,5 +1046,6 @@ crate::scenario_table!(
     both_promotion_authorities_keep_real_warning_holds,
     malformed_advisories_are_rejected_without_approval,
     dependency_warnings_agree_across_promotion_projection_and_triage,
-    foreign_prerequisite_warning_hold_releases_after_completion
+    foreign_prerequisite_warning_hold_releases_after_completion,
+    transitive_dependency_warnings_agree_and_release_warning_holds
 );

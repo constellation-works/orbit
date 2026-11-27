@@ -98,6 +98,14 @@ impl OrbitRuntime {
         graph.ok_or_else(|| OrbitError::Execution("pilot graph discovery stopped".to_string()))
     }
 
+    /// Direct dependency edges and every existing local dependency reachable
+    /// from them.
+    pub(crate) fn pilot_dependency_closure(&self, task: &Task) -> Result<Vec<String>, OrbitError> {
+        Ok(self
+            .discover_pilot_dependency_graph(task, &BTreeSet::new())?
+            .dependencies(task))
+    }
+
     /// Read the graph again while holding the locks of `locked`, reading only
     /// its tasks. Reaching an ID outside it returns `None`: reading that task
     /// now would take its lock out of order, so the caller releases its locks

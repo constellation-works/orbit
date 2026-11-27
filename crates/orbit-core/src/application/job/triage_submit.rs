@@ -297,13 +297,19 @@ impl OrbitRuntime {
         match task.status {
             TaskStatus::Proposed => {
                 let comments = self.resolve_task_pilot_comments(&task.id, &row.comments)?;
-                let candidacy =
-                    pilot_warning_candidacy(task, &comments, &row.history, &|id: &str| {
+                let dependencies = self.pilot_dependency_closure(task)?;
+                let candidacy = pilot_warning_candidacy(
+                    task,
+                    &comments,
+                    &row.history,
+                    &dependencies,
+                    &|id: &str| {
                         matches!(
                             self.get_task(id),
                             Ok(found) if found.status == TaskStatus::Done
                         )
-                    });
+                    },
+                );
                 match candidacy {
                     PilotWarningCandidacy::NotHeld => Ok(None),
                     other => Ok(Some(BaseEligibility {
