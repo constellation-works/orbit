@@ -864,6 +864,119 @@ fn remote_access_overlapping_reads_share_one_tailscale_probe() {
 }
 
 #[test]
+fn remote_access_overlapping_reads_bound_whois_waits() {
+    isolated(
+        "remote_access::remote_access_overlapping_reads_bound_whois_waits",
+        || {
+            let fixture = Fixture::new();
+            let (bin, gate) = gated_tailscale_stub(&fixture);
+            let script = bin.join("tailscale");
+            let source = fs::read_to_string(&script).unwrap().replace(
+            "echo \"whois $3\" >> \"$dir/calls.log\"",
+            "echo \"whois $3\" >> \"$dir/calls.log\"\n    if [ \"$3\" = 100.64.0.9 ]; then read -r _ < \"$dir/gate\"; fi",
+        );
+            fs::write(&script, source).unwrap();
+            let config = fixture.global.join("config.toml");
+            let base = fs::read_to_string(&config).unwrap();
+            fs::write(&config, format!("{base}\n[machine.web]\ntrusted_hosts = [\"dash.tailnet.ts.net\"]\ntrusted_logins = [\"alice@example.com\"]\n")).unwrap();
+            let server = fixture.server_with_path(false, &bin);
+            serve_json(&bin, "dash.tailnet.ts.net", &server.origin, "127.0.0.1");
+            let record = |ip: &str| {
+                assert!(
+                    send_trusted(
+                        &server,
+                        "/api/tasks?workspace=ws_http_fixture",
+                        "alice@example.com",
+                        ip
+                    )
+                    .status()
+                    .is_success()
+                );
+            };
+            record("100.64.0.9");
+            let first = spawn_remote_access_read(&server.origin);
+            let wait_for = |expected: &str| {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while !tailscale_calls(&bin).iter().any(|call| call == expected) {
+                    assert!(Instant::now() < deadline, "missing call {expected}");
+                    thread::sleep(Duration::from_millis(10));
+                }
+            };
+            wait_for("serve");
+            gate.release().unwrap();
+            wait_for("whois 100.64.0.9");
+
+            // The first snapshot contains only .9, whose probe remains held. The
+            // second snapshot sees eight newer devices before the in-flight .9.
+            for i in 1..=8 {
+                record(&format!("100.64.0.{i}"));
+            }
+            let origin = server.origin.clone();
+            let (tx, rx) = mpsc::channel();
+            let second = thread::spawn(move || {
+                tx.send(spawn_remote_access_read(&origin).join().unwrap())
+                    .unwrap();
+            });
+            let response = rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("request must not wait on a ninth uncached probe");
+            second.join().unwrap();
+            let body = super::support::json_ok(response);
+            let devices = body["connections"]["devices"].as_array().unwrap();
+            assert_eq!(
+                devices
+                    .iter()
+                    .filter(|device| !device["device"].is_null())
+                    .count(),
+                8,
+                "{body}"
+            );
+            assert!(
+                devices
+                    .iter()
+                    .any(|device| device["ip"] == "100.64.0.9" && device["device"].is_null()),
+                "{body}"
+            );
+            let calls = tailscale_calls(&bin);
+            let whois: Vec<_> = calls
+                .iter()
+                .filter(|call| call.starts_with("whois "))
+                .collect();
+            assert_eq!(whois.len(), 9, "{calls:?}");
+            assert_eq!(
+                whois.iter().collect::<std::collections::HashSet<_>>().len(),
+                9,
+                "one subprocess per IP: {calls:?}"
+            );
+            gate.release().unwrap();
+            assert_eq!(
+                super::support::json_ok(first.join().unwrap())["connections"]["devices"][0]["device"],
+                "phone"
+            );
+
+            // All nine cached names fit even though the request budget is eight.
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            assert_eq!(
+                body["connections"]["devices"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|device| !device["device"].is_null())
+                    .count(),
+                9
+            );
+            assert_eq!(
+                tailscale_calls(&bin)
+                    .iter()
+                    .filter(|call| call.starts_with("whois "))
+                    .count(),
+                9
+            );
+        },
+    );
+}
+
+#[test]
 fn remote_access_evicted_pending_stream_cannot_decrement_later_stream() {
     isolated(
         "remote_access::remote_access_evicted_pending_stream_cannot_decrement_later_stream",

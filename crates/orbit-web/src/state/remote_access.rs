@@ -239,10 +239,10 @@ impl RemoteAccess {
 
     /// The `tailscale whois` reading for `ip`: a cached one younger than
     /// `ttl`, else the result of one `probe` that overlapping callers share.
-    /// Starting a probe spends one of the caller's `budget` and needs a free
-    /// slot among the [`WHOIS_PROBES`] the server runs at once. Joining a probe
-    /// already in flight costs nothing. `None` means no reading is available
-    /// yet.
+    /// Waiting for a probe spends one of the caller's `budget`, whether it
+    /// starts the probe or joins one in flight. Starting also needs a free
+    /// slot among the [`WHOIS_PROBES`] the server runs at once. Cached
+    /// readings cost nothing. `None` means no reading is available yet.
     pub(crate) fn whois_or_probe(
         &self,
         ip: IpAddr,
@@ -257,18 +257,22 @@ impl RemoteAccess {
             {
                 return Some(reading.clone());
             }
-            match cache.whois_probes.get(&ip).map(Arc::clone) {
+            if *budget == 0 {
+                return None;
+            }
+            let flight = match cache.whois_probes.get(&ip).map(Arc::clone) {
                 Some(flight) => flight,
                 None => {
-                    if *budget == 0 || cache.whois_probes.len() >= WHOIS_PROBES {
+                    if cache.whois_probes.len() >= WHOIS_PROBES {
                         return None;
                     }
-                    *budget -= 1;
                     let flight = Probe::default();
                     cache.whois_probes.insert(ip, Arc::clone(&flight));
                     flight
                 }
-            }
+            };
+            *budget -= 1;
+            flight
         };
         let (started, reading) = flight.get_or_init(|| (Instant::now(), probe()));
         let mut cache = self.tailscale_cache();
