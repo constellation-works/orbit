@@ -407,6 +407,42 @@ pub(super) fn unreconciled_library_deferrals(
     diagnostics
 }
 
+/// Explain deferrals in opaque required commands, whose test scope cannot be
+/// established from the command. Focused receipts cannot establish that scope.
+pub(super) fn unreconciled_opaque_deferrals(records: &[ReviewValidation]) -> Vec<String> {
+    records
+        .iter()
+        .filter(|record| {
+            record.role == ValidationRole::Required
+                && record.outcome == ValidationOutcome::Passed
+                && record.deferral().is_some()
+                && recorded_cargo_scope(&record.command).is_none()
+                && !contains_cargo_test(&record.command)
+        })
+        .map(|record| {
+            let label = record.record_id().map_or_else(
+                || format!("`{}`", record.command),
+                |id| format!("`{id}` (`{}`)", record.command),
+            );
+            let notices = record
+                .deferred
+                .iter()
+                .filter(|notice| !notice.trim().is_empty())
+                .map(|notice| format!("`{}`", notice.trim()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "unreconciled_opaque_deferral: required record {label} has uncovered deferrals: \
+                 {notices}; its command has no supported Cargo scope, so focused evidence alone \
+                 cannot establish its coverage. Run `{}` natively outside the sandbox without \
+                 deferral and admit a fresh review with that result, or admit a fresh review \
+                 with supported Cargo records and matching host evidence",
+                record.command
+            )
+        })
+        .collect()
+}
+
 fn plain_scope_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric()
         || matches!(

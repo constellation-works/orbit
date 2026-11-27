@@ -833,10 +833,68 @@ fn unreconciled_v9_v12_library_pairs_refuse_and_name_v9_with_runnable_route() {
     assert!(host_refusal.host_command.is_none());
 }
 
+fn opaque_affected_test_record_names_all_uncovered_deferrals() {
+    let make = "CI_TEST_BASE=be2bcfec0caa9e97cec61461bfe4a076bf5721d9 make ci-test-affected";
+    for broad in [make, "cargo test -p orbit-runtime --lib"] {
+        let (fixture, _bin) = fixture();
+        let tests: Vec<String> = (1..=6).map(|i| format!("sandbox_test_{i}")).collect();
+        let notices: Vec<String> = tests
+            .iter()
+            .map(|test| format!("DEFERRED: bubblewrap unavailable: {test}: namespace unavailable"))
+            .collect();
+        let mut validation = vec![
+            json!({"id":"V1", "command":"fixture check", "outcome":"passed", "role":"required"}),
+            json!({"id":"V8", "command":broad, "outcome":"passed", "role":"required", "deferred":notices}),
+        ];
+        let mut evidence = Vec::new();
+        for (index, test) in tests.iter().enumerate() {
+            let command = lib_requirement(test);
+            validation.push(json!({"id":format!("V{}", index + 11), "command":command, "outcome":"not_run", "role":"required"}));
+            evidence.push(
+                json!({"kind":"host_sandbox_test", "name":test, "command":command,
+                "artifact":format!("evidence/sandbox-{index}.json"), "os":"linux"}),
+            );
+        }
+        fixture.put_report(
+            &json!({"schema_version":1, "attempt_id":fixture.input["admission"]["attempt_id"],
+            "verdict":"incomplete", "summary":"Sandbox evidence needed", "findings":[],
+            "validation":validation, "external_evidence":evidence,
+            "escalation":"Attach the six focused results."}),
+        );
+        if broad == make {
+            let stop = fixture
+                .settle()
+                .expect_err("opaque scope blocks")
+                .to_string();
+            let cert = certificate(&fixture);
+            let escalation = cert.escalation.as_deref().unwrap();
+            for text in ["`V8`", make, "focused evidence alone", "fresh review"] {
+                assert!(
+                    escalation.contains(text) && stop.contains(text),
+                    "{text}: {stop}"
+                );
+            }
+            for notice in &notices {
+                assert!(escalation.contains(notice), "{escalation}");
+            }
+            assert_eq!(broad_record(&cert, make).deferred, notices);
+            assert!(cert.host_evidence.is_empty());
+            assert!(!cert.verdict.passed());
+        } else {
+            let settled = fixture.settle().expect("supported scope is fulfilled");
+            assert_eq!(settled["gate"], "passed");
+            let cert = certificate(&fixture);
+            assert_eq!(cert.host_evidence.len(), 6);
+            assert!(broad_record(&cert, broad).deferred.is_empty());
+        }
+    }
+}
+
 crate::scenario_table!(
     package_wide_host_evidence_scenarios,
     a_package_wide_lib_deferral_is_received_when_settlement_runs_that_lib_test,
     a_package_wide_lib_deferral_is_refused_for_a_mismatched_package_target_or_filter,
     budgeted_library_v9_v12_pair_holds_and_settles_with_authenticated_linux_evidence,
     unreconciled_v9_v12_library_pairs_refuse_and_name_v9_with_runnable_route,
+    opaque_affected_test_record_names_all_uncovered_deferrals,
 );

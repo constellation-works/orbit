@@ -14,7 +14,9 @@ use orbit_types::workflow::{
 
 use crate::OrbitRuntime;
 use crate::application::review::cargo_target::CargoOwners;
-use crate::application::review::evidence::{covers_deferral, unreconciled_library_deferrals};
+use crate::application::review::evidence::{
+    covers_deferral, unreconciled_library_deferrals, unreconciled_opaque_deferrals,
+};
 
 use super::{Judgement, SettlementInputs};
 
@@ -292,7 +294,7 @@ impl Judgement {
             match self.validation_defect(scope) {
                 None => self.validation_complete = true,
                 Some(defect) => {
-                    let library_diagnostics =
+                    let mut library_diagnostics =
                         matches!(defect, ValidationDefect::RequiredDeferred { .. })
                             .then(|| {
                                 unreconciled_library_deferrals(
@@ -301,6 +303,7 @@ impl Judgement {
                                 )
                             })
                             .unwrap_or_default();
+                    library_diagnostics.extend(unreconciled_opaque_deferrals(&self.validation));
                     self.downgrade(&defect.reason());
                     self.append_unique_escalations(library_diagnostics);
                 }
@@ -373,7 +376,9 @@ impl Judgement {
     }
 
     fn record_unreconciled_library_deferrals(&mut self) {
-        let diagnostics = unreconciled_library_deferrals(&self.validation, &self.external_evidence);
+        let mut diagnostics =
+            unreconciled_library_deferrals(&self.validation, &self.external_evidence);
+        diagnostics.extend(unreconciled_opaque_deferrals(&self.validation));
         self.append_unique_escalations(diagnostics);
     }
 
