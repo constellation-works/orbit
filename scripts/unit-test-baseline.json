@@ -598,6 +598,8 @@
         "host/plugin/tests/paths.rs::read_pin_file_does_not_follow_a_symlinked_leaf",
         "host/plugin/tests/sandbox_mask.rs::prepare_refuses_a_linked_tree_or_sentinel",
         "host/plugin/tests/secrets.rs::invalid_names_and_values_are_refused_without_echoing_the_value",
+        "host/plugin/tests/secrets.rs::masked_store_stays_unreadable",
+        "host/plugin/tests/secrets.rs::permission_drift_is_refused_without_echoing_the_value",
         "host/resource/profile/tests/cache.rs::no_diff_tag_edit_reclassifies_a_cached_template",
         "host/resource/tests/platform.rs::cpu_window_handles_tick_wrap_and_the_freshness_boundary",
         "host/resource/tests/platform.rs::cpu_window_missing_stale_future_or_identical_baselines_take_a_real_window",

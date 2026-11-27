@@ -285,7 +285,8 @@ impl PluginSecretStore {
 
     /// Only a file that does not exist reads as "nothing set". A masked or
     /// permission-denied store is refused: an empty `context.secrets` would
-    /// send a backend into its "not configured" path.
+    /// send a backend into its "not configured" path. An existing store that
+    /// drifted away from owner-only permissions is refused the same way.
     fn read(&self, plugin: &str) -> Result<SecretFile, OrbitError> {
         let path = self.file_path(plugin)?;
         self.refuse_unusable_dir()?;
@@ -305,6 +306,8 @@ impl PluginSecretStore {
                 return Err(OrbitError::Io(format!("open {}: {error}", path.display())));
             }
         };
+        #[cfg(unix)]
+        validate_opened_secret_file(&path, &handle)?;
         let mut raw = String::new();
         handle
             .read_to_string(&mut raw)
@@ -365,7 +368,9 @@ impl PluginSecretStore {
 
     /// The store directory is host-owned; a link there would send every value
     /// wherever it points. Inside an agent sandbox the directory is masked,
-    /// and nothing may be read or written through it.
+    /// and nothing may be read or written through it. On Unix an existing
+    /// directory that drifted away from owner-only ownership or permissions
+    /// is refused before any value is loaded.
     fn refuse_unusable_dir(&self) -> Result<(), OrbitError> {
         if tree_masked(&self.dir) {
             return Err(not_visible("the plugin secret store"));
@@ -377,9 +382,83 @@ impl PluginSecretStore {
                     self.dir.display()
                 )))
             }
+            Ok(metadata) => {
+                #[cfg(unix)]
+                validate_secret_store_dir(&self.dir, &metadata)?;
+                #[cfg(not(unix))]
+                let _ = &metadata;
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
+}
+
+/// On Unix, refuse an existing store directory that another user owns or
+/// that other users can reach. Only an existing directory is checked: an
+/// absent one reads as empty and is created `0700` on write. The diagnostic
+/// names the directory, never a secret value.
+#[cfg(unix)]
+fn validate_secret_store_dir(dir: &Path, metadata: &std::fs::Metadata) -> Result<(), OrbitError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    // SAFETY: `geteuid` only reads the calling process's credentials.
+    let euid = unsafe { libc::geteuid() };
+    if metadata.uid() != euid {
+        return Err(OrbitError::PolicyDenied(format!(
+            "refusing the plugin secret store at {}: it is owned by uid {}, not this host \
+             (uid {euid})",
+            dir.display(),
+            metadata.uid()
+        )));
+    }
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(OrbitError::PolicyDenied(format!(
+            "refusing the plugin secret store at {}: it has mode {mode:03o}, which other users \
+             can access; it must be 0700",
+            dir.display()
+        )));
+    }
+    Ok(())
+}
+
+/// On Unix, refuse an opened secret file that is not a regular file, that
+/// another user owns, or that other users can reach. The opened descriptor
+/// is checked, so a swap between the pathname check and the open cannot
+/// bypass it. The diagnostic names the file, never its contents.
+#[cfg(unix)]
+fn validate_opened_secret_file(path: &Path, handle: &std::fs::File) -> Result<(), OrbitError> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let metadata = handle
+        .metadata()
+        .map_err(|error| OrbitError::Io(format!("inspect {}: {error}", path.display())))?;
+    if !metadata.is_file() {
+        return Err(OrbitError::PolicyDenied(format!(
+            "refusing the plugin secret store file at {}: it is not a regular file",
+            path.display()
+        )));
+    }
+    // SAFETY: `geteuid` only reads the calling process's credentials.
+    let euid = unsafe { libc::geteuid() };
+    if metadata.uid() != euid {
+        return Err(OrbitError::PolicyDenied(format!(
+            "refusing the plugin secret store file at {}: it is owned by uid {}, not this host \
+             (uid {euid})",
+            path.display(),
+            metadata.uid()
+        )));
+    }
+    let mode = metadata.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(OrbitError::PolicyDenied(format!(
+            "refusing the plugin secret store file at {}: it has mode {mode:03o}, which other \
+             users can access; it must be 0600",
+            path.display()
+        )));
+    }
+    Ok(())
 }
 
 /// Keep the store directory `0700` even when something created it with a
