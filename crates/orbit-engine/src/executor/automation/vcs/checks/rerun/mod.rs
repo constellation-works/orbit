@@ -6,9 +6,13 @@
 //! conclusion-only and dependency-handoff failure sets.
 
 mod classification;
+
 mod conclusion;
+
 mod plan;
+
 mod send;
+
 mod unreadable_log;
 
 use std::path::Path;
@@ -29,6 +33,8 @@ pub(in crate::executor::automation::vcs) use conclusion::handoff_step_set;
 pub(in crate::executor::automation::vcs) use plan::{CiRerunPlanInputs, plan_ci_rerun};
 pub(super) use send::infrastructure_backoff;
 
+const NO_AUTHENTICATED_PLAN: &str = "CI retry adapter returned no authenticated plan";
+
 pub(in crate::executor::automation::vcs) enum CiRerunStep {
     NotEligible,
     /// A durable infrastructure backoff; it never expires into source repair.
@@ -45,14 +51,6 @@ pub(in crate::executor::automation::vcs) enum CiRerunStep {
     /// A no-edit repair's one unchanged-head rerun failed again; callers hold
     /// with `DeliveryRefusal::RepairDispatched`.
     NoEditRerunFailed(String),
-}
-
-const NO_AUTHENTICATED_PLAN: &str = "CI retry adapter returned no authenticated plan";
-
-/// Whether `error` is the deserialisation failure [`authenticated_plan`]
-/// itself produced, as opposed to a failure of the request it sent.
-pub(super) fn is_no_authenticated_plan_error(error: &OrbitError) -> bool {
-    matches!(error, OrbitError::Execution(message) if message == NO_AUTHENTICATED_PLAN)
 }
 
 /// The one `ci.rerun_plan` request: the exact identity a rerun plan must
@@ -89,6 +87,12 @@ impl RerunPlanRequest<'_> {
 
 /// The adapter's plan did not match the exact request that was sent.
 pub(super) struct PlanMismatch;
+
+/// Whether `error` is the deserialisation failure [`authenticated_plan`]
+/// itself produced, as opposed to a failure of the request it sent.
+pub(super) fn is_no_authenticated_plan_error(error: &OrbitError) -> bool {
+    matches!(error, OrbitError::Execution(message) if message == NO_AUTHENTICATED_PLAN)
+}
 
 pub(super) fn authenticated_plan<H: RuntimeHost + ?Sized>(
     host: &H,

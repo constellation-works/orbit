@@ -277,7 +277,6 @@ fn checkpoint(
 fn settled_outcome(step: &JobV2Step, record: &AutoTaskStepRecord) -> StepOutcome {
     let success = record.status == AutoTaskStepStatus::Done;
     StepOutcome {
-        failure_code: None,
         success,
         output: serde_json::json!({
             "auto_task": record.auto_task,
@@ -298,6 +297,7 @@ fn settled_outcome(step: &JobV2Step, record: &AutoTaskStepRecord) -> StepOutcome
                     .unwrap_or("no accepted completion")
             )
         }),
+        failure_code: None,
     }
 }
 

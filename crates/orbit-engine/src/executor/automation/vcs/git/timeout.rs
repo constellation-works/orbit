@@ -3,6 +3,13 @@ use serde_json::Value;
 use std::cell::Cell;
 use std::path::Path;
 use std::time::{Duration, Instant};
+
+thread_local! {
+    pub(super) static GIT_DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+    static GIT_TIMEOUT_BUDGET: Cell<GitTimeoutBudget> =
+        const { Cell::new(GitTimeoutBudget::DEFAULT) };
+}
+
 /// Bounded wall-clock budgets for host Git children.
 ///
 /// Heavyweight mutations get their own defaults; every request still carries a
@@ -84,12 +91,6 @@ impl GitTimeoutBudget {
     }
 }
 
-thread_local! {
-    pub(super) static GIT_DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
-    static GIT_TIMEOUT_BUDGET: Cell<GitTimeoutBudget> =
-        const { Cell::new(GitTimeoutBudget::DEFAULT) };
-}
-
 /// Shared deadline for the read/fetch phase of a fresh preparation. Rewrites
 /// retain their ordinary timeout and owned-rebase cleanup budget.
 pub(crate) struct GitDeadlineGuard(Option<Instant>);
@@ -104,22 +105,6 @@ impl Drop for GitDeadlineGuard {
     fn drop(&mut self) {
         GIT_DEADLINE.with(|slot| slot.set(self.0));
     }
-}
-
-pub(super) fn command_timeout(args: &[&str]) -> Result<u64, OrbitError> {
-    let timeout = GitTimeoutBudget::current().timeout_for(args);
-    GIT_DEADLINE.with(|slot| match slot.get() {
-        Some(deadline) => deadline
-            .checked_duration_since(Instant::now())
-            .map(|remaining| timeout.min(remaining.as_millis().max(1) as u64))
-            .ok_or_else(|| {
-                OrbitError::Execution(
-                    "prepared_base_refresh_refused: fresh preparation deadline exhausted"
-                        .to_string(),
-                )
-            }),
-        None => Ok(timeout),
-    })
 }
 
 /// Restores the previous Git timeout budget when the scope exits.
@@ -138,6 +123,22 @@ impl Drop for GitTimeoutBudgetGuard {
     fn drop(&mut self) {
         GIT_TIMEOUT_BUDGET.with(|cell| cell.set(self.previous));
     }
+}
+
+pub(super) fn command_timeout(args: &[&str]) -> Result<u64, OrbitError> {
+    let timeout = GitTimeoutBudget::current().timeout_for(args);
+    GIT_DEADLINE.with(|slot| match slot.get() {
+        Some(deadline) => deadline
+            .checked_duration_since(Instant::now())
+            .map(|remaining| timeout.min(remaining.as_millis().max(1) as u64))
+            .ok_or_else(|| {
+                OrbitError::Execution(
+                    "prepared_base_refresh_refused: fresh preparation deadline exhausted"
+                        .to_string(),
+                )
+            }),
+        None => Ok(timeout),
+    })
 }
 
 fn parse_timeout_ms(value: &Value, field: &str) -> Result<u64, OrbitError> {

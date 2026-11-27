@@ -25,6 +25,13 @@ use super::conflict::{pipeline_checkpoint_string, pipeline_step};
 use super::preserve::recorded_spec_digest;
 use super::{FOREIGN_REBASE_EVENT, LANDING_REVIEW_STEPS, PipelineFailure, REVIEW_ADMISSION_STEPS};
 
+/// The settlement step of the before-landing review.
+const LANDING_SETTLE_STEP: &str = "landing_review_gate_settle";
+
+/// The refusal a before-landing settlement leads with when the verdict is
+/// `incomplete`.
+const INCOMPLETE_VERDICT_REFUSAL: &str = "review_gate_blocked: verdict incomplete";
+
 pub(super) fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -65,13 +72,6 @@ pub(super) fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
         &checkpoint_owner,
     )
 }
-
-/// The settlement step of the before-landing review.
-const LANDING_SETTLE_STEP: &str = "landing_review_gate_settle";
-
-/// The refusal a before-landing settlement leads with when the verdict is
-/// `incomplete`.
-const INCOMPLETE_VERDICT_REFUSAL: &str = "review_gate_blocked: verdict incomplete";
 
 /// [ORB-15329] Push the reviewer commit a before-landing review recorded
 /// before it settled `incomplete`, so it is not stranded in this host's

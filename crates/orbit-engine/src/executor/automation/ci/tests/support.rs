@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 
 use super::super::query::{AuthStatus, CiQueries, LogScope, RemoteBranchHeads, RunLog};
 
+pub(super) const HEAD: &str = "1111111111111111111111111111111111111111";
+
 /// Scripted GitHub answers. Anything not scripted is an empty result.
 #[derive(Default)]
 pub(super) struct FakeQueries {
@@ -449,8 +451,6 @@ pub(super) fn run(
         "url": format!("https://github.com/acme/orbit/actions/runs/{run_id}"),
     })
 }
-
-pub(super) const HEAD: &str = "1111111111111111111111111111111111111111";
 
 pub(super) fn input() -> Value {
     json!({"integration_branch": "topic", "max_checkout_log_reads": 1})

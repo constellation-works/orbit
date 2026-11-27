@@ -176,6 +176,52 @@ impl BaseFailureCheck {
     }
 }
 
+/// [ORB-15427] A claimed leaf's report that `command` failed on its
+/// candidate, with `exit_code`, only with `failures`, every one of which
+/// also fails on `base_sha`, and the owner's own base it must stand on.
+#[derive(Debug, Clone, Copy)]
+pub struct ClaimedKnownRed<'a> {
+    /// The base branch this owner captured for the claim's admission.
+    pub base_branch: &'a str,
+    /// `remote` to read that branch as `origin/<base_branch>` after a fetch,
+    /// `local` for this checkout's own branch.
+    pub base_sync: BaseSyncMode,
+    /// The base the leaf compared with: the handed-off candidate's base.
+    pub base_sha: &'a str,
+    /// The owner-required command the log reports.
+    pub command: &'a str,
+    /// What the candidate run reported testing.
+    pub selection: Option<&'a Value>,
+    /// The candidate run's exit status.
+    pub exit_code: i32,
+    /// Every failure the candidate run named.
+    pub failures: &'a BTreeSet<String>,
+}
+
+/// [ORB-15566] Why the owner did not confirm a claimed leaf's known-red
+/// report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KnownRedUnconfirmed {
+    /// The owner's own comparable, completed base run contradicts the report:
+    /// it passes the reported tests, fails without one of them, or fails a
+    /// whole run with another exit status. Asking again reads the same base
+    /// result, so the report can never be confirmed.
+    Contradicted(String),
+    /// The owner could not establish it either way: no base run in time, a
+    /// run it could not compare, or a report it does not judge.
+    Inconclusive(String),
+}
+
+impl KnownRedUnconfirmed {
+    /// Why, in prose.
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        match self {
+            Self::Contradicted(reason) | Self::Inconclusive(reason) => reason,
+        }
+    }
+}
+
 /// Check a reviewer's claim that `command` fails on `base_sha` exactly as on
 /// the candidate checked out in `workspace_path` [ORB-14434].
 ///
@@ -461,52 +507,6 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
             },
         },
     }))
-}
-
-/// [ORB-15427] A claimed leaf's report that `command` failed on its
-/// candidate, with `exit_code`, only with `failures`, every one of which
-/// also fails on `base_sha`, and the owner's own base it must stand on.
-#[derive(Debug, Clone, Copy)]
-pub struct ClaimedKnownRed<'a> {
-    /// The base branch this owner captured for the claim's admission.
-    pub base_branch: &'a str,
-    /// `remote` to read that branch as `origin/<base_branch>` after a fetch,
-    /// `local` for this checkout's own branch.
-    pub base_sync: BaseSyncMode,
-    /// The base the leaf compared with: the handed-off candidate's base.
-    pub base_sha: &'a str,
-    /// The owner-required command the log reports.
-    pub command: &'a str,
-    /// What the candidate run reported testing.
-    pub selection: Option<&'a Value>,
-    /// The candidate run's exit status.
-    pub exit_code: i32,
-    /// Every failure the candidate run named.
-    pub failures: &'a BTreeSet<String>,
-}
-
-/// [ORB-15566] Why the owner did not confirm a claimed leaf's known-red
-/// report.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum KnownRedUnconfirmed {
-    /// The owner's own comparable, completed base run contradicts the report:
-    /// it passes the reported tests, fails without one of them, or fails a
-    /// whole run with another exit status. Asking again reads the same base
-    /// result, so the report can never be confirmed.
-    Contradicted(String),
-    /// The owner could not establish it either way: no base run in time, a
-    /// run it could not compare, or a report it does not judge.
-    Inconclusive(String),
-}
-
-impl KnownRedUnconfirmed {
-    /// Why, in prose.
-    #[must_use]
-    pub fn reason(&self) -> &str {
-        match self {
-            Self::Contradicted(reason) | Self::Inconclusive(reason) => reason,
-        }
-    }
 }
 
 /// [ORB-15427] The owner's check of a claimed leaf's known-red `report`.

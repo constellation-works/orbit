@@ -7,6 +7,13 @@ use crate::context::RuntimeHost;
 use super::super::delivery::DeliveryPin;
 use super::{admission, ledger};
 
+/// Nested `failed_step_input` field the conflict-recovery provider compares
+/// to `git rev-parse ORIG_HEAD`.
+///
+/// Admission recomputes [`recovery_published_head`] and must not read this
+/// field. A rendered value can only make the provider refuse.
+pub(crate) const AUTHENTICATED_PUBLISHED_HEAD_SHA: &str = "authenticated_published_head_sha";
+
 /// Pin the contiguous heads this execution or its authenticated retry
 /// ancestors published for the same pull request. Branch and review pins
 /// remain enforced by completion on every provider read.
@@ -47,13 +54,6 @@ pub(crate) fn recovery_published_head(
     }
     Ok(head)
 }
-
-/// Nested `failed_step_input` field the conflict-recovery provider compares
-/// to `git rev-parse ORIG_HEAD`.
-///
-/// Admission recomputes [`recovery_published_head`] and must not read this
-/// field. A rendered value can only make the provider refuse.
-pub(crate) const AUTHENTICATED_PUBLISHED_HEAD_SHA: &str = "authenticated_published_head_sha";
 
 /// The publication pin a conflict-recovery provider may trust.
 ///

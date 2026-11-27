@@ -20,6 +20,37 @@ use super::input::{refused, required_workspace};
 use super::no_diff;
 use super::observe::{observe, require_clean_candidate};
 
+/// The claimed-task artifact carrying findings the claimed worker could not
+/// file on the owner [ORB-14792].
+const UNFILED_FINDINGS_ARTIFACT: &str = "unfiled-findings.json";
+
+/// Largest implementer summary a handoff carries. The summary is prose for a
+/// reader, and the handoff travels to the owner in one coordination call.
+const MAX_HANDOFF_SUMMARY_BYTES: usize = 64 * 1024;
+
+/// What [`attach_unfiled_findings`] recorded.
+#[derive(Debug, Default, Clone, Copy)]
+struct UnfiledFindings {
+    /// Findings written to the artifact.
+    attached: usize,
+    /// Of those, plain strings rewritten as finding objects.
+    normalized: usize,
+}
+
+/// What the handoff's validation logs show, for its execution summary.
+#[derive(Debug, Clone, Copy)]
+enum HandoffChecks {
+    /// Every captured required command passed and its log is pinned.
+    Passed,
+    /// The owner requires no command.
+    NoneConfigured,
+    /// A `no-diff-expected` skip, which runs no command [ORB-15764].
+    NoDiffExpected,
+    /// A `skip-validation` candidate within the light-delivery paths, which
+    /// runs no command [ORB-16855].
+    LightDelivery,
+}
+
 /// Build the typed handoff and record it as this claim's durable settlement.
 pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -197,19 +228,6 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
     }))
 }
 
-/// The claimed-task artifact carrying findings the claimed worker could not
-/// file on the owner [ORB-14792].
-const UNFILED_FINDINGS_ARTIFACT: &str = "unfiled-findings.json";
-
-/// What [`attach_unfiled_findings`] recorded.
-#[derive(Debug, Default, Clone, Copy)]
-struct UnfiledFindings {
-    /// Findings written to the artifact.
-    attached: usize,
-    /// Of those, plain strings rewritten as finding objects.
-    normalized: usize,
-}
-
 /// Attach the implementer's `unfiled_findings` output, if any, to the claimed
 /// task on the owner, through the claim, and report how many it holds.
 ///
@@ -308,24 +326,6 @@ fn handoff_review(
         disposition,
         selective_receipt: None,
     })
-}
-
-/// Largest implementer summary a handoff carries. The summary is prose for a
-/// reader, and the handoff travels to the owner in one coordination call.
-const MAX_HANDOFF_SUMMARY_BYTES: usize = 64 * 1024;
-
-/// What the handoff's validation logs show, for its execution summary.
-#[derive(Debug, Clone, Copy)]
-enum HandoffChecks {
-    /// Every captured required command passed and its log is pinned.
-    Passed,
-    /// The owner requires no command.
-    NoneConfigured,
-    /// A `no-diff-expected` skip, which runs no command [ORB-15764].
-    NoDiffExpected,
-    /// A `skip-validation` candidate within the light-delivery paths, which
-    /// runs no command [ORB-16855].
-    LightDelivery,
 }
 
 /// The `execution_summary` the typed handoff carries to the owner.

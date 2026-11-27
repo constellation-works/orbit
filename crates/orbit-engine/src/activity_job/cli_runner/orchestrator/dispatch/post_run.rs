@@ -21,7 +21,32 @@ use super::{CliDispatchContext, subprocess};
 /// contention, and the pause before each retry. Each attempt already waits out
 /// the connection's busy timeout, so the pause only lets a short writer finish.
 const REFRESH_LOCK_BUSY_ATTEMPTS: u32 = 3;
+
 const REFRESH_LOCK_BUSY_PAUSE: Duration = Duration::from_millis(250);
+
+pub(super) struct CliProviderCompletion<'a> {
+    pub(super) started_at: chrono::DateTime<chrono::Utc>,
+    pub(super) context: CliDispatchContext<'a>,
+    pub(super) provider: String,
+    pub(super) provider_enum: Provider,
+    pub(super) model: Option<String>,
+    pub(super) agent_execution_id: Option<i64>,
+    pub(super) task_ids: &'a [String],
+    pub(super) worktree_boundary: Option<WorktreeBoundaryGuard>,
+    pub(super) sandbox: Option<&'a ResolvedSandbox>,
+    pub(super) subprocess_cwd: Option<&'a std::path::Path>,
+    pub(super) redaction: &'a PatternRedactor,
+    pub(super) timeout_seconds: u64,
+    pub(super) argv_redacted: Vec<String>,
+    pub(super) stdin_blob_ref: Option<String>,
+    pub(super) print_timeout: Option<Duration>,
+    pub(super) stall_window: Option<Duration>,
+    pub(super) inspection: Option<&'a SourceInspection>,
+    pub(super) staged_images: Option<&'a StagedImages>,
+    pub(super) scratch_dir: Option<&'a std::path::Path>,
+    pub(super) build_wait_directory: &'a tempfile::TempDir,
+    pub(super) process_exit: subprocess::ProviderProcessExit,
+}
 
 /// Refreshes the durable store after a provider exits. A lock-busy failure is
 /// retried a bounded number of times; a lock still held afterwards is transient
@@ -49,30 +74,6 @@ fn refresh_store_after_provider(
             DispatchError::CliInvocationPermanent(message)
         });
     }
-}
-
-pub(super) struct CliProviderCompletion<'a> {
-    pub(super) started_at: chrono::DateTime<chrono::Utc>,
-    pub(super) context: CliDispatchContext<'a>,
-    pub(super) provider: String,
-    pub(super) provider_enum: Provider,
-    pub(super) model: Option<String>,
-    pub(super) agent_execution_id: Option<i64>,
-    pub(super) task_ids: &'a [String],
-    pub(super) worktree_boundary: Option<WorktreeBoundaryGuard>,
-    pub(super) sandbox: Option<&'a ResolvedSandbox>,
-    pub(super) subprocess_cwd: Option<&'a std::path::Path>,
-    pub(super) redaction: &'a PatternRedactor,
-    pub(super) timeout_seconds: u64,
-    pub(super) argv_redacted: Vec<String>,
-    pub(super) stdin_blob_ref: Option<String>,
-    pub(super) print_timeout: Option<Duration>,
-    pub(super) stall_window: Option<Duration>,
-    pub(super) inspection: Option<&'a SourceInspection>,
-    pub(super) staged_images: Option<&'a StagedImages>,
-    pub(super) scratch_dir: Option<&'a std::path::Path>,
-    pub(super) build_wait_directory: &'a tempfile::TempDir,
-    pub(super) process_exit: subprocess::ProviderProcessExit,
 }
 
 pub(super) fn finish_cli_dispatch(

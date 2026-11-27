@@ -15,6 +15,16 @@ use crate::context::CrewConfig;
 use super::dispatcher::DispatchError;
 use crate::context::RuntimeHost;
 
+/// A run-scoped restriction on the crews this run may launch [ORB-11242]. The
+/// key travels on the *run* input, so the restriction survives whichever input
+/// selects the crew for a given activity.
+const ALLOWED_CREWS_KEY: &str = "allowed_crews";
+
+/// Activity input naming the configuration the host resolves the crew from
+/// (a `workflow.purpose_crews.<purpose>` or `workflow.<tier>_complexity_crews`
+/// pool, or the final-recovery binding `workflow.final_recovery_crews`).
+const CREW_CONFIG_KEY: &str = "crew_config_key";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedAgentSettings {
     pub crew_name: Option<String>,
@@ -29,15 +39,6 @@ pub struct ResolvedAgentSettings {
     /// The crew sets `vision = false`.
     pub vision_disabled: bool,
 }
-
-/// A run-scoped restriction on the crews this run may launch [ORB-11242]. The
-/// key travels on the *run* input, so the restriction survives whichever input
-/// selects the crew for a given activity.
-const ALLOWED_CREWS_KEY: &str = "allowed_crews";
-/// Activity input naming the configuration the host resolves the crew from
-/// (a `workflow.purpose_crews.<purpose>` or `workflow.<tier>_complexity_crews`
-/// pool, or the final-recovery binding `workflow.final_recovery_crews`).
-const CREW_CONFIG_KEY: &str = "crew_config_key";
 
 /// Resolve one crew assignment for an activity. Explicit activity input wins —
 /// a named `crew`, which the host uses as it is, else a `crew_config_key` the

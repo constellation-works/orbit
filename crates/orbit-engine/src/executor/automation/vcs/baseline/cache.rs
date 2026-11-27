@@ -39,6 +39,14 @@ pub(in super::super) struct CachePaths {
     pub(in super::super) worktree: PathBuf,
 }
 
+/// A base run this repository's cache records: the scratch checkout it ran
+/// in and the lock it held throughout.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(in super::super) struct RecordedBaseRun {
+    pub(in super::super) worktree: PathBuf,
+    pub(in super::super) lock: PathBuf,
+}
+
 pub(in super::super) fn cache_paths(
     process_env: &orbit_common::Env,
     repo: &Path,
@@ -71,14 +79,6 @@ pub(in super::super) fn cache_paths(
         claim_inconclusive: dir.join(format!("{key}.claim-inconclusive.json")),
         worktree: scratch_checkout_path(process_env, repo, &format!("{CACHE_DIR}-{key}"))?,
     })
-}
-
-/// A base run this repository's cache records: the scratch checkout it ran
-/// in and the lock it held throughout.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(in super::super) struct RecordedBaseRun {
-    pub(in super::super) worktree: PathBuf,
-    pub(in super::super) lock: PathBuf,
 }
 
 /// Every base run whose cache lock exists. The lock file is created before
@@ -136,11 +136,12 @@ pub(in super::super) fn cached_base_check<H: RuntimeHost + ?Sized>(
     )
     .ok()?;
     let result = read_cached(&cache.result, selection)?;
+    let not_comparable = not_comparable(selection, &result);
     Some(BaselineCheck {
         base_sha: base_sha.to_string(),
-        not_comparable: not_comparable(selection, &result),
         result: Ok(result),
         cached: true,
+        not_comparable,
         exact_replay: selection
             .is_some_and(|selection| selection.get(super::compare::FAILING_TESTS_KEY).is_some()),
     })

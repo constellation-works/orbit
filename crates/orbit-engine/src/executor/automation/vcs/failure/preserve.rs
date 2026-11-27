@@ -274,10 +274,10 @@ pub(super) fn preserve_owner_signoff_candidate<H: RuntimeHost + ?Sized>(
         workspace_path,
     )?;
     let diagnostic = bounded_diagnostic(error_message);
+    let append_history = vec![held_history(&held)];
     host.apply_task_automation_update(
         &task.id,
         TaskAutomationUpdate {
-            append_history: vec![held_history(&held)],
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
@@ -296,6 +296,7 @@ pub(super) fn preserve_owner_signoff_candidate<H: RuntimeHost + ?Sized>(
                 ),
                 operation_id: None,
             }],
+            append_history,
             ..TaskAutomationUpdate::default()
         },
     )?;
@@ -442,10 +443,10 @@ pub(super) fn hold_provider_failure_candidate<H: RuntimeHost + ?Sized>(
         &head_sha,
         workspace_path,
     )?;
+    let append_history = vec![held_history(&held)];
     host.apply_task_automation_update(
         &task.id,
         TaskAutomationUpdate {
-            append_history: vec![held_history(&held)],
             append_comments: held
                 .carry_failure
                 .is_some()
@@ -462,6 +463,7 @@ pub(super) fn hold_provider_failure_candidate<H: RuntimeHost + ?Sized>(
                 })
                 .into_iter()
                 .collect(),
+            append_history,
             ..TaskAutomationUpdate::default()
         },
     )?;
@@ -521,10 +523,10 @@ pub(super) fn hold_upgrade_pending_candidate<H: RuntimeHost + ?Sized>(
         &head_sha,
         workspace_path,
     )?;
+    let append_history = vec![held_history(&held)];
     host.apply_task_automation_update(
         &task.id,
         TaskAutomationUpdate {
-            append_history: vec![held_history(&held)],
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
@@ -539,6 +541,7 @@ pub(super) fn hold_upgrade_pending_candidate<H: RuntimeHost + ?Sized>(
                 ),
                 operation_id: None,
             }],
+            append_history,
             ..TaskAutomationUpdate::default()
         },
     )?;
@@ -606,10 +609,10 @@ pub(super) fn hold_child_timeout_candidate<H: RuntimeHost + ?Sized>(
         &head_sha,
         workspace_path,
     )?;
+    let append_history = vec![held_history(&held)];
     host.apply_task_automation_update(
         &task.id,
         TaskAutomationUpdate {
-            append_history: vec![held_history(&held)],
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
@@ -623,6 +626,7 @@ pub(super) fn hold_child_timeout_candidate<H: RuntimeHost + ?Sized>(
                 ),
                 operation_id: None,
             }],
+            append_history,
             ..TaskAutomationUpdate::default()
         },
     )?;

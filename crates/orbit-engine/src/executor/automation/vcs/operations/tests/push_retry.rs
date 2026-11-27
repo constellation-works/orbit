@@ -23,7 +23,159 @@ use serde_json::{Value, json};
 use super::super::{CANDIDATE_REF_PUSH, EVIDENCE_REF_PUSH};
 
 const TARGET_REF: &str = "refs/orbit/evidence/ORB-23936";
+
 const CHILD_ENV: &str = "ORBIT_PUSH_RETRY_TEST_CHILD";
+
+struct PushFixture {
+    client: PathBuf,
+    bare: PathBuf,
+    pushes: PathBuf,
+    attempted: PathBuf,
+    marker: PathBuf,
+}
+
+impl PushFixture {
+    fn open(mode: &str) -> Self {
+        let root = std::env::current_dir().unwrap().join("fixture");
+        let client = root.join("client");
+        let bare = root.join("bare");
+        fs::create_dir_all(&client).unwrap();
+        git(&[
+            "init",
+            "-q",
+            "--template=",
+            "-b",
+            "main",
+            client.to_str().unwrap(),
+        ]);
+        git(&["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()]);
+        git(&[
+            "-C",
+            client.to_str().unwrap(),
+            "remote",
+            "add",
+            "origin",
+            bare.to_str().unwrap(),
+        ]);
+        let alternates = bare.join("objects/info/alternates");
+        fs::create_dir_all(alternates.parent().unwrap()).unwrap();
+        fs::write(
+            &alternates,
+            format!("{}\n", client.join(".git/objects").display()),
+        )
+        .unwrap();
+        let pushes = root.join("pushes");
+        let attempted = root.join("attempted");
+        let marker = root.join("stall");
+        let fixture = Self {
+            client,
+            bare,
+            pushes,
+            attempted,
+            marker,
+        };
+        fixture.install_receivepack(mode);
+        fixture
+    }
+
+    fn install_receivepack(&self, mode: &str) {
+        let wrapper = self.client.join("../receive-pack");
+        let wrapper = wrapper
+            .canonicalize()
+            .unwrap_or_else(|_| self.bare.parent().unwrap().join("receive-pack"));
+        let script = format!(
+            r#"#!/bin/sh
+unset GIT_DIR GIT_WORK_TREE GIT_PREFIX GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+repo="$1"
+printf '1\n' >> '{pushes}'
+git receive-pack --advertise-refs "$repo" || exit 1
+hdr=$(dd bs=4 count=1 2>/dev/null || true)
+len=$((0x$hdr))
+payload_len=$((len - 4))
+dd bs="$payload_len" count=1 of='{pkt}' 2>/dev/null || true
+dd if='{pkt}' bs=1 skip=41 count=40 of='{attempted}' 2>/dev/null || true
+new=$(cat '{attempted}')
+if [ "{mode}" = "landed" ] || [ "{mode}" = "unreadable" ] || [ "{mode}" = "permanent" ]; then
+    git --git-dir="$repo" update-ref '{target_ref}' "$new" || exit 1
+fi
+if [ "{mode}" = "permanent" ]; then
+    echo 'non-fast-forward' >&2
+    echo 'protected branch hook declined' >&2
+    exit 1
+fi
+if [ "{mode}" = "unreadable" ]; then
+    mv "$repo" "$repo.unreadable"
+    : > "$repo"
+fi
+: > '{marker}'
+sleep 120
+"#,
+            pushes = self.pushes.display(),
+            pkt = self.pushes.with_extension("pkt").display(),
+            attempted = self.attempted.display(),
+            mode = mode,
+            target_ref = TARGET_REF,
+            marker = self.marker.display(),
+        );
+        fs::write(&wrapper, script).unwrap();
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        git(&[
+            "-C",
+            self.client.to_str().unwrap(),
+            "config",
+            "remote.origin.receivepack",
+            wrapper.to_str().unwrap(),
+        ]);
+    }
+
+    fn install_gh(&self) {
+        let bin = self.bare.parent().unwrap().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let gh = bin.join("gh");
+        fs::write(
+            &gh,
+            "#!/bin/sh\nprintf '%s\\n' '{\"url\":\"https://example.test/owner/repo\"}'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut paths = vec![bin];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        // SAFETY: this runs inside the isolated child process, before any
+        // other thread reads PATH. The parent keeps its own environment.
+        unsafe { std::env::set_var("PATH", std::env::join_paths(paths).unwrap()) };
+    }
+
+    fn run_evidence(&self, tree: &str) -> Result<Value, OrbitError> {
+        super::super::dispatch::run(
+            &orbit_common::Env::capture(),
+            EVIDENCE_REF_PUSH,
+            &json!({
+                "repo_root": self.client,
+                "tree_sha": tree,
+                "target_ref": TARGET_REF,
+                "message": "Screenshots for ORB-23936",
+                "forge_retry": forge_retry(),
+            }),
+        )
+    }
+
+    fn push_count(&self) -> usize {
+        fs::read_to_string(&self.pushes)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .count()
+    }
+
+    fn attempted_sha(&self) -> String {
+        fs::read_to_string(&self.attempted)
+            .unwrap_or_else(|error| panic!("read attempted sha: {error}"))
+            .trim()
+            .to_string()
+    }
+}
 
 #[test]
 fn timed_out_evidence_push_lands_when_the_ref_names_the_commit() {
@@ -311,157 +463,6 @@ fn forge_retry() -> Value {
         "initial_backoff_ms": 0,
         "backoff_cap_ms": 0
     })
-}
-
-struct PushFixture {
-    client: PathBuf,
-    bare: PathBuf,
-    pushes: PathBuf,
-    attempted: PathBuf,
-    marker: PathBuf,
-}
-
-impl PushFixture {
-    fn open(mode: &str) -> Self {
-        let root = std::env::current_dir().unwrap().join("fixture");
-        let client = root.join("client");
-        let bare = root.join("bare");
-        fs::create_dir_all(&client).unwrap();
-        git(&[
-            "init",
-            "-q",
-            "--template=",
-            "-b",
-            "main",
-            client.to_str().unwrap(),
-        ]);
-        git(&["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()]);
-        git(&[
-            "-C",
-            client.to_str().unwrap(),
-            "remote",
-            "add",
-            "origin",
-            bare.to_str().unwrap(),
-        ]);
-        let alternates = bare.join("objects/info/alternates");
-        fs::create_dir_all(alternates.parent().unwrap()).unwrap();
-        fs::write(
-            &alternates,
-            format!("{}\n", client.join(".git/objects").display()),
-        )
-        .unwrap();
-        let pushes = root.join("pushes");
-        let attempted = root.join("attempted");
-        let marker = root.join("stall");
-        let fixture = Self {
-            client,
-            bare,
-            pushes,
-            attempted,
-            marker,
-        };
-        fixture.install_receivepack(mode);
-        fixture
-    }
-
-    fn install_receivepack(&self, mode: &str) {
-        let wrapper = self.client.join("../receive-pack");
-        let wrapper = wrapper
-            .canonicalize()
-            .unwrap_or_else(|_| self.bare.parent().unwrap().join("receive-pack"));
-        let script = format!(
-            r#"#!/bin/sh
-unset GIT_DIR GIT_WORK_TREE GIT_PREFIX GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
-repo="$1"
-printf '1\n' >> '{pushes}'
-git receive-pack --advertise-refs "$repo" || exit 1
-hdr=$(dd bs=4 count=1 2>/dev/null || true)
-len=$((0x$hdr))
-payload_len=$((len - 4))
-dd bs="$payload_len" count=1 of='{pkt}' 2>/dev/null || true
-dd if='{pkt}' bs=1 skip=41 count=40 of='{attempted}' 2>/dev/null || true
-new=$(cat '{attempted}')
-if [ "{mode}" = "landed" ] || [ "{mode}" = "unreadable" ] || [ "{mode}" = "permanent" ]; then
-    git --git-dir="$repo" update-ref '{target_ref}' "$new" || exit 1
-fi
-if [ "{mode}" = "permanent" ]; then
-    echo 'non-fast-forward' >&2
-    echo 'protected branch hook declined' >&2
-    exit 1
-fi
-if [ "{mode}" = "unreadable" ]; then
-    mv "$repo" "$repo.unreadable"
-    : > "$repo"
-fi
-: > '{marker}'
-sleep 120
-"#,
-            pushes = self.pushes.display(),
-            pkt = self.pushes.with_extension("pkt").display(),
-            attempted = self.attempted.display(),
-            mode = mode,
-            target_ref = TARGET_REF,
-            marker = self.marker.display(),
-        );
-        fs::write(&wrapper, script).unwrap();
-        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
-        git(&[
-            "-C",
-            self.client.to_str().unwrap(),
-            "config",
-            "remote.origin.receivepack",
-            wrapper.to_str().unwrap(),
-        ]);
-    }
-
-    fn install_gh(&self) {
-        let bin = self.bare.parent().unwrap().join("bin");
-        fs::create_dir_all(&bin).unwrap();
-        let gh = bin.join("gh");
-        fs::write(
-            &gh,
-            "#!/bin/sh\nprintf '%s\\n' '{\"url\":\"https://example.test/owner/repo\"}'\n",
-        )
-        .unwrap();
-        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
-        let mut paths = vec![bin];
-        paths.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
-        // SAFETY: this runs inside the isolated child process, before any
-        // other thread reads PATH. The parent keeps its own environment.
-        unsafe { std::env::set_var("PATH", std::env::join_paths(paths).unwrap()) };
-    }
-
-    fn run_evidence(&self, tree: &str) -> Result<Value, OrbitError> {
-        super::super::dispatch::run(
-            &orbit_common::Env::capture(),
-            EVIDENCE_REF_PUSH,
-            &json!({
-                "repo_root": self.client,
-                "tree_sha": tree,
-                "target_ref": TARGET_REF,
-                "message": "Screenshots for ORB-23936",
-                "forge_retry": forge_retry(),
-            }),
-        )
-    }
-
-    fn push_count(&self) -> usize {
-        fs::read_to_string(&self.pushes)
-            .unwrap_or_default()
-            .lines()
-            .filter(|line| !line.is_empty())
-            .count()
-    }
-
-    fn attempted_sha(&self) -> String {
-        fs::read_to_string(&self.attempted)
-            .unwrap_or_else(|error| panic!("read attempted sha: {error}"))
-            .trim()
-            .to_string()
-    }
 }
 
 fn write_other_tip(fixture: &PushFixture) -> String {

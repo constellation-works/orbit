@@ -60,10 +60,6 @@ struct RetryableHistoryFile {
     landing_gaps: BTreeMap<String, SweepCount>,
 }
 
-fn history_schema_version() -> u64 {
-    HISTORY_SCHEMA_VERSION
-}
-
 /// One collection's errors after [`RetryableHistory::observe`].
 pub(super) struct Observed {
     pub(super) retryable: Vec<Value>,
@@ -153,15 +149,6 @@ impl From<&RetryableHistory> for RetryableHistoryFile {
     }
 }
 
-/// Repeated activity calls for one sweep count once.
-fn next_count(prior: Option<&SweepCount>, sweep_id: &str) -> u64 {
-    match prior {
-        Some(count) if count.last_sweep_id == sweep_id => count.consecutive_sweeps,
-        Some(count) => count.consecutive_sweeps + 1,
-        None => 1,
-    }
-}
-
 /// A count map, or anything else (which loads as no counts). One entry that
 /// is not an object-shaped [`SweepCount`] is skipped; its neighbours stay.
 #[derive(Deserialize)]
@@ -169,25 +156,6 @@ fn next_count(prior: Option<&SweepCount>, sweep_id: &str) -> u64 {
 enum LenientCounts {
     Map(BTreeMap<String, Value>),
     Other(IgnoredAny),
-}
-
-fn lenient_counts<'de, D>(deserializer: D) -> Result<BTreeMap<String, SweepCount>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(match LenientCounts::deserialize(deserializer)? {
-        LenientCounts::Map(entries) => entries
-            .into_iter()
-            .filter_map(|(key, entry)| {
-                entry.is_object().then_some(entry).and_then(|entry| {
-                    serde_json::from_value::<SweepCount>(entry)
-                        .ok()
-                        .map(|count| (key, count))
-                })
-            })
-            .collect(),
-        LenientCounts::Other(_) => BTreeMap::new(),
-    })
 }
 
 /// Fields [`error_key`] reads. `run_id` and `job_id` stay in JSON display
@@ -237,6 +205,38 @@ impl Default for LenientText {
     fn default() -> Self {
         Self::Text(String::new())
     }
+}
+
+fn history_schema_version() -> u64 {
+    HISTORY_SCHEMA_VERSION
+}
+
+/// Repeated activity calls for one sweep count once.
+fn next_count(prior: Option<&SweepCount>, sweep_id: &str) -> u64 {
+    match prior {
+        Some(count) if count.last_sweep_id == sweep_id => count.consecutive_sweeps,
+        Some(count) => count.consecutive_sweeps + 1,
+        None => 1,
+    }
+}
+
+fn lenient_counts<'de, D>(deserializer: D) -> Result<BTreeMap<String, SweepCount>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match LenientCounts::deserialize(deserializer)? {
+        LenientCounts::Map(entries) => entries
+            .into_iter()
+            .filter_map(|(key, entry)| {
+                entry.is_object().then_some(entry).and_then(|entry| {
+                    serde_json::from_value::<SweepCount>(entry)
+                        .ok()
+                        .map(|count| (key, count))
+                })
+            })
+            .collect(),
+        LenientCounts::Other(_) => BTreeMap::new(),
+    })
 }
 
 /// The run, job and operation an error is about, or `None` for one that

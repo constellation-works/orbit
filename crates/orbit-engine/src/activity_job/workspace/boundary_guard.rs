@@ -18,6 +18,22 @@ use super::fingerprint::{
 use super::rebase_recovery::RebaseContinuation;
 use super::{DeclaredWorktreePair, DispatchError, V2AuditWriter, WorktreeBoundaryGuard};
 
+/// Record-store paths rewritten by the engine and by out-of-run curation.
+/// They are not part of a run's code candidate.
+const ORBIT_RECORD_STORE_PREFIX: &str = ".orbit/";
+
+/// Generation records Orbit writes at the repository root while a run is in
+/// flight. Names match `crates/orbit-common/src/fs/generation/paths.rs`
+/// (`COMPAT_RECORD`, `IMAGE_DIGEST_CACHE`) and
+/// `crates/orbit-common/src/fs/generation/registry.rs` (`PARTICIPANTS_DIR`).
+const GENERATION_COMPAT_RECORD: &str = ".generation-compat.json";
+
+const GENERATION_IMAGE_DIGEST_CACHE: &str = ".generation-image-digest.json";
+
+const GENERATION_PARTICIPANTS_DIR: &str = ".generation-participants";
+
+const GENERATION_PARTICIPANTS_PREFIX: &str = ".generation-participants/";
+
 impl WorktreeBoundaryGuard {
     /// `primary_base_branch` is the workspace's `workflow.base_branch`: the
     /// primary's baseline, whatever branch the primary has checked out.
@@ -187,6 +203,7 @@ impl WorktreeBoundaryGuard {
             );
         }
 
+        let assigned_before = git_fingerprint(process_env, &assigned_root)?;
         Ok(Some(Self {
             process_env: process_env.clone(),
             task_id,
@@ -194,11 +211,11 @@ impl WorktreeBoundaryGuard {
             provider: provider.to_string(),
             requested_workspace_path,
             requested_repo_root,
-            assigned_before: git_fingerprint(process_env, &assigned_root)?,
-            primary_before,
-            primary_baseline,
             assigned_root,
             primary_root,
+            assigned_before,
+            primary_before,
+            primary_baseline,
             rebase_recovery: None,
             activity: String::new(),
             audit: None,
@@ -579,85 +596,6 @@ enum HostContinuation {
     Absorbed,
 }
 
-/// The parts of a checkout fingerprint that identify it without enumerating it.
-///
-/// A full [`GitWorktreeFingerprint`] carries a `path_states` entry — up to four
-/// sha256 digests — for every dirty path, plus an `untracked_content` digest per
-/// untracked file. Four of those serialised into one error string reached 2.5 MB
-/// on a 50-path `primary_checkout_drift`, and every consumer of that string
-/// (`run.finished.error_message`, the worker log, the recovery agent's prompt)
-/// then carried the copy. The digests stay retrievable from the audit blob named
-/// by the diagnostic's `fingerprints_blob_ref` [ORB-12467].
-fn fingerprint_summary(fingerprint: &GitWorktreeFingerprint) -> Value {
-    json!({
-        "head": fingerprint.head,
-        "branch": fingerprint.branch,
-        "index_sha256": fingerprint.index_sha256,
-        "tracked_patch_sha256": fingerprint.tracked_patch_sha256,
-        "dirty_paths": fingerprint.dirty_paths,
-    })
-}
-
-/// Record-store paths rewritten by the engine and by out-of-run curation.
-/// They are not part of a run's code candidate.
-const ORBIT_RECORD_STORE_PREFIX: &str = ".orbit/";
-/// Generation records Orbit writes at the repository root while a run is in
-/// flight. Names match `crates/orbit-common/src/fs/generation/paths.rs`
-/// (`COMPAT_RECORD`, `IMAGE_DIGEST_CACHE`) and
-/// `crates/orbit-common/src/fs/generation/registry.rs` (`PARTICIPANTS_DIR`).
-const GENERATION_COMPAT_RECORD: &str = ".generation-compat.json";
-const GENERATION_IMAGE_DIGEST_CACHE: &str = ".generation-image-digest.json";
-const GENERATION_PARTICIPANTS_DIR: &str = ".generation-participants";
-const GENERATION_PARTICIPANTS_PREFIX: &str = ".generation-participants/";
-
-/// Accept stationary primary record-store dirt that does not touch the run.
-///
-/// HEAD and branch are unchanged. Every dirt path is under `.orbit/` or is one
-/// of Orbit's own root-level generation records (`.generation-compat.json`,
-/// `.generation-image-digest.json`, or a `.generation-participants/` record),
-/// and none of those paths intersect the run's changed paths. That is
-/// concurrent record-store movement — a curation pass re-serializing a tracked
-/// record, an untracked record file, or a generation rewrite during the run —
-/// and it is not the candidate.
-///
-/// Snapshots still cannot name the writer. An unrestricted provider can edit
-/// the primary checkout directly, and that edit is indistinguishable from
-/// concurrent source work. Source paths, deletions, and staged index entries
-/// therefore stay `primary_checkout_drift`, including edits disjoint from the
-/// candidate. Overlapping record-store dirt is the same failure; the
-/// intersection is `conflicting_paths`.
-///
-/// [`PrimaryBaseline::admits_move`] covers a primary that moved. It rejects a
-/// stationary HEAD and branch on its first clause, so this function is what
-/// keeps a stationary record-store delta from being reported as drift.
-/// The nonempty dirt-path condition keeps an unexplained fingerprint change
-/// fail closed. Neither checkout is staged, committed, reset, or cleaned here.
-fn primary_stationary_dirt_delta_is_benign(
-    before: &GitWorktreeFingerprint,
-    after: &GitWorktreeFingerprint,
-    primary_dirt_paths: &[String],
-    conflicting_paths: &[String],
-) -> bool {
-    before.head == after.head
-        && before.branch == after.branch
-        && !primary_dirt_paths.is_empty()
-        && conflicting_paths.is_empty()
-        && primary_dirt_paths
-            .iter()
-            .all(|path| is_benign_stationary_primary_path(path))
-}
-
-/// Whether a stationary-primary dirt path is Orbit-owned record-store movement
-/// rather than source drift: `.orbit/` record-store dirt or one of the
-/// root-level generation records.
-fn is_benign_stationary_primary_path(path: &str) -> bool {
-    path.starts_with(ORBIT_RECORD_STORE_PREFIX)
-        || path == GENERATION_COMPAT_RECORD
-        || path == GENERATION_IMAGE_DIGEST_CACHE
-        || path == GENERATION_PARTICIPANTS_DIR
-        || path.starts_with(GENERATION_PARTICIPANTS_PREFIX)
-}
-
 /// The registered primary checkout's baseline [ORB-19177]: the workspace's
 /// `workflow.base_branch` and that branch's tip when the guard captured the
 /// primary.
@@ -793,6 +731,73 @@ impl PrimaryBaseline {
             None => reason,
         }
     }
+}
+
+/// The parts of a checkout fingerprint that identify it without enumerating it.
+///
+/// A full [`GitWorktreeFingerprint`] carries a `path_states` entry — up to four
+/// sha256 digests — for every dirty path, plus an `untracked_content` digest per
+/// untracked file. Four of those serialised into one error string reached 2.5 MB
+/// on a 50-path `primary_checkout_drift`, and every consumer of that string
+/// (`run.finished.error_message`, the worker log, the recovery agent's prompt)
+/// then carried the copy. The digests stay retrievable from the audit blob named
+/// by the diagnostic's `fingerprints_blob_ref` [ORB-12467].
+fn fingerprint_summary(fingerprint: &GitWorktreeFingerprint) -> Value {
+    json!({
+        "head": fingerprint.head,
+        "branch": fingerprint.branch,
+        "index_sha256": fingerprint.index_sha256,
+        "tracked_patch_sha256": fingerprint.tracked_patch_sha256,
+        "dirty_paths": fingerprint.dirty_paths,
+    })
+}
+
+/// Accept stationary primary record-store dirt that does not touch the run.
+///
+/// HEAD and branch are unchanged. Every dirt path is under `.orbit/` or is one
+/// of Orbit's own root-level generation records (`.generation-compat.json`,
+/// `.generation-image-digest.json`, or a `.generation-participants/` record),
+/// and none of those paths intersect the run's changed paths. That is
+/// concurrent record-store movement — a curation pass re-serializing a tracked
+/// record, an untracked record file, or a generation rewrite during the run —
+/// and it is not the candidate.
+///
+/// Snapshots still cannot name the writer. An unrestricted provider can edit
+/// the primary checkout directly, and that edit is indistinguishable from
+/// concurrent source work. Source paths, deletions, and staged index entries
+/// therefore stay `primary_checkout_drift`, including edits disjoint from the
+/// candidate. Overlapping record-store dirt is the same failure; the
+/// intersection is `conflicting_paths`.
+///
+/// [`PrimaryBaseline::admits_move`] covers a primary that moved. It rejects a
+/// stationary HEAD and branch on its first clause, so this function is what
+/// keeps a stationary record-store delta from being reported as drift.
+/// The nonempty dirt-path condition keeps an unexplained fingerprint change
+/// fail closed. Neither checkout is staged, committed, reset, or cleaned here.
+fn primary_stationary_dirt_delta_is_benign(
+    before: &GitWorktreeFingerprint,
+    after: &GitWorktreeFingerprint,
+    primary_dirt_paths: &[String],
+    conflicting_paths: &[String],
+) -> bool {
+    before.head == after.head
+        && before.branch == after.branch
+        && !primary_dirt_paths.is_empty()
+        && conflicting_paths.is_empty()
+        && primary_dirt_paths
+            .iter()
+            .all(|path| is_benign_stationary_primary_path(path))
+}
+
+/// Whether a stationary-primary dirt path is Orbit-owned record-store movement
+/// rather than source drift: `.orbit/` record-store dirt or one of the
+/// root-level generation records.
+fn is_benign_stationary_primary_path(path: &str) -> bool {
+    path.starts_with(ORBIT_RECORD_STORE_PREFIX)
+        || path == GENERATION_COMPAT_RECORD
+        || path == GENERATION_IMAGE_DIGEST_CACHE
+        || path == GENERATION_PARTICIPANTS_DIR
+        || path.starts_with(GENERATION_PARTICIPANTS_PREFIX)
 }
 
 /// `workflow.base_branch` as a local branch name: `origin/main` and

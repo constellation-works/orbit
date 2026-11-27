@@ -26,6 +26,31 @@ use orbit_common::env_vars::CARGO_DENY_DB_PATH as CARGO_DENY_DB_PATH_ENV;
 /// Scratch subdirectory holding this run's cargo-deny advisory database.
 const CARGO_DENY_ADVISORY_DB_SUBDIR: &str = "cargo-deny-advisory-db";
 
+pub(super) struct ProviderEnvironmentInput<'a> {
+    pub(super) context: CliDispatchContext<'a>,
+    pub(super) provider: &'a str,
+    pub(super) model: &'a Option<String>,
+    pub(super) inspection: &'a Option<SourceInspection>,
+    pub(super) tool_ctx: &'a ToolContext,
+    pub(super) task_id: Option<&'a str>,
+    pub(super) wall_clock_timeout: Duration,
+    pub(super) timeout_seconds: u64,
+    pub(super) scratch: &'a Path,
+    pub(super) tool_disallow_list: &'a Option<Vec<String>>,
+    pub(super) activity_tools: &'a ResolvedActivityTools,
+    pub(super) orbit_env: Vec<(String, String)>,
+    pub(super) subprocess_cwd: &'a Option<PathBuf>,
+    pub(super) sandbox: Option<&'a ResolvedSandbox>,
+    pub(super) child_env: &'a mut Vec<(String, String)>,
+    pub(super) fixed_env: &'a [(&'static str, &'static str)],
+}
+
+pub(super) struct PreparedProviderEnvironment {
+    pub(super) scratch_dir: Option<PathBuf>,
+    pub(super) build_wait_directory: tempfile::TempDir,
+    pub(super) python_cache_directory: tempfile::TempDir,
+}
+
 /// Prepare the per-run cargo-deny advisory database directory [ORB-21352].
 ///
 /// The sandbox binds only `$CARGO_HOME/registry` and `$CARGO_HOME/git`
@@ -94,31 +119,6 @@ fn sandbox_profile_allows_modify(
         }
     }
     Ok(allowed)
-}
-
-pub(super) struct ProviderEnvironmentInput<'a> {
-    pub(super) context: CliDispatchContext<'a>,
-    pub(super) provider: &'a str,
-    pub(super) model: &'a Option<String>,
-    pub(super) inspection: &'a Option<SourceInspection>,
-    pub(super) tool_ctx: &'a ToolContext,
-    pub(super) task_id: Option<&'a str>,
-    pub(super) wall_clock_timeout: Duration,
-    pub(super) timeout_seconds: u64,
-    pub(super) scratch: &'a Path,
-    pub(super) tool_disallow_list: &'a Option<Vec<String>>,
-    pub(super) activity_tools: &'a ResolvedActivityTools,
-    pub(super) orbit_env: Vec<(String, String)>,
-    pub(super) subprocess_cwd: &'a Option<PathBuf>,
-    pub(super) sandbox: Option<&'a ResolvedSandbox>,
-    pub(super) child_env: &'a mut Vec<(String, String)>,
-    pub(super) fixed_env: &'a [(&'static str, &'static str)],
-}
-
-pub(super) struct PreparedProviderEnvironment {
-    pub(super) scratch_dir: Option<PathBuf>,
-    pub(super) build_wait_directory: tempfile::TempDir,
-    pub(super) python_cache_directory: tempfile::TempDir,
 }
 
 pub(super) fn prepare_provider_environment(

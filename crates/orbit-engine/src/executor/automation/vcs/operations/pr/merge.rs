@@ -23,6 +23,13 @@ const MERGE_CONFLICT_REASON: &str = "Pull Request has merge conflicts";
 /// decodes [F2026-11-509]. The forge answered, so the merge may have landed.
 const MERGE_RESPONSE_DECODE_DIAGNOSTIC: &str = "unexpected end of JSON input";
 
+/// Which refusals a reviewed merge's caller asks to receive as values.
+struct ReviewedMergeReports {
+    base_modified: bool,
+    ambiguous: bool,
+    conflict: bool,
+}
+
 pub(in crate::executor::automation::vcs::operations) fn pr_merge(
     process_env: &orbit_common::Env,
     input: &Value,
@@ -97,13 +104,6 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
         "stdout": result.stdout,
         "stderr": result.stderr,
     }))
-}
-
-/// Which refusals a reviewed merge's caller asks to receive as values.
-struct ReviewedMergeReports {
-    base_modified: bool,
-    ambiguous: bool,
-    conflict: bool,
 }
 
 /// Use the synchronous REST mutation: `sha` is checked by GitHub when it

@@ -11,10 +11,10 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
 /// output. It records no pipeline entry, so later templates see it absent.
 pub(super) fn skipped_step_outcome() -> StepOutcome {
     StepOutcome {
-        failure_code: None,
         success: true,
         output: Value::Null,
         message: None,
+        failure_code: None,
     }
 }
 
@@ -225,10 +225,10 @@ pub(super) fn run_step_with_retry(
     let failure = match last_err {
         Some(err) => StepFailure::Error(err),
         None => StepFailure::Outcome(last_failed_outcome.unwrap_or(StepOutcome {
-            failure_code: None,
             success: false,
             output: Value::Null,
             message: None,
+            failure_code: None,
         })),
     };
     recover_or_return_original(step, ctx, failure, max_attempts, max_attempts)

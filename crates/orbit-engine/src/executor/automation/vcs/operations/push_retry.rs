@@ -20,104 +20,23 @@ use super::{CANDIDATE_REF_PREFIX, DEFAULT_TIMEOUT_MS, LONG_TIMEOUT_MS};
 /// fixed, half random), so pushes failing together do not retry in lockstep.
 /// A cancel stops the worker's process group, which ends a wait with it.
 const PUSH_TRANSIENT_ATTEMPTS: u32 = 6;
+
 const PUSH_TRANSIENT_INITIAL_BACKOFF_MS: u64 = 10_000;
+
 const PUSH_TRANSIENT_BACKOFF_CAP_MS: u64 = 160_000;
+
 /// Bounds on a `forge_retry` override, so asset input cannot turn the push
 /// into an unbounded wait.
 const PUSH_TRANSIENT_MAX_ATTEMPTS: u64 = 10;
+
 const PUSH_TRANSIENT_MAX_BACKOFF_MS: u64 = 600_000;
+
 /// The longest `forge_retry.window_ms` [ORB-14634]: the two hours the clock
 /// keeps resuming a held owner-local run.
 const PUSH_FORGE_MAX_WINDOW_MS: u64 = 2 * 60 * 60 * 1000;
+
 /// Largest forge refusal a hold carries.
 const FORGE_HOLD_DIAGNOSTIC_BYTES: usize = 2048;
-
-pub(super) fn push(process_env: &orbit_common::Env, input: &Value) -> Result<Value, OrbitError> {
-    let repo_root = required_string(input, "repo_root")?;
-    let branch = required_string(input, "branch")?;
-    let force_with_lease = input
-        .get("force_with_lease")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let expected_remote_sha = optional_string(input, "expected_remote_sha");
-
-    reject_option_like("branch", branch)?;
-    if force_with_lease && !valid_expected_remote_sha(expected_remote_sha) {
-        return Err(OrbitError::InvalidInput(
-            "private automation VCS push requires an exact 40- or 64-character expected_remote_sha when force_with_lease is true"
-                .to_string(),
-        ));
-    }
-
-    let mut args = vec!["push".to_string()];
-    if let Some(expected_remote_sha) = force_with_lease.then_some(expected_remote_sha).flatten() {
-        args.push(format!(
-            "--force-with-lease=refs/heads/{branch}:{expected_remote_sha}"
-        ));
-    }
-    args.extend(["--".to_string(), "origin".to_string(), branch.to_string()]);
-    let target_ref = format!("refs/heads/{branch}");
-    let local_head = execute(
-        process_env,
-        "git",
-        vec!["rev-parse".into(), "--verify".into(), target_ref.clone()],
-        Some(Path::new(repo_root)),
-        DEFAULT_TIMEOUT_MS,
-        "push local head",
-    )?;
-    let pushed = execute_push_with_transient_retry(
-        process_env,
-        &args,
-        Path::new(repo_root),
-        &target_ref,
-        local_head.stdout.trim(),
-        "push",
-        PushBackoff::from_input(input)?,
-    )
-    .map_err(|exhausted| exhausted.into_hold_error())?;
-    Ok(pushed.output())
-}
-
-/// Push `head_sha` to `target_ref` on `origin`, replacing whatever the ref
-/// held: the ref is owned by the one run named in it.
-pub(super) fn push_candidate_ref(
-    process_env: &orbit_common::Env,
-    input: &Value,
-) -> Result<Value, OrbitError> {
-    let repo_root = required_string(input, "repo_root")?;
-    let head_sha = required_string(input, "head_sha")?;
-    let target_ref = required_string(input, "target_ref")?;
-    if !valid_expected_remote_sha(Some(head_sha)) {
-        return Err(OrbitError::InvalidInput(
-            "private automation VCS candidate push requires an exact 40- or 64-character head_sha"
-                .to_string(),
-        ));
-    }
-    if !valid_candidate_ref(target_ref) {
-        return Err(OrbitError::InvalidInput(format!(
-            "private automation VCS candidate push target must be a plain ref under \
-             '{CANDIDATE_REF_PREFIX}'"
-        )));
-    }
-    // A carried candidate ref is pushed by a failure activity, which has no
-    // later step to hold at: exhausting its budget is an ordinary failure.
-    let pushed = execute_push_with_transient_retry(
-        process_env,
-        &[
-            "push".to_string(),
-            "--".to_string(),
-            "origin".to_string(),
-            format!("+{head_sha}:{target_ref}"),
-        ],
-        Path::new(repo_root),
-        target_ref,
-        head_sha,
-        "candidate ref push",
-        PushBackoff::from_input(input)?,
-    )
-    .map_err(PushFailure::into_error)?;
-    Ok(pushed.output())
-}
 
 /// The transient push retry budget: `forge_retry` in the operation input, or
 /// the production default.
@@ -265,6 +184,110 @@ impl PushFailure {
     }
 }
 
+/// What a publication read showed for the pushed ref.
+enum PublicationObservation {
+    /// Every effective push URL has `head_sha` at `target_ref`.
+    Landed(orbit_exec::ExecutionResult),
+    /// The destination has no such ref.
+    Absent,
+    /// The ref is present and names a different commit.
+    OtherSha(String),
+}
+
+/// How one remote's `ls-remote` output names `target_ref`.
+enum RefTip {
+    Exact,
+    Absent,
+    OtherSha(String),
+}
+
+pub(super) fn push(process_env: &orbit_common::Env, input: &Value) -> Result<Value, OrbitError> {
+    let repo_root = required_string(input, "repo_root")?;
+    let branch = required_string(input, "branch")?;
+    let force_with_lease = input
+        .get("force_with_lease")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let expected_remote_sha = optional_string(input, "expected_remote_sha");
+
+    reject_option_like("branch", branch)?;
+    if force_with_lease && !valid_expected_remote_sha(expected_remote_sha) {
+        return Err(OrbitError::InvalidInput(
+            "private automation VCS push requires an exact 40- or 64-character expected_remote_sha when force_with_lease is true"
+                .to_string(),
+        ));
+    }
+
+    let mut args = vec!["push".to_string()];
+    if let Some(expected_remote_sha) = force_with_lease.then_some(expected_remote_sha).flatten() {
+        args.push(format!(
+            "--force-with-lease=refs/heads/{branch}:{expected_remote_sha}"
+        ));
+    }
+    args.extend(["--".to_string(), "origin".to_string(), branch.to_string()]);
+    let target_ref = format!("refs/heads/{branch}");
+    let local_head = execute(
+        process_env,
+        "git",
+        vec!["rev-parse".into(), "--verify".into(), target_ref.clone()],
+        Some(Path::new(repo_root)),
+        DEFAULT_TIMEOUT_MS,
+        "push local head",
+    )?;
+    let pushed = execute_push_with_transient_retry(
+        process_env,
+        &args,
+        Path::new(repo_root),
+        &target_ref,
+        local_head.stdout.trim(),
+        "push",
+        PushBackoff::from_input(input)?,
+    )
+    .map_err(|exhausted| exhausted.into_hold_error())?;
+    Ok(pushed.output())
+}
+
+/// Push `head_sha` to `target_ref` on `origin`, replacing whatever the ref
+/// held: the ref is owned by the one run named in it.
+pub(super) fn push_candidate_ref(
+    process_env: &orbit_common::Env,
+    input: &Value,
+) -> Result<Value, OrbitError> {
+    let repo_root = required_string(input, "repo_root")?;
+    let head_sha = required_string(input, "head_sha")?;
+    let target_ref = required_string(input, "target_ref")?;
+    if !valid_expected_remote_sha(Some(head_sha)) {
+        return Err(OrbitError::InvalidInput(
+            "private automation VCS candidate push requires an exact 40- or 64-character head_sha"
+                .to_string(),
+        ));
+    }
+    if !valid_candidate_ref(target_ref) {
+        return Err(OrbitError::InvalidInput(format!(
+            "private automation VCS candidate push target must be a plain ref under \
+             '{CANDIDATE_REF_PREFIX}'"
+        )));
+    }
+    // A carried candidate ref is pushed by a failure activity, which has no
+    // later step to hold at: exhausting its budget is an ordinary failure.
+    let pushed = execute_push_with_transient_retry(
+        process_env,
+        &[
+            "push".to_string(),
+            "--".to_string(),
+            "origin".to_string(),
+            format!("+{head_sha}:{target_ref}"),
+        ],
+        Path::new(repo_root),
+        target_ref,
+        head_sha,
+        "candidate ref push",
+        PushBackoff::from_input(input)?,
+    )
+    .map_err(PushFailure::into_error)?;
+    Ok(pushed.output())
+}
+
 /// Arguments for one push attempt. After a `missing necessary objects`
 /// refusal, later attempts pass `--no-thin` so the pack does not delta
 /// against bases the server advertised and then did not have.
@@ -294,23 +317,6 @@ fn bounded_diagnostic(text: &str) -> String {
         end -= 1;
     }
     text[..end].to_string()
-}
-
-/// What a publication read showed for the pushed ref.
-enum PublicationObservation {
-    /// Every effective push URL has `head_sha` at `target_ref`.
-    Landed(orbit_exec::ExecutionResult),
-    /// The destination has no such ref.
-    Absent,
-    /// The ref is present and names a different commit.
-    OtherSha(String),
-}
-
-/// How one remote's `ls-remote` output names `target_ref`.
-enum RefTip {
-    Exact,
-    Absent,
-    OtherSha(String),
 }
 
 /// Whether every effective publication destination holds `head_sha` at

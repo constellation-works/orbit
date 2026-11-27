@@ -6,6 +6,19 @@ use crate::context::RuntimeHost;
 use super::super::super::operations;
 use super::super::answers::{PullRequestStatus, PullRequestSummary};
 
+pub(super) struct PrOutput<'a> {
+    pub(super) decision: &'a str,
+    pub(super) pr_created: bool,
+    pub(super) pr_reused: bool,
+    pub(super) pr_number: String,
+    pub(super) pr_url: Option<String>,
+    pub(super) base: &'a str,
+    pub(super) head: &'a str,
+    pub(super) base_ref: &'a str,
+    pub(super) base_sha: &'a str,
+    pub(super) freshness: &'a super::super::super::freshness::BranchFreshness,
+}
+
 pub(super) fn view_pr<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &std::path::Path,
@@ -127,19 +140,6 @@ fn ensure_live_base(
         )));
     }
     Ok(())
-}
-
-pub(super) struct PrOutput<'a> {
-    pub(super) decision: &'a str,
-    pub(super) pr_created: bool,
-    pub(super) pr_reused: bool,
-    pub(super) pr_number: String,
-    pub(super) pr_url: Option<String>,
-    pub(super) base: &'a str,
-    pub(super) head: &'a str,
-    pub(super) base_ref: &'a str,
-    pub(super) base_sha: &'a str,
-    pub(super) freshness: &'a super::super::super::freshness::BranchFreshness,
 }
 
 pub(super) fn pr_output(output: PrOutput<'_>) -> Value {

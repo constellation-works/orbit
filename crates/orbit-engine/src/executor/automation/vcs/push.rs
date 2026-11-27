@@ -27,6 +27,25 @@ use super::operations;
 use super::pr_answers::{PrMergeState, classify_pr_state, read_pr_status};
 use super::remote_probe::{RemoteBranchProbe, pre_push_remote_branch};
 
+/// Marker a before-landing repair uses once its pull request merged at the
+/// leased head. The failure handoff reads it; it is not a new blocker kind.
+const REVIEW_REPAIR_AFTER_MERGE: &str = "review_repair_after_merge:";
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum PushDecision {
+    Missing,
+    Current,
+    FastForward,
+    RemoteAhead,
+    Diverged,
+}
+
+/// Where the repair was pushed, or why neither ref accepted it.
+enum PreservedRepair {
+    Ref(String),
+    Unpushed(String),
+}
+
 pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -542,15 +561,6 @@ fn resolve_workspace_path<H: RuntimeHost + ?Sized>(
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum PushDecision {
-    Missing,
-    Current,
-    FastForward,
-    RemoteAhead,
-    Diverged,
-}
-
 fn push_decision(
     process_env: &orbit_common::Env,
     workspace_path: &Path,
@@ -628,10 +638,6 @@ fn validate_rewrite_checkpoint(
     }
     Ok(())
 }
-
-/// Marker a before-landing repair uses once its pull request merged at the
-/// leased head. The failure handoff reads it; it is not a new blocker kind.
-const REVIEW_REPAIR_AFTER_MERGE: &str = "review_repair_after_merge:";
 
 /// The unpublished repair on top of `lease`, when the open pull request
 /// merged at that lease.
@@ -774,12 +780,6 @@ fn merge_commit_on_base(
         merge_commit,
         &remote_base,
     )
-}
-
-/// Where the repair was pushed, or why neither ref accepted it.
-enum PreservedRepair {
-    Ref(String),
-    Unpushed(String),
 }
 
 /// Push `local_sha` to the evidence-hold ref, then to the durable candidate

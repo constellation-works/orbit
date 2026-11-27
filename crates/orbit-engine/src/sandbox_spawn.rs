@@ -25,7 +25,18 @@ use crate::context::dispatch_contract::ResolvedSandbox;
 
 pub(crate) use orbit_common::env_vars::CODEX_CA_CERTIFICATE as CODEX_CA_CERTIFICATE_ENV;
 pub(crate) use orbit_common::env_vars::SSL_CERT_FILE as SSL_CERT_FILE_ENV;
+
 const DEFAULT_MACOS_CA_CERTIFICATE: &str = "/etc/ssl/cert.pem";
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static BWRAP_PROBE_FORCED_UNAVAILABLE: Cell<bool> = const { Cell::new(false) };
+}
+
+#[cfg(test)]
+thread_local! {
+    static POST_RUN_GUARD_WITHOUT_USER_NAMESPACE: Cell<bool> = const { Cell::new(false) };
+}
 
 /// Typed spawn failure with a retryability classification (ORB-10006).
 ///
@@ -53,6 +64,60 @@ pub(crate) struct SandboxDispatchMetadata {
 pub(crate) struct PreparedSandbox<'a> {
     pub(crate) effective: Option<&'a ResolvedSandbox>,
     pub(crate) metadata: SandboxDispatchMetadata,
+}
+
+impl SpawnError {
+    pub(crate) fn transient(message: String) -> Self {
+        Self {
+            permanent: false,
+            message,
+        }
+    }
+
+    pub(crate) fn permanent(message: String) -> Self {
+        Self {
+            permanent: true,
+            message,
+        }
+    }
+
+    /// Classify an OS spawn error. `NotFound` (ENOENT) and
+    /// `PermissionDenied` (EACCES) are deterministic; resource-exhaustion
+    /// signals (EAGAIN, ENOMEM, EMFILE, ENFILE, ...) and anything
+    /// unrecognized stay transient — conservative in the direction of
+    /// preserving retries.
+    pub(crate) fn from_spawn_io(program: &str, err: &std::io::Error) -> Self {
+        let message = format!("failed to spawn `{program}`: {err}");
+        match err.kind() {
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
+                Self::permanent(message)
+            }
+            _ => Self::transient(message),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct SpawnedChild {
+    /// Drops before the mount plan, including when unwinding.
+    pub(crate) child: OwnedChild,
+    /// Linux mount-source descriptors retained until the provider exits.
+    ///
+    /// Closing a duplicate SQLite database descriptor can release this
+    /// process's POSIX locks even while the host lease connection remains
+    /// open, so the complete plan shares the sandboxed child's lifetime.
+    pub(crate) _linux_mount_plan: Option<LinuxBwrapPlan>,
+}
+
+impl SpawnedChild {
+    /// The post-run write-policy snapshot the Linux plan took while compiling
+    /// its deny mounts — after grant preparation, before the child ran. Only
+    /// a managed Bubblewrap launch carries one.
+    pub(crate) fn take_linux_post_run_guard(&mut self) -> Option<LinuxBwrapPostRunGuard> {
+        self._linux_mount_plan
+            .as_mut()
+            .and_then(LinuxBwrapPlan::take_post_run_guard)
+    }
 }
 
 /// Resolve availability before provider argv construction. This ordering is
@@ -137,11 +202,6 @@ fn linux_bwrap_probe_for_dispatch() -> BwrapProbeOutcome {
     probe_bwrap()
 }
 
-#[cfg(any(test, feature = "test-support"))]
-thread_local! {
-    static BWRAP_PROBE_FORCED_UNAVAILABLE: Cell<bool> = const { Cell::new(false) };
-}
-
 /// Run `operation` with the Linux Bubblewrap capability probe reporting
 /// unavailable on this thread, as on a host whose kernel refuses the user
 /// namespace `bwrap` needs. The real probe is not consulted. The previous
@@ -208,60 +268,6 @@ fn prepare_linux_sandbox_for_dispatch_with_probe<'a>(
             "{}; declare allow_fallback: true to permit bare exec",
             probe.detail
         )))
-    }
-}
-
-impl SpawnError {
-    pub(crate) fn transient(message: String) -> Self {
-        Self {
-            permanent: false,
-            message,
-        }
-    }
-
-    pub(crate) fn permanent(message: String) -> Self {
-        Self {
-            permanent: true,
-            message,
-        }
-    }
-
-    /// Classify an OS spawn error. `NotFound` (ENOENT) and
-    /// `PermissionDenied` (EACCES) are deterministic; resource-exhaustion
-    /// signals (EAGAIN, ENOMEM, EMFILE, ENFILE, ...) and anything
-    /// unrecognized stay transient — conservative in the direction of
-    /// preserving retries.
-    pub(crate) fn from_spawn_io(program: &str, err: &std::io::Error) -> Self {
-        let message = format!("failed to spawn `{program}`: {err}");
-        match err.kind() {
-            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
-                Self::permanent(message)
-            }
-            _ => Self::transient(message),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct SpawnedChild {
-    /// Drops before the mount plan, including when unwinding.
-    pub(crate) child: OwnedChild,
-    /// Linux mount-source descriptors retained until the provider exits.
-    ///
-    /// Closing a duplicate SQLite database descriptor can release this
-    /// process's POSIX locks even while the host lease connection remains
-    /// open, so the complete plan shares the sandboxed child's lifetime.
-    pub(crate) _linux_mount_plan: Option<LinuxBwrapPlan>,
-}
-
-impl SpawnedChild {
-    /// The post-run write-policy snapshot the Linux plan took while compiling
-    /// its deny mounts — after grant preparation, before the child ran. Only
-    /// a managed Bubblewrap launch carries one.
-    pub(crate) fn take_linux_post_run_guard(&mut self) -> Option<LinuxBwrapPostRunGuard> {
-        self._linux_mount_plan
-            .as_mut()
-            .and_then(LinuxBwrapPlan::take_post_run_guard)
     }
 }
 
@@ -625,11 +631,6 @@ fn validate_ca_certificate_path(
     })?;
 
     Ok(())
-}
-
-#[cfg(test)]
-thread_local! {
-    static POST_RUN_GUARD_WITHOUT_USER_NAMESPACE: Cell<bool> = const { Cell::new(false) };
 }
 
 #[cfg(test)]

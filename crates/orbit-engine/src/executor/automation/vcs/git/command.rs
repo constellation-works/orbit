@@ -9,6 +9,38 @@ use serde_json::Value;
 use std::io::Read;
 use std::path::Path;
 
+/// Git diff flags for producing self-contained patches that recreate binary
+/// changes and exact text lines regardless of user diff configuration.
+pub(crate) const BINARY_PATCH_DIFF_ARGS: &[&str] = &[
+    "--binary",
+    "--full-index",
+    "--no-renames",
+    "--no-color",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--no-ext-diff",
+    "--no-textconv",
+];
+
+/// The names `gh` reads to find the host's GitHub credential: a token, the
+/// host, the config location holding a stored login, and the session bus and
+/// runtime directory a Linux login keyring answers on. The governed `github.*`
+/// readers inherit the whole environment and so reach all of them; a guarded
+/// read that omitted the keyring pair saw no login for the same configured
+/// account [ORB-28025]. None names a secret that is not already `gh`'s own
+/// credential route.
+const GH_CREDENTIAL_ENV: &[&str] = &[
+    env_vars::GH_TOKEN,
+    env_vars::GITHUB_TOKEN,
+    env_vars::GH_ENTERPRISE_TOKEN,
+    env_vars::GITHUB_ENTERPRISE_TOKEN,
+    env_vars::GH_HOST,
+    env_vars::GH_CONFIG_DIR,
+    env_vars::XDG_CONFIG_HOME,
+    env_vars::XDG_RUNTIME_DIR,
+    env_vars::DBUS_SESSION_BUS_ADDRESS,
+];
+
 /// Captured Git child result, including timeout vs ordinary failure.
 #[derive(Debug, Clone)]
 pub(crate) struct GitOutcome {
@@ -29,6 +61,89 @@ pub(crate) struct GitBytesOutcome {
     pub timed_out: bool,
     pub timeout_ms: u64,
     pub exit_code: Option<i32>,
+}
+
+/// How a run resolves its configured base branch.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BaseSyncMode {
+    /// Read the checkout's local branch.
+    Local,
+    /// Fetch and read the remote-tracking branch.
+    #[default]
+    Remote,
+}
+
+impl std::str::FromStr for BaseSyncMode {
+    type Err = OrbitError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim() {
+            "" | "remote" => Ok(Self::Remote),
+            "local" => Ok(Self::Local),
+            other => Err(OrbitError::InvalidInput(format!(
+                "input.base_sync must be 'local' or 'remote', got '{other}'"
+            ))),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BaseSyncMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl BaseSyncMode {
+    /// Parse the job input's base sync mode. Missing, non-string and empty
+    /// values use remote sync, matching the delivery input contract.
+    pub fn from_input(input: &Value) -> Result<Self, OrbitError> {
+        input
+            .get("base_sync")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .parse()
+    }
+}
+
+/// NUL-delimited Git path records read from raw stdout bytes, split by
+/// whether each name is exact UTF-8 text.
+#[derive(Debug, Default)]
+pub(crate) struct ExactPaths {
+    /// Records whose bytes are valid UTF-8, unchanged.
+    pub paths: Vec<String>,
+    /// Records whose bytes are not UTF-8, rendered with
+    /// [`slice::escape_ascii`] for diagnostics only (for example
+    /// `loose-\xff.pyc`). Such a rendering never names the native path.
+    pub unrepresentable: Vec<String>,
+}
+
+/// A URL argument that reaches `push_url` itself, without Git applying
+/// `url.*.insteadOf` to the already-resolved push URL a second time.
+///
+/// `git remote get-url --push` resolves `pushInsteadOf` (and, when no
+/// push-specific rule matches, `insteadOf`) exactly once, as `git push
+/// origin` does. Passing that resolved URL to `ls-remote` or `fetch`
+/// would apply `insteadOf` again and can name a different repository
+/// [ORB-17686]. The probe URL appends a suffix segment so an ephemeral
+/// identity rewrite for it is strictly longer — and therefore wins —
+/// over every `insteadOf` rule whose value is a prefix of `push_url`.
+/// The identity rewrite maps the probe URL back to `push_url`, so the
+/// transport still addresses exactly `push_url`. This adds only a
+/// command-line `-c` value; it never writes the user's Git config.
+#[derive(Debug, Clone)]
+pub(crate) struct DirectRemoteTarget {
+    pub probe_url: String,
+    pub config_arg: Option<String>,
+}
+
+impl DirectRemoteTarget {
+    pub(crate) fn prefix_args(&self) -> Vec<String> {
+        match &self.config_arg {
+            Some(config) => vec!["-c".to_string(), config.clone()],
+            None => Vec::new(),
+        }
+    }
 }
 
 pub(crate) fn git_failure_error(
@@ -75,19 +190,6 @@ pub(crate) fn git_run(
         exit_code: result.exit_code,
     })
 }
-
-/// Git diff flags for producing self-contained patches that recreate binary
-/// changes and exact text lines regardless of user diff configuration.
-pub(crate) const BINARY_PATCH_DIFF_ARGS: &[&str] = &[
-    "--binary",
-    "--full-index",
-    "--no-renames",
-    "--no-color",
-    "--src-prefix=a/",
-    "--dst-prefix=b/",
-    "--no-ext-diff",
-    "--no-textconv",
-];
 
 /// Supervise host Git with the same secured environment and process-group
 /// cleanup as `git_run`, retaining stdout bytes and optional stdin bytes.
@@ -156,25 +258,6 @@ fn vcs_environment(process_env: &orbit_common::Env, extras: &[&str]) -> Vec<(Str
         .collect()
 }
 
-/// The names `gh` reads to find the host's GitHub credential: a token, the
-/// host, the config location holding a stored login, and the session bus and
-/// runtime directory a Linux login keyring answers on. The governed `github.*`
-/// readers inherit the whole environment and so reach all of them; a guarded
-/// read that omitted the keyring pair saw no login for the same configured
-/// account [ORB-28025]. None names a secret that is not already `gh`'s own
-/// credential route.
-const GH_CREDENTIAL_ENV: &[&str] = &[
-    env_vars::GH_TOKEN,
-    env_vars::GITHUB_TOKEN,
-    env_vars::GH_ENTERPRISE_TOKEN,
-    env_vars::GITHUB_ENTERPRISE_TOKEN,
-    env_vars::GH_HOST,
-    env_vars::GH_CONFIG_DIR,
-    env_vars::XDG_CONFIG_HOME,
-    env_vars::XDG_RUNTIME_DIR,
-    env_vars::DBUS_SESSION_BUS_ADDRESS,
-];
-
 /// The one environment every host-side `gh` child runs under: the baseline
 /// plus GitHub's authentication, host and config names, never the provider's
 /// credentials or the ORBIT_* envelope.
@@ -238,49 +321,6 @@ pub(crate) fn git_request(
     }
 }
 
-/// How a run resolves its configured base branch.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum BaseSyncMode {
-    /// Read the checkout's local branch.
-    Local,
-    /// Fetch and read the remote-tracking branch.
-    #[default]
-    Remote,
-}
-
-impl std::str::FromStr for BaseSyncMode {
-    type Err = OrbitError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.trim() {
-            "" | "remote" => Ok(Self::Remote),
-            "local" => Ok(Self::Local),
-            other => Err(OrbitError::InvalidInput(format!(
-                "input.base_sync must be 'local' or 'remote', got '{other}'"
-            ))),
-        }
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for BaseSyncMode {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
-        value.parse().map_err(serde::de::Error::custom)
-    }
-}
-
-impl BaseSyncMode {
-    /// Parse the job input's base sync mode. Missing, non-string and empty
-    /// values use remote sync, matching the delivery input contract.
-    pub fn from_input(input: &Value) -> Result<Self, OrbitError> {
-        input
-            .get("base_sync")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .parse()
-    }
-}
-
 pub(in crate::executor::automation) fn base_sync_mode_from_input(
     input: &Value,
 ) -> Result<BaseSyncMode, OrbitError> {
@@ -302,18 +342,6 @@ pub(crate) fn git_output_paths(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .collect())
-}
-
-/// NUL-delimited Git path records read from raw stdout bytes, split by
-/// whether each name is exact UTF-8 text.
-#[derive(Debug, Default)]
-pub(crate) struct ExactPaths {
-    /// Records whose bytes are valid UTF-8, unchanged.
-    pub paths: Vec<String>,
-    /// Records whose bytes are not UTF-8, rendered with
-    /// [`slice::escape_ascii`] for diagnostics only (for example
-    /// `loose-\xff.pyc`). Such a rendering never names the native path.
-    pub unrepresentable: Vec<String>,
 }
 
 /// Run Git and split its NUL-delimited path output without lossy decoding.
@@ -505,34 +533,6 @@ pub(crate) fn git_success(
     git_output_raw(process_env, current_dir, args).map(|_| ())
 }
 
-/// A URL argument that reaches `push_url` itself, without Git applying
-/// `url.*.insteadOf` to the already-resolved push URL a second time.
-///
-/// `git remote get-url --push` resolves `pushInsteadOf` (and, when no
-/// push-specific rule matches, `insteadOf`) exactly once, as `git push
-/// origin` does. Passing that resolved URL to `ls-remote` or `fetch`
-/// would apply `insteadOf` again and can name a different repository
-/// [ORB-17686]. The probe URL appends a suffix segment so an ephemeral
-/// identity rewrite for it is strictly longer — and therefore wins —
-/// over every `insteadOf` rule whose value is a prefix of `push_url`.
-/// The identity rewrite maps the probe URL back to `push_url`, so the
-/// transport still addresses exactly `push_url`. This adds only a
-/// command-line `-c` value; it never writes the user's Git config.
-#[derive(Debug, Clone)]
-pub(crate) struct DirectRemoteTarget {
-    pub probe_url: String,
-    pub config_arg: Option<String>,
-}
-
-impl DirectRemoteTarget {
-    pub(crate) fn prefix_args(&self) -> Vec<String> {
-        match &self.config_arg {
-            Some(config) => vec!["-c".to_string(), config.clone()],
-            None => Vec::new(),
-        }
-    }
-}
-
 pub(crate) fn direct_remote_target(push_url: &str) -> DirectRemoteTarget {
     // A `-c url.<push_url>.insteadOf=...` key cannot carry these bytes:
     // `=` would end the config name early and the rest corrupt parsing.
@@ -546,9 +546,10 @@ pub(crate) fn direct_remote_target(push_url: &str) -> DirectRemoteTarget {
     }
     let separator = if push_url.ends_with('/') { "" } else { "/" };
     let probe_url = format!("{push_url}{separator}.orbit-publication-probe");
+    let config_arg = Some(format!("url.{push_url}.insteadOf={probe_url}"));
     DirectRemoteTarget {
-        config_arg: Some(format!("url.{push_url}.insteadOf={probe_url}")),
         probe_url,
+        config_arg,
     }
 }
 

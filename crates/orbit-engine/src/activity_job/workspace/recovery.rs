@@ -100,12 +100,15 @@ impl WorktreeBoundaryGuard {
             }
             match fs::rename(&pending, &recovery_root) {
                 Ok(()) => {
+                    let tracked_patch = recovery_root.join("tracked.patch");
+                    let untracked_payload = recovery_root.join("untracked");
+                    let manifest = recovery_root.join("manifest.json");
                     break WorktreeRecoveryArtifact {
                         attempt,
-                        tracked_patch: recovery_root.join("tracked.patch"),
-                        untracked_payload: recovery_root.join("untracked"),
-                        manifest: recovery_root.join("manifest.json"),
                         root: recovery_root,
+                        tracked_patch,
+                        untracked_payload,
+                        manifest,
                     };
                 }
                 Err(_) if recovery_root.exists() => {

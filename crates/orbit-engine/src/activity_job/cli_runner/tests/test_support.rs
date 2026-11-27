@@ -12,9 +12,14 @@ use super::super::super::audit_writer::V2AuditWriter;
 use super::super::super::dispatcher::{DispatchError, ResolvedCliExecutor, ResolvedSandbox};
 use crate::context::ResolvedActivityTools;
 
-pub(in crate::activity_job::cli_runner) fn sh_args(script: &str) -> Vec<String> {
-    vec!["-c".to_string(), script.to_string()]
-}
+/// The registry [`TestHost::resolve_activity_tool_denials`] resolves against.
+const TEST_REGISTERED_TOOLS: &[&str] = &[
+    "orbit.task.show",
+    "orbit.search",
+    "orbit.workflow.ship",
+    "proc.spawn",
+    "github.run.list",
+];
 
 /// A persistence-refresh failure a test forces on the post-run path, by the
 /// error class the real store reports for it.
@@ -149,14 +154,9 @@ impl crate::test_support::NullRuntimeHost for TestHost {
     }
 }
 
-/// The registry [`TestHost::resolve_activity_tool_denials`] resolves against.
-const TEST_REGISTERED_TOOLS: &[&str] = &[
-    "orbit.task.show",
-    "orbit.search",
-    "orbit.workflow.ship",
-    "proc.spawn",
-    "github.run.list",
-];
+pub(in crate::activity_job::cli_runner) fn sh_args(script: &str) -> Vec<String> {
+    vec!["-c".to_string(), script.to_string()]
+}
 
 /// An audit writer persisting envelopes and blobs to an in-memory store and
 /// `audit_root/blobs`, so tests read back what a real run would keep.

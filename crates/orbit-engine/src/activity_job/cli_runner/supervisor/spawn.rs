@@ -16,15 +16,6 @@ use super::capture::{
 };
 use super::output::{OutputLineContext, TracedCaptureSink};
 
-type SpawnOutput = (
-    CapturedOutput,
-    CapturedOutput,
-    Option<i32>,
-    Duration,
-    bool,
-    bool,
-);
-
 /// Newest stdout bytes a progress sample carries. Large enough for one
 /// provider event holding a long assistant message.
 const PROGRESS_WINDOW_BYTES: usize = 64 * 1024;
@@ -39,18 +30,14 @@ thread_local! {
     static FIXTURE_DRAIN_BUDGET: std::cell::Cell<Duration> = const { std::cell::Cell::new(OUTPUT_DRAIN_BUDGET) };
 }
 
-/// Bound escaped-pipe cleanup in stdin fixtures without changing the production guard.
-#[cfg(test)]
-pub(super) fn with_output_drain_budget<T>(budget: Duration, operation: impl FnOnce() -> T) -> T {
-    struct Restore(Duration);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            FIXTURE_DRAIN_BUDGET.with(|slot| slot.set(self.0));
-        }
-    }
-    let _restore = Restore(FIXTURE_DRAIN_BUDGET.with(|slot| slot.replace(budget)));
-    operation()
-}
+type SpawnOutput = (
+    CapturedOutput,
+    CapturedOutput,
+    Option<i32>,
+    Duration,
+    bool,
+    bool,
+);
 
 /// Samples a running child's stdout every `interval` until it exits, so a
 /// long invocation is observable before it finishes.
@@ -103,6 +90,19 @@ pub(in crate::activity_job::cli_runner) struct SpawnWithTimeoutRequest<'a> {
     /// all stayed flat for this long. `None` or zero leaves only the
     /// wall-clock deadline.
     pub(in crate::activity_job::cli_runner) stall_window: Option<Duration>,
+}
+
+/// Bound escaped-pipe cleanup in stdin fixtures without changing the production guard.
+#[cfg(test)]
+pub(super) fn with_output_drain_budget<T>(budget: Duration, operation: impl FnOnce() -> T) -> T {
+    struct Restore(Duration);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            FIXTURE_DRAIN_BUDGET.with(|slot| slot.set(self.0));
+        }
+    }
+    let _restore = Restore(FIXTURE_DRAIN_BUDGET.with(|slot| slot.replace(budget)));
+    operation()
 }
 
 /// Spawn the child [`spawn_with_timeout`] will supervise. A caller that needs

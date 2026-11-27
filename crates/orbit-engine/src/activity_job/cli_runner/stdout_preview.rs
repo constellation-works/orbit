@@ -6,11 +6,26 @@ use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 use orbit_types::workflow::activity_job::Provider;
 
 pub(super) const STDOUT_TEXT_PREVIEW_LIMIT_BYTES: usize = 64 * 1024;
+
+/// Bound on the final message a step output carries. The complete capture
+/// stays addressable through the step's stdout blob reference.
+pub(super) const FINAL_MESSAGE_LIMIT_BYTES: usize = 64 * 1024;
+
+/// Bound on the newest message one progress event carries.
+pub(super) const PROGRESS_MESSAGE_LIMIT_BYTES: usize = 4 * 1024;
+
 pub(super) struct StdoutTextPreview {
     pub(super) text: String,
     /// Whether bounding omitted redacted text; capture truncation is separate.
     pub(super) truncated: bool,
     pub(super) preview_bytes: usize,
+}
+
+pub(super) struct BoundedMessage {
+    pub(super) text: String,
+    pub(super) truncated: bool,
+    /// Size of the message before it was bounded.
+    pub(super) original_bytes: usize,
 }
 
 pub(super) fn stdout_text_preview(
@@ -68,20 +83,6 @@ fn truncate_preview_text(redacted: &str, prefer_tail: bool, limit: usize) -> Str
         let boundary = floor_char_boundary(redacted, limit);
         redacted[..boundary].to_string()
     }
-}
-
-/// Bound on the final message a step output carries. The complete capture
-/// stays addressable through the step's stdout blob reference.
-pub(super) const FINAL_MESSAGE_LIMIT_BYTES: usize = 64 * 1024;
-
-/// Bound on the newest message one progress event carries.
-pub(super) const PROGRESS_MESSAGE_LIMIT_BYTES: usize = 4 * 1024;
-
-pub(super) struct BoundedMessage {
-    pub(super) text: String,
-    pub(super) truncated: bool,
-    /// Size of the message before it was bounded.
-    pub(super) original_bytes: usize,
 }
 
 /// The newest assistant message in `stdout`, redacted and cut to `limit`

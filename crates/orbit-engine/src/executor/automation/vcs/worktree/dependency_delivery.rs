@@ -44,6 +44,15 @@ pub(in crate::executor::automation) enum DependencyDeliveryMode {
     Ignore,
 }
 
+/// One dependency that lifecycle-completed but whose delivery commits are not
+/// reachable from the base.
+#[derive(Debug)]
+struct UndeliveredDependency {
+    task_id: String,
+    dependency_id: String,
+    commits: Vec<String>,
+}
+
 pub(in crate::executor::automation) fn dependency_delivery_mode_from_input(
     input: &Value,
 ) -> Result<DependencyDeliveryMode, OrbitError> {
@@ -60,15 +69,6 @@ pub(in crate::executor::automation) fn dependency_delivery_mode_from_input(
             "input.dependency_delivery must be 'enforce' or 'ignore', got '{other}'"
         ))),
     }
-}
-
-/// One dependency that lifecycle-completed but whose delivery commits are not
-/// reachable from the base.
-#[derive(Debug)]
-struct UndeliveredDependency {
-    task_id: String,
-    dependency_id: String,
-    commits: Vec<String>,
 }
 
 /// Refuse the run when any done dependency of `task_ids` is undelivered into

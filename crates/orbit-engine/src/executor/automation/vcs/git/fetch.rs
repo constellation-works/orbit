@@ -16,8 +16,34 @@ use orbit_common::fs::git::{
 };
 use orbit_common::fs::io::{FileLockOptions, FileLockTimeout, with_exclusive_file_lock_options};
 use orbit_types::workflow::TRANSIENT_FAILURE_MARKER;
+
 const ORIGIN_AVAILABILITY_PROBE_TIMEOUT_MS: u64 = GIT_REMOTE_TIMEOUT.as_millis() as u64;
+
 const ORIGIN_AVAILABILITY_PROBE_MIN_TIMEOUT_MS: u64 = 1_000;
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static WORKTREE_SETUP_FETCH_LIMITS: Cell<Option<WorktreeSetupFetchLimits>> =
+        const { Cell::new(None) };
+}
+
+#[cfg(feature = "test-support")]
+#[derive(Clone, Copy)]
+struct WorktreeSetupFetchLimits {
+    hold_limit: Duration,
+    lock_wait: Duration,
+}
+
+enum WorktreeFetchLockError {
+    Lock(io::Error),
+    Fetch(OrbitError),
+}
+
+impl From<io::Error> for WorktreeFetchLockError {
+    fn from(error: io::Error) -> Self {
+        Self::Lock(error)
+    }
+}
 
 /// Fetch `origin/<branch>` into the local remote-tracking ref.
 ///
@@ -292,19 +318,6 @@ pub fn with_worktree_setup_fetch_limits<T>(
     operation()
 }
 
-#[cfg(feature = "test-support")]
-#[derive(Clone, Copy)]
-struct WorktreeSetupFetchLimits {
-    hold_limit: Duration,
-    lock_wait: Duration,
-}
-
-#[cfg(feature = "test-support")]
-thread_local! {
-    static WORKTREE_SETUP_FETCH_LIMITS: Cell<Option<WorktreeSetupFetchLimits>> =
-        const { Cell::new(None) };
-}
-
 fn worktree_setup_fetch_limits() -> (Duration, Duration) {
     #[cfg(feature = "test-support")]
     if let Some(limits) = WORKTREE_SETUP_FETCH_LIMITS.with(Cell::get) {
@@ -349,17 +362,6 @@ fn fetch_remote_base_for_worktree_setup(
             Err(origin_unavailable_refusal(error))
         }
         Err(WorktreeFetchLockError::Lock(error)) => Err(error.into()),
-    }
-}
-
-enum WorktreeFetchLockError {
-    Lock(io::Error),
-    Fetch(OrbitError),
-}
-
-impl From<io::Error> for WorktreeFetchLockError {
-    fn from(error: io::Error) -> Self {
-        Self::Lock(error)
     }
 }
 

@@ -16,6 +16,51 @@ use super::conventions::meaningful_execution_summary;
 
 pub(super) const FAILED_HANDOFF_ACTOR: &str = "system";
 
+/// The durable execution-summary first line that blocks delivery.
+const DELIVERY_FAILED_LINE: &str = "Outcome: failed";
+
+pub(super) struct HandoffContext {
+    pub(super) batch_id: String,
+    pub(super) workspace_path: PathBuf,
+    pub(super) tasks: Vec<Task>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum FailedHandoffPhase {
+    Prepare,
+    Rebase,
+    Push,
+    PrLookup,
+    PrCreate,
+    /// The configured body could not be rendered, or a required section is
+    /// unfilled under `pr.missing_required_section = "refuse"`.
+    PrBody,
+    PrView,
+    Promote,
+    EmptyBranch,
+    ObsoleteBase,
+    /// The head or base no longer matches the reviewed candidate [ORB-11333].
+    StaleReviewGate,
+}
+
+impl FailedHandoffPhase {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Prepare => "prepare",
+            Self::Rebase => "rebase",
+            Self::Push => "push",
+            Self::PrLookup => "automation.vcs.pr.lookup",
+            Self::PrCreate => "automation.vcs.pr.create",
+            Self::PrBody => "automation.vcs.pr.body",
+            Self::PrView => "automation.vcs.pr.view",
+            Self::Promote => "promote",
+            Self::EmptyBranch => "empty-branch",
+            Self::ObsoleteBase => "obsolete-base",
+            Self::StaleReviewGate => "stale-review-gate",
+        }
+    }
+}
+
 /// Idempotency key for the forge-hold comment of one batch.
 pub(super) fn forge_hold_operation_id(batch_id: &str) -> String {
     format!("forge-hold:{batch_id}")
@@ -61,9 +106,6 @@ pub(super) fn review_repair_comment_key(body: &str) -> Option<(String, String)> 
         prefix.to_string(),
     ))
 }
-
-/// The durable execution-summary first line that blocks delivery.
-const DELIVERY_FAILED_LINE: &str = "Outcome: failed";
 
 /// Durable delivery gate (ORB-10313 / friction F2026-07-091).
 ///
@@ -152,12 +194,6 @@ pub(super) fn claimed_attempt_summary<H: RuntimeHost + ?Sized>(
     Some(implementer_summary(input))
 }
 
-pub(super) struct HandoffContext {
-    pub(super) batch_id: String,
-    pub(super) workspace_path: PathBuf,
-    pub(super) tasks: Vec<Task>,
-}
-
 pub(super) fn load_handoff_context<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -222,42 +258,6 @@ pub(super) fn completed_task_ids_from_input(input: &Value) -> Option<Vec<String>
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
     (!ids.is_empty()).then_some(ids)
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) enum FailedHandoffPhase {
-    Prepare,
-    Rebase,
-    Push,
-    PrLookup,
-    PrCreate,
-    /// The configured body could not be rendered, or a required section is
-    /// unfilled under `pr.missing_required_section = "refuse"`.
-    PrBody,
-    PrView,
-    Promote,
-    EmptyBranch,
-    ObsoleteBase,
-    /// The head or base no longer matches the reviewed candidate [ORB-11333].
-    StaleReviewGate,
-}
-
-impl FailedHandoffPhase {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Prepare => "prepare",
-            Self::Rebase => "rebase",
-            Self::Push => "push",
-            Self::PrLookup => "automation.vcs.pr.lookup",
-            Self::PrCreate => "automation.vcs.pr.create",
-            Self::PrBody => "automation.vcs.pr.body",
-            Self::PrView => "automation.vcs.pr.view",
-            Self::Promote => "promote",
-            Self::EmptyBranch => "empty-branch",
-            Self::ObsoleteBase => "obsolete-base",
-            Self::StaleReviewGate => "stale-review-gate",
-        }
-    }
 }
 
 pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(

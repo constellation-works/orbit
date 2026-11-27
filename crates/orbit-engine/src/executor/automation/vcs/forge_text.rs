@@ -1,5 +1,13 @@
 //! Neutralize accidental account mentions in text Orbit publishes to a forge.
 
+/// A fenced code block's delimiter run: the marker character and its length.
+/// A block closes only on a run of the same marker at least as long.
+#[derive(Clone, Copy)]
+pub(super) struct Fence {
+    marker: char,
+    len: usize,
+}
+
 /// Keep the visible wording and Markdown intact by separating `@` from a
 /// mention name with a zero-width joiner. The same representation works in
 /// plain-text titles/commit subjects and prose, and repeated rendering is safe.
@@ -232,14 +240,6 @@ fn is_email_at(text: &str, at: usize) -> bool {
             label.chars().next().is_some_and(char::is_alphanumeric)
                 && label.chars().next_back().is_some_and(char::is_alphanumeric)
         })
-}
-
-/// A fenced code block's delimiter run: the marker character and its length.
-/// A block closes only on a run of the same marker at least as long.
-#[derive(Clone, Copy)]
-pub(super) struct Fence {
-    marker: char,
-    len: usize,
 }
 
 /// The fence a template line opens. A backtick fence's info string cannot

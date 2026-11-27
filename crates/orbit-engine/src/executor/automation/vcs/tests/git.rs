@@ -21,6 +21,16 @@ use super::super::git::{
     git_output_raw, git_run, git_run_bytes,
 };
 
+// A FIFO releases the shim explicitly, including when an assertion unwinds.
+// Keeping both ends open makes release nonblocking even if startup failed.
+struct SshRelease(fs::File);
+
+impl Drop for SshRelease {
+    fn drop(&mut self) {
+        let _ = self.0.write_all(b"terminate\n");
+    }
+}
+
 // Fault injection: each shell alias fails silently, either by exiting or by
 // signalling only its own Git parent. This reproduces the missing diagnostic
 // without load or a process-global PATH shim (F2026-10-252).
@@ -247,16 +257,6 @@ fn stalled_delivery_fetch_releases_the_lock_before_a_waiter_times_out() {
             "a stalled remote stays a transient failure: {error}"
         );
     });
-}
-
-// A FIFO releases the shim explicitly, including when an assertion unwinds.
-// Keeping both ends open makes release nonblocking even if startup failed.
-struct SshRelease(fs::File);
-
-impl Drop for SshRelease {
-    fn drop(&mut self) {
-        let _ = self.0.write_all(b"terminate\n");
-    }
 }
 
 #[test]

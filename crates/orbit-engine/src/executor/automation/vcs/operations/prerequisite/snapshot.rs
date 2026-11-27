@@ -8,25 +8,6 @@ use super::super::super::completion_deadline::Deadline;
 use super::super::input::{number, same, text};
 use super::support::{api, complete_list, encoded, unreadable};
 
-pub(in super::super) struct Snapshot {
-    pub(in super::super) repository: String,
-    pub(in super::super) repository_id: u64,
-    pub(in super::super) pr: Value,
-    pub(in super::super) required: Vec<RequiredGate>,
-    pub(in super::super) policy: Value,
-    pub(in super::super) checks: Value,
-    pub(in super::super) statuses: Value,
-    pub(in super::super) runs: Value,
-}
-
-/// The pull request and the head, branch and base a snapshot must still show.
-pub(in super::super) struct PullRequestSelector<'a> {
-    pub(in super::super) pr: &'a str,
-    pub(in super::super) head: &'a str,
-    pub(in super::super) branch: &'a str,
-    pub(in super::super) base: &'a str,
-}
-
 /// First wait between reads of unreadable-but-possibly-transient evidence.
 const FIRST_RETRY_WAIT_MS: u64 = 5_000;
 
@@ -106,6 +87,25 @@ const NON_TRANSIENT_CAUSES: &[(&str, &str)] = &[
         "a review decision that is neither approved nor absent waits on a reviewer, not on a retry",
     ),
 ];
+
+pub(in super::super) struct Snapshot {
+    pub(in super::super) repository: String,
+    pub(in super::super) repository_id: u64,
+    pub(in super::super) pr: Value,
+    pub(in super::super) required: Vec<RequiredGate>,
+    pub(in super::super) policy: Value,
+    pub(in super::super) checks: Value,
+    pub(in super::super) statuses: Value,
+    pub(in super::super) runs: Value,
+}
+
+/// The pull request and the head, branch and base a snapshot must still show.
+pub(in super::super) struct PullRequestSelector<'a> {
+    pub(in super::super) pr: &'a str,
+    pub(in super::super) head: &'a str,
+    pub(in super::super) branch: &'a str,
+    pub(in super::super) base: &'a str,
+}
 
 /// Why `error` is an unreadable cause no retry can clear, or `None` when it is
 /// transient (or not an unreadable-evidence error at all).

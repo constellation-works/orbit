@@ -26,8 +26,8 @@ fn run(program: &str, args: &[String], stall: Option<Duration>, timeout: Duratio
     let (_stdout, _stderr, exit_code, duration, timed_out, stalled) = spawn_with_timeout(
         &orbit_common::Env::capture(),
         SpawnWithTimeoutRequest {
-            stall_window: stall,
             on_spawn: Some(&on_spawn),
+            stall_window: stall,
             ..spawn_test_request(
                 program,
                 args,

@@ -16,6 +16,24 @@ use super::clean_tree::Verifier;
 use super::no_diff::{self, NoDiff};
 use super::tagged_no_diff;
 
+/// Persisted author of a host system write (`ActorIdentity::System`).
+///
+/// Ordinary task updates stamp the caller's identity instead, so this label
+/// is the provenance of a legacy settlement comment, not a string the
+/// subject can choose.
+const SYSTEM_STAMPED_AUTHOR: &str = "system";
+
+/// Outcome of comparing `input.base_sha` with the worktree's current HEAD.
+pub(super) enum PinnedHead {
+    /// No base was pinned by the caller, so this step attributes no history.
+    Unpinned,
+    Matched(String),
+    Changed {
+        base_sha: String,
+        head_sha: String,
+    },
+}
+
 /// The `regression_from` culprits this run's implementer supplied, which the
 /// owner records as relations on acceptance [ORB-24696]. Read through the
 /// same implementation-output channel the commit step uses for its summary.
@@ -219,17 +237,6 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff_at_revisio
     }
 }
 
-/// Outcome of comparing `input.base_sha` with the worktree's current HEAD.
-pub(super) enum PinnedHead {
-    /// No base was pinned by the caller, so this step attributes no history.
-    Unpinned,
-    Matched(String),
-    Changed {
-        base_sha: String,
-        head_sha: String,
-    },
-}
-
 /// Compare HEAD with the immutable checkpoint `worktree_setup` pinned for this
 /// run without traversing or interpreting provider-created history.
 ///
@@ -363,13 +370,6 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
     Ok(chain.contains(&checkpoint.key.run_id)
         && host.get_task(task_id)?.job_run_id.as_deref() == Some(checkpoint_owner))
 }
-
-/// Persisted author of a host system write (`ActorIdentity::System`).
-///
-/// Ordinary task updates stamp the caller's identity instead, so this label
-/// is the provenance of a legacy settlement comment, not a string the
-/// subject can choose.
-const SYSTEM_STAMPED_AUTHOR: &str = "system";
 
 /// Accept HEAD only when a settled before-landing review recorded it as its
 /// final commit and it descends from the pinned base.

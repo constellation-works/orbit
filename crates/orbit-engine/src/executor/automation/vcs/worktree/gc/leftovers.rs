@@ -13,6 +13,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const LEFTOVER_DETAIL: &str = "Git no longer listed this directory as a worktree: an earlier \
      removal failed partway. Removed the remains of the terminal run's worktree.";
 
+const TRASH_DETAIL: &str = "A timed-out worktree removal left a relocated trash directory. \
+     Removed the leftover directory.";
+
+pub(super) struct TrashDirectoryInfo {
+    pid: u32,
+    nanos: u128,
+}
+
 /// Whether a directory is what a failed `git worktree remove` leaves: Git
 /// has dropped its administrative entry, so the `.git` link is gone or names
 /// a directory that no longer exists. A link that still resolves means the
@@ -77,14 +85,6 @@ pub(super) fn reclaim_failed_removal_leftover(
     report.action = "removed".to_string();
     report.detail = Some(LEFTOVER_DETAIL.to_string());
     Ok(report)
-}
-
-const TRASH_DETAIL: &str = "A timed-out worktree removal left a relocated trash directory. \
-     Removed the leftover directory.";
-
-pub(super) struct TrashDirectoryInfo {
-    pid: u32,
-    nanos: u128,
 }
 
 pub(super) fn parse_trash_directory(file_name: &str) -> Option<TrashDirectoryInfo> {

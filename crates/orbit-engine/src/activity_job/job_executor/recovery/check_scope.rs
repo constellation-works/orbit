@@ -35,6 +35,34 @@ struct PathReason {
     reason: String,
 }
 
+/// What binding an admitted check repair decided.
+pub(super) enum CheckScopeBind {
+    /// The repair explained its edits; commit it before the retry.
+    Bound,
+    /// The repair made no edit and wrote no scope record. Nothing is
+    /// committed; the retry reruns completion on the unchanged head, where
+    /// the watcher reruns the failed checks once.
+    NoEdit,
+}
+
+struct BoundCheckRepair<'a> {
+    root: &'a Path,
+    head: String,
+    task: String,
+    owner_run: String,
+    pr: String,
+    admitted: orbit_types::workflow::PrAutoFixAttempt,
+    relative: String,
+}
+
+/// The task, owner run, pull request and failed head a no-edit repair reruns.
+struct NoEditRerunTarget<'a> {
+    task: &'a str,
+    owner_run: &'a str,
+    pr: &'a str,
+    head: &'a str,
+}
+
 fn report_path(run: &str, step: &str, failure: &str) -> String {
     let key = format!("{run}\0{step}\0{failure}");
     let digest = lower_hex(Sha256::digest(key.as_bytes()));
@@ -59,16 +87,6 @@ pub(super) fn instruction(run: &str, step: &str, failure: &str) -> String {
 
 fn refused(detail: impl std::fmt::Display) -> RecoveryCommitRefusal {
     RecoveryCommitRefusal::Uncommittable(format!("CI repair scope: {detail}"))
-}
-
-/// What binding an admitted check repair decided.
-pub(super) enum CheckScopeBind {
-    /// The repair explained its edits; commit it before the retry.
-    Bound,
-    /// The repair made no edit and wrote no scope record. Nothing is
-    /// committed; the retry reruns completion on the unchanged head, where
-    /// the watcher reruns the failed checks once.
-    NoEdit,
 }
 
 /// Whether the worktree holds a delivery edit outside `.orbit/` scratch.
@@ -108,16 +126,6 @@ fn worktree_has_delivery_edit(
         }
     }
     Ok(false)
-}
-
-struct BoundCheckRepair<'a> {
-    root: &'a Path,
-    head: String,
-    task: String,
-    owner_run: String,
-    pr: String,
-    admitted: orbit_types::workflow::PrAutoFixAttempt,
-    relative: String,
 }
 
 fn bind_preflight<'a>(
@@ -333,14 +341,6 @@ pub(super) fn bind(
     bound["ci_repair_paths"] = json!(paths);
     bound["ci_repair_evidence"] = evidence;
     Ok(CheckScopeBind::Bound)
-}
-
-/// The task, owner run, pull request and failed head a no-edit repair reruns.
-struct NoEditRerunTarget<'a> {
-    task: &'a str,
-    owner_run: &'a str,
-    pr: &'a str,
-    head: &'a str,
 }
 
 /// Record a no-edit repair durably before the retry, so the completion

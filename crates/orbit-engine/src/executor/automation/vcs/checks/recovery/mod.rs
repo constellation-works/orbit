@@ -6,7 +6,9 @@
 //! name.
 
 mod act;
+
 mod classify;
+
 mod dependency;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -93,8 +95,8 @@ impl CheckRecovery {
         max_base_ci_cycles: u64,
     ) -> Self {
         Self {
-            deadline_ms,
             max_base_ci_cycles,
+            deadline_ms,
             ..Default::default()
         }
     }
@@ -143,21 +145,6 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     LogsUnavailable(String),
 }
 
-/// The names of the checks the rollup reports failed, with their workflow.
-pub(in crate::executor::automation::vcs) fn failed_checks(
-    status: &PullRequestStatus,
-) -> Vec<(Option<String>, String)> {
-    status
-        .status_checks
-        .iter()
-        .flatten()
-        .filter(|check| {
-            check.state == Some(CheckState::Failed) || check.owed_state == Some(CheckState::Failed)
-        })
-        .filter_map(|check| Some((check.workflow_name.clone(), check.name.clone()?)))
-        .collect()
-}
-
 /// One failed job, or one failed required check run outside a workflow, on
 /// the pull request's head.
 pub(in crate::executor::automation::vcs) struct FailedJob {
@@ -173,4 +160,19 @@ pub(in crate::executor::automation::vcs) struct FailedJob {
     /// The moved base tip's same job succeeded. A failure that remains on a
     /// head containing that tip is then the candidate's, not the base's.
     pub(super) tip_passes: bool,
+}
+
+/// The names of the checks the rollup reports failed, with their workflow.
+pub(in crate::executor::automation::vcs) fn failed_checks(
+    status: &PullRequestStatus,
+) -> Vec<(Option<String>, String)> {
+    status
+        .status_checks
+        .iter()
+        .flatten()
+        .filter(|check| {
+            check.state == Some(CheckState::Failed) || check.owed_state == Some(CheckState::Failed)
+        })
+        .filter_map(|check| Some((check.workflow_name.clone(), check.name.clone()?)))
+        .collect()
 }

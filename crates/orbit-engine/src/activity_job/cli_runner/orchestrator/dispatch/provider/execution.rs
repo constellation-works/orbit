@@ -630,8 +630,8 @@ pub(in super::super) fn dispatch_prepared_provider(
         })?;
     }
     post_run::finish_cli_dispatch(post_run::CliProviderCompletion {
-        context,
         started_at,
+        context,
         provider,
         provider_enum,
         model,

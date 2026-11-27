@@ -500,15 +500,15 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         &task.id,
         TaskAutomationUpdate {
             status: Some(TaskStatus::Blocked),
+            external_refs: vec![ExternalRef::github_pr_with_url(
+                pr_number.clone(),
+                pr_url.as_deref(),
+            )?],
             status_event: Some(event.to_string()),
             status_note: Some(note.clone()),
             status_decision: Some(TaskDecision::RunTransition {
                 run_id: run_id.to_string(),
             }),
-            external_refs: vec![ExternalRef::github_pr_with_url(
-                pr_number.clone(),
-                pr_url.as_deref(),
-            )?],
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),

@@ -102,30 +102,30 @@ impl PullRequestStatus {
                 .map(ToOwned::to_owned)
         };
         Self {
-            identity_metadata_readable: pull_request.is_object(),
-            merge_commit_absent: pull_request.get("mergeCommit") == Some(&Value::Null),
-            merged_at_absent: pull_request.get("mergedAt") == Some(&Value::Null),
-            auto_merge_enabled: pull_request
-                .get("autoMergeRequest")
-                .map(|value| !value.is_null()),
             number: pull_request.get("number").and_then(Value::as_u64),
             number_selector: pull_request.get("number").and_then(number_selector),
             url: text("url"),
             body: exact("body"),
             state: exact("state"),
+            auto_merge_enabled: pull_request
+                .get("autoMergeRequest")
+                .map(|value| !value.is_null()),
             head_branch: text("headRefName"),
             head_sha: text("headRefOid"),
             base_branch: text("baseRefName"),
             merge_commit: reported(pull_request.pointer("/mergeCommit/oid")),
-            merged_at: text("mergedAt"),
-            merge_state_status: exact("mergeStateStatus"),
-            is_draft: pull_request.get("isDraft") == Some(&Value::Bool(true)),
             exact_head_branch: exact("headRefName"),
             exact_head_sha: exact("headRefOid"),
             exact_merge_commit: pull_request
                 .pointer("/mergeCommit/oid")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
+            identity_metadata_readable: pull_request.is_object(),
+            merge_commit_absent: pull_request.get("mergeCommit") == Some(&Value::Null),
+            merged_at_absent: pull_request.get("mergedAt") == Some(&Value::Null),
+            merged_at: text("mergedAt"),
+            merge_state_status: exact("mergeStateStatus"),
+            is_draft: pull_request.get("isDraft") == Some(&Value::Bool(true)),
             review_decision: ReviewDecision::parse(pull_request.get("reviewDecision")),
             status_checks: pull_request
                 .get("statusCheckRollup")
@@ -275,15 +275,6 @@ impl StatusCheck {
     }
 }
 
-/// Classify one status-check rollup context for branch protection.
-///
-/// This is the single spelling of the state/status/conclusion → pass/fail/
-/// pending mapping. `None` means the value is not recognized; callers that
-/// must bucket every context treat `None` as pending.
-pub fn classify_rollup_context(check: &Value) -> Option<CheckState> {
-    StatusCheck::classify(check)
-}
-
 /// One pull request as `pr.list` reports it.
 #[derive(Clone, Debug)]
 pub(in crate::executor::automation::vcs) struct PullRequestSummary {
@@ -371,16 +362,16 @@ impl MergeCapabilities {
             })
         };
         Ok(Self {
-            allow_squash_merge: capability("allow_squash_merge")?,
-            allow_rebase_merge: capability("allow_rebase_merge")?,
-            allow_merge_commit: capability("allow_merge_commit")?,
-            requires_linear_history: capability("requires_linear_history")?,
-            allow_auto_merge: capability("allow_auto_merge")?,
             repository: reported(repository.get("name_with_owner")),
             base_branch: repository
                 .get("base_branch")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
+            allow_squash_merge: capability("allow_squash_merge")?,
+            allow_rebase_merge: capability("allow_rebase_merge")?,
+            allow_merge_commit: capability("allow_merge_commit")?,
+            requires_linear_history: capability("requires_linear_history")?,
+            allow_auto_merge: capability("allow_auto_merge")?,
         })
     }
 }
@@ -445,39 +436,6 @@ impl ReviewedMergeOutcome {
                 .map(ToOwned::to_owned),
         }
     }
-}
-
-/// Read pull request `pr_number`'s merge-relevant state.
-pub(in crate::executor::automation::vcs) fn read_pr_status<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace_path: &Path,
-    pr_number: &str,
-) -> Result<PullRequestStatus, OrbitError> {
-    read_pr_status_with_deadline(host, workspace_path, pr_number, None)
-}
-
-/// The same status observation within an existing completion/landing budget.
-pub(in crate::executor::automation::vcs) fn read_pr_status_before<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace_path: &Path,
-    pr_number: &str,
-    deadline_ms: u64,
-) -> Result<PullRequestStatus, OrbitError> {
-    read_pr_status_with_deadline(host, workspace_path, pr_number, Some(deadline_ms))
-}
-
-fn read_pr_status_with_deadline<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace_path: &Path,
-    pr_number: &str,
-    deadline_ms: Option<u64>,
-) -> Result<PullRequestStatus, OrbitError> {
-    let mut input = json!({"pr":pr_number,"workspace_path":workspace_path.to_string_lossy()});
-    if let Some(deadline) = deadline_ms {
-        input["deadline_ms"] = json!(deadline);
-    }
-    let response = host.run_private_vcs_operation(operations::PR_STATUS, input)?;
-    Ok(PullRequestStatus::from_status_response(&response))
 }
 
 /// The checks branch protection requires on one head commit, as
@@ -587,9 +545,9 @@ impl RequiredChecks {
         Ok(Self {
             head_sha,
             required,
+            reported_head_sha: reported(pull_request.get("headRefOid")),
             checks,
             check_runs,
-            reported_head_sha: reported(pull_request.get("headRefOid")),
             failed_history: failed_check_history(commit),
         })
     }
@@ -646,6 +604,48 @@ impl RequiredChecks {
                     && (workflow.is_none() || required_workflow.as_deref() == workflow)
             })
     }
+}
+
+/// Classify one status-check rollup context for branch protection.
+///
+/// This is the single spelling of the state/status/conclusion → pass/fail/
+/// pending mapping. `None` means the value is not recognized; callers that
+/// must bucket every context treat `None` as pending.
+pub fn classify_rollup_context(check: &Value) -> Option<CheckState> {
+    StatusCheck::classify(check)
+}
+
+/// Read pull request `pr_number`'s merge-relevant state.
+pub(in crate::executor::automation::vcs) fn read_pr_status<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    pr_number: &str,
+) -> Result<PullRequestStatus, OrbitError> {
+    read_pr_status_with_deadline(host, workspace_path, pr_number, None)
+}
+
+/// The same status observation within an existing completion/landing budget.
+pub(in crate::executor::automation::vcs) fn read_pr_status_before<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    pr_number: &str,
+    deadline_ms: u64,
+) -> Result<PullRequestStatus, OrbitError> {
+    read_pr_status_with_deadline(host, workspace_path, pr_number, Some(deadline_ms))
+}
+
+fn read_pr_status_with_deadline<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    pr_number: &str,
+    deadline_ms: Option<u64>,
+) -> Result<PullRequestStatus, OrbitError> {
+    let mut input = json!({"pr":pr_number,"workspace_path":workspace_path.to_string_lossy()});
+    if let Some(deadline) = deadline_ms {
+        input["deadline_ms"] = json!(deadline);
+    }
+    let response = host.run_private_vcs_operation(operations::PR_STATUS, input)?;
+    Ok(PullRequestStatus::from_status_response(&response))
 }
 
 /// Read which checks branch protection requires on pull request

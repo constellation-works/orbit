@@ -20,18 +20,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 
-/// Task statuses that settle the work as done — the only statuses that
-/// license discarding a run's worktree and branch outright. A task parked in
-/// `someday` licenses it only under the parked-age rule
-/// (`WorktreeGcOptions::parked_older_than`). Every other status (including
-/// `blocked` and `review`) retains it, and an unresolvable or missing task id
-/// retains it as well: the collector fails closed.
-pub(super) fn task_status_permits_deletion(status: TaskStatus) -> bool {
-    matches!(
-        status,
-        TaskStatus::Rejected | TaskStatus::Archived | TaskStatus::Done
-    )
-}
+/// What an operator can do about a directory Git does not list as a
+/// worktree of this checkout and that GC cannot show to be the remains of a
+/// failed removal. GC never removes one.
+pub(super) const NOT_REGISTERED_REMEDY: &str = "Git does not list this directory as a worktree of this \
+     checkout, so GC never removes it. If the worktree was moved, `git worktree repair <path>` \
+     re-registers it; otherwise inspect it and delete it by hand once nothing in it is needed.";
 
 #[derive(Debug, Clone, Default)]
 pub struct WorktreeGcOptions {
@@ -119,18 +113,24 @@ impl WorktreeGcReport {
     }
 }
 
-/// What an operator can do about a directory Git does not list as a
-/// worktree of this checkout and that GC cannot show to be the remains of a
-/// failed removal. GC never removes one.
-pub(super) const NOT_REGISTERED_REMEDY: &str = "Git does not list this directory as a worktree of this \
-     checkout, so GC never removes it. If the worktree was moved, `git worktree repair <path>` \
-     re-registers it; otherwise inspect it and delete it by hand once nothing in it is needed.";
-
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct WorktreeGcResult {
     pub dry_run: bool,
     pub bytes_reclaimed: u64,
     pub reports: Vec<WorktreeGcReport>,
+}
+
+/// Task statuses that settle the work as done — the only statuses that
+/// license discarding a run's worktree and branch outright. A task parked in
+/// `someday` licenses it only under the parked-age rule
+/// (`WorktreeGcOptions::parked_older_than`). Every other status (including
+/// `blocked` and `review`) retains it, and an unresolvable or missing task id
+/// retains it as well: the collector fails closed.
+pub(super) fn task_status_permits_deletion(status: TaskStatus) -> bool {
+    matches!(
+        status,
+        TaskStatus::Rejected | TaskStatus::Archived | TaskStatus::Done
+    )
 }
 
 pub fn collect_worktrees<H: RuntimeHost + ?Sized>(

@@ -24,6 +24,20 @@ const CONVENTIONAL_HOME_BIN_DIRS: &[&str] = &[".local/bin", ".orbit/bin", ".carg
 /// an interactive shell can. [ORB-11808]
 pub(crate) const SUPPORTED_SYSTEM_BIN_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
 
+const MISSING_LAUNCHER_PREFIX: &str = "provider launcher `";
+
+const MISSING_LAUNCHER_PROVIDER: &str = "` for provider `";
+
+const MISSING_LAUNCHER_SUFFIX: &str = "` was not found";
+
+/// A provider launcher that dispatch could not find, as named by the
+/// permanent spawn error `resolve_provider_launcher` returns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingLauncher {
+    pub program: String,
+    pub provider: String,
+}
+
 /// Resolve a provider launcher without relying solely on the parent process's
 /// ambient `PATH`.
 ///
@@ -305,18 +319,6 @@ fn resolve_provider_launcher_with_extra_dirs(
         missing_launcher_message(program, provider)
     )))
 }
-
-/// A provider launcher that dispatch could not find, as named by the
-/// permanent spawn error `resolve_provider_launcher` returns.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MissingLauncher {
-    pub program: String,
-    pub provider: String,
-}
-
-const MISSING_LAUNCHER_PREFIX: &str = "provider launcher `";
-const MISSING_LAUNCHER_PROVIDER: &str = "` for provider `";
-const MISSING_LAUNCHER_SUFFIX: &str = "` was not found";
 
 fn missing_launcher_message(program: &str, provider: &str) -> String {
     format!(

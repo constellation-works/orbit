@@ -34,6 +34,14 @@ pub enum BaselineHoldStatus {
     Lifted(String),
 }
 
+/// A recent failed attempt to judge a hold, keyed by tip and command using
+/// the cache path. It never represents a conclusive validation result.
+#[derive(Serialize, Deserialize)]
+struct InconclusiveHoldAttempt {
+    recorded_at: chrono::DateTime<Utc>,
+    reason: String,
+}
+
 /// Decide whether a [`BaselineRedHold`] still stands in `repo`.
 ///
 /// The hold stands while its base ref still points at the red commit. When
@@ -99,14 +107,6 @@ pub fn recorded_baseline_hold_status<H: RuntimeHost + ?Sized>(
         Err(status) => return Some(status),
     };
     recorded_moved_base_status(host, repo, hold, &tip)
-}
-
-/// A recent failed attempt to judge a hold, keyed by tip and command using
-/// the cache path. It never represents a conclusive validation result.
-#[derive(Serialize, Deserialize)]
-struct InconclusiveHoldAttempt {
-    recorded_at: chrono::DateTime<Utc>,
-    reason: String,
 }
 
 fn record_inconclusive_hold<H: RuntimeHost + ?Sized>(

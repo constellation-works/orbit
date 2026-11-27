@@ -33,6 +33,54 @@ use orbit_types::workflow::{MUSE_MODEL_ACCESS_OUTPUT_KEY, MuseModelAccess};
 use serde_json::Value;
 use std::time::Duration;
 
+/// Names this projection writes into step output.
+///
+/// An agent `result` cannot set one of these or have it listed in
+/// `response_result_fields`. The drop below and every write share this slice,
+/// so a new Orbit key cannot be offered as the agent's answer.
+const ORBIT_OWNED_STEP_OUTPUT_KEYS: &[&str] = &[
+    DECLARED_FAILURE_EVIDENCE_KEY,
+    MUSE_MODEL_ACCESS_OUTPUT_KEY,
+    "build_budget_waits",
+    "timed_out",
+    "stalled",
+    super::super::continuation::REQUEST_OUTPUT_KEY,
+    super::super::response_correction::REQUEST_OUTPUT_KEY,
+    "print_timeout_ms",
+    "effective_deadline_ms",
+    "response_result_fields",
+    "final_message",
+    "final_message_truncated",
+    "final_message_bytes",
+    "provider",
+    "argv_redacted",
+    "stdin_blob_ref",
+    "stdout_blob_ref",
+    "stderr_blob_ref",
+    "exit_code",
+    "duration_ms",
+    "response_envelope_required",
+    "response_envelope_valid",
+    "response_envelope_status",
+    "response_envelope_error",
+    "completion_envelope_required",
+    "completion_envelope_satisfied",
+    "completion_envelope_error",
+    "sandbox_write_diagnostic",
+    "stdout_text",
+    "stdout_text_truncated",
+    "stdout_text_original_bytes",
+    "stdout_text_preview_bytes",
+    "stdout_text_preview_limit_bytes",
+    "stdout_text_captured_bytes",
+    "stdout_capture_truncated",
+    "stdout_capture_limit_bytes",
+    "stderr_original_bytes",
+    "stderr_captured_bytes",
+    "stderr_capture_truncated",
+    "stderr_capture_limit_bytes",
+];
+
 /// Inclusive provider-budget boundary, independent of envelope policy flags.
 pub(in super::super) fn print_budget_exhausted(
     exit_success: bool,
@@ -120,54 +168,6 @@ fn retained_claude_terminal_result(provider: Provider, answer_text: &str) -> boo
         .ok()
         .is_some_and(|value| value.get("type").and_then(Value::as_str) == Some("result"))
 }
-
-/// Names this projection writes into step output.
-///
-/// An agent `result` cannot set one of these or have it listed in
-/// `response_result_fields`. The drop below and every write share this slice,
-/// so a new Orbit key cannot be offered as the agent's answer.
-const ORBIT_OWNED_STEP_OUTPUT_KEYS: &[&str] = &[
-    DECLARED_FAILURE_EVIDENCE_KEY,
-    MUSE_MODEL_ACCESS_OUTPUT_KEY,
-    "build_budget_waits",
-    "timed_out",
-    "stalled",
-    super::super::continuation::REQUEST_OUTPUT_KEY,
-    super::super::response_correction::REQUEST_OUTPUT_KEY,
-    "print_timeout_ms",
-    "effective_deadline_ms",
-    "response_result_fields",
-    "final_message",
-    "final_message_truncated",
-    "final_message_bytes",
-    "provider",
-    "argv_redacted",
-    "stdin_blob_ref",
-    "stdout_blob_ref",
-    "stderr_blob_ref",
-    "exit_code",
-    "duration_ms",
-    "response_envelope_required",
-    "response_envelope_valid",
-    "response_envelope_status",
-    "response_envelope_error",
-    "completion_envelope_required",
-    "completion_envelope_satisfied",
-    "completion_envelope_error",
-    "sandbox_write_diagnostic",
-    "stdout_text",
-    "stdout_text_truncated",
-    "stdout_text_original_bytes",
-    "stdout_text_preview_bytes",
-    "stdout_text_preview_limit_bytes",
-    "stdout_text_captured_bytes",
-    "stdout_capture_truncated",
-    "stdout_capture_limit_bytes",
-    "stderr_original_bytes",
-    "stderr_captured_bytes",
-    "stderr_capture_truncated",
-    "stderr_capture_limit_bytes",
-];
 
 /// Record one Orbit-owned step-output field, replacing any agent value.
 #[track_caller]
@@ -854,9 +854,9 @@ pub(in super::super) fn project_completion(
         message,
         failure_code,
         invocation: trace.map(|trace| DispatchInvocationTrace {
+            agent_execution_id,
             provider,
             model,
-            agent_execution_id,
             account: spec.crew_account.clone(),
             trace,
         }),

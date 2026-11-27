@@ -53,11 +53,26 @@ use super::git::{
 pub use fixed_wait_fixture::with_vcs_retry_wait;
 
 const PROBE_ATTEMPTS: u32 = 3;
+
 const INITIAL_BACKOFF_MS: u64 = 250;
 
 #[cfg(feature = "test-support")]
 thread_local! {
     static BACKOFF_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(INITIAL_BACKOFF_MS) };
+}
+
+pub(super) struct RemoteBranchProbe {
+    pub(super) sha: Option<String>,
+    pub(super) attempts: u32,
+    pub(super) elapsed_ms: u64,
+    pub(super) waited_ms: u64,
+}
+
+pub(super) struct RemoteRefProbe {
+    pub(super) stdout: String,
+    pub(super) attempts: u32,
+    pub(super) elapsed_ms: u64,
+    pub(super) waited_ms: u64,
 }
 
 /// Scale retry waits in fixtures without changing attempt counts or production defaults.
@@ -90,13 +105,6 @@ pub(crate) fn fixed_wait(duration: Duration) {
         return;
     }
     std::thread::sleep(duration);
-}
-
-pub(super) struct RemoteBranchProbe {
-    pub(super) sha: Option<String>,
-    pub(super) attempts: u32,
-    pub(super) elapsed_ms: u64,
-    pub(super) waited_ms: u64,
 }
 
 /// Probe `branch` at `remote`, the effective publication destination.
@@ -150,13 +158,6 @@ pub(super) fn exact_remote_ref_sha(stdout: &str, full_ref: &str) -> Option<Strin
 /// output; see [`exact_remote_ref_sha`] for the tail-match invariant.
 pub(super) fn exact_remote_branch_sha(stdout: &str, branch: &str) -> Option<String> {
     exact_remote_ref_sha(stdout, &format!("refs/heads/{branch}"))
-}
-
-pub(super) struct RemoteRefProbe {
-    pub(super) stdout: String,
-    pub(super) attempts: u32,
-    pub(super) elapsed_ms: u64,
-    pub(super) waited_ms: u64,
 }
 
 /// Retry only supervisor deadlines, never a completed Git refusal. Each child

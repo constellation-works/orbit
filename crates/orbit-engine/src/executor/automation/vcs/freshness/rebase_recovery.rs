@@ -1,4 +1,5 @@
 //! Interrupted rebase recovery and certified rewrite classification.
+
 use super::super::super::input::{input_string_field, required_input_string};
 use super::super::absorbed::{
     ABSORBING_STEP, AbsorbedReason, AbsorbedRefusal, covering_commit, task_scope_digest,
@@ -13,6 +14,15 @@ use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost};
 use orbit_common::{OrbitError, RecoverableVcsConflict};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+
+/// How the current HEAD relates to the certified recovery of the prepared
+/// rewrite; see [`recovered_rewrite`].
+pub(super) enum RecoveredRewrite {
+    Current(Value),
+    Overtaken(Value),
+    Uncertified,
+    Absent,
+}
 
 /// Certify a deterministic `sync_base` rebase that dropped every pick, using
 /// the same content evidence and host authority as conflict recovery. Other
@@ -424,15 +434,6 @@ fn base_overtook_recovery(
             &landed,
             &prepared,
         )?)
-}
-
-/// How the current HEAD relates to the certified recovery of the prepared
-/// rewrite; see [`recovered_rewrite`].
-pub(super) enum RecoveredRewrite {
-    Current(Value),
-    Overtaken(Value),
-    Uncertified,
-    Absent,
 }
 
 /// Whether a recovery checkpoint was produced for the prepared base pin.

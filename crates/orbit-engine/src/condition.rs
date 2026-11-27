@@ -16,6 +16,8 @@ use orbit_common::OrbitError;
 
 use crate::template::{self, TemplateContext};
 
+type Render<'a> = dyn Fn(&str) -> Result<String, OrbitError> + 'a;
+
 /// Evaluate a boolean expression whose operands are templates. Shared between
 /// `when:` and loop `break_when:` constructs
 /// (`docs/design/activity-job/4_decisions.md`, "Condition guards stay
@@ -33,8 +35,6 @@ pub fn evaluate_bool_expr(expr: &str, ctx: &TemplateContext) -> Result<bool, Orb
 pub(crate) fn evaluate_expr(resolved: &str) -> Result<bool, OrbitError> {
     evaluate_with(resolved, &|operand| Ok(operand.to_string()))
 }
-
-type Render<'a> = dyn Fn(&str) -> Result<String, OrbitError> + 'a;
 
 /// Parse and evaluate an expression, rendering each operand through `render`.
 ///

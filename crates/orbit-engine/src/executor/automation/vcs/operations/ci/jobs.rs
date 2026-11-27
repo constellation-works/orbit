@@ -22,6 +22,94 @@ use super::super::input::{required_string, valid_expected_remote_sha};
 use super::super::process::execute_with_transient_retry;
 use super::log_answer::CiJobLogAnswer;
 
+// Unknown provider strings remain observations, never a successful verdict.
+macro_rules! ci_job_tokens {
+    ($name:ident { $($variant:ident => $token:literal),+ $(,)? }) => {
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub(in crate::executor::automation::vcs) enum $name {
+            $($variant,)+
+            Unknown(String),
+        }
+        impl $name {
+            fn parse(value: &Value) -> Option<Self> {
+                Some(match value.as_str()? {
+                    $($token => Self::$variant,)+
+                    other => Self::Unknown(other.to_string()),
+                })
+            }
+        }
+    };
+}
+
+// All 21 normalized fields are decoded together. Extra fields and non-object
+// rows are retained only for serialization, since existing evidence notes
+// embed the complete row, including incomplete host observations.
+macro_rules! ci_commit_job_fields {
+    ($($field:ident : $ty:ty => $parse:expr),+ $(,)?) => {
+        #[derive(Clone, Debug)]
+        pub(in crate::executor::automation::vcs) struct CiCommitJobEvidence {
+            $(pub(in crate::executor::automation::vcs) $field: CiJobObservation<$ty>,)+
+            pub(in crate::executor::automation::vcs) association: CiJobPullRequests,
+            pub(in crate::executor::automation::vcs) started_time: Option<chrono::DateTime<chrono::FixedOffset>>,
+            pub(in crate::executor::automation::vcs) completed_time: Option<chrono::DateTime<chrono::FixedOffset>>,
+            extra: serde_json::Map<String, Value>,
+            field_order: Option<Vec<String>>,
+            non_object: Option<Value>,
+        }
+        impl CiCommitJobEvidence {
+            fn decode(value: Value) -> Self {
+                let association = CiJobPullRequests::from_legacy(&value);
+                let (mut fields, non_object) = match value {
+                    Value::Object(fields) => (fields, None),
+                    other => (serde_json::Map::new(), Some(other)),
+                };
+                let field_order = Some(fields.keys().cloned().collect());
+                let mut row = Self {
+                    $($field: CiJobObservation::decode(fields.remove(stringify!($field)), $parse),)+
+                    association, started_time: None, completed_time: None,
+                    extra: fields, field_order, non_object,
+                };
+                row.bind_times();
+                row
+            }
+        }
+        impl Serialize for CiCommitJobEvidence {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                use serde::ser::SerializeMap;
+                if let Some(value) = &self.non_object { return value.serialize(serializer); }
+                let mut map = serializer.serialize_map(None)?;
+                if let Some(order) = &self.field_order {
+                    // serde_json preserves insertion order in this workspace;
+                    // a decoded row must keep its original history projection.
+                    for key in order {
+                        match key.as_str() {
+                            $(stringify!($field) => map.serialize_entry(key, &self.$field)?,)+
+                            _ => if let Some(value) = self.extra.get(key) {
+                                map.serialize_entry(key, value)?;
+                            },
+                        }
+                    }
+                } else {
+                    $(map.serialize_entry(stringify!($field), &self.$field)?;)+
+                }
+                map.end()
+            }
+        }
+    };
+}
+
+/// Largest failed-job log excerpt one read returns.
+const MAX_JOB_LOG_BYTES: usize = 64 * 1024;
+
+// Project inside gh, before the process supervisor captures stdout. A page of
+// repository metadata, commit messages or job-step timestamps can exceed its
+// normal capture bound. Keep the original 100-row window and total_count so
+// exact-tip completeness checks and bounded ancestry selection stay unchanged.
+// Do not default a missing list to []: a malformed read must still fail.
+const COMMIT_RUN_FIELDS: &str = "{total_count, workflow_runs: (.workflow_runs | if type != \"array\" then error(\"workflow_runs must be an array\") else map({id, name, workflow_id, repository: {id: .repository.id, full_name: .repository.full_name}, status, conclusion, run_started_at, run_attempt, event, head_branch, head_sha, pull_requests}) end)}";
+
+const RUN_JOB_FIELDS: &str = "{total_count, jobs: (.jobs | if type != \"array\" then error(\"jobs must be an array\") else map({id, name, status, conclusion, started_at, completed_at, steps: (.steps | if type == \"array\" then map({name, number, status, conclusion}) else . end)}) end)}";
+
 /// Parsed job identity for bounded diagnostics; incomplete identities remain
 /// incomplete, with the same serialized optional fields as historical notes.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -106,26 +194,10 @@ impl CiJobObservation<u64> {
     }
 }
 
-// Unknown provider strings remain observations, never a successful verdict.
-macro_rules! ci_job_tokens {
-    ($name:ident { $($variant:ident => $token:literal),+ $(,)? }) => {
-        #[derive(Clone, Debug, PartialEq, Eq)]
-        pub(in crate::executor::automation::vcs) enum $name {
-            $($variant,)+
-            Unknown(String),
-        }
-        impl $name {
-            fn parse(value: &Value) -> Option<Self> {
-                Some(match value.as_str()? {
-                    $($token => Self::$variant,)+
-                    other => Self::Unknown(other.to_string()),
-                })
-            }
-        }
-    };
-}
 ci_job_tokens!(CiJobStatus { Completed => "completed" });
+
 ci_job_tokens!(CiJobEvent { PullRequest => "pull_request" });
+
 ci_job_tokens!(CiJobConclusion {
     Success => "success", Failure => "failure", Cancelled => "cancelled",
     TimedOut => "timed_out", ActionRequired => "action_required",
@@ -163,6 +235,7 @@ impl CiJobConclusion {
 pub(in crate::executor::automation::vcs) struct CiJobPullRequests {
     pub(in crate::executor::automation::vcs) numbers: Vec<u64>,
 }
+
 impl CiJobPullRequests {
     pub(in crate::executor::automation::vcs) fn from_legacy(job: &Value) -> Self {
         let number = |value: &Value| {
@@ -186,76 +259,6 @@ impl CiJobPullRequests {
     }
 }
 
-fn ci_job_text(value: &Value) -> Option<String> {
-    value.as_str().map(str::to_string)
-}
-fn ci_job_steps(value: &Value) -> Option<Vec<CiJobObservation<String>>> {
-    Some(
-        value
-            .as_array()?
-            .iter()
-            .cloned()
-            .map(|step| CiJobObservation::decode(Some(step), ci_job_text))
-            .collect(),
-    )
-}
-
-// All 21 normalized fields are decoded together. Extra fields and non-object
-// rows are retained only for serialization, since existing evidence notes
-// embed the complete row, including incomplete host observations.
-macro_rules! ci_commit_job_fields {
-    ($($field:ident : $ty:ty => $parse:expr),+ $(,)?) => {
-        #[derive(Clone, Debug)]
-        pub(in crate::executor::automation::vcs) struct CiCommitJobEvidence {
-            $(pub(in crate::executor::automation::vcs) $field: CiJobObservation<$ty>,)+
-            pub(in crate::executor::automation::vcs) association: CiJobPullRequests,
-            pub(in crate::executor::automation::vcs) started_time: Option<chrono::DateTime<chrono::FixedOffset>>,
-            pub(in crate::executor::automation::vcs) completed_time: Option<chrono::DateTime<chrono::FixedOffset>>,
-            extra: serde_json::Map<String, Value>,
-            field_order: Option<Vec<String>>,
-            non_object: Option<Value>,
-        }
-        impl CiCommitJobEvidence {
-            fn decode(value: Value) -> Self {
-                let association = CiJobPullRequests::from_legacy(&value);
-                let (mut fields, non_object) = match value {
-                    Value::Object(fields) => (fields, None),
-                    other => (serde_json::Map::new(), Some(other)),
-                };
-                let field_order = Some(fields.keys().cloned().collect());
-                let mut row = Self {
-                    $($field: CiJobObservation::decode(fields.remove(stringify!($field)), $parse),)+
-                    association, started_time: None, completed_time: None,
-                    extra: fields, field_order, non_object,
-                };
-                row.bind_times();
-                row
-            }
-        }
-        impl Serialize for CiCommitJobEvidence {
-            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                use serde::ser::SerializeMap;
-                if let Some(value) = &self.non_object { return value.serialize(serializer); }
-                let mut map = serializer.serialize_map(None)?;
-                if let Some(order) = &self.field_order {
-                    // serde_json preserves insertion order in this workspace;
-                    // a decoded row must keep its original history projection.
-                    for key in order {
-                        match key.as_str() {
-                            $(stringify!($field) => map.serialize_entry(key, &self.$field)?,)+
-                            _ => if let Some(value) = self.extra.get(key) {
-                                map.serialize_entry(key, value)?;
-                            },
-                        }
-                    }
-                } else {
-                    $(map.serialize_entry(stringify!($field), &self.$field)?;)+
-                }
-                map.end()
-            }
-        }
-    };
-}
 ci_commit_job_fields! {
     run_id: u64 => Value::as_u64,
     job_id: u64 => Value::as_u64,
@@ -308,6 +311,7 @@ pub(in crate::executor::automation::vcs) struct CiCommitJobsAnswer {
     commit: CiJobObservation<String>,
     pub(in crate::executor::automation::vcs) jobs: Vec<CiCommitJobEvidence>,
 }
+
 impl CiCommitJobsAnswer {
     pub(in crate::executor::automation::vcs) fn decode_response(response: Value) -> Option<Self> {
         let commit = CiJobObservation::decode(response.get("commit").cloned(), ci_job_text);
@@ -322,16 +326,20 @@ impl CiCommitJobsAnswer {
     }
 }
 
-/// Largest failed-job log excerpt one read returns.
-const MAX_JOB_LOG_BYTES: usize = 64 * 1024;
+fn ci_job_text(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_string)
+}
 
-// Project inside gh, before the process supervisor captures stdout. A page of
-// repository metadata, commit messages or job-step timestamps can exceed its
-// normal capture bound. Keep the original 100-row window and total_count so
-// exact-tip completeness checks and bounded ancestry selection stay unchanged.
-// Do not default a missing list to []: a malformed read must still fail.
-const COMMIT_RUN_FIELDS: &str = "{total_count, workflow_runs: (.workflow_runs | if type != \"array\" then error(\"workflow_runs must be an array\") else map({id, name, workflow_id, repository: {id: .repository.id, full_name: .repository.full_name}, status, conclusion, run_started_at, run_attempt, event, head_branch, head_sha, pull_requests}) end)}";
-const RUN_JOB_FIELDS: &str = "{total_count, jobs: (.jobs | if type != \"array\" then error(\"jobs must be an array\") else map({id, name, status, conclusion, started_at, completed_at, steps: (.steps | if type == \"array\" then map({name, number, status, conclusion}) else . end)}) end)}";
+fn ci_job_steps(value: &Value) -> Option<Vec<CiJobObservation<String>>> {
+    Some(
+        value
+            .as_array()?
+            .iter()
+            .cloned()
+            .map(|step| CiJobObservation::decode(Some(step), ci_job_text))
+            .collect(),
+    )
+}
 
 /// Every job of the newest attempt of each workflow run GitHub recorded for
 /// `commit`, with its conclusion and first failed step. Base ancestry reads

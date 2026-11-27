@@ -7,6 +7,13 @@ use orbit_common::OrbitError;
 
 use super::super::git::{git_output, git_output_raw};
 
+#[derive(Default)]
+pub(super) struct WorktreeStatusCounts {
+    pub(super) staged: usize,
+    pub(super) unstaged: usize,
+    pub(super) untracked: usize,
+}
+
 /// The worktree carries no committable work. Reports only what was observed —
 /// this message shares no wording with [`unrelated_history_error`] so a reader
 /// can tell the two conditions apart (ORB-10380).
@@ -49,13 +56,6 @@ pub(super) fn changed_head_error(
          the immutable setup checkpoint at HEAD. Orbit did not stage, reset, or adopt history.",
         workspace_path.display()
     ))
-}
-
-#[derive(Default)]
-pub(super) struct WorktreeStatusCounts {
-    pub(super) staged: usize,
-    pub(super) unstaged: usize,
-    pub(super) untracked: usize,
 }
 
 /// Uses [`git_output_raw`] rather than [`git_output`]: the latter trims the

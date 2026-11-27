@@ -36,6 +36,43 @@ pub struct V2DispatchInput<'a> {
     pub host: Option<&'a dyn RuntimeHost>,
 }
 
+struct V2FsAuditLogger {
+    audit: Arc<V2AuditWriter>,
+}
+
+impl FsAuditLogger for V2FsAuditLogger {
+    fn emit(&self, event: FsCallEvent) -> Result<(), OrbitError> {
+        let kind = match event.kind {
+            FsCallEventKind::Request => V2AuditEventKind::FsCallRequest {
+                profile: event.profile,
+                op: event.op,
+                path: event.path,
+                allowed: event.allowed,
+                matched_rule: event.matched_rule,
+            },
+            FsCallEventKind::Result => V2AuditEventKind::FsCallResult {
+                profile: event.profile,
+                op: event.op,
+                path: event.path,
+                allowed: event.allowed,
+                matched_rule: event.matched_rule,
+            },
+            FsCallEventKind::Denied => V2AuditEventKind::FsCallDenied {
+                profile: event.profile,
+                op: event.op,
+                path: event.path,
+                allowed: event.allowed,
+                matched_rule: event.matched_rule,
+            },
+        };
+
+        self.audit
+            .emit(kind)
+            .map(|_| ())
+            .map_err(|error| OrbitError::Execution(format!("audit write failed: {error}")))
+    }
+}
+
 /// Dispatch a v2 activity by type. Emits §7 activity.started/finished
 /// events around the per-type runner and nests the runner's events beneath.
 pub fn dispatch_v2_activity(input: V2DispatchInput<'_>) -> Result<DispatchOutcome, DispatchError> {
@@ -340,43 +377,6 @@ fn label_failure_with_step(activity_name: &str, mut outcome: DispatchOutcome) ->
         outcome.message = Some(format!("step `{activity_name}`: {message}"));
     }
     outcome
-}
-
-struct V2FsAuditLogger {
-    audit: Arc<V2AuditWriter>,
-}
-
-impl FsAuditLogger for V2FsAuditLogger {
-    fn emit(&self, event: FsCallEvent) -> Result<(), OrbitError> {
-        let kind = match event.kind {
-            FsCallEventKind::Request => V2AuditEventKind::FsCallRequest {
-                profile: event.profile,
-                op: event.op,
-                path: event.path,
-                allowed: event.allowed,
-                matched_rule: event.matched_rule,
-            },
-            FsCallEventKind::Result => V2AuditEventKind::FsCallResult {
-                profile: event.profile,
-                op: event.op,
-                path: event.path,
-                allowed: event.allowed,
-                matched_rule: event.matched_rule,
-            },
-            FsCallEventKind::Denied => V2AuditEventKind::FsCallDenied {
-                profile: event.profile,
-                op: event.op,
-                path: event.path,
-                allowed: event.allowed,
-                matched_rule: event.matched_rule,
-            },
-        };
-
-        self.audit
-            .emit(kind)
-            .map(|_| ())
-            .map_err(|error| OrbitError::Execution(format!("audit write failed: {error}")))
-    }
 }
 
 pub(crate) fn v2_fs_audit_logger(audit: Arc<V2AuditWriter>) -> Arc<dyn FsAuditLogger> {

@@ -110,13 +110,13 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
         run_id: &ctx.run_id,
         failed_step_id: &step.id,
         recovery_activity: &recovery.name,
-        task_ids: &task_ids,
-        commit_type,
-        recovery_model: recovery_model.map(str::to_string),
         repair_paths: bound
             .get("ci_repair_paths")
             .and_then(Value::as_array)
             .map(|_| &repair_paths[..]),
+        task_ids: &task_ids,
+        commit_type,
+        recovery_model: recovery_model.map(str::to_string),
         no_diff_route: checkpoint
             .get("skipped_no_diff_expected")
             .and_then(Value::as_bool)

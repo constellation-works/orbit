@@ -11,6 +11,19 @@ use super::super::super::operations;
 
 use super::{CheckFailureClass, FailedJob};
 
+/// What authenticating a waiter's dependency record reads through the
+/// provider adapter: the landing's host, checkout, candidate, PR, head and
+/// accepted base, bounded by one deadline.
+pub(super) struct DependencyAuthScope<'a, H: RuntimeHost + ?Sized> {
+    pub(super) host: &'a H,
+    pub(super) workspace: &'a std::path::Path,
+    pub(super) context: &'a HandoffLandingContext,
+    pub(super) pr: u64,
+    pub(super) head: &'a str,
+    pub(super) base: &'a str,
+    pub(super) deadline_ms: u64,
+}
+
 /// Dependency job ids a waiter's record names, parsed without trusting
 /// them: only a gate for spending the authenticated read, never evidence.
 fn dependency_ids_in_log(log: &str) -> Vec<u64> {
@@ -32,19 +45,6 @@ fn dependency_ids_in_log(log: &str) -> Vec<u64> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// What authenticating a waiter's dependency record reads through the
-/// provider adapter: the landing's host, checkout, candidate, PR, head and
-/// accepted base, bounded by one deadline.
-pub(super) struct DependencyAuthScope<'a, H: RuntimeHost + ?Sized> {
-    pub(super) host: &'a H,
-    pub(super) workspace: &'a std::path::Path,
-    pub(super) context: &'a HandoffLandingContext,
-    pub(super) pr: u64,
-    pub(super) head: &'a str,
-    pub(super) base: &'a str,
-    pub(super) deadline_ms: u64,
 }
 
 /// Fold authenticated dependency waiters into the jobs they name: a waiter

@@ -11,6 +11,11 @@ use std::path::{Path, PathBuf};
 pub(super) const HOST_VALIDATION_TARGETS_DIR: [&str; 3] =
     [".orbit", "state", "host-validation-targets"];
 
+/// Name of Cargo's incremental-compilation switch. Set on the child only
+/// when a host target is bound, so a Makefile or `.cargo/config.toml` is
+/// not what turns the cache off.
+const CARGO_INCREMENTAL: &str = "CARGO_INCREMENTAL";
+
 /// The directory name of the host validation target for a canonical source
 /// checkout. Worktree GC re-derives it from run records with this same rule.
 pub(super) fn host_validation_target_key(source: &Path) -> String {
@@ -79,11 +84,6 @@ fn host_validation_target(primary: PathBuf, source: &Path) -> Result<PathBuf, Or
     }
     Ok(target)
 }
-
-/// Name of Cargo's incremental-compilation switch. Set on the child only
-/// when a host target is bound, so a Makefile or `.cargo/config.toml` is
-/// not what turns the cache off.
-const CARGO_INCREMENTAL: &str = "CARGO_INCREMENTAL";
 
 /// Apply the workspace mapping after ordinary environment resolution.
 /// No configured binding means no allocation and no environment mutation.

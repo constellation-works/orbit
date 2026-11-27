@@ -15,6 +15,17 @@ use super::super::spawn::{PreparedSandbox, prepare_sandbox_for_dispatch};
 use super::super::supervisor::DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS;
 use crate::context::RuntimeHost;
 
+/// The checkout a provider runs in: the assigned source cwd, or the
+/// temporary checkout of a source inspection with its rebound inputs.
+pub(super) struct SourceCheckout {
+    pub(super) source_cwd: Option<PathBuf>,
+    pub(super) inspection: Option<SourceInspection>,
+    pub(super) inspection_input: Option<Value>,
+    pub(super) inspection_task_ctx: Option<Value>,
+    pub(super) subprocess_cwd: Option<PathBuf>,
+    pub(super) subprocess_cwd_string: Option<String>,
+}
+
 /// Trusted-host invocations have been removed. Keep refusing legacy assets
 /// rather than allowing a stored admission to authorize a new process.
 pub(super) fn reject_removed_trusted_host_execution(
@@ -74,17 +85,6 @@ pub(super) fn activity_tool_context(
     tool_ctx.agent_name = Some(provider.to_string());
     tool_ctx.model_name = spec.model.as_deref().map(str::to_string);
     tool_ctx
-}
-
-/// The checkout a provider runs in: the assigned source cwd, or the
-/// temporary checkout of a source inspection with its rebound inputs.
-pub(super) struct SourceCheckout {
-    pub(super) source_cwd: Option<PathBuf>,
-    pub(super) inspection: Option<SourceInspection>,
-    pub(super) inspection_input: Option<Value>,
-    pub(super) inspection_task_ctx: Option<Value>,
-    pub(super) subprocess_cwd: Option<PathBuf>,
-    pub(super) subprocess_cwd_string: Option<String>,
 }
 
 /// Resolve the subprocess cwd before sandbox compilation so the host can

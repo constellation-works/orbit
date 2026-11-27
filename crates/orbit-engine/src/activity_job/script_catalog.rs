@@ -113,14 +113,6 @@ struct ScriptEnvelopeYaml {
     spec: ScriptSpec,
 }
 
-/// Load and validate one script manifest file against `workspace_root`.
-pub fn load_script_asset(
-    manifest_path: &Path,
-    workspace_root: &Path,
-) -> Result<ScriptAsset, ScriptLoadError> {
-    load_script_snapshot(manifest_path, workspace_root).map(|snapshot| snapshot.asset)
-}
-
 /// A loaded manifest plus the exact manifest and entry bytes its digests
 /// were computed over. A script step writes these bytes, and only these,
 /// into its sandbox, so a write to either file after the grant check
@@ -130,133 +122,6 @@ pub struct ScriptSnapshot {
     pub asset: ScriptAsset,
     pub manifest_bytes: Vec<u8>,
     pub entry_bytes: Vec<u8>,
-}
-
-/// [`load_script_asset`], keeping the bytes each file was read as.
-pub fn load_script_snapshot(
-    manifest_path: &Path,
-    workspace_root: &Path,
-) -> Result<ScriptSnapshot, ScriptLoadError> {
-    let manifest_bytes =
-        std::fs::read(manifest_path).map_err(|source| ScriptLoadError::ReadManifest {
-            path: manifest_path.to_path_buf(),
-            source,
-        })?;
-    let envelope: ScriptEnvelopeYaml =
-        serde_yaml::from_slice(&manifest_bytes).map_err(|error| ScriptLoadError::Parse {
-            path: manifest_path.to_path_buf(),
-            message: error.to_string(),
-        })?;
-    if envelope.schema_version
-        != orbit_types::workflow::activity_job::SCRIPT_MANIFEST_SCHEMA_VERSION
-    {
-        return Err(ScriptLoadError::Parse {
-            path: manifest_path.to_path_buf(),
-            message: format!(
-                "unsupported schemaVersion: {} (want {})",
-                envelope.schema_version,
-                orbit_types::workflow::activity_job::SCRIPT_MANIFEST_SCHEMA_VERSION
-            ),
-        });
-    }
-    if envelope.kind != ResourceKind::Script {
-        return Err(ScriptLoadError::Parse {
-            path: manifest_path.to_path_buf(),
-            message: format!("kind mismatch: expected `Script`, got `{}`", envelope.kind),
-        });
-    }
-    let name = envelope.metadata.name;
-    if manifest_path.file_stem().and_then(|stem| stem.to_str()) != Some(name.as_str()) {
-        return Err(ScriptLoadError::NameMismatch {
-            path: manifest_path.to_path_buf(),
-            name,
-        });
-    }
-    let spec = envelope.spec;
-    validate_script_spec(&name, &spec).map_err(|source| ScriptLoadError::Validation {
-        path: manifest_path.to_path_buf(),
-        source,
-    })?;
-    let entry_path = resolve_script_entry(manifest_path, workspace_root, &spec.entry)?;
-    // The digests are over both files' bytes as loaded, so this one read
-    // of the entry is what the grant binding is made from.
-    let entry_bytes = std::fs::read(&entry_path).map_err(|source| ScriptLoadError::ReadEntry {
-        path: manifest_path.to_path_buf(),
-        entry: entry_path.clone(),
-        source,
-    })?;
-    let first_line = entry_bytes
-        .split(|byte| *byte == b'\n')
-        .next()
-        .and_then(|line| std::str::from_utf8(line).ok())
-        .map(|line| line.trim_end_matches('\r'));
-    let interpreter = if !spec.interpreter.is_empty() {
-        spec.interpreter.clone()
-    } else {
-        match first_line {
-            Some(line) => script_interpreter_from_shebang(line)
-                .map_err(|source| ScriptLoadError::Validation {
-                    path: manifest_path.to_path_buf(),
-                    source,
-                })?
-                .unwrap_or_default(),
-            None => Vec::new(),
-        }
-    };
-    let entry_digest = script_sha256_hex(&entry_bytes);
-    let manifest_digest = script_sha256_hex(&manifest_bytes);
-    let digest =
-        orbit_types::workflow::activity_job::script_content_digest(&manifest_bytes, &entry_bytes);
-    Ok(ScriptSnapshot {
-        asset: ScriptAsset {
-            name,
-            spec,
-            manifest_path: manifest_path.to_path_buf(),
-            entry_path,
-            interpreter,
-            digest,
-            manifest_digest,
-            entry_digest,
-        },
-        manifest_bytes,
-        entry_bytes,
-    })
-}
-
-/// The step output an exit-0 script answered with, or why it is invalid
-/// (§4): stdout within the cap, UTF-8, one JSON document (`{}` for empty
-/// stdout without a schema) that passes `output_schema_json`. The host
-/// asks the same question before it keeps any output file, so a set is
-/// only ever stored for an output the step accepts.
-pub fn script_stdout_output(
-    stdout: &[u8],
-    over_cap: bool,
-    schema: &Value,
-) -> Result<Value, String> {
-    if over_cap {
-        return Err(format!(
-            "stdout is larger than its {} byte cap",
-            orbit_types::workflow::activity_job::SCRIPT_STDOUT_CAP_BYTES
-        ));
-    }
-    let text = std::str::from_utf8(stdout)
-        .map_err(|error| format!("stdout is not UTF-8: {error}"))?
-        .trim();
-    let has_schema = !schema.is_null();
-    let output = if text.is_empty() && !has_schema {
-        Value::Object(serde_json::Map::new())
-    } else {
-        serde_json::from_str::<Value>(text)
-            .map_err(|error| format!("stdout is not one JSON document: {error}"))?
-    };
-    if has_schema {
-        let validator = orbit_tools::plugin::CompiledSchema::compile(schema.clone())
-            .map_err(|error| format!("output_schema_json {error}"))?;
-        if let Some(violations) = validator.violations(&output) {
-            return Err(format!("stdout fails output_schema_json: {violations}"));
-        }
-    }
-    Ok(output)
 }
 
 /// Why a templated script argument did not render.
@@ -272,128 +137,6 @@ pub enum ScriptArgError {
         "script argument `{argument}` renders to `{value}`, which starts with `-`; give the template a literal prefix (such as `--label={{{{ input.label }}}}`) so input cannot become an option"
     )]
     OptionInjection { argument: String, value: String },
-}
-
-/// Render a manifest's `args` against the step input (§1). Each element
-/// renders to exactly one argv element: every `{{ input.<path> }}` must
-/// name a string, number or boolean in the input, a value is never split
-/// or globbed, and an element whose rendered text starts with `-` because
-/// of a template at its very start is refused.
-pub fn render_script_args(args: &[String], input: &Value) -> Result<Vec<String>, ScriptArgError> {
-    args.iter()
-        .map(|argument| render_script_arg(argument, input))
-        .collect()
-}
-
-fn render_script_arg(argument: &str, input: &Value) -> Result<String, ScriptArgError> {
-    let mut rendered = String::new();
-    let mut rest = argument;
-    let mut leading_template = false;
-    while let Some(open) = rest.find("{{") {
-        rendered.push_str(&rest[..open]);
-        let after_open = &rest[open + 2..];
-        let Some(close) = after_open.find("}}") else {
-            break;
-        };
-        let expression = after_open[..close].trim();
-        let template_error = |reason: &str| ScriptArgError::Template {
-            argument: argument.to_string(),
-            expression: expression.to_string(),
-            reason: reason.to_string(),
-        };
-        if rendered.is_empty() {
-            leading_template = true;
-        }
-        let Some(path) = expression.strip_prefix("input.") else {
-            return Err(template_error("must read `input.<field>`"));
-        };
-        let mut value = input;
-        for segment in path.split('.') {
-            value = value
-                .get(segment)
-                .ok_or_else(|| template_error("names no value in the step input"))?;
-        }
-        match value {
-            Value::String(text) => rendered.push_str(text),
-            Value::Number(number) => rendered.push_str(&number.to_string()),
-            Value::Bool(flag) => rendered.push_str(if *flag { "true" } else { "false" }),
-            _ => {
-                return Err(template_error("must render to a string, number or boolean"));
-            }
-        }
-        rest = &after_open[close + 2..];
-    }
-    rendered.push_str(rest);
-    if leading_template && rendered.starts_with('-') {
-        return Err(ScriptArgError::OptionInjection {
-            argument: argument.to_string(),
-            value: rendered,
-        });
-    }
-    Ok(rendered)
-}
-
-/// Resolve `entry` physically beneath `workspace_root`, outside `.git/`
-/// and `.orbit/state/`. A symlink that leaves the workspace resolves to
-/// its target and is refused there, not at the link.
-fn resolve_script_entry(
-    manifest_path: &Path,
-    workspace_root: &Path,
-    entry: &str,
-) -> Result<PathBuf, ScriptLoadError> {
-    let escapes = |reason: String| ScriptLoadError::EntryEscapes {
-        path: manifest_path.to_path_buf(),
-        entry: entry.to_string(),
-        reason,
-    };
-    let root = workspace_root
-        .canonicalize()
-        .map_err(|error| escapes(format!("workspace root does not resolve: {error}")))?;
-    let candidate = root.join(entry);
-    let resolved = candidate
-        .canonicalize()
-        .map_err(|error| escapes(format!("does not resolve: {error}")))?;
-    if !resolved.starts_with(&root) {
-        return Err(escapes(format!(
-            "resolves to {}, outside {}",
-            resolved.display(),
-            root.display()
-        )));
-    }
-    for forbidden in [root.join(".git"), root.join(".orbit").join("state")] {
-        if let Ok(forbidden) = forbidden.canonicalize()
-            && resolved.starts_with(&forbidden)
-        {
-            return Err(escapes(format!(
-                "resolves under {}, which a script entry may not live in",
-                forbidden.display()
-            )));
-        }
-    }
-    let metadata = std::fs::metadata(&resolved)
-        .map_err(|error| escapes(format!("does not resolve: {error}")))?;
-    if !metadata.is_file() {
-        return Err(escapes("is not a regular file".to_string()));
-    }
-    Ok(resolved)
-}
-
-/// Describe a load error and the operator's remedy.
-pub fn script_load_refusal(error: &ScriptLoadError) -> String {
-    let remedy = match error.manifest_path() {
-        Some(path) => {
-            let name = path
-                .file_stem()
-                .map(|stem| stem.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            format!(
-                "repair that manifest (for example its `entry`), or, if the script is retired, delete {} and run `orbit script revoke {name}`",
-                path.display()
-            )
-        }
-        None => "repair or remove the manifests it names".to_string(),
-    };
-    format!("{error}. {remedy}, then rerun `orbit doctor`")
 }
 
 /// The workspace's script catalog: every manifest in one scripts
@@ -529,4 +272,261 @@ impl V2ScriptCatalog {
     pub fn manifest_path_for(&self, name: &str) -> PathBuf {
         self.scripts_dir.join(format!("{name}.yaml"))
     }
+}
+
+/// Load and validate one script manifest file against `workspace_root`.
+pub fn load_script_asset(
+    manifest_path: &Path,
+    workspace_root: &Path,
+) -> Result<ScriptAsset, ScriptLoadError> {
+    load_script_snapshot(manifest_path, workspace_root).map(|snapshot| snapshot.asset)
+}
+
+/// [`load_script_asset`], keeping the bytes each file was read as.
+pub fn load_script_snapshot(
+    manifest_path: &Path,
+    workspace_root: &Path,
+) -> Result<ScriptSnapshot, ScriptLoadError> {
+    let manifest_bytes =
+        std::fs::read(manifest_path).map_err(|source| ScriptLoadError::ReadManifest {
+            path: manifest_path.to_path_buf(),
+            source,
+        })?;
+    let envelope: ScriptEnvelopeYaml =
+        serde_yaml::from_slice(&manifest_bytes).map_err(|error| ScriptLoadError::Parse {
+            path: manifest_path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    if envelope.schema_version
+        != orbit_types::workflow::activity_job::SCRIPT_MANIFEST_SCHEMA_VERSION
+    {
+        return Err(ScriptLoadError::Parse {
+            path: manifest_path.to_path_buf(),
+            message: format!(
+                "unsupported schemaVersion: {} (want {})",
+                envelope.schema_version,
+                orbit_types::workflow::activity_job::SCRIPT_MANIFEST_SCHEMA_VERSION
+            ),
+        });
+    }
+    if envelope.kind != ResourceKind::Script {
+        return Err(ScriptLoadError::Parse {
+            path: manifest_path.to_path_buf(),
+            message: format!("kind mismatch: expected `Script`, got `{}`", envelope.kind),
+        });
+    }
+    let name = envelope.metadata.name;
+    if manifest_path.file_stem().and_then(|stem| stem.to_str()) != Some(name.as_str()) {
+        return Err(ScriptLoadError::NameMismatch {
+            path: manifest_path.to_path_buf(),
+            name,
+        });
+    }
+    let spec = envelope.spec;
+    validate_script_spec(&name, &spec).map_err(|source| ScriptLoadError::Validation {
+        path: manifest_path.to_path_buf(),
+        source,
+    })?;
+    let entry_path = resolve_script_entry(manifest_path, workspace_root, &spec.entry)?;
+    // The digests are over both files' bytes as loaded, so this one read
+    // of the entry is what the grant binding is made from.
+    let entry_bytes = std::fs::read(&entry_path).map_err(|source| ScriptLoadError::ReadEntry {
+        path: manifest_path.to_path_buf(),
+        entry: entry_path.clone(),
+        source,
+    })?;
+    let first_line = entry_bytes
+        .split(|byte| *byte == b'\n')
+        .next()
+        .and_then(|line| std::str::from_utf8(line).ok())
+        .map(|line| line.trim_end_matches('\r'));
+    let interpreter = if !spec.interpreter.is_empty() {
+        spec.interpreter.clone()
+    } else {
+        match first_line {
+            Some(line) => script_interpreter_from_shebang(line)
+                .map_err(|source| ScriptLoadError::Validation {
+                    path: manifest_path.to_path_buf(),
+                    source,
+                })?
+                .unwrap_or_default(),
+            None => Vec::new(),
+        }
+    };
+    let entry_digest = script_sha256_hex(&entry_bytes);
+    let manifest_digest = script_sha256_hex(&manifest_bytes);
+    let digest =
+        orbit_types::workflow::activity_job::script_content_digest(&manifest_bytes, &entry_bytes);
+    Ok(ScriptSnapshot {
+        asset: ScriptAsset {
+            name,
+            spec,
+            manifest_path: manifest_path.to_path_buf(),
+            entry_path,
+            interpreter,
+            digest,
+            manifest_digest,
+            entry_digest,
+        },
+        manifest_bytes,
+        entry_bytes,
+    })
+}
+
+/// The step output an exit-0 script answered with, or why it is invalid
+/// (§4): stdout within the cap, UTF-8, one JSON document (`{}` for empty
+/// stdout without a schema) that passes `output_schema_json`. The host
+/// asks the same question before it keeps any output file, so a set is
+/// only ever stored for an output the step accepts.
+pub fn script_stdout_output(
+    stdout: &[u8],
+    over_cap: bool,
+    schema: &Value,
+) -> Result<Value, String> {
+    if over_cap {
+        return Err(format!(
+            "stdout is larger than its {} byte cap",
+            orbit_types::workflow::activity_job::SCRIPT_STDOUT_CAP_BYTES
+        ));
+    }
+    let text = std::str::from_utf8(stdout)
+        .map_err(|error| format!("stdout is not UTF-8: {error}"))?
+        .trim();
+    let has_schema = !schema.is_null();
+    let output = if text.is_empty() && !has_schema {
+        Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str::<Value>(text)
+            .map_err(|error| format!("stdout is not one JSON document: {error}"))?
+    };
+    if has_schema {
+        let validator = orbit_tools::plugin::CompiledSchema::compile(schema.clone())
+            .map_err(|error| format!("output_schema_json {error}"))?;
+        if let Some(violations) = validator.violations(&output) {
+            return Err(format!("stdout fails output_schema_json: {violations}"));
+        }
+    }
+    Ok(output)
+}
+
+/// Render a manifest's `args` against the step input (§1). Each element
+/// renders to exactly one argv element: every `{{ input.<path> }}` must
+/// name a string, number or boolean in the input, a value is never split
+/// or globbed, and an element whose rendered text starts with `-` because
+/// of a template at its very start is refused.
+pub fn render_script_args(args: &[String], input: &Value) -> Result<Vec<String>, ScriptArgError> {
+    args.iter()
+        .map(|argument| render_script_arg(argument, input))
+        .collect()
+}
+
+fn render_script_arg(argument: &str, input: &Value) -> Result<String, ScriptArgError> {
+    let mut rendered = String::new();
+    let mut rest = argument;
+    let mut leading_template = false;
+    while let Some(open) = rest.find("{{") {
+        rendered.push_str(&rest[..open]);
+        let after_open = &rest[open + 2..];
+        let Some(close) = after_open.find("}}") else {
+            break;
+        };
+        let expression = after_open[..close].trim();
+        let template_error = |reason: &str| ScriptArgError::Template {
+            argument: argument.to_string(),
+            expression: expression.to_string(),
+            reason: reason.to_string(),
+        };
+        if rendered.is_empty() {
+            leading_template = true;
+        }
+        let Some(path) = expression.strip_prefix("input.") else {
+            return Err(template_error("must read `input.<field>`"));
+        };
+        let mut value = input;
+        for segment in path.split('.') {
+            value = value
+                .get(segment)
+                .ok_or_else(|| template_error("names no value in the step input"))?;
+        }
+        match value {
+            Value::String(text) => rendered.push_str(text),
+            Value::Number(number) => rendered.push_str(&number.to_string()),
+            Value::Bool(flag) => rendered.push_str(if *flag { "true" } else { "false" }),
+            _ => {
+                return Err(template_error("must render to a string, number or boolean"));
+            }
+        }
+        rest = &after_open[close + 2..];
+    }
+    rendered.push_str(rest);
+    if leading_template && rendered.starts_with('-') {
+        return Err(ScriptArgError::OptionInjection {
+            argument: argument.to_string(),
+            value: rendered,
+        });
+    }
+    Ok(rendered)
+}
+
+/// Resolve `entry` physically beneath `workspace_root`, outside `.git/`
+/// and `.orbit/state/`. A symlink that leaves the workspace resolves to
+/// its target and is refused there, not at the link.
+fn resolve_script_entry(
+    manifest_path: &Path,
+    workspace_root: &Path,
+    entry: &str,
+) -> Result<PathBuf, ScriptLoadError> {
+    let escapes = |reason: String| ScriptLoadError::EntryEscapes {
+        path: manifest_path.to_path_buf(),
+        entry: entry.to_string(),
+        reason,
+    };
+    let root = workspace_root
+        .canonicalize()
+        .map_err(|error| escapes(format!("workspace root does not resolve: {error}")))?;
+    let candidate = root.join(entry);
+    let resolved = candidate
+        .canonicalize()
+        .map_err(|error| escapes(format!("does not resolve: {error}")))?;
+    if !resolved.starts_with(&root) {
+        return Err(escapes(format!(
+            "resolves to {}, outside {}",
+            resolved.display(),
+            root.display()
+        )));
+    }
+    for forbidden in [root.join(".git"), root.join(".orbit").join("state")] {
+        if let Ok(forbidden) = forbidden.canonicalize()
+            && resolved.starts_with(&forbidden)
+        {
+            return Err(escapes(format!(
+                "resolves under {}, which a script entry may not live in",
+                forbidden.display()
+            )));
+        }
+    }
+    let metadata = std::fs::metadata(&resolved)
+        .map_err(|error| escapes(format!("does not resolve: {error}")))?;
+    if !metadata.is_file() {
+        return Err(escapes("is not a regular file".to_string()));
+    }
+    Ok(resolved)
+}
+
+/// Describe a load error and the operator's remedy.
+pub fn script_load_refusal(error: &ScriptLoadError) -> String {
+    let remedy = match error.manifest_path() {
+        Some(path) => {
+            let name = path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            format!(
+                "repair that manifest (for example its `entry`), or, if the script is retired, delete {} and run `orbit script revoke {name}`",
+                path.display()
+            )
+        }
+        None => "repair or remove the manifests it names".to_string(),
+    };
+    format!("{error}. {remedy}, then rerun `orbit doctor`")
 }

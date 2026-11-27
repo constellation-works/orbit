@@ -6,11 +6,18 @@ use super::super::history::RetryableHistory;
 use super::support::{FakeQueries, input, run};
 
 const FAILING: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
 const REPAIRED: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
 const LATER: &str = "cccccccccccccccccccccccccccccccccccccccc";
+
 /// When every held run below finished, as GitHub reports a completed run's
 /// last update.
 const RED_COMPLETED_AT: &str = "2026-10-07T02:45:00Z";
+
+const CI_JOB: &str = "Check / Clippy / Test";
+
+const CI_STEP: &str = "Run CI guardrails";
 
 fn at(time: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(time)
@@ -243,9 +250,6 @@ fn held_red_run_is_released_once_it_has_waited_past_the_window() {
         json!(60)
     );
 }
-
-const CI_JOB: &str = "Check / Clippy / Test";
-const CI_STEP: &str = "Run CI guardrails";
 
 /// A failed-step log of Orbit's single CI guardrails step, as `gh run view
 /// --log-failed` prints it, failing with `diagnostic` at `location`.

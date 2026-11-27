@@ -29,6 +29,53 @@ use super::input::{refused, required_workspace};
 use super::observe::{claimed_base_sync, observe, observe_with, require_clean_candidate};
 use super::{already_resolved, no_diff};
 
+/// The decision a validation step records when the workspace requires no
+/// command, on the owner's delivery path and a claimed leaf alike.
+pub(in crate::executor::automation::vcs) const SKIPPED_NO_REQUIRED_COMMANDS: &str =
+    "skipped_no_required_commands";
+
+/// The decision a validation step records when every delivered task carries
+/// `skip-validation` and the candidate changes only
+/// `workflow.light_delivery_paths` [ORB-16855].
+pub(in crate::executor::automation::vcs) const SKIPPED_LIGHT_DELIVERY: &str =
+    "skipped_light_delivery";
+
+/// Why that decision ran nothing, in the step's own output.
+pub(in crate::executor::automation::vcs) const NO_REQUIRED_COMMANDS_NOTE: &str = "no required validation commands configured \
+     (`workflow.required_validation_commands` is empty); no check ran";
+
+/// One required command's result on a claimed candidate: it passed, or it
+/// passed an isolated flaky-test replay, or failed only with tests its base
+/// fails too, as `known_red` reports
+/// [ORB-15427]. A pre-publication output carries these as `results`, and the
+/// pin attaches them as they were.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct ClaimedResult {
+    command: String,
+    output: String,
+    /// Absent from outputs recorded before known red applied to claims,
+    /// which carried only passed commands.
+    #[serde(default)]
+    exit_code: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    known_red: Option<HandoffKnownRed>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    flaky: Option<FlakyValidation>,
+}
+
+impl ClaimedResult {
+    /// A command that passed outright with `output`.
+    pub(super) fn passed(command: String, output: String) -> Self {
+        Self {
+            command,
+            output,
+            exit_code: 0,
+            known_red: None,
+            flaky: None,
+        }
+    }
+}
+
 /// Run the owner's required commands on the exact candidate and attach one
 /// captured log per command to the owner's copy of the task.
 ///
@@ -213,38 +260,6 @@ fn mark_light(output: &mut Value, light: Option<&LightDeliveryDecision>) {
     if let Some(light) = light {
         output["decision"] = json!(SKIPPED_LIGHT_DELIVERY);
         output["note"] = json!(light.note());
-    }
-}
-
-/// One required command's result on a claimed candidate: it passed, or it
-/// passed an isolated flaky-test replay, or failed only with tests its base
-/// fails too, as `known_red` reports
-/// [ORB-15427]. A pre-publication output carries these as `results`, and the
-/// pin attaches them as they were.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct ClaimedResult {
-    command: String,
-    output: String,
-    /// Absent from outputs recorded before known red applied to claims,
-    /// which carried only passed commands.
-    #[serde(default)]
-    exit_code: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    known_red: Option<HandoffKnownRed>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    flaky: Option<FlakyValidation>,
-}
-
-impl ClaimedResult {
-    /// A command that passed outright with `output`.
-    pub(super) fn passed(command: String, output: String) -> Self {
-        Self {
-            command,
-            output,
-            exit_code: 0,
-            known_red: None,
-            flaky: None,
-        }
     }
 }
 
@@ -688,18 +703,3 @@ pub(super) fn claimed_base_ref_for_tests(
 ) -> Result<String, OrbitError> {
     claimed_base_ref(context, input)
 }
-
-/// The decision a validation step records when the workspace requires no
-/// command, on the owner's delivery path and a claimed leaf alike.
-pub(in crate::executor::automation::vcs) const SKIPPED_NO_REQUIRED_COMMANDS: &str =
-    "skipped_no_required_commands";
-
-/// The decision a validation step records when every delivered task carries
-/// `skip-validation` and the candidate changes only
-/// `workflow.light_delivery_paths` [ORB-16855].
-pub(in crate::executor::automation::vcs) const SKIPPED_LIGHT_DELIVERY: &str =
-    "skipped_light_delivery";
-
-/// Why that decision ran nothing, in the step's own output.
-pub(in crate::executor::automation::vcs) const NO_REQUIRED_COMMANDS_NOTE: &str = "no required validation commands configured \
-     (`workflow.required_validation_commands` is empty); no check ran";

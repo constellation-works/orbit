@@ -132,6 +132,38 @@ impl std::fmt::Display for RecoveryCommitRefusal {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct IndexEntry {
+    mode: Vec<u8>,
+    oid: Vec<u8>,
+}
+
+struct StageEntry {
+    entry: IndexEntry,
+    stage: u8,
+    path: Vec<u8>,
+}
+
+struct RetainedIndexNote {
+    path: Vec<u8>,
+    reason: &'static str,
+}
+
+struct StageableSafePaths {
+    remove_from_index: Vec<Vec<u8>>,
+    normal_add: Vec<Vec<u8>>,
+    normal_add_dirs: Vec<Vec<u8>>,
+    staged_addition_add: Vec<Vec<u8>>,
+}
+
+impl StageableSafePaths {
+    fn is_empty(&self) -> bool {
+        self.remove_from_index.is_empty()
+            && self.normal_add.is_empty()
+            && self.staged_addition_add.is_empty()
+    }
+}
+
 /// Commit what recovery left in the worktree as a new candidate head with
 /// recovery provenance, or refuse it before any Git mutation.
 pub(crate) fn commit_recovery_repair(
@@ -568,23 +600,6 @@ fn path_from_git_bytes(bytes: &[u8]) -> Result<Cow<'_, Path>, orbit_common::Orbi
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct IndexEntry {
-    mode: Vec<u8>,
-    oid: Vec<u8>,
-}
-
-struct StageEntry {
-    entry: IndexEntry,
-    stage: u8,
-    path: Vec<u8>,
-}
-
-struct RetainedIndexNote {
-    path: Vec<u8>,
-    reason: &'static str,
-}
-
 fn read_stage_entries(
     process_env: &orbit_common::Env,
     workspace_path: &Path,
@@ -746,21 +761,6 @@ fn path_is_under_dir(path: &[u8], dir: &[u8]) -> bool {
         || path
             .strip_prefix(dir)
             .is_some_and(|rest| rest.starts_with(b"/"))
-}
-
-struct StageableSafePaths {
-    remove_from_index: Vec<Vec<u8>>,
-    normal_add: Vec<Vec<u8>>,
-    normal_add_dirs: Vec<Vec<u8>>,
-    staged_addition_add: Vec<Vec<u8>>,
-}
-
-impl StageableSafePaths {
-    fn is_empty(&self) -> bool {
-        self.remove_from_index.is_empty()
-            && self.normal_add.is_empty()
-            && self.staged_addition_add.is_empty()
-    }
 }
 
 /// Partition `safe_paths` by how the temporary `HEAD` index can stage each

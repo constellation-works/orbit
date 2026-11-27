@@ -51,31 +51,9 @@ use std::path::Path;
 #[cfg(feature = "test-support")]
 pub use fixture::with_prerequisite_clock;
 
-pub(super) fn now_ms() -> Result<u64, OrbitError> {
-    #[cfg(feature = "test-support")]
-    if let Some(now) = fixture::now() {
-        return Ok(now);
-    }
-    u64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| error("completion clock"))?
-            .as_millis(),
-    )
-    .map_err(|_| error("completion clock overflow"))
-}
-fn error(reason: &str) -> OrbitError {
-    OrbitError::workflow_evidence_unavailable(reason)
-}
-fn expired() -> OrbitError {
-    OrbitError::DeliveryRefused {
-        refusal: DeliveryRefusal::CompletionBudgetExpired,
-        message: "workflow prerequisite evidence is unavailable (completion deadline expired)"
-            .to_string(),
-    }
-}
 #[derive(Clone, Copy)]
 pub(super) struct Deadline(pub(super) u64);
+
 impl Deadline {
     pub(super) fn from_input(input: &Value) -> Result<Self, OrbitError> {
         input["deadline_ms"]
@@ -151,6 +129,7 @@ impl Deadline {
         Ok(result)
     }
 }
+
 impl Deadline {
     /// Type a failed read that a caller ran with its own per-request timeouts.
     /// `last_timeout` is the timeout the final request carried. A read killed
@@ -166,6 +145,33 @@ impl Deadline {
         }
     }
 }
+
+pub(super) fn now_ms() -> Result<u64, OrbitError> {
+    #[cfg(feature = "test-support")]
+    if let Some(now) = fixture::now() {
+        return Ok(now);
+    }
+    u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| error("completion clock"))?
+            .as_millis(),
+    )
+    .map_err(|_| error("completion clock overflow"))
+}
+
+fn error(reason: &str) -> OrbitError {
+    OrbitError::workflow_evidence_unavailable(reason)
+}
+
+fn expired() -> OrbitError {
+    OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::CompletionBudgetExpired,
+        message: "workflow prerequisite evidence is unavailable (completion deadline expired)"
+            .to_string(),
+    }
+}
+
 pub(super) fn probe(label: &str, timeout: u64) {
     #[cfg(feature = "test-support")]
     fixture::probe(label, timeout);

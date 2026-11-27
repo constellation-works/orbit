@@ -18,6 +18,7 @@ use orbit_common::process::supervisor::ProcessStopCause;
 pub(super) const STALL_STOP_REASON: &str = "stalled";
 
 const MIN_SAMPLE: Duration = Duration::from_millis(50);
+
 const MAX_SAMPLE: Duration = Duration::from_secs(10);
 
 pub(super) struct StallWatch {
@@ -76,6 +77,13 @@ impl StallWatch {
     }
 }
 
+#[cfg(target_os = "linux")]
+enum CpuRead {
+    Ticks(u64),
+    Gone,
+    Unreadable,
+}
+
 /// Absolute CPU of the live tree rooted at `root`.
 ///
 /// The unit is opaque and only has to grow when the tree runs: Linux clock
@@ -127,13 +135,6 @@ fn linux_tree_cpu(root: u32) -> Option<u64> {
         }
     }
     Some(total)
-}
-
-#[cfg(target_os = "linux")]
-enum CpuRead {
-    Ticks(u64),
-    Gone,
-    Unreadable,
 }
 
 #[cfg(target_os = "linux")]

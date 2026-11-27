@@ -5,6 +5,18 @@ use super::super::history::RetryableHistory;
 use super::super::query::LogScope;
 use super::support::{FakeQueries, HEAD, input, run};
 
+const PR_BRANCH: &str = "orbit/ORB-14260-6bfc1a2d";
+
+const PR_HEAD: &str = "2222222222222222222222222222222222222222";
+
+const MACOS_RUN: u64 = 37_485_029_423;
+
+const WINDOWS_RUN: u64 = 37_485_029_402;
+
+const MACOS_JOB: u64 = 106_100_000_001;
+
+const WINDOWS_JOB: u64 = 106_100_000_002;
+
 fn full_page(count: u64) -> Vec<Value> {
     (1..=count)
         .map(|run_id| {
@@ -133,13 +145,6 @@ fn checkout_evidence_uses_all_scope_and_each_log_read_uses_the_requested_bound()
         "checkout recovery must read Failed then All for the same run and job"
     );
 }
-
-const PR_BRANCH: &str = "orbit/ORB-14260-6bfc1a2d";
-const PR_HEAD: &str = "2222222222222222222222222222222222222222";
-const MACOS_RUN: u64 = 37_485_029_423;
-const WINDOWS_RUN: u64 = 37_485_029_402;
-const MACOS_JOB: u64 = 106_100_000_001;
-const WINDOWS_JOB: u64 = 106_100_000_002;
 
 fn pr_run(run_id: u64, workflow: &str, conclusion: &str, created_at: &str) -> Value {
     let mut pr_run = run(

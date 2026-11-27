@@ -42,11 +42,6 @@ pub enum CatalogError {
     },
 }
 
-/// Translate catalog-loading failures at the orbit-engine crate boundary.
-pub fn catalog_error_to_orbit(error: CatalogError) -> OrbitError {
-    OrbitError::InvalidInput(error.to_string())
-}
-
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ResolveError {
     #[error(
@@ -84,4 +79,9 @@ pub enum ResolveError {
         name: String,
         manifest: PathBuf,
     },
+}
+
+/// Translate catalog-loading failures at the orbit-engine crate boundary.
+pub fn catalog_error_to_orbit(error: CatalogError) -> OrbitError {
+    OrbitError::InvalidInput(error.to_string())
 }

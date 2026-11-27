@@ -7,6 +7,9 @@ use super::refs::{CandidateProbeResults, RefKind, ScannedRef};
 use super::run_event::is_branch_event;
 use super::unsuccessful_conclusion;
 
+/// Where collection records a job's concurrency-cancellation annotation.
+pub(super) const CONCURRENCY_CANCELLATION_FIELD: &str = "concurrency_cancellation";
+
 /// Where each run lands once it has been classified.
 #[derive(Default)]
 pub(super) struct RunPartition {
@@ -315,9 +318,6 @@ pub(super) fn job_concurrency_cancellation(job: &Value) -> Option<&str> {
     job.get(CONCURRENCY_CANCELLATION_FIELD)
         .and_then(Value::as_str)
 }
-
-/// Where collection records a job's concurrency-cancellation annotation.
-pub(super) const CONCURRENCY_CANCELLATION_FIELD: &str = "concurrency_cancellation";
 
 pub(super) fn is_inconclusive_cancellation(failure: &Value) -> bool {
     if failure.get("evidence_state").and_then(Value::as_str) == Some("inconclusive") {

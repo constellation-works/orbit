@@ -7,6 +7,61 @@
 
 use orbit_tools::github_cli::strip_ansi_sequences;
 
+/// Lines a runner emits when something breaks.
+pub const ERROR_MARKERS: &[&str] = &[
+    "error",
+    "failed",
+    "failure",
+    "panicked",
+    "assertion",
+    "exit code",
+    "not ok",
+    "fatal",
+];
+
+/// The step column `gh run view --log*` prints when it cannot attribute a log
+/// line to a step. Some runs label every line of a job this way.
+pub const UNATTRIBUTED_STEP: &str = "UNKNOWN STEP";
+
+/// Longest normalized signature kept; longer ones end in `…`.
+const MAX_SIGNATURE_CHARS: usize = 200;
+
+/// A failed step's normalized root-cause line.
+pub struct ErrorSignature {
+    pub text: String,
+    /// True when no diagnostic line survived and `text` is the step name.
+    pub step_fallback: bool,
+}
+
+/// What one runner log line is, for signature and excerpt selection.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LineKind {
+    RunCommand,
+    /// Printed source inside the runner command group, never emitted evidence.
+    CommandBody,
+    ParamDump,
+    EndGroup,
+    CompilerDiagnostic,
+    CargoStatus,
+    ConcreteDiagnostic,
+    ErrorAnnotated,
+    /// A line-initial named diagnostic, for example cargo-deny's vulnerability.
+    LabelledDiagnostic,
+    GenericTrailer,
+    Marker,
+    Bookkeeping,
+    Content,
+}
+
+/// How every line of an excerpt names the job's one failed step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepBinding {
+    /// Every line's step column is the failed step.
+    Named,
+    /// Every line's step column is [`UNATTRIBUTED_STEP`].
+    Unattributed,
+}
+
 /// File names cited as `path:line[:column]` in emitted failed-step output.
 ///
 /// This deliberately has no extension list: lockfiles and generated files
@@ -42,18 +97,6 @@ pub(crate) fn cited_location_paths(log: &str) -> std::collections::BTreeSet<Stri
     }
     paths
 }
-
-/// Lines a runner emits when something breaks.
-pub const ERROR_MARKERS: &[&str] = &[
-    "error",
-    "failed",
-    "failure",
-    "panicked",
-    "assertion",
-    "exit code",
-    "not ok",
-    "fatal",
-];
 
 /// Reduce a failed-step log to one normalized line that survives a rerun.
 ///
@@ -250,13 +293,6 @@ fn is_cargo_status(payload: &str) -> bool {
     .any(|prefix| payload.starts_with(prefix))
 }
 
-/// A failed step's normalized root-cause line.
-pub struct ErrorSignature {
-    pub text: String,
-    /// True when no diagnostic line survived and `text` is the step name.
-    pub step_fallback: bool,
-}
-
 /// Concrete failing test names exposed in `log` (nextest `FAIL [...]` verdicts,
 /// libtest `test <name> ... FAILED` verdicts, and libtest `failures:` entries),
 /// deduplicated in emission order.
@@ -298,26 +334,6 @@ pub(crate) fn failing_test_names(log: &str) -> Vec<String> {
         }
     }
     names
-}
-
-/// What one runner log line is, for signature and excerpt selection.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum LineKind {
-    RunCommand,
-    /// Printed source inside the runner command group, never emitted evidence.
-    CommandBody,
-    ParamDump,
-    EndGroup,
-    CompilerDiagnostic,
-    CargoStatus,
-    ConcreteDiagnostic,
-    ErrorAnnotated,
-    /// A line-initial named diagnostic, for example cargo-deny's vulnerability.
-    LabelledDiagnostic,
-    GenericTrailer,
-    Marker,
-    Bookkeeping,
-    Content,
 }
 
 /// Classify each line of a failed-step log. A runner's command display lasts
@@ -697,19 +713,6 @@ pub fn declared_infrastructure_signature<'a>(
         })
 }
 
-/// The step column `gh run view --log*` prints when it cannot attribute a log
-/// line to a step. Some runs label every line of a job this way.
-pub const UNATTRIBUTED_STEP: &str = "UNKNOWN STEP";
-
-/// How every line of an excerpt names the job's one failed step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StepBinding {
-    /// Every line's step column is the failed step.
-    Named,
-    /// Every line's step column is [`UNATTRIBUTED_STEP`].
-    Unattributed,
-}
-
 /// Job, step and remainder of one `gh run view --log` line (`job`, `step`, rest).
 ///
 /// `None` for a timestamp-led raw job-API line, whose payload may contain tabs,
@@ -820,6 +823,3 @@ pub fn normalize_signature(lowered: &str) -> String {
     }
     out.chars().take(MAX_SIGNATURE_CHARS).collect::<String>() + "…"
 }
-
-/// Longest normalized signature kept; longer ones end in `…`.
-const MAX_SIGNATURE_CHARS: usize = 200;
