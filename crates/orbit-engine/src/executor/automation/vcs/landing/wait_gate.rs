@@ -11,7 +11,7 @@ use super::super::operations::{self, CiCommitJobsAnswer, CiJobConclusion, CiJobS
 use super::super::pr::{
     BlockedCheckWait, OwedHostedChecks, PrMergeState, ReviewDecision, UnreportedChecks,
     checked_pr_state, classify_pr_state, owed_hosted_checks, read_pr_status,
-    read_required_checks_observed,
+    read_required_checks_observed, resolve_permitted_merge,
 };
 
 /// Observe whether a stopped waiting gate has cleared without mutating the
@@ -130,7 +130,7 @@ pub fn landing_wait_gate_cleared<H: HostEnvironment + RuntimeHostProcessEnvironm
     }
     if gate == LandingWaitGate::ForgeObservationUnavailable {
         let mut unreported = UnreportedChecks::new();
-        return Ok(checked_pr_state(
+        let Ok(state) = checked_pr_state(
             host,
             workspace,
             &pr,
@@ -138,8 +138,17 @@ pub fn landing_wait_gate_cleared<H: HostEnvironment + RuntimeHostProcessEnvironm
             BlockedCheckWait::Owner(&context.owed_hosted_checks),
             &mut unreported,
             None,
-        )
-        .is_ok());
+        ) else {
+            return Ok(false);
+        };
+        if !matches!(state, PrMergeState::Merged) {
+            match resolve_permitted_merge(host, &workspace.to_string_lossy(), &pr) {
+                Ok(_) => {}
+                Err(error) if super::run::transport_failure(&error) => return Ok(false),
+                Err(error) => return Err(error),
+            }
+        }
+        return Ok(true);
     }
     let mut unreported = UnreportedChecks::new();
     let state = checked_pr_state(

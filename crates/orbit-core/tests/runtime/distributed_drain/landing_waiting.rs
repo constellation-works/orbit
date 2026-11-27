@@ -205,6 +205,11 @@ fn waiting_gates_resume_and_land_the_same_handoff() {
             "transient_checks",
             "green",
         ),
+        (
+            LandingWaitGate::ForgeObservationUnavailable,
+            "transient_merge_capabilities",
+            "green",
+        ),
     ] {
         let fixture = WaitingOwner::new();
         fixture.phase(pending_phase);
@@ -233,6 +238,13 @@ fn waiting_gates_resume_and_land_the_same_handoff() {
             fixture.dispatch(due).is_empty(),
             "unchanged pending gate consumes no attempt"
         );
+        if pending_phase == "transient_merge_capabilities" {
+            assert!(
+                fixture.dispatch(due + TimeDelta::hours(1)).is_empty(),
+                "persisting merge-capability outage must not consume retries across sweeps"
+            );
+            assert_eq!(fixture.attempt(), stopped);
+        }
         fixture.phase(recovered_phase);
         if gate == LandingWaitGate::ForgeObservationUnavailable {
             let host = orbit_core::test_support::EngineHost::new(&fixture.owner.pair.wire.owner);
@@ -631,11 +643,11 @@ p = (f / 'phase').read_text()
 a = sys.argv[1:]
 head = c['candidate']['commit']
 base = c['base']['commit']
-check = {'__typename':'CheckRun','name':'Test','status':'COMPLETED' if p in ['green','base_green'] else 'IN_PROGRESS','conclusion':'SUCCESS','isRequired':True,'checkSuite':{'workflowRun':{'workflow':{'name':'CI'}}}}
+check = {'__typename':'CheckRun','name':'Test','status':'COMPLETED' if p in ['green','base_green','transient_merge_capabilities'] else 'IN_PROGRESS','conclusion':'SUCCESS','isRequired':True,'checkSuite':{'workflowRun':{'workflow':{'name':'CI'}}}}
 if p.startswith('base_') or p == 'candidate_failed':
     check['status'] = 'COMPLETED'
     check['conclusion'] = 'FAILURE'
-pr = {'number':42,'state':'MERGED' if (f / 'merged').exists() else 'OPEN','isDraft':False,'mergedAt':'2026-11-08T00:00:00Z' if (f / 'merged').exists() else None,'mergeStateStatus':'CLEAN' if p == 'green' else 'BLOCKED','reviewDecision':'APPROVED','headRefName':c['source_branch'],'headRefOid':head,'baseRefName':c['base_branch'],'mergeCommit':{'oid':head} if (f / 'merged').exists() else None,'url':'https://github.com/owner/repository/pull/42','statusCheckRollup':[check]}
+pr = {'number':42,'state':'MERGED' if (f / 'merged').exists() else 'OPEN','isDraft':False,'mergedAt':'2026-11-08T00:00:00Z' if (f / 'merged').exists() else None,'mergeStateStatus':'CLEAN' if p in ['green','transient_merge_capabilities'] else 'BLOCKED','reviewDecision':'APPROVED','headRefName':c['source_branch'],'headRefOid':head,'baseRefName':c['base_branch'],'mergeCommit':{'oid':head} if (f / 'merged').exists() else None,'url':'https://github.com/owner/repository/pull/42','statusCheckRollup':[check]}
 if p == 'review':
     pr['reviewDecision'] = 'REVIEW_REQUIRED'
 if p == 'conflict':
@@ -659,6 +671,9 @@ elif 'graphql' in a:
         sys.stderr.write('gh: Something went wrong while executing your query (graphql)\n')
         sys.exit(1)
     if 'autoMergeAllowed' in query:
+        if p == 'transient_merge_capabilities':
+            sys.stderr.write('gh: Something went wrong while executing your query (graphql)\n')
+            sys.exit(1)
         out = {'data':{'repository':{'autoMergeAllowed':False,'mergeCommitAllowed':True,'rebaseMergeAllowed':False,'squashMergeAllowed':False,'pullRequest':{'baseRefName':c['base_branch'],'baseRef':{'branchProtectionRule':{'requiresLinearHistory':False}}}}}}
     else:
         out = {'data':{'repository':{'pullRequest':{'headRefOid':head,'commits':{'nodes':[{'commit':{'oid':head,'statusCheckRollup':{'contexts':{'pageInfo':{'hasNextPage':False},'nodes':[check]}},'checkSuites':{'pageInfo':{'hasNextPage':False},'nodes':[]}}}]}}}}}
