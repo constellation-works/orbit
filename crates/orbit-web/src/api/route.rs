@@ -14,8 +14,8 @@ use super::*;
 /// [`crate::shutdown::shutdown_signal`] or a lifecycle boundary such as an
 /// Orbit upgrade, and records any handover target for the lifecycle case. It
 /// then calls this function, and only then notifies the grace-period timer.
-/// The standalone lease listener (`serve_lease_listener_on`) also awaits the
-/// signal future but does not call this function.
+/// [`crate::lease_listener::serve_lease_listener_on`] drains its connections
+/// when its caller's shutdown future completes.
 pub(crate) fn request_shutdown() {
     log::request_shutdown();
     events::request_shutdown();

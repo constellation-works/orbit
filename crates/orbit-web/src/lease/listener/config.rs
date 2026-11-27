@@ -27,8 +27,8 @@ pub struct LeaseListenerTlsSettings {
 /// The listener's settings before validation.
 ///
 /// Path leases are not configurable [ORB-22808], so nothing reads these from
-/// `config.toml`: [`LeaseListenerSettings::default`] names no bind address
-/// and so refuses to start. Tests build their own.
+/// `config.toml`. [`LeaseListenerConfig::from_settings`] requires a bind
+/// address, which [`LeaseListenerSettings::default`] omits. Tests supply one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeaseListenerSettings {
     /// The address to listen on, or `None` for no listener.

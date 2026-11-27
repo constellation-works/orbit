@@ -2,7 +2,7 @@
   "schema_version": 1,
   "counts": {
     "application_port_methods": 0,
-    "env_global_accessor_calls": 51,
+    "env_global_accessor_calls": 50,
     "env_process_env_method_calls": 507,
     "from_kernel_ref_uses": 0,
     "impl_orbit_runtime_files": 308,
