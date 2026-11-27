@@ -896,7 +896,15 @@ base, with no commits or pending changes of their own; advancement of the live b
 alone does not refuse the handoff. Acceptance and completion recheck the report,
 its underlying evidence and logs.
 An already-landed checkpoint also retains scope, criteria and covering-commit ancestry/marker checks,
-including a covering sibling task. The executor's branch need not exist on the owner.
+including a covering sibling task. The implementer and owner both check Git's recorded file contents
+for subsequent edits to a covered file, even if the file was restored before the tested revision.
+Each covering hunk needs unique before and after images, including the surrounding lines at a
+deletion. Later edits descended from the covering commit must leave each covered region intact, and the
+after image must still match uniquely at the tested revision. This proof is limited to regular UTF-8
+text files within the verifier's size, hunk and history bounds. When proof fails, the refusal names
+the path. Deliver any missing changes. If the pinned current revision satisfies the task, document
+the criteria and capture fresh required validation on it through the `no-diff.json` route. The
+executor's branch need not exist on the owner.
 `NoDiff` completes through the same authorized `review → done` landing boundary without an
 external merge. A review-only completion contract still waits for owner approval; a
 base that no longer contains the synchronized revision, or changed evidence,

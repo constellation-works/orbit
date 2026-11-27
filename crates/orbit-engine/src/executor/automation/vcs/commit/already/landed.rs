@@ -5,6 +5,8 @@
 //! `covering_task_id` names this task (same-task retry) or a sibling whose
 //! covering commit already landed the required change on the pinned HEAD.
 
+mod covering_hunk;
+
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -18,9 +20,9 @@ use orbit_types::workflow::{DeliveryRefusal, ValidationOutcome, ValidationRole};
 use serde_json::{Value, json};
 
 use crate::context::{HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment};
+use crate::executor::automation::vcs::git;
 
 use super::super::super::delivery_marker::delivery_markers;
-use super::super::super::git::{git_output, git_output_paths, git_success};
 use super::super::super::retry_lineage::{
     LineageStep, LineageStop, RETRY_LINEAGE_MAX_HOPS, RetryLineage,
 };
@@ -192,20 +194,32 @@ impl AlreadyLanded {
             return Err(Self::refused("tested HEAD is not the owner-observed base"));
         }
 
-        git_success(
+        git::git_success(
             &host.process_env(),
             workspace,
-            &["merge-base", "--is-ancestor", &covering, &head],
+            &[
+                "--no-replace-objects",
+                "merge-base",
+                "--is-ancestor",
+                &covering,
+                &head,
+            ],
         )
         .map_err(|error| {
             Self::refused(format!(
                 "covering commit is not a verified ancestor of tested HEAD: {error}"
             ))
         })?;
-        let message = git_output(
+        let message = git::git_output(
             &host.process_env(),
             workspace,
-            &["show", "-s", "--format=%B", &covering],
+            &[
+                "--no-replace-objects",
+                "show",
+                "-s",
+                "--format=%B",
+                &covering,
+            ],
         )?;
         if !delivery_markers(&message).contains(&format!("[{}]", evidence.covering_task_id)) {
             return Err(Self::refused(
@@ -313,41 +327,48 @@ fn verify_covering_scope(
         let anchor =
             anchor_path(selector).map_err(|error| AlreadyLanded::refused(error.to_string()))?;
         let resolved = canonical_workspace
-            .join(anchor)
+            .join(&anchor)
             .canonicalize()
-            .map_err(|_| {
-                AlreadyLanded::refused("scope anchor is unavailable; reconcile the task selectors")
-            })?;
+            .map_err(|error| covering_path_refused(&anchor.to_string_lossy(), error))?;
         if !resolved.starts_with(&canonical_workspace) {
             return Err(AlreadyLanded::refused(
                 "scope anchor is outside the tested workspace",
             ));
         }
     }
-    let changed = git_output_paths(
-        process_env,
-        workspace,
-        &["diff", "--name-only", "-z", covering, head, "--"],
-    )?;
-    if task.context_files.is_empty()
-        || changed.iter().any(|path| {
-            task.context_files
-                .iter()
-                .any(|selector| overlaps(selector, path))
-        })
-    {
+    if task.context_files.is_empty() {
         return Err(AlreadyLanded::refused(
             "covering scope is empty or changed since landing; reconcile and revalidate before delivery",
         ));
     }
-    let delivered = git_output_paths(
+    let changed = git::git_output_exact_paths(
         process_env,
         workspace,
         &[
+            "--no-replace-objects",
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--no-relative",
+            "--ignore-submodules=none",
+            "-z",
+            covering,
+            head,
+            "--",
+        ],
+    )?;
+    let delivered = git::git_output_exact_paths(
+        process_env,
+        workspace,
+        &[
+            "--no-replace-objects",
             "diff-tree",
             "--root",
             "--no-commit-id",
             "--name-only",
+            "--no-renames",
+            "--no-relative",
+            "--ignore-submodules=none",
             "-r",
             "--first-parent",
             "-m",
@@ -356,16 +377,66 @@ fn verify_covering_scope(
             "--",
         ],
     )?;
-    if !delivered.iter().any(|path| {
+    if let Some(path) = changed
+        .unrepresentable
+        .first()
+        .or(delivered.unrepresentable.first())
+    {
+        return Err(covering_path_refused(path, "Git path is not UTF-8"));
+    }
+    let in_scope = |path: &str| {
         task.context_files
             .iter()
             .any(|selector| overlaps(selector, path))
-    }) {
+    };
+    if let Some(path) = changed
+        .paths
+        .iter()
+        .find(|path| in_scope(path) && !delivered.paths.contains(path))
+    {
+        return Err(covering_path_refused(
+            path,
+            "the file changed after landing",
+        ));
+    }
+    let mut scoped_delivery = delivered
+        .paths
+        .iter()
+        .filter(|path| in_scope(path))
+        .peekable();
+    if scoped_delivery.peek().is_none() {
         return Err(AlreadyLanded::refused(
             "covering commit did not change the task's declared scope",
         ));
     }
+    if head != covering {
+        for path in scoped_delivery {
+            let head_changed = changed.paths.contains(path);
+            if !covering_hunk::covering_hunks_survive(
+                process_env,
+                workspace,
+                covering,
+                head,
+                path,
+                head_changed,
+            )
+            .map_err(|error| covering_path_refused(path, error))?
+            {
+                return Err(covering_path_refused(
+                    path,
+                    "the file changed after landing",
+                ));
+            }
+        }
+    }
     Ok(())
+}
+
+fn covering_path_refused(path: &str, reason: impl std::fmt::Display) -> OrbitError {
+    AlreadyLanded::refused(format!(
+        "cannot verify coverage for {path:?} ({reason}). Check the acceptance criteria on the pinned current HEAD and deliver any missing change. If the current tree satisfies the task, run all required validation there and attach {} with schema_version 1, task_id, run_id, tested_head, reason and validation entries with command, zero exit_code and log_artifact. Attach each log with its run_id, tested_head, command, zero exit_code and output",
+        no_diff::ARTIFACT,
+    ))
 }
 
 /// Whether `evidence_run` is the current run or a run in its recorded retry
