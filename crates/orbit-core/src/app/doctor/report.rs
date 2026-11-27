@@ -657,12 +657,12 @@ fn mcp_registration_row(
 
 /// Whether the OS sweep-clock unit invokes this binary [ORB-12244].
 fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
-    match crate::application::routines::inspect_clock_unit() {
+    match crate::app::routine::inspect_clock_unit() {
         Ok(inspection) => {
             let mut row = clock_unit_row_from_inspection(&inspection);
             if !matches!(
                 inspection.verdict,
-                crate::application::routines::ClockUnitVerdict::NoUnitInstalled
+                crate::app::routine::ClockUnitVerdict::NoUnitInstalled
             ) {
                 // A matching unit file does not mean the timer is armed.
                 // `orbit clock status` treats an operator pause as healthy;
@@ -687,7 +687,7 @@ fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
 
 /// Fold native timer readiness into a clock-unit row that already has a unit.
 fn apply_clock_manager_readiness(row: &mut WorkspaceDoctorResult, global_root: &std::path::Path) {
-    use crate::application::routines::{clock_status, doctor_clock_not_running_issue};
+    use crate::app::routine::{clock_status, doctor_clock_not_running_issue};
 
     let status = match clock_status(global_root) {
         Ok(status) => status,
@@ -788,9 +788,9 @@ fn add_clock_hold(row: &mut WorkspaceDoctorResult, global_root: &std::path::Path
 }
 
 fn clock_unit_row_from_inspection(
-    inspection: &crate::application::routines::ClockUnitInspection,
+    inspection: &crate::app::routine::ClockUnitInspection,
 ) -> WorkspaceDoctorResult {
-    use crate::application::routines::ClockUnitVerdict;
+    use crate::app::routine::ClockUnitVerdict;
 
     let status = match inspection.verdict {
         ClockUnitVerdict::Matching => WorkspaceDoctorStatus::Ok,

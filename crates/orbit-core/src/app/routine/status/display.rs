@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::application::routines::template::is_seeded_routine_file;
+use crate::app::routine::template::is_seeded_routine_file;
 
 /// Consecutive failures at the head of a routine's fire history.
 #[derive(Debug, Clone)]

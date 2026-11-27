@@ -91,7 +91,7 @@ use std::time::Duration;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_core::application::routines::{
+use orbit_core::app::routine::{
     DiscoveredWorkspaces, RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions,
 };
 use orbit_core::runtime::JobRuns;

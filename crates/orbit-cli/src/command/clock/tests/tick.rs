@@ -2,7 +2,7 @@
 
 use super::super::tick::ClockTickArgs;
 use crate::command::CommandOutput;
-use orbit_core::application::routines::{ExternalMergeSweepReport, SweepOutcome};
+use orbit_core::app::routine::{ExternalMergeSweepReport, SweepOutcome};
 
 #[test]
 fn deadline_failure_returns_nonzero_with_deferred_workspaces_in_both_views() {

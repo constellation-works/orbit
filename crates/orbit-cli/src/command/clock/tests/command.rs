@@ -2,7 +2,7 @@
 
 use super::super::command::clock_status_payload;
 use crate::output::common::payload::{Block, View};
-use orbit_core::application::routines::ClockStatus;
+use orbit_core::app::routine::ClockStatus;
 
 #[test]
 fn clock_status_state_token_for_each_status_combination() {

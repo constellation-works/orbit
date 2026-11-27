@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{DASHBOARD_CLOCK_SERVICE, OPERATOR_OVERRIDE_ENV};
-use orbit_core::application::routines::ClockStatus;
+use orbit_core::app::routine::ClockStatus;
 use orbit_core::test_support::{FixtureRuntime, fixture_core};
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::json;

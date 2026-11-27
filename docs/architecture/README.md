@@ -51,7 +51,7 @@ Scheduling alongside the flow: `orbit-automation` evaluates routines and
 auto-tasks (due, overlap, retry, CEL condition triggers in
 `crates/orbit-automation/src/condition/`); `orbit-clock` owns the host sweep
 clock (`TICK_DEADLINE` in `crates/orbit-clock/src/lib.rs`) that wakes the sweep
-pass in `orbit-core`'s `crates/orbit-core/src/application/routines/`.
+pass in `orbit-core`'s `crates/orbit-core/src/app/routine/`.
 
 ## The store, and federation between owner and follower hosts
 

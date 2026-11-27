@@ -13,7 +13,31 @@
 
 mod dashboard;
 
+mod edit_contract;
+
+mod guarded_edit;
+
+mod lease;
+
+mod loader;
+
+mod materialize;
+
+mod resident_port;
+
+mod seed;
+
+mod status;
+
+mod store;
+
+mod sweep;
+
+mod template;
+
 mod toggle;
+
+mod trigger_edit;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::RoutineTrigger;
@@ -22,27 +46,51 @@ use serde_json::{Value, json};
 
 use super::exec::{self, App, DashboardOrigin, DashboardRow, Operation};
 use crate::Core;
-pub use crate::application::routines::{
-    ClockStatus, RoutineBreakerAction, RoutineBreakerOutcome, RoutineEditOutcome,
-    RoutineEditRefusal, RoutineStatusReport,
-};
 pub use crate::application::store_opener::StoreOpener;
 
-// Surface re-exports: what the CLI, dashboard and composition name from this subject.
-pub use crate::application::routines::seed::{
-    RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
+pub use edit_contract::{RoutineEditOutcome, RoutineEditRefusal};
+pub use loader::{
+    DiscoveredWorkspaces, OwnerOnlyRoutine, RetiredRoutine, RoutineLoadError,
+    RoutineWorkspaceProvider, declares_any_routine_name,
 };
-pub use crate::application::routines::{
-    AutoTaskSweepReport, ClockHealth, ClockUnitConvergence, ClockUnitDrift, ClockUnitInspection,
-    ClockUnitVerdict, DiscoveredWorkspaces, ExternalMergeSweepReport, FireField, OwnerOnlyRoutine,
-    RetiredRoutine, RoutineField, RoutineLoadError, RoutineMachineIdentity, RoutineStatus,
-    RoutineSweepReport, RoutineWorkspaceProvider, SweepContext, SweepOptions, SweepOutcome,
-    clock_status, clock_unit_drift_warning, control_listed_routine_breaker, converge_clock_unit,
-    declares_any_routine_name, ensure_routine_store, inspect_clock_unit, install_clock,
-    pause_routine, project_fire, recent_fires, resume_routine, routine_breaker_events,
-    routine_statuses_with_providers, run_sweep, run_sweep_pass, set_clock_cadence,
-    set_clock_enabled, trigger_options,
+pub(crate) use materialize::reconcile_default_routines_for_policy;
+pub(crate) use orbit_automation::routines::due::{minimum_cron_interval, parse_cron};
+pub(crate) use orbit_clock::doctor_clock_not_running_issue;
+pub use orbit_clock::{
+    ClockHealth, ClockStatus, ClockUnitConvergence, ClockUnitDrift, ClockUnitInspection,
+    ClockUnitVerdict, clock_status, clock_unit_drift_warning, converge_clock_unit,
+    inspect_clock_unit, install_clock, set_clock_cadence, set_clock_enabled,
 };
+pub(crate) use resident_port::ResidentRoutineStatus;
+pub(crate) use seed::{DEFAULT_ROUTINE_FILES, RETIRED_ROUTINE_FILES};
+pub use seed::{RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions};
+pub use status::{
+    FireField, RoutineBreakerAction, RoutineBreakerOutcome, RoutineField, RoutineStatus,
+    RoutineStatusReport, control_listed_routine_breaker, pause_routine, project_fire, recent_fires,
+    resume_routine, routine_breaker_events, routine_statuses_with_providers,
+};
+pub(crate) use status::{
+    checkout_edit_report, checkout_routine_statuses, set_routine_enabled, toggle_checkout_routine,
+};
+pub(crate) use store::host_routine_breakers;
+pub use store::{RoutineMachineIdentity, ensure_routine_store};
+pub use sweep::{
+    AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepContext, SweepOptions,
+    SweepOutcome, run_sweep, run_sweep_pass,
+};
+pub(crate) use template::{ShippedShape, is_orbit_written_routine, shipped_shape_of};
+pub(crate) use trigger_edit::edit_checkout_routine_trigger;
+pub use trigger_edit::trigger_options;
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use orbit_automation::routines::breaker::request_breaker_bypass;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use orbit_automation::routines::sweep::record_fire_intent;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use orbit_clock::{ClockSettings, load_clock_settings, save_clock_settings};
 
 /// Reads the host's routine status report.
 pub type Statuses = Box<dyn FnOnce() -> Result<RoutineStatusReport, OrbitError> + Send>;
@@ -274,3 +322,6 @@ impl App for RoutineApp {
 pub fn exec(core: &Core, command: Command) -> Result<Outcome, crate::Error> {
     exec::run::<RoutineApp>(core, command)
 }
+
+#[cfg(test)]
+mod tests;

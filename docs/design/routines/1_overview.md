@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints.
 tags: [routines, scheduler]
-paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-cli/src/command/clock/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-clock/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/repository/routine.rs", "crates/orbit-store/src/repository/routine/**"]
+paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-cli/src/command/clock/**", "crates/orbit-core/src/app/routine/**", "crates/orbit-clock/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/repository/routine.rs", "crates/orbit-store/src/repository/routine/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10739, ORB-12236]
 ---
@@ -143,7 +143,7 @@ fragmentation this feature exists to end.
 |---------|------|------|
 | Routine definition type + fail-closed YAML parse | `crates/orbit-types/src/workflow/routine.rs` | Done — [ORB-10021] |
 | Shared delivery/state evaluation, immutable inputs and receipt validation | `crates/orbit-automation/src/delivery/`, `crates/orbit-automation/src/members/`, `crates/orbit-core/src/application/automation/` | Done — [ORB-11330], [ORB-11331] |
-| Registry-neutral loading, due computation and sweep kernel; Core assembly and status | `crates/orbit-automation/src/routines/`, `crates/orbit-core/src/application/routines/` | Done — [ORB-10021], [ORB-12236] |
+| Registry-neutral loading, due computation and sweep kernel; Core assembly and status | `crates/orbit-automation/src/routines/`, `crates/orbit-core/src/app/routine/` | Done — [ORB-10021], [ORB-12236] |
 | Local identity/catalog composition, workspace discovery, and runtime construction | `crates/orbit-cmd/src/registry/routines.rs`, `crates/orbit-cmd/src/registry/runtime/mod.rs`, `crates/orbit-registry/src/machine_identity.rs`, `crates/orbit-registry/src/workspace_registry/` | Done — [ORB-12236], [ORB-12725] |
 | Host-local scheduler state (fires, pauses) | `crates/orbit-store/src/repository/routine.rs` | Done — [ORB-10021] |
 | Sweep advisory lock (flock, host-global) | `crates/orbit-store/src/fs/routine_sweep_lock.rs` | Done — [ORB-10021] |
@@ -152,8 +152,8 @@ fragmentation this feature exists to end.
 | `orbit clock` CLI (`status/pause/enable/repair/set/tick`) | `crates/orbit-cli/src/command/clock/` | Done — [ORB-10720], [ORB-12237] |
 | launchd/systemd unit templates + installer | `crates/orbit-clock/assets/clock/` + `crates/orbit-clock/src/` (re-exported as `routines::clock`) | Done — [ORB-10021]; own crate since [ORB-22688] |
 | Disabled default routine seeding + workspace ship wrapper | `crates/orbit-core/assets/{routines,jobs}/` | Done — [ORB-10207] / [Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job) |
-| Per-user definitions, seeded through init/sync | `crates/orbit-core/src/application/routines/seed.rs` | Done — [ORB-12718] replaced git-shared definitions |
-| Replica-local cron GC | `crates/orbit-core/src/application/routines/loader.rs::runs_in_replica` | Done — [ORB-14173], [ORB-16354] |
+| Per-user definitions, seeded through init/sync | `crates/orbit-core/src/app/routine/seed.rs` | Done — [ORB-12718] replaced git-shared definitions |
+| Replica-local cron GC | `crates/orbit-core/src/app/routine/loader.rs::runs_in_replica` | Done — [ORB-14173], [ORB-16354] |
 | Hourly performance refresh (retired [ORB-22804]) and weekly publication defaults | `crates/orbit-core/assets/routines/retired/crew_performance_refresh.yaml`, `crates/orbit-core/assets/routines/task_publication.yaml` | Done — [ORB-17816], [ORB-18378] |
 | Resident cycle default; weekly evolution pass (retired [ORB-22844]) | `crates/orbit-core/assets/routines/resident_cycle.yaml`, `crates/orbit-core/assets/routines/retired/evolution_pass.yaml` | Done — [ORB-21244], [ORB-21249] |
 

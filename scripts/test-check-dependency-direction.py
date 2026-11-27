@@ -250,11 +250,10 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_helper_only_scan_roots_fail_closed_when_missing(self):
         # super_chains_into and inherent_calls_into rglob a module. A missing
-        # path must fail closed, the way the ripgrep roots already do. These
-        # two are not ripgrep roots: routines is only an inherent defining
-        # module, and orbit-core runtime is only a helper scan target.
+        # path must fail closed, the way the ripgrep roots already do. The
+        # routine app and runtime scan boundary are not ripgrep roots.
         cases = (
-            self.app / "routines",
+            self.root / "crates/orbit-core/src/app/routine",
             self.root / "crates/orbit-core/src/runtime",
         )
         for path in cases:
@@ -1131,122 +1130,73 @@ class RelativeImportTests(unittest.TestCase):
         ], shared=method)
 
     def test_automation_and_auto_tasks_cannot_reach_routines(self):
-        # [ORB-22623] `routines` sits above both; automation's clock-settings
-        # read and auto_tasks' display state were back-edges into it.
-        method = {
-            "routines/status/report.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn fresh_routine_method(&self) {}\n}\n",
-        }
-        # One batch per detector across both modules' routines chains, as
-        # in the forecast shim rows above.
         modules = ("automation", "auto_tasks")
         self.check_rows([
-            (f"{module}/probe.rs",
-             "impl OrbitRuntime {\n    fn probe(&self) {\n"
-             "        self.fresh_routine_method();\n    }\n}\n")
-            for module in modules
-        ], rejected=True, shared=method)
-        self.check_rows([
             row for module in modules for row in (
-                (f"{module}/probe.rs", "use crate::application::routines::Probe;\n"),
+                (f"{module}/probe.rs", "use crate::app::routine::Probe;\n"),
                 (f"{module}/deep/probe.rs",
-                 "fn probe(root: &Path) { crate::application::routines::clock::load(root); }\n"),
-            )
-        ], rejected=True)
-        self.check_rows([
-            (f"{module}/probe.rs", "use crate::application::{\n    routines::Probe,\n};\n")
-            for module in modules
-        ], rejected=True)
-        self.check_rows([
-            row for module in modules for row in (
-                (f"{module}/mod.rs", "use super::routines::Probe;\n"),
-                (f"{module}/probe.rs", "use super::super::routines::Probe;\n"),
-                (f"{module}/probe.rs", "use super::super::{routines::Probe};\n"),
-                (f"{module}/deep/probe.rs", "use super::super::super::{routines::Probe};\n"),
+                 "fn probe(root: &Path) { crate::app::routine::clock_status(root); }\n"),
+                (f"{module}/grouped.rs", "use crate::{app::{routine::Probe}};\n"),
+                (f"{module}/mod.rs", "use super::super::app::routine::Probe;\n"),
+                (f"{module}/relative.rs", "use super::super::super::{app::routine::Probe};\n"),
+                (f"{module}/deep/grouped.rs",
+                 "use super::super::super::super::{app::{routine::Probe}};\n"),
             )
         ], rejected=True)
         self.check_files({
-            **method,
             "automation/condition/evaluate.rs":
                 "fn cadence(root: &Path) { crate::application::contracts::load_clock_settings(root); }\n",
             "automation/pilot_presence.rs":
                 "use orbit_automation::routines::loader::declared_routine_names;\n",
             "auto_tasks/listing.rs":
                 "use crate::application::contracts::ScheduleDisplayState;\n",
-            "routines/sweep.rs":
+            "../app/routine/sweep.rs":
                 "use crate::application::auto_tasks::scheduler::run;\n"
                 "use crate::application::automation::SourceCache;\n"
                 "use crate::application::backlog_forecast::record;\n",
         }, rejected=False)
 
     def test_resident_reaches_routine_status_only_through_its_port(self):
-        # Resident's status lookup closed routines -> automation -> resident
-        # -> routines. Exercise each detector separately so no hit masks one.
-        for rows in (
-            [("resident/probe.rs", "use crate::application::routines::Probe;\n"),
-             ("resident/deep/probe.rs",
-              "fn probe() { crate::application::routines::status::checkout_routine_statuses(); }\n")],
-            [("resident/probe.rs", "use crate::application::{\n    routines::Probe,\n};\n")],
-            [("resident/mod.rs", "use super::routines::Probe;\n"),
-             ("resident/probe.rs", "use super::super::routines::Probe;\n"),
-             ("resident/grouped.rs", "use super::super::{routines::Probe};\n"),
-             ("resident/deep/probe.rs", "use super::super::super::{routines::Probe};\n")],
-        ):
-            self.check_rows(rows, rejected=True)
-        method = {
-            "routines/status/report.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn fresh_routine_method(&self) {}\n}\n",
-        }
         self.check_rows([
-            (f"resident/call_{index}.rs", f"fn probe() {{ {call}; }}\n")
-            for index, call in enumerate((
-                "self.fresh_routine_method()", "runtime.fresh_routine_method()",
-                "OrbitRuntime::fresh_routine_method(runtime)",
-                "Self::fresh_routine_method(runtime)",
-                "<OrbitRuntime>::fresh_routine_method(runtime)",
-                "<crate::OrbitRuntime>::fresh_routine_method(runtime)",
-            ))
-        ], rejected=True, shared=method)
+            ("resident/probe.rs", "use crate::app::routine::Probe;\n"),
+            ("resident/deep/probe.rs",
+             "fn probe(rt: &OrbitRuntime) { crate::app::routine::checkout_routine_statuses(rt); }\n"),
+            ("resident/mod.rs", "use super::super::app::routine::Probe;\n"),
+            ("resident/grouped.rs", "use crate::{app::{routine::Probe}};\n"),
+            ("resident/deep/grouped.rs",
+             "use super::super::super::super::{app::routine::Probe};\n"),
+        ], rejected=True)
         self.check_files({
-            **method,
-            "resident/routine_status_port.rs":
-                "pub(in crate::application) trait ResidentRoutineStatusPort {\n"
-                "    fn disabled_resident_cycle_routine_name(&self) -> Option<String>;\n}\n",
             "resident/mandate_reads.rs":
                 "use super::ResidentRoutineStatusPort;\n"
+                "use crate::app::port::ResidentRoutineStatus;\n"
                 "impl OrbitRuntime {\n    pub(crate) fn resident_cycle_routine_disabled(&self) {\n"
-                "        self.disabled_resident_cycle_routine_name();\n    }\n}\n",
-            "routines/resident_port.rs":
+                "        ResidentRoutineStatus(self).disabled_resident_cycle_routine_name();\n    }\n}\n",
+            "../app/port.rs":
+                "pub(crate) use super::routine::ResidentRoutineStatus;\n"
                 "use crate::application::resident::ResidentRoutineStatusPort;\n"
-                "impl ResidentRoutineStatusPort for OrbitRuntime {\n"
-                "    fn disabled_resident_cycle_routine_name(&self) -> Option<String> {\n"
-                "        self.fresh_routine_method();\n        None\n    }\n}\n",
+                "impl ResidentRoutineStatusPort for ResidentRoutineStatus<'_> {}\n",
         }, rejected=False)
 
     def test_contracts_cannot_reach_routines_or_auto_tasks(self):
         # [ORB-22623] The moved leaves stay below the modules that read them.
         # Grouped relative imports escaped the guard; each super chain must
         # reach application from the fixture's actual module depth.
-        targets = ("routines::clock::set_clock_cadence", "auto_tasks::AutoTaskListingRow")
+        target = "auto_tasks::AutoTaskListingRow"
         # Separate runs exercise direct, grouped and relative-path detectors.
         self.check_rows([
             ("contracts/clock_settings.rs", f"use crate::application::{target};\n")
-            for target in targets
         ], rejected=True)
         self.check_rows([
             ("contracts/clock_settings.rs", f"use crate::application::{{{target}}};\n")
-            for target in targets
         ], rejected=True)
         self.check_rows([
-            row for target in targets for row in (
-                ("contracts/clock_settings.rs", f"use super::super::{{{target}}};\n"),
-                ("contracts/clock_settings/nested.rs",
-                 f"use super::{{super::{{super::{{\n    {target},\n}}}}}};\n"),
-            )
+            ("contracts/clock_settings.rs", f"use super::super::{{{target}}};\n"),
+            ("contracts/clock_settings/nested.rs",
+             f"use super::{{super::{{super::{{\n    {target},\n}}}}}};\n"),
         ], rejected=True)
         self.check_rejected_exact_rows(self.app, [
             ("contracts/mod.rs", source, 1)
-            for target in targets
             for source in (
                 f"use super::{target};\n",
                 f"use super::{{{target}}};\n",
@@ -1265,25 +1215,30 @@ class RelativeImportTests(unittest.TestCase):
         # The mod.rs rows keep their exact path for the module-depth check.
         self.check_rows([
             ("contracts/clock_settings.rs",
-             "use super::super::super::application::routines::Probe;\n"),
-            ("contracts/clock_settings.rs",
-             "use super::super::super::{application::auto_tasks::Probe};\n"),
-            ("contracts/clock_settings.rs",
-             "use super::super::super::{\n    application::routines::Probe,\n};\n"),
-            ("contracts/clock_settings.rs",
-             "fn probe() { super::super::super::application::routines::clock::load(); }\n"),
+             "use super::super::super::application::auto_tasks::Probe;\n"),
             ("contracts/clock_settings/nested.rs",
-             "use super::super::super::super::application::routines::Probe;\n"),
-            ("contracts/clock_settings/nested.rs",
-             "use super::super::super::super::{application::routines::Probe};\n"),
-            ("contracts/clock_settings/nested.rs",
-             "use super::super::super::super::{\n    application::auto_tasks::Probe,\n};\n"),
+             "use super::super::super::super::{application::auto_tasks::Probe};\n"),
         ], rejected=True)
         self.check_rejected_exact_rows(self.app, [
             ("contracts/mod.rs", source, 1) for source in (
-                "use super::super::application::routines::Probe;\n",
-                "use super::super::{application::routines::Probe};\n",
-                "use super::super::{\n    application::routines::Probe,\n};\n",
+                "use super::super::application::auto_tasks::Probe;\n",
+                "use super::super::{application::auto_tasks::Probe};\n",
+                "use super::super::{\n    application::auto_tasks::Probe,\n};\n",
+            )
+        ])
+        # The routine app edge is guardable through the same Rust path forms.
+        self.check_rows([
+            ("contracts/clock_settings.rs", "use crate::app::routine::set_clock_cadence;\n"),
+            ("contracts/grouped.rs", "use crate::{app::{routine::Probe}};\n"),
+            ("contracts/relative.rs", "use super::super::super::app::routine::Probe;\n"),
+            ("contracts/nested/probe.rs",
+             "use super::{super::{super::{super::{\n    app::routine::Probe,\n}}}};\n"),
+        ], rejected=True)
+        self.check_rejected_exact_rows(self.app, [
+            ("contracts/mod.rs", source, 1) for source in (
+                "use super::super::app::routine::Probe;\n",
+                "use super::super::{app::routine::Probe};\n",
+                "use super::super::{\n    app::routine::Probe,\n};\n",
             )
         ])
 
@@ -1292,16 +1247,16 @@ class RelativeImportTests(unittest.TestCase):
         # Every row hits the same definitions scan over orbit-core/src, so
         # they share one guard run (check_rows asserts each row's own path).
         self.check_rows([
-            ("routines/clock/settings.rs", source) for source in (
+            ("../app/routine/clock/settings.rs", source) for source in (
                 "pub struct ClockSettings;\n",
                 "pub fn load_clock_settings() {}\n",
                 "pub enum ScheduleDisplayState {}\n",
             )
         ], rejected=True)
         self.check_files({
-            "routines/clock/settings.rs":
+            "../app/routine/clock/settings.rs":
                 "pub use crate::application::contracts::{ClockSettings, load_clock_settings};\n",
-            "routines/status/mod.rs":
+            "../app/routine/status/mod.rs":
                 "pub use crate::application::contracts::ScheduleDisplayState;\n",
         }, rejected=False)
 
@@ -1530,7 +1485,7 @@ class RelativeImportTests(unittest.TestCase):
     # `(file, supers at file depth that reach the forbidden name, name)`.
     INLINE_DEPTH_CALLERS = (
         # orbit-core application modules: contracts, task, job, the grouped
-        # layer checks, landing and routines.
+        # layer checks and landing.
         ("application/contracts/probe.rs", 2, "task"),
         ("application/task/probe.rs", 2, "job"),
         ("application/task/probe.rs", 2, "review"),
@@ -1545,7 +1500,6 @@ class RelativeImportTests(unittest.TestCase):
         ("application/review/probe.rs", 2, "landing"),
         ("application/backlog_forecast/probe.rs", 2, "codebase"),
         ("application/codebase/probe.rs", 2, "backlog_forecast"),
-        ("application/resident/probe.rs", 2, "routines"),
         # orbit-core bootstrap, composition and runtime layering.
         ("application/workspace/sync.rs", 3, "bootstrap"),
         ("adapter/tool_host/operation.rs", 3, "composition"),
@@ -1563,6 +1517,9 @@ class RelativeImportTests(unittest.TestCase):
         ("activity_job/cli_runner/probe.rs", 2, "DECLARED_FAILURE_EVIDENCE_KEY"),
     )
     # Named-path callers already resolved inline depth; they stay in step.
+    INLINE_DEPTH_CORE_CALLERS = (
+        ("application/resident/probe.rs", 3, "app::routine"),
+    )
     INLINE_DEPTH_STORE_CALLERS = (
         ("contract/probe.rs", 2, "repository"),
         ("driver/file/probe.rs", 3, "driver::sqlite"),
@@ -1577,7 +1534,7 @@ class RelativeImportTests(unittest.TestCase):
     def inline_depth_bases(self):
         crates = self.root / "crates"
         return (
-            (crates / "orbit-core/src", self.INLINE_DEPTH_CALLERS),
+            (crates / "orbit-core/src", self.INLINE_DEPTH_CALLERS + self.INLINE_DEPTH_CORE_CALLERS),
             (crates / "orbit-config/src", self.INLINE_DEPTH_CONFIG_CALLERS),
             (crates / "orbit-engine/src", self.INLINE_DEPTH_ENGINE_CALLERS),
             (crates / "orbit-store/src", self.INLINE_DEPTH_STORE_CALLERS),

@@ -1385,7 +1385,7 @@ Persist a per-resource-kind managed manifest containing the SHA-256 digest last 
 ## All five definition-artifact kinds carry managed provenance, and doctor reports it
 
 **Recorded:** 2026-08 · [ORB-10800]
-**Code anchors:** `crates/orbit-core/src/application/managed_assets/mod.rs::ManagedAssetLayout`, `crates/orbit-core/src/application/skill.rs::seed_default_skills`, `crates/orbit-core/src/application/routines/materialize.rs::seed_default_routines`, `crates/orbit-core/src/application/auto_tasks/mod.rs::seed_default_auto_tasks`, `crates/orbit-core/src/application/health/`
+**Code anchors:** `crates/orbit-core/src/application/managed_assets/mod.rs::ManagedAssetLayout`, `crates/orbit-core/src/application/skill.rs::seed_default_skills`, `crates/orbit-core/src/app/routine/materialize.rs::seed_default_routines`, `crates/orbit-core/src/application/auto_tasks/mod.rs::seed_default_auto_tasks`, `crates/orbit-core/src/application/health/`
 
 ### Context
 
@@ -1605,7 +1605,7 @@ Step recovery runs once per exhausted step and is limited to small repairs. It m
 ## A backstop recovers tasks blocked outside pipelines
 
 **Recorded:** 2026-10-04 · [ORB-13898] · amended [ORB-14685]
-**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/application/task/retained_candidate.rs`, `crates/orbit-core/src/application/task/blocked_recovery_steps.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/application/routines/sweep/tick.rs`
+**Paths:** `crates/orbit-core/assets/activities/final_recovery.yaml`, `crates/orbit-core/src/application/task/blocked_recovery.rs`, `crates/orbit-core/src/application/task/retained_candidate.rs`, `crates/orbit-core/src/application/task/blocked_recovery_steps.rs`, `crates/orbit-core/assets/jobs/blocked_task_recovery_pipeline.yaml`, `crates/orbit-core/assets/activities/prepare_blocked_task_recovery.yaml`, `crates/orbit-core/assets/activities/apply_blocked_task_recovery.yaml`, `crates/orbit-core/src/app/routine/sweep/tick.rs`
 
 ### Context
 

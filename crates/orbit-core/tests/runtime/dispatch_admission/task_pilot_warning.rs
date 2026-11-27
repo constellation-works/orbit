@@ -5,8 +5,8 @@
 
 use std::path::Path;
 
+use orbit_core::app::routine::{pause_routine, resume_routine};
 use orbit_core::application::job::SubmissionKind;
-use orbit_core::application::routines::{pause_routine, resume_routine};
 use orbit_core::runtime::OrbitRuntime;
 use orbit_types::task::ExecutionLocation;
 use serde_json::{Value, json};

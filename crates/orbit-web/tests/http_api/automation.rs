@@ -290,7 +290,7 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
             )
             .unwrap();
             let slot = "2026-09-20T23:00:00+00:00";
-            orbit_core::application::routines::record_fire_intent(
+            orbit_core::app::routine::record_fire_intent(
                 &store,
                 &RoutineFireIntentParams {
                     routine_name: "pilot".into(),
@@ -594,7 +594,7 @@ fn record_fire(
     state: RoutineFireState,
 ) {
     let slot = at.to_rfc3339();
-    orbit_core::application::routines::record_fire_intent(
+    orbit_core::app::routine::record_fire_intent(
         store,
         &RoutineFireIntentParams {
             routine_name: name.into(),
@@ -940,7 +940,7 @@ fn routine_health_memo_ignores_unrelated_audit_writes_but_sees_new_fires() {
             )
             .unwrap();
             let slot = "2026-10-10T06:00:00+00:00";
-            orbit_core::application::routines::record_fire_intent(
+            orbit_core::app::routine::record_fire_intent(
                 &store,
                 &RoutineFireIntentParams {
                     routine_name: "watch".into(),
@@ -1121,7 +1121,7 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
 
             // 2. In-flight cron trial once a non-skipped fire is created after admission.
             let trial_slot = (admitted_at + Duration::seconds(30)).to_rfc3339();
-            orbit_core::application::routines::record_fire_intent(
+            orbit_core::app::routine::record_fire_intent(
                 &store,
                 &RoutineFireIntentParams {
                     routine_name: "cron_trial".into(),
@@ -1226,7 +1226,7 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
             assert_eq!(backoff_cron["breaker"]["trial_expected_at"], future_trial);
 
             assert!(
-                orbit_core::application::routines::request_breaker_bypass(
+                orbit_core::app::routine::request_breaker_bypass(
                     &store,
                     "cron_trial",
                     "human:test"
@@ -1293,12 +1293,8 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
                     "tripped",
                 );
                 assert!(
-                    orbit_core::application::routines::request_breaker_bypass(
-                        &store,
-                        name,
-                        "human:test"
-                    )
-                    .unwrap()
+                    orbit_core::app::routine::request_breaker_bypass(&store, name, "human:test")
+                        .unwrap()
                 );
                 let pending = row(name);
                 assert_eq!(pending["breaker"]["trial_phase"], "armed", "{pending}");

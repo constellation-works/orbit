@@ -326,7 +326,7 @@ unvalidated rebase.
 **Superseded by:** [Ship sweep remains an admission entry point](#ship-sweep-remains-an-admission-entry-point). The original decision below is retained as history.
 
 **Recorded:** 2026-09 · Daniel requested retirement during revision of the design authored by [ORB-12488].
-**Code anchors:** `crates/orbit-core/assets/routines/ship_sweep.yaml`, `crates/orbit-core/assets/jobs/workspace_ship_pipeline.yaml`, `crates/orbit-core/src/application/routines/`
+**Code anchors:** `crates/orbit-core/assets/routines/ship_sweep.yaml`, `crates/orbit-core/assets/jobs/workspace_ship_pipeline.yaml`, `crates/orbit-core/src/app/routine/`
 
 ### Context
 

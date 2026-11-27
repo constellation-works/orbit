@@ -32,7 +32,7 @@ pub(crate) enum ConfinedAssetPath {
 /// Explicit repair paths (`orbit doctor --fix-stale-artifacts`) use this
 /// fail-closed helper. Reconciliation uses [`record_managed_manifest_write`]
 /// so a read-only global root does not fail a later read-only command.
-pub(in crate::application) fn write_managed_asset_manifest(
+pub(crate) fn write_managed_asset_manifest(
     manifest_path: &Path,
     manifest: &ManagedAssetManifest,
 ) -> Result<(), OrbitError> {
@@ -42,7 +42,7 @@ pub(in crate::application) fn write_managed_asset_manifest(
     })
 }
 
-pub(in crate::application) fn encode_managed_asset_manifest(
+pub(crate) fn encode_managed_asset_manifest(
     manifest: &ManagedAssetManifest,
 ) -> Result<String, OrbitError> {
     let asset_kind = &manifest.asset_kind;
@@ -102,7 +102,7 @@ pub(crate) fn record_managed_manifest_write(
     }
 }
 
-pub(in crate::application) fn load_managed_asset_manifest(
+pub(crate) fn load_managed_asset_manifest(
     path: &Path,
     expected_kind: &str,
     layout: ManagedAssetLayout,

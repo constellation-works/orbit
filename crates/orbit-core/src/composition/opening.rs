@@ -258,7 +258,7 @@ impl Opening {
     }
 }
 
-impl crate::application::routines::DiscoveredWorkspaces {
+impl crate::app::routine::DiscoveredWorkspaces {
     /// Add an owner checkout composition opened for a routine sweep.
     pub fn push_entry(&mut self, workspace: orbit_types::workspace::Workspace, opened: Opening) {
         self.entries.push((workspace, opened.runtime));

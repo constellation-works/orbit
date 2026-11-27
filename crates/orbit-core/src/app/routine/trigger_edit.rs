@@ -11,13 +11,13 @@ use orbit_types::workflow::automation::members::StateTriggerKind;
 use orbit_types::workflow::{OverlapPolicy, RoutineTrigger};
 use serde::Serialize;
 
-use super::due::parse_cron;
 use super::edit_contract::{RoutineEditOutcome, RoutineEditRefusal};
 use super::guarded_edit::guarded_routine_edit;
 use super::loader::LoadedRoutine;
 use super::status::{RoutineStatusReport, checkout_edit_report, select_listed_routine_for_target};
 use super::template::is_seeded_routine_file;
 use crate::OrbitRuntime;
+use orbit_automation::routines::due::parse_cron;
 
 /// Every state-trigger kind; [`trigger_options`] filters it per definition.
 const STATE_TRIGGER_KINDS: [StateTriggerKind; 4] = [

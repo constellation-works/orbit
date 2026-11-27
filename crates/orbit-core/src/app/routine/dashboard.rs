@@ -8,13 +8,14 @@ use orbit_common::governance::authorization::{
 };
 use serde_json::{Value, json};
 
+use super::status::toggle_listed_routine;
+use super::trigger_edit::edit_listed_routine_trigger;
 use super::{ClockAction, ClockControl, ClockControlled, DashboardWrite, DashboardWritten};
+use super::{
+    RoutineEditRefusal, control_listed_routine_breaker, set_clock_cadence, set_clock_enabled,
+};
 use crate::Core;
 use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
-use crate::application::routines::{
-    RoutineEditRefusal, control_listed_routine_breaker, edit_listed_routine_trigger,
-    set_clock_cadence, set_clock_enabled, toggle_listed_routine,
-};
 
 /// The governed operation one write requires and the audit row it declares.
 pub(super) fn operation(origin: &DashboardOrigin, write: &DashboardWrite) -> Operation {

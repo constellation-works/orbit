@@ -342,7 +342,7 @@ fn confined_writer_replaces_the_file_without_changing_an_open_readers_content() 
 #[cfg(target_os = "linux")]
 #[test]
 fn confined_writer_preserves_the_previous_file_when_staging_write_fails() {
-    const CHILD: &str = "application::routines::tests::materialize::staging_write_failure_child";
+    const CHILD: &str = "app::routine::tests::materialize::staging_write_failure_child";
     let mut command = std::process::Command::new(std::env::current_exe().expect("test executable"));
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);

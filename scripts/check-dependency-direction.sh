@@ -341,9 +341,8 @@ done < "$dependency_listing"
 # `ReviewAdmissionHook`. Grouped `use crate::application::{…}` trees count too.
 app_src="$repo_root/crates/orbit-core/src/application"
 app_modules='task|task_bundle|automation|job|review|distributed|admission|workspace_auto|backlog_forecast|pull_drain|sweep_filing'
-# [ORB-22623] The clock settings and schedule display state keep contracts
-# below `routines` and `auto_tasks`.
-contracts_higher="${app_modules}|routines|auto_tasks"
+# [ORB-22623] Schedule display state keeps contracts below auto_tasks.
+contracts_higher="${app_modules}|auto_tasks"
 
 # Print every `super::` path or use-tree in production code under application module
 # `$2` that climbs out of it to `application`, or past it to the crate root and back
@@ -1881,23 +1880,22 @@ for lower_module in task job review distributed; do
   fi
 done
 
-# [ORB-22623] `routines` (the sweep clock) sits outside the order, above
-# `automation` and `auto_tasks`: it calls automation's evaluation and the
-# auto-task scheduler, and reaches `review`, `pull_drain` and `backlog_forecast`.
-# The clock settings and schedule display state those two read live in
-# `contracts`. A path, a grouped tree, a `super::` chain into `routines`, or a
-# call to an inherent method it defines (names derived) is a reintroduced edge.
-# Resident reads the selected-checkout cycle switch through its own
-# ResidentRoutineStatusPort, implemented by routines [ORB-22956], so the
-# routines -> automation -> resident path has no back-edge into routines.
-for lower_module in automation auto_tasks resident; do
-  if dependency_matches -n 'crate::application::routines\b' \
-    "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
-    dependency_matches -n -U 'crate::application::\{[^}]*\broutines\b' \
-      "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
-    ! inherent_calls_into "$app_src" "$lower_module" routines '' '' ||
-    ! super_chains_into "$app_src" "$lower_module" routines; then
-    echo "orbit-core ${lower_module} must not name routines or call its inherent methods; use lower-owned contracts or resident::ResidentRoutineStatusPort"
+# The routine app sits above automation, auto_tasks and resident, and
+# consumes clock and schedule display contracts without a back-edge. Resident
+# reads the selected-checkout cycle switch through its own status port.
+# Match the crate-qualified path so relative imports are checked at their
+# lexical depth, where `app::routine` can name a different module.
+if [[ ! -d "$core_src/app/routine" ]]; then
+  echo "dependency scan path missing: $core_src/app/routine" >&2
+  fail=1
+fi
+for lower_module in automation auto_tasks contracts resident; do
+  routine_scan_tests=
+  if [[ "$lower_module" == contracts ]]; then
+    routine_scan_tests=include-tests
+  fi
+  if ! super_chains_into "$app_src" "$lower_module" 'crate::app::routine' named-path "$routine_scan_tests"; then
+    echo "orbit-core ${lower_module} must not name app::routine; use lower-owned contracts or resident::ResidentRoutineStatusPort"
     fail=1
   fi
 done

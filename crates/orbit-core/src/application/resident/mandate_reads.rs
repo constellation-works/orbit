@@ -17,6 +17,7 @@ use super::{
     view,
 };
 use crate::OrbitRuntime;
+use crate::app::port::ResidentRoutineStatus;
 use crate::application::task::decision_request_json;
 
 impl OrbitRuntime {
@@ -47,7 +48,7 @@ impl OrbitRuntime {
     /// enabled, missing, or its status cannot be read (a failed lookup
     /// never fails the caller's read).
     pub(crate) fn resident_cycle_routine_disabled(&self) -> Option<String> {
-        self.disabled_resident_cycle_routine_name()
+        ResidentRoutineStatus(self).disabled_resident_cycle_routine_name()
     }
 
     /// Why an active mandate is stalled, as attention and the reads report

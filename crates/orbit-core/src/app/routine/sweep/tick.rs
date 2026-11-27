@@ -20,6 +20,7 @@ use super::{
     AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
     workspaces,
 };
+use crate::app::routine::lease::sweep_owner_lease_lifetimes;
 use crate::application::auto_tasks::SchedulerOptions;
 use crate::application::auto_tasks::scheduler::run_auto_task_scheduler_with_cache;
 use crate::application::automation::SourceCache;
@@ -95,7 +96,7 @@ pub fn run_sweep(
     // configured per-file budget. `run_sweep_pass` (the explicit-context seam)
     // is left untouched so tests never rotate real logs.
     log_rotation::rotate_and_prune(
-        &super::super::clock::sweep_log_path(&global_root),
+        &orbit_clock::sweep_log_path(&global_root),
         &LogRotationConfig::default(),
     );
     run_sweep_pass(
@@ -143,7 +144,7 @@ pub fn run_sweep_pass(
         });
     };
 
-    let store = super::super::open_routine_store(opener, global_root)?;
+    let store = crate::app::routine::store::open_routine_store(opener, global_root)?;
     // The OS unit and due calculation share this host-local setting. A
     // configured five-minute clock therefore keeps a slot natural for two
     // five-minute intervals instead of retaining the old 120-second default.
@@ -340,7 +341,7 @@ fn run_pre_admission_maintenance(
     // Lifetime maintenance starts no work and must also run during an
     // admission hold. Load the clock credentials before checking the forge.
     report.clock_env_loaded = workspaces::load_clock_env_for(global_root, discovered, load_errors);
-    super::super::leases::sweep_owner_lease_lifetimes(discovered, deadline, skipped_workspaces);
+    sweep_owner_lease_lifetimes(discovered, deadline, skipped_workspaces);
 
     // Settle owner tasks whose delivery PR merged outside Orbit. Runs after
     // the clock environment loads so forge credentials are available, and
