@@ -660,6 +660,7 @@
         "boundary/coordination/tests/lock_holders.rs::a_partition_wait_names_its_exclusive_holder",
         "boundary/coordination/tests/lock_holders.rs::a_partition_wait_names_its_shared_holders",
         "boundary/coordination/tests/lock_holders.rs::a_section_held_past_its_threshold_reports_its_label_and_duration",
+        "boundary/coordination/tests/observation.rs::display_reads_answer_the_settled_snapshot_while_a_writer_holds_the_partition",
         "boundary/coordination/tests/read_latency.rs::slow_release_reports_do_not_hold_task_boundaries",
         "boundary/coordination/tests/read_latency.rs::task_read_report_latency_probe",
         "boundary/coordination/tests/sidecar_reads.rs::a_history_read_settles_an_interrupted_commit_or_write_first",

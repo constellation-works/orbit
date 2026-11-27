@@ -2048,6 +2048,18 @@ Admitted unit tests:
   the decode bound. The pre-change read decoded every claim payload, so
   the count does not hold there.
 
+- `orbit-store`'s
+  `boundary/coordination/tests/observation.rs::display_reads_answer_the_settled_snapshot_while_a_writer_holds_the_partition`
+  is a criterion 2 regression for ORB-29157. A second writer holds the task-commit
+  partition inside `with_admission` until the test releases it, so the race between
+  that writer and each display read is forced rather than timed. Every observational
+  read (board pages, detail, listed row, labels, statuses and the tag set) answers the
+  settled snapshot with no lock wait, recovery or index repair, while the coordinated
+  control reads fail on the held partition. After the writer commits, the next
+  observation equals the coordinated reads. Holding the partition and capturing its
+  lock events need crate-private seams (the commit boundary, `lock_events_observed`),
+  so a crate-root test cannot drive the same interleaving.
+
 - `orbit-engine`'s `executor/automation/vcs/operations/tests/push_retry.rs` cases
   `timed_out_evidence_push_lands_when_the_ref_names_the_commit`,
   `timed_out_evidence_push_fails_when_the_ref_is_absent`,

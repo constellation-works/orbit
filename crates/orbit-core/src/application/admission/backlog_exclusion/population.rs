@@ -19,27 +19,13 @@ impl BacklogSnapshot {
     /// status: a live leaf can still carry a task that has since closed, and
     /// an explicit readiness request may name one. An id no task in this
     /// workspace has, malformed ones included, stays absent.
+    ///
+    /// `observed` selects the informational read for an observational
+    /// snapshot: the envelopes come from the settled snapshot, with no commit
+    /// recovery, so a readiness read never waits on a held task writer. A task
+    /// whose bundle a writer holds in flight stays absent. Admission reads pass
+    /// `false`.
     pub(crate) fn include_tasks<'a>(
-        &mut self,
-        runtime: &OrbitRuntime,
-        ids: impl IntoIterator<Item = &'a String>,
-    ) -> Result<(), OrbitError> {
-        self.include_tasks_in(runtime, ids, false)
-    }
-
-    /// [`Self::include_tasks`] for an observational snapshot: the envelopes
-    /// are read from the settled snapshot, with no commit recovery, so a
-    /// readiness read never waits on a held task writer. A task whose bundle
-    /// a writer holds in flight stays absent.
-    pub(crate) fn include_tasks_observed<'a>(
-        &mut self,
-        runtime: &OrbitRuntime,
-        ids: impl IntoIterator<Item = &'a String>,
-    ) -> Result<(), OrbitError> {
-        self.include_tasks_in(runtime, ids, true)
-    }
-
-    fn include_tasks_in<'a>(
         &mut self,
         runtime: &OrbitRuntime,
         ids: impl IntoIterator<Item = &'a String>,

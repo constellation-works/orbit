@@ -184,6 +184,37 @@ impl<'a> TaskAccess<'a> {
         Ok(self.stored.stores.tasks())
     }
 
+    /// [`Self::metadata_for_ids`] from the settled snapshot, for display
+    /// labels. Local: one keyed envelope read per id with no commit-boundary
+    /// section or recovery; an id whose bundle is in flight is absent. Owner:
+    /// the same bounded `task_metadata` ID selections.
+    pub fn observe_metadata_for_ids(
+        &self,
+        ids: &BTreeSet<String>,
+    ) -> Result<Vec<Task>, OrbitError> {
+        match self.visible_read() {
+            None => Ok(Vec::new()),
+            Some(Chosen::Owner(owner)) => metadata::collect_owner_metadata(&owner, Some(ids)),
+            Some(Chosen::Local(stores)) => Ok(stores
+                .tasks()
+                .observe_task_envelopes_for_ids(ids)?
+                .into_iter()
+                .map(metadata_task)
+                .collect()),
+        }
+    }
+
+    /// [`Self::status_index`] for display. Local: the registry's projection
+    /// read outside the commit boundary. Owner: the `status_index`
+    /// projection.
+    pub fn observe_status_index(&self) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
+        match self.visible_read() {
+            None => Ok(BTreeMap::new()),
+            Some(Chosen::Owner(owner)) => owner.projection("", "status_index"),
+            Some(Chosen::Local(stores)) => stores.tasks().observe_task_status_index(),
+        }
+    }
+
     fn visible_read(&self) -> Option<Chosen<'a>> {
         match &self.stored.task_route {
             TaskRoute::Local => Some(Chosen::Local(&self.stored.stores)),
@@ -507,26 +538,6 @@ impl<'a> TaskAccess<'a> {
         }
     }
 
-    /// [`Self::metadata_for_ids`] from the settled snapshot, for display
-    /// labels. Local: one keyed envelope read per id with no commit-boundary
-    /// section or recovery; an id whose bundle is in flight is absent. Owner:
-    /// the same bounded `task_metadata` ID selections.
-    pub fn observe_metadata_for_ids(
-        &self,
-        ids: &BTreeSet<String>,
-    ) -> Result<Vec<Task>, OrbitError> {
-        match self.visible_read() {
-            None => Ok(Vec::new()),
-            Some(Chosen::Owner(owner)) => metadata::collect_owner_metadata(&owner, Some(ids)),
-            Some(Chosen::Local(stores)) => Ok(stores
-                .tasks()
-                .observe_task_envelopes_for_ids(ids)?
-                .into_iter()
-                .map(metadata_task)
-                .collect()),
-        }
-    }
-
     /// Creation time and status of the tasks in `statuses` or updated at or
     /// after `updated_since`. Local: the store's validated index. Owner:
     /// [`Self::metadata`], filtered here.
@@ -560,17 +571,6 @@ impl<'a> TaskAccess<'a> {
             None => Ok(BTreeMap::new()),
             Some(Chosen::Owner(owner)) => owner.projection("", "status_index"),
             Some(Chosen::Local(stores)) => stores.tasks().task_status_index(),
-        }
-    }
-
-    /// [`Self::status_index`] for display. Local: the registry's projection
-    /// read outside the commit boundary. Owner: the `status_index`
-    /// projection.
-    pub fn observe_status_index(&self) -> Result<BTreeMap<String, TaskStatus>, OrbitError> {
-        match self.visible_read() {
-            None => Ok(BTreeMap::new()),
-            Some(Chosen::Owner(owner)) => owner.projection("", "status_index"),
-            Some(Chosen::Local(stores)) => stores.tasks().observe_task_status_index(),
         }
     }
 

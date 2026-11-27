@@ -19,6 +19,7 @@ use crate::contract::*;
 use crate::repository::task_index::{TaskRegistryStore, task_registry_path};
 
 const PARTITION: &str = "orbit-test-123456";
+
 const TAG: &str = "no-diff-expected";
 
 /// Only a hang guard for the channel handshakes.

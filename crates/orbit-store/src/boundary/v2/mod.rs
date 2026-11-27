@@ -24,6 +24,7 @@ pub(crate) mod desktop;
 mod envelope_cache;
 mod index;
 mod listing;
+
 mod observation;
 mod query;
 mod relations;

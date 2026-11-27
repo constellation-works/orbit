@@ -189,7 +189,10 @@ impl OrbitRuntime {
         match observed {
             Ok(pages) => Ok(pages),
             Err(error) => {
-                tracing::debug!(%error, "observed task pages unavailable; reading them coordinated");
+                tracing::debug!(
+                    %error,
+                    "observed task pages unavailable; reading them coordinated"
+                );
                 self.query_task_row_pages(query, pages)
             }
         }
@@ -364,7 +367,11 @@ impl OrbitRuntime {
             Ok(Some(row)) => Ok(row),
             Ok(None) => Err(OrbitError::not_found(NotFoundKind::Task, id.to_string())),
             Err(error) => {
-                tracing::debug!(task_id = %id, %error, "observed task row unavailable; reading it coordinated");
+                tracing::debug!(
+                    task_id = %id,
+                    %error,
+                    "observed task row unavailable; reading it coordinated"
+                );
                 self.get_task_row(id)
             }
         }
