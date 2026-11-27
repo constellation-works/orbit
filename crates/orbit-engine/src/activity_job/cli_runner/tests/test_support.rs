@@ -1,3 +1,4 @@
+use crate::test_support::impl_test_host;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -105,51 +106,72 @@ impl TestHost {
     }
 }
 
-impl crate::test_support::NullRuntimeHost for TestHost {
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.clone(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
-    }
+impl_test_host! {
+    impl Dispatch for TestHost {
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Ok(ResolvedCliExecutor {
+                command: self.command.clone(),
+                args: Vec::new(),
+                inspection_args: None,
+                image_input: None,
+            })
+        }
 
-    /// Deny mode over the fixed [`TEST_REGISTERED_TOOLS`] registry.
-    fn resolve_activity_tool_denials(
-        &self,
-        _run_id: Option<&str>,
-        _task_ids: &[String],
-        _activity: &str,
-        disallow_list: &[String],
-    ) -> Result<ResolvedActivityTools, DispatchError> {
-        Ok(ResolvedActivityTools {
-            effective_tools: orbit_types::workflow::tools_allowed_by_disallow_list(
-                disallow_list,
-                TEST_REGISTERED_TOOLS.iter().copied(),
-            ),
-            ..Default::default()
-        })
-    }
-
-    fn resolve_executor_sandbox(
-        &self,
-        _provider: &str,
-        _fs_profile: Option<&str>,
-        _subprocess_cwd: Option<&Path>,
-    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-        Ok(self.sandbox.clone())
-    }
-
-    fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
-        let call = self.refresh_calls.fetch_add(1, Ordering::SeqCst) + 1;
-        match &self.refresh_failure {
-            Some(failure) if self.refresh_failing_calls.is_none_or(|calls| call <= calls) => {
-                Err(failure.error())
-            }
-            _ => Ok(()),
+        fn resolve_executor_sandbox(
+            &self,
+            _provider: &str,
+            _fs_profile: Option<&str>,
+            _subprocess_cwd: Option<&Path>,
+        ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+            Ok(self.sandbox.clone())
         }
     }
+}
+
+impl_test_host! {
+    impl HostEnvironment for TestHost {
+        fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
+            let call = self.refresh_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            match &self.refresh_failure {
+                Some(failure) if self.refresh_failing_calls.is_none_or(|calls| call <= calls) => {
+                    Err(failure.error())
+                }
+                _ => Ok(()),
+            }
+        }
+    }
+}
+
+impl_test_host! { impl RunLifecycle for TestHost {} }
+
+impl_test_host! {
+    impl Recovery for TestHost {
+        /// Deny mode over the fixed [`TEST_REGISTERED_TOOLS`] registry.
+        fn resolve_activity_tool_denials(
+            &self,
+            _run_id: Option<&str>,
+            _task_ids: &[String],
+            _activity: &str,
+            disallow_list: &[String],
+        ) -> Result<ResolvedActivityTools, DispatchError> {
+            Ok(ResolvedActivityTools {
+                effective_tools: orbit_types::workflow::tools_allowed_by_disallow_list(
+                    disallow_list,
+                    TEST_REGISTERED_TOOLS.iter().copied(),
+                ),
+                ..Default::default()
+            })
+        }
+    }
+}
+
+impl_test_host! { impl ReviewGate for TestHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for TestHost {}
 }
 
 pub(in crate::activity_job::cli_runner) fn sh_args(script: &str) -> Vec<String> {

@@ -1,12 +1,12 @@
 #![allow(missing_docs)]
 
+use orbit_engine::test_support::impl_test_host;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::task::{ExternalRef, Task, TaskArtifact, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
@@ -27,29 +27,29 @@ impl FakeTaskHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for FakeTaskHost {
-    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
-        self.tasks
-            .get(task_id)
-            .cloned()
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
-    }
+impl_test_host! {
+    impl HostEnvironment for FakeTaskHost {
+        fn lookup_task_for_worktree_gc(
+            &self,
+            _run_id: &str,
+            task_id: &str,
+        ) -> orbit_engine::WorktreeGcTaskLookup {
+            use orbit_engine::WorktreeGcTaskLookup;
 
-    fn get_task_artifacts(&self, _task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
-        Ok(Vec::new())
+            match self.tasks.get(task_id) {
+                Some(task) => WorktreeGcTaskLookup::Found {
+                    status: task.status,
+                    pr_status: task.pr_status.clone(),
+                    status_since: Some(task.updated_at),
+                },
+                None => WorktreeGcTaskLookup::Unresolved,
+            }
+        }
     }
+}
 
-    fn list_tasks_filtered(
-        &self,
-        _status: Option<TaskStatus>,
-        _priority: Option<TaskPriority>,
-        _parent_id: Option<&str>,
-        _job_run_id: Option<&str>,
-        _external_ref: Option<&ExternalRef>,
-        _has_external_ref_system: Option<&str>,
-    ) -> Result<Vec<Task>, OrbitError> {
-        Ok(self.tasks.values().cloned().collect())
-    }
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for FakeTaskHost {}
 }
 
 /// Lets the tempdir delete the fixture if an assertion fails first.

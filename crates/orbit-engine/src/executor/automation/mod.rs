@@ -10,6 +10,17 @@ pub(crate) mod vcs;
 
 pub(crate) use shell::dispatch_local_shell;
 
+#[cfg(feature = "test-support")]
+pub use ci::collect_ci_evidence;
+#[cfg(feature = "test-support")]
+pub use dependabot::collect_dependabot_alerts;
+#[cfg(feature = "test-support")]
+pub use shell::local_shell;
+#[cfg(feature = "test-support")]
+pub use task_update::task_complete;
+#[cfg(feature = "test-support")]
+pub use vcs::{git_commit, handoff_land, push_batch_changes};
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 

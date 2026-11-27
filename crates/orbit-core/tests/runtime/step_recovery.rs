@@ -16,6 +16,7 @@
 /// [ORB-14822] The host commits a recovery's repair before the retry.
 mod repair_commit;
 
+use orbit_engine::test_support::impl_test_host;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -231,222 +232,248 @@ impl RecoveryHost<'_> {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
-    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        Recovery::final_recovery_log_tail(
-            &orbit_core::test_support::EngineHost::new(self.runtime),
-            run_id,
-        )
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        if action == "checkpoint" {
-            // `HEAD` in a recorded output names the worktree's live head.
-            let head = git_stdout(
-                Path::new(input["workspace_path"].as_str().unwrap()),
-                &["rev-parse", "HEAD"],
-            );
-            let output = input["output"]
-                .to_string()
-                .replace("\"HEAD\"", &format!("\"{head}\""));
-            return Ok(serde_json::from_str(&output).unwrap());
-        }
-        if action != "deliver" {
-            self.hooks
-                .lock()
-                .unwrap()
-                .push((action.to_string(), input.clone()));
-            return Ok(json!({}));
-        }
-        let worktree = Path::new(input["workspace_path"].as_str().unwrap());
-        self.attempts_saw.lock().unwrap().push((
-            git_stdout(worktree, &["rev-parse", "HEAD"]),
-            git_stdout(worktree, &["status", "--porcelain"]),
-        ));
-        let call = self.deliveries.fetch_add(1, Ordering::SeqCst);
-        if call > 0 && self.retry_refusal {
-            return Err(DispatchError::DeliveryRefused {
+impl_test_host! {
+    impl Dispatch for RecoveryHost<'_> {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            if action == "checkpoint" {
+                // `HEAD` in a recorded output names the worktree's live head.
+                let head = git_stdout(
+                    Path::new(input["workspace_path"].as_str().unwrap()),
+                    &["rev-parse", "HEAD"],
+                );
+                let output = input["output"]
+                    .to_string()
+                    .replace("\"HEAD\"", &format!("\"{head}\""));
+                return Ok(serde_json::from_str(&output).unwrap());
+            }
+            if action != "deliver" {
+                self.hooks
+                    .lock()
+                    .unwrap()
+                    .push((action.to_string(), input.clone()));
+                return Ok(json!({}));
+            }
+            let worktree = Path::new(input["workspace_path"].as_str().unwrap());
+            self.attempts_saw.lock().unwrap().push((
+                git_stdout(worktree, &["rev-parse", "HEAD"]),
+                git_stdout(worktree, &["status", "--porcelain"]),
+            ));
+            let call = self.deliveries.fetch_add(1, Ordering::SeqCst);
+            if call > 0 && self.retry_refusal {
+                return Err(DispatchError::DeliveryRefused {
+                    action: action.to_string(),
+                    refusal: orbit_types::workflow::DeliveryRefusal::HeadChanged,
+                    message: "delivery_evidence_stale: pull request reports head other".to_string(),
+                });
+            }
+            if call > 0 && self.retry_succeeds {
+                return Ok(json!({"delivered": true}));
+            }
+            Err(DispatchError::DeterministicActionFailed {
                 action: action.to_string(),
-                refusal: orbit_types::workflow::DeliveryRefusal::HeadChanged,
-                message: "delivery_evidence_stale: pull request reports head other".to_string(),
-            });
+                message: if call == 0 {
+                    ORIGINAL_FAILURE
+                } else {
+                    RETRY_FAILURE
+                }
+                .to_string(),
+            })
         }
-        if call > 0 && self.retry_succeeds {
-            return Ok(json!({"delivered": true}));
+
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Ok(ResolvedCliExecutor {
+                command: self.provider.display().to_string(),
+                args: Vec::new(),
+                inspection_args: None,
+                image_input: None,
+            })
         }
-        Err(DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: if call == 0 {
-                ORIGINAL_FAILURE
-            } else {
-                RETRY_FAILURE
-            }
-            .to_string(),
-        })
     }
+}
 
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.provider.display().to_string(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
-    }
-
-    fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
-        let mut environment = self.runtime.validation_environment();
-        if self.change_validation_env && self.validation_env_marker.exists() {
-            if let Some((_, value)) = environment
-                .env
-                .iter_mut()
-                .find(|(name, _)| name == "CARGO_HOME")
-            {
-                *value = "/changed/cargo-home".to_string();
-            } else {
-                environment
+impl_test_host! {
+    impl HostEnvironment for RecoveryHost<'_> {
+        fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
+            let mut environment = self.runtime.validation_environment();
+            if self.change_validation_env && self.validation_env_marker.exists() {
+                if let Some((_, value)) = environment
                     .env
-                    .push(("CARGO_HOME".to_string(), "/changed/cargo-home".to_string()));
+                    .iter_mut()
+                    .find(|(name, _)| name == "CARGO_HOME")
+                {
+                    *value = "/changed/cargo-home".to_string();
+                } else {
+                    environment
+                        .env
+                        .push(("CARGO_HOME".to_string(), "/changed/cargo-home".to_string()));
+                }
             }
+            environment
         }
-        environment
     }
+}
 
-    fn tool_context_for_activity(
-        &self,
-        run_id: Option<&str>,
-        fs_profile: Option<&str>,
-        fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
-        proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_core::test_support::EngineHost::new(self.runtime).tool_context_for_activity(
-            run_id,
-            fs_profile,
-            fs_audit,
-            proc_allowed_programs,
-        )
-    }
-
-    fn agent_crew_config_for_input(
-        &self,
-        input: &Value,
-    ) -> Result<Option<orbit_engine::CrewConfig>, DispatchError> {
-        // The recovery draw resolves a crew model, which authors the host's
-        // repair commit [ORB-16768]. No crew exercises the historical fallback.
-        let Some(model) = self.recovery_model else {
-            return Ok(None);
-        };
-        let recovery = input
-            .get("crew_config_key")
-            .and_then(Value::as_str)
-            .is_some_and(|key| {
-                key == "workflow.purpose_crews.failure_recovery"
-                    || key == "workflow.purpose_crews.auto_fix"
-            });
-        Ok(recovery.then(|| orbit_engine::CrewConfig {
-            name: None,
-            provider: None,
-            model: Some(model.to_string()),
-            reasoning_effort: None,
-            env: Vec::new(),
-            account: None,
-            vision_disabled: false,
-        }))
-    }
-
-    /// The runtime's registry, without task-store lookups: a follower holds
-    /// no copy of the owner's task.
-    fn resolve_activity_tool_denials(
-        &self,
-        _run_id: Option<&str>,
-        _task_ids: &[String],
-        activity: &str,
-        disallow_list: &[String],
-    ) -> Result<ResolvedActivityTools, DispatchError> {
-        orbit_core::test_support::EngineHost::new(self.runtime).resolve_activity_tool_denials(
-            None,
-            &[],
-            activity,
-            disallow_list,
-        )
-    }
-
-    fn worker_invocation(&self) -> Option<WorkerInvocation> {
-        self.claimed.then(|| WorkerInvocation {
-            owner_machine_id: "hm_owner".to_string(),
-            owner_workspace_id: "ws_owner".to_string(),
-            owner_destination: "owner".to_string(),
-            task_id: TASK.to_string(),
-            claim_id: "claim-1".to_string(),
-            execution: ExecutionLocation {
-                machine_id: "hm_follower".to_string(),
-                machine_name: None,
-            },
-            bound_run_id: "leaf".to_string(),
-        })
-    }
-
-    /// A follower's drain tracks the worker it launched.
-    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
-        Ok(())
-    }
-
-    fn register_worker_pid_namespace(&self, _pid: u32) -> Result<(), OrbitError> {
-        Ok(())
-    }
-
-    fn allocate_step_recovery_decision(
-        &self,
-        request: &StepRecoveryDecisionRequest,
-    ) -> Result<Option<StepRecoveryDecisionSlot>, OrbitError> {
-        let slot = orbit_core::test_support::EngineHost::new(self.runtime)
-            .allocate_step_recovery_decision(request)?;
-        self.slots.lock().unwrap().extend(slot.clone());
-        Ok(slot)
-    }
-
-    fn read_step_recovery_decision(
-        &self,
-        slot: &StepRecoveryDecisionSlot,
-    ) -> Result<StepRecoveryDecisionRead, OrbitError> {
-        if self.read_failure {
-            return Err(OrbitError::Io("injected decision read failure".to_string()));
+impl_test_host! {
+    impl RunLifecycle for RecoveryHost<'_> {
+        fn worker_invocation(&self) -> Option<WorkerInvocation> {
+            self.claimed.then(|| WorkerInvocation {
+                owner_machine_id: "hm_owner".to_string(),
+                owner_workspace_id: "ws_owner".to_string(),
+                owner_destination: "owner".to_string(),
+                task_id: TASK.to_string(),
+                claim_id: "claim-1".to_string(),
+                execution: ExecutionLocation {
+                    machine_id: "hm_follower".to_string(),
+                    machine_name: None,
+                },
+                bound_run_id: "leaf".to_string(),
+            })
         }
-        orbit_core::test_support::EngineHost::new(self.runtime).read_step_recovery_decision(slot)
-    }
 
-    fn update_task_from_activity(
-        &self,
-        _task_id: &str,
-        _update: TaskActivityUpdate,
-    ) -> Result<orbit_types::task::Task, OrbitError> {
-        self.task_write("update_task_from_activity")
-    }
+        /// A follower's drain tracks the worker it launched.
+        fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
+            Ok(())
+        }
 
-    fn apply_task_automation_update(
-        &self,
-        _task_id: &str,
-        _update: TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        self.task_write("apply_task_automation_update")
-    }
+        fn register_worker_pid_namespace(&self, _pid: u32) -> Result<(), OrbitError> {
+            Ok(())
+        }
 
-    fn widen_task_context_files(
-        &self,
-        _task_id: &str,
-        _run_id: &str,
-        _step: ContextWideningStep,
-        _activity: &str,
-        _paths: &[String],
-    ) -> Result<Vec<String>, OrbitError> {
-        self.task_write("widen_task_context_files")
+        fn update_task_from_activity(
+            &self,
+            _task_id: &str,
+            _update: TaskActivityUpdate,
+        ) -> Result<orbit_types::task::Task, OrbitError> {
+            self.task_write("update_task_from_activity")
+        }
+
+        fn apply_task_automation_update(
+            &self,
+            _task_id: &str,
+            _update: TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            self.task_write("apply_task_automation_update")
+        }
+
+        fn widen_task_context_files(
+            &self,
+            _task_id: &str,
+            _run_id: &str,
+            _step: ContextWideningStep,
+            _activity: &str,
+            _paths: &[String],
+        ) -> Result<Vec<String>, OrbitError> {
+            self.task_write("widen_task_context_files")
+        }
     }
+}
+
+impl_test_host! {
+    impl Recovery for RecoveryHost<'_> {
+        fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+            Recovery::final_recovery_log_tail(
+                &orbit_core::test_support::EngineHost::new(self.runtime),
+                run_id,
+            )
+        }
+
+        fn tool_context_for_activity(
+            &self,
+            run_id: Option<&str>,
+            fs_profile: Option<&str>,
+            fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
+            proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            orbit_core::test_support::EngineHost::new(self.runtime).tool_context_for_activity(
+                run_id,
+                fs_profile,
+                fs_audit,
+                proc_allowed_programs,
+            )
+        }
+
+        fn agent_crew_config_for_input(
+            &self,
+            input: &Value,
+        ) -> Result<Option<orbit_engine::CrewConfig>, DispatchError> {
+            // The recovery draw resolves a crew model, which authors the host's
+            // repair commit [ORB-16768]. No crew exercises the historical fallback.
+            let Some(model) = self.recovery_model else {
+                return Ok(None);
+            };
+            let recovery = input
+                .get("crew_config_key")
+                .and_then(Value::as_str)
+                .is_some_and(|key| {
+                    key == "workflow.purpose_crews.failure_recovery"
+                        || key == "workflow.purpose_crews.auto_fix"
+                });
+            Ok(recovery.then(|| orbit_engine::CrewConfig {
+                name: None,
+                provider: None,
+                model: Some(model.to_string()),
+                reasoning_effort: None,
+                env: Vec::new(),
+                account: None,
+                vision_disabled: false,
+            }))
+        }
+
+        /// The runtime's registry, without task-store lookups: a follower holds
+        /// no copy of the owner's task.
+        fn resolve_activity_tool_denials(
+            &self,
+            _run_id: Option<&str>,
+            _task_ids: &[String],
+            activity: &str,
+            disallow_list: &[String],
+        ) -> Result<ResolvedActivityTools, DispatchError> {
+            orbit_core::test_support::EngineHost::new(self.runtime).resolve_activity_tool_denials(
+                None,
+                &[],
+                activity,
+                disallow_list,
+            )
+        }
+    }
+}
+
+impl_test_host! {
+    impl ReviewGate for RecoveryHost<'_> {
+        fn allocate_step_recovery_decision(
+            &self,
+            request: &StepRecoveryDecisionRequest,
+        ) -> Result<Option<StepRecoveryDecisionSlot>, OrbitError> {
+            let slot = orbit_core::test_support::EngineHost::new(self.runtime)
+                .allocate_step_recovery_decision(request)?;
+            self.slots.lock().unwrap().extend(slot.clone());
+            Ok(slot)
+        }
+
+        fn read_step_recovery_decision(
+            &self,
+            slot: &StepRecoveryDecisionSlot,
+        ) -> Result<StepRecoveryDecisionRead, OrbitError> {
+            if self.read_failure {
+                return Err(OrbitError::Io("injected decision read failure".to_string()));
+            }
+            orbit_core::test_support::EngineHost::new(self.runtime)
+                .read_step_recovery_decision(slot)
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for RecoveryHost<'_> {}
 }
 
 /// The failing step under the shipped recovery activity, in a job with a

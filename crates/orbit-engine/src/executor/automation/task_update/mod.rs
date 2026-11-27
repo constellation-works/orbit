@@ -9,9 +9,8 @@ use crate::context::{HostEnvironment, RunLifecycle, TaskActivityUpdate};
 use super::StateExecutionContext;
 use super::input::{input_string_field, required_input_string};
 
-pub(in crate::executor::automation) use complete::{
-    authorization_note, complete_tasks, task_complete,
-};
+pub use complete::task_complete;
+pub(in crate::executor::automation) use complete::{authorization_note, complete_tasks};
 
 pub(super) fn update_task<H: RunLifecycle + HostEnvironment + ?Sized>(
     host: &H,

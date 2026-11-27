@@ -12,6 +12,7 @@
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^forge_hold::/)'`.
 
+use orbit_engine::test_support::impl_test_host;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -237,58 +238,74 @@ impl ForgeHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for ForgeHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((action.to_string(), input.clone()));
-        Ok(match action {
-            "decide" => json!({
-                "decision": "escalate",
-                "diagnosis": "the forge refused the push",
-                "human_action": "restore push acceptance",
-            }),
-            other => json!({ "action": other }),
-        })
+impl_test_host! {
+    impl Dispatch for ForgeHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((action.to_string(), input.clone()));
+            Ok(match action {
+                "decide" => json!({
+                    "decision": "escalate",
+                    "diagnosis": "the forge refused the push",
+                    "human_action": "restore push acceptance",
+                }),
+                other => json!({ "action": other }),
+            })
+        }
     }
+}
 
-    fn checkpoint_step(
-        &self,
-        _run_id: &str,
-        step_index: u32,
-        step_id: &str,
-        output: &Value,
-        _compound_outputs: &BTreeMap<String, Value>,
-        _: &std::collections::BTreeMap<
-            String,
-            orbit_types::workflow::activity_job::ScriptOutputSet,
-        >,
-    ) -> Result<(), DispatchError> {
-        self.checkpoints
-            .lock()
-            .unwrap()
-            .insert(step_index, (step_id.to_string(), output.clone()));
-        Ok(())
-    }
+impl_test_host! { impl HostEnvironment for ForgeHost {} }
 
-    fn admit_final_recovery(
-        &self,
-        _run_id: &str,
-        request: &FinalRecoveryAdmissionRequest,
-    ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        self.final_recovery_requests
-            .lock()
-            .unwrap()
-            .push(request.clone());
-        Ok(FinalRecoveryAdmission::Admitted)
+impl_test_host! { impl RunLifecycle for ForgeHost {} }
+
+impl_test_host! {
+    impl Recovery for ForgeHost {
+        fn checkpoint_step(
+            &self,
+            _run_id: &str,
+            step_index: u32,
+            step_id: &str,
+            output: &Value,
+            _compound_outputs: &BTreeMap<String, Value>,
+            _: &std::collections::BTreeMap<
+                String,
+                orbit_types::workflow::activity_job::ScriptOutputSet,
+            >,
+        ) -> Result<(), DispatchError> {
+            self.checkpoints
+                .lock()
+                .unwrap()
+                .insert(step_index, (step_id.to_string(), output.clone()));
+            Ok(())
+        }
+
+        fn admit_final_recovery(
+            &self,
+            _run_id: &str,
+            request: &FinalRecoveryAdmissionRequest,
+        ) -> Result<FinalRecoveryAdmission, OrbitError> {
+            self.final_recovery_requests
+                .lock()
+                .unwrap()
+                .push(request.clone());
+            Ok(FinalRecoveryAdmission::Admitted)
+        }
     }
+}
+
+impl_test_host! { impl ReviewGate for ForgeHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ForgeHost {}
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {

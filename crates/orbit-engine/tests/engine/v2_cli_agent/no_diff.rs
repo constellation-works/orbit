@@ -1,5 +1,6 @@
 mod owner;
 
+use orbit_engine::test_support::impl_test_host;
 use orbit_engine::{Dispatch, RunLifecycle};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -17,30 +18,49 @@ struct NoDiffHost {
     committed: AtomicBool,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for NoDiffHost {
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Dispatch::resolve_cli_executor(&self.cli, provider)
-    }
+impl_test_host! {
+    impl Dispatch for NoDiffHost {
+        fn resolve_cli_executor(
+            &self,
+            provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Dispatch::resolve_cli_executor(&self.cli, provider)
+        }
 
-    fn get_task(&self, _: &str) -> Result<Task, OrbitError> {
-        Ok(self.task.clone())
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            _: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            assert_eq!(action, "delivery_sentinel");
+            self.committed.store(true, Ordering::SeqCst);
+            Ok(json!({}))
+        }
     }
+}
 
-    fn get_task_artifacts(&self, _: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
-        Ok(Vec::new())
-    }
+impl_test_host! { impl HostEnvironment for NoDiffHost {} }
 
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _: &Value,
-        _: &Value,
-        _: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        assert_eq!(action, "delivery_sentinel");
-        self.committed.store(true, Ordering::SeqCst);
-        Ok(json!({}))
+impl_test_host! {
+    impl RunLifecycle for NoDiffHost {
+        fn get_task(&self, _: &str) -> Result<Task, OrbitError> {
+            Ok(self.task.clone())
+        }
+
+        fn get_task_artifacts(&self, _: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
+            Ok(Vec::new())
+        }
     }
+}
+
+impl_test_host! { impl Recovery for NoDiffHost {} }
+
+impl_test_host! { impl ReviewGate for NoDiffHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for NoDiffHost {}
 }
 
 struct SummaryDeliveryHost {
@@ -51,139 +71,164 @@ struct SummaryDeliveryHost {
     state: std::sync::Mutex<orbit_types::workflow::PipelineState>,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for SummaryDeliveryHost {
-    fn get_task_artifact(&self, _: &str, path: &str) -> Result<Option<TaskArtifact>, OrbitError> {
-        Ok(self
-            .artifacts
-            .iter()
-            .find(|artifact| artifact.path == path)
-            .cloned())
-    }
-
-    fn get_task_artifacts(&self, _: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
-        Ok(self.artifacts.clone())
-    }
-
-    fn read_run_state(
-        &self,
-        _: &str,
-    ) -> Result<Option<orbit_types::workflow::PipelineState>, OrbitError> {
-        Ok(Some(self.state.lock().unwrap().clone()))
-    }
-
-    fn checkpoint_step(
-        &self,
-        _: &str,
-        _: u32,
-        step_id: &str,
-        output: &Value,
-        compound_outputs: &std::collections::BTreeMap<String, Value>,
-        _: &std::collections::BTreeMap<
-            String,
-            orbit_types::workflow::activity_job::ScriptOutputSet,
-        >,
-    ) -> Result<(), DispatchError> {
-        let mut state = self.state.lock().unwrap();
-        state.record_pipeline_output(step_id, output.clone());
-        for (key, value) in compound_outputs {
-            state.record_pipeline_output(key, value.clone());
+impl_test_host! {
+    impl Dispatch for SummaryDeliveryHost {
+        fn resolve_cli_executor(
+            &self,
+            provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Dispatch::resolve_cli_executor(&self.cli, provider)
         }
-        Ok(())
-    }
 
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Dispatch::resolve_cli_executor(&self.cli, provider)
-    }
-
-    fn get_task(&self, _: &str) -> Result<Task, OrbitError> {
-        Ok(self.task.lock().unwrap().clone())
-    }
-
-    fn list_run_tasks(&self, _: &str) -> Result<Vec<Task>, OrbitError> {
-        Ok(vec![self.task.lock().unwrap().clone()])
-    }
-
-    fn get_job_run(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<orbit_types::workflow::JobRun>, OrbitError> {
-        Ok(Some(
-            serde_json::from_value(json!({
-                "run_id":run_id, "job_id":"summary-fixture", "attempt":1,
-                "state":"running", "scheduled_at":chrono::Utc::now(),
-                "created_at":chrono::Utc::now(), "resolved_crew":"fixture-crew",
-            }))
-            .unwrap(),
-        ))
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        let mut task = self.task.lock().unwrap();
-        if let Some(expected) = update.expected_status {
-            assert_eq!(task.status, expected);
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            orbit_engine::execute_deterministic_action(
+                self,
+                action,
+                config,
+                input,
+                false,
+                &std::collections::HashMap::new(),
+                None,
+            )
+            .map_err(|error| DispatchError::JobExecution(error.to_string()))
         }
-        if let Some(summary) = update.execution_summary {
-            task.execution_summary = summary;
-        }
-        if let Some(crew) = update.implemented_by {
-            task.implemented_by = Some(crew);
-        }
-        if let Some(status) = update.status {
-            task.status = status;
-        }
-        if let Some(event) = update.status_event {
-            self.history
-                .lock()
-                .unwrap()
-                .push(orbit_types::task::TaskHistoryEntry {
-                    at: chrono::Utc::now(),
-                    by: "system".into(),
-                    event,
-                    note: update.status_note,
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                    surface: None,
-                    caller: None,
-                });
-        }
-        Ok(())
     }
+}
 
-    fn update_task_from_activity(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskActivityUpdate,
-    ) -> Result<Task, OrbitError> {
-        let mut task = self.task.lock().unwrap();
-        assert_eq!(task.status, update.expected_status);
-        task.status = update.status;
-        Ok(task.clone())
-    }
+impl_test_host! { impl HostEnvironment for SummaryDeliveryHost {} }
 
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        _: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        orbit_engine::execute_deterministic_action(
-            self,
-            action,
-            config,
-            input,
-            false,
-            &std::collections::HashMap::new(),
-            None,
-        )
-        .map_err(|error| DispatchError::JobExecution(error.to_string()))
+impl_test_host! {
+    impl RunLifecycle for SummaryDeliveryHost {
+        fn get_task_artifact(
+            &self,
+            _: &str,
+            path: &str,
+        ) -> Result<Option<TaskArtifact>, OrbitError> {
+            Ok(self
+                .artifacts
+                .iter()
+                .find(|artifact| artifact.path == path)
+                .cloned())
+        }
+
+        fn get_task_artifacts(&self, _: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
+            Ok(self.artifacts.clone())
+        }
+
+        fn read_run_state(
+            &self,
+            _: &str,
+        ) -> Result<Option<orbit_types::workflow::PipelineState>, OrbitError> {
+            Ok(Some(self.state.lock().unwrap().clone()))
+        }
+
+        fn get_task(&self, _: &str) -> Result<Task, OrbitError> {
+            Ok(self.task.lock().unwrap().clone())
+        }
+
+        fn list_run_tasks(&self, _: &str) -> Result<Vec<Task>, OrbitError> {
+            Ok(vec![self.task.lock().unwrap().clone()])
+        }
+
+        fn get_job_run(
+            &self,
+            run_id: &str,
+        ) -> Result<Option<orbit_types::workflow::JobRun>, OrbitError> {
+            Ok(Some(
+                serde_json::from_value(json!({
+                    "run_id":run_id, "job_id":"summary-fixture", "attempt":1,
+                    "state":"running", "scheduled_at":chrono::Utc::now(),
+                    "created_at":chrono::Utc::now(), "resolved_crew":"fixture-crew",
+                }))
+                .unwrap(),
+            ))
+        }
+
+        fn apply_task_automation_update(
+            &self,
+            _: &str,
+            update: orbit_engine::TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            let mut task = self.task.lock().unwrap();
+            if let Some(expected) = update.expected_status {
+                assert_eq!(task.status, expected);
+            }
+            if let Some(summary) = update.execution_summary {
+                task.execution_summary = summary;
+            }
+            if let Some(crew) = update.implemented_by {
+                task.implemented_by = Some(crew);
+            }
+            if let Some(status) = update.status {
+                task.status = status;
+            }
+            if let Some(event) = update.status_event {
+                self.history
+                    .lock()
+                    .unwrap()
+                    .push(orbit_types::task::TaskHistoryEntry {
+                        at: chrono::Utc::now(),
+                        by: "system".into(),
+                        event,
+                        note: update.status_note,
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                        surface: None,
+                        caller: None,
+                    });
+            }
+            Ok(())
+        }
+
+        fn update_task_from_activity(
+            &self,
+            _: &str,
+            update: orbit_engine::TaskActivityUpdate,
+        ) -> Result<Task, OrbitError> {
+            let mut task = self.task.lock().unwrap();
+            assert_eq!(task.status, update.expected_status);
+            task.status = update.status;
+            Ok(task.clone())
+        }
     }
+}
+
+impl_test_host! {
+    impl Recovery for SummaryDeliveryHost {
+        fn checkpoint_step(
+            &self,
+            _: &str,
+            _: u32,
+            step_id: &str,
+            output: &Value,
+            compound_outputs: &std::collections::BTreeMap<String, Value>,
+            _: &std::collections::BTreeMap<
+                String,
+                orbit_types::workflow::activity_job::ScriptOutputSet,
+            >,
+        ) -> Result<(), DispatchError> {
+            let mut state = self.state.lock().unwrap();
+            state.record_pipeline_output(step_id, output.clone());
+            for (key, value) in compound_outputs {
+                state.record_pipeline_output(key, value.clone());
+            }
+            Ok(())
+        }
+    }
+}
+
+impl_test_host! { impl ReviewGate for SummaryDeliveryHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for SummaryDeliveryHost {}
 }
 
 /// A claimed unchanged base needs response artifacts at implement_one, while

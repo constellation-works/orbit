@@ -6,7 +6,7 @@ pub const STEP_RECOVERY_DECISION_SCHEMA_VERSION: u32 = 1;
 
 /// Whether a step-recovery hook may dispatch [ORB-11332].
 ///
-/// The test-only `NullRuntimeHost` default answers `Allowed`. `Reserved` admits the attempt
+/// The test fixture default answers `Allowed`. `Reserved` admits the attempt
 /// under its `episode`, and `Denied` carries the reason recovery must not run.
 /// The original step error stays authoritative either way.
 #[derive(Debug, Clone, PartialEq, Eq)]

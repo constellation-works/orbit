@@ -1,5 +1,6 @@
 //! The shipped workflow, with deterministic reservation and time boundaries.
 use super::*;
+use orbit_engine::test_support::impl_test_host;
 
 #[derive(Default)]
 struct State {
@@ -17,75 +18,93 @@ struct GateHost {
     cancelled: bool,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for GateHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _: &Value,
-        input: &Value,
-        _: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        let mut state = self.state.lock().unwrap();
-        Ok(match action {
-            "resolve_delivery_job" => json!({"job_name": "task_local_pipeline"}),
-            "reserve_locks" => {
-                let now = state.elapsed;
-                state.attempts.push(now);
-                state.elapsed += self.reserve_cost;
-                json!({
-                    "reserved": now >= self.opens_at,
-                    "reservation_id": "fixture-reservation",
-                    "footprint_deferred": false,
-                    "conflicts": [{"file": "held.rs", "held_by": "task", "held_by_id": "holder"}],
-                    "waiting_on_deps": [],
-                })
-            }
-            // Also makes the pre-fix shipped loop deterministic: its sleep
-            // activity advances virtual time rather than waiting on the host.
-            "sleep" => {
-                let delay = Duration::from_secs_f64(input["seconds"].as_f64().unwrap());
-                state.sleeps.push(delay);
-                state.elapsed += delay;
-                json!({"slept_seconds": delay.as_secs_f64()})
-            }
-            "gate_starvation_defer" => {
-                let reservation = input
-                    .get("reservation")
-                    .cloned()
-                    .unwrap_or_else(|| input.clone());
-                let expired = input["expired"] == true;
-                if expired && reservation["reserved"] == true {
+impl_test_host! {
+    impl Dispatch for GateHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            input: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            let mut state = self.state.lock().unwrap();
+            Ok(match action {
+                "resolve_delivery_job" => json!({"job_name": "task_local_pipeline"}),
+                "reserve_locks" => {
+                    let now = state.elapsed;
+                    state.attempts.push(now);
+                    state.elapsed += self.reserve_cost;
+                    json!({
+                        "reserved": now >= self.opens_at,
+                        "reservation_id": "fixture-reservation",
+                        "footprint_deferred": false,
+                        "conflicts": [{
+                            "file": "held.rs",
+                            "held_by": "task",
+                            "held_by_id": "holder",
+                        }],
+                        "waiting_on_deps": [],
+                    })
+                }
+                // Also makes the pre-fix shipped loop deterministic: its sleep
+                // activity advances virtual time rather than waiting on the host.
+                "sleep" => {
+                    let delay = Duration::from_secs_f64(input["seconds"].as_f64().unwrap());
+                    state.sleeps.push(delay);
+                    state.elapsed += delay;
+                    json!({"slept_seconds": delay.as_secs_f64()})
+                }
+                "gate_starvation_defer" => {
+                    let reservation = input
+                        .get("reservation")
+                        .cloned()
+                        .unwrap_or_else(|| input.clone());
+                    let expired = input["expired"] == true;
+                    if expired && reservation["reserved"] == true {
+                        state.released += 1;
+                    }
+                    let deferred = expired || reservation["reserved"] != true;
+                    json!({"deferred": deferred, "reservation": {
+                        "reservation_id": "fixture-reservation", "footprint_deferred": false
+                    }})
+                }
+                "invoke_and_wait" => {
+                    if input["deferral"]["deferred"] == true {
+                        json!({"status": "success", "skipped": true})
+                    } else {
+                        state.dispatched += 1;
+                        json!({"status": if self.cancelled {"cancelled"} else {"success"}})
+                    }
+                }
+                "release_locks" => {
+                    assert_eq!(input["reservation_id"], "fixture-reservation");
                     state.released += 1;
+                    json!({})
                 }
-                let deferred = expired || reservation["reserved"] != true;
-                json!({"deferred": deferred, "reservation": {
-                    "reservation_id": "fixture-reservation", "footprint_deferred": false
-                }})
-            }
-            "invoke_and_wait" => {
-                if input["deferral"]["deferred"] == true {
-                    json!({"status": "success", "skipped": true})
-                } else {
-                    state.dispatched += 1;
-                    json!({"status": if self.cancelled {"cancelled"} else {"success"}})
+                "pipeline_success_guard" => {
+                    if input["result"]["status"] == "cancelled" {
+                        return Err(DispatchError::ChildRunCancelled {
+                            message: "fixture child cancelled".into(),
+                        });
+                    }
+                    json!({})
                 }
-            }
-            "release_locks" => {
-                assert_eq!(input["reservation_id"], "fixture-reservation");
-                state.released += 1;
-                json!({})
-            }
-            "pipeline_success_guard" => {
-                if input["result"]["status"] == "cancelled" {
-                    return Err(DispatchError::ChildRunCancelled {
-                        message: "fixture child cancelled".into(),
-                    });
-                }
-                json!({})
-            }
-            other => panic!("unexpected action: {other}"),
-        })
+                other => panic!("unexpected action: {other}"),
+            })
+        }
     }
+}
+
+impl_test_host! { impl HostEnvironment for GateHost {} }
+
+impl_test_host! { impl RunLifecycle for GateHost {} }
+
+impl_test_host! { impl Recovery for GateHost {} }
+
+impl_test_host! { impl ReviewGate for GateHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for GateHost {}
 }
 
 fn shipped_gate() -> orbit_types::workflow::JobV2 {

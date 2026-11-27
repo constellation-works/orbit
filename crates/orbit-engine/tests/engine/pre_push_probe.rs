@@ -2,12 +2,13 @@
 //! Fake Git stalls by exec'ing sleep; the supervisor's deadline kills it. Each
 //! body runs in a child so PATH changes cannot affect concurrent fixtures.
 
-use std::collections::HashMap;
+use orbit_engine::test_support::impl_test_host;
+use orbit_engine::test_support::push_batch_changes;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
 use orbit_common::OrbitError;
-use orbit_engine::execute_deterministic_action;
+
 use serde_json::{Value, json};
 
 use super::git_fixture;
@@ -48,7 +49,16 @@ esac
 "#;
 
 struct Host;
-impl orbit_engine::test_support::NullRuntimeHost for Host {}
+
+impl_test_host! { impl HostEnvironment for Host {} }
+
+impl_test_host! { impl RunLifecycle for Host {} }
+
+impl_test_host! { impl ReviewGate for Host {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for Host {}
+}
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -116,17 +126,12 @@ impl Fixture {
             || {
                 with_supervisor_seam(seam, || {
                     orbit_engine::test_support::with_remote_probe_backoff(10, || {
-                        execute_deterministic_action(
+                        push_batch_changes(
                             &Host,
-                            "git_push",
-                            &json!({}),
                             &json!({
                                 "workspace_path": self.root.path(),
                                 "branch": "candidate",
                             }),
-                            false,
-                            &HashMap::new(),
-                            None,
                         )
                     })
                 })

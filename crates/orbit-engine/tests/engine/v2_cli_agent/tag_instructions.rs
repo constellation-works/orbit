@@ -3,6 +3,7 @@
 //! it applied; with none the prompt is unchanged, and a refusal stops the
 //! dispatch before the provider runs.
 
+use orbit_engine::test_support::impl_test_host;
 use orbit_engine::{Dispatch, HostEnvironment, Recovery};
 use std::sync::Mutex;
 
@@ -21,59 +22,83 @@ struct TagHost {
     steering: bool,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for TagHost {
-    fn mid_run_steering_enabled(&self) -> bool {
-        self.steering
-    }
+impl_test_host! {
+    impl Dispatch for TagHost {
+        fn mid_run_steering_enabled(&self) -> bool {
+            self.steering
+        }
 
-    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
-    }
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            Dispatch::run_deterministic(&self.cli, action, config, input, tool_context)
+        }
 
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Dispatch::run_deterministic(&self.cli, action, config, input, tool_context)
-    }
+        fn resolve_cli_executor(
+            &self,
+            provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Dispatch::resolve_cli_executor(&self.cli, provider)
+        }
 
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Dispatch::resolve_cli_executor(&self.cli, provider)
+        fn tag_instructions_for_activity(
+            &self,
+            _run_id: &str,
+            activity_name: &str,
+            input: &Value,
+        ) -> Result<Vec<TagInstruction>, DispatchError> {
+            self.asked
+                .lock()
+                .unwrap()
+                .push((activity_name.to_string(), input.clone()));
+            self.instructions
+                .clone()
+                .map_err(DispatchError::CliInvocationPermanent)
+        }
     }
+}
 
-    fn tool_context_for_activity(
-        &self,
-        run_id: Option<&str>,
-        fs_profile: Option<&str>,
-        fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        Recovery::tool_context_for_activity(
-            &self.cli,
-            run_id,
-            fs_profile,
-            fs_audit,
-            proc_allowed_programs,
-        )
+impl_test_host! {
+    impl HostEnvironment for TagHost {
+        fn agent_subprocess_environment(
+            &self,
+            required_env_vars: &[&str],
+        ) -> Vec<(String, String)> {
+            HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
+        }
     }
+}
 
-    fn tag_instructions_for_activity(
-        &self,
-        _run_id: &str,
-        activity_name: &str,
-        input: &Value,
-    ) -> Result<Vec<TagInstruction>, DispatchError> {
-        self.asked
-            .lock()
-            .unwrap()
-            .push((activity_name.to_string(), input.clone()));
-        self.instructions
-            .clone()
-            .map_err(DispatchError::CliInvocationPermanent)
+impl_test_host! { impl RunLifecycle for TagHost {} }
+
+impl_test_host! {
+    impl Recovery for TagHost {
+        fn tool_context_for_activity(
+            &self,
+            run_id: Option<&str>,
+            fs_profile: Option<&str>,
+            fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            Recovery::tool_context_for_activity(
+                &self.cli,
+                run_id,
+                fs_profile,
+                fs_audit,
+                proc_allowed_programs,
+            )
+        }
     }
+}
+
+impl_test_host! { impl ReviewGate for TagHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for TagHost {}
 }
 
 /// Dispatch `agent_implement` through a fake provider that saves its prompt.

@@ -14,6 +14,7 @@ mod shared_completion;
 use orbit_core::application::auto_tasks::AutoTaskAddParams;
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::runtime::OrbitRuntime;
+use orbit_engine::test_support::impl_test_host;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
@@ -303,35 +304,51 @@ fn receipts_respect_step_expiry_after_downtime() {
         runtime: &'a OrbitRuntime,
         backdate_hours: i64,
     }
-    impl orbit_engine::test_support::NullRuntimeHost for ReceiptHost<'_> {
-        fn observe_auto_task_step(
-            &self,
-            run: &str,
-            request: &orbit_engine::AutoTaskStepRequest,
-        ) -> Result<orbit_engine::AutoTaskObservation, orbit_engine::DispatchError> {
-            let mut observation = orbit_engine::Recovery::observe_auto_task_step(
-                &orbit_core::test_support::EngineHost::new(self.runtime),
-                run,
-                request,
-            )?;
-            if let Some(receipt) = &mut observation.receipt {
-                receipt.settled_at -= Duration::hours(self.backdate_hours);
+
+    impl_test_host! { impl Dispatch for ReceiptHost<'_> {} }
+
+    impl_test_host! { impl HostEnvironment for ReceiptHost<'_> {} }
+
+    impl_test_host! { impl RunLifecycle for ReceiptHost<'_> {} }
+
+    impl_test_host! {
+        impl Recovery for ReceiptHost<'_> {
+            fn observe_auto_task_step(
+                &self,
+                run: &str,
+                request: &orbit_engine::AutoTaskStepRequest,
+            ) -> Result<orbit_engine::AutoTaskObservation, orbit_engine::DispatchError> {
+                let mut observation = orbit_engine::Recovery::observe_auto_task_step(
+                    &orbit_core::test_support::EngineHost::new(self.runtime),
+                    run,
+                    request,
+                )?;
+                if let Some(receipt) = &mut observation.receipt {
+                    receipt.settled_at -= Duration::hours(self.backdate_hours);
+                }
+                Ok(observation)
             }
-            Ok(observation)
+
+            fn checkpoint_auto_task_step(
+                &self,
+                run: &str,
+                step: &str,
+                record: &AutoTaskStepRecord,
+            ) -> Result<(), orbit_engine::DispatchError> {
+                orbit_engine::Recovery::checkpoint_auto_task_step(
+                    &orbit_core::test_support::EngineHost::new(self.runtime),
+                    run,
+                    step,
+                    record,
+                )
+            }
         }
-        fn checkpoint_auto_task_step(
-            &self,
-            run: &str,
-            step: &str,
-            record: &AutoTaskStepRecord,
-        ) -> Result<(), orbit_engine::DispatchError> {
-            orbit_engine::Recovery::checkpoint_auto_task_step(
-                &orbit_core::test_support::EngineHost::new(self.runtime),
-                run,
-                step,
-                record,
-            )
-        }
+    }
+
+    impl_test_host! { impl ReviewGate for ReceiptHost<'_> {} }
+
+    impl_test_host! {
+        impl RuntimeHostProcessEnvironment for ReceiptHost<'_> {}
     }
     for (expiry, age_hours, backdate_hours, expected) in [
         (

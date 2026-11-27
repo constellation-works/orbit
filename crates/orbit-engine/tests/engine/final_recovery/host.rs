@@ -2,6 +2,7 @@
 //! scenarios: `RecoveryHost` stands in for Core, and `run*` executes a job
 //! through `execute_job_with_resume` while collecting audit attempts.
 
+use orbit_engine::test_support::impl_test_host;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
@@ -124,179 +125,197 @@ impl RecoveryHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((action.to_string(), input.clone()));
-        let reply = self
-            .replies
-            .lock()
-            .unwrap()
-            .get_mut(action)
-            .and_then(VecDeque::pop_front);
-        match reply {
-            Some(Reply::Ok(value)) => Ok(value),
-            Some(Reply::Observation) => Err(DispatchError::CompletionObservationUnavailable {
-                action: action.to_string(),
-                message: "TLS handshake timeout".into(),
-            }),
-            Some(Reply::Fail) => Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("{action} failed"),
-            }),
-            Some(Reply::Diagnostic(message)) => Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message,
-            }),
-            Some(Reply::Permanent) => Err(DispatchError::CliInvocationPermanent(format!(
-                "{action}: sandbox unavailable"
-            ))),
-            Some(Reply::Conflict(conflict)) => {
-                Err(DispatchError::RecoverableVcsConflict(Box::new(conflict)))
+impl_test_host! {
+    impl Dispatch for RecoveryHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((action.to_string(), input.clone()));
+            let reply = self
+                .replies
+                .lock()
+                .unwrap()
+                .get_mut(action)
+                .and_then(VecDeque::pop_front);
+            match reply {
+                Some(Reply::Ok(value)) => Ok(value),
+                Some(Reply::Observation) => Err(DispatchError::CompletionObservationUnavailable {
+                    action: action.to_string(),
+                    message: "TLS handshake timeout".into(),
+                }),
+                Some(Reply::Fail) => Err(DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("{action} failed"),
+                }),
+                Some(Reply::Diagnostic(message)) => Err(DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message,
+                }),
+                Some(Reply::Permanent) => Err(DispatchError::CliInvocationPermanent(format!(
+                    "{action}: sandbox unavailable"
+                ))),
+                Some(Reply::Conflict(conflict)) => {
+                    Err(DispatchError::RecoverableVcsConflict(Box::new(conflict)))
+                }
+                Some(Reply::EvidenceHold) => {
+                    Err(DispatchError::ReviewEvidenceHold(Box::new(evidence_hold())))
+                }
+                Some(Reply::ChildCancelled) => Err(DispatchError::ChildRunCancelled {
+                    message: "child run jrun-child was cancelled".to_string(),
+                }),
+                None if action == "setup" => Ok(json!({
+                    "workspace_path": self.workspace_path,
+                    "base_ref": "main",
+                    "base_sha": "0123456789abcdef0123456789abcdef01234567",
+                })),
+                None => Ok(json!({ "action": action })),
             }
-            Some(Reply::EvidenceHold) => {
-                Err(DispatchError::ReviewEvidenceHold(Box::new(evidence_hold())))
+        }
+
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<orbit_engine::ResolvedCliExecutor, DispatchError> {
+            self.cli.clone().ok_or(DispatchError::JobExecution(
+                "this fixture has no provider CLI".into(),
+            ))
+        }
+    }
+}
+
+impl_test_host! { impl HostEnvironment for RecoveryHost {} }
+
+impl_test_host! {
+    impl RunLifecycle for RecoveryHost {
+        fn apply_task_automation_update(
+            &self,
+            task_id: &str,
+            update: TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            self.updates
+                .lock()
+                .unwrap()
+                .push((task_id.to_string(), update));
+            Ok(())
+        }
+    }
+}
+
+impl_test_host! {
+    impl Recovery for RecoveryHost {
+        fn checkpoint_step(
+            &self,
+            _: &str,
+            _: u32,
+            step_id: &str,
+            output: &Value,
+            _: &std::collections::BTreeMap<String, Value>,
+            _: &std::collections::BTreeMap<
+                String,
+                orbit_types::workflow::activity_job::ScriptOutputSet,
+            >,
+        ) -> Result<(), DispatchError> {
+            self.checkpoints
+                .lock()
+                .unwrap()
+                .push((step_id.to_string(), output.clone()));
+            Ok(())
+        }
+
+        fn checkpoint_step_diagnostic(
+            &self,
+            _: &str,
+            step_id: &str,
+            output: &Value,
+        ) -> Result<(), DispatchError> {
+            self.diagnostics
+                .lock()
+                .unwrap()
+                .push((step_id.to_string(), output.clone()));
+            Ok(())
+        }
+
+        fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+            Ok(self.logs.get(run_id).cloned())
+        }
+
+        fn tool_context_for_activity(
+            &self,
+            _run_id: Option<&str>,
+            _fs_profile: Option<&str>,
+            _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            _proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            orbit_tools::ToolContext {
+                workspace_root: self.primary_root.clone(),
+                ..Default::default()
             }
-            Some(Reply::ChildCancelled) => Err(DispatchError::ChildRunCancelled {
-                message: "child run jrun-child was cancelled".to_string(),
-            }),
-            None if action == "setup" => Ok(json!({
-                "workspace_path": self.workspace_path,
-                "base_ref": "main",
-                "base_sha": "0123456789abcdef0123456789abcdef01234567",
-            })),
-            None => Ok(json!({ "action": action })),
+        }
+
+        fn completion_observation_admission(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<CompletionObservationAdmission, OrbitError> {
+            if let Some(facts) = self.observation.clone() {
+                return orbit_engine::admit_published_completion_observation(facts)
+                    .map_err(|message| OrbitError::Execution(message.to_string()));
+            }
+            Ok(self.completion_admission.clone())
+        }
+
+        fn admit_final_recovery(
+            &self,
+            _run_id: &str,
+            request: &FinalRecoveryAdmissionRequest,
+        ) -> Result<FinalRecoveryAdmission, OrbitError> {
+            self.admissions.lock().unwrap().push(request.clone());
+            Ok(self.admission.clone())
+        }
+
+        fn apply_final_recovery(
+            &self,
+            _run_id: &str,
+            application: &FinalRecoveryApplication,
+        ) -> Result<FinalRecoveryApplied, OrbitError> {
+            self.applications.lock().unwrap().push(application.clone());
+            if self.apply_script == ApplyScript::Fail {
+                return Err(OrbitError::Execution(
+                    "scripted final recovery application failed".to_string(),
+                ));
+            }
+            if self.apply_script == ApplyScript::ParkRequeue
+                && matches!(application.decision, FinalRecoveryDecision::Requeue { .. })
+            {
+                return Ok(FinalRecoveryApplied::Escalated {
+                    outcome: "blocked for a human: requeue parked by the host".to_string(),
+                });
+            }
+            Ok(match &application.decision {
+                FinalRecoveryDecision::Resume { .. } => FinalRecoveryApplied::Resume,
+                FinalRecoveryDecision::Escalate { .. } => FinalRecoveryApplied::Escalated {
+                    outcome: "blocked for a human".to_string(),
+                },
+                other => FinalRecoveryApplied::Settled {
+                    outcome: other.kind().to_string(),
+                },
+            })
         }
     }
+}
 
-    fn checkpoint_step(
-        &self,
-        _: &str,
-        _: u32,
-        step_id: &str,
-        output: &Value,
-        _: &std::collections::BTreeMap<String, Value>,
-        _: &std::collections::BTreeMap<
-            String,
-            orbit_types::workflow::activity_job::ScriptOutputSet,
-        >,
-    ) -> Result<(), DispatchError> {
-        self.checkpoints
-            .lock()
-            .unwrap()
-            .push((step_id.to_string(), output.clone()));
-        Ok(())
-    }
+impl_test_host! { impl ReviewGate for RecoveryHost {} }
 
-    fn checkpoint_step_diagnostic(
-        &self,
-        _: &str,
-        step_id: &str,
-        output: &Value,
-    ) -> Result<(), DispatchError> {
-        self.diagnostics
-            .lock()
-            .unwrap()
-            .push((step_id.to_string(), output.clone()));
-        Ok(())
-    }
-
-    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(self.logs.get(run_id).cloned())
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        task_id: &str,
-        update: TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        self.updates
-            .lock()
-            .unwrap()
-            .push((task_id.to_string(), update));
-        Ok(())
-    }
-
-    fn resolve_cli_executor(
-        &self,
-        _provider: &str,
-    ) -> Result<orbit_engine::ResolvedCliExecutor, DispatchError> {
-        self.cli.clone().ok_or(DispatchError::JobExecution(
-            "this fixture has no provider CLI".into(),
-        ))
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext {
-            workspace_root: self.primary_root.clone(),
-            ..Default::default()
-        }
-    }
-
-    fn completion_observation_admission(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<CompletionObservationAdmission, OrbitError> {
-        if let Some(facts) = self.observation.clone() {
-            return orbit_engine::admit_published_completion_observation(facts)
-                .map_err(|message| OrbitError::Execution(message.to_string()));
-        }
-        Ok(self.completion_admission.clone())
-    }
-
-    fn admit_final_recovery(
-        &self,
-        _run_id: &str,
-        request: &FinalRecoveryAdmissionRequest,
-    ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        self.admissions.lock().unwrap().push(request.clone());
-        Ok(self.admission.clone())
-    }
-
-    fn apply_final_recovery(
-        &self,
-        _run_id: &str,
-        application: &FinalRecoveryApplication,
-    ) -> Result<FinalRecoveryApplied, OrbitError> {
-        self.applications.lock().unwrap().push(application.clone());
-        if self.apply_script == ApplyScript::Fail {
-            return Err(OrbitError::Execution(
-                "scripted final recovery application failed".to_string(),
-            ));
-        }
-        if self.apply_script == ApplyScript::ParkRequeue
-            && matches!(application.decision, FinalRecoveryDecision::Requeue { .. })
-        {
-            return Ok(FinalRecoveryApplied::Escalated {
-                outcome: "blocked for a human: requeue parked by the host".to_string(),
-            });
-        }
-        Ok(match &application.decision {
-            FinalRecoveryDecision::Resume { .. } => FinalRecoveryApplied::Resume,
-            FinalRecoveryDecision::Escalate { .. } => FinalRecoveryApplied::Escalated {
-                outcome: "blocked for a human".to_string(),
-            },
-            other => FinalRecoveryApplied::Settled {
-                outcome: other.kind().to_string(),
-            },
-        })
-    }
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for RecoveryHost {}
 }
 
 pub(super) struct Run {

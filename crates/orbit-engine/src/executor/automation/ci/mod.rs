@@ -98,7 +98,8 @@ pub(super) fn bounded_u64(
     Ok(raw.min(max))
 }
 
-pub(super) fn collect_ci_evidence<
+/// Collect forge CI outcomes and the job evidence used to classify failures.
+pub fn collect_ci_evidence<
     H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
 >(
     host: &H,

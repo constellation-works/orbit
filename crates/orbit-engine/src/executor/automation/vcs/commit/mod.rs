@@ -24,7 +24,7 @@ pub use scope::validate_claim_new_paths;
 pub(super) use scope::{WideningProvenance, attribute_candidate_paths};
 
 pub(super) use actions::commit_failure_candidate;
-pub(in crate::executor::automation) use actions::git_commit;
+pub use actions::git_commit;
 pub(super) use checkpoint::{
     claimed_clean_base_checkpoint, verified_clean_tree_checkpoint, verify_clean_tree_handoff,
     verify_clean_tree_handoff_at_revision,

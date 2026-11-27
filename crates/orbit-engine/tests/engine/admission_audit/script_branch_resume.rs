@@ -5,6 +5,7 @@
 //! refuses with `script_outputs_unavailable` when the stored set is gone,
 //! never re-running the script to mint a replacement.
 
+use orbit_engine::test_support::impl_test_host;
 use std::collections::BTreeMap;
 use std::sync::Mutex as StdMutex;
 
@@ -89,146 +90,162 @@ impl ScriptBranchHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for ScriptBranchHost {
-    fn run_script_step(&self, request: &ScriptStepRequest) -> ScriptStepRun {
-        self.scripts.lock().expect("scripts").push(request.clone());
-        let outputs = if request.step_id == "shoot" {
-            let set = kept_set(&request.run_id, &request.step_id);
-            self.stored
+impl_test_host! {
+    impl Dispatch for ScriptBranchHost {
+        fn run_script_step(&self, request: &ScriptStepRequest) -> ScriptStepRun {
+            self.scripts.lock().expect("scripts").push(request.clone());
+            let outputs = if request.step_id == "shoot" {
+                let set = kept_set(&request.run_id, &request.step_id);
+                self.stored
+                    .lock()
+                    .expect("stored")
+                    .insert(set.set_id.clone(), set.clone());
+                ScriptStepOutputs::Kept(set)
+            } else {
+                ScriptStepOutputs::None
+            };
+            ScriptStepRun::Ran(Box::new(ScriptStepRan {
+                end: ScriptStepEnd::Exited(0),
+                stdout: br#"{"ok": true}"#.to_vec(),
+                stdout_over_cap: false,
+                output_schema: Value::Null,
+                log: Vec::new(),
+                record: ScriptExecutionRecord {
+                    script: request.script.clone(),
+                    ..ScriptExecutionRecord::default()
+                },
+                outputs,
+            }))
+        }
+
+        fn verify_script_output_set(
+            &self,
+            consumer_run_id: &str,
+            set: &ScriptOutputSet,
+        ) -> Result<(), String> {
+            self.verified
                 .lock()
-                .expect("stored")
-                .insert(set.set_id.clone(), set.clone());
-            ScriptStepOutputs::Kept(set)
-        } else {
-            ScriptStepOutputs::None
-        };
-        ScriptStepRun::Ran(Box::new(ScriptStepRan {
-            end: ScriptStepEnd::Exited(0),
-            stdout: br#"{"ok": true}"#.to_vec(),
-            stdout_over_cap: false,
-            output_schema: Value::Null,
-            log: Vec::new(),
-            record: ScriptExecutionRecord {
-                script: request.script.clone(),
-                ..ScriptExecutionRecord::default()
-            },
-            outputs,
-        }))
-    }
-
-    fn verify_script_output_set(
-        &self,
-        consumer_run_id: &str,
-        set: &ScriptOutputSet,
-    ) -> Result<(), String> {
-        self.verified
-            .lock()
-            .expect("verified")
-            .push(set.set_id.clone());
-        if set.run_id != consumer_run_id {
-            return Err(format!("was produced by run {}", set.run_id));
-        }
-        match self.stored.lock().expect("stored").get(&set.set_id) {
-            Some(stored) if stored == set => Ok(()),
-            Some(_) => Err("does not match its producer record".to_string()),
-            None => Err("has no producer record".to_string()),
+                .expect("verified")
+                .push(set.set_id.clone());
+            if set.run_id != consumer_run_id {
+                return Err(format!("was produced by run {}", set.run_id));
+            }
+            match self.stored.lock().expect("stored").get(&set.set_id) {
+                Some(stored) if stored == set => Ok(()),
+                Some(_) => Err("does not match its producer record".to_string()),
+                None => Err("has no producer record".to_string()),
+            }
         }
     }
+}
 
-    fn observe_auto_task_step(
-        &self,
-        _run_id: &str,
-        request: &AutoTaskStepRequest,
-    ) -> Result<AutoTaskObservation, DispatchError> {
-        let record = self
-            .records
-            .lock()
-            .expect("records")
-            .get(&request.step_id)
-            .cloned();
-        let now = Utc::now();
-        let phase = *self.phase.lock().expect("phase");
-        let (readiness, receipt) = if phase == 1 {
-            (AutoTaskReadiness::Ready, None)
-        } else if phase == 2 {
-            (
-                AutoTaskReadiness::Ready,
-                Some(AutoTaskReceipt {
-                    task_id: "T-HOLD".to_string(),
-                    task_status: "done".to_string(),
-                    accepted: true,
-                    settled_at: now,
-                    observed_at: now,
-                    result: None,
-                }),
-            )
-        } else {
-            (AutoTaskReadiness::Waiting("board.empty".to_string()), None)
-        };
-        Ok(AutoTaskObservation {
-            now,
-            record,
-            action_key: format!("run:{}", request.step_id),
-            input_digest: "digest".to_string(),
-            definition_hold: None,
-            receipt,
-            result_hold: None,
-            bound_status: None,
-            deadline: Some(now + Duration::hours(24)),
-            dynamic_expiry: false,
-            expired: None,
-            readiness,
-            recheck_at: now + Duration::seconds(30),
-        })
-    }
+impl_test_host! { impl HostEnvironment for ScriptBranchHost {} }
 
-    fn checkpoint_auto_task_step(
-        &self,
-        _run_id: &str,
-        step_id: &str,
-        record: &AutoTaskStepRecord,
-    ) -> Result<(), DispatchError> {
-        self.records
-            .lock()
-            .expect("records")
-            .insert(step_id.to_string(), record.clone());
-        Ok(())
-    }
+impl_test_host! { impl RunLifecycle for ScriptBranchHost {} }
 
-    fn admit_auto_task_step(
-        &self,
-        _run_id: &str,
-        _step_id: &str,
-    ) -> Result<AutoTaskAdmission, DispatchError> {
-        Ok(AutoTaskAdmission::Bound {
-            task_id: "T-HOLD".to_string(),
-            minted: true,
-        })
-    }
+impl_test_host! {
+    impl Recovery for ScriptBranchHost {
+        fn observe_auto_task_step(
+            &self,
+            _run_id: &str,
+            request: &AutoTaskStepRequest,
+        ) -> Result<AutoTaskObservation, DispatchError> {
+            let record = self
+                .records
+                .lock()
+                .expect("records")
+                .get(&request.step_id)
+                .cloned();
+            let now = Utc::now();
+            let phase = *self.phase.lock().expect("phase");
+            let (readiness, receipt) = if phase == 1 {
+                (AutoTaskReadiness::Ready, None)
+            } else if phase == 2 {
+                (
+                    AutoTaskReadiness::Ready,
+                    Some(AutoTaskReceipt {
+                        task_id: "T-HOLD".to_string(),
+                        task_status: "done".to_string(),
+                        accepted: true,
+                        settled_at: now,
+                        observed_at: now,
+                        result: None,
+                    }),
+                )
+            } else {
+                (AutoTaskReadiness::Waiting("board.empty".to_string()), None)
+            };
+            Ok(AutoTaskObservation {
+                now,
+                record,
+                action_key: format!("run:{}", request.step_id),
+                input_digest: "digest".to_string(),
+                definition_hold: None,
+                receipt,
+                result_hold: None,
+                bound_status: None,
+                deadline: Some(now + Duration::hours(24)),
+                dynamic_expiry: false,
+                expired: None,
+                readiness,
+                recheck_at: now + Duration::seconds(30),
+            })
+        }
 
-    fn checkpoint_parallel_branch(
-        &self,
-        _run_id: &str,
-        step_id: &str,
-        branch_id: &str,
-        output: &Value,
-    ) -> Result<(), DispatchError> {
-        self.branches
-            .lock()
-            .expect("branches")
-            .entry(step_id.to_string())
-            .or_default()
-            .insert(branch_id.to_string(), output.clone());
-        Ok(())
-    }
+        fn checkpoint_auto_task_step(
+            &self,
+            _run_id: &str,
+            step_id: &str,
+            record: &AutoTaskStepRecord,
+        ) -> Result<(), DispatchError> {
+            self.records
+                .lock()
+                .expect("records")
+                .insert(step_id.to_string(), record.clone());
+            Ok(())
+        }
 
-    fn park_job_run(
-        &self,
-        _run_id: &str,
-        _park: &orbit_types::workflow::ParkedWait,
-    ) -> Result<(), DispatchError> {
-        Ok(())
+        fn admit_auto_task_step(
+            &self,
+            _run_id: &str,
+            _step_id: &str,
+        ) -> Result<AutoTaskAdmission, DispatchError> {
+            Ok(AutoTaskAdmission::Bound {
+                task_id: "T-HOLD".to_string(),
+                minted: true,
+            })
+        }
+
+        fn checkpoint_parallel_branch(
+            &self,
+            _run_id: &str,
+            step_id: &str,
+            branch_id: &str,
+            output: &Value,
+        ) -> Result<(), DispatchError> {
+            self.branches
+                .lock()
+                .expect("branches")
+                .entry(step_id.to_string())
+                .or_default()
+                .insert(branch_id.to_string(), output.clone());
+            Ok(())
+        }
+
+        fn park_job_run(
+            &self,
+            _run_id: &str,
+            _park: &orbit_types::workflow::ParkedWait,
+        ) -> Result<(), DispatchError> {
+            Ok(())
+        }
     }
+}
+
+impl_test_host! { impl ReviewGate for ScriptBranchHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ScriptBranchHost {}
 }
 
 fn kept_set(run_id: &str, step_id: &str) -> ScriptOutputSet {

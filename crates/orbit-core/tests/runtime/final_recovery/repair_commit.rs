@@ -2,17 +2,18 @@
 
 mod evidence;
 
+use orbit_engine::test_support::impl_test_host;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
-use orbit_engine::{Dispatch, HostEnvironment, Recovery, ReviewGate, RunLifecycle};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied, V2AuditWriter, execute_job_with_resume,
 };
+use orbit_engine::{HostEnvironment, Recovery, RunLifecycle};
 use orbit_tools::ToolContext;
 use orbit_types::workflow::activity_job::JobV2;
 use orbit_types::workflow::{
@@ -105,130 +106,81 @@ struct RepairPipeline<'a> {
     validations: Mutex<Vec<Value>>,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
-    fn list_run_tasks(&self, run: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
-        self.fixture.runtime.list_run_tasks(run)
-    }
-
-    fn get_task(&self, task: &str) -> Result<orbit_types::task::Task, OrbitError> {
-        self.fixture.runtime.get_task(task)
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        task_id: &str,
-        update: orbit_engine::TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        if self.repair.starts_with("scratch-") && !update.upsert_artifacts.is_empty() {
-            return Err(OrbitError::Execution("synthetic artifact refusal".into()));
-        }
-        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
-            .apply_task_automation_update(task_id, update)
-    }
-
-    fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
-        self.fixture.runtime.read_run_state(run)
-    }
-
-    fn get_job_run(&self, run: &str) -> Result<Option<orbit_types::workflow::JobRun>, OrbitError> {
-        orbit_core::test_support::EngineHost::new(&self.fixture.runtime).get_job_run(run)
-    }
-
-    fn required_validation_commands(&self) -> Vec<String> {
-        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
-            .required_validation_commands()
-    }
-
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        HostEnvironment::run_settings(&orbit_core::test_support::EngineHost::new(
-            &self.fixture.runtime,
-        ))
-    }
-
-    fn attach_task_validation_log(
-        &self,
-        task: &str,
-        run: &str,
-        path: &str,
-        content: Vec<u8>,
-    ) -> Result<(), OrbitError> {
-        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
-            .attach_task_validation_log(task, run, path, content)
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        context: ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "setup" => {
-                let mut output = self.fixture.input.clone();
-                if self.repair == "foreign-root" {
-                    let nested = self.fixture.repo.join("nested");
-                    std::fs::create_dir(&nested).unwrap();
-                    output["workspace_path"] = json!(nested);
-                } else if self.repair == "unrelated-base" {
-                    output["base_sha"] = json!(git(
-                        self.fixture,
-                        &["commit-tree", "HEAD^{tree}", "-m", "unrelated root"]
-                    ));
+impl_test_host! {
+    impl Dispatch for RepairPipeline<'_> {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            context: ToolContext,
+        ) -> Result<Value, DispatchError> {
+            match action {
+                "setup" => {
+                    let mut output = self.fixture.input.clone();
+                    if self.repair == "foreign-root" {
+                        let nested = self.fixture.repo.join("nested");
+                        std::fs::create_dir(&nested).unwrap();
+                        output["workspace_path"] = json!(nested);
+                    } else if self.repair == "unrelated-base" {
+                        output["base_sha"] = json!(git(
+                            self.fixture,
+                            &["commit-tree", "HEAD^{tree}", "-m", "unrelated root"]
+                        ));
+                    }
+                    Ok(output)
                 }
-                Ok(output)
-            }
-            "pin_review" => Ok(if self.repair == "settled-review" {
-                json!({"reviewed_head_sha": git(self.fixture, &["rev-parse", "HEAD"])})
-            } else {
-                crate::review_admission_shape::admitted_review(
-                    "admitted",
-                    "lineage",
-                    &git(self.fixture, &["rev-parse", "HEAD"]),
-                )
-            }),
-            "review_report" => {
-                let admissions = self.admissions.lock().unwrap();
-                let admission = admissions.last().unwrap();
-                let verdict = if self.repair == "committed" && admissions.len() == 1 {
-                    "reject"
+                "pin_review" => Ok(if self.repair == "settled-review" {
+                    json!({"reviewed_head_sha": git(self.fixture, &["rev-parse", "HEAD"])})
                 } else {
-                    "accept"
-                };
-                self.fixture.put_report(&json!({
-                    "schema_version": 1, "attempt_id": admission["attempt_id"],
-                    "verdict": verdict, "summary": "Inspected candidate behavior.",
-                    "findings": if verdict == "reject" { json!([{
-                        "id": "F1", "severity": "high", "summary": "Candidate needs repair",
-                        "paths": ["candidate.txt"], "disposition": {"kind": "open"},
-                    }]) } else { json!([]) },
-                    "validation": [{
-                        "id": "V1",
-                        "command":
-                            orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
-                                .required_validation_commands()[0],
-                        "outcome": "passed",
-                        "role": "required",
-                    }],
-                    "escalation": if verdict == "reject" { Some("Repair F1") } else { None },
-                }));
-                Ok(json!({"verdict": verdict}))
-            }
-            "decide" => {
-                *self.decisions.lock().unwrap() += 1;
-                if self.repair != "committed" {
-                    let expected_failed_step = if self.repair == "landing-review" {
-                        "landing_review"
+                    crate::review_admission_shape::admitted_review(
+                        "admitted",
+                        "lineage",
+                        &git(self.fixture, &["rev-parse", "HEAD"]),
+                    )
+                }),
+                "review_report" => {
+                    let admissions = self.admissions.lock().unwrap();
+                    let admission = admissions.last().unwrap();
+                    let verdict = if self.repair == "committed" && admissions.len() == 1 {
+                        "reject"
                     } else {
-                        "validate"
+                        "accept"
                     };
-                    assert_eq!(input["failed_step_id"], expected_failed_step);
-                    self.validation_heads.lock().unwrap().push((
-                        git(self.fixture, &["rev-parse", "HEAD"]),
-                        git(self.fixture, &["status", "--porcelain"]),
-                    ));
+                    self.fixture.put_report(&json!({
+                        "schema_version": 1, "attempt_id": admission["attempt_id"],
+                        "verdict": verdict, "summary": "Inspected candidate behavior.",
+                        "findings": if verdict == "reject" { json!([{
+                            "id": "F1", "severity": "high", "summary": "Candidate needs repair",
+                            "paths": ["candidate.txt"], "disposition": {"kind": "open"},
+                        }]) } else { json!([]) },
+                        "validation": [{
+                            "id": "V1",
+                            "command":
+                                orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                                    .required_validation_commands()[0],
+                            "outcome": "passed",
+                            "role": "required",
+                        }],
+                        "escalation": if verdict == "reject" { Some("Repair F1") } else { None },
+                    }));
+                    Ok(json!({"verdict": verdict}))
                 }
-                std::fs::write(self.fixture.repo.join("candidate.txt"), "repaired\n").unwrap();
+                "decide" => {
+                    *self.decisions.lock().unwrap() += 1;
+                    if self.repair != "committed" {
+                        let expected_failed_step = if self.repair == "landing-review" {
+                            "landing_review"
+                        } else {
+                            "validate"
+                        };
+                        assert_eq!(input["failed_step_id"], expected_failed_step);
+                        self.validation_heads.lock().unwrap().push((
+                            git(self.fixture, &["rev-parse", "HEAD"]),
+                            git(self.fixture, &["status", "--porcelain"]),
+                        ));
+                    }
+                    std::fs::write(self.fixture.repo.join("candidate.txt"), "repaired\n").unwrap();
                 match self.repair {
                     "committed" => {
                         git(self.fixture, &["add", "candidate.txt"]);
@@ -236,10 +188,10 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                     }
                     "protected" | "evidence-protected" | "scratch-ok" | "scratch-redirect" => {
                         std::fs::write(
-                            self.fixture.repo.join("canary.txt"),
-                            "ordinary safe line\napi_key=synthetic_patch_api_canary\nAuthorization: Bearer synthetic_patch_bearer_canary\nsk-syntheticpatchcanary00000000\n",
-                        )
-                        .unwrap();
+                                self.fixture.repo.join("canary.txt"),
+                                "ordinary safe line\napi_key=synthetic_patch_api_canary\nAuthorization: Bearer synthetic_patch_bearer_canary\nsk-syntheticpatchcanary00000000\n",
+                            )
+                            .unwrap();
                         std::fs::write(
                             self.fixture.repo.join(".env"),
                             "ENV_CANARY=synthetic_env_file_canary\n",
@@ -250,7 +202,8 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         let repo = &self.fixture.repo;
                         std::fs::remove_file(repo.join("to-dir")).unwrap();
                         std::fs::create_dir(repo.join("to-dir")).unwrap();
-                        std::fs::write(repo.join("to-dir/.env"), "new_protected_canary\n").unwrap();
+                        std::fs::write(repo.join("to-dir/.env"), "new_protected_canary\n")
+                            .unwrap();
                         std::fs::write(repo.join("to-dir/ordinary"), "new ordinary content\n")
                             .unwrap();
                         std::fs::remove_file(repo.join("to-file/.env")).unwrap();
@@ -266,16 +219,21 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         )
                         .unwrap();
                         std::fs::write(repo.join("raw.dat"), b"hdr\x80\x81\xff\n").unwrap();
-                        std::fs::write(repo.join("trailing.txt"), b"first line\nfinal spaces   \n")
-                            .unwrap();
+                        std::fs::write(
+                            repo.join("trailing.txt"),
+                            b"first line\nfinal spaces   \n",
+                        )
+                        .unwrap();
                         std::fs::write(repo.join("no_nl.txt"), b"no newline   ").unwrap();
-                        std::fs::write(repo.join("added.bin"), b"\x7fELF\x00\x01\x02\xff").unwrap();
+                        std::fs::write(repo.join("added.bin"), b"\x7fELF\x00\x01\x02\xff")
+                            .unwrap();
                     }
                     #[cfg(unix)]
-                    "symlink" => {
-                        std::os::unix::fs::symlink("candidate.txt", self.fixture.repo.join("link"))
-                            .unwrap()
-                    }
+                    "symlink" => std::os::unix::fs::symlink(
+                        "candidate.txt",
+                        self.fixture.repo.join("link"),
+                    )
+                    .unwrap(),
                     #[cfg(unix)]
                     "non-utf8" => {
                         use std::ffi::OsStr;
@@ -294,8 +252,11 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                             b"native path content\n",
                         )
                         .unwrap();
-                        std::fs::write(nested.join(".env"), b"ENV_CANARY=non_utf8_dir_secret\n")
-                            .unwrap();
+                        std::fs::write(
+                            nested.join(".env"),
+                            b"ENV_CANARY=non_utf8_dir_secret\n",
+                        )
+                        .unwrap();
                         std::fs::write(repo.join(".env"), b"ENV_CANARY=top_secret\n").unwrap();
                     }
                     #[cfg(unix)]
@@ -316,15 +277,19 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                     }
                     "staged-ignored" => {
                         let repo = &self.fixture.repo;
-                        std::fs::write(repo.join("notes.ignored"), "initial ignored\n").unwrap();
+                        std::fs::write(repo.join("notes.ignored"), "initial ignored\n")
+                            .unwrap();
                         std::fs::create_dir_all(repo.join("ignored-dir")).unwrap();
                         std::fs::write(
                             repo.join("ignored-dir/nested.txt"),
                             "nested ignored content\n",
                         )
                         .unwrap();
-                        std::fs::write(repo.join("ignored-dir/untracked.txt"), "must not stage\n")
-                            .unwrap();
+                        std::fs::write(
+                            repo.join("ignored-dir/untracked.txt"),
+                            "must not stage\n",
+                        )
+                        .unwrap();
                         std::fs::write(repo.join("deleted.ignored"), "gone before capture\n")
                             .unwrap();
                         std::fs::write(
@@ -380,8 +345,11 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                     }
                     "staged-mixed" => {
                         let repo = &self.fixture.repo;
-                        std::fs::write(repo.join("tracked_reverted.txt"), "staged reverted edit\n")
-                            .unwrap();
+                        std::fs::write(
+                            repo.join("tracked_reverted.txt"),
+                            "staged reverted edit\n",
+                        )
+                        .unwrap();
                         std::fs::write(repo.join("staged_deleted.txt"), "staged deleted new\n")
                             .unwrap();
                         std::fs::write(repo.join("both_changed.txt"), "staged intermediate\n")
@@ -397,7 +365,8 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         );
                         std::fs::write(repo.join("tracked_reverted.txt"), "base\n").unwrap();
                         std::fs::remove_file(repo.join("staged_deleted.txt")).unwrap();
-                        std::fs::write(repo.join("both_changed.txt"), "worktree final\n").unwrap();
+                        std::fs::write(repo.join("both_changed.txt"), "worktree final\n")
+                            .unwrap();
                         std::fs::write(
                             repo.join(".env"),
                             "ENV_CANARY=synthetic_staged_mixed_env_canary\n",
@@ -467,12 +436,13 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                 // enough to admit a fresh reviewer for this repair.
                 Ok(
                     json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "review_gate_settle",
-                    "rationale": "repaired the rejected candidate"}),
+                        "rationale": "repaired the rejected candidate"}),
                 )
             }
             _ => {
-                let mut result = orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
-                    .run_deterministic(action, config, input, context)?;
+                let mut result =
+                    orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                        .run_deterministic(action, config, input, context)?;
                 if action == "review_gate_admit" {
                     if self.repair == "landing-review" {
                         result["timing"] = json!("before-landing");
@@ -483,76 +453,150 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
             }
         }
     }
+    }
+}
 
-    fn checkpoint_step(
-        &self,
-        run_id: &str,
-        index: u32,
-        step_id: &str,
-        output: &Value,
-        compound: &BTreeMap<String, Value>,
-        script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
-    ) -> Result<(), DispatchError> {
-        if step_id == "commit" {
-            self.commits.lock().unwrap().push(output.clone());
-        } else if matches!(step_id, "validate" | "landing_review") {
-            self.validations.lock().unwrap().push(output.clone());
-            self.validation_heads.lock().unwrap().push((
-                output["tested_head"].as_str().unwrap().into(),
-                git(self.fixture, &["status", "--porcelain"]),
-            ));
+impl_test_host! {
+    impl HostEnvironment for RepairPipeline<'_> {
+        fn required_validation_commands(&self) -> Vec<String> {
+            orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                .required_validation_commands()
         }
-        orbit_core::test_support::EngineHost::new(&self.fixture.runtime).checkpoint_step(
-            run_id,
-            index,
-            step_id,
-            output,
-            compound,
-            script_outputs,
-        )
-    }
 
-    fn persist_final_recovery_evidence(
-        &self,
-        run_id: &str,
-        task_id: &str,
-        workspace: &std::path::Path,
-        evidence: &Value,
-    ) -> Result<(), OrbitError> {
-        Recovery::persist_final_recovery_evidence(
-            &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
-            run_id,
-            task_id,
-            workspace,
-            evidence,
-        )
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            HostEnvironment::run_settings(&orbit_core::test_support::EngineHost::new(
+                &self.fixture.runtime,
+            ))
+        }
     }
+}
 
-    fn final_recovery_log_tail(&self, run: &str) -> Result<Option<String>, OrbitError> {
-        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
-            .final_recovery_log_tail(run)
-    }
+impl_test_host! {
+    impl RunLifecycle for RepairPipeline<'_> {
+        fn list_run_tasks(&self, run: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
+            self.fixture.runtime.list_run_tasks(run)
+        }
 
-    fn admit_final_recovery(
-        &self,
-        run: &str,
-        request: &FinalRecoveryAdmissionRequest,
-    ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
-            .admit_final_recovery(run, request)
-    }
+        fn get_task(&self, task: &str) -> Result<orbit_types::task::Task, OrbitError> {
+            self.fixture.runtime.get_task(task)
+        }
 
-    fn apply_final_recovery(
-        &self,
-        run: &str,
-        application: &FinalRecoveryApplication,
-    ) -> Result<FinalRecoveryApplied, OrbitError> {
-        Recovery::apply_final_recovery(
-            &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
-            run,
-            application,
-        )
+        fn apply_task_automation_update(
+            &self,
+            task_id: &str,
+            update: orbit_engine::TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            if self.repair.starts_with("scratch-") && !update.upsert_artifacts.is_empty() {
+                return Err(OrbitError::Execution("synthetic artifact refusal".into()));
+            }
+            orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                .apply_task_automation_update(task_id, update)
+        }
+
+        fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
+            self.fixture.runtime.read_run_state(run)
+        }
+
+        fn get_job_run(
+            &self,
+            run: &str,
+        ) -> Result<Option<orbit_types::workflow::JobRun>, OrbitError> {
+            orbit_core::test_support::EngineHost::new(&self.fixture.runtime).get_job_run(run)
+        }
     }
+}
+
+impl_test_host! {
+    impl Recovery for RepairPipeline<'_> {
+        fn checkpoint_step(
+            &self,
+            run_id: &str,
+            index: u32,
+            step_id: &str,
+            output: &Value,
+            compound: &BTreeMap<String, Value>,
+            script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
+        ) -> Result<(), DispatchError> {
+            if step_id == "commit" {
+                self.commits.lock().unwrap().push(output.clone());
+            } else if matches!(step_id, "validate" | "landing_review") {
+                self.validations.lock().unwrap().push(output.clone());
+                self.validation_heads.lock().unwrap().push((
+                    output["tested_head"].as_str().unwrap().into(),
+                    git(self.fixture, &["status", "--porcelain"]),
+                ));
+            }
+            orbit_core::test_support::EngineHost::new(&self.fixture.runtime).checkpoint_step(
+                run_id,
+                index,
+                step_id,
+                output,
+                compound,
+                script_outputs,
+            )
+        }
+
+        fn persist_final_recovery_evidence(
+            &self,
+            run_id: &str,
+            task_id: &str,
+            workspace: &std::path::Path,
+            evidence: &Value,
+        ) -> Result<(), OrbitError> {
+            Recovery::persist_final_recovery_evidence(
+                &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
+                run_id,
+                task_id,
+                workspace,
+                evidence,
+            )
+        }
+
+        fn final_recovery_log_tail(&self, run: &str) -> Result<Option<String>, OrbitError> {
+            orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                .final_recovery_log_tail(run)
+        }
+
+        fn admit_final_recovery(
+            &self,
+            run: &str,
+            request: &FinalRecoveryAdmissionRequest,
+        ) -> Result<FinalRecoveryAdmission, OrbitError> {
+            orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                .admit_final_recovery(run, request)
+        }
+
+        fn apply_final_recovery(
+            &self,
+            run: &str,
+            application: &FinalRecoveryApplication,
+        ) -> Result<FinalRecoveryApplied, OrbitError> {
+            Recovery::apply_final_recovery(
+                &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
+                run,
+                application,
+            )
+        }
+    }
+}
+
+impl_test_host! {
+    impl ReviewGate for RepairPipeline<'_> {
+        fn attach_task_validation_log(
+            &self,
+            task: &str,
+            run: &str,
+            path: &str,
+            content: Vec<u8>,
+        ) -> Result<(), OrbitError> {
+            orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                .attach_task_validation_log(task, run, path, content)
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for RepairPipeline<'_> {}
 }
 
 fn job(fixture: &Fixture, repair: &str) -> JobV2 {

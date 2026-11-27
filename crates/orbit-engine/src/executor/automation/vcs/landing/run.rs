@@ -141,7 +141,8 @@ impl Deref for LandingPass {
     }
 }
 
-pub(in crate::executor::automation) fn handoff_land<
+/// Land a published handoff within its configured polling and retry budget.
+pub fn handoff_land<
     H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
 >(
     host: &H,

@@ -2,6 +2,7 @@
 //! Fake providers exercise emitted capabilities and real read/git/rg in the
 //! pinned checkout without starting a model session or modifying Orbit state.
 
+use orbit_engine::test_support::impl_test_host;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -51,35 +52,56 @@ struct InspectionHost {
     inspection_args: Option<Vec<String>>,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for InspectionHost {
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.display().to_string(),
-            args: self.args.clone(),
-            inspection_args: self.inspection_args.clone(),
-            image_input: None,
-        })
+impl_test_host! {
+    impl Dispatch for InspectionHost {
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Ok(ResolvedCliExecutor {
+                command: self.command.display().to_string(),
+                args: self.args.clone(),
+                inspection_args: self.inspection_args.clone(),
+                image_input: None,
+            })
+        }
+
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            _input: &Value,
+            _ctx: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            Err(DispatchError::DeterministicActionNotRegistered(
+                action.into(),
+            ))
+        }
     }
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        _input: &Value,
-        _ctx: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            action.into(),
-        ))
+}
+
+impl_test_host! { impl HostEnvironment for InspectionHost {} }
+
+impl_test_host! { impl RunLifecycle for InspectionHost {} }
+
+impl_test_host! {
+    impl Recovery for InspectionHost {
+        fn tool_context_for_activity(
+            &self,
+            _run: Option<&str>,
+            _profile: Option<&str>,
+            _audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            _programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            orbit_tools::ToolContext::default()
+        }
     }
-    fn tool_context_for_activity(
-        &self,
-        _run: Option<&str>,
-        _profile: Option<&str>,
-        _audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext::default()
-    }
+}
+
+impl_test_host! { impl ReviewGate for InspectionHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for InspectionHost {}
 }
 
 #[test]

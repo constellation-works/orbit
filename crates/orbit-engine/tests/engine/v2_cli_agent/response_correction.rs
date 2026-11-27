@@ -10,6 +10,7 @@
 //! The provider is a scripted `claude` that numbers its invocations and saves
 //! each prompt and argv.
 
+use orbit_engine::test_support::impl_test_host;
 use orbit_engine::{Dispatch, HostEnvironment, Recovery};
 use std::{cell::Cell, sync::Mutex};
 
@@ -42,85 +43,109 @@ struct RecordingHost {
     required_tools: Vec<String>,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
-    fn persist_invocation_trace(
-        &self,
-        _job_run_id: &str,
-        _activity_id: &str,
-        _input: &Value,
-        invocation: &orbit_engine::DispatchInvocationTrace,
-    ) -> Result<(), DispatchError> {
-        self.superseded_traces
-            .lock()
-            .unwrap()
-            .push(invocation.clone());
-        Ok(())
-    }
-
-    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
-    }
-
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Dispatch::resolve_cli_executor(&self.cli, provider)
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        run_id: Option<&str>,
-        fs_profile: Option<&str>,
-        fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        Recovery::tool_context_for_activity(
-            &self.cli,
-            run_id,
-            fs_profile,
-            fs_audit,
-            proc_allowed_programs,
-        )
-    }
-
-    fn resolve_activity_tools(
-        &self,
-        _task_ids: &[String],
-        baseline_tools: &[String],
-    ) -> Result<orbit_engine::ResolvedActivityTools, DispatchError> {
-        let mut effective_tools = baseline_tools.to_vec();
-        for tool in &self.required_tools {
-            if !effective_tools.contains(tool) {
-                effective_tools.push(tool.clone());
-            }
+impl_test_host! {
+    impl Dispatch for RecordingHost {
+        fn resolve_cli_executor(
+            &self,
+            provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Dispatch::resolve_cli_executor(&self.cli, provider)
         }
-        Ok(orbit_engine::ResolvedActivityTools {
-            requested_tools: self.required_tools.clone(),
-            effective_tools,
-            ..Default::default()
-        })
-    }
 
-    fn resolve_activity_tool_denials(
-        &self,
-        _run_id: Option<&str>,
-        _task_ids: &[String],
-        _activity: &str,
-        _disallow_list: &[String],
-    ) -> Result<orbit_engine::ResolvedActivityTools, DispatchError> {
-        Ok(orbit_engine::ResolvedActivityTools::default())
+        fn resolve_executor_sandbox(
+            &self,
+            provider: &str,
+            fs_profile: Option<&str>,
+            _subprocess_cwd: Option<&Path>,
+        ) -> Result<Option<orbit_engine::ResolvedSandbox>, DispatchError> {
+            self.sandbox_requests
+                .lock()
+                .unwrap()
+                .push((provider.to_string(), fs_profile.map(str::to_string)));
+            Ok(None)
+        }
     }
+}
 
-    fn resolve_executor_sandbox(
-        &self,
-        provider: &str,
-        fs_profile: Option<&str>,
-        _subprocess_cwd: Option<&Path>,
-    ) -> Result<Option<orbit_engine::ResolvedSandbox>, DispatchError> {
-        self.sandbox_requests
-            .lock()
-            .unwrap()
-            .push((provider.to_string(), fs_profile.map(str::to_string)));
-        Ok(None)
+impl_test_host! {
+    impl HostEnvironment for RecordingHost {
+        fn agent_subprocess_environment(
+            &self,
+            required_env_vars: &[&str],
+        ) -> Vec<(String, String)> {
+            HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
+        }
     }
+}
+
+impl_test_host! { impl RunLifecycle for RecordingHost {} }
+
+impl_test_host! {
+    impl Recovery for RecordingHost {
+        fn persist_invocation_trace(
+            &self,
+            _job_run_id: &str,
+            _activity_id: &str,
+            _input: &Value,
+            invocation: &orbit_engine::DispatchInvocationTrace,
+        ) -> Result<(), DispatchError> {
+            self.superseded_traces
+                .lock()
+                .unwrap()
+                .push(invocation.clone());
+            Ok(())
+        }
+
+        fn tool_context_for_activity(
+            &self,
+            run_id: Option<&str>,
+            fs_profile: Option<&str>,
+            fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            Recovery::tool_context_for_activity(
+                &self.cli,
+                run_id,
+                fs_profile,
+                fs_audit,
+                proc_allowed_programs,
+            )
+        }
+
+        fn resolve_activity_tools(
+            &self,
+            _task_ids: &[String],
+            baseline_tools: &[String],
+        ) -> Result<orbit_engine::ResolvedActivityTools, DispatchError> {
+            let mut effective_tools = baseline_tools.to_vec();
+            for tool in &self.required_tools {
+                if !effective_tools.contains(tool) {
+                    effective_tools.push(tool.clone());
+                }
+            }
+            Ok(orbit_engine::ResolvedActivityTools {
+                requested_tools: self.required_tools.clone(),
+                effective_tools,
+                ..Default::default()
+            })
+        }
+
+        fn resolve_activity_tool_denials(
+            &self,
+            _run_id: Option<&str>,
+            _task_ids: &[String],
+            _activity: &str,
+            _disallow_list: &[String],
+        ) -> Result<orbit_engine::ResolvedActivityTools, DispatchError> {
+            Ok(orbit_engine::ResolvedActivityTools::default())
+        }
+    }
+}
+
+impl_test_host! { impl ReviewGate for RecordingHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for RecordingHost {}
 }
 
 struct Fixture {

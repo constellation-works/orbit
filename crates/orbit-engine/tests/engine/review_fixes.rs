@@ -13,6 +13,7 @@
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^review_fixes::/)'`.
 
+use orbit_engine::test_support::impl_test_host;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -224,195 +225,219 @@ impl ScriptedHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
-    fn record_reviewer_invocation(
-        &self,
-        request: &orbit_engine::ReviewerInvocationRequest,
-    ) -> Result<Option<u64>, OrbitError> {
-        self.reviewer_events.lock().unwrap().push(request.event);
-        Ok(None)
+impl_test_host! {
+    impl Dispatch for ScriptedHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            let action = action.strip_prefix(STUB_PREFIX).unwrap_or(action);
+            self.calls
+                .lock()
+                .expect("call log")
+                .push((action.to_string(), input.clone()));
+            let head = self.head.lock().expect("candidate").clone();
+            let output = match action {
+                "worktree_setup" => json!({
+                    "job_run_id": RUN_ID,
+                    "workspace_path": WORKSPACE,
+                    "base_ref": "origin/main",
+                    "base_sha": "base-sha",
+                    "prior_job_run_id": null,
+                    "prior_foreign_run": null,
+                }),
+                "candidate_resume" => self.resume.clone(),
+                "agent_implement" => json!({ "summary": "implemented" }),
+                "git_commit" => json!({ "skipped_no_diff_expected": false }),
+                "pr_prepare" | "git_rebase" => json!({
+                    "head": "candidate-branch",
+                    "head_sha": head,
+                    "base": "main",
+                    "base_ref": "origin/main",
+                    "base_sha": "base-sha",
+                    "remote_sha": head,
+                    "remote_sha_before": head,
+                    "head_sha_before": head,
+                    "commits_behind": 0,
+                    "sync_required": false,
+                    "rewritten": false,
+                }),
+                "candidate_validate"
+                    if input.get("ownership_base_sha").is_some()
+                        && self.revalidation == Revalidation::Fails =>
+                {
+                    return Err(DeterministicFailure::validation(&head));
+                }
+                "candidate_validate"
+                    if input.get("ownership_base_sha").is_none()
+                        && matches!(
+                            self.revalidation,
+                            Revalidation::CandidateFailsOnce
+                                | Revalidation::CandidateEnvironment
+                                | Revalidation::CandidateBaselineRed
+                        )
+                        && self.inputs("candidate_validate").len() == 1 =>
+                {
+                    let message = match self.revalidation {
+                        Revalidation::CandidateEnvironment => {
+                            "[validation_environment] required tool unavailable".to_string()
+                        }
+                        Revalidation::CandidateBaselineRed => {
+                            orbit_types::workflow::BaselineRedHold {
+                                base_ref: "origin/main".to_string(),
+                                base_sha: "base-sha".to_string(),
+                                command: "make test".to_string(),
+                                run_id: RUN_ID.to_string(),
+                                selection: None,
+                                failures: Default::default(),
+                            }
+                            .text("base shares failure")
+                        }
+                        _ => format!("required validation failed on candidate {head}"),
+                    };
+                    return Err(DispatchError::DeterministicActionFailed {
+                        action: "candidate_validate".into(),
+                        message,
+                    });
+                }
+                "step_failure_recovery" => {
+                    *self.head.lock().expect("candidate") = "candidate-repaired".to_string();
+                    json!({"summary": "repaired candidate"})
+                }
+                "candidate_validate" => json!({ "decision": "passed", "tested_head": head }),
+                "review_gate_admit" if input["preflight"] == true => {
+                    json!({ "applies": true, "decision": "preflight_passed" })
+                }
+                "review_gate_admit" if input.get("re_review_after").is_some() => {
+                    json!({ "applies": false, "reason": "re_review_not_required" })
+                }
+                // A before-PR run: the gate after `pr_open` does not apply.
+                "review_gate_admit" if input["before_landing"] == true => {
+                    json!({ "applies": false, "reason": "reviewed_before_pr" })
+                }
+                "review_gate_admit" => json!({
+                    "applies": true,
+                    "decision": "admitted",
+                    "first_task_id": "T-1",
+                    "attempt_id": "rvw-1",
+                    "lineage_key": "lineage-1",
+                    "manifest_artifact": "review-manifest.json",
+                    "report_artifact": "review-report.json",
+                    "reviewer": { "crew": "reviewers" },
+                }),
+                "agent_review_repair" => {
+                    json!({
+                        "summary": "partial review",
+                        "verdict": "accept",
+                        "timed_out": matches!(self.settlement, Settlement::Timeout),
+                    })
+                }
+                "review_gate_settle" => return self.settle(input),
+                "git_push" => json!({ "local_sha": head, "remote_sha_before": null }),
+                "pr_open" => json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" }),
+                "pr_promote" => json!({ "promoted": true }),
+                "pr_complete" => json!({
+                    "re_review_required": false,
+                    "merge": { "merged": true },
+                    "completed_task_ids": ["T-1"],
+                    "skipped_task_ids": [],
+                }),
+                "final_recovery" => json!({
+                    "decision": "escalate",
+                    "diagnosis": "the reviewer left an open finding",
+                    "human_action": "decide the finding",
+                }),
+                "pr_failure_handoff" => json!({ "decision": "blocked_review_gate" }),
+                "claim_validate" => json!({
+                    "decision": "passed",
+                    "tested_head": head,
+                    "candidate": { "commit": head },
+                    "validation": [],
+                    "no_diff_evidence": null,
+                }),
+                "claim_handoff" => json!({ "decision": "handed_off" }),
+                "claim_candidate_carry" => json!({ "phase": "candidate_carry", "carry": "none" }),
+                "invoke_detached" => json!({ "run_id": "jrun-watch", "state": "pending" }),
+                other => {
+                    return Err(DispatchError::DeterministicActionFailed {
+                        action: other.to_string(),
+                        message: "not scripted".to_string(),
+                    });
+                }
+            };
+            Ok(output)
+        }
     }
+}
 
-    fn review_report_correction(
-        &self,
-        request: &orbit_engine::ReviewReportCorrectionRequest,
-    ) -> Result<Option<String>, OrbitError> {
-        self.report_checks.lock().unwrap().push(request.clone());
-        Ok(self.report_defects.lock().unwrap().pop())
-    }
+impl_test_host! { impl HostEnvironment for ScriptedHost {} }
 
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        let action = action.strip_prefix(STUB_PREFIX).unwrap_or(action);
-        self.calls
-            .lock()
-            .expect("call log")
-            .push((action.to_string(), input.clone()));
-        let head = self.head.lock().expect("candidate").clone();
-        let output = match action {
-            "worktree_setup" => json!({
-                "job_run_id": RUN_ID,
-                "workspace_path": WORKSPACE,
-                "base_ref": "origin/main",
-                "base_sha": "base-sha",
-                "prior_job_run_id": null,
-                "prior_foreign_run": null,
-            }),
-            "candidate_resume" => self.resume.clone(),
-            "agent_implement" => json!({ "summary": "implemented" }),
-            "git_commit" => json!({ "skipped_no_diff_expected": false }),
-            "pr_prepare" | "git_rebase" => json!({
-                "head": "candidate-branch",
-                "head_sha": head,
-                "base": "main",
-                "base_ref": "origin/main",
-                "base_sha": "base-sha",
-                "remote_sha": head,
-                "remote_sha_before": head,
-                "head_sha_before": head,
-                "commits_behind": 0,
-                "sync_required": false,
-                "rewritten": false,
-            }),
-            "candidate_validate"
-                if input.get("ownership_base_sha").is_some()
-                    && self.revalidation == Revalidation::Fails =>
-            {
-                return Err(DeterministicFailure::validation(&head));
-            }
-            "candidate_validate"
-                if input.get("ownership_base_sha").is_none()
-                    && matches!(
-                        self.revalidation,
-                        Revalidation::CandidateFailsOnce
-                            | Revalidation::CandidateEnvironment
-                            | Revalidation::CandidateBaselineRed
-                    )
-                    && self.inputs("candidate_validate").len() == 1 =>
-            {
-                let message = match self.revalidation {
-                    Revalidation::CandidateEnvironment => {
-                        "[validation_environment] required tool unavailable".to_string()
-                    }
-                    Revalidation::CandidateBaselineRed => orbit_types::workflow::BaselineRedHold {
-                        base_ref: "origin/main".to_string(),
-                        base_sha: "base-sha".to_string(),
-                        command: "make test".to_string(),
-                        run_id: RUN_ID.to_string(),
-                        selection: None,
-                        failures: Default::default(),
-                    }
-                    .text("base shares failure"),
-                    _ => format!("required validation failed on candidate {head}"),
-                };
-                return Err(DispatchError::DeterministicActionFailed {
-                    action: "candidate_validate".into(),
-                    message,
-                });
-            }
-            "step_failure_recovery" => {
-                *self.head.lock().expect("candidate") = "candidate-repaired".to_string();
-                json!({"summary": "repaired candidate"})
-            }
-            "candidate_validate" => json!({ "decision": "passed", "tested_head": head }),
-            "review_gate_admit" if input["preflight"] == true => {
-                json!({ "applies": true, "decision": "preflight_passed" })
-            }
-            "review_gate_admit" if input.get("re_review_after").is_some() => {
-                json!({ "applies": false, "reason": "re_review_not_required" })
-            }
-            // A before-PR run: the gate after `pr_open` does not apply.
-            "review_gate_admit" if input["before_landing"] == true => {
-                json!({ "applies": false, "reason": "reviewed_before_pr" })
-            }
-            "review_gate_admit" => json!({
-                "applies": true,
-                "decision": "admitted",
-                "first_task_id": "T-1",
-                "attempt_id": "rvw-1",
-                "lineage_key": "lineage-1",
-                "manifest_artifact": "review-manifest.json",
-                "report_artifact": "review-report.json",
-                "reviewer": { "crew": "reviewers" },
-            }),
-            "agent_review_repair" => {
-                json!({ "summary": "partial review", "verdict": "accept", "timed_out": matches!(self.settlement, Settlement::Timeout) })
-            }
-            "review_gate_settle" => return self.settle(input),
-            "git_push" => json!({ "local_sha": head, "remote_sha_before": null }),
-            "pr_open" => json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" }),
-            "pr_promote" => json!({ "promoted": true }),
-            "pr_complete" => json!({
-                "re_review_required": false,
-                "merge": { "merged": true },
-                "completed_task_ids": ["T-1"],
-                "skipped_task_ids": [],
-            }),
-            "final_recovery" => json!({
-                "decision": "escalate",
-                "diagnosis": "the reviewer left an open finding",
-                "human_action": "decide the finding",
-            }),
-            "pr_failure_handoff" => json!({ "decision": "blocked_review_gate" }),
-            "claim_validate" => json!({
-                "decision": "passed",
-                "tested_head": head,
-                "candidate": { "commit": head },
-                "validation": [],
-                "no_diff_evidence": null,
-            }),
-            "claim_handoff" => json!({ "decision": "handed_off" }),
-            "claim_candidate_carry" => json!({ "phase": "candidate_carry", "carry": "none" }),
-            "invoke_detached" => json!({ "run_id": "jrun-watch", "state": "pending" }),
-            other => {
-                return Err(DispatchError::DeterministicActionFailed {
-                    action: other.to_string(),
-                    message: "not scripted".to_string(),
-                });
-            }
-        };
-        Ok(output)
-    }
+impl_test_host! { impl RunLifecycle for ScriptedHost {} }
 
-    fn admit_final_recovery(
-        &self,
-        _run_id: &str,
-        request: &FinalRecoveryAdmissionRequest,
-    ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        self.admissions
-            .lock()
-            .expect("admissions")
-            .push(request.clone());
-        Ok(FinalRecoveryAdmission::Admitted)
-    }
+impl_test_host! {
+    impl Recovery for ScriptedHost {
+        fn admit_final_recovery(
+            &self,
+            _run_id: &str,
+            request: &FinalRecoveryAdmissionRequest,
+        ) -> Result<FinalRecoveryAdmission, OrbitError> {
+            self.admissions
+                .lock()
+                .expect("admissions")
+                .push(request.clone());
+            Ok(FinalRecoveryAdmission::Admitted)
+        }
 
-    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        self.log_tail_run_ids
-            .lock()
-            .expect("log tail lookups")
-            .push(run_id.to_string());
-        Ok((run_id == RUN_ID).then(|| self.log_tail.clone()).flatten())
-    }
+        fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+            self.log_tail_run_ids
+                .lock()
+                .expect("log tail lookups")
+                .push(run_id.to_string());
+            Ok((run_id == RUN_ID).then(|| self.log_tail.clone()).flatten())
+        }
 
-    fn apply_final_recovery(
-        &self,
-        _run_id: &str,
-        application: &FinalRecoveryApplication,
-    ) -> Result<FinalRecoveryApplied, OrbitError> {
-        Ok(match &application.decision {
-            FinalRecoveryDecision::Escalate { .. } => FinalRecoveryApplied::Escalated {
-                outcome: "blocked for a human".to_string(),
-            },
-            other => FinalRecoveryApplied::Settled {
-                outcome: other.kind().to_string(),
-            },
-        })
+        fn apply_final_recovery(
+            &self,
+            _run_id: &str,
+            application: &FinalRecoveryApplication,
+        ) -> Result<FinalRecoveryApplied, OrbitError> {
+            Ok(match &application.decision {
+                FinalRecoveryDecision::Escalate { .. } => FinalRecoveryApplied::Escalated {
+                    outcome: "blocked for a human".to_string(),
+                },
+                other => FinalRecoveryApplied::Settled {
+                    outcome: other.kind().to_string(),
+                },
+            })
+        }
     }
+}
+
+impl_test_host! {
+    impl ReviewGate for ScriptedHost {
+        fn record_reviewer_invocation(
+            &self,
+            request: &orbit_engine::ReviewerInvocationRequest,
+        ) -> Result<Option<u64>, OrbitError> {
+            self.reviewer_events.lock().unwrap().push(request.event);
+            Ok(None)
+        }
+
+        fn review_report_correction(
+            &self,
+            request: &orbit_engine::ReviewReportCorrectionRequest,
+        ) -> Result<Option<String>, OrbitError> {
+            self.report_checks.lock().unwrap().push(request.clone());
+            Ok(self.report_defects.lock().unwrap().pop())
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ScriptedHost {}
 }
 
 /// The failure a required command on the reviewer commit reports.

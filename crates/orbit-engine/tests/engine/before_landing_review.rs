@@ -7,6 +7,7 @@
 //! way. Action-level tests cannot see broken step wiring or template
 //! references; these graphs can.
 
+use orbit_engine::test_support::impl_test_host;
 use std::sync::Mutex;
 
 use orbit_common::OrbitError;
@@ -237,53 +238,55 @@ impl Host {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for Host {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .expect("call log")
-            .push((action.to_string(), input.clone()));
-        let output = match action {
-            "test_stub_worktree" => json!({
-                "job_run_id": RUN,
-                "workspace_path": "/worktrees/before-landing-run",
-            }),
-            "test_stub_commit" => json!({ "skipped_no_diff_expected": false }),
-            "test_stub_prepare_branch" | "test_stub_sync_base" => json!({
-                "head": "candidate-branch",
-                "head_sha": "candidate",
-                "base": "main",
-                "base_ref": "origin/main",
-                "base_sha": "base-sha",
-                "remote_sha": "candidate",
-                "remote_sha_before": null,
-                "head_sha_before": "candidate",
-                "commits_behind": 0,
-                "sync_required": false,
-                "rewritten": false,
-            }),
-            "test_stub_review_gate_admit" => self.admit(input),
-            "test_stub_agent_review_repair" => {
-                if self.reviewer_fails {
-                    return Err(DispatchError::DeterministicActionRefused {
-                        action: "test_stub_agent_review_repair".to_string(),
-                        message: "the landing reviewer must not run once evidence_received is \
-                                  decided"
+impl_test_host! {
+    impl Dispatch for Host {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls
+                .lock()
+                .expect("call log")
+                .push((action.to_string(), input.clone()));
+            let output = match action {
+                "test_stub_worktree" => json!({
+                    "job_run_id": RUN,
+                    "workspace_path": "/worktrees/before-landing-run",
+                }),
+                "test_stub_commit" => json!({ "skipped_no_diff_expected": false }),
+                "test_stub_prepare_branch" | "test_stub_sync_base" => json!({
+                    "head": "candidate-branch",
+                    "head_sha": "candidate",
+                    "base": "main",
+                    "base_ref": "origin/main",
+                    "base_sha": "base-sha",
+                    "remote_sha": "candidate",
+                    "remote_sha_before": null,
+                    "head_sha_before": "candidate",
+                    "commits_behind": 0,
+                    "sync_required": false,
+                    "rewritten": false,
+                }),
+                "test_stub_review_gate_admit" => self.admit(input),
+                "test_stub_agent_review_repair" => {
+                    if self.reviewer_fails {
+                        return Err(DispatchError::DeterministicActionRefused {
+                            action: "test_stub_agent_review_repair".to_string(),
+                            message: "the landing reviewer must not run once evidence_received is \
+                                      decided"
                             .to_string(),
                     });
                 }
                 if self.outcome == Outcome::Timeout {
                     return Err(DispatchError::DeterministicActionRefused {
                         action: "test_stub_agent_review_repair".to_string(),
-                        message: "review_timeout_incomplete: reviewer exceeded its wall clock; \
-                                  partial report retained for continuation"
-                            .to_string(),
+                        message:
+                            "review_timeout_incomplete: reviewer exceeded its wall clock; \
+                                      partial report retained for continuation"
+                                .to_string(),
                     });
                 }
                 json!({ "summary": "reviewed", "verdict": "accept" })
@@ -292,34 +295,51 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
             "test_stub_push" => json!({ "local_sha": "candidate", "remote_sha_before": null }),
             "test_stub_pr_open" => {
                 json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" })
-            }
-            "test_stub_promote_tasks" => json!({ "promoted": true }),
-            "test_stub_candidate_validate" => json!({ "decision": "passed" }),
-            "test_stub_git_push" => {
-                let rebased = input["branch"] == "rebased-branch";
-                json!({
-                    "decision": "performed_fast_forward",
-                    "remote_sha_before": "candidate",
-                    "local_sha": if rebased { "rebased-head" } else { "landing-fix" },
-                })
-            }
-            "test_stub_pr_complete" => self.complete(input),
-            "test_stub_pr_failure_handoff" => json!({ "decision": "kept_in_review" }),
-            other => panic!("unexpected action `{other}`"),
-        };
-        Ok(output)
+                }
+                "test_stub_promote_tasks" => json!({ "promoted": true }),
+                "test_stub_candidate_validate" => json!({ "decision": "passed" }),
+                "test_stub_git_push" => {
+                    let rebased = input["branch"] == "rebased-branch";
+                    json!({
+                        "decision": "performed_fast_forward",
+                        "remote_sha_before": "candidate",
+                        "local_sha": if rebased { "rebased-head" } else { "landing-fix" },
+                    })
+                }
+                "test_stub_pr_complete" => self.complete(input),
+                "test_stub_pr_failure_handoff" => json!({ "decision": "kept_in_review" }),
+                other => panic!("unexpected action `{other}`"),
+            };
+            Ok(output)
+        }
     }
+}
 
-    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
+impl_test_host! { impl HostEnvironment for Host {} }
 
-    fn record_reviewer_invocation(
-        &self,
-        _request: &ReviewerInvocationRequest,
-    ) -> Result<Option<u64>, OrbitError> {
-        Ok(None)
+impl_test_host! { impl RunLifecycle for Host {} }
+
+impl_test_host! {
+    impl Recovery for Host {
+        fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+            Ok(None)
+        }
     }
+}
+
+impl_test_host! {
+    impl ReviewGate for Host {
+        fn record_reviewer_invocation(
+            &self,
+            _request: &ReviewerInvocationRequest,
+        ) -> Result<Option<u64>, OrbitError> {
+            Ok(None)
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for Host {}
 }
 
 /// A claimed leaf whose claim captured `review.before_landing`; the
@@ -354,62 +374,63 @@ impl LeafHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .expect("call log")
-            .push((action.to_string(), input.clone()));
-        let reviewed = if self.fix { "landing-fix" } else { "candidate" };
-        let output = match action {
-            "test_stub_worktree_setup" => json!({
-                "job_run_id": RUN,
-                "workspace_path": "/worktrees/leaf",
-                "base_ref": "origin/main",
-                "base_sha": "base-sha",
-            }),
-            "test_stub_candidate_resume" => json!({ "implement": true, "repair": null }),
-            "test_stub_agent_implement" => json!({ "summary": "implemented" }),
-            "test_stub_git_commit" => json!({ "skipped_no_diff_expected": false }),
-            "test_stub_pr_prepare" | "test_stub_git_rebase" => json!({
-                "head": "candidate-branch",
-                "head_sha": "candidate",
-                "base": "main",
-                "base_ref": "origin/main",
-                "base_sha": "base-sha",
-                "remote_sha": null,
-                "remote_sha_before": null,
-                "head_sha_before": "candidate",
-                "commits_behind": 0,
-                "sync_required": false,
-                "rewritten": false,
-            }),
-            "test_stub_review_gate_admit" if input["before_landing"] == true => json!({
-                "applies": true,
-                "decision": self.landing_decision,
-                "first_task_id": "T-1",
-                "attempt_id": "rvw-landing",
-                "lineage_key": "claim-1",
-                "manifest_artifact": "review-manifest.json",
-                "report_artifact": "review-report.json",
-                "reviewer": { "crew": "reviewers" },
-                "timing": "before-landing",
-            }),
-            "test_stub_review_gate_admit" => {
-                json!({ "applies": false, "reason": "review_before_landing" })
-            }
-            "test_stub_agent_review_repair" => {
-                if self.reviewer_fails {
-                    return Err(DispatchError::DeterministicActionRefused {
-                        action: "test_stub_agent_review_repair".to_string(),
-                        message: "the landing reviewer must not run once evidence_received is \
-                                  decided"
+impl_test_host! {
+    impl Dispatch for LeafHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls
+                .lock()
+                .expect("call log")
+                .push((action.to_string(), input.clone()));
+            let reviewed = if self.fix { "landing-fix" } else { "candidate" };
+            let output = match action {
+                "test_stub_worktree_setup" => json!({
+                    "job_run_id": RUN,
+                    "workspace_path": "/worktrees/leaf",
+                    "base_ref": "origin/main",
+                    "base_sha": "base-sha",
+                }),
+                "test_stub_candidate_resume" => json!({ "implement": true, "repair": null }),
+                "test_stub_agent_implement" => json!({ "summary": "implemented" }),
+                "test_stub_git_commit" => json!({ "skipped_no_diff_expected": false }),
+                "test_stub_pr_prepare" | "test_stub_git_rebase" => json!({
+                    "head": "candidate-branch",
+                    "head_sha": "candidate",
+                    "base": "main",
+                    "base_ref": "origin/main",
+                    "base_sha": "base-sha",
+                    "remote_sha": null,
+                    "remote_sha_before": null,
+                    "head_sha_before": "candidate",
+                    "commits_behind": 0,
+                    "sync_required": false,
+                    "rewritten": false,
+                }),
+                "test_stub_review_gate_admit" if input["before_landing"] == true => json!({
+                    "applies": true,
+                    "decision": self.landing_decision,
+                    "first_task_id": "T-1",
+                    "attempt_id": "rvw-landing",
+                    "lineage_key": "claim-1",
+                    "manifest_artifact": "review-manifest.json",
+                    "report_artifact": "review-report.json",
+                    "reviewer": { "crew": "reviewers" },
+                    "timing": "before-landing",
+                }),
+                "test_stub_review_gate_admit" => {
+                    json!({ "applies": false, "reason": "review_before_landing" })
+                }
+                "test_stub_agent_review_repair" => {
+                    if self.reviewer_fails {
+                        return Err(DispatchError::DeterministicActionRefused {
+                            action: "test_stub_agent_review_repair".to_string(),
+                            message: "the landing reviewer must not run once evidence_received is \
+                                      decided"
                             .to_string(),
                     });
                 }
@@ -473,17 +494,34 @@ impl orbit_engine::test_support::NullRuntimeHost for LeafHost {
         };
         Ok(output)
     }
-
-    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(None)
     }
+}
 
-    fn record_reviewer_invocation(
-        &self,
-        _request: &ReviewerInvocationRequest,
-    ) -> Result<Option<u64>, OrbitError> {
-        Ok(None)
+impl_test_host! { impl HostEnvironment for LeafHost {} }
+
+impl_test_host! { impl RunLifecycle for LeafHost {} }
+
+impl_test_host! {
+    impl Recovery for LeafHost {
+        fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+            Ok(None)
+        }
     }
+}
+
+impl_test_host! {
+    impl ReviewGate for LeafHost {
+        fn record_reviewer_invocation(
+            &self,
+            _request: &ReviewerInvocationRequest,
+        ) -> Result<Option<u64>, OrbitError> {
+            Ok(None)
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for LeafHost {}
 }
 
 /// An approving review: the PR is open and promoted before the reviewer

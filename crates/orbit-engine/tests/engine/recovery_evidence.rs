@@ -1,6 +1,7 @@
 //! Built-in step recovery receives bounded evidence through the public job
 //! executor, without asking the recovering agent to observe operator runs.
 
+use orbit_engine::test_support::impl_test_host;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -25,77 +26,96 @@ struct Host {
     worker_run: Option<&'static str>,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for Host {
-    fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
-        self.worker_run
-            .map(|run_id| orbit_types::tool::WorkerInvocation {
-                owner_machine_id: "owner".into(),
-                owner_workspace_id: "workspace".into(),
-                owner_destination: "owner".into(),
-                task_id: "fixture-task".into(),
-                claim_id: "fixture-claim".into(),
-                execution: orbit_types::task::ExecutionLocation {
-                    machine_id: "follower".into(),
-                    machine_name: None,
-                },
-                bound_run_id: run_id.into(),
+impl_test_host! {
+    impl Dispatch for Host {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            input: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            if action == self.activity {
+                // The deterministic backend adds its own step_id after activity
+                // dispatch; it is not part of the agent leaf's input schema.
+                let mut leaf_input = input.clone();
+                leaf_input.as_object_mut().unwrap().remove("step_id");
+                self.inputs.lock().unwrap().push(leaf_input);
+                return Ok(json!({}));
+            }
+            if self.activity == "pr_conflict_recovery" {
+                return Err(DispatchError::RecoverableVcsConflict(Box::new(
+                    orbit_common::RecoverableVcsConflict {
+                        operation: "git_rebase".to_string(),
+                        original_base_sha: "original".to_string(),
+                        target_base_sha: "target".to_string(),
+                        conflicting_paths: vec!["src/lib.rs".to_string()],
+                        conflicting_files: Vec::new(),
+                        diagnostic: "rebase stopped on an unmerged path".to_string(),
+                    },
+                )));
+            }
+            Err(DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: "candidate validation failed".to_string(),
             })
-    }
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _: &Value,
-        input: &Value,
-        _: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        if action == self.activity {
-            // The deterministic backend adds its own step_id after activity
-            // dispatch; it is not part of the agent leaf's input schema.
-            let mut leaf_input = input.clone();
-            leaf_input.as_object_mut().unwrap().remove("step_id");
-            self.inputs.lock().unwrap().push(leaf_input);
-            return Ok(json!({}));
         }
-        if self.activity == "pr_conflict_recovery" {
-            return Err(DispatchError::RecoverableVcsConflict(Box::new(
+    }
+}
+
+impl_test_host! { impl HostEnvironment for Host {} }
+
+impl_test_host! {
+    impl RunLifecycle for Host {
+        fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
+            self.worker_run
+                .map(|run_id| orbit_types::tool::WorkerInvocation {
+                    owner_machine_id: "owner".into(),
+                    owner_workspace_id: "workspace".into(),
+                    owner_destination: "owner".into(),
+                    task_id: "fixture-task".into(),
+                    claim_id: "fixture-claim".into(),
+                    execution: orbit_types::task::ExecutionLocation {
+                        machine_id: "follower".into(),
+                        machine_name: None,
+                    },
+                    bound_run_id: run_id.into(),
+                })
+        }
+
+        fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
+            // Fault injection at the real git_rebase backend's task-read boundary
+            // preserves resolved backend identity without starting a Git fixture.
+            Err(OrbitError::RecoverableVcsConflict(Box::new(
                 orbit_common::RecoverableVcsConflict {
-                    operation: "git_rebase".to_string(),
-                    original_base_sha: "original".to_string(),
-                    target_base_sha: "target".to_string(),
-                    conflicting_paths: vec!["src/lib.rs".to_string()],
+                    operation: "git_rebase".into(),
+                    original_base_sha: "original".into(),
+                    target_base_sha: "target".into(),
+                    conflicting_paths: vec!["src/lib.rs".into()],
                     conflicting_files: Vec::new(),
-                    diagnostic: "rebase stopped on an unmerged path".to_string(),
+                    diagnostic: "injected rebase conflict".into(),
                 },
-            )));
+            )))
         }
-        Err(DispatchError::DeterministicActionFailed {
-            action: action.to_string(),
-            message: "candidate validation failed".to_string(),
-        })
     }
+}
 
-    fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
-        // Fault injection at the real git_rebase backend's task-read boundary
-        // preserves resolved backend identity without starting a Git fixture.
-        Err(OrbitError::RecoverableVcsConflict(Box::new(
-            orbit_common::RecoverableVcsConflict {
-                operation: "git_rebase".into(),
-                original_base_sha: "original".into(),
-                target_base_sha: "target".into(),
-                conflicting_paths: vec!["src/lib.rs".into()],
-                conflicting_files: Vec::new(),
-                diagnostic: "injected rebase conflict".into(),
-            },
-        )))
+impl_test_host! {
+    impl Recovery for Host {
+        fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+            assert_eq!(
+                run_id, RUN,
+                "never read a rendered stale or foreign run log"
+            );
+            self.log.clone().map_err(OrbitError::Execution)
+        }
     }
+}
 
-    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        assert_eq!(
-            run_id, RUN,
-            "never read a rendered stale or foreign run log"
-        );
-        self.log.clone().map_err(OrbitError::Execution)
-    }
+impl_test_host! { impl ReviewGate for Host {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for Host {}
 }
 
 fn job(activity: &str) -> (JobV2, Value) {

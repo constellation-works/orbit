@@ -2,6 +2,7 @@
 //! [ORB-13994] The run failure must preserve its own requeue while ordinary
 //! backlog tasks and the other recovery outcomes keep their behavior.
 
+use orbit_engine::test_support::impl_test_host;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -41,114 +42,132 @@ struct FailingPipeline<'a> {
     handoffs: Option<&'a AtomicUsize>,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        _input: &Value,
-        _context: ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "setup" => {
-                if !self.keep_status {
-                    orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
-                        .apply_task_automation_update(
-                            self.task,
-                            TaskAutomationUpdate {
-                                status: Some(TaskStatus::InProgress),
-                                job_run_id: Some(self.run.to_string()),
-                                ..Default::default()
-                            },
-                        )
-                        .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+impl_test_host! {
+    impl Dispatch for FailingPipeline<'_> {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            _input: &Value,
+            _context: ToolContext,
+        ) -> Result<Value, DispatchError> {
+            match action {
+                "setup" => {
+                    if !self.keep_status {
+                        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                            .apply_task_automation_update(
+                                self.task,
+                                TaskAutomationUpdate {
+                                    status: Some(TaskStatus::InProgress),
+                                    job_run_id: Some(self.run.to_string()),
+                                    ..Default::default()
+                                },
+                            )
+                            .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+                    }
+                    Ok(json!({"workspace_path": self.fixture.repo, "base_ref": "main"}))
                 }
-                Ok(json!({"workspace_path": self.fixture.repo, "base_ref": "main"}))
-            }
-            "implement" => {
-                // A task may have returned to backlog before the failure.
-                if !self.keep_status {
-                    orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
-                        .apply_task_automation_update(
-                            self.task,
-                            TaskAutomationUpdate {
-                                status: Some(self.failure_status),
-                                ..Default::default()
-                            },
-                        )
-                        .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+                "implement" => {
+                    // A task may have returned to backlog before the failure.
+                    if !self.keep_status {
+                        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                            .apply_task_automation_update(
+                                self.task,
+                                TaskAutomationUpdate {
+                                    status: Some(self.failure_status),
+                                    ..Default::default()
+                                },
+                            )
+                            .map_err(|error| DispatchError::JobExecution(error.to_string()))?;
+                    }
+                    Err(DispatchError::DeterministicActionFailed {
+                        action: action.to_string(),
+                        message: "injected implementation failure".to_string(),
+                    })
                 }
-                Err(DispatchError::DeterministicActionFailed {
-                    action: action.to_string(),
-                    message: "injected implementation failure".to_string(),
-                })
-            }
-            "decide" => Ok(self.decision.clone()),
-            "handoff" => {
-                if let Some(handoffs) = self.handoffs {
-                    handoffs.fetch_add(1, Ordering::SeqCst);
+                "decide" => Ok(self.decision.clone()),
+                "handoff" => {
+                    if let Some(handoffs) = self.handoffs {
+                        handoffs.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(json!({"blocked": true}))
                 }
-                Ok(json!({"blocked": true}))
+                _ => panic!("unexpected fixture action: {action}"),
             }
-            _ => panic!("unexpected fixture action: {action}"),
         }
     }
+}
 
-    fn checkpoint_step(
-        &self,
-        run_id: &str,
-        index: u32,
-        step_id: &str,
-        output: &Value,
-        compound: &BTreeMap<String, Value>,
-        script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
-    ) -> Result<(), DispatchError> {
-        orbit_core::test_support::EngineHost::new(&self.fixture.runtime).checkpoint_step(
-            run_id,
-            index,
-            step_id,
-            output,
-            compound,
-            script_outputs,
-        )
-    }
+impl_test_host! { impl HostEnvironment for FailingPipeline<'_> {} }
 
-    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        Recovery::final_recovery_log_tail(
-            &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
-            run_id,
-        )
+impl_test_host! {
+    impl RunLifecycle for FailingPipeline<'_> {
+        fn apply_task_automation_update(
+            &self,
+            task_id: &str,
+            update: TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                .apply_task_automation_update(task_id, update)
+        }
     }
+}
 
-    fn admit_final_recovery(
-        &self,
-        run_id: &str,
-        request: &FinalRecoveryAdmissionRequest,
-    ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
-            .admit_final_recovery(run_id, request)
-    }
+impl_test_host! {
+    impl Recovery for FailingPipeline<'_> {
+        fn checkpoint_step(
+            &self,
+            run_id: &str,
+            index: u32,
+            step_id: &str,
+            output: &Value,
+            compound: &BTreeMap<String, Value>,
+            script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
+        ) -> Result<(), DispatchError> {
+            orbit_core::test_support::EngineHost::new(&self.fixture.runtime).checkpoint_step(
+                run_id,
+                index,
+                step_id,
+                output,
+                compound,
+                script_outputs,
+            )
+        }
 
-    fn apply_final_recovery(
-        &self,
-        run_id: &str,
-        application: &FinalRecoveryApplication,
-    ) -> Result<FinalRecoveryApplied, OrbitError> {
-        Recovery::apply_final_recovery(
-            &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
-            run_id,
-            application,
-        )
-    }
+        fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
+            Recovery::final_recovery_log_tail(
+                &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
+                run_id,
+            )
+        }
 
-    fn apply_task_automation_update(
-        &self,
-        task_id: &str,
-        update: TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
-            .apply_task_automation_update(task_id, update)
+        fn admit_final_recovery(
+            &self,
+            run_id: &str,
+            request: &FinalRecoveryAdmissionRequest,
+        ) -> Result<FinalRecoveryAdmission, OrbitError> {
+            orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                .admit_final_recovery(run_id, request)
+        }
+
+        fn apply_final_recovery(
+            &self,
+            run_id: &str,
+            application: &FinalRecoveryApplication,
+        ) -> Result<FinalRecoveryApplied, OrbitError> {
+            Recovery::apply_final_recovery(
+                &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
+                run_id,
+                application,
+            )
+        }
     }
+}
+
+impl_test_host! { impl ReviewGate for FailingPipeline<'_> {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for FailingPipeline<'_> {}
 }
 
 fn failing_job() -> JobV2 {

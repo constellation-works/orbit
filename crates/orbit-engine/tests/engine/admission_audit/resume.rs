@@ -5,6 +5,7 @@
 //! `execute_job_with_resume` skips checkpointed steps while feeding their
 //! recorded outputs into the pipeline for later steps.
 
+use orbit_engine::test_support::impl_test_host;
 use std::collections::BTreeMap;
 use std::sync::Mutex as StdMutex;
 
@@ -62,40 +63,56 @@ impl CheckpointHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for CheckpointHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.inputs
-            .lock()
-            .expect("inputs")
-            .push((action.to_string(), input.clone()));
-        Dispatch::run_deterministic(&self.inner, action, config, input, tool_context)
+impl_test_host! {
+    impl Dispatch for CheckpointHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.inputs
+                .lock()
+                .expect("inputs")
+                .push((action.to_string(), input.clone()));
+            Dispatch::run_deterministic(&self.inner, action, config, input, tool_context)
+        }
     }
+}
 
-    fn checkpoint_step(
-        &self,
-        _run_id: &str,
-        step_index: u32,
-        step_id: &str,
-        output: &Value,
-        _compound_outputs: &BTreeMap<String, Value>,
-        _: &std::collections::BTreeMap<
-            String,
-            orbit_types::workflow::activity_job::ScriptOutputSet,
-        >,
-    ) -> Result<(), DispatchError> {
-        self.checkpoints.lock().expect("checkpoints").push((
-            step_index,
-            step_id.to_string(),
-            output.clone(),
-        ));
-        Ok(())
+impl_test_host! { impl HostEnvironment for CheckpointHost {} }
+
+impl_test_host! { impl RunLifecycle for CheckpointHost {} }
+
+impl_test_host! {
+    impl Recovery for CheckpointHost {
+        fn checkpoint_step(
+            &self,
+            _run_id: &str,
+            step_index: u32,
+            step_id: &str,
+            output: &Value,
+            _compound_outputs: &BTreeMap<String, Value>,
+            _: &std::collections::BTreeMap<
+                String,
+                orbit_types::workflow::activity_job::ScriptOutputSet,
+            >,
+        ) -> Result<(), DispatchError> {
+            self.checkpoints.lock().expect("checkpoints").push((
+                step_index,
+                step_id.to_string(),
+                output.clone(),
+            ));
+            Ok(())
+        }
     }
+}
+
+impl_test_host! { impl ReviewGate for CheckpointHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for CheckpointHost {}
 }
 
 /// How the waiting auto-task branch answers on the next parked replay.
@@ -172,122 +189,138 @@ impl CompoundReplayHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for CompoundReplayHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.inputs
-            .lock()
-            .expect("inputs")
-            .push((action.to_string(), input.clone()));
-        Dispatch::run_deterministic(&self.inner, action, config, input, tool_context)
+impl_test_host! {
+    impl Dispatch for CompoundReplayHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.inputs
+                .lock()
+                .expect("inputs")
+                .push((action.to_string(), input.clone()));
+            Dispatch::run_deterministic(&self.inner, action, config, input, tool_context)
+        }
     }
+}
 
-    fn observe_auto_task_step(
-        &self,
-        _run_id: &str,
-        request: &AutoTaskStepRequest,
-    ) -> Result<AutoTaskObservation, DispatchError> {
-        *self.observes.lock().expect("observes") += 1;
-        let record = self
-            .records
-            .lock()
-            .expect("records")
-            .get(&request.step_id)
-            .cloned();
-        let now = Utc::now();
-        let phase = *self.phase.lock().expect("phase");
-        let (readiness, receipt) = match phase {
-            CompoundReplayPhase::Waiting => {
-                (AutoTaskReadiness::Waiting("board.empty".to_string()), None)
-            }
-            CompoundReplayPhase::Admit => (AutoTaskReadiness::Ready, None),
-            CompoundReplayPhase::Receipt => {
-                let task_id = record
-                    .as_ref()
-                    .and_then(|record| record.task_id.clone())
-                    .unwrap_or_else(|| "T-HOLD".to_string());
-                (
-                    AutoTaskReadiness::Ready,
-                    Some(AutoTaskReceipt {
-                        task_id,
-                        task_status: "done".to_string(),
-                        accepted: true,
-                        settled_at: now,
-                        observed_at: now,
-                        result: None,
-                    }),
-                )
-            }
-        };
-        Ok(AutoTaskObservation {
-            now,
-            record,
-            action_key: format!("run:{}", request.step_id),
-            input_digest: "digest".to_string(),
-            definition_hold: None,
-            receipt,
-            result_hold: None,
-            bound_status: None,
-            deadline: Some(now + Duration::hours(24)),
-            dynamic_expiry: false,
-            expired: None,
-            readiness,
-            recheck_at: now + Duration::seconds(30),
-        })
-    }
+impl_test_host! { impl HostEnvironment for CompoundReplayHost {} }
 
-    fn checkpoint_auto_task_step(
-        &self,
-        _run_id: &str,
-        step_id: &str,
-        record: &AutoTaskStepRecord,
-    ) -> Result<(), DispatchError> {
-        self.records
-            .lock()
-            .expect("records")
-            .insert(step_id.to_string(), record.clone());
-        Ok(())
-    }
+impl_test_host! { impl RunLifecycle for CompoundReplayHost {} }
 
-    fn admit_auto_task_step(
-        &self,
-        _run_id: &str,
-        _step_id: &str,
-    ) -> Result<AutoTaskAdmission, DispatchError> {
-        Ok(AutoTaskAdmission::Bound {
-            task_id: "T-HOLD".to_string(),
-            minted: true,
-        })
-    }
+impl_test_host! {
+    impl Recovery for CompoundReplayHost {
+        fn observe_auto_task_step(
+            &self,
+            _run_id: &str,
+            request: &AutoTaskStepRequest,
+        ) -> Result<AutoTaskObservation, DispatchError> {
+            *self.observes.lock().expect("observes") += 1;
+            let record = self
+                .records
+                .lock()
+                .expect("records")
+                .get(&request.step_id)
+                .cloned();
+            let now = Utc::now();
+            let phase = *self.phase.lock().expect("phase");
+            let (readiness, receipt) = match phase {
+                CompoundReplayPhase::Waiting => {
+                    (AutoTaskReadiness::Waiting("board.empty".to_string()), None)
+                }
+                CompoundReplayPhase::Admit => (AutoTaskReadiness::Ready, None),
+                CompoundReplayPhase::Receipt => {
+                    let task_id = record
+                        .as_ref()
+                        .and_then(|record| record.task_id.clone())
+                        .unwrap_or_else(|| "T-HOLD".to_string());
+                    (
+                        AutoTaskReadiness::Ready,
+                        Some(AutoTaskReceipt {
+                            task_id,
+                            task_status: "done".to_string(),
+                            accepted: true,
+                            settled_at: now,
+                            observed_at: now,
+                            result: None,
+                        }),
+                    )
+                }
+            };
+            Ok(AutoTaskObservation {
+                now,
+                record,
+                action_key: format!("run:{}", request.step_id),
+                input_digest: "digest".to_string(),
+                definition_hold: None,
+                receipt,
+                result_hold: None,
+                bound_status: None,
+                deadline: Some(now + Duration::hours(24)),
+                dynamic_expiry: false,
+                expired: None,
+                readiness,
+                recheck_at: now + Duration::seconds(30),
+            })
+        }
 
-    fn checkpoint_parallel_branch(
-        &self,
-        _run_id: &str,
-        step_id: &str,
-        branch_id: &str,
-        output: &Value,
-    ) -> Result<(), DispatchError> {
-        self.branches
-            .lock()
-            .expect("branches")
-            .entry(step_id.to_string())
-            .or_default()
-            .insert(branch_id.to_string(), output.clone());
-        Ok(())
-    }
+        fn checkpoint_auto_task_step(
+            &self,
+            _run_id: &str,
+            step_id: &str,
+            record: &AutoTaskStepRecord,
+        ) -> Result<(), DispatchError> {
+            self.records
+                .lock()
+                .expect("records")
+                .insert(step_id.to_string(), record.clone());
+            Ok(())
+        }
 
-    fn park_job_run(
-        &self,
-        _run_id: &str,
-        _park: &orbit_types::workflow::ParkedWait,
-    ) -> Result<(), DispatchError> {
-        Ok(())
+        fn admit_auto_task_step(
+            &self,
+            _run_id: &str,
+            _step_id: &str,
+        ) -> Result<AutoTaskAdmission, DispatchError> {
+            Ok(AutoTaskAdmission::Bound {
+                task_id: "T-HOLD".to_string(),
+                minted: true,
+            })
+        }
+
+        fn checkpoint_parallel_branch(
+            &self,
+            _run_id: &str,
+            step_id: &str,
+            branch_id: &str,
+            output: &Value,
+        ) -> Result<(), DispatchError> {
+            self.branches
+                .lock()
+                .expect("branches")
+                .entry(step_id.to_string())
+                .or_default()
+                .insert(branch_id.to_string(), output.clone());
+            Ok(())
+        }
+
+        fn park_job_run(
+            &self,
+            _run_id: &str,
+            _park: &orbit_types::workflow::ParkedWait,
+        ) -> Result<(), DispatchError> {
+            Ok(())
+        }
     }
+}
+
+impl_test_host! { impl ReviewGate for CompoundReplayHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for CompoundReplayHost {}
 }
 
 /// Host that keeps the run's `PipelineState` the way the production host
@@ -341,43 +374,59 @@ impl StateHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for StateHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.inputs
-            .lock()
-            .expect("inputs")
-            .push((action.to_string(), input.clone()));
-        Dispatch::run_deterministic(&self.inner, action, config, input, tool_context)
+impl_test_host! {
+    impl Dispatch for StateHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.inputs
+                .lock()
+                .expect("inputs")
+                .push((action.to_string(), input.clone()));
+            Dispatch::run_deterministic(&self.inner, action, config, input, tool_context)
+        }
     }
+}
 
-    fn checkpoint_step(
-        &self,
-        _run_id: &str,
-        step_index: u32,
-        step_id: &str,
-        output: &Value,
-        _compound_outputs: &BTreeMap<String, Value>,
-        _: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
-    ) -> Result<(), DispatchError> {
-        self.record(step_index, step_id, output, false);
-        Ok(())
-    }
+impl_test_host! { impl HostEnvironment for StateHost {} }
 
-    fn checkpoint_skipped_step(
-        &self,
-        _run_id: &str,
-        step_index: u32,
-        step_id: &str,
-    ) -> Result<(), DispatchError> {
-        self.record(step_index, step_id, &Value::Null, true);
-        Ok(())
+impl_test_host! { impl RunLifecycle for StateHost {} }
+
+impl_test_host! {
+    impl Recovery for StateHost {
+        fn checkpoint_step(
+            &self,
+            _run_id: &str,
+            step_index: u32,
+            step_id: &str,
+            output: &Value,
+            _compound_outputs: &BTreeMap<String, Value>,
+            _: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
+        ) -> Result<(), DispatchError> {
+            self.record(step_index, step_id, output, false);
+            Ok(())
+        }
+
+        fn checkpoint_skipped_step(
+            &self,
+            _run_id: &str,
+            step_index: u32,
+            step_id: &str,
+        ) -> Result<(), DispatchError> {
+            self.record(step_index, step_id, &Value::Null, true);
+            Ok(())
+        }
     }
+}
+
+impl_test_host! { impl ReviewGate for StateHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for StateHost {}
 }
 
 fn resume_state_with_completed_steps(steps: &[(u32, &str, Value)]) -> PipelineState {

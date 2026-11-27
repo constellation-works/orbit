@@ -9,6 +9,7 @@
 //! not find evidence-only keeps the reviewer step failed, and settlement never
 //! runs.
 
+use orbit_engine::test_support::impl_test_host;
 use orbit_engine::{Dispatch, HostEnvironment, Recovery};
 use std::sync::Mutex;
 
@@ -68,85 +69,111 @@ impl DeniedCheckHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for DeniedCheckHost {
-    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
-    }
+impl_test_host! {
+    impl Dispatch for DeniedCheckHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls
+                .lock()
+                .expect("call log")
+                .push((action.to_string(), input.clone()));
+            match action {
+                "worktree" => Ok(json!({"job_run_id": RUN, "workspace_path": self.workspace})),
+                "commit" => Ok(json!({"skipped_no_diff_expected": false})),
+                "review_gate_admit" => Ok(json!({
+                    "applies": true,
+                    "decision": "admitted",
+                    "first_task_id": "T-1",
+                    "attempt_id": "rvw-landing",
+                    "lineage_key": "lineage-1",
+                    "manifest_artifact": "review-manifest.json",
+                    "report_artifact": "review-report.json",
+                    "reviewer": {"crew": ""},
+                    "timing": "before-landing",
+                })),
+                // Settlement decides the hold from the report, as the gate does
+                // for any evidence-only verdict.
+                "review_gate_settle" => Err(DispatchError::ReviewEvidenceHold(Box::new(held()))),
+                other => Err(DispatchError::DeterministicActionRefused {
+                    action: other.to_string(),
+                    message: format!("`{other}` is not part of this fixture"),
+                }),
+            }
+        }
 
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .expect("call log")
-            .push((action.to_string(), input.clone()));
-        match action {
-            "worktree" => Ok(json!({"job_run_id": RUN, "workspace_path": self.workspace})),
-            "commit" => Ok(json!({"skipped_no_diff_expected": false})),
-            "review_gate_admit" => Ok(json!({
-                "applies": true,
-                "decision": "admitted",
-                "first_task_id": "T-1",
-                "attempt_id": "rvw-landing",
-                "lineage_key": "lineage-1",
-                "manifest_artifact": "review-manifest.json",
-                "report_artifact": "review-report.json",
-                "reviewer": {"crew": ""},
-                "timing": "before-landing",
-            })),
-            // Settlement decides the hold from the report, as the gate does
-            // for any evidence-only verdict.
-            "review_gate_settle" => Err(DispatchError::ReviewEvidenceHold(Box::new(held()))),
-            other => Err(DispatchError::DeterministicActionRefused {
-                action: other.to_string(),
-                message: format!("`{other}` is not part of this fixture"),
-            }),
+        fn resolve_cli_executor(
+            &self,
+            provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Dispatch::resolve_cli_executor(&self.cli, provider)
         }
     }
+}
 
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Dispatch::resolve_cli_executor(&self.cli, provider)
+impl_test_host! {
+    impl HostEnvironment for DeniedCheckHost {
+        fn agent_subprocess_environment(
+            &self,
+            required_env_vars: &[&str],
+        ) -> Vec<(String, String)> {
+            HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
+        }
     }
+}
 
-    fn tool_context_for_activity(
-        &self,
-        run_id: Option<&str>,
-        fs_profile: Option<&str>,
-        fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        let mut context = Recovery::tool_context_for_activity(
-            &self.cli,
-            run_id,
-            fs_profile,
-            fs_audit,
-            proc_allowed_programs,
-        );
-        context.workspace_root = Some(self.primary.clone());
-        context
-    }
+impl_test_host! { impl RunLifecycle for DeniedCheckHost {} }
 
-    fn record_reviewer_invocation(
-        &self,
-        _request: &orbit_engine::ReviewerInvocationRequest,
-    ) -> Result<Option<u64>, OrbitError> {
-        Ok(None)
+impl_test_host! {
+    impl Recovery for DeniedCheckHost {
+        fn tool_context_for_activity(
+            &self,
+            run_id: Option<&str>,
+            fs_profile: Option<&str>,
+            fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            let mut context = Recovery::tool_context_for_activity(
+                &self.cli,
+                run_id,
+                fs_profile,
+                fs_audit,
+                proc_allowed_programs,
+            );
+            context.workspace_root = Some(self.primary.clone());
+            context
+        }
     }
+}
 
-    fn review_report_evidence_hold(
-        &self,
-        request: &ReviewReportCorrectionRequest,
-    ) -> Result<Option<String>, OrbitError> {
-        self.judged.lock().expect("judged").push(request.clone());
-        Ok(match self.report {
-            Report::EvidenceOnly => Some(format!("`{WEBSITE_CHECK}`")),
-            Report::NotEvidenceOnly => None,
-        })
+impl_test_host! {
+    impl ReviewGate for DeniedCheckHost {
+        fn record_reviewer_invocation(
+            &self,
+            _request: &orbit_engine::ReviewerInvocationRequest,
+        ) -> Result<Option<u64>, OrbitError> {
+            Ok(None)
+        }
+
+        fn review_report_evidence_hold(
+            &self,
+            request: &ReviewReportCorrectionRequest,
+        ) -> Result<Option<String>, OrbitError> {
+            self.judged.lock().expect("judged").push(request.clone());
+            Ok(match self.report {
+                Report::EvidenceOnly => Some(format!("`{WEBSITE_CHECK}`")),
+                Report::NotEvidenceOnly => None,
+            })
+        }
     }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for DeniedCheckHost {}
 }
 
 fn held() -> ReviewEvidenceHold {

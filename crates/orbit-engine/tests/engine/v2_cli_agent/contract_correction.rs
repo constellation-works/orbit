@@ -9,6 +9,7 @@
 //! an agent filing tasks would), and prints the scripted envelope.
 
 use orbit_engine::Dispatch;
+use orbit_engine::test_support::impl_test_host;
 use std::sync::Mutex;
 
 use orbit_types::workflow::activity_job::V2AuditEventKind;
@@ -28,44 +29,63 @@ struct CorrectionHost {
     traces: Mutex<Vec<bool>>,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for CorrectionHost {
-    fn persist_invocation_trace(
-        &self,
-        _job_run_id: &str,
-        _activity_id: &str,
-        input: &Value,
-        _invocation: &orbit_engine::DispatchInvocationTrace,
-    ) -> Result<(), DispatchError> {
-        self.traces
-            .lock()
-            .unwrap()
-            .push(input.get("contract_correction").is_some());
-        Ok(())
-    }
+impl_test_host! {
+    impl Dispatch for CorrectionHost {
+        fn resolve_cli_executor(
+            &self,
+            provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Dispatch::resolve_cli_executor(&self.cli, provider)
+        }
 
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Dispatch::resolve_cli_executor(&self.cli, provider)
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _: &Value,
-        _: &Value,
-        _: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "delivery_sentinel" => {
-                *self.delivered.lock().unwrap() += 1;
-                Ok(json!({}))
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            _: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            match action {
+                "delivery_sentinel" => {
+                    *self.delivered.lock().unwrap() += 1;
+                    Ok(json!({}))
+                }
+                "contract_recovery" => Ok(json!({})),
+                _ => Err(DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: "unexpected deterministic action".to_string(),
+                }),
             }
-            "contract_recovery" => Ok(json!({})),
-            _ => Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: "unexpected deterministic action".to_string(),
-            }),
         }
     }
+}
+
+impl_test_host! { impl HostEnvironment for CorrectionHost {} }
+
+impl_test_host! { impl RunLifecycle for CorrectionHost {} }
+
+impl_test_host! {
+    impl Recovery for CorrectionHost {
+        fn persist_invocation_trace(
+            &self,
+            _job_run_id: &str,
+            _activity_id: &str,
+            input: &Value,
+            _invocation: &orbit_engine::DispatchInvocationTrace,
+        ) -> Result<(), DispatchError> {
+            self.traces
+                .lock()
+                .unwrap()
+                .push(input.get("contract_correction").is_some());
+            Ok(())
+        }
+    }
+}
+
+impl_test_host! { impl ReviewGate for CorrectionHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for CorrectionHost {}
 }
 
 struct Run {

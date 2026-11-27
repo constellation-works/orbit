@@ -3,6 +3,7 @@
 //! `task_blocked_by_agent` at the implement-step boundary, like the
 //! `blocker: {kind, evidence}` shape [ORB-25393].
 
+use orbit_engine::test_support::impl_test_host;
 use orbit_engine::{Dispatch, HostEnvironment, Recovery};
 use std::sync::Mutex;
 
@@ -39,48 +40,72 @@ impl DeclaredBlockerHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for DeclaredBlockerHost {
-    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
-    }
+impl_test_host! {
+    impl Dispatch for DeclaredBlockerHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls
+                .lock()
+                .expect("call log")
+                .push((action.to_string(), input.clone()));
+            // The recovery activity must never run for a held blocker; record it
+            // if it does so the action assertion below catches it, but do not
+            // delegate to the CLI host (which refuses deterministic actions).
+            let _ = (config, tool_context);
+            Ok(json!({}))
+        }
 
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .expect("call log")
-            .push((action.to_string(), input.clone()));
-        // The recovery activity must never run for a held blocker; record it
-        // if it does so the action assertion below catches it, but do not
-        // delegate to the CLI host (which refuses deterministic actions).
-        let _ = (config, tool_context);
-        Ok(json!({}))
+        fn resolve_cli_executor(
+            &self,
+            provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Dispatch::resolve_cli_executor(&self.cli, provider)
+        }
     }
+}
 
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Dispatch::resolve_cli_executor(&self.cli, provider)
+impl_test_host! {
+    impl HostEnvironment for DeclaredBlockerHost {
+        fn agent_subprocess_environment(
+            &self,
+            required_env_vars: &[&str],
+        ) -> Vec<(String, String)> {
+            HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
+        }
     }
+}
 
-    fn tool_context_for_activity(
-        &self,
-        run_id: Option<&str>,
-        fs_profile: Option<&str>,
-        fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        Recovery::tool_context_for_activity(
-            &self.cli,
-            run_id,
-            fs_profile,
-            fs_audit,
-            proc_allowed_programs,
-        )
+impl_test_host! { impl RunLifecycle for DeclaredBlockerHost {} }
+
+impl_test_host! {
+    impl Recovery for DeclaredBlockerHost {
+        fn tool_context_for_activity(
+            &self,
+            run_id: Option<&str>,
+            fs_profile: Option<&str>,
+            fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            Recovery::tool_context_for_activity(
+                &self.cli,
+                run_id,
+                fs_profile,
+                fs_audit,
+                proc_allowed_programs,
+            )
+        }
     }
+}
+
+impl_test_host! { impl ReviewGate for DeclaredBlockerHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for DeclaredBlockerHost {}
 }
 
 fn scripted_activity(action: &str) -> ActivityV2 {

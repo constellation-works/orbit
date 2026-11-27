@@ -1,6 +1,7 @@
 //! A recovery host carries evidence to its claim owner without task-write tools.
 
-use orbit_engine::{Dispatch, HostEnvironment, Recovery, ReviewGate, RunLifecycle};
+use orbit_engine::test_support::impl_test_host;
+use orbit_engine::{HostEnvironment, Recovery, RunLifecycle};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::claimed_review::ToOwner;
@@ -146,70 +147,24 @@ struct ClaimedRecoveryHost {
     worktree_output: Value,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
-    fn list_run_tasks(&self, run: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
-        self.bound.list_run_tasks(run)
-    }
-
-    fn get_task(&self, task: &str) -> Result<orbit_types::task::Task, OrbitError> {
-        self.bound.get_task(task)
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        task_id: &str,
-        update: TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        RunLifecycle::apply_task_automation_update(
-            &orbit_core::test_support::EngineHost::new(&self.bound),
-            task_id,
-            update,
-        )
-    }
-
-    fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
-        self.bound.read_run_state(run)
-    }
-
-    fn get_job_run(&self, run: &str) -> Result<Option<orbit_types::workflow::JobRun>, OrbitError> {
-        orbit_core::test_support::EngineHost::new(&self.bound).get_job_run(run)
-    }
-
-    fn required_validation_commands(&self) -> Vec<String> {
-        orbit_core::test_support::EngineHost::new(&self.bound).required_validation_commands()
-    }
-
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        HostEnvironment::run_settings(&orbit_core::test_support::EngineHost::new(&self.bound))
-    }
-
-    fn attach_task_validation_log(
-        &self,
-        task: &str,
-        run: &str,
-        path: &str,
-        content: Vec<u8>,
-    ) -> Result<(), OrbitError> {
-        orbit_core::test_support::EngineHost::new(&self.bound)
-            .attach_task_validation_log(task, run, path, content)
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        context: ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "setup" => Ok(self.worktree_output.clone()),
-            "fail_validate" => Err(DispatchError::DeterministicActionFailed {
-                action: "claim_validate".into(),
-                message: "candidate check failed".into(),
-            }),
-            "decide" => {
-                let repo = Path::new(self.worktree_output["workspace_path"].as_str().unwrap());
-                std::fs::write(repo.join("candidate.txt"), "repaired\nTOKEN=x\n").unwrap();
+impl_test_host! {
+    impl Dispatch for ClaimedRecoveryHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            context: ToolContext,
+        ) -> Result<Value, DispatchError> {
+            match action {
+                "setup" => Ok(self.worktree_output.clone()),
+                "fail_validate" => Err(DispatchError::DeterministicActionFailed {
+                    action: "claim_validate".into(),
+                    message: "candidate check failed".into(),
+                }),
+                "decide" => {
+                    let repo = Path::new(self.worktree_output["workspace_path"].as_str().unwrap());
+                    std::fs::write(repo.join("candidate.txt"), "repaired\nTOKEN=x\n").unwrap();
                 std::fs::write(repo.join(".env"), "PROTECTED_ENV_CANARY=x\n").unwrap();
                 Ok(json!({
                     "decision": "resume",
@@ -223,65 +178,137 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
                 .run_deterministic(action, config, input, context),
         }
     }
-
-    fn checkpoint_step(
-        &self,
-        run_id: &str,
-        index: u32,
-        step_id: &str,
-        output: &Value,
-        compound: &BTreeMap<String, Value>,
-        script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
-    ) -> Result<(), DispatchError> {
-        orbit_core::test_support::EngineHost::new(&self.bound).checkpoint_step(
-            run_id,
-            index,
-            step_id,
-            output,
-            compound,
-            script_outputs,
-        )
     }
+}
 
-    fn persist_final_recovery_evidence(
-        &self,
-        run_id: &str,
-        task_id: &str,
-        workspace: &Path,
-        evidence: &Value,
-    ) -> Result<(), OrbitError> {
-        Recovery::persist_final_recovery_evidence(
-            &orbit_core::test_support::EngineHost::new(&self.bound),
-            run_id,
-            task_id,
-            workspace,
-            evidence,
-        )
-    }
+impl_test_host! {
+    impl HostEnvironment for ClaimedRecoveryHost {
+        fn required_validation_commands(&self) -> Vec<String> {
+            orbit_core::test_support::EngineHost::new(&self.bound).required_validation_commands()
+        }
 
-    fn final_recovery_log_tail(&self, run: &str) -> Result<Option<String>, OrbitError> {
-        orbit_core::test_support::EngineHost::new(&self.bound).final_recovery_log_tail(run)
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            HostEnvironment::run_settings(&orbit_core::test_support::EngineHost::new(&self.bound))
+        }
     }
+}
 
-    fn admit_final_recovery(
-        &self,
-        run: &str,
-        request: &FinalRecoveryAdmissionRequest,
-    ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        orbit_core::test_support::EngineHost::new(&self.bound).admit_final_recovery(run, request)
-    }
+impl_test_host! {
+    impl RunLifecycle for ClaimedRecoveryHost {
+        fn list_run_tasks(&self, run: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
+            self.bound.list_run_tasks(run)
+        }
 
-    fn apply_final_recovery(
-        &self,
-        run: &str,
-        application: &FinalRecoveryApplication,
-    ) -> Result<FinalRecoveryApplied, OrbitError> {
-        Recovery::apply_final_recovery(
-            &orbit_core::test_support::EngineHost::new(&self.bound),
-            run,
-            application,
-        )
+        fn get_task(&self, task: &str) -> Result<orbit_types::task::Task, OrbitError> {
+            self.bound.get_task(task)
+        }
+
+        fn apply_task_automation_update(
+            &self,
+            task_id: &str,
+            update: TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            RunLifecycle::apply_task_automation_update(
+                &orbit_core::test_support::EngineHost::new(&self.bound),
+                task_id,
+                update,
+            )
+        }
+
+        fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
+            self.bound.read_run_state(run)
+        }
+
+        fn get_job_run(
+            &self,
+            run: &str,
+        ) -> Result<Option<orbit_types::workflow::JobRun>, OrbitError> {
+            orbit_core::test_support::EngineHost::new(&self.bound).get_job_run(run)
+        }
     }
+}
+
+impl_test_host! {
+    impl Recovery for ClaimedRecoveryHost {
+        fn checkpoint_step(
+            &self,
+            run_id: &str,
+            index: u32,
+            step_id: &str,
+            output: &Value,
+            compound: &BTreeMap<String, Value>,
+            script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
+        ) -> Result<(), DispatchError> {
+            orbit_core::test_support::EngineHost::new(&self.bound).checkpoint_step(
+                run_id,
+                index,
+                step_id,
+                output,
+                compound,
+                script_outputs,
+            )
+        }
+
+        fn persist_final_recovery_evidence(
+            &self,
+            run_id: &str,
+            task_id: &str,
+            workspace: &Path,
+            evidence: &Value,
+        ) -> Result<(), OrbitError> {
+            Recovery::persist_final_recovery_evidence(
+                &orbit_core::test_support::EngineHost::new(&self.bound),
+                run_id,
+                task_id,
+                workspace,
+                evidence,
+            )
+        }
+
+        fn final_recovery_log_tail(&self, run: &str) -> Result<Option<String>, OrbitError> {
+            orbit_core::test_support::EngineHost::new(&self.bound).final_recovery_log_tail(run)
+        }
+
+        fn admit_final_recovery(
+            &self,
+            run: &str,
+            request: &FinalRecoveryAdmissionRequest,
+        ) -> Result<FinalRecoveryAdmission, OrbitError> {
+            orbit_core::test_support::EngineHost::new(&self.bound)
+                .admit_final_recovery(run, request)
+        }
+
+        fn apply_final_recovery(
+            &self,
+            run: &str,
+            application: &FinalRecoveryApplication,
+        ) -> Result<FinalRecoveryApplied, OrbitError> {
+            Recovery::apply_final_recovery(
+                &orbit_core::test_support::EngineHost::new(&self.bound),
+                run,
+                application,
+            )
+        }
+    }
+}
+
+impl_test_host! {
+    impl ReviewGate for ClaimedRecoveryHost {
+        fn attach_task_validation_log(
+            &self,
+            task: &str,
+            run: &str,
+            path: &str,
+            content: Vec<u8>,
+        ) -> Result<(), OrbitError> {
+            orbit_core::test_support::EngineHost::new(&self.bound)
+                .attach_task_validation_log(task, run, path, content)
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ClaimedRecoveryHost {}
 }
 
 struct ClaimedRecoveryFixture {
