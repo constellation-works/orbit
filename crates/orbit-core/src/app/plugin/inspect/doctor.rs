@@ -17,7 +17,7 @@ use orbit_types::plugin::{
 use super::summary::{PluginSummary, list_plugins};
 
 use crate::OrbitRuntime;
-use crate::application::plugin::lifecycle::build_pin_drift;
+use crate::app::plugin::lifecycle::build_pin_drift;
 use crate::runtime::plugin::backend::plugin_backend;
 use crate::runtime::plugin::build_witness::verify_build_record;
 use crate::runtime::plugin::paths::{plugin_install_root, plugin_namespace_dir, read_pin_file};
@@ -68,7 +68,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
             intentional: true,
         }]
     } else {
-        super::super::secrets::unset_secret_rows(runtime, &summaries)?
+        crate::app::plugin::secret::unset_secret_rows(runtime, &summaries)?
     };
     // A skill link whose target is gone is invisible to the skill catalog's
     // own doctor — it only walks seeded trees — and to the plugin record,
@@ -79,7 +79,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
         if summary.install_path.is_empty() {
             continue;
         }
-        for (link, target) in super::super::skills::dangling_plugin_skill_links(
+        for (link, target) in crate::app::plugin::skill::dangling_plugin_skill_links(
             &runtime.global_root(),
             &plugin_namespace_dir(&runtime.global_root(), &summary.name),
         ) {

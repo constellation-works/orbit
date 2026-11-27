@@ -18,8 +18,8 @@ use orbit_types::workflow::{
 };
 use std::path::{Component, Path, PathBuf};
 
+use crate::app::plugin::InactivePlugin;
 use crate::application::automation::{AutomationAutoTaskPort, SourceCache};
-use crate::application::plugin::InactivePlugin;
 
 struct CachedDispatch<'a> {
     runtime: &'a OrbitRuntime,
@@ -173,7 +173,7 @@ impl OrbitRuntime {
         &self,
         definition: &AutoTaskDefinition,
     ) -> Option<InactivePlugin> {
-        crate::application::plugin::inactive_plugin(
+        crate::app::plugin::inactive_plugin(
             &self.auto_task_inspection_dir(definition),
             &self.auto_task_definition_path(definition),
             self.plugin_load(),
@@ -194,7 +194,7 @@ impl OrbitRuntime {
             .into_iter()
             .map(|definition| self.listed_auto_task(definition))
             .filter(|listed| {
-                crate::application::plugin::is_listed(
+                crate::app::plugin::is_listed(
                     listed.inactive_plugin.is_some(),
                     include_inactive_plugins,
                 )
@@ -433,7 +433,7 @@ pub(crate) fn mint_params(
         &definition.name,
     );
     if let Some((namespace, _)) =
-        crate::application::plugin::read_definition_provenance(&definitions_dir, &path)
+        crate::app::plugin::read_definition_provenance(&definitions_dir, &path)
     {
         let tag = format!("plugin:{namespace}");
         if !params.tags.contains(&tag) {

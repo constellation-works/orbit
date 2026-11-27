@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::create_dir_symlink;
 use orbit_core::app::doctor::{ArtifactCondition, ArtifactKind, inspect_definition_artifacts};
-use orbit_core::application::plugin::{
+use orbit_core::app::plugin::{
     PluginAddOptions, PluginEnableOptions, PluginUpgradeOptions, enable_plugin, install_plugin,
     plugin_doctor, sync_plugins, upgrade_plugin,
 };

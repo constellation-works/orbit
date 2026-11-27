@@ -31,7 +31,7 @@ impl RoutineStatusReport {
         include_inactive_plugins: bool,
     ) -> impl Iterator<Item = &RetiredRoutine> {
         self.retired.iter().filter(move |routine| {
-            crate::application::plugin::is_listed(routine.skipped, include_inactive_plugins)
+            crate::app::plugin::is_listed(routine.skipped, include_inactive_plugins)
         })
     }
 

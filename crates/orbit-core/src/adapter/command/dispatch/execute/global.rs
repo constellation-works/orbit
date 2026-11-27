@@ -11,7 +11,7 @@ use orbit_tools::{ToolContext, ToolExecutionKind};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
-use crate::application::plugin::mcp_surface::{FileIdentity, FileStamp};
+use crate::app::plugin::{FileIdentity, FileStamp};
 use crate::application::store_opener::StoreOpener;
 use crate::runtime::tool_exec::{check_activity_tool_policy, check_tool_active};
 

@@ -128,7 +128,7 @@ dashboard_reads! {
     /// Whether a plugin lifecycle verb rewrote the host's plugin rows after
     /// this workspace was opened, so a server must reopen it.
     plugin_installed_changed() -> bool = "plugin-installed-changed",
-        |rt| rt.plugin_installed_changed();
+        |rt| crate::app::plugin::plugin_installed_changed(rt);
     /// The host resource monitor the workspace samples.
     host_resource_monitor() -> Arc<HostResourceMonitor> = "host-resource-monitor",
         |rt| Ok(rt.host_resource_monitor());

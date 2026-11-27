@@ -111,7 +111,6 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `landing` | `unit::landing` | above task |
 | `managed_assets` | `unit::managed_assets` | leaf |
 | `operator_input.rs` | `app::review` | 4 |
-| `plugin` | `app::plugin` | above task |
 | `pull_drain` | `unit::pull_drain` | 6 |
 | `resident` | `app::resident` | above task |
 | `review` | `app::review` | 4 |

@@ -248,7 +248,7 @@ fn remove_install_scratch(path: &Path) {
 /// The lock file sits beside the namespace's witness: outside the namespace
 /// directory, which `remove` deletes whole, and in a tree no plugin backend
 /// can read, so no plugin can open it to hold an install off.
-pub(in crate::application::plugin) fn lock_plugin_namespace(
+pub(in crate::app::plugin) fn lock_plugin_namespace(
     global_root: &Path,
     name: &str,
 ) -> Result<FileLockGuard, OrbitError> {

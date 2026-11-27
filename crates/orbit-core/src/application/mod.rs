@@ -9,7 +9,7 @@
 //! - Automation: `auto_tasks`, `automation`, `workspace_auto`,
 //!   `sweep_filing`, `seeding_policy`.
 //! - Agents and runs: `executor`, `experiment`, `resident`, `vision_probe`, `statistics`.
-//! - Plugins: `plugin`, `tool_name_migration`.
+//! - Tool names: `tool_name_migration`.
 //! - Workspace and host: `codebase`, `distributed`, `pull_drain`,
 //!   `host_labels`, `gc`, `change_watch`, `managed_assets`.
 //! - Policy: `application_authority`, `contracts`, `admission`,
@@ -33,7 +33,6 @@ pub mod job;
 pub mod landing;
 pub(crate) mod managed_assets;
 pub mod operator_input;
-pub mod plugin;
 pub(crate) mod pull_drain;
 pub mod resident;
 pub mod review;

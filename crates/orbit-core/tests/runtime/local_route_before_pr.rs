@@ -6,8 +6,8 @@
 //! fails closed with the same refusal, on a local workspace and on a PR one.
 
 use orbit_common::OrbitError;
+use orbit_core::app::plugin::{PluginAddOptions, install_plugin};
 use orbit_core::app::run::ShipMode;
-use orbit_core::application::plugin::{PluginAddOptions, install_plugin};
 use orbit_core::application::review::review_switches;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::OrbitRuntime;

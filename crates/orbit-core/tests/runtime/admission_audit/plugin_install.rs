@@ -4,7 +4,7 @@ use orbit_types::plugin::PluginStatus;
 use orbit_types::telemetry::AuditEventStatus;
 
 use super::plugin_fixture::{PluginFixture, PluginSpecFixture};
-use orbit_core::application::plugin::{
+use orbit_core::app::plugin::{
     PluginAddOptions, PluginUpgradeOptions, install_plugin, upgrade_plugin,
 };
 
@@ -294,7 +294,7 @@ fn upgrade_enabled(
     version: &str,
     dir: &str,
     root: &Path,
-) -> orbit_core::application::plugin::PluginUpgradeResult {
+) -> orbit_core::app::plugin::PluginUpgradeResult {
     let block = templated_write_block(root);
     let mut spec = PluginSpecFixture::new(dir, name);
     spec.version = version;
@@ -392,10 +392,10 @@ fn exact_file_upgrade_requires_reconsent_for_a_new_destination_and_binds_the_dig
             .contains(&second.display().to_string())
     );
 
-    orbit_core::application::plugin::enable_plugin(
+    orbit_core::app::plugin::enable_plugin(
         &fixture.runtime,
         "exact",
-        &orbit_core::application::plugin::PluginEnableOptions {
+        &orbit_core::app::plugin::PluginEnableOptions {
             grants: vec!["fs".into()],
             ..Default::default()
         },
@@ -408,7 +408,7 @@ fn exact_file_upgrade_requires_reconsent_for_a_new_destination_and_binds_the_dig
     let body = std::fs::read_to_string(&manifest).unwrap();
     std::fs::write(&manifest, body.replace("write_files:", "read:")).unwrap();
     let runtime = fixture.reopen();
-    let shown = orbit_core::application::plugin::show_plugin(&runtime, "exact").unwrap();
+    let shown = orbit_core::app::plugin::show_plugin(&runtime, "exact").unwrap();
     assert_eq!(shown.status, PluginStatus::Inactive);
     assert!(
         shown

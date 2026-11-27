@@ -15,7 +15,7 @@ use orbit_types::plugin::{
 };
 
 use super::plugin_fixture::PluginFixture;
-use orbit_core::application::plugin::{
+use orbit_core::app::plugin::{
     PluginAddOptions, PluginUpgradeOptions, install_plugin, plugin_build_doctor, plugin_doctor,
     show_plugin, sync_plugins, upgrade_plugin,
 };

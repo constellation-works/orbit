@@ -322,7 +322,7 @@ sync [ORB-27881]).
   `crates/orbit-cmd/src/migrate.rs`,
   `crates/orbit-core/src/application/tool_name_migration/`,
   `crates/orbit-core/src/application/task_bundle/migration.rs` and
-  `crates/orbit-core/src/application/plugin/lifecycle/migrate.rs`.
+  `crates/orbit-core/src/app/plugin/lifecycle/migrate.rs`.
   Rationale: each quarantines against the live path it upgrades (the live
   path reads and writes the current shape only); consolidating them into one
   unit is deferred to a restructure that can move each reader with its format

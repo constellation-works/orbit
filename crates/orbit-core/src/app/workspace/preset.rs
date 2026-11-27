@@ -36,10 +36,10 @@ use orbit_config::{
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
+use crate::app::plugin::plugin_seeded_definitions;
 use crate::app::routine::checkout_edit_report;
 use crate::app::routine::set_routine_enabled;
 use crate::application::job::DEFAULT_JOB_FILES;
-use crate::application::plugin::seed::plugin_seeded_definitions;
 use crate::application::store_opener::StoreOpener;
 
 /// Largest preset file Orbit reads.

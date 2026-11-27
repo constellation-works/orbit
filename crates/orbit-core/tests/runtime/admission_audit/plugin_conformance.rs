@@ -8,7 +8,7 @@ use orbit_types::plugin::PLUGIN_DIR_NAME;
 
 use super::plugin_fixture::PluginFixture;
 use crate::scenarios::Outcome;
-use orbit_core::application::plugin::{
+use orbit_core::app::plugin::{
     PluginAddOptions, PluginTestOptions, PluginTestReport, install_plugin, test_plugin_dir,
 };
 use orbit_core::runtime::OrbitRuntime;

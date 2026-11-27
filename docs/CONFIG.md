@@ -3102,7 +3102,7 @@ paths = [
   "crates/orbit-common/src/security/**",
   "crates/orbit-core/src/adapter/engine_host/actions/sandbox/**",
   "crates/orbit-core/src/application/job/pipeline/claude_credential.rs",
-  "crates/orbit-core/src/application/plugin/secrets.rs",
+  "crates/orbit-core/src/app/plugin/secret.rs",
   "crates/orbit-runtime/src/git_sandbox.rs",
   "crates/orbit-runtime/src/plugin/sandbox_mask.rs",
   "crates/orbit-runtime/src/plugin/secrets.rs",

@@ -203,7 +203,7 @@
     "reason": "Grandchild stays alive until a ready file, then the parent joins it. The measurement needs the live process."
   },
   {
-    "path": "crates/orbit-core/src/application/plugin/tests/fixture.rs",
+    "path": "crates/orbit-core/src/app/plugin/tests/fixture.rs",
     "function": "enter_isolated_child",
     "call": ".output()",
     "ordinal": 0,

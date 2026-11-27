@@ -5,7 +5,7 @@ use orbit_config::ConfigRoots;
 
 use super::definition_fixture::DefinitionPlugin;
 use super::plugin_fixture::PluginFixture;
-use orbit_core::application::plugin::{
+use orbit_core::app::plugin::{
     PluginAddOptions, PluginEnableOptions, disable_plugin_in_workspace, enable_plugin,
     enable_plugin_in_workspace, install_plugin,
 };

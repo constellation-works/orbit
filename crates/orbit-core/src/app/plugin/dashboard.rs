@@ -4,9 +4,12 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE};
 use serde_json::Value;
 
-use super::Outcome;
+use super::{
+    Outcome, PluginSummary, disable_plugin, disable_plugin_in_workspace,
+    enable_plugin_from_dashboard, enable_plugin_in_workspace, list_plugins,
+    plugin_panel_refresh_ms, read_plugin_panel,
+};
 use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
-use crate::application::plugin::PluginSummary;
 use crate::{Core, OrbitRuntime};
 
 /// The enablement record a dashboard write changes.
@@ -58,7 +61,7 @@ pub struct PanelRead {
 impl PanelRead {
     pub(super) fn new(core: &Core, namespace: String, panel: String) -> Result<Self, OrbitError> {
         let runtime = core.runtime();
-        let refresh_ms = runtime.plugin_panel_refresh_ms(&namespace, &panel)?;
+        let refresh_ms = plugin_panel_refresh_ms(runtime, &namespace, &panel)?;
         Ok(Self {
             runtime: runtime.clone(),
             namespace,
@@ -74,7 +77,7 @@ impl PanelRead {
 
     /// Run the panel source through the existing read-only tool dispatch.
     pub fn read(self) -> Result<Value, OrbitError> {
-        self.runtime.read_plugin_panel(&self.namespace, &self.panel)
+        read_plugin_panel(&self.runtime, &self.namespace, &self.panel)
     }
 }
 
@@ -91,22 +94,19 @@ pub(super) fn toggle(
         ..
     } = toggle;
     let scope = scope?;
-    if !runtime
-        .list_plugins()?
+    if !list_plugins(runtime)?
         .iter()
         .any(|plugin| plugin.name == namespace)
     {
         return Ok(None);
     }
     let summary = match (enable, scope) {
-        (true, DashboardScope::Host) => runtime.enable_plugin_from_dashboard(&namespace)?.summary,
+        (true, DashboardScope::Host) => enable_plugin_from_dashboard(runtime, &namespace)?.summary,
         (true, DashboardScope::Workspace) => {
-            runtime
-                .enable_plugin_in_workspace(&namespace, false)?
-                .summary
+            enable_plugin_in_workspace(runtime, &namespace, false)?.summary
         }
-        (false, DashboardScope::Host) => runtime.disable_plugin(&namespace)?,
-        (false, DashboardScope::Workspace) => runtime.disable_plugin_in_workspace(&namespace)?,
+        (false, DashboardScope::Host) => disable_plugin(runtime, &namespace)?,
+        (false, DashboardScope::Workspace) => disable_plugin_in_workspace(runtime, &namespace)?,
     };
     Ok(Some(summary))
 }

@@ -43,7 +43,7 @@ pub(super) fn doctor_check_worktree_reclaim(runtime: &OrbitRuntime) -> Workspace
 /// source at install time, with its command, consent, profile and artifact
 /// digest, and any drift `orbit plugin doctor` finds in those builds.
 pub(super) fn doctor_check_plugin_builds(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    let rows = match runtime.plugin_build_doctor() {
+    let rows = match crate::app::plugin::plugin_build_doctor(runtime) {
         Ok(rows) => rows,
         Err(error) => {
             return check(

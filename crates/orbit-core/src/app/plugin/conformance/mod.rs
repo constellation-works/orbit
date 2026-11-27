@@ -44,8 +44,6 @@ mod model;
 mod runner;
 
 pub use gate::PluginTestValidationGate;
-pub use model::PluginTestDeferral;
 pub use model::PluginTestOptions;
-pub use model::PluginTestOutcome;
 pub use model::PluginTestReport;
 pub use runner::test_plugin_dir;

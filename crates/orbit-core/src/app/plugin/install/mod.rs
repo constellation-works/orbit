@@ -6,15 +6,17 @@ mod permissions;
 mod staging;
 
 pub(super) use flow::install_pinned_plugin;
+#[cfg(feature = "test-support")]
+pub use flow::install_plugin;
 pub(crate) use flow::install_plugin_reporting_enable;
-pub use flow::{install_plugin, upgrade_plugin};
+pub use flow::upgrade_plugin;
 pub(super) use staging::lock_plugin_namespace;
 
 use orbit_types::plugin::PluginGrant;
 
 use super::inspect::PluginSummary;
 use super::seed::PluginSeedOutcome;
-use super::skills::PluginSkillLink;
+use super::skill::PluginSkillLink;
 
 #[derive(Debug, Clone, Default)]
 pub struct PluginAddOptions {

@@ -5,7 +5,7 @@ use orbit_common::OrbitError;
 use orbit_tools::plugin::load_plugin_dir;
 
 use super::definition_fixture::DefinitionPlugin;
-use crate::application::plugin::seed::{PluginSeedAction, seed_plugin_definitions};
+use crate::app::plugin::seed::{PluginSeedAction, seed_plugin_definitions};
 use crate::runtime::plugin::definitions::{load_plugin_definitions, shipped_job_names};
 
 /// `code` + `review` seeds as `code-review`, a shipped default: seeding must
