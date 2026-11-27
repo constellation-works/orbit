@@ -343,7 +343,7 @@ fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
         add_managed_manifest_entry(&catalog, name, &old);
     }
     use orbit_core::app::doctor::{ArtifactCondition, ArtifactProvenance};
-    use orbit_core::application::workspace_sync::{
+    use orbit_core::app::workspace::{
         ManagedArtifactOutcome, ManagedArtifactScope, reconcile_workspace_managed_artifacts,
     };
     let activity_catalog = workspace.join("resources/activities");

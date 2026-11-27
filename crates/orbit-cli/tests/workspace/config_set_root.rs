@@ -548,12 +548,12 @@ fn config_set_refusals_match_shared_admission_without_writes() {
         } else {
             orbit_config::ConfigScope::Global
         };
-        let expected = orbit_core::application::config::set_key(
+        let expected = orbit_core::app::config::set_key(
             &runtime,
             key,
             &typed,
             scope,
-            orbit_core::application::config::ConfigWriteInit::RequireExisting,
+            orbit_core::app::config::ConfigWriteInit::RequireExisting,
         )
         .unwrap_err()
         .to_string();
@@ -574,11 +574,11 @@ fn config_set_refusals_match_shared_admission_without_writes() {
             before
         );
     }
-    let events = runtime
-        .list_audit_events_filtered(
-            &orbit_core::test_support::fixture_store::AuditEventFilter::default(),
-        )
-        .unwrap();
+    let events = orbit_core::app::audit::list_audit_events_filtered(
+        &runtime,
+        &orbit_core::test_support::fixture_store::AuditEventFilter::default(),
+    )
+    .unwrap();
     assert!(
         events
             .iter()

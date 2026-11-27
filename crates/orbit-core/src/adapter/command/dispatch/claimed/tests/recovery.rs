@@ -522,10 +522,15 @@ fn a_claimed_leafs_final_recovery_reads_its_review_evidence_and_delivery_through
         "no delivery read is forwarded to the owner"
     );
 
-    let rows = fixture
-        .runtime
-        .list_audit_events(None, Some(GET.to_string()), None, None, 20)
-        .unwrap();
+    let rows = crate::app::audit::list_audit_events(
+        &fixture.runtime,
+        None,
+        Some(GET.to_string()),
+        None,
+        None,
+        20,
+    )
+    .unwrap();
     assert!(
         !rows.is_empty()
             && rows.iter().all(|row| row.brokered

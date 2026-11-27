@@ -116,18 +116,20 @@ impl Drains {
 
     /// Audit arguments for `tool_name` recorded against `run_id`, newest first.
     fn audits(&self, run_id: &str, tool_name: &str, status: AuditEventStatus) -> Vec<Value> {
-        self.runtime
-            .list_audit_events_filtered(&AuditEventFilter {
+        orbit_core::app::audit::list_audit_events_filtered(
+            &self.runtime,
+            &AuditEventFilter {
                 tool_name: Some(tool_name.to_string()),
                 status: Some(status),
                 job_run_id: Some(run_id.to_string()),
                 limit: 10,
                 ..AuditEventFilter::default()
-            })
-            .unwrap()
-            .iter()
-            .map(|event| serde_json::from_str(event.arguments_json.as_deref().unwrap()).unwrap())
-            .collect()
+            },
+        )
+        .unwrap()
+        .iter()
+        .map(|event| serde_json::from_str(event.arguments_json.as_deref().unwrap()).unwrap())
+        .collect()
     }
 }
 

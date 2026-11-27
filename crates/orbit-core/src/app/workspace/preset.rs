@@ -511,70 +511,68 @@ pub struct AppliedWorkspacePreset {
     pub applied_at: String,
 }
 
-impl OrbitRuntime {
-    /// Enable the plugin-seeded routines and auto-tasks `preset` names, as an
-    /// operator act. Each must still be one a plugin seeded into this
-    /// workspace. Returns the names whose state changed.
-    pub fn enable_preset_definitions(
-        &self,
-        preset: &WorkspacePreset,
-    ) -> Result<Vec<String>, OrbitError> {
-        preset.require_plugin_seeded(&self.shared_root())?;
-        // Resolve every routine before enabling anything: the status report
-        // is where the runtime catalog and plugin skips apply, so a routine
-        // that does not load there must not leave an auto-task from the
-        // same preset already enabled.
-        let report = if preset.enable_routines.is_empty() {
-            None
-        } else {
-            Some(checkout_edit_report(self)?)
-        };
-        if let Some(report) = &report {
-            for name in &preset.enable_routines {
-                report
-                    .statuses
-                    .iter()
-                    .map(|status| &status.routine)
-                    .find(|routine| routine.definition.name == *name)
-                    .ok_or_else(|| {
-                        OrbitError::InvalidInput(format!(
-                            "plugin-seeded routine '{name}' does not load in this workspace; run \
-                             `orbit routine list` to see why"
-                        ))
-                    })?;
-            }
+/// Enable the plugin-seeded routines and auto-tasks `preset` names, as an
+/// operator act. Each must still be one a plugin seeded into this
+/// workspace. Returns the names whose state changed.
+pub(super) fn enable_preset_definitions(
+    rt: &OrbitRuntime,
+    preset: &WorkspacePreset,
+) -> Result<Vec<String>, OrbitError> {
+    preset.require_plugin_seeded(&rt.shared_root())?;
+    // Resolve every routine before enabling anything: the status report
+    // is where the runtime catalog and plugin skips apply, so a routine
+    // that does not load there must not leave an auto-task from the
+    // same preset already enabled.
+    let report = if preset.enable_routines.is_empty() {
+        None
+    } else {
+        Some(checkout_edit_report(rt)?)
+    };
+    if let Some(report) = &report {
+        for name in &preset.enable_routines {
+            report
+                .statuses
+                .iter()
+                .map(|status| &status.routine)
+                .find(|routine| routine.definition.name == *name)
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(format!(
+                        "plugin-seeded routine '{name}' does not load in this workspace; run \
+                         `orbit routine list` to see why"
+                    ))
+                })?;
         }
-        let mut changed = Vec::new();
-        for name in &preset.enable_auto_tasks {
-            let before = self
-                .auto_task_show(name)?
-                .is_some_and(|definition| definition.enabled);
-            self.auto_task_toggle(name, true)?;
-            if !before {
+    }
+    let mut changed = Vec::new();
+    for name in &preset.enable_auto_tasks {
+        let before = rt
+            .auto_task_show(name)?
+            .is_some_and(|definition| definition.enabled);
+        rt.auto_task_toggle(name, true)?;
+        if !before {
+            changed.push(name.clone());
+        }
+    }
+    if let Some(report) = &report {
+        for name in &preset.enable_routines {
+            let routine = report
+                .statuses
+                .iter()
+                .map(|status| &status.routine)
+                .find(|routine| routine.definition.name == *name)
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(format!(
+                        "plugin-seeded routine '{name}' does not load in this workspace; run \
+                         `orbit routine list` to see why"
+                    ))
+                })?;
+            if !routine.definition.enabled {
+                let _ = set_routine_enabled(routine, false, true)?;
                 changed.push(name.clone());
             }
         }
-        if let Some(report) = &report {
-            for name in &preset.enable_routines {
-                let routine = report
-                    .statuses
-                    .iter()
-                    .map(|status| &status.routine)
-                    .find(|routine| routine.definition.name == *name)
-                    .ok_or_else(|| {
-                        OrbitError::InvalidInput(format!(
-                            "plugin-seeded routine '{name}' does not load in this workspace; run \
-                             `orbit routine list` to see why"
-                        ))
-                    })?;
-                if !routine.definition.enabled {
-                    let _ = set_routine_enabled(routine, false, true)?;
-                    changed.push(name.clone());
-                }
-            }
-        }
-        Ok(changed)
     }
+    Ok(changed)
 }
 
 /// The preset last applied to the workspace at `workspace_orbit_root`, if any.

@@ -7,9 +7,17 @@
 //! caller's own flow, which the app runs once it has admitted the command:
 //! that flow lives above this crate.
 
+mod live_run;
+
 mod migrate;
 
+mod preset;
+
+mod product_profile;
+
 mod registry;
+
+mod sync;
 
 mod tasks;
 
@@ -40,17 +48,12 @@ use crate::application::codebase::DiffStatsBackfill;
 use crate::application::job::TaskCrewBackfill;
 use crate::application::seeding_policy::SeedingPolicyExclusions;
 use crate::application::task::{TaskListFilter, TaskRow};
-use crate::application::workspace_preset::AppliedWorkspacePreset;
 use crate::{Core, ShipMode};
+use preset::AppliedWorkspacePreset;
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
 pub use crate::adapter::HubCoordinationExecutor;
 pub use crate::application::workspace_auto::FleetReadinessFacts;
-pub use crate::application::workspace_preset::WorkspacePreset;
-pub use crate::application::workspace_sync::{
-    ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,
-    reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
-};
 pub use crate::bootstrap::init::{
     InitOptions, allocated_task_prefix, init_global, init_workspace_at_root,
 };
@@ -59,10 +62,19 @@ pub use crate::composition::{
     Opening, WorkspaceAuthorityAdoption, adopt_workspace_layout_authority, core_for_request,
     store_opener, verify_workspace_layout_authority,
 };
+pub use live_run::workspace_live_run_ids;
 pub use orbit_runtime::{
     WorkspaceRuntimeBinding, is_global_orbit_root, managed_workspace_selector_from_env,
     resolve_generation_root, resolve_global_root, resolve_process_generation_root,
     resolve_root_path_value,
+};
+pub use preset::WorkspacePreset;
+pub(crate) use product_profile::ProductProfile;
+pub(crate) use sync::reconcile_workspace_catalog_copies;
+pub use sync::{
+    ManagedArtifactOutcome, ManagedArtifactScope, ManagedArtifactSyncAction,
+    WorkspaceManagedArtifactSyncReport, reconcile_workspace_managed_artifacts,
+    seed_absent_workspace_managed_artifacts,
 };
 
 /// The caller's own flow for a command whose body lives above this crate. It
@@ -508,9 +520,9 @@ impl<'a> App for WorkspaceApp<'a> {
 /// state changed.
 pub fn enable_preset_definitions(
     core: &Core,
-    preset: &crate::application::workspace_preset::WorkspacePreset,
+    preset: &WorkspacePreset,
 ) -> Result<Vec<String>, OrbitError> {
-    core.runtime().enable_preset_definitions(preset)
+    preset::enable_preset_definitions(core.runtime(), preset)
 }
 
 /// Authorize, audit and run one workspace command.

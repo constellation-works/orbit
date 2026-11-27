@@ -582,18 +582,19 @@ wf_test!(
         );
         let cancel_path = |run_id: &str| format!("/api/runs/{run_id}/cancel?workspace={WS}");
         let cancel_audits = |run_id: &str| {
-            fixture
-                .runtime
-                .list_audit_events_filtered(&AuditEventFilter {
+            orbit_core::app::audit::list_audit_events_filtered(
+                &fixture.runtime,
+                &AuditEventFilter {
                     job_run_id: Some(run_id.to_string()),
                     limit: 50,
                     ..AuditEventFilter::default()
-                })
-                .unwrap()
-                .into_iter()
-                .filter_map(|event| event.tool_name)
-                .filter(|tool| tool.starts_with("pipeline.run.cancel"))
-                .collect::<Vec<_>>()
+                },
+            )
+            .unwrap()
+            .into_iter()
+            .filter_map(|event| event.tool_name)
+            .filter(|tool| tool.starts_with("pipeline.run.cancel"))
+            .collect::<Vec<_>>()
         };
         // Rendered queued, then started by the worker's start arbiter before the Cancel arrived.
         let mut owner = std::process::Command::new("sleep")

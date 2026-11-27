@@ -189,7 +189,7 @@ Do not substitute a live authenticated smoke for fixture coverage.
 
 ## Package and hand off managed assets
 
-`crates/orbit-core/assets/` is the canonical source for embedded executors and skills. A new executor asset needs the catalog registration in `DEFAULT_EXECUTOR_FILES`; a changed skill reference needs the matching `include_str!` registration in `crates/orbit-core/src/application/skill/catalog.rs::DEFAULT_SKILL_FILES` only when it adds a new file. Then materialize the committed plugin mirror from canonical assets:
+`crates/orbit-core/assets/` is the canonical source for embedded executors and skills. A new executor asset needs the catalog registration in `DEFAULT_EXECUTOR_FILES`; a changed skill reference needs the matching `include_str!` registration in `crates/orbit-core/src/app/skill/catalog.rs::DEFAULT_SKILL_FILES` only when it adds a new file. Then materialize the committed plugin mirror from canonical assets:
 
 ```bash
 ./scripts/sync-plugin-skills.sh

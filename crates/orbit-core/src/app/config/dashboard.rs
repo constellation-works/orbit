@@ -2,13 +2,13 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::DASHBOARD_CONFIG_SET;
 use serde_json::{Map, Value, json};
 
-use super::Outcome;
+use super::write::{
+    ConfigUnsetRefusal, ConfigWriteInit, ConfigWriteOutcome, GuardedConfigUnset, delete_crew,
+    set_crew, set_key, unset_key, unset_key_preserving_effective,
+};
+use super::{ConfigScope, Outcome};
 use crate::Core;
 use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
-use crate::application::config::{
-    ConfigScope, ConfigUnsetRefusal, ConfigWriteInit, ConfigWriteOutcome, GuardedConfigUnset,
-    delete_crew, set_crew, set_key, unset_key, unset_key_preserving_effective,
-};
 
 /// One dashboard configuration mutation.
 pub enum DashboardConfigWriteKind {

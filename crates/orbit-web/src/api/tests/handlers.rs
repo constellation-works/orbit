@@ -96,16 +96,16 @@ async fn successful_clock_change_with_failed_follow_up_read_is_audited_and_unkno
     );
     assert!(result["changed"].is_null());
 
-    let clock_audits = runtime
-        .list_audit_events(None, None, None, None, 20)
-        .expect("list audit events")
-        .into_iter()
-        .filter(|event| {
-            event.command == "dashboard.operations"
-                && event.target_type.as_deref() == Some(DASHBOARD_CLOCK_SERVICE.id)
-                && event.target_id.as_deref() == Some("clock")
-        })
-        .collect::<Vec<_>>();
+    let clock_audits =
+        orbit_core::app::audit::list_audit_events(&runtime, None, None, None, None, 20)
+            .expect("list audit events")
+            .into_iter()
+            .filter(|event| {
+                event.command == "dashboard.operations"
+                    && event.target_type.as_deref() == Some(DASHBOARD_CLOCK_SERVICE.id)
+                    && event.target_id.as_deref() == Some("clock")
+            })
+            .collect::<Vec<_>>();
     assert_eq!(clock_audits.len(), 1);
     assert_eq!(clock_audits[0].status, AuditEventStatus::Success);
     assert_eq!(clock_audits[0].error_message, None);
@@ -248,8 +248,7 @@ fn forged_clock_disable(machine_name: &str) -> Request<Body> {
 
 #[cfg(unix)]
 fn clock_audit_rows(runtime: &FixtureRuntime) -> Vec<orbit_types::telemetry::AuditEvent> {
-    runtime
-        .list_audit_events(None, None, None, None, 20)
+    orbit_core::app::audit::list_audit_events(runtime, None, None, None, None, 20)
         .expect("list audit events")
         .into_iter()
         .filter(|event| {

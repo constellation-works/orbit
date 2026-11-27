@@ -249,16 +249,15 @@ impl Fixture {
         });
         CHILD_PREPARED.with(|slot| slot.borrow_mut().take());
         std::fs::write(self.root.path().join(format!("ran-{child}")), "").unwrap();
-        let row = self
-            .runtime
-            .list_audit_events(None, None, None, None, 1000)
-            .unwrap()
-            .into_iter()
-            .find(|event| {
-                event.command == "pipeline.child_wait"
-                    && event.target_id.as_deref() == Some(child.as_str())
-            })
-            .unwrap_or_else(|| panic!("no pipeline.child_wait row for {child}"));
+        let row =
+            orbit_core::app::audit::list_audit_events(&self.runtime, None, None, None, None, 1000)
+                .unwrap()
+                .into_iter()
+                .find(|event| {
+                    event.command == "pipeline.child_wait"
+                        && event.target_id.as_deref() == Some(child.as_str())
+                })
+                .unwrap_or_else(|| panic!("no pipeline.child_wait row for {child}"));
         (child, row, output)
     }
 

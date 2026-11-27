@@ -35,14 +35,15 @@ fn incident_message_recovers_a_complete_copy_outside_the_evidence_preview() {
                     } else {
                         cut.clone()
                     });
-                    fixture.runtime.record_audit_event(&event).unwrap();
+                    orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
                 }
                 cases.push((run, cut, complete));
             }
-            let report = fixture
-                .runtime
-                .audit_failure_incidents(&FailureIncidentQuery::default())
-                .unwrap();
+            let report = orbit_core::app::audit::audit_failure_incidents(
+                &fixture.runtime,
+                &FailureIncidentQuery::default(),
+            )
+            .unwrap();
             let server = fixture.server(false);
             let payload =
                 json_ok(server.get("/api/audit/incidents?since=24h&workspace=ws_http_fixture"));
@@ -118,13 +119,14 @@ fn incident_list_bounds_repeated_evidence_and_keeps_exact_raw_drilldown() {
                     } else {
                         message.clone()
                     });
-                    fixture.runtime.record_audit_event(&event).unwrap();
+                    orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
                 }
             }
-            let report = fixture
-                .runtime
-                .audit_failure_incidents(&FailureIncidentQuery::default())
-                .unwrap();
+            let report = orbit_core::app::audit::audit_failure_incidents(
+                &fixture.runtime,
+                &FailureIncidentQuery::default(),
+            )
+            .unwrap();
             assert_eq!(report.incidents.len(), 2);
             let server = fixture.server(false);
             let payload = json_ok(server.get("/api/audit/incidents?since=24h&class=unexpected&limit=50&workspace=ws_http_fixture"));

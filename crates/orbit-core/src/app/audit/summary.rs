@@ -5,7 +5,7 @@ use orbit_store::contract::{
     FailureIncidentQuery, FailureIncidentReport,
 };
 
-use crate::application::audit_event::AuditPolicyDenialStats;
+use super::event::{self, AuditPolicyDenialStats};
 use crate::application::job::JobRunListParams;
 use crate::{Core, JobRunState};
 
@@ -59,20 +59,23 @@ pub(super) fn read(
     incident_scan_limit: usize,
 ) -> Result<AuditSummary, OrbitError> {
     let runtime = core.runtime();
-    let stats = runtime.audit_event_stats(Some(since), None)?;
-    let policy = runtime.audit_policy_denial_stats(Some(&since))?;
-    let incidents = runtime.audit_failure_incidents(&FailureIncidentQuery {
-        since: Some(since),
-        max_events: incident_scan_limit,
-        ..Default::default()
-    })?;
+    let stats = event::audit_event_stats(runtime, Some(since), None)?;
+    let policy = event::audit_policy_denial_stats(runtime, Some(&since))?;
+    let incidents = event::audit_failure_incidents(
+        runtime,
+        &FailureIncidentQuery {
+            since: Some(since),
+            max_events: incident_scan_limit,
+            ..Default::default()
+        },
+    )?;
     let failed_runs = count_failed_runs(core, since)?;
     let active_long_runs = count_active_long_runs(core, since)?;
-    let buckets = runtime.audit_event_hourly_buckets(&since)?;
-    let tool_aggs = runtime.audit_event_aggregates_by_tool(&since)?;
-    let tool_model_aggs = runtime.audit_event_aggregates_by_tool_model(&since)?;
-    let actor_aggs = runtime.audit_event_aggregates_by_actor(&since)?;
-    let attribution_aggs = runtime.audit_tool_call_counts_by_attribution(Some(&since))?;
+    let buckets = event::audit_event_hourly_buckets(runtime, &since)?;
+    let tool_aggs = event::audit_event_aggregates_by_tool(runtime, &since)?;
+    let tool_model_aggs = event::audit_event_aggregates_by_tool_model(runtime, &since)?;
+    let actor_aggs = event::audit_event_aggregates_by_actor(runtime, &since)?;
+    let attribution_aggs = event::audit_tool_call_counts_by_attribution(runtime, Some(&since))?;
 
     let mut by_avg: Vec<&AuditToolAggregate> = tool_aggs
         .iter()
@@ -86,8 +89,7 @@ pub(super) fn read(
     });
     let mut duration_by_tool = Vec::with_capacity(8);
     for tool in by_avg.iter().take(8) {
-        let p95 = runtime
-            .audit_event_stats(Some(since), Some(tool.tool_name.clone()))
+        let p95 = event::audit_event_stats(runtime, Some(since), Some(tool.tool_name.clone()))
             .map(|stats| stats.p95_duration_ms)
             .unwrap_or(0);
         duration_by_tool.push(AuditToolDuration {

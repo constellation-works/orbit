@@ -29,9 +29,9 @@ use orbit_types::identity::lower_hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::app::skill::DEFAULT_SKILL_FILES;
 use crate::application::executor::DEFAULT_EXECUTOR_FILES;
 use crate::application::job::DEFAULT_JOB_FILES;
-use crate::application::skill::DEFAULT_SKILL_FILES;
 use crate::bootstrap::policy::DEFAULT_POLICY_FILES;
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 

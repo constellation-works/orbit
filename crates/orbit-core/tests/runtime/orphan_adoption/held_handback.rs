@@ -498,8 +498,9 @@ fn a_stale_check_answer_hold_is_repaired_once_the_published_head_is_red() {
     // An Orbit-audited clean base refresh of the published head remains
     // eligible: the same identity guard passes when the audit links the head.
     let audited_head = "audited-head";
-    fx.runtime
-        .record_audit_event(&orbit_store::contract::AuditEventInsertParams {
+    orbit_core::app::audit::record_audit_event(
+        &fx.runtime,
+        &orbit_store::contract::AuditEventInsertParams {
             execution_id: format!("audit-pr-refresh-{}", red.number),
             command: "pr_refresh".to_string(),
             subcommand: Some("updated".to_string()),
@@ -544,8 +545,9 @@ fn a_stale_check_answer_hold_is_repaired_once_the_published_head_is_red() {
             job_run_id: None,
             activity_id: None,
             step_index: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     fx.blocked(&red, audited_head, "orbit-bot", false, &["Test shard 13"]);
     let audited = fx.pass(&drain, "done", true);
     let entry = started(&audited, &red.task).unwrap_or_else(|| panic!("{audited}"));

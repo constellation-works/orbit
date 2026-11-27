@@ -820,18 +820,19 @@ fn local_provider_outcome(detail: &str, class: Option<ProviderFailureClass>) {
         assert_eq!(hold.excluded_crews, ["fixture"]);
         assert_eq!(hold.run_id, run.run_id);
         assert!(hold.not_before > stored.finished_at.unwrap());
-        let deferred = fx
-            .runtime
-            .audit_failure_incidents(&orbit_store::contract::FailureIncidentQuery::default())
-            .unwrap()
-            .incidents
-            .into_iter()
-            .filter(|incident| {
-                incident.surface == orbit_store::contract::RUN_DEFERRED_SURFACE
-                    && incident.run_ids.contains(&run.run_id)
-            })
-            .map(|incident| incident.class)
-            .collect::<Vec<_>>();
+        let deferred = orbit_core::app::audit::audit_failure_incidents(
+            &fx.runtime,
+            &orbit_store::contract::FailureIncidentQuery::default(),
+        )
+        .unwrap()
+        .incidents
+        .into_iter()
+        .filter(|incident| {
+            incident.surface == orbit_store::contract::RUN_DEFERRED_SURFACE
+                && incident.run_ids.contains(&run.run_id)
+        })
+        .map(|incident| incident.class)
+        .collect::<Vec<_>>();
         assert_eq!(deferred, [orbit_store::contract::FailureClass::Deferred]);
         let replay_count = fx.runtime.get_task_history(&task).unwrap().len();
         orbit_core::test_support::EngineHost::new(&fx.runtime)

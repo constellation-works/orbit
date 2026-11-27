@@ -182,10 +182,8 @@ fn every_allowlisted_owner_call_reaches_the_owner_through_the_broker_on_the_clai
     let content: Vec<u8> = serde_json::from_value(put["artifacts"][0]["content"].clone()).unwrap();
     assert_eq!(content, br#"{"checked": true}"#);
 
-    let rows = fixture
-        .runtime
-        .list_audit_events(None, None, None, None, 50)
-        .unwrap();
+    let rows =
+        crate::app::audit::list_audit_events(&fixture.runtime, None, None, None, None, 50).unwrap();
     for (name, _) in &calls {
         assert!(
             rows.iter().any(|row| row.brokered

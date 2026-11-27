@@ -161,9 +161,15 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
             "a removed checkout's output is reclaimed"
         );
     }
-    let mut events = runtime
-        .list_audit_events(None, Some("worktree.reclaim".into()), None, None, 100)
-        .unwrap();
+    let mut events = orbit_core::app::audit::list_audit_events(
+        &runtime,
+        None,
+        Some("worktree.reclaim".into()),
+        None,
+        None,
+        100,
+    )
+    .unwrap();
     events.sort_by_key(|event| event.timestamp);
     let order = events
         .iter()
@@ -296,10 +302,16 @@ fn admission_skips_empty_terminal_history_without_git_and_detects_new_output() {
         );
     }
     assert!(
-        runtime
-            .list_audit_events(None, Some("worktree.reclaim".into()), None, None, 100)
-            .unwrap()
-            .is_empty()
+        orbit_core::app::audit::list_audit_events(
+            &runtime,
+            None,
+            Some("worktree.reclaim".into()),
+            None,
+            None,
+            100
+        )
+        .unwrap()
+        .is_empty()
     );
 
     // Positive control: the observer must see real collector calls, and a

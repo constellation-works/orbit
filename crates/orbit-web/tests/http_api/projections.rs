@@ -1260,7 +1260,8 @@ projections_test!(
     {
         use policy_denials_fixture::{RAW_DENIED_COUNT, SQL_POLICY_COUNT, V2_POLICY_COUNT};
         policy_denials_fixture::seed(&fixture.runtime);
-        let stats = fixture.runtime.audit_policy_denial_stats(None).unwrap();
+        let stats =
+            orbit_core::app::audit::audit_policy_denial_stats(&fixture.runtime, None).unwrap();
         check_eq!(stats.sql_denied => SQL_POLICY_COUNT; "SQL denial count");
         check_eq!(stats.v2_denied => V2_POLICY_COUNT; "V2 denial count");
         let counts: std::collections::BTreeMap<_, _> = stats.by_operation.into_iter().collect();

@@ -2,7 +2,20 @@
 //! reads and writes.
 
 mod dashboard;
+
+mod path;
+
+mod provenance;
+
+mod purpose;
+
 mod read;
+
+mod row;
+
+mod view;
+
+mod write;
 
 use std::path::PathBuf;
 
@@ -11,14 +24,21 @@ use serde_json::Value;
 
 use super::exec::{self, App, DashboardRow, Operation};
 use crate::Core;
-pub use crate::application::config::{
-    ConfigScope, ConfigUnsetRefusal, ConfigWriteInit, ConfigWriteOutcome, GuardedConfigUnset,
-    parse_config_scope,
-};
 pub use dashboard::{DashboardConfigWrite, DashboardConfigWriteKind, DashboardConfigWriteResult};
+pub use orbit_config::ConfigScope;
 pub use orbit_runtime::refuse_indirect_uninitialized_caller_orbit;
 pub use read::{
     ConfigGetResult, ConfigReadScope, ConfigShowData, ConfigShowRoots, ConfigShowWorkspaceBinding,
+};
+pub use view::parse_config_scope;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use view::{effective_view, file_view, key_catalog};
+pub use write::{ConfigUnsetRefusal, ConfigWriteInit, ConfigWriteOutcome, GuardedConfigUnset};
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use write::{
+    delete_crew, set_crew, set_key, set_key_literal, unset_key, unset_key_preserving_effective,
 };
 
 /// One configuration command, shared by the CLI and dashboard surfaces.
@@ -138,22 +158,16 @@ impl App for ConfigApp {
                 scope,
                 init,
             } => {
-                let outcome = crate::application::config::set_key_literal(
-                    runtime, &key, &value, scope, init,
-                )?;
+                let outcome = write::set_key_literal(runtime, &key, &value, scope, init)?;
                 Outcome::SetLiteral {
                     outcome,
                     global_root: runtime.global_root(),
                 }
             }
-            Command::Keys => Outcome::Keys(crate::application::config::key_catalog()),
+            Command::Keys => Outcome::Keys(view::key_catalog()),
             Command::Path { global } => Outcome::Path(read::config_path(core, global)?),
-            Command::EffectiveView => {
-                Outcome::View(crate::application::config::effective_view(runtime)?)
-            }
-            Command::FileView { scope } => {
-                Outcome::View(crate::application::config::file_view(runtime, scope)?)
-            }
+            Command::EffectiveView => Outcome::View(view::effective_view(runtime)?),
+            Command::FileView { scope } => Outcome::View(view::file_view(runtime, scope)?),
             Command::DashboardWrite(write) => {
                 Outcome::DashboardWritten(dashboard::write(core, write)?)
             }

@@ -160,7 +160,7 @@ fn audit_list_pages_through_the_window_by_cursor_and_keeps_filters() {
                 if id.starts_with("probe") {
                     event.role = "unverified".into();
                 }
-                fixture.runtime.record_audit_event(&event).unwrap();
+                orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
             }
             let server = fixture.server(false);
             // Every page's execution ids, in the order the cursor yields them.
@@ -223,19 +223,20 @@ fn family_drilldown_includes_model_roles_and_denials_before_paging() {
             ] {
                 let mut event = row(id, Some("orbit.task.show"), status);
                 event.role = role.into();
-                fixture.runtime.record_audit_event(&event).unwrap();
+                orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
             }
             // A whole newer SQL batch belongs to another family. Family and
             // status must be evaluated before offset/limit, across batches.
             for index in 0..225 {
-                fixture
-                    .runtime
-                    .record_audit_event(&row(
+                orbit_core::app::audit::record_audit_event(
+                    &fixture.runtime,
+                    &row(
                         &format!("other-family-{index}"),
                         Some("orbit.task.show"),
                         Failure,
-                    ))
-                    .unwrap();
+                    ),
+                )
+                .unwrap();
             }
             let server = fixture.server(false);
             let events = |query: &str| {
@@ -286,31 +287,33 @@ fn incident_audit_ids_return_all_requested_rows_with_workspace_scope() {
                 );
                 event.command = "task".into();
                 event.subcommand = Some("add".into());
-                fixture.runtime.record_audit_event(&event).unwrap();
+                orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
             }
-            fixture
-                .runtime
-                .record_audit_event(&row(
+            orbit_core::app::audit::record_audit_event(
+                &fixture.runtime,
+                &row(
                     "unrelated",
                     Some("orbit.task.show"),
                     AuditEventStatus::Success,
-                ))
-                .unwrap();
+                ),
+            )
+            .unwrap();
             let mut foreign = row(
                 "foreign-workspace",
                 Some("orbit.task.show"),
                 AuditEventStatus::Success,
             );
             foreign.workspace_id = Some("ws_other".into());
-            fixture.runtime.record_audit_event(&foreign).unwrap();
+            orbit_core::app::audit::record_audit_event(&fixture.runtime, &foreign).unwrap();
 
-            let stored = fixture
-                .runtime
-                .list_audit_events_filtered(&AuditEventFilter {
+            let stored = orbit_core::app::audit::list_audit_events_filtered(
+                &fixture.runtime,
+                &AuditEventFilter {
                     limit: 100,
                     ..AuditEventFilter::default()
-                })
-                .unwrap();
+                },
+            )
+            .unwrap();
             let target_ids = stored
                 .iter()
                 .filter(|event| event.execution_id.starts_with("incident-"))
@@ -365,7 +368,7 @@ fn incidents_carry_the_cause_one_failure_shares_across_surfaces() {
                 event.role = role.into();
                 event.job_run_id = Some(run.into());
                 event.error_message = Some(message.into());
-                fixture.runtime.record_audit_event(&event).unwrap();
+                orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
             }
 
             let payload = json_ok(
@@ -440,7 +443,7 @@ fn incident_messages_are_bounded_and_the_full_text_loads_by_audit_row() {
                 );
                 event.job_run_id = Some("run-long".into());
                 event.error_message = Some(message.clone());
-                fixture.runtime.record_audit_event(&event).unwrap();
+                orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
             }
             let server = fixture.server(false);
             let response = server.get("/api/audit/incidents?since=24h&workspace=ws_http_fixture");
@@ -513,14 +516,15 @@ fn failure_incident_scan_coverage_reports_truncation_against_the_cap() {
         "audit::failure_incident_scan_coverage_reports_truncation_against_the_cap",
         || {
             let fixture = Fixture::new();
-            fixture
-                .runtime
-                .record_audit_event(&row(
+            orbit_core::app::audit::record_audit_event(
+                &fixture.runtime,
+                &row(
                     "scan-0",
                     Some("orbit.workflow.run.list"),
                     AuditEventStatus::Failure,
-                ))
-                .unwrap();
+                ),
+            )
+            .unwrap();
             let server = fixture.server(false);
             let complete =
                 json_ok(server.get("/api/audit/summary?since=1h&workspace=ws_http_fixture"));
@@ -533,14 +537,15 @@ fn failure_incident_scan_coverage_reports_truncation_against_the_cap() {
             // or adding a test-only query path. Use another summary window to
             // avoid the first response's memoized bundle.
             for index in 1..=cap {
-                fixture
-                    .runtime
-                    .record_audit_event(&row(
+                orbit_core::app::audit::record_audit_event(
+                    &fixture.runtime,
+                    &row(
                         &format!("scan-{index}"),
                         Some("orbit.workflow.run.list"),
                         AuditEventStatus::Failure,
-                    ))
-                    .unwrap();
+                    ),
+                )
+                .unwrap();
             }
             let partial =
                 json_ok(server.get("/api/audit/summary?since=24h&workspace=ws_http_fixture"));
@@ -579,7 +584,7 @@ fn callable_failures_reconcile_raw_classified_and_denied_rows_with_events() {
                 if index == 0 {
                     event.workspace_id = Some("ws_other".into());
                 }
-                fixture.runtime.record_audit_event(&event).unwrap();
+                orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
             }
             for (id, tool, status, message) in [
                 ("denied-only", Some("orbit.friction.list"), Denied, None),
@@ -603,7 +608,7 @@ fn callable_failures_reconcile_raw_classified_and_denied_rows_with_events() {
             ] {
                 let mut event = row(id, tool, status);
                 event.error_message = message.map(str::to_string);
-                fixture.runtime.record_audit_event(&event).unwrap();
+                orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
             }
             for (id, command, subcommand) in [
                 ("authorization", "authorization", "run-mcp"),
@@ -612,7 +617,7 @@ fn callable_failures_reconcile_raw_classified_and_denied_rows_with_events() {
                 let mut event = row(id, Some(TOOL), Failure);
                 event.command = command.into();
                 event.subcommand = Some(subcommand.into());
-                fixture.runtime.record_audit_event(&event).unwrap();
+                orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
             }
             fixture
                 .runtime
@@ -679,13 +684,14 @@ fn callable_failures_reconcile_raw_classified_and_denied_rows_with_events() {
             let since = DateTime::parse_from_rfc3339(summary["since"].as_str().unwrap())
                 .unwrap()
                 .with_timezone(&Utc);
-            let incidents = fixture
-                .runtime
-                .audit_failure_incidents(&FailureIncidentQuery {
+            let incidents = orbit_core::app::audit::audit_failure_incidents(
+                &fixture.runtime,
+                &FailureIncidentQuery {
                     since: Some(since),
                     ..Default::default()
-                })
-                .unwrap();
+                },
+            )
+            .unwrap();
             for counts in rows {
                 let tool = counts["tool"].as_str().unwrap();
                 let events = json_ok(
@@ -871,20 +877,26 @@ fn inactive_tool_calls_are_denied_by_registry_and_audit_classifier() {
                 matches!(error, OrbitError::PolicyDenied(_)),
                 "inactive no-op toggle is a policy refusal: {error}"
             );
-            let events = fixture
-                .runtime
-                .list_audit_events(None, Some("orbit.friction.list".into()), None, None, 100)
-                .unwrap();
+            let events = orbit_core::app::audit::list_audit_events(
+                &fixture.runtime,
+                None,
+                Some("orbit.friction.list".into()),
+                None,
+                None,
+                100,
+            )
+            .unwrap();
             assert_eq!(
                 events.len(),
                 1,
                 "one runtime tool attempt produces one audit row"
             );
             assert_eq!(events[0].status, AuditEventStatus::Denied);
-            let report = fixture
-                .runtime
-                .audit_failure_incidents(&FailureIncidentQuery::default())
-                .unwrap();
+            let report = orbit_core::app::audit::audit_failure_incidents(
+                &fixture.runtime,
+                &FailureIncidentQuery::default(),
+            )
+            .unwrap();
             assert_eq!(report.incidents.len(), 1);
             assert_eq!(report.incidents[0].class, FailureClass::Denied);
             assert_eq!(report.raw_events_by_class["denied"], 1);
@@ -902,7 +914,7 @@ fn duration_ranking_excludes_unnamed_events_before_selecting_top_tools() {
                 let tool = format!("fixture.tool.{index}");
                 let mut event = row(&tool, Some(&tool), AuditEventStatus::Success);
                 event.duration_ms = (index + 1) * 100;
-                fixture.runtime.record_audit_event(&event).unwrap();
+                orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
             }
             for (index, tool) in [None, Some(""), Some(" "), Some("unknown")]
                 .into_iter()
@@ -911,7 +923,7 @@ fn duration_ranking_excludes_unnamed_events_before_selecting_top_tools() {
                 let mut event = row(&format!("unnamed-{index}"), tool, AuditEventStatus::Success);
                 event.command = "job-run".into();
                 event.duration_ms = 90_000;
-                fixture.runtime.record_audit_event(&event).unwrap();
+                orbit_core::app::audit::record_audit_event(&fixture.runtime, &event).unwrap();
             }
             let server = fixture.server(false);
             let summary =
@@ -941,14 +953,15 @@ fn zero_limit_returns_an_empty_page_with_and_without_predicates() {
             // More than the 200-row HTTP maximum, so a fallthrough to the
             // store's internal default is visible as more than one page.
             for index in 0..250 {
-                fixture
-                    .runtime
-                    .record_audit_event(&row(
+                orbit_core::app::audit::record_audit_event(
+                    &fixture.runtime,
+                    &row(
                         &format!("zero-{index}"),
                         Some("orbit.task.show"),
                         AuditEventStatus::Success,
-                    ))
-                    .unwrap();
+                    ),
+                )
+                .unwrap();
             }
             let server = fixture.server(false);
             let response = server.get("/api/audit?workspace=ws_http_fixture&since=24h&limit=0");

@@ -231,10 +231,11 @@ fn lease_routes_share_runtime_state_and_gate_writes() {
             // workspace is opened: the answer is the same 403 for a workspace
             // that does not exist, and the refusal writes no audit row.
             let denied_rows = || {
-                runtime
-                    .list_audit_events_with_kind(None, None, None, None, None, 200)
-                    .unwrap()
-                    .len()
+                orbit_core::app::audit::list_audit_events_with_kind(
+                    &runtime, None, None, None, None, None, 200,
+                )
+                .unwrap()
+                .len()
             };
             let rows_before = denied_rows();
             let denial = error_code(

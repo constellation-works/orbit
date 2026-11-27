@@ -111,9 +111,15 @@ fn a_call_carries_its_own_declared_secrets_and_the_audit_row_names_them() {
     );
 
     let rows = |tool: &str| {
-        runtime
-            .list_audit_events(None, Some(tool.to_string()), None, None, 10)
-            .expect("audit events")
+        orbit_core::app::audit::list_audit_events(
+            &runtime,
+            None,
+            Some(tool.to_string()),
+            None,
+            None,
+            10,
+        )
+        .expect("audit events")
     };
     let demo_rows = rows("demo.hello");
     assert_eq!(demo_rows.len(), 1);

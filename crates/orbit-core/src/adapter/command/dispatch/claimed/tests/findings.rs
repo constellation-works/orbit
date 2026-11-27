@@ -152,10 +152,15 @@ fn a_claimed_implementer_reads_every_finding_on_the_candidate_it_resumes() {
         assert_eq!(input["id"], TASK, "{input}");
         assert_eq!(session.worker_invocation.as_ref(), Some(&fixture.binding));
     }
-    let rows = fixture
-        .runtime
-        .list_audit_events(None, Some(GET.to_string()), None, None, 20)
-        .unwrap();
+    let rows = crate::app::audit::list_audit_events(
+        &fixture.runtime,
+        None,
+        Some(GET.to_string()),
+        None,
+        None,
+        20,
+    )
+    .unwrap();
     assert!(
         !rows.is_empty()
             && rows.iter().all(|row| row.brokered

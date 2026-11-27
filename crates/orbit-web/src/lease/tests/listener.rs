@@ -486,9 +486,8 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
     let trace_output = String::from_utf8(trace.0.lock().unwrap().clone()).unwrap();
     assert!(!trace_output.contains(&alice));
     assert!(!trace_output.contains(&format!("%6F{}", &alice[1..])));
-    let events = runtime
-        .list_audit_events(None, None, None, None, 100)
-        .unwrap();
+    let events =
+        orbit_core::app::audit::list_audit_events(&runtime, None, None, None, None, 100).unwrap();
     let intake: Vec<_> = events
         .iter()
         .filter(|event| {

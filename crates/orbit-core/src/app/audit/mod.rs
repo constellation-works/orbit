@@ -1,6 +1,8 @@
 //! The audit app: `orbit audit`, `orbit log tail`, and the dashboard's audit
 //! listing, summary and denial read models.
 
+mod event;
+
 mod summary;
 
 use std::ffi::OsStr;
@@ -15,9 +17,21 @@ use orbit_types::workflow::activity_job::V2_DENIAL_EVENT_TYPES;
 
 use super::exec::{self, App, Operation};
 use crate::Core;
-pub use crate::application::audit_event::{
+pub use event::{
     AuditListingColumns, AuditListingExactIds, AuditListingHttpWindow, AuditListingPage,
     AuditListingPredicates, AuditListingProfile, AuditPolicyDenialStats,
+};
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use event::{
+    audit_denials_by_operation, audit_event_count, audit_event_stats, audit_failure_incidents,
+    audit_policy_denial_stats, list_audit_events, list_audit_events_by_ids,
+    list_audit_events_filtered, list_audit_events_with_kind, record_audit_event,
+};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use event::{
+    audit_event_count, audit_failure_incidents, list_audit_events_by_ids,
+    list_audit_events_filtered, record_audit_event,
 };
 pub use orbit_store::contract::V2AuditEventRow;
 pub use summary::{AuditSummary, AuditToolDuration};
@@ -223,20 +237,23 @@ impl App for AuditApp {
         let runtime = core.runtime();
         Ok(match command {
             Command::List { columns, profile } => {
-                Outcome::Listed(runtime.audit_listing_page(*columns, profile)?)
+                Outcome::Listed(event::audit_listing_page(runtime, *columns, profile)?)
             }
             Command::Show { id, callback_limit } => {
-                let event = runtime.show_audit_event(id)?;
+                let event = event::show_audit_event(runtime, id)?;
                 let (callbacks, callbacks_incomplete) = if event
                     .application
                     .as_ref()
                     .is_some_and(|application| !application.callback)
                 {
-                    let mut callbacks = runtime.list_audit_events_filtered(&AuditEventFilter {
-                        application_entry_execution_id: Some(event.execution_id.clone()),
-                        limit: callback_limit + 1,
-                        ..AuditEventFilter::default()
-                    })?;
+                    let mut callbacks = event::list_audit_events_filtered(
+                        runtime,
+                        &AuditEventFilter {
+                            application_entry_execution_id: Some(event.execution_id.clone()),
+                            limit: callback_limit + 1,
+                            ..AuditEventFilter::default()
+                        },
+                    )?;
                     let incomplete = callbacks.len() > callback_limit;
                     callbacks.truncate(callback_limit);
                     callbacks.reverse();
@@ -251,11 +268,11 @@ impl App for AuditApp {
                 }))
             }
             Command::Export { since, tool } => {
-                Outcome::Exported(runtime.export_audit_events(since, tool)?)
+                Outcome::Exported(event::export_audit_events(runtime, since, tool)?)
             }
             Command::Stats { since, tool } => {
-                let stats = runtime.audit_event_stats(since, tool)?;
-                let policy_denials = runtime.audit_policy_denial_stats(since.as_ref())?;
+                let stats = event::audit_event_stats(runtime, since, tool)?;
+                let policy_denials = event::audit_policy_denial_stats(runtime, since.as_ref())?;
                 Outcome::Stats {
                     stats,
                     policy_denials,
@@ -276,7 +293,7 @@ impl App for AuditApp {
                     )
                     .into());
                 }
-                Outcome::Pruned(runtime.prune_audit_events(&cutoff)?)
+                Outcome::Pruned(event::prune_audit_events(runtime, &cutoff)?)
             }
             Command::Summary {
                 since,
@@ -297,14 +314,15 @@ impl App for AuditApp {
                         ..Default::default()
                     })?);
                 }
-                let sqlite_events = runtime.list_audit_events(
+                let sqlite_events = event::list_audit_events(
+                    runtime,
                     since,
                     None,
                     Some(AuditEventStatus::Denied),
                     agent_filter,
                     scan_limit,
                 )?;
-                let policy_decisions = runtime.audit_policy_denial_stats(since.as_ref())?;
+                let policy_decisions = event::audit_policy_denial_stats(runtime, since.as_ref())?;
                 Outcome::Denials(Box::new(AuditDenialsData {
                     v2_events,
                     sqlite_events,

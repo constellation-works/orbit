@@ -60,13 +60,19 @@ fn resident_tasks(fixture: &Fixture) -> usize {
 }
 
 fn audits(fixture: &Fixture, operation: &str, status: AuditEventStatus) -> usize {
-    fixture
-        .runtime
-        .list_audit_events_with_kind(None, None, Some(operation.into()), Some(status), None, 50)
-        .unwrap()
-        .iter()
-        .filter(|event| event.command == "dashboard.operations")
-        .count()
+    orbit_core::app::audit::list_audit_events_with_kind(
+        &fixture.runtime,
+        None,
+        None,
+        Some(operation.into()),
+        Some(status),
+        None,
+        50,
+    )
+    .unwrap()
+    .iter()
+    .filter(|event| event.command == "dashboard.operations")
+    .count()
 }
 
 fn create(server: &super::support::Server, goal: &str) -> String {
@@ -542,17 +548,16 @@ fn dashboard_mixed_grant_reports_applied_widening_when_deadline_is_refused() {
                         .unwrap()
                         .is_empty()
                 );
-                let events = fixture
-                    .runtime
-                    .list_audit_events_with_kind(
-                        None,
-                        None,
-                        Some("resident.grant".into()),
-                        Some(AuditEventStatus::Failure),
-                        None,
-                        50,
-                    )
-                    .unwrap();
+                let events = orbit_core::app::audit::list_audit_events_with_kind(
+                    &fixture.runtime,
+                    None,
+                    None,
+                    Some("resident.grant".into()),
+                    Some(AuditEventStatus::Failure),
+                    None,
+                    50,
+                )
+                .unwrap();
                 let event = events
                     .iter()
                     .find(|event| {
@@ -628,17 +633,16 @@ fn dashboard_mixed_grant_with_already_held_widening_reports_unchanged_when_deadl
                 assert_eq!(shown["mandate"]["deadline"], "2030-01-01T00:00:00Z");
             }
 
-            let events = fixture
-                .runtime
-                .list_audit_events_with_kind(
-                    None,
-                    None,
-                    Some("resident.grant".into()),
-                    Some(AuditEventStatus::Failure),
-                    None,
-                    50,
-                )
-                .unwrap();
+            let events = orbit_core::app::audit::list_audit_events_with_kind(
+                &fixture.runtime,
+                None,
+                None,
+                Some("resident.grant".into()),
+                Some(AuditEventStatus::Failure),
+                None,
+                50,
+            )
+            .unwrap();
             let messages: Vec<&str> = events
                 .iter()
                 .filter(|event| {

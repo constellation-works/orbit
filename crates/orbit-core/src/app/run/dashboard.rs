@@ -106,7 +106,7 @@ dashboard_reads! {
         |rt| rt.list_v2_audit_events(filter);
     /// The audit events with the given ids.
     audit_events_by_ids(ids: &'a [i64]) -> Vec<AuditEvent> = "audit-events-by-ids",
-        |rt| rt.list_audit_events_by_ids(ids, None);
+        |rt| crate::app::audit::list_audit_events_by_ids(rt, ids, None);
     /// A run's audit steps, one per attempt.
     audit_step_attempts(run_id: &'a str) -> Vec<RunAuditStep> = "audit-step-attempts",
         |rt| rt.collect_run_audit_step_attempts(run_id);
@@ -331,10 +331,10 @@ dashboard_reads! {
     /// The failure incidents the audit trail records.
     failure_incidents(query: &'a FailureIncidentQuery) -> FailureIncidentReport
         = "failure-incidents",
-        |rt| rt.audit_failure_incidents(query);
+        |rt| crate::app::audit::audit_failure_incidents(rt, query);
     /// How many audit events were recorded since `since`.
     audit_event_count(since: Option<DateTime<Utc>>) -> i64 = "audit-event-count",
-        |rt| rt.audit_event_count(since);
+        |rt| crate::app::audit::audit_event_count(rt, since);
     /// The facts fleet readiness is judged from.
     fleet_readiness_facts() -> FleetReadinessFacts = "fleet-readiness-facts",
         |rt| Ok(rt.fleet_readiness_facts());

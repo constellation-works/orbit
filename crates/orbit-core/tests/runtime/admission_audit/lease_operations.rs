@@ -92,12 +92,19 @@ fn holder_ids(conflicts: &Value) -> Vec<(String, String)> {
 }
 
 fn lease_audit_commands(runtime: &OrbitRuntime) -> Vec<String> {
-    runtime
-        .list_audit_events_with_kind(None, None, Some("lease".into()), None, None, 200)
-        .expect("list lease audit events")
-        .into_iter()
-        .map(|event| event.command)
-        .collect()
+    orbit_core::app::audit::list_audit_events_with_kind(
+        runtime,
+        None,
+        None,
+        Some("lease".into()),
+        None,
+        None,
+        200,
+    )
+    .expect("list lease audit events")
+    .into_iter()
+    .map(|event| event.command)
+    .collect()
 }
 
 /// Move a lease's `expires_at` into the past without ending it.

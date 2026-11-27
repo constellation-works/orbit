@@ -451,17 +451,16 @@ fn operator_handoff_audit_never_contains_unbounded_or_invalid_reason_or_key() {
                 }
             }
             for operation in operations {
-                let events = fixture
-                    .runtime
-                    .list_audit_events_with_kind(
-                        None,
-                        None,
-                        Some(operation.to_string()),
-                        None,
-                        None,
-                        100,
-                    )
-                    .expect("list audit events");
+                let events = orbit_core::app::audit::list_audit_events_with_kind(
+                    &fixture.runtime,
+                    None,
+                    None,
+                    Some(operation.to_string()),
+                    None,
+                    None,
+                    100,
+                )
+                .expect("list audit events");
                 let rows: Vec<_> = events
                     .iter()
                     .filter(|event| event.command == "dashboard.operations")
@@ -505,17 +504,16 @@ fn operator_handoff_audit_never_contains_unbounded_or_invalid_reason_or_key() {
                     "{operation} valid audit should hold trimmed reason: {rows:?}"
                 );
             }
-            let retry_rows = fixture
-                .runtime
-                .list_audit_events_with_kind(
-                    None,
-                    None,
-                    Some("handoff.retry".to_string()),
-                    None,
-                    None,
-                    100,
-                )
-                .expect("list retry audit events");
+            let retry_rows = orbit_core::app::audit::list_audit_events_with_kind(
+                &fixture.runtime,
+                None,
+                None,
+                Some("handoff.retry".to_string()),
+                None,
+                None,
+                100,
+            )
+            .expect("list retry audit events");
             assert!(
                 retry_rows.iter().any(|event| {
                     event

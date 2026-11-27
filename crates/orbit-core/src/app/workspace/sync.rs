@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::app::routine::RoutineSeedIdentity;
 use crate::app::routine::reconcile_default_routines_for_policy;
+use crate::app::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
 use crate::application::auto_tasks::demoted::release_demoted_auto_tasks;
 use crate::application::auto_tasks::retired::retire_replaced_auto_tasks;
 use crate::application::auto_tasks::settings::migrate_settings_only_forks;
@@ -25,7 +26,6 @@ use crate::application::managed_assets::{
     reconcile_managed_assets_left_out,
 };
 use crate::application::seeding_policy::{seeded_defaults, workspace_seeding_policies};
-use crate::application::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
 use crate::application::tool_name_migration::heal_workspace_sync_auto_task_catalog;
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
