@@ -406,7 +406,8 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
     );
     assert_eq!(mixed["code"], "invalid_input", "{mixed}");
     assert_eq!(
-        mixed["message"], "invalid input: unknown field 'input'",
+        mixed["message"],
+        "invalid input: unknown field 'input'. Valid values: workspace, job_name, default_input, model",
         "the mixed form is refused before the disabled job is consulted: {mixed}"
     );
     client.call_tool_err(

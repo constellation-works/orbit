@@ -31,6 +31,16 @@ fn tool_run_input_misses_return_actionable_suggestions() {
         .assert()
         .success();
 
+    let run_tool_refusal = |tool: &str, input: &Value| {
+        let output = command()
+            .args(["tool", "run", tool, "--input", &input.to_string(), "--json"])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty(), "{output:?}");
+        serde_json::from_slice::<Value>(&output.stderr).expect("JSON tool error")
+    };
     // GitHub builtins have no MCP scope, so both stay here. The shared table
     // still feeds the MCP matrix; this loop keeps one id miss, one type miss,
     // and one search-status miss so the CLI entry point stays covered.
@@ -38,22 +48,7 @@ fn tool_run_input_misses_return_actionable_suggestions() {
         .iter()
         .filter(|case| cli_keeps_shared_hint_case(case))
     {
-        let output = command()
-            .args([
-                "tool",
-                "run",
-                case.tool,
-                "--input",
-                &case.input.to_string(),
-                "--format",
-                "json",
-            ])
-            .assert()
-            .failure()
-            .get_output()
-            .clone();
-        assert!(output.stdout.is_empty(), "{output:?}");
-        let error: Value = serde_json::from_slice(&output.stderr).expect("JSON tool error");
+        let error = run_tool_refusal(case.tool, &case.input);
         tool_input_hint_cases::assert_hint(case, &error, "error");
         if case.tool == "orbit.search" {
             for suggestion in &case.suggestions {
@@ -65,6 +60,44 @@ fn tool_run_input_misses_return_actionable_suggestions() {
                     .success();
             }
         }
+    }
+
+    let listed = command()
+        .args(["tool", "list", "--json"])
+        .assert()
+        .success();
+    let tools: Vec<Value> =
+        serde_json::from_slice(&listed.get_output().stdout).expect("tool list JSON");
+    for (tool, field, input) in [
+        ("orbit.task.list", "all", json!({"all": true})),
+        ("orbit.search", "scope", json!({"scope": "all"})),
+        (
+            "github.run.logs",
+            "failed_only",
+            json!({"run": "123", "failed_only": true}),
+        ),
+    ] {
+        let schema = tools
+            .iter()
+            .find(|entry| entry["name"] == tool)
+            .expect(tool);
+        let fields = schema["parameters"]
+            .as_array()
+            .expect("schema parameters")
+            .iter()
+            .map(|param| param["name"].as_str().expect("parameter name"))
+            .collect::<Vec<_>>();
+        let error = run_tool_refusal(tool, &input);
+        assert_eq!(error["code"], "invalid_input", "{tool}");
+        assert_eq!(
+            error["error"],
+            format!(
+                "invalid input: unknown field '{field}'. Valid values: {}",
+                fields.join(", ")
+            ),
+            "{tool}"
+        );
+        assert!(error.get("did_you_mean").is_none(), "{error}");
     }
 }
 

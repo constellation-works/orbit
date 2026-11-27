@@ -1,7 +1,9 @@
 use orbit_common::OrbitError;
+use orbit_common::protocol::tool_input;
 use serde_json::{Value, json};
 
 use super::super::logs::{LogReadBounds, RunLogRequests, read_run_log_guarded};
+use crate::Tool;
 
 /// Default excerpt size. Small enough that a routine failed-step read costs an
 /// executing agent a few thousand tokens rather than its whole context.
@@ -22,21 +24,13 @@ impl GithubRunLogsTool {
         ctx: &crate::ToolContext,
         input: &Value,
     ) -> Result<RunLogRequests, OrbitError> {
-        orbit_common::protocol::tool_input::reject_unknown_tool_fields(
-            input,
-            &[
-                "run",
-                "job",
-                "scope",
-                "max_bytes",
-                "repo",
-                "step",
-                "byte_start",
-                "byte_end",
-                "line_start",
-                "line_end",
-            ],
-        )?;
+        let schema = self.schema();
+        let fields = schema
+            .parameters
+            .iter()
+            .map(|param| param.name.as_str())
+            .collect::<Vec<_>>();
+        tool_input::reject_unknown_tool_fields(input, &fields)?;
         let requests = RunLogRequests::from_input(input)?
             .with_log_cache(super::super::log_cache::LogCache::in_data_root(&ctx.env));
         Ok(match super::super::tool_workspace_dir(ctx) {
@@ -46,7 +40,7 @@ impl GithubRunLogsTool {
     }
 }
 
-impl crate::Tool for GithubRunLogsTool {
+impl Tool for GithubRunLogsTool {
     fn schema(&self) -> orbit_types::tool::ToolSchema {
         super::super::gh_schema(
             "github.run.logs",

@@ -18,11 +18,12 @@ pub const TOOL_INPUT_TRANSPORT_WRAPPER_KEYS: &[&str] = &["_meta", "workspace", "
 /// not an identity key; operations that used to accept it refuse it.
 pub const TOOL_INPUT_IDENTITY_KEYS: &[&str] = &["model"];
 
-/// Refuse unknown top-level tool-argument keys with a did-you-mean hint.
+/// Refuse unknown top-level tool-argument keys with corrective guidance.
 ///
 /// Transport wrappers in [`TOOL_INPUT_TRANSPORT_WRAPPER_KEYS`] are ignored.
 /// All unknown keys are reported; a close match against `allowed` is
-/// included in the message and on [`OrbitError::did_you_mean`].
+/// included in the message and on [`OrbitError::did_you_mean`]. Without a
+/// close match, the message lists the allowed names when available.
 pub fn reject_unknown_tool_fields(input: &Value, allowed: &[&str]) -> Result<(), OrbitError> {
     let Some(object) = input.as_object() else {
         return Ok(());
@@ -40,25 +41,40 @@ pub fn reject_unknown_tool_fields(input: &Value, allowed: &[&str]) -> Result<(),
         return Ok(());
     }
 
+    Err(unknown_tool_fields_error(&unknown, allowed, allowed))
+}
+
+pub(crate) fn unknown_tool_fields_error(
+    unknown: &[String],
+    suggestion_fields: &[&str],
+    schema_fields: &[&str],
+) -> OrbitError {
     let suggestion = unknown
         .iter()
-        .filter_map(|key| suggest_tool_field(key, allowed))
+        .filter_map(|key| suggest_tool_field(key, suggestion_fields))
         // Schema order keeps identifier corrections ahead of new artifact
         // metadata hints, regardless of the JSON object's key ordering.
-        .min_by_key(|suggestion| allowed.iter().position(|name| name == suggestion));
-    let message = unknown_tool_field_message(&unknown, suggestion);
-    Err(OrbitError::invalid_input_with_suggestions(
-        message,
+        .min_by_key(|suggestion| suggestion_fields.iter().position(|name| name == suggestion));
+    OrbitError::invalid_input_with_suggestions(
+        unknown_tool_field_message(unknown, suggestion, schema_fields),
         suggestion
             .map(|name| vec![name.to_string()])
             .unwrap_or_default(),
-    ))
+    )
 }
 
-fn unknown_tool_field_message(unknown: &[String], suggestion: Option<&str>) -> String {
-    let hint = suggestion
-        .map(|name| format!(" (did you mean '{name}'?)"))
-        .unwrap_or_default();
+fn unknown_tool_field_message(
+    unknown: &[String],
+    suggestion: Option<&str>,
+    schema_fields: &[&str],
+) -> String {
+    let hint = match suggestion {
+        Some(name) => format!(" (did you mean '{name}'?)"),
+        None if !schema_fields.is_empty() => {
+            format!(". Valid values: {}", schema_fields.join(", "))
+        }
+        None => String::new(),
+    };
     if unknown.len() == 1 {
         format!("unknown field '{}'{}", unknown[0], hint)
     } else {
@@ -169,7 +185,7 @@ pub fn missing_tool_field(input: &Value, canonical: &str) -> OrbitError {
         return OrbitError::invalid_input_with_suggestions(
             format!(
                 "missing `{canonical}`; {}",
-                unknown_tool_field_message(std::slice::from_ref(unknown), Some(canonical)),
+                unknown_tool_field_message(std::slice::from_ref(unknown), Some(canonical), &[]),
             ),
             vec![canonical.to_string()],
         );
