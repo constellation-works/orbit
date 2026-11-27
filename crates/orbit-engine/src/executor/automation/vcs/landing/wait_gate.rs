@@ -27,7 +27,16 @@ pub fn landing_wait_gate_cleared<H: HostEnvironment + RuntimeHostProcessEnvironm
     };
     let workspace = &context.workspace_path;
     let pr = number.to_string();
-    let status = read_pr_status(host, workspace, &pr)?;
+    let status = match read_pr_status(host, workspace, &pr) {
+        Ok(status) => status,
+        Err(error)
+            if gate == LandingWaitGate::ForgeObservationUnavailable
+                && super::run::transport_failure(&error) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
     if status.head_sha.as_deref() != Some(&context.candidate.candidate.commit)
         && super::super::checks::verify_published_base_update(
             &host.process_env(),
@@ -118,6 +127,19 @@ pub fn landing_wait_gate_cleared<H: HostEnvironment + RuntimeHostProcessEnvironm
                 deadline_ms,
             );
         }
+    }
+    if gate == LandingWaitGate::ForgeObservationUnavailable {
+        let mut unreported = UnreportedChecks::new();
+        return Ok(checked_pr_state(
+            host,
+            workspace,
+            &pr,
+            &status,
+            BlockedCheckWait::Owner(&context.owed_hosted_checks),
+            &mut unreported,
+            None,
+        )
+        .is_ok());
     }
     let mut unreported = UnreportedChecks::new();
     let state = checked_pr_state(

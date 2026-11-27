@@ -3,7 +3,8 @@
 use orbit_common::OrbitError;
 use orbit_types::workflow::DeliveryRefusal;
 use orbit_types::workflow::handoff::{
-    HandoffCandidate, LandingWaitGate, OwnerLandingRefusal, OwnerLandingRefusalKind,
+    HandoffCandidate, HandoffDelivery, LandingWaitGate, OwnerLandingRefusal,
+    OwnerLandingRefusalKind,
 };
 use serde_json::{Value, json};
 
@@ -132,6 +133,14 @@ pub(super) fn hold_pr<H: ReviewGate + ?Sized>(
                 if observation.get("log_read_gap").is_some() =>
             {
                 Some(LandingWaitGate::JobLogsUnavailable)
+            }
+            DeliveryRefusal::ForgeObservationUnavailable
+                if matches!(
+                    context.candidate.delivery,
+                    HandoffDelivery::PullRequest { .. }
+                ) && observation.get("transport_retry_exhausted").is_some() =>
+            {
+                Some(LandingWaitGate::ForgeObservationUnavailable)
             }
             _ => None,
         },

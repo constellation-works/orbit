@@ -120,6 +120,8 @@ pub enum LandingWaitGate {
     RequiredChecksPending,
     /// Failed-job logs must become readable before the failure can be classified.
     JobLogsUnavailable,
+    /// The forge must answer read-only observation queries again before landing resumes.
+    ForgeObservationUnavailable,
 }
 
 impl LandingWaitGate {
@@ -128,7 +130,9 @@ impl LandingWaitGate {
         match self {
             Self::BaseChecksPending => "delivery_base_checks_pending",
             Self::RequiredChecksPending => "delivery_requirements_unsatisfied",
-            Self::JobLogsUnavailable => "delivery_forge_observation_unavailable",
+            Self::JobLogsUnavailable | Self::ForgeObservationUnavailable => {
+                "delivery_forge_observation_unavailable"
+            }
         }
     }
 }

@@ -138,14 +138,19 @@ impl WaitingOwner {
     /// Run the public landing action against the current forge phase. It must
     /// refuse, leaving the stopped attempt production recorded.
     fn land_refused(&self, context: &str) {
-        let result = orbit_engine::execute_deterministic_action(
-            &orbit_core::test_support::EngineHost::new(&self.owner.pair.wire.owner),
-            "handoff_land",
-            &json!({}),
-            &json!({"handoff_id":self.handoff, "max_wait_seconds":0}),
-            false,
-            &Default::default(),
-            None,
+        let result = orbit_engine::test_support::with_vcs_retry_wait(
+            |_| {},
+            || {
+                orbit_engine::execute_deterministic_action(
+                    &orbit_core::test_support::EngineHost::new(&self.owner.pair.wire.owner),
+                    "handoff_land",
+                    &json!({}),
+                    &json!({"handoff_id":self.handoff, "max_wait_seconds":0}),
+                    false,
+                    &Default::default(),
+                    None,
+                )
+            },
         );
         assert!(
             result.is_err(),
@@ -183,27 +188,65 @@ impl WaitingOwner {
 }
 
 fn waiting_gates_resume_and_land_the_same_handoff() {
-    for gate in [
-        LandingWaitGate::BaseChecksPending,
-        LandingWaitGate::RequiredChecksPending,
+    for (gate, pending_phase, recovered_phase) in [
+        (
+            LandingWaitGate::BaseChecksPending,
+            "base_pending",
+            "base_green",
+        ),
+        (LandingWaitGate::RequiredChecksPending, "pending", "green"),
+        (
+            LandingWaitGate::ForgeObservationUnavailable,
+            "transient_status",
+            "green",
+        ),
+        (
+            LandingWaitGate::ForgeObservationUnavailable,
+            "transient_checks",
+            "green",
+        ),
     ] {
         let fixture = WaitingOwner::new();
-        fixture.phase(if gate == LandingWaitGate::BaseChecksPending {
-            "base_pending"
-        } else {
-            "pending"
-        });
+        fixture.phase(pending_phase);
         let stopped = fixture.stop(gate);
         let due = stopped.updated_at + TimeDelta::seconds(60);
+        if gate == LandingWaitGate::ForgeObservationUnavailable {
+            let evidence: Value =
+                serde_json::from_str(stopped.evidence.as_deref().unwrap()).unwrap();
+            let reason = evidence["reason"]["value"].as_str().unwrap();
+            assert!(
+                reason.contains("waiting-gate")
+                    && reason.contains("orbit task retry-handoff")
+                    && !reason.contains("orbit job resume")
+                    && !reason.contains("resuming the held run"),
+                "held stop reason must describe waiting-gate/handoff retry: {reason}"
+            );
+            let host = orbit_core::test_support::EngineHost::new(&fixture.owner.pair.wire.owner);
+            let context =
+                orbit_engine::ReviewGate::handoff_landing_context(&host, &fixture.handoff).unwrap();
+            assert!(
+                !orbit_engine::landing_wait_gate_cleared(&host, &context, gate).unwrap(),
+                "{pending_phase}: waiting gate must stay closed while the forge is unavailable"
+            );
+        }
         assert!(
             fixture.dispatch(due).is_empty(),
             "unchanged pending gate consumes no attempt"
         );
-        fixture.phase(if gate == LandingWaitGate::BaseChecksPending {
-            "base_green"
-        } else {
-            "green"
-        });
+        fixture.phase(recovered_phase);
+        if gate == LandingWaitGate::ForgeObservationUnavailable {
+            let host = orbit_core::test_support::EngineHost::new(&fixture.owner.pair.wire.owner);
+            let context =
+                orbit_engine::ReviewGate::handoff_landing_context(&host, &fixture.handoff).unwrap();
+            assert!(
+                orbit_engine::landing_wait_gate_cleared(&host, &context, gate).unwrap(),
+                "{pending_phase}: waiting gate must clear once the forge responds"
+            );
+            assert!(
+                !fixture.forge.join("merged").exists(),
+                "waiting-gate probe must not mutate the forge"
+            );
+        }
         assert!(
             fixture
                 .dispatch(due - TimeDelta::milliseconds(1))
@@ -214,7 +257,7 @@ fn waiting_gates_resume_and_land_the_same_handoff() {
         assert_eq!(
             retried.len(),
             1,
-            "cleared {gate:?} resumes without an operator"
+            "cleared {gate:?} ({pending_phase}) resumes without an operator"
         );
         assert_eq!(retried[0].handoff_id, fixture.handoff);
         assert_eq!(retried[0].attempt, 2);
@@ -266,42 +309,50 @@ fn waiting_gates_resume_and_land_the_same_handoff() {
 }
 
 fn waiting_retries_are_bounded_and_candidate_stops_stay_parked() {
-    let fixture = WaitingOwner::new();
-    for number in 1..=4 {
-        fixture.phase("pending");
-        let stopped = fixture.stop(LandingWaitGate::RequiredChecksPending);
-        assert_eq!(stopped.attempt, number);
-        fixture.phase("green");
-        let due = stopped.updated_at + TimeDelta::seconds(60 * (1_i64 << (number - 1)));
-        assert!(
-            fixture
-                .dispatch(due - TimeDelta::milliseconds(1))
-                .is_empty()
-        );
-        let retried = fixture.dispatch(due);
-        if number == 4 {
+    for (gate, stop_phase) in [
+        (LandingWaitGate::RequiredChecksPending, "pending"),
+        (
+            LandingWaitGate::ForgeObservationUnavailable,
+            "transient_checks",
+        ),
+    ] {
+        let fixture = WaitingOwner::new();
+        for number in 1..=4 {
+            fixture.phase(stop_phase);
+            let stopped = fixture.stop(gate);
+            assert_eq!(stopped.attempt, number);
+            fixture.phase("green");
+            let due = stopped.updated_at + TimeDelta::seconds(60 * (1_i64 << (number - 1)));
             assert!(
-                retried.is_empty(),
-                "three retries exhaust this handoff's budget"
+                fixture
+                    .dispatch(due - TimeDelta::milliseconds(1))
+                    .is_empty()
             );
-        } else {
-            assert_eq!(retried.len(), 1);
+            let retried = fixture.dispatch(due);
+            if number == 4 {
+                assert!(
+                    retried.is_empty(),
+                    "three retries exhaust this handoff's budget for {gate:?}"
+                );
+            } else {
+                assert_eq!(retried.len(), 1);
+            }
         }
+        let history = fixture
+            .owner
+            .pair
+            .wire
+            .owner
+            .get_task_history(&fixture.task)
+            .unwrap();
+        assert_eq!(
+            history
+                .iter()
+                .filter(|entry| entry.event == "landing_retry_reserved")
+                .count(),
+            3
+        );
     }
-    let history = fixture
-        .owner
-        .pair
-        .wire
-        .owner
-        .get_task_history(&fixture.task)
-        .unwrap();
-    assert_eq!(
-        history
-            .iter()
-            .filter(|entry| entry.event == "landing_retry_reserved")
-            .count(),
-        3
-    );
 
     // Candidate failure, content conflict and provider review refusal retain
     // their normal public landing outcomes instead of becoming retry authority.
@@ -589,6 +640,9 @@ if p == 'review':
     pr['reviewDecision'] = 'REVIEW_REQUIRED'
 if p == 'conflict':
     pr['mergeStateStatus'] = 'DIRTY'
+if p == 'transient_status' and a[:2] == ['pr','view']:
+    sys.stderr.write('error connecting to api.github.com: tls: handshake timeout\n')
+    sys.exit(1)
 if a[:2] == ['pr','view']:
     out = pr
 elif any(x.endswith('/pulls/42/merge') for x in a):
@@ -601,6 +655,9 @@ elif a[:2] == ['repo','view']:
     out = {'nameWithOwner':'owner/repository'}
 elif 'graphql' in a:
     query = ' '.join(a)
+    if p == 'transient_checks' and 'autoMergeAllowed' not in query:
+        sys.stderr.write('gh: Something went wrong while executing your query (graphql)\n')
+        sys.exit(1)
     if 'autoMergeAllowed' in query:
         out = {'data':{'repository':{'autoMergeAllowed':False,'mergeCommitAllowed':True,'rebaseMergeAllowed':False,'squashMergeAllowed':False,'pullRequest':{'baseRefName':c['base_branch'],'baseRef':{'branchProtectionRule':{'requiresLinearHistory':False}}}}}}
     else:
