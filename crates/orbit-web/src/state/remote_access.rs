@@ -31,6 +31,7 @@ const DEVICE_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const ACTIVE_WINDOW_MINUTES: i64 = 15;
 /// The refusal window.
 pub(crate) const REFUSAL_WINDOW_HOURS: i64 = 24;
+
 /// Request counts: one bucket per second, at most 901 per device.
 const REQUEST_WINDOW: Window = Window {
     bucket_secs: 1,
