@@ -209,14 +209,17 @@ fn acts_on_this_checkout(verb: TaskVerb) -> bool {
 /// registered workspace it was read from, each relation target's status and
 /// the run that owns the task.
 fn shown(runtime: &OrbitRuntime, answer: Value) -> Result<Outcome, OrbitError> {
-    let workspace = workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
-        &runtime.global_root(),
-    ))
-    .ok()
-    .and_then(|registry| {
-        workspace_registry::find_workspace_by_path(&registry, &runtime.paths().repo_root)
-            .map(|workspace| (workspace.id.clone(), workspace.name.clone()))
-    });
+    let workspace = match runtime.opened_registered_workspace() {
+        Some(opened) => opened.map(|(id, name)| (id.to_owned(), name.to_owned())),
+        None => workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
+            &runtime.global_root(),
+        ))
+        .ok()
+        .and_then(|registry| {
+            workspace_registry::find_workspace_by_path(&registry, &runtime.paths().repo_root)
+                .map(|workspace| (workspace.id.clone(), workspace.name.clone()))
+        }),
+    };
     let targets = answer
         .get("relations")
         .and_then(Value::as_array)
