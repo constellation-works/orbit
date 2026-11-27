@@ -40,7 +40,7 @@ mod activity_catalog;
 
 mod artifact;
 
-mod artifact_diagnosis;
+mod artifact_diagnostic;
 
 mod automation;
 

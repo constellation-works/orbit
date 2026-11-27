@@ -58,7 +58,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_config::DEMOTED_DEFAULT_AUTO_TASKS;
 
-use super::artifact_diagnosis;
+use super::artifact_diagnostic;
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::auto_tasks_dir;
 
@@ -325,10 +325,10 @@ impl ManagedCatalog {
 pub fn inspect_definition_artifacts(rt: &OrbitRuntime) -> Result<Vec<ArtifactHealth>, OrbitError> {
     let mut report = Vec::new();
     for mut catalog in managed_catalogs(rt) {
-        let mut health = artifact_diagnosis::diagnose_catalog(rt, &catalog);
+        let mut health = artifact_diagnostic::diagnose_catalog(rt, &catalog);
         health
             .findings
-            .extend(artifact_diagnosis::diagnose_workspace_catalog_copies(
+            .extend(artifact_diagnostic::diagnose_workspace_catalog_copies(
                 rt,
                 catalog.kind,
             ));
@@ -337,7 +337,7 @@ pub fn inspect_definition_artifacts(rt: &OrbitRuntime) -> Result<Vec<ArtifactHea
             // each with its own settings and manifest, retaining local
             // candidate faults as well as faults in the shared catalog.
             catalog.dir = auto_tasks_dir(&rt.shared_root());
-            let shared = artifact_diagnosis::diagnose_catalog(rt, &catalog);
+            let shared = artifact_diagnostic::diagnose_catalog(rt, &catalog);
             health.scanned += shared.scanned;
             health.findings.extend(shared.findings);
         }

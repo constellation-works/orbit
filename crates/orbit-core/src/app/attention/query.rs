@@ -1,4 +1,4 @@
-use super::{host, provider_sources, runtime_sources, sources};
+use super::{host, provider_source, runtime_source, source};
 
 use crate::{
     OrbitRuntime,
@@ -235,7 +235,7 @@ pub(crate) fn attention_query(
                 }
                 Err(error) => {
                     for kind in &filter.kinds {
-                        degraded.push(sources::workspace_degraded(
+                        degraded.push(source::workspace_degraded(
                             &workspace,
                             kind.as_str(),
                             "source_unavailable",
@@ -248,15 +248,15 @@ pub(crate) fn attention_query(
         };
         // One open-task listing shared by every task-backed source for
         // this workspace, loaded lazily by whichever source needs it first.
-        let open_tasks = sources::SharedOpenTasks::default();
-        let source_context = sources::AttentionSourceContext {
+        let open_tasks = source::SharedOpenTasks::default();
+        let source_context = source::AttentionSourceContext {
             runtime: selected,
             workspace: &workspace,
             host: &host,
             filter: &filter,
             now,
         };
-        let mut candidates = match sources::read_attention_sources(
+        let mut candidates = match source::read_attention_sources(
             selected,
             &workspace,
             &host,
@@ -270,14 +270,14 @@ pub(crate) fn attention_query(
                     AttentionKind::TASK_LEVEL_NAMES.contains(&kind.as_str())
                         || **kind == AttentionKind::NoticeOpen
                 }) {
-                    degraded.push(sources::workspace_degraded(
+                    degraded.push(source::workspace_degraded(
                         &workspace,
                         kind.as_str(),
                         "source_unavailable",
                         error.to_string(),
                     ));
                 }
-                sources::AttentionCandidates {
+                source::AttentionCandidates {
                     items: Vec::new(),
                     degraded: Vec::new(),
                     timings: BTreeMap::new(),
@@ -287,13 +287,13 @@ pub(crate) fn attention_query(
         let reads_runtime = operator
             || resident_scope.is_some_and(|covered| covered.contains(&target.workspace_id));
         host_health_withheld |= !reads_runtime;
-        runtime_sources::read_runtime_attention(
+        runtime_source::read_runtime_attention(
             &source_context,
             reads_runtime,
             &mut candidates,
             &open_tasks,
         );
-        provider_sources::read_ci_attention(
+        provider_source::read_ci_attention(
             &source_context,
             session_context,
             &mut candidates,
@@ -304,7 +304,7 @@ pub(crate) fn attention_query(
             match host::read_doctor_host_item(runtime, selected, &workspace, &host, owner) {
                 Ok(Some(item)) => candidates.items.push(item),
                 Ok(None) => {}
-                Err(error) => candidates.degraded.push(sources::workspace_degraded(
+                Err(error) => candidates.degraded.push(source::workspace_degraded(
                     &workspace,
                     AttentionKind::HostUnhealthy.as_str(),
                     "source_unavailable",
@@ -327,7 +327,7 @@ pub(crate) fn attention_query(
                 .map(|item| item.kind.as_str())
                 .collect::<BTreeSet<_>>();
             for kind in dropped {
-                candidates.degraded.push(sources::workspace_degraded(
+                candidates.degraded.push(source::workspace_degraded(
                     &workspace,
                     kind,
                     "item_cap",

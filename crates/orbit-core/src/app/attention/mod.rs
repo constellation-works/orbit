@@ -17,21 +17,21 @@
 //! operation in `orbit_common::governance::attention`, so the federated
 //! aggregator applies the same rules once over every host.
 
-mod drain_keeper_sources;
+mod drain_keeper_source;
 
 mod host;
 
-mod notice_sources;
+mod notice_source;
 
-mod provider_sources;
+mod provider_source;
 
 mod query;
 
-mod routine_sources;
+mod routine_source;
 
-mod runtime_sources;
+mod runtime_source;
 
-mod sources;
+mod source;
 
 mod wait;
 

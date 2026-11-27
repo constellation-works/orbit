@@ -11,12 +11,12 @@ use orbit_types::{
 };
 use serde_json::json;
 
-use super::super::notice_sources::{
-    friction_attention_items, notice_attention_items, resident_stalled_items,
-};
 use super::subject::{self, Subject};
 use super::{AttentionCandidates, SharedOpenTasks, item};
 use crate::OrbitRuntime;
+use crate::app::attention::notice_source::{
+    friction_attention_items, notice_attention_items, resident_stalled_items,
+};
 
 impl SharedOpenTasks {
     pub(in super::super) fn get(&self, runtime: &OrbitRuntime) -> Result<&[Task], OrbitError> {
@@ -79,7 +79,9 @@ pub(in super::super) fn read_attention_sources(
     // so a pending task commit does not hold it.
     if filter.selected(K::RoutineTripped) {
         let started = Instant::now();
-        match super::super::routine_sources::routine_tripped_items(runtime, workspace, host, now) {
+        match crate::app::attention::routine_source::routine_tripped_items(
+            runtime, workspace, host, now,
+        ) {
             Ok(items) => result.items.extend(items),
             Err(error) => result.degraded.push(item::workspace_degraded(
                 workspace,
@@ -215,7 +217,7 @@ pub(in super::super) fn read_attention_sources(
     );
     if keeper_kinds.0 || keeper_kinds.1 {
         let started = Instant::now();
-        match super::super::drain_keeper_sources::drain_keeper_items(
+        match crate::app::attention::drain_keeper_source::drain_keeper_items(
             runtime,
             workspace,
             host,

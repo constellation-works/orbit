@@ -2,7 +2,7 @@
 //! this host [ORB-25103]. The breaker is host-local scheduler state, so every
 //! checkout reports the routines its workspace defines.
 
-use super::sources::attention_reason;
+use super::source::attention_reason;
 use crate::OrbitRuntime;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
