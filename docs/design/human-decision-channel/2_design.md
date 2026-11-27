@@ -325,7 +325,11 @@ was granted (`orbit_tools` grants read access to the global root), and every
 sandboxed agent launch masks it for reads and writes, created before launch so a
 later registration stays hidden ([plugins](../plugins/1_scope.md) §4.3,
 [policy sandbox](../policy-sandbox/2_design.md)). Core refuses a hidden store as
-not visible rather than reading it as "no channel registered". Every channel
+not visible rather than reading it as "no channel registered". On Unix an
+existing store is also validated before any key is parsed: a linked or non-directory
+store directory, a linked or non-regular state file, a foreign owner, or a mode open to
+group or world is refused (`STD-05@1 §R9`) with a reason that names the path and the
+fault, never contents; an absent store still reads as empty. Every channel
 read and write, the digest and submission included, runs where the store is
 visible: the operator CLI, or the host process that spawned the calling backend.
 A backend reaches its `orbit.decision.digest` and `orbit.decision.submit`
