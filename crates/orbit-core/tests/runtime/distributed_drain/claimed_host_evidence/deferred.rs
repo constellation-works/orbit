@@ -767,6 +767,109 @@ fn a_scenario_row_with_two_homes_names_only_the_uncovered_command() {
     );
 }
 
+/// [ORB-29576] The real `orbit-core/tests/runtime` layout mixes `#[path]`
+/// support and nested module mounts with plain-`mod` scenario modules, and
+/// `deferred.rs` itself holds string-literal `scenario_table!(` fixtures.
+/// Neither suppresses `decision_raise::managed_scenarios` or pollutes its
+/// unique home.
+fn a_target_with_path_support_and_fixture_strings_resolves_its_plain_home() {
+    let workspace = [
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/orbit-core\"]\nresolver = \"3\"\n",
+        ),
+        (
+            "crates/orbit-core/Cargo.toml",
+            "[package]\nname = \"orbit-core\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+        ),
+        (
+            "crates/orbit-core/tests/support/admission.rs",
+            "pub fn helper() {}\n",
+        ),
+        (
+            "crates/orbit-core/tests/runtime/main.rs",
+            "#[path = \"../support/admission.rs\"]\n\
+             mod admission_test_support;\n\
+             mod decision_raise;\n\
+             mod distributed_drain;\n\
+             mod task_delivery;\n",
+        ),
+        (
+            "crates/orbit-core/tests/runtime/decision_raise.rs",
+            "#[cfg(target_os = \"linux\")]\n\
+             crate::scenario_table!(managed_scenarios, managed_raise_keeps_shared_root_read_only);\n",
+        ),
+        (
+            "crates/orbit-core/tests/runtime/distributed_drain/mod.rs",
+            "mod claimed_host_evidence;\n",
+        ),
+        (
+            "crates/orbit-core/tests/runtime/distributed_drain/claimed_host_evidence.rs",
+            "mod deferred;\n",
+        ),
+        (
+            "crates/orbit-core/tests/runtime/distributed_drain/claimed_host_evidence/deferred.rs",
+            "const FIXTURE_PLAIN: &str = \"crate::scenario_table!(managed_scenarios, managed_raise_keeps_shared_root_read_only);\\n\";\n\
+             const FIXTURE_RAW: &str = r#\"crate::scenario_table!(other_scenarios, managed_raise_keeps_shared_root_read_only);\"#;\n\
+             const QUOTE_CHAR: char = '\"';\n\
+             // crate::scenario_table!(commented, managed_raise_keeps_shared_root_read_only);\n\
+             /* /* nested */ crate::scenario_table!(block_commented, managed_raise_keeps_shared_root_read_only); */\n\
+             crate::scenario_table!(deferred_scenarios, a_different_row);\n",
+        ),
+        (
+            "crates/orbit-core/tests/runtime/task_delivery.rs",
+            "#[path = \"source_repair.rs\"]\nmod source_repair;\n",
+        ),
+        (
+            "crates/orbit-core/tests/runtime/source_repair.rs",
+            "#[path = \"source_repair/association.rs\"]\nmod association;\n",
+        ),
+        (
+            "crates/orbit-core/tests/runtime/source_repair/association.rs",
+            "crate::scenario_table!(association_scenarios, an_association_row);\n",
+        ),
+    ];
+    let certificate = settle_scenario_deferral(&workspace);
+    let escalation = certificate.escalation.as_deref().unwrap_or_default();
+    assert!(
+        escalation.contains(SCENARIO_NATIVE)
+            && escalation.contains(&format!("qa-scenario-pass: {SCENARIO_ROW}")),
+        "plain-mod home resolves alongside #[path] mounts and fixture literals: {escalation}"
+    );
+    assert!(
+        !escalation.contains(&format!("--test runtime {SCENARIO_ROW}")),
+        "a Cargo filter on the row runs no test and is never offered: {escalation}"
+    );
+}
+
+/// [ORB-29576] When a `#[path]`-mounted module runs the same row as a
+/// plain-`mod` module, the row still has no unique home.
+fn a_scenario_row_shared_with_a_path_module_has_no_unique_home() {
+    let mut workspace = SCENARIO_WORKSPACE.to_vec();
+    workspace[2] = (
+        "crates/orbit-core/tests/runtime/main.rs",
+        "mod decision_raise;\n#[path = \"other_raise.rs\"]\nmod other_raise;\n",
+    );
+    workspace.push((
+        "crates/orbit-core/tests/runtime/other_raise.rs",
+        "crate::scenario_table!(other_scenarios, managed_raise_keeps_shared_root_read_only);\n",
+    ));
+    let certificate = settle_scenario_deferral(&workspace);
+    let escalation = certificate.escalation.as_deref().unwrap_or_default();
+    assert!(
+        escalation.contains("unreconciled_scenario_deferral")
+            && escalation.contains(SCENARIO_NEXTEST)
+            && escalation.contains("admit a fresh review"),
+        "the uncovered command and the fresh-review route: {escalation}"
+    );
+    assert!(
+        !escalation.contains(SCENARIO_NATIVE)
+            && !escalation.contains("decision_raise::managed_scenarios")
+            && !escalation.contains("other_scenarios"),
+        "no libtest is named as the home of a row shared with a #[path] module: {escalation}"
+    );
+}
+
 crate::scenario_table!(
     a_broader_run_deferring_only_host_tests_scenarios,
     a_broader_run_deferring_only_host_tests_settles_on_their_replays,
@@ -776,5 +879,7 @@ crate::scenario_table!(
     a_deferral_owed_to_another_os_holds_the_review_for_it,
     a_nested_seatbelt_conformance_deferral_settles_on_its_host_replay,
     a_consolidated_scenario_deferral_names_its_libtest_and_marker,
-    a_scenario_row_with_two_homes_names_only_the_uncovered_command
+    a_scenario_row_with_two_homes_names_only_the_uncovered_command,
+    a_target_with_path_support_and_fixture_strings_resolves_its_plain_home,
+    a_scenario_row_shared_with_a_path_module_has_no_unique_home
 );
