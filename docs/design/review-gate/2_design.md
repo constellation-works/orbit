@@ -479,9 +479,12 @@ Settlement has already widened the selectors over every repaired path, and
 any path still unowned widens the first task's selectors with review
 provenance instead of failing ([ORB-13990]). It then reruns
 `workflow.required_validation_commands` on the reviewer commit. A failed
-command fails the step with no retry and no recovery, and the failure handoff reports verdict `reject` even
+command fails the step with no retry and no recovery, and the failure handoff
+writes a one-line comment pointing to `orbit run show <run-id> --json` even
 though the certificate recorded `accept_with_fixes`: the certificate says
 what the reviewer established, and the handoff says why publication stopped.
+The typed detail is recorded as a `RecordedReviewFixValidationFailure` history
+entry, not as a `reject` verdict in the comment.
 ### 3.2 Before-landing review of the open PR [ORB-14849]
 
 With `before-landing` captured, the pre-push gate reports `applies: false`
@@ -518,10 +521,11 @@ through the `re_review*` steps exactly as a before-PR review's does.
 Every step here is completion-stage. Any outcome other than an approve —
 a `reject` or `incomplete` verdict, a reviewer timeout, a lost lease, a
 failed revalidation or a settle error — fails the run with the PR open and
-unmerged, and the failure handoff keeps the task in `review` with a comment
-naming the step's typed reason (`review_gate_blocked`,
-`review_timeout_incomplete`, `push_lease_lost`, ...) and decision
-`landing_review_failure`. `review_repair_after_merge` is the exception to
+unmerged, and the failure handoff keeps the task in `review` with a one-line
+comment pointing to `orbit run show <run-id> --json`. The step's typed reason
+(`review_gate_blocked`, `review_timeout_incomplete`, `push_lease_lost`, ...)
+and decision `landing_review_failure` are recorded in the `pr_failure_handoff`
+step output in the run record, not in the comment. `review_repair_after_merge` is the exception to
 staying in `review`: the pull request is already merged, and the task is
 blocked with the recipe that lands the preserved repair. No outcome closes the PR.
 A PR that merged outside Orbit while its review ran [ORB-26599] is the other
@@ -540,8 +544,8 @@ repair remains local. An unconfirmed merge with a lost lease also stays local.
 One exception to "no push": a reviewer commit that settled `incomplete` is not left in the run's
 host-local worktree. Settlement has already committed the reviewer's repair, so
 the failure handoff pushes it onto the published head under the same lease as
-`landing_push` and records the result as `reviewer_push` in its output and in
-the comment. It is a preservation push: the commit is neither approved nor
+`landing_push` and records the result as `reviewer_push` in its
+`pr_failure_handoff` step output only, not in the comment. It is a preservation push: the commit is neither approved nor
 revalidated, hosted CI restarts on it, `complete_pr` does not run and nothing
 merges. A lost lease (`push_lease_lost`) is recorded without failing the
 handoff, and the commit stays local. A `reject`, a reviewer timeout or a failed
@@ -2051,8 +2055,10 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 - A denied required check is not evidence either way: it keeps its own
   `validation_unavailable` reason instead of counting as a failure.
 - A failed `review_validate` leaves a certificate that says
-  `accept_with_fixes` beside a blocked task. The handoff comment names the
-  failure as `reject`; nothing rewrites the recorded certificate.
+  `accept_with_fixes` beside a blocked task. The handoff comment is one line
+  pointing to `orbit run show <run-id> --json`; the typed detail is recorded
+  as a `RecordedReviewFixValidationFailure` history entry, and nothing
+  rewrites the recorded certificate.
 - The `operator` writer class rests on the same process identity as other
   operator decisions: an agent envelope or managed-run marker in the
   environment excludes it, but the environment is not authentication. A
