@@ -3021,19 +3021,103 @@ fn pr_open_permanent_create_failures_never_retry_or_look_up_again(sandbox: &Path
         assert_create_failure(&host, &error, diagnostic);
     }
 }
+fn assert_failure_comment(message: &str) {
+    assert!(!message.contains('\n'), "{message}");
+    assert!(!message.contains("```"), "{message}");
+    assert!(
+        message.contains("orbit run show ") && message.contains("--json"),
+        "{message}"
+    );
+    assert!(
+        !message
+            .split(|c: char| !c.is_ascii_hexdigit())
+            .any(|word| word.len() == 40),
+        "{message}"
+    );
+}
+fn failure_comments_keep_diagnostics_in_the_run(sandbox: &Path) {
+    for (step, code, diagnostic, expected) in [
+        (
+            "landing_review_gate_settle",
+            "review_gate_blocked",
+            "review_gate_blocked: verdict reject",
+            "landing_review_failure",
+        ),
+        (
+            "complete_pr",
+            "pipeline_step_failed",
+            "merge refused: detailed diagnostic",
+            "review_completion_failure",
+        ),
+    ] {
+        let (fx, host) = fx_host(sandbox);
+        host.set_status(TASK_ID, TaskStatus::Review);
+        host.publish_pr(TASK_ID);
+        let output = failure_handoff_ok(&fx, &host, step, code, diagnostic);
+        assert_eq!(output["decision"], expected);
+        assert_eq!(output["failed_step_id"], step);
+        assert_eq!(output["handoff_run_id"], RUN_ID);
+        assert_eq!(output["pr_number"], PR_NUMBER);
+        assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+        assert_failure_comment(&host.comments(TASK_ID).last().unwrap().message);
+    }
+    let (fx, host) = fx_host(sandbox);
+    let git_dir = fx.git(&["rev-parse", "--absolute-git-dir"]);
+    fs::create_dir_all(Path::new(&git_dir).join("rebase-merge")).unwrap();
+    let output = failure_handoff_ok(
+        &fx,
+        &host,
+        "sync_base",
+        "pipeline_step_failed",
+        "foreign diagnostic",
+    );
+    assert_eq!(output["decision"], "foreign_rebase_refused");
+    assert_eq!(output["workspace_path"], fx.repo.to_string_lossy().as_ref());
+    assert_failure_comment(&host.comments(TASK_ID).last().unwrap().message);
+}
+fn conflict_handoff_keeps_structured_conflict_details(sandbox: &Path) {
+    let (fx, host) = fx_host(sandbox);
+    let candidate = fx.commit("shared.txt", "candidate\n");
+    fx.commit_on_base("shared.txt", "base\n");
+    let base = fx.git(&["rev-parse", BASE]);
+    let rebase = crate::git_test_support::command()
+        .current_dir(&fx.repo)
+        .args(["rebase", BASE])
+        .output()
+        .unwrap();
+    assert!(!rebase.status.success());
+    let mut input = failure_input(
+        &fx,
+        "sync_base",
+        "pipeline_step_failed",
+        "conflicting paths: shared.txt",
+    );
+    input["job_input"]["base_branch"] = json!(BASE);
+    input["job_input"]["base_sync"] = json!("local");
+    input["pipeline"]["prepare_branch"] =
+        json!({"head": BRANCH, "head_sha": candidate, "base_sha": base});
+    let output = action_ok(&host, "pr_failure_handoff", &input);
+    assert_eq!(output["conflicting_paths"], json!(["shared.txt"]));
+    assert_eq!(output["failed_step_id"], "sync_base");
+    assert_eq!(output["handoff_run_id"], RUN_ID);
+    let (_, _, note, decision) = locked(&host.status_events).last().cloned().unwrap();
+    assert!(note.unwrap().contains("shared.txt"));
+    assert_eq!(
+        decision,
+        Some(orbit_types::task::TaskDecision::RunTransition {
+            run_id: RUN_ID.to_string()
+        })
+    );
+    let comment = host.comments(TASK_ID).last().unwrap().message.clone();
+    assert_failure_comment(&comment);
+    assert!(comment.contains("merge conflict"));
+}
 fn assert_create_failure(host: &DeliveryHost, error: &OrbitError, diagnostic: &str) {
     let expected = format!("private automation VCS PR create failed: {diagnostic}");
     assert_eq!(error.to_string(), format!("execution failed: {expected}"));
     let comments = host.comments(TASK_ID);
     assert_eq!(comments.len(), 1);
-    assert!(
-        comments[0]
-            .message
-            .contains("[phase=automation.vcs.pr.create]"),
-        "create must preserve its failing phase: {}",
-        comments[0].message
-    );
-    assert!(comments[0].message.contains(&expected));
+    assert_failure_comment(&comments[0].message);
     assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
 }
 fn passing_checks_merge_the_reviewed_candidate_and_record_its_delivery(sandbox: &Path) {
@@ -3192,17 +3276,14 @@ fn a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease
                 (!delete_branch).then_some(lease.as_str())
             );
             assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
-            let recipes: Vec<_> = host
-                .comments(TASK_ID)
-                .into_iter()
-                .filter(|comment| comment.message.starts_with("review_repair_after_merge:"))
-                .collect();
-            assert_eq!(recipes.len(), 1, "{pipeline} {method}: one recipe comment");
-            let recipe = &recipes[0].message;
-            assert!(recipe.contains("git fetch origin"), "{recipe}");
-            assert!(recipe.contains("git cherry-pick"), "{recipe}");
-            assert!(recipe.contains("open a pull request"), "{recipe}");
-            assert!(!recipe.contains(TASK_ID), "{recipe}");
+            let comments = host.comments(TASK_ID);
+            assert_eq!(
+                comments.len(),
+                1,
+                "{pipeline} {method}: one handoff comment"
+            );
+            assert_failure_comment(&comments[0].message);
+            assert!(comments[0].message.contains("merged"));
         }
         let fx = Fixture::new(sandbox);
         let _repair = commit_local(&fx, "src/repair-a.txt", "repair a\n");
@@ -4066,11 +4147,7 @@ fn pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch(sandbox
     let comments = host.comments(TASK_ID);
     assert_eq!(comments.len(), 1, "the same handoff phase is recorded once");
     for comment in comments {
-        assert!(
-            comment.message.contains("[phase=obsolete-base]"),
-            "{}",
-            comment.message
-        );
+        assert_failure_comment(&comment.message);
     }
 }
 fn pr_open_judges_a_stacked_repair_by_its_own_marker_not_its_fixes_quote(sandbox: &Path) {
@@ -4147,11 +4224,7 @@ fn pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate(sandbox: &Pa
         assert_eq!(fx.forge_state("pr-head"), None, "{case}: no PR exists");
         let comments = host.comments(TASK_ID);
         assert_eq!(comments.len(), 1, "{case}: one failed-handoff record");
-        assert!(
-            comments[0].message.contains("[phase=stale-review-gate]"),
-            "{case}: {}",
-            comments[0].message
-        );
+        assert_failure_comment(&comments[0].message);
         assert_eq!(host.status(TASK_ID), TaskStatus::InProgress, "{case}");
         let mut current = fx.open_input(&fx.head(), &base_sha);
         current["base_sha"] = json!(base_sha);
@@ -4836,12 +4909,8 @@ fn a_missing_validation_tool_is_an_environment_failure(sandbox: &Path) {
     assert_eq!(fx.head(), fx.candidate);
     assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
     let comments = host.comments(TASK_ID);
-    assert!(
-        comments
-            .iter()
-            .any(|comment| comment.message.contains(&format!("PATH={MINIMAL_PATH}"))),
-        "the block reports the PATH the tool was missing from: {comments:?}"
-    );
+    assert_failure_comment(&comments.last().unwrap().message);
+    assert!(comments.last().unwrap().message.contains("missing"));
 }
 /// The owner validates outside any agent sandbox, so a required command that exits zero after printing a `DEFERRED:` notice never ran its sandbox-confined path before delivery [ORB-15287].
 fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure(sandbox: &Path) {
@@ -5422,6 +5491,8 @@ fn an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr(sandbox: &Path)
         &message,
     );
     assert_eq!(handoff["decision"], "blocked_by_agent");
+    assert_eq!(handoff["worktree"], fx.repo.to_string_lossy().as_ref());
+    assert!(handoff["recovery"].as_str().unwrap().contains("patch"));
     assert_eq!(handoff["blocker_kind"], "environment");
     assert_eq!(handoff["head_sha"], head_before);
     assert_held_without_pr(&fx, &handoff, &remote_before, "blocker");
@@ -5455,12 +5526,9 @@ fn an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr(sandbox: &Path)
         ),
         "the note keeps its pre-decision text for older readers"
     );
-    assert!(
-        host.comments(TASK_ID)
-            .iter()
-            .any(|comment| comment.message.contains("kind=environment")),
-        "the task comment records the kind"
-    );
+    let comments = host.comments(TASK_ID);
+    assert_failure_comment(&comments.last().unwrap().message);
+    assert!(comments.last().unwrap().message.contains("blocker"));
 }
 /// Unjudged dirty candidates are committed to a durable ref without publishing
 /// a PR or changing task status. Classification remains specific to each row.
@@ -6306,11 +6374,10 @@ fn a_red_base_during_pr_revalidation_holds_the_task(sandbox: &Path) {
         note.as_deref().and_then(BaselineRedHold::from_text),
         Some(hold.clone())
     );
+    assert_failure_comment(&host.comments(TASK_ID).last().unwrap().message);
     assert!(
-        host.comments(TASK_ID).last().is_some_and(|comment| comment
-            .message
-            .contains(&format!("existing PR #{PR_NUMBER} remains"))),
-        "the existing PR is described as preserved at its last published head"
+        note.unwrap()
+            .contains(&format!("existing PR #{PR_NUMBER} remains"))
     );
     fx.commit_on_base("Makefile", "ci-lint:\n\t@echo lint-ok\n");
     assert!(matches!(
@@ -7070,11 +7137,23 @@ fn a_failed_review_revalidation_rejects_and_preserves_both_commits(sandbox: &Pat
     assert!(entry.decision.is_none(), "no new task decision shape");
     let comments = host.comments(TASK_ID);
     let comment = comments.last().unwrap();
+    assert_failure_comment(&comment.message);
     assert_eq!((entry.at, &entry.by), (comment.at, &comment.by));
     assert_eq!(
         orbit_types::workflow::review_fix_validation_failure_times(&history, &comments),
         vec![comment.at],
         "the typed event and its escalation comment count once"
+    );
+    let legacy = TaskComment {
+        at: comment.at,
+        by: "system".to_string(),
+        message: "## Review gate escalation\n\nVerdict: `reject`. The reviewer's fixes did not pass owner revalidation.".to_string(),
+        operation_id: None,
+    };
+    assert_eq!(
+        orbit_types::workflow::review_fix_validation_failure_times(&[], &[legacy]),
+        vec![comment.at],
+        "historical multiline escalation still counts"
     );
     assert_eq!(
         host.releases()
@@ -7731,7 +7810,7 @@ test_groups! {
     pr_body_and_promotion_contracts => [pr_promote_records_the_pull_request_page_with_its_number, pr_open_appends_the_review_fixes_section_to_the_published_body],
     metadata_lag_pins_and_repair => [previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins, previous_published_head_metadata_lag_after_in_run_conflict_repair],
     pr_open_branch_identity => [pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip, pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch, pr_open_judges_a_stacked_repair_by_its_own_marker_not_its_fixes_quote, pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate],
-    pr_create_retry_contracts => [pr_open_permanent_create_failures_never_retry_or_look_up_again, pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr, pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase, pr_open_refuses_a_reused_pr_targeting_another_base, a_failure_handoff_refuses_a_reused_pr_targeting_another_base],
+    pr_create_retry_contracts => [conflict_handoff_keeps_structured_conflict_details, failure_comments_keep_diagnostics_in_the_run, pr_open_permanent_create_failures_never_retry_or_look_up_again, pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr, pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase, pr_open_refuses_a_reused_pr_targeting_another_base, a_failure_handoff_refuses_a_reused_pr_targeting_another_base],
     pr_lookup_retry_contracts => [pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling, pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens],
     pr_number_and_push_transports => [pr_open_preserves_provider_number_representations, fixture_push_guard_checks_all_effective_push_urls, fixture_push_refuses_non_file_transports_without_network],
     git_push_effective_destination_contracts => [git_push_publishes_to_effective_push_destination_not_fetch_remote, git_push_probes_composed_rewrite_destination_not_its_rewrite, git_push_refuses_self_pointing_effective_push_url],

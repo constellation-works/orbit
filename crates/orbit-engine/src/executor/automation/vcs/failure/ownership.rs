@@ -433,33 +433,34 @@ pub(super) fn preserve_completion_failure<H: RunLifecycle + ?Sized>(
         .then(|| typed_reason(error_code, error_message));
     let merged_outside_orbit =
         landing_review.is_some() && error_message.contains(REVIEW_PR_MERGED_OUTSIDE_ORBIT);
-    let note = match &landing_review {
-        // [ORB-26599] The PR merged while the review ran: the verdict gates
-        // nothing, and the settlement comment names the merge and any
-        // unpushed reviewer commit.
-        Some(reason) if merged_outside_orbit => format!(
-            "Before-landing review ended on PR #{pr_number} (`{reason}`) after the PR had \
-             already merged outside Orbit; its verdict gates nothing and no decision is \
-             pending. Nothing was merged by the review, and no reviewer commit was pushed. \
-             The task settles from the merge.\n\n- Run: `{run_id}`\n- Failed step: \
-             `{failed_step_id}`\n- Error code: `{error_code}`\n\nFailure:\n```text\n\
-             {error_message}\n```",
-        ),
-        Some(reason) => format!(
-            "Before-landing review did not approve PR #{pr_number} (`{reason}`); the PR stays \
-             open and unmerged and the task stays '{}'. Nothing was merged. {} An operator \
-             decides what lands next.\n\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n- Error code: \
-             `{error_code}`\n\nFailure:\n```text\n{error_message}\n```",
-            task.status,
-            reviewer_outcome_sentence(reviewer_push, reviewer_preservation),
-        ),
-        None => format!(
-            "PR completion failed after publication; preserved PR #{pr_number} and task status \
-             '{}' for a safe completion retry. No candidate, PR body, branch, or repository \
-             setting was changed.\n\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n- \
-             Error code: `{error_code}`\n\nFailure:\n```text\n{error_message}\n```",
-            task.status
-        ),
+    let note = if merged_outside_orbit {
+        format!(
+            "Before-landing review ended because the pull request had already merged; inspect `orbit run show {run_id} --json` for details."
+        )
+    } else if landing_review.is_some() {
+        let reason = match orbit_types::workflow::ReviewGateRefusal::from_error_code(error_code) {
+            Some(orbit_types::workflow::ReviewGateRefusal::TimeoutIncomplete) => {
+                "the reviewer timed out"
+            }
+            Some(orbit_types::workflow::ReviewGateRefusal::AwaitingEvidence) => {
+                "review evidence is missing"
+            }
+            Some(orbit_types::workflow::ReviewGateRefusal::Abandoned) => {
+                "the reviewer left without a verdict"
+            }
+            Some(orbit_types::workflow::ReviewGateRefusal::Blocked) => "the review did not approve",
+            None if failed_step_id == "landing_review_validate" => {
+                "reviewer fixes failed validation"
+            }
+            None => "a review step failed",
+        };
+        format!(
+            "Before-landing review stopped because {reason}; inspect `orbit run show {run_id} --json` before deciding what to do next."
+        )
+    } else {
+        format!(
+            "Pull request completion stopped because a completion step failed; inspect `orbit run show {run_id} --json` before retrying."
+        )
     };
     host.apply_task_automation_update(
         &task.id,
@@ -496,125 +497,6 @@ pub(super) fn preserve_completion_failure<H: RunLifecycle + ?Sized>(
         "candidate_preserved": true,
         "task_status": task.status.to_string(),
     }))
-}
-
-/// What the comment says became of the reviewer's commit or uncommitted repairs.
-fn reviewer_outcome_sentence(
-    reviewer_push: Option<&Value>,
-    reviewer_preservation: Option<&Value>,
-) -> String {
-    if let Some(push) = reviewer_push {
-        // A refused push is reported with where the commit was saved instead.
-        if let (Some("push_failed"), Some(_)) = (
-            push.get("decision").and_then(Value::as_str),
-            reviewer_preservation,
-        ) {
-            let refusal = push
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown refusal");
-            return format!(
-                "The reviewer's commit could not be pushed to the PR branch ({refusal}); the PR \
-                 branch is unchanged. {}",
-                reviewer_outcome_sentence(None, reviewer_preservation)
-            );
-        }
-        return reviewer_push_sentence(Some(push));
-    }
-    let Some(preserved) = reviewer_preservation else {
-        return "Only a fix the review settled was pushed.".to_string();
-    };
-    let decision = preserved
-        .get("decision")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let field = |key: &str| preserved.get(key).and_then(Value::as_str);
-    match decision {
-        "preserved" => {
-            let commit_sha = field("commit_sha").unwrap_or("unknown");
-            let published_head = field("published_head_sha").unwrap_or("unknown");
-            let durable_ref = field("ref").unwrap_or("unknown");
-            if preserved
-                .get("committed_by_handoff")
-                .and_then(Value::as_bool)
-                == Some(true)
-            {
-                format!(
-                    "Orbit committed the stopped reviewer's edits at `{commit_sha}` and \
-                     preserved the commit on `{durable_ref}` (on top of published head \
-                     `{published_head}`); it was not pushed to the PR branch."
-                )
-            } else {
-                format!(
-                    "The reviewer's fix commit `{commit_sha}` was preserved on `{durable_ref}` \
-                     (on top of published head `{published_head}`); it was not pushed to the PR \
-                     branch."
-                )
-            }
-        }
-        "commit_refused" => {
-            let error = field("error").unwrap_or("unknown refusal");
-            match field("diff_artifact") {
-                Some(artifact) => format!(
-                    "The reviewer's uncommitted repair could not be committed ({error}); the \
-                     uncommitted diff was saved to task artifact `{artifact}`."
-                ),
-                None => format!(
-                    "The reviewer's uncommitted repair could not be committed ({error}) and stays \
-                     in the run's worktree."
-                ),
-            }
-        }
-        "preserve_failed" => {
-            let commit_sha = field("commit_sha").unwrap_or("unknown");
-            let published_head = field("published_head_sha").unwrap_or("unknown");
-            let error = field("error").unwrap_or("unknown error");
-            match field("diff_artifact") {
-                Some(artifact) => format!(
-                    "The reviewer's fix commit `{commit_sha}` could not be pushed to a durable \
-                     ref ({error}); its diff against `{published_head}` was saved to task artifact \
-                     `{artifact}`."
-                ),
-                None => format!(
-                    "The reviewer's fix commit `{commit_sha}` could not be pushed to a durable \
-                     ref ({error}) and stays in the run's worktree."
-                ),
-            }
-        }
-        "no_reviewer_commit" => "The review recorded no commit to preserve.".to_string(),
-        "unavailable" => format!(
-            "Reviewer repairs could not be inspected ({}).",
-            field("error").unwrap_or("unknown error")
-        ),
-        _ => "Only a fix the review settled was pushed.".to_string(),
-    }
-}
-
-/// What the comment says became of the reviewer commit an incomplete
-/// before-landing review recorded.
-fn reviewer_push_sentence(reviewer_push: Option<&Value>) -> String {
-    let Some(push) = reviewer_push else {
-        return "Only a fix the review settled was pushed.".to_string();
-    };
-    let decision = push
-        .get("decision")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let field = |key: &str| push.get(key).and_then(Value::as_str).unwrap_or("unknown");
-    match decision {
-        "no_reviewer_commit" => "The review recorded no commit to push.".to_string(),
-        "push_failed" => format!(
-            "The reviewer's commit could not be pushed and stays in the run's worktree: {}",
-            field("error")
-        ),
-        _ => format!(
-            "The reviewer's commit `{}` was pushed to the PR branch on top of the published head \
-             `{}` so it is not stranded in the run's worktree; it is neither approved nor \
-             revalidated, and hosted CI restarts on it.",
-            field("local_sha"),
-            field("published_head_sha"),
-        ),
-    }
 }
 
 /// The typed reason for a failed step: a review-gate refusal's code, else the
@@ -664,8 +546,8 @@ pub(super) fn refuse_foreign_rebase<H: RunLifecycle + RuntimeHostProcessEnvironm
     task: &orbit_types::task::Task,
     run_id: &str,
     failed_step_id: &str,
-    error_code: &str,
-    error_message: &str,
+    _error_code: &str,
+    _error_message: &str,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
     let provenance = rebase_provenance_summary(&host.process_env(), workspace_path);
@@ -675,11 +557,7 @@ pub(super) fn refuse_foreign_rebase<H: RunLifecycle + RuntimeHostProcessEnvironm
          or published"
     );
     let message = format!(
-        "{note}\n\nThe in-progress rebase does not match this run's prepared branch checkpoint, \
-         so its rebase metadata, index, and worktree edits were left intact. Inspect \
-         `{}` before retrying delivery.\n\n- Error code: `{error_code}`\n\n\
-         Failure:\n```text\n{error_message}\n```",
-        workspace_path.display()
+        "Delivery stopped because an unrelated rebase is in progress; inspect `orbit run show {run_id} --json` before retrying."
     );
     host.apply_task_automation_update(
         &task.id,
