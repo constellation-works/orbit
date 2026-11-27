@@ -1,15 +1,24 @@
 //! Conservative integration-target ownership proof from an immutable Git tree.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use git2::{ObjectType, Repository, Tree};
+use git2::{ObjectType, Oid, Repository, Tree};
 use toml::Value;
 
-/// Package targets proven from the candidate's workspace manifests and tree.
+use super::scenario_row::ScenarioRows;
+
+/// Package targets proven from the candidate's workspace manifests and tree,
+/// and the scenario rows its integration targets declare [ORB-29076].
 #[derive(Default)]
 pub(super) struct CargoOwners {
     targets: BTreeMap<String, BTreeSet<String>>,
+    /// Integration-target trees `(package, target, tree)` that hold a
+    /// `main.rs`. Their rows are read only when a deferral asks for them.
+    scenario_dirs: Vec<(String, String, Oid)>,
+    root: PathBuf,
+    scenarios: OnceCell<ScenarioRows>,
 }
 
 impl CargoOwners {
@@ -46,6 +55,7 @@ impl CargoOwners {
             paths.push(String::new());
         }
         let mut targets = BTreeMap::new();
+        let mut scenario_dirs = Vec::new();
         for path in paths {
             let prefix = if path.is_empty() {
                 String::new()
@@ -78,6 +88,7 @@ impl CargoOwners {
                                 entry.kind() == Some(ObjectType::Blob)
                                     && matches!(entry.filemode(), 0o100644 | 0o100755)
                             }) {
+                                scenario_dirs.push((name.clone(), item_name.to_string(), sub.id()));
                                 tests.insert(item_name.to_string());
                             }
                         }
@@ -94,7 +105,19 @@ impl CargoOwners {
                 return None;
             }
         }
-        Some(Self { targets })
+        Some(Self {
+            targets,
+            scenario_dirs,
+            root: root.to_path_buf(),
+            scenarios: OnceCell::new(),
+        })
+    }
+
+    /// The scenario rows the candidate's integration targets run. The first
+    /// call reads the target sources from the candidate's trees, so a review
+    /// whose records carry no deferral never pays for that read.
+    pub(super) fn scenarios(&self) -> &ScenarioRows {
+        self.scenarios.get_or_init(|| self.scan_scenarios())
     }
 
     pub(super) fn unique_owner(&self, packages: &[&str], target: &str, expected: &str) -> bool {
@@ -112,6 +135,19 @@ impl CargoOwners {
             }
         }
         owners.as_slice() == [expected]
+    }
+
+    fn scan_scenarios(&self) -> ScenarioRows {
+        let mut rows = ScenarioRows::default();
+        let Ok(repo) = Repository::open(&self.root) else {
+            return rows;
+        };
+        for (package, target, tree) in &self.scenario_dirs {
+            if let Ok(dir) = repo.find_tree(*tree) {
+                rows.scan_target(&repo, &dir, package, target);
+            }
+        }
+        rows
     }
 }
 

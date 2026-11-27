@@ -17,6 +17,7 @@ use crate::application::review::cargo_target::CargoOwners;
 use crate::application::review::evidence::{
     covers_deferral, unreconciled_library_deferrals, unreconciled_opaque_deferrals,
 };
+use crate::application::review::scenario_row::unreconciled_scenario_deferrals;
 
 use super::{Judgement, SettlementInputs};
 
@@ -45,19 +46,19 @@ impl Judgement {
         {
             return Ok(());
         }
+        let owners = CargoOwners::at(&context.workspace_path, &candidate.tree);
         let Some(requirements) =
             crate::application::review::evidence::canonical_requirements(&self.external_evidence)
         else {
             if self.verdict == ReviewVerdict::Incomplete {
-                self.record_unreconciled_library_deferrals();
+                self.record_unreconciled_library_deferrals(&owners);
             }
             return Ok(());
         };
         self.external_evidence = requirements;
-        let owners = CargoOwners::at(&context.workspace_path, &candidate.tree);
         if !self.evidence_would_complete(&self.external_evidence, scope, &owners) {
             if self.verdict == ReviewVerdict::Incomplete {
-                self.record_unreconciled_library_deferrals();
+                self.record_unreconciled_library_deferrals(&owners);
             }
             return Ok(());
         }
@@ -262,6 +263,7 @@ impl Judgement {
         repair: Option<&CommitIdentity>,
         scope: &[String],
         unrestored: Option<&ValidationDefect>,
+        owners: &CargoOwners,
     ) {
         if let Some(defect) = unrestored {
             self.downgrade(&defect.reason());
@@ -300,10 +302,14 @@ impl Judgement {
                                 unreconciled_library_deferrals(
                                     &self.validation,
                                     &self.external_evidence,
+                                    owners,
                                 )
                             })
                             .unwrap_or_default();
-                    library_diagnostics.extend(unreconciled_opaque_deferrals(&self.validation));
+                    library_diagnostics
+                        .extend(unreconciled_opaque_deferrals(&self.validation, owners));
+                    library_diagnostics
+                        .extend(unreconciled_scenario_deferrals(&self.validation, owners));
                     self.downgrade(&defect.reason());
                     self.append_unique_escalations(library_diagnostics);
                 }
@@ -375,10 +381,11 @@ impl Judgement {
         });
     }
 
-    fn record_unreconciled_library_deferrals(&mut self) {
+    fn record_unreconciled_library_deferrals(&mut self, owners: &CargoOwners) {
         let mut diagnostics =
-            unreconciled_library_deferrals(&self.validation, &self.external_evidence);
-        diagnostics.extend(unreconciled_opaque_deferrals(&self.validation));
+            unreconciled_library_deferrals(&self.validation, &self.external_evidence, owners);
+        diagnostics.extend(unreconciled_opaque_deferrals(&self.validation, owners));
+        diagnostics.extend(unreconciled_scenario_deferrals(&self.validation, owners));
         self.append_unique_escalations(diagnostics);
     }
 

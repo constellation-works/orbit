@@ -295,6 +295,12 @@ impl Judgement {
                 });
                 let reviewer_named = requirement.is_some();
                 if requirement.is_none() {
+                    // [ORB-29076] A scenario row runs inside its libtest, so a
+                    // Cargo filter on the row runs no test. The scenario
+                    // diagnostic names the runnable check instead.
+                    if owners.scenarios().is_row(test) {
+                        continue;
+                    }
                     let command = match recorded_cargo_scope(&record.command) {
                         Some(RecordedCargoScope::Integration { package, target }) => {
                             format!("cargo test -p {package} --test {target} {test}")

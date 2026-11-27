@@ -18,6 +18,35 @@ const C: &str = "fixture_children::a_third_child_is_reaped";
 const SEATBELT_CONFORMANCE_TABLE: &str =
     "a_config_templated_write_root_outside_scratch_needs_fs_consent_scenarios";
 
+/// The candidate's workspace for ORB-29029: `orbit-core`'s `runtime` target
+/// declares `decision_raise`, whose `scenario_table!` runs
+/// `managed_raise_keeps_shared_root_read_only`.
+const SCENARIO_WORKSPACE: [(&str, &str); 4] = [
+    (
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/orbit-core\"]\nresolver = \"3\"\n",
+    ),
+    (
+        "crates/orbit-core/Cargo.toml",
+        "[package]\nname = \"orbit-core\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    ),
+    (
+        "crates/orbit-core/tests/runtime/main.rs",
+        "mod decision_raise;\n",
+    ),
+    (
+        "crates/orbit-core/tests/runtime/decision_raise.rs",
+        "crate::scenario_table!(managed_scenarios, managed_raise_keeps_shared_root_read_only);\n",
+    ),
+];
+
+const SCENARIO_ROW: &str = "managed_raise_keeps_shared_root_read_only";
+
+const SCENARIO_NATIVE: &str =
+    "cargo test -p orbit-core --test runtime decision_raise::managed_scenarios";
+
+const SCENARIO_NEXTEST: &str = "cargo nextest run -p orbit-core -p orbit-exec --test runtime";
+
 /// The host requirement that runs exactly `test`.
 fn exact(test: &str) -> String {
     format!("cargo test -p orbit-exec --test probe {test}")
@@ -627,6 +656,117 @@ fn a_deferral_owed_to_another_os_holds_the_review_for_it() {
     assert_eq!(broad_record(&certificate, BROAD).deferred, [notice(B)]);
 }
 
+fn scenario_record(
+    id: &str,
+    command: &str,
+    outcome: ValidationOutcome,
+    deferred: Vec<String>,
+) -> ReviewValidation {
+    ReviewValidation {
+        id: Some(id.into()),
+        command: command.into(),
+        outcome,
+        role: ValidationRole::Required,
+        note: None,
+        check: None,
+        control: None,
+        sources: Vec::new(),
+        mutation_target: Vec::new(),
+        repaired_blob: Default::default(),
+        deferred,
+        baseline: None,
+    }
+}
+
+/// Settle a nextest record that passed with a Bubblewrap deferral naming
+/// [`SCENARIO_ROW`] on a candidate whose tree is `workspace`, and return the
+/// certificate. Nothing replays: no host run may stand for the row.
+fn settle_scenario_deferral(workspace: &[(&str, &str)]) -> ReviewCertificate {
+    let (leaf, attempt_id) = leaf_with_candidate_files(&probe(&[]), false, "probe", workspace);
+    let notice =
+        orbit_exec::bwrap_deferral_notice(SCENARIO_ROW, "the host cannot apply the sandbox");
+    leaf.put_report(&ReviewReport {
+        external_evidence: Vec::new(),
+        schema_version: REVIEW_CONTRACT_VERSION,
+        attempt_id,
+        verdict: ReviewVerdict::Accept,
+        summary: "Checked the change; the consolidated scenario deferred on this host.".into(),
+        findings: Vec::new(),
+        validation: vec![
+            scenario_record("V1", "make ci-fast", ValidationOutcome::Passed, Vec::new()),
+            scenario_record(
+                "V2",
+                SCENARIO_NEXTEST,
+                ValidationOutcome::Passed,
+                vec![notice],
+            ),
+        ],
+        retired_validation: Vec::new(),
+        escalation: None,
+    });
+    // The deferred row keeps the review from passing; the diagnostic is the outcome.
+    let _ = leaf.settle();
+    let certificate = certificate(&leaf);
+    assert!(!certificate.verdict.passed(), "{:?}", certificate.verdict);
+    assert!(
+        certificate.host_evidence.is_empty(),
+        "{:?}",
+        certificate.host_evidence
+    );
+    certificate
+}
+
+/// [ORB-29076] A nextest record passes with a Bubblewrap deferral that names a
+/// consolidated scenario row. The row runs inside `decision_raise::managed_scenarios`,
+/// so the escalation names that libtest and the row's marker. It never offers
+/// a Cargo filter on the row, which runs no test, and no replay runs for it.
+fn a_consolidated_scenario_deferral_names_its_libtest_and_marker() {
+    let certificate = settle_scenario_deferral(&SCENARIO_WORKSPACE);
+    let escalation = certificate.escalation.as_deref().unwrap_or_default();
+    assert!(
+        orbit_types::workflow::HostSandboxCommand::admit(SCENARIO_NATIVE, &[]).is_ok(),
+        "the native check is admissible"
+    );
+    assert!(
+        escalation.contains(SCENARIO_NATIVE)
+            && escalation.contains(&format!("qa-scenario-pass: {SCENARIO_ROW}")),
+        "the escalation names the libtest and its marker: {escalation}"
+    );
+    assert!(
+        !escalation.contains(&format!("--test runtime {SCENARIO_ROW}")),
+        "a Cargo filter on the row runs no test and is never offered: {escalation}"
+    );
+}
+
+/// [ORB-29076] When two libtests run the same row, no libtest is its home. The
+/// escalation names the uncovered command and the fresh-review route, and it
+/// names no native check and no marker-bearing libtest.
+fn a_scenario_row_with_two_homes_names_only_the_uncovered_command() {
+    let mut workspace = SCENARIO_WORKSPACE.to_vec();
+    workspace[2] = (
+        "crates/orbit-core/tests/runtime/main.rs",
+        "mod decision_raise;\nmod other_raise;\n",
+    );
+    workspace.push((
+        "crates/orbit-core/tests/runtime/other_raise.rs",
+        "crate::scenario_table!(other_scenarios, managed_raise_keeps_shared_root_read_only);\n",
+    ));
+    let certificate = settle_scenario_deferral(&workspace);
+    let escalation = certificate.escalation.as_deref().unwrap_or_default();
+    assert!(
+        escalation.contains("unreconciled_scenario_deferral")
+            && escalation.contains(SCENARIO_NEXTEST)
+            && escalation.contains("admit a fresh review"),
+        "the uncovered command and the fresh-review route: {escalation}"
+    );
+    assert!(
+        !escalation.contains(SCENARIO_NATIVE)
+            && !escalation.contains("decision_raise::managed_scenarios")
+            && !escalation.contains("other_scenarios"),
+        "no libtest is named as the home of an ambiguous row: {escalation}"
+    );
+}
+
 crate::scenario_table!(
     a_broader_run_deferring_only_host_tests_scenarios,
     a_broader_run_deferring_only_host_tests_settles_on_their_replays,
@@ -634,5 +774,7 @@ crate::scenario_table!(
     a_broader_run_the_host_cannot_establish_runs_no_replay,
     a_replay_short_of_executing_its_test_leaves_the_broader_run_short,
     a_deferral_owed_to_another_os_holds_the_review_for_it,
-    a_nested_seatbelt_conformance_deferral_settles_on_its_host_replay
+    a_nested_seatbelt_conformance_deferral_settles_on_its_host_replay,
+    a_consolidated_scenario_deferral_names_its_libtest_and_marker,
+    a_scenario_row_with_two_homes_names_only_the_uncovered_command
 );

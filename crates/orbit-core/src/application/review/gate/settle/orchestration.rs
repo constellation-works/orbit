@@ -488,7 +488,16 @@ fn settle(
         &final_candidate.commit,
         repair.as_ref(),
     )?;
-    judgement.reconcile_verdict(repair.as_ref(), &validation_scope, unrestored.as_ref());
+    let owners = crate::application::review::cargo_target::CargoOwners::at(
+        &context.workspace_path,
+        &final_candidate.tree,
+    );
+    judgement.reconcile_verdict(
+        repair.as_ref(),
+        &validation_scope,
+        unrestored.as_ref(),
+        &owners,
+    );
     let now = Utc::now();
 
     let settled = match recorded {

@@ -737,6 +737,19 @@ run starts), and a `review-*` name is reserved. A reviewer's own captured log
 is never a host result
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
 
+A consolidated scenario row (a row of a `scenario_table!`) runs inside one
+libtest, so its deferral notice names the row, not a test path, and a Cargo
+filter on the row runs no test. Settlement never synthesizes a requirement for
+such a row. Its `unreconciled_scenario_deferral` escalation names the libtest
+that runs it (`cargo test -p <crate> --test <target> <module>::<table>`) and
+the marker the native run must print, `qa-scenario-pass: <row>`. That run
+validates the row alone: a parent test pass without the marker, a repeated
+deferral, or a row with no single home in the candidate settles nothing. The
+home is read from the candidate's own tree and counts only when the row's
+module is declared with a plain `mod` line in a target with no `#[path]`
+module, and no other libtest runs the same row. Otherwise the escalation names
+the uncovered command and the fresh-review route.
+
 One exception: when the reviewer accepted with no open findings, settlement
 itself reads a `DEFERRED: bubblewrap unavailable:` notice in a required
 record and synthesizes the Linux `host_sandbox_test` requirement for the

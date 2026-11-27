@@ -355,6 +355,7 @@ pub(super) fn recorded_cargo_scope(command: &str) -> Option<RecordedCargoScope<'
 pub(super) fn unreconciled_library_deferrals(
     records: &[ReviewValidation],
     requirements: &[ReviewEvidenceRequirement],
+    owners: &CargoOwners,
 ) -> Vec<String> {
     let eligible: Vec<ReviewEvidenceRequirement> = canonical_requirements(requirements)
         .unwrap_or_default()
@@ -391,6 +392,7 @@ pub(super) fn unreconciled_library_deferrals(
             .map(String::as_str)
             .filter(|notice| {
                 !notice.trim().is_empty()
+                    && !names_scenario_row(owners, notice)
                     && !eligible.iter().any(|required| {
                         required.command == record.command
                             || covers_deferral(required, record, notice, &CargoOwners::default())
@@ -409,7 +411,10 @@ pub(super) fn unreconciled_library_deferrals(
 
 /// Explain deferrals in opaque required commands, whose test scope cannot be
 /// established from the command. Focused receipts cannot establish that scope.
-pub(super) fn unreconciled_opaque_deferrals(records: &[ReviewValidation]) -> Vec<String> {
+pub(super) fn unreconciled_opaque_deferrals(
+    records: &[ReviewValidation],
+    owners: &CargoOwners,
+) -> Vec<String> {
     records
         .iter()
         .filter(|record| {
@@ -419,28 +424,38 @@ pub(super) fn unreconciled_opaque_deferrals(records: &[ReviewValidation]) -> Vec
                 && recorded_cargo_scope(&record.command).is_none()
                 && !contains_cargo_test(&record.command)
         })
-        .map(|record| {
+        .filter_map(|record| {
+            // [ORB-29076] Scenario rows get their own diagnostic.
+            let notices = record
+                .deferred
+                .iter()
+                .filter(|notice| !notice.trim().is_empty() && !names_scenario_row(owners, notice))
+                .map(|notice| format!("`{}`", notice.trim()))
+                .collect::<Vec<_>>();
+            if notices.is_empty() {
+                return None;
+            }
             let label = record.record_id().map_or_else(
                 || format!("`{}`", record.command),
                 |id| format!("`{id}` (`{}`)", record.command),
             );
-            let notices = record
-                .deferred
-                .iter()
-                .filter(|notice| !notice.trim().is_empty())
-                .map(|notice| format!("`{}`", notice.trim()))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
+            Some(format!(
                 "unreconciled_opaque_deferral: required record {label} has uncovered deferrals: \
-                 {notices}; its command has no supported Cargo scope, so focused evidence alone \
+                 {}; its command has no supported Cargo scope, so focused evidence alone \
                  cannot establish its coverage. Run `{}` natively outside the sandbox without \
                  deferral and admit a fresh review with that result, or admit a fresh review \
                  with supported Cargo records and matching host evidence",
+                notices.join(", "),
                 record.command
-            )
+            ))
         })
         .collect()
+}
+
+/// [ORB-29076] Whether `notice` names a consolidated scenario row. Such a row
+/// has no Cargo filter that runs it, so only the scenario diagnostic names it.
+fn names_scenario_row(owners: &CargoOwners, notice: &str) -> bool {
+    deferred_test(notice).is_some_and(|test| owners.scenarios().is_row(test))
 }
 
 fn plain_scope_char(ch: char) -> bool {
