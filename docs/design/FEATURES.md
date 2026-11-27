@@ -22,7 +22,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 | [Standing Drain](./standing-drain/1_scope.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
 
-### Designing (8)
+### Designing (9)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -31,6 +31,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Doc Layout](./doc-layout/1_scope.md) | Phase 1: create docs/principles/ and move the three pages [ORB-29310] | claude |
 | [Eval Harness](./eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
 | [Owner Failover](./owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
+| [Plugin Pages](./plugin-pages/1_scope.md) | Operator approval of this scope [ORB-29504] | claude |
 | [Signal Acknowledgement](./signal-acknowledgement/1_scope.md) | Daniel promotes ORB-27754 from someday to start phase 1; phases 2 and 3 are unfiled | claude |
 | [Symbol Risk Index](./symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
