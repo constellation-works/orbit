@@ -2,7 +2,7 @@
 title: Crew Memory — Design
 owner: claude
 created_date: 2026-11-08
-updated_date: 2026-11-24
+updated_date: 2026-11-27
 last_validated: 2026-11-09
 status: Accepted
 feature: crew-memory
@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: "Accepted, now parked design for experimental per-model memory: owner-store spaces delivered through a memory experiment overlay and rewritten by score-blind dreaming runs only during an active memory experiment; external user surfaces and the default routine were retired after a no-difference readout."
 tags: [crew-memory, experiments, agent-scorecards, auto-tasks]
-paths: ["crates/orbit-core/src/application/crew_memory/**", "crates/orbit-core/src/app/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
+paths: ["crates/orbit-core/src/app/crew_memory/**", "crates/orbit-core/src/app/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
 related_features: [experiments, agent-scorecards, auto-tasks, routines, task-artifacts]
 related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23115, ORB-23116, ORB-23066, ORB-10736, ORB-23644]
 ---

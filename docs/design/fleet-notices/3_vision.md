@@ -2,7 +2,7 @@
 title: Fleet Notices — Vision
 owner: claude
 created_date: 2026-11-01
-updated_date: 2026-11-02
+updated_date: 2026-11-27
 last_validated: 2026-11-02
 status: Draft
 feature: fleet-notices
@@ -10,7 +10,7 @@ doc_role: vision
 type: design
 summary: "Open directions for fleet notices: the maintenance dispatch hold, real orchestrator credentials, multi-owner global notices, push delivery, and prior art"
 tags: [fleet-notices]
-paths: ["crates/orbit-core/src/application/notice/**"]
+paths: ["crates/orbit-core/src/app/notice/**"]
 related_features: [fleet-notices, distributed-drain, operator-attention, path-leases]
 related_artifacts: [ORB-21207]
 ---

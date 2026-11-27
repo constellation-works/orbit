@@ -2,7 +2,7 @@
 title: Crew Memory — Vision
 owner: claude
 created_date: 2026-11-08
-updated_date: 2026-11-19
+updated_date: 2026-11-27
 last_validated: 2026-11-08
 status: Accepted
 feature: crew-memory
@@ -10,7 +10,7 @@ doc_role: vision
 type: design
 summary: "Open questions for crew memory after the first experiment: cross-workspace memory, reviewer and pilot experiments, automatic promotion, and what prior work on agent reflection suggests."
 tags: [crew-memory]
-paths: ["crates/orbit-core/src/application/crew_memory/**"]
+paths: ["crates/orbit-core/src/app/crew_memory/**"]
 related_features: [experiments, agent-scorecards]
 related_artifacts: [ORB-23105]
 ---

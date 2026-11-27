@@ -32,7 +32,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Eval Harness](./eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
 | [Owner Failover](./owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
 | [Pilot Notes](./pilot-notes/1_overview.md) | Add the config table and the pilot's prompt section [ORB-29586] | claude |
-| [Plugin Pages](./plugin-pages/1_overview.md) | Check the frame policy in three browser engines [ORB-29532] | claude |
+| [Plugin Pages](./plugin-pages/1_overview.md) | Record the engine measurements against the one-document contract [ORB-29532] | claude |
 | [Signal Acknowledgement](./signal-acknowledgement/1_scope.md) | Daniel promotes ORB-27754 from someday to start phase 1; phases 2 and 3 are unfiled | claude |
 | [Symbol Risk Index](./symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
