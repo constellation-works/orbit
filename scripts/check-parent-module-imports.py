@@ -29,7 +29,7 @@ def _skip_quoted(source, start, quote):
 def _skip_raw_string(source, start):
     """Return the end of a Rust raw string, or None if this is not one."""
     index = start
-    if source.startswith("br", index):
+    if source.startswith("br", index) or source.startswith("cr", index):
         index += 2
     elif source[index] == "r":
         index += 1
