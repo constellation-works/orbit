@@ -7,7 +7,7 @@ last_validated: 2026-10-26
 # Path-lease listener sudo on a disposable host
 
 Recipe for the fresh-authorization prerequisite in
-[2_design.md §7.1](../../design/path-leases/2_design.md#71-the-listener-user). The network lease
+[2_design.md §7.1](../../../design/path-leases/2_design.md#71-the-listener-user). The network lease
 listener is implemented, but its configuration and the `orbit lease` commands were withdrawn
 [ORB-22808], so nothing starts it today. A root-owned stub stands
 in for the transition, so the recipe isolates host authorization without product execution. The

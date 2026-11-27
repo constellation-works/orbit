@@ -408,7 +408,7 @@ exec {shlex.quote(sys.executable)} "$@"
         for path in ("scripts/new-guard.sh", ".github/new.yml", "Makefile",
                      ".config/nextest.toml",
                      "crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml",
-                     "install.sh", "RELEASING.md", "docs/dev/qa/path-leases-listener-sudo.md",
+                     "install.sh", "RELEASING.md", "docs/agents/records/qa/path-leases-listener-sudo.md",
                      "plugin/new.json", ".cargo/config.toml"):
             with self.subTest(path=path):
                 target = self.root / path
@@ -502,7 +502,7 @@ exec {shlex.quote(sys.executable)} "$@"
         self.init_ci_git()
         self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
         for path in ("server.json",
-                     "docs/dev/examples/release-readiness/scripts/release-readiness.yaml"):
+                     "docs/development/examples/release-readiness/scripts/release-readiness.yaml"):
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("# changed input\n")
@@ -535,7 +535,7 @@ exec {shlex.quote(sys.executable)} "$@"
                 self.assert_self_tests(False)
                 self.assertFalse((self.guard_calls / "test-path-leases-listener-sudo.py").exists())
         ordinary.unlink()
-        recipe = self.root / "docs/dev/qa/path-leases-listener-sudo.md"
+        recipe = self.root / "docs/agents/records/qa/path-leases-listener-sudo.md"
         recipe.parent.mkdir(parents=True, exist_ok=True)
         recipe.write_text("# recipe\n")
         for flag, env in (("--fast", None), ("--guards", {"CI_SELF_TESTS": "changed"})):
@@ -2245,7 +2245,7 @@ class DocLinkGuardrailTests(unittest.TestCase):
 
     def test_excluded_documents_are_ignored_when_tracked_or_untracked(self):
         excluded = ("docs/design/demo/4_decisions.md", "docs/design/_templates/example.md",
-                    "docs/design/CONVENTIONS.md", "docs/dev/rca/record.md", "CHANGELOG.md",
+                    "docs/design/CONVENTIONS.md", "docs/agents/records/rca/record.md", "CHANGELOG.md",
                     "crates/demo/tests/fixtures/example.md")
         for name in excluded:
             self.write(name, "[historical](missing.md)\n`crates/missing.rs`\n")
@@ -4874,7 +4874,7 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         self.write(self.DOC, f"# Overview\n\nThe {self.CONST} job name is owned by contracts.\n\n"
                    f"```text\n`{self.CONST}`\n```\n")
         self.write("docs/design/orbit-core/4_decisions.md", f"Decided `{self.CONST}`.\n")
-        self.write("docs/dev/rca/2026-01-01-record.md", f"Cause: `{self.CONST}`.\n")
+        self.write("docs/agents/records/rca/2026-01-01-record.md", f"Cause: `{self.CONST}`.\n")
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stderr)
 

@@ -25,12 +25,12 @@ repo_root="${1:-${ORBIT_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
 docs_dir="$repo_root/docs"
 runbooks_dir="$docs_dir/runbooks"
 design_dir="$docs_dir/design"
-qa_dir="$docs_dir/dev/qa"
-rca_dir="$docs_dir/dev/rca"
+qa_dir="$docs_dir/agents/records/qa"
+rca_dir="$docs_dir/agents/records/rca"
 archived_dir="$design_dir/_archived"
 
 if [[ ! -d "$runbooks_dir" || ! -d "$design_dir" || ! -d "$rca_dir" ]]; then
-  echo "error: expected docs/runbooks, docs/design, and docs/dev/rca under $repo_root" >&2
+  echo "error: expected docs/runbooks, docs/design, and docs/agents/records/rca under $repo_root" >&2
   exit 1
 fi
 

@@ -21,7 +21,7 @@ uses), take the identifiers whose definition the diff deletes:
 Drop any identifier the same diff adds back, or that the working tree still
 defines, re-exports or styles. Fail when a removed identifier is named as a
 token inside an inline code span of a live document. Live documents are `docs/`
-(except `docs/design/*/4_decisions.md`, `docs/dev/rca/` and `docs/standards/`),
+(except `docs/design/*/4_decisions.md`, `docs/agents/records/rca/` and `docs/standards/`),
 `website/src/content`, the shipped skills, `ARCHITECTURE.md` and the per-crate
 `AGENTS.md` and `CLAUDE.md` files. Legitimate keeps are recorded in
 `scripts/removed-code-identifiers-allowlist.json` with a reason. An entry is
@@ -50,7 +50,7 @@ DOC_PREFIXES = ("docs/", "website/src/content/", "crates/orbit-core/assets/skill
 DOC_FILES = ("ARCHITECTURE.md",)
 CRATE_GUIDE = re.compile(r"crates/[^/]+/(?:AGENTS|CLAUDE)\.md")
 # Decision records, RCAs and vendored standards keep history on purpose.
-HISTORICAL_DOCS = re.compile(r"docs/design/[^/]+/4_decisions\.md|docs/dev/rca/|docs/standards/")
+HISTORICAL_DOCS = re.compile(r"docs/design/[^/]+/4_decisions\.md|docs/agents/records/rca/|docs/standards/")
 CRATE_SOURCE = re.compile(r"crates/([^/]+)/src/(.+)\.rs")
 # A definition starts its line, after visibility and qualifier keywords, so
 # `*const T`, `&'static str` and `fn(u8)` pointer types do not count.

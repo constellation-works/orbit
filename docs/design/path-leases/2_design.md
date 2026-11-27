@@ -391,7 +391,7 @@ claim that agents cannot mint tokens. Fail closed. Leave `lease.listener.bind` a
 the listener user. Ordinary password-protected `sudo` is that narrower case, not a sufficient
 deployment. The disposable-guest recipe for a warmed timestamp and for the denial under
 `timestamp_timeout=0` is
-[path-leases-listener-sudo.md](../../dev/qa/path-leases-listener-sudo.md). It does not change
+[path-leases-listener-sudo.md](../../agents/records/qa/path-leases-listener-sudo.md). It does not change
 a live owner's sudoers.
 
 - **The user.** A system user with no login shell and its own Orbit home (for example

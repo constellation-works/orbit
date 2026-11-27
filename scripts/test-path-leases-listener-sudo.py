@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the listener-sudo recipe's tty guard as written, with heredoc-fed stdin.
 
-Each warm-then-child block in docs/dev/qa/path-leases-listener-sudo.md is fed to
+Each warm-then-child block in docs/agents/records/qa/path-leases-listener-sudo.md is fed to
 `bash -s` on stdin, as its `su - operator --session-command 'bash -s' << 'EOF'` heredoc does. The
 guard must pass when the session has a controlling terminal, and refuse with exit 2
 when it has none. A `sudo` stub on PATH keeps real sudo out, and the recipe's /tmp
@@ -19,7 +19,7 @@ import termios
 import unittest
 from unittest import mock
 
-RECIPE = Path(__file__).resolve().parent.parent / "docs/dev/qa/path-leases-listener-sudo.md"
+RECIPE = Path(__file__).resolve().parent.parent / "docs/agents/records/qa/path-leases-listener-sudo.md"
 OPENER = "su - operator --session-command 'bash -s' << 'EOF'"
 
 

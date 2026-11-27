@@ -102,7 +102,7 @@ FILE_READERS = (
     (Path("scripts/ci-await-jobs.py"), ("orbit-engine",)),
     (Path("scripts/ci-test-affected.py"), ("orbit-core",)),
     (Path("scripts/release-readiness-adapter.py"), ("orbit-engine",)),
-    (Path("docs/dev/examples/release-readiness/scripts/release-readiness.yaml"), ("orbit-engine",)),
+    (Path("docs/development/examples/release-readiness/scripts/release-readiness.yaml"), ("orbit-engine",)),
     (Path(".github/workflows/ci.yml"), ("orbit-engine",)),
     (Path(".github/workflows/ci-macos.yml"), ("orbit-engine",)),
     (Path(".github/workflows/website-check.yml"), ("orbit-engine",)),

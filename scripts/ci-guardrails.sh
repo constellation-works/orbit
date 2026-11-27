@@ -293,10 +293,10 @@ elif [[ "$fast" == true || ("$guards" == true && "${CI_SELF_TESTS:-all}" == chan
         scripts/* | .github/* | Makefile | .cargo/* | Cargo.toml | Cargo.lock | \
           .config/nextest.toml | \
           crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml | \
-          install.sh | RELEASING.md | docs/dev/qa/path-leases-listener-sudo.md | \
+          install.sh | RELEASING.md | docs/agents/records/qa/path-leases-listener-sudo.md | \
           docs/standards/* | AGENTS.md | CLAUDE.md | \
           plugin/* | npm/* | .agents/* | .claude-plugin/* | \
-          server.json | docs/dev/examples/release-readiness/scripts/release-readiness.yaml)
+          server.json | docs/development/examples/release-readiness/scripts/release-readiness.yaml)
           run_self_tests=true
           break
           ;;

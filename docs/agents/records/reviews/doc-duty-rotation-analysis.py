@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Manual historical analysis of the doc-duty starvation incident (ORB-15149).
 
-Run manually with python3 docs/dev/reviews/doc-duty-rotation-analysis.py.
+Run manually with python3 docs/agents/records/reviews/doc-duty-rotation-analysis.py.
 This standalone model does not read or execute the production template and
 provides no production regression coverage. Its corpus, history window and
 batch size are historical assumptions, not assertions about current policy.

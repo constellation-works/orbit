@@ -216,7 +216,7 @@
   },
   {
     "identifier": "contention",
-    "doc": "docs/dev/qa/cli-command-evidence.md",
+    "doc": "docs/agents/records/qa/cli-command-evidence.md",
     "reason": "Names the `orbit task locks contention` CLI subcommand, not the removed `app::run` constructor `Command::contention`."
   },
   {
