@@ -72,6 +72,94 @@ fn task_update_with_resident_mandate_activates_and_warns() {
     }
 }
 
+fn mandate_fixture() -> (Fixture, String) {
+    let fixture = Fixture::new();
+    let config = fixture.root.join("config.toml");
+    let mut settings = fs::read_to_string(&config).unwrap();
+    settings.push_str("\n[crews.mandate-fixture]\nprovider = \"codex\"\nmodel = \"gpt-6-sol\"\n");
+    fs::write(config, settings).unwrap();
+    let mandate = json!({
+        "schema": "resident.mandate/v1",
+        "goal": "Keep the release branch green",
+        "exit_criteria": ["All release checks pass"],
+        "workspaces": ["audit-qa"],
+        "crew": "mandate-fixture",
+        "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+    });
+    (fixture, mandate.to_string())
+}
+
+fn add_plain_task(fixture: &Fixture, status: &str, tag: &str) -> String {
+    let task = fixture.json(&[
+        "task",
+        "add",
+        "--title",
+        "Release resident",
+        "--status",
+        status,
+        "--complexity",
+        "low",
+        "--tag",
+        tag,
+        "--crew",
+        "sol",
+        "--json",
+    ]);
+    task["id"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn task_update_adding_resident_tag_with_mandate_syncs_crew_and_activates() {
+    let (fixture, mandate) = mandate_fixture();
+    let attachment = format!("resident/mandate.json={mandate}");
+    for status in ["proposed", "backlog"] {
+        let id = add_plain_task(&fixture, status, "ordinary");
+        let updated = fixture.json(&[
+            "task",
+            "update",
+            &id,
+            "--tag",
+            "resident",
+            "--artifact",
+            &attachment,
+            "--json",
+        ]);
+        assert_eq!(updated["crew"], "mandate-fixture", "{updated}");
+        assert_eq!(updated["status"], "in-progress", "{updated}");
+    }
+}
+
+#[test]
+fn task_update_removing_resident_tag_with_mandate_keeps_crew() {
+    let (fixture, mandate) = mandate_fixture();
+    let attachment = format!("resident/mandate.json={mandate}");
+    let id = add_plain_task(&fixture, "backlog", "resident");
+    let updated = fixture.json(&[
+        "task",
+        "update",
+        &id,
+        "--tag",
+        "ordinary",
+        "--artifact",
+        &attachment,
+        "--json",
+    ]);
+    assert_eq!(updated["crew"], "sol", "{updated}");
+    assert_ne!(updated["status"], "in-progress", "{updated}");
+}
+
+#[test]
+fn task_update_with_non_canonical_mandate_path_syncs_crew_and_activates() {
+    let (fixture, mandate) = mandate_fixture();
+    for path in ["./resident/mandate.json", "resident//mandate.json"] {
+        let id = add_plain_task(&fixture, "backlog", "resident");
+        let attachment = format!("{path}={mandate}");
+        let updated = fixture.json(&["task", "update", &id, "--artifact", &attachment, "--json"]);
+        assert_eq!(updated["crew"], "mandate-fixture", "{path}: {updated}");
+        assert_eq!(updated["status"], "in-progress", "{path}: {updated}");
+    }
+}
+
 fn task_updates_and_approval_redact_prose_before_persistence() {
     let fixture = Fixture::new();
     let token = format!("ghp_{}", "a".repeat(36));

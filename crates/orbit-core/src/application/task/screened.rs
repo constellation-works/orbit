@@ -12,7 +12,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 use orbit_types::task::{
     RegressionClassification, SeveritySource, Task, TaskRelation, TaskRelationType, TaskStatus,
-    backlog_footprint_warning, canonical_artifact_path,
+    backlog_footprint_warning, canonical_artifact_path, normalize_task_tags,
 };
 use orbit_types::workflow::automation::COVERAGE_ARTIFACT;
 use orbit_types::workflow::{RESIDENT_MANDATE_ARTIFACT, RESIDENT_TAG};
@@ -338,10 +338,10 @@ impl OrbitRuntime {
         let writes_coverage = params.upsert_artifacts.iter().any(|artifact| {
             canonical_artifact_path(&artifact.path).ok().as_deref() == Some(COVERAGE_ARTIFACT)
         });
-        let mandate_artifact = params
-            .upsert_artifacts
-            .iter()
-            .find(|artifact| artifact.path == RESIDENT_MANDATE_ARTIFACT);
+        let mandate_artifact = params.upsert_artifacts.iter().find(|artifact| {
+            canonical_artifact_path(&artifact.path).ok().as_deref()
+                == Some(RESIDENT_MANDATE_ARTIFACT)
+        });
         let attaches_mandate = mandate_artifact.is_some();
         let mandate_crew = mandate_artifact
             .and_then(|artifact| self.resident_crew_from_mandate(&artifact.content));
@@ -355,11 +355,20 @@ impl OrbitRuntime {
         } else {
             None
         };
-        // Keep the crew change in the same write as the mandate artifact.
-        if let Some(crew) = mandate_crew
-            && stored
+        // Keep the crew change in the same write as the mandate artifact, for
+        // the tags the task holds after this write: a replacement tag list
+        // wins over the stored one.
+        let resident_after_write = match params.tags.clone() {
+            Some(tags) => normalize_task_tags(tags),
+            None => stored
                 .as_ref()
-                .is_some_and(|task| task.tags.iter().any(|tag| tag == RESIDENT_TAG))
+                .map(|task| task.tags.clone())
+                .unwrap_or_default(),
+        }
+        .iter()
+        .any(|tag| tag == RESIDENT_TAG);
+        if let Some(crew) = mandate_crew
+            && resident_after_write
         {
             params.crew = Some(Some(crew));
         }
