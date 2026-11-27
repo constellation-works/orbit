@@ -11,19 +11,18 @@
 //! changing them or polling inside the cache period never rescans task
 //! bundles. A stale scan is served while one background refresh replaces it.
 
-use std::sync::Arc;
-
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
+use orbit_core::OrbitError;
+use orbit_core::app::agent::{self as agent_app, Command, Outcome};
 use orbit_core::application::agents::{
     self, AgentFacts, AgentQuery, AgentRole, CiFailureQuery, RankQuery,
 };
-use orbit_core::{OrbitError, OrbitRuntime};
 use serde::Deserialize;
 
 use super::{bad_request, blocking, map_runtime_error};
-use crate::runtime_memo::{AGENT_SCAN_STALE_LIMIT, AGENT_SCAN_TTL, Served};
-use crate::state::{DashboardState, Ws};
+use crate::runtime_memo::{AGENT_SCAN_TTL, Served};
+use crate::state::{AgentsWs, DashboardState, WsCore};
 
 /// Query string for the agent scorecard routes.
 #[derive(Debug, Default, Deserialize)]
@@ -100,7 +99,7 @@ pub(super) struct CiFailureSelection {
 
 pub(super) async fn agent_scorecard(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ws: AgentsWs,
     Path(role): Path<String>,
     Query(query): Query<AgentScorecardQuery>,
 ) -> Response {
@@ -109,7 +108,7 @@ pub(super) async fn agent_scorecard(
             Ok(selected) => selected,
             Err(error) => return error_response(error),
         };
-    match facts(&state, runtime).await {
+    match facts(&state, &ws).await {
         Ok(served) => (
             served.age_header(),
             Json(agents::agent_scorecard(
@@ -127,15 +126,19 @@ pub(super) async fn agent_scorecard(
 /// The implementer tier/type matrix, sliced from the same cached scan.
 pub(super) async fn agent_by_type(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ws: AgentsWs,
     Query(query): Query<AgentScorecardQuery>,
 ) -> Response {
     let selection = match selection(&query) {
         Ok(selection) => selection,
         Err(error) => return error_response(error),
     };
-    let types = runtime.task_types().to_vec();
-    match facts(&state, runtime).await {
+    let types = match agent_app::exec(&ws.core, Command::TaskTypes) {
+        Ok(Outcome::TaskTypes(types)) => types,
+        Ok(_) => return error_response(mismatched("task types")),
+        Err(error) => return error_response(error),
+    };
+    match facts(&state, &ws).await {
         Ok(served) => (
             served.age_header(),
             Json(agents::agent_by_type_scorecard(
@@ -154,14 +157,14 @@ pub(super) async fn agent_by_type(
 /// cached scan.
 pub(super) async fn agent_size_curves(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ws: AgentsWs,
     Query(query): Query<AgentScorecardQuery>,
 ) -> Response {
     let selection = match selection(&query) {
         Ok(selection) => selection,
         Err(error) => return error_response(error),
     };
-    let served = match facts(&state, runtime).await {
+    let served = match facts(&state, &ws).await {
         Ok(served) => served,
         Err(error) => return error_response(error),
     };
@@ -178,7 +181,7 @@ pub(super) async fn agent_size_curves(
 
 pub(super) async fn agent_detail(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ws: AgentsWs,
     Path(role): Path<String>,
     Query(query): Query<AgentScorecardQuery>,
 ) -> Response {
@@ -190,7 +193,7 @@ pub(super) async fn agent_detail(
     let Some(crew) = query.crew.as_deref().filter(|crew| !crew.trim().is_empty()) else {
         return bad_request("crew is required".into());
     };
-    let served = match facts(&state, runtime).await {
+    let served = match facts(&state, &ws).await {
         Ok(served) => served,
         Err(error) => return error_response(error),
     };
@@ -210,14 +213,14 @@ pub(super) async fn agent_detail(
 
 pub(super) async fn agent_attribution(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ws: AgentsWs,
     Query(query): Query<AgentScorecardQuery>,
 ) -> Response {
     let selection = match selection(&query) {
         Ok(selection) => selection,
         Err(error) => return error_response(error),
     };
-    match facts(&state, runtime).await {
+    match facts(&state, &ws).await {
         Ok(served) => (
             served.age_header(),
             Json(agents::agent_attribution(
@@ -235,7 +238,7 @@ pub(super) async fn agent_attribution(
 /// the workspace's current season of noise scales.
 pub(super) async fn agent_rank(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ws: AgentsWs,
     Query(query): Query<AgentRankQuery>,
 ) -> Response {
     let selection = match RankQuery::parse(
@@ -248,11 +251,12 @@ pub(super) async fn agent_rank(
         Ok(selection) => selection,
         Err(error) => return error_response(error),
     };
-    let seasons = match runtime.agent_rank_seasons() {
-        Ok(seasons) => seasons,
+    let seasons = match agent_app::exec(&ws.core, Command::RankSeasons) {
+        Ok(Outcome::RankSeasons(seasons)) => seasons,
+        Ok(_) => return error_response(mismatched("ranking seasons")),
         Err(error) => return error_response(error),
     };
-    match facts(&state, runtime).await {
+    match facts(&state, &ws).await {
         Ok(served) => (
             served.age_header(),
             Json(agents::agent_rank(
@@ -270,7 +274,7 @@ pub(super) async fn agent_rank(
 /// The recorded required-check failures the selection names, newest first:
 /// the payload `orbit agents ci-failures --json` prints.
 pub(super) async fn agent_ci_failures(
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Query(query): Query<CiFailureSelection>,
 ) -> Response {
     let selection = match CiFailureQuery::parse(
@@ -283,7 +287,7 @@ pub(super) async fn agent_ci_failures(
         Err(error) => return error_response(error),
     };
     match blocking("CI failure records", move || {
-        runtime.ci_failure_records(&selection)
+        agent_app::exec(&core, Command::CiFailures(selection))?.into_value()
     })
     .await
     {
@@ -306,19 +310,22 @@ fn error_response(error: OrbitError) -> Response {
     }
 }
 
-async fn facts(
-    state: &DashboardState,
-    runtime: Arc<OrbitRuntime>,
-) -> Result<Served<AgentFacts>, OrbitError> {
-    let scan_runtime = Arc::clone(&runtime);
-    state
-        .agent_memo()
-        .get_or_refresh(
-            &runtime,
-            (),
-            AGENT_SCAN_TTL,
-            AGENT_SCAN_STALE_LIMIT,
-            move || scan_runtime.agent_scan(),
-        )
-        .await
+/// The agent app's answer to a read, which is always the model it was asked
+/// for.
+fn mismatched(read: &str) -> OrbitError {
+    OrbitError::Execution(format!("the agent {read} read answered with another model"))
+}
+
+async fn facts(state: &DashboardState, ws: &AgentsWs) -> Result<Served<AgentFacts>, OrbitError> {
+    let core = std::sync::Arc::clone(&ws.core);
+    ws.cached_scan(state, move || {
+        match agent_app::exec(&core, Command::Scan)? {
+            Outcome::Scan(facts) => Ok(*facts),
+            Outcome::Value(_)
+            | Outcome::VisionProbe(_)
+            | Outcome::TaskTypes(_)
+            | Outcome::RankSeasons(_) => Err(mismatched("scan")),
+        }
+    })
+    .await
 }

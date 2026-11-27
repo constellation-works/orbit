@@ -1,9 +1,10 @@
 //! Search query arguments derive from the operation spec; reindex remains local maintenance.
 use super::operation_args::{Invocation, augment_operation_args, input_from_matches};
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 use clap::{ArgMatches, Args, Command, FromArgMatches, Subcommand};
 use orbit_common::governance::{operation::OperationVerb, search::SearchVerb};
-use orbit_core::{OrbitError, OrbitRuntime, SearchRequestProfile};
+use orbit_core::app::search::{self, Command as SearchAppCommand, Input, Outcome};
+use orbit_core::{Core, OrbitError, SearchRequestProfile};
 use serde_json::Value;
 
 pub struct SearchCommand {
@@ -11,10 +12,21 @@ pub struct SearchCommand {
     pub command: Option<SearchSubcommand>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
-pub enum SearchSubcommand {
-    /// Rebuild the task search index from the task store.
-    Reindex,
+impl SearchCommand {
+    pub fn audit_subcommand(&self) -> String {
+        let mode = if self.command.is_some() {
+            "reindex".to_string()
+        } else {
+            self.query.audit_subcommand()
+        };
+        let kind = self
+            .query
+            .input
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("all");
+        format!("{mode}:{kind}")
+    }
 }
 
 impl Args for SearchCommand {
@@ -56,8 +68,8 @@ impl FromArgMatches for SearchCommand {
     }
 }
 
-impl Execute for SearchCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for SearchCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         let Invocation { spec, input } = self.query;
         if matches!(self.command, Some(SearchSubcommand::Reindex)) {
             if input.contains_key("query")
@@ -69,7 +81,13 @@ impl Execute for SearchCommand {
                         .into(),
                 ));
             }
-            let stats = runtime.search_reindex()?;
+            let Outcome::Reindexed(stats) =
+                search::exec(core, SearchAppCommand::Reindex(Input::new(input)))?
+            else {
+                return Err(OrbitError::Execution(
+                    "search reindex answered without index stats".into(),
+                ));
+            };
             return Ok(Payload::detail(
                 serde_json::json!(stats),
                 format!("Indexed {} chunks from {} tasks", stats.chunks, stats.tasks),
@@ -78,28 +96,21 @@ impl Execute for SearchCommand {
         }
         SearchRequestProfile::NounCli
             .require_nonempty_query(input.get("query").and_then(Value::as_str))?;
-        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        let value = search::exec(
+            core,
+            SearchAppCommand::Operation(spec.verb, Input::new(input)),
+        )?
+        .into_value()?;
         match spec.verb {
             SearchVerb::Query => render(&value),
         }
     }
 }
 
-impl SearchCommand {
-    pub fn audit_subcommand(&self) -> String {
-        let mode = if self.command.is_some() {
-            "reindex".to_string()
-        } else {
-            self.query.audit_subcommand()
-        };
-        let kind = self
-            .query
-            .input
-            .get("kind")
-            .and_then(Value::as_str)
-            .unwrap_or("all");
-        format!("{mode}:{kind}")
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum SearchSubcommand {
+    /// Rebuild the task search index from the task store.
+    Reindex,
 }
 
 fn render(value: &Value) -> CommandOut {

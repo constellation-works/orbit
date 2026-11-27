@@ -185,6 +185,13 @@ impl Operation {
         self
     }
 
+    /// Record the audit row under `subcommand` where the CLI path is not the
+    /// label the command has always been audited under.
+    pub(crate) fn subcommand(mut self, subcommand: impl Into<String>) -> Self {
+        self.subcommand = subcommand.into();
+        self
+    }
+
     /// Preserve the command's explicit audit attribution.
     pub(crate) fn audit_role(mut self, role: &'static str) -> Self {
         self.audit_role = Some(role);

@@ -88,7 +88,7 @@ render(outcome)                                           // render
 - A read model the dashboard needs (`query_task_rows`, `delivery_attention_map`, `list_job_runs`) is a read command of the app that owns the data, and its `Outcome` is the model.
 - The tool path keeps its JSON entry. Its handler match, which the operation registry already has for migrated nouns, calls `app::<noun>::exec`. A surface with typed input calls `exec` directly. Both end in the same function.
 
-**Status.** `Core` (`crates/orbit-core/src/composition/core.rs`) and the chokepoint `app/exec.rs` exist, and the `friction`, `task`, `run` and `plugin` apps are the entry for their surfaces [ORB-28396] to [ORB-28399]. Workspace commands are in progress [ORB-28400]; the other families, the generic tool and MCP entries, the CLI entry and the dashboard are filed and not built [ORB-28401] to [ORB-28407], [ORB-28415]. `orbit-core` still exports `OrbitRuntime`, so a surface can still name it [ORB-28417].
+**Status.** `Core` (`crates/orbit-core/src/composition/core.rs`) and the chokepoint `app/exec.rs` exist, and the `friction`, `task`, `run` and `plugin` apps are the entry for their surfaces [ORB-28396] to [ORB-28399]. The automation family [ORB-28402] and the agent, attention, codebase, search, notice, gc and crew memory apps [ORB-28403] are the entry for theirs. Workspace commands are in progress [ORB-28400]; the other families, the generic tool and MCP entries, the CLI entry and the dashboard are filed and not built [ORB-28401] to [ORB-28407], [ORB-28415]. `orbit-core` still exports `OrbitRuntime`, so a surface can still name it [ORB-28417].
 
 ## 3. Apps: one unit per subject
 
@@ -506,6 +506,7 @@ Follow-ups filed while building: [ORB-28488] restored the writer-lock ratchet af
 - [ORB-28399] — routed plugin commands through `app::plugin`, the last of the four apps built.
 - [ORB-28400] — is routing workspace commands through `app::workspace`.
 - [ORB-28401] — will route config, skill and audit commands through `exec`.
+- [ORB-28403] — routed agent, attention, codebase, search, notice, gc and crew memory commands through their apps.
 - [ORB-28407] — will remove authorization and audit from the CLI entry.
 - [ORB-28415] — will give the dashboard a `Core` instead of the runtime.
 - [ORB-28417] — will close `orbit-core`'s exports to `app`, `Core` and `Error`.

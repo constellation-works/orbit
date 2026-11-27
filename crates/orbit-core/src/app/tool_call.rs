@@ -55,6 +55,8 @@ impl Input {
 pub(crate) struct Caller {
     pub(crate) session: ToolSessionContext,
     pub(crate) run_id: Option<String>,
+    /// The task the tool context is scoped to, if any.
+    pub(crate) task_id: Option<String>,
     pub(crate) agent: Option<String>,
     pub(crate) model: Option<String>,
 }
@@ -107,4 +109,21 @@ pub(crate) fn through_tool_entry<V: OperationVerb>(
             ..Default::default()
         },
     )
+}
+
+/// [`run`] for a noun whose flow reads the tool entry's canonical input as it
+/// arrived, without parsing it against the spec a second time.
+pub(crate) fn run_unparsed<V: OperationVerb>(
+    core: &Core,
+    verb: V,
+    input: Input,
+    flow: impl FnOnce(&OrbitRuntime, Value, &Caller) -> Result<Value, OrbitError>,
+) -> Result<Value, OrbitError> {
+    match core.entry() {
+        Entry::Tool => {
+            let Input { fields, caller } = input;
+            flow(core.runtime(), fields, &caller)
+        }
+        Entry::CommandLine | Entry::Service => through_tool_entry(core.runtime(), verb, input),
+    }
 }

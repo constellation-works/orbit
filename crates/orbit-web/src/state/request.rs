@@ -1,5 +1,7 @@
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_core::Core;
+use orbit_core::application::agents::AgentFacts;
+use orbit_core::application::codebase::CodebaseFacts;
 
 use super::*;
 
@@ -250,6 +252,106 @@ impl PluginPanelWs {
 }
 
 impl FromRequestParts<DashboardState> for PluginPanelWs {
+    type Rejection = WsRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &DashboardState,
+    ) -> Result<Self, Self::Rejection> {
+        let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
+        let WsCore(core) = WsCore::over(&runtime);
+        Ok(Self { core, runtime })
+    }
+}
+
+/// An agent scorecard request's opaque [`Core`] and the cache identity of its
+/// selected runtime.
+pub(crate) struct AgentsWs {
+    pub(crate) core: Arc<Core>,
+    runtime: Arc<OrbitRuntime>,
+}
+
+impl AgentsWs {
+    /// The cached agent scan for this runtime generation, served stale while
+    /// one background `scan` replaces it.
+    pub(crate) async fn cached_scan(
+        &self,
+        state: &DashboardState,
+        scan: impl FnOnce() -> Result<AgentFacts, orbit_core::Error> + Send + 'static,
+    ) -> Result<crate::runtime_memo::Served<AgentFacts>, orbit_core::Error> {
+        state
+            .agent_memo()
+            .get_or_refresh(
+                &self.runtime,
+                (),
+                crate::runtime_memo::AGENT_SCAN_TTL,
+                crate::runtime_memo::AGENT_SCAN_STALE_LIMIT,
+                scan,
+            )
+            .await
+    }
+}
+
+impl FromRequestParts<DashboardState> for AgentsWs {
+    type Rejection = WsRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &DashboardState,
+    ) -> Result<Self, Self::Rejection> {
+        let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
+        let WsCore(core) = WsCore::over(&runtime);
+        Ok(Self { core, runtime })
+    }
+}
+
+/// A codebase analytics request's opaque [`Core`] and the cache identity of
+/// its selected runtime.
+pub(crate) struct CodebaseWs {
+    pub(crate) core: Arc<Core>,
+    runtime: Arc<OrbitRuntime>,
+}
+
+impl CodebaseWs {
+    /// The cached history-only scan for this runtime generation, served stale
+    /// while one background `scan` replaces it.
+    pub(crate) async fn cached_scan(
+        &self,
+        state: &DashboardState,
+        scan: impl FnOnce() -> Result<CodebaseFacts, orbit_core::Error> + Send + 'static,
+    ) -> Result<crate::runtime_memo::Served<CodebaseFacts>, orbit_core::Error> {
+        state
+            .codebase_memo()
+            .get_or_refresh(
+                &self.runtime,
+                None,
+                crate::runtime_memo::CODEBASE_ANALYTICS_TTL,
+                crate::runtime_memo::CODEBASE_ANALYTICS_STALE_LIMIT,
+                scan,
+            )
+            .await
+    }
+
+    /// The cached related-file scan of one resolved `window`.
+    pub(crate) async fn cached_related_scan(
+        &self,
+        state: &DashboardState,
+        window: String,
+        scan: impl FnOnce() -> Result<CodebaseFacts, orbit_core::Error> + Send + 'static,
+    ) -> Result<crate::runtime_memo::Served<CodebaseFacts>, orbit_core::Error> {
+        state
+            .codebase_memo()
+            .get_or_compute(
+                &self.runtime,
+                Some(window),
+                crate::runtime_memo::CODEBASE_ANALYTICS_TTL,
+                scan,
+            )
+            .await
+    }
+}
+
+impl FromRequestParts<DashboardState> for CodebaseWs {
     type Rejection = WsRejection;
 
     async fn from_request_parts(

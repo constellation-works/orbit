@@ -79,7 +79,8 @@ pub(crate) use remote_access::{
     TailscaleReading,
 };
 pub(crate) use request::{
-    AuditSummaryWs, ConfigFileWs, Pinned, PluginPanelWs, RefreshFailure, Ws, WsCore, WsRejection,
+    AgentsWs, AuditSummaryWs, CodebaseWs, ConfigFileWs, Pinned, PluginPanelWs, RefreshFailure, Ws,
+    WsCore, WsRejection,
 };
 pub(crate) use trusted_hosts::TrustedHosts;
 

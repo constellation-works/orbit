@@ -25,12 +25,15 @@ use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
+use orbit_core::app::codebase::{self as codebase_app, Command, Outcome};
 use orbit_core::application::codebase::{self, CodebaseQuery, RegressionFilter};
 use serde::Deserialize;
 
 use super::{bad_request, blocking_join, map_runtime_error};
-use crate::runtime_memo::{CODEBASE_ANALYTICS_STALE_LIMIT, CODEBASE_ANALYTICS_TTL};
-use crate::state::{DashboardState, Ws};
+#[cfg(doc)]
+use crate::runtime_memo::CODEBASE_ANALYTICS_STALE_LIMIT;
+use crate::runtime_memo::CODEBASE_ANALYTICS_TTL;
+use crate::state::{CodebaseWs, DashboardState};
 
 /// Query string for `GET /api/codebase/analytics` and `/show`.
 #[derive(Debug, Default, Deserialize)]
@@ -86,9 +89,13 @@ pub(super) struct CodebaseRelatedQuery {
 /// The validated selection of an analytics or show query; a layer is checked
 /// against the workspace's `workflow.regression_layers`.
 fn codebase_selection(
-    runtime: &orbit_core::OrbitRuntime,
+    core: &orbit_core::Core,
     query: &CodebaseAnalyticsQuery,
 ) -> Result<CodebaseQuery, Box<Response>> {
+    let layers = || match codebase_app::exec(core, Command::RegressionLayers)? {
+        Outcome::RegressionLayers(layers) => Ok(layers),
+        Outcome::Value(_) | Outcome::Facts(_) => Err(mismatched("regression layers")),
+    };
     let selection = CodebaseQuery::parse(
         query.window.as_deref(),
         query.min_support,
@@ -100,7 +107,7 @@ fn codebase_selection(
             query.escape.as_deref(),
             query.layer.as_deref(),
             query.detected_by.as_deref(),
-            runtime.regression_layers(),
+            &layers()?,
         )?))
     });
     selection.map_err(|error| {
@@ -115,32 +122,43 @@ fn codebase_selection(
 /// analytics payload, with its `Age` header.
 async fn cached_codebase_scan(
     state: &DashboardState,
-    runtime: &Arc<orbit_core::OrbitRuntime>,
+    ws: &CodebaseWs,
 ) -> Result<crate::runtime_memo::Served<codebase::CodebaseFacts>, Box<Response>> {
-    let scan_runtime = Arc::clone(runtime);
-    state
-        .codebase_memo()
-        .get_or_refresh(
-            runtime,
-            None,
-            CODEBASE_ANALYTICS_TTL,
-            CODEBASE_ANALYTICS_STALE_LIMIT,
-            move || scan_runtime.codebase_scan(),
-        )
+    let core = Arc::clone(&ws.core);
+    ws.cached_scan(state, move || facts(&core, Command::Scan))
         .await
         .map_err(|error| Box::new(map_runtime_error(error)))
 }
 
+/// The codebase app's answer to a read, which is always the model it was
+/// asked for.
+fn mismatched(read: &str) -> orbit_core::OrbitError {
+    orbit_core::OrbitError::Execution(format!(
+        "the codebase {read} read answered with another model"
+    ))
+}
+
+/// The scan a scan read answers with.
+fn facts(
+    core: &orbit_core::Core,
+    command: Command,
+) -> Result<codebase::CodebaseFacts, orbit_core::OrbitError> {
+    match codebase_app::exec(core, command)? {
+        Outcome::Facts(facts) => Ok(facts),
+        Outcome::Value(_) | Outcome::RegressionLayers(_) => Err(mismatched("scan")),
+    }
+}
+
 pub(super) async fn codebase_analytics(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ws: CodebaseWs,
     Query(query): Query<CodebaseAnalyticsQuery>,
 ) -> Response {
-    let query = match codebase_selection(&runtime, &query) {
+    let query = match codebase_selection(&ws.core, &query) {
         Ok(query) => query,
         Err(response) => return *response,
     };
-    let served = match cached_codebase_scan(&state, &runtime).await {
+    let served = match cached_codebase_scan(&state, &ws).await {
         Ok(served) => served,
         Err(response) => return *response,
     };
@@ -166,17 +184,17 @@ pub(super) async fn codebase_analytics(
 /// it; a path nothing in the window touched or sited is a 400.
 pub(super) async fn codebase_show(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ws: CodebaseWs,
     Query(query): Query<CodebaseAnalyticsQuery>,
 ) -> Response {
-    let selection = match codebase_selection(&runtime, &query) {
+    let selection = match codebase_selection(&ws.core, &query) {
         Ok(selection) => selection,
         Err(response) => return *response,
     };
     let Some(path) = query.path.as_deref().filter(|path| !path.trim().is_empty()) else {
         return bad_request("path is required".into());
     };
-    let served = match cached_codebase_scan(&state, &runtime).await {
+    let served = match cached_codebase_scan(&state, &ws).await {
         Ok(served) => served,
         Err(response) => return *response,
     };
@@ -204,7 +222,7 @@ pub(super) async fn codebase_show(
 
 pub(super) async fn codebase_related(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    ws: CodebaseWs,
     Query(query): Query<CodebaseRelatedQuery>,
 ) -> Response {
     let selection = match codebase::RelatedQuery::parse(
@@ -219,16 +237,12 @@ pub(super) async fn codebase_related(
     let Some(path) = query.path else {
         return bad_request("path is required".into());
     };
-    let scan_runtime = Arc::clone(&runtime);
+    let core = Arc::clone(&ws.core);
     let scan_query = selection.codebase_query();
-    let facts = match state
-        .codebase_memo()
-        .get_or_compute(
-            &runtime,
-            Some(selection.window().to_owned()),
-            CODEBASE_ANALYTICS_TTL,
-            move || scan_runtime.codebase_related_scan(&scan_query),
-        )
+    let facts = match ws
+        .cached_related_scan(&state, selection.window().to_owned(), move || {
+            facts(&core, Command::RelatedScan(scan_query))
+        })
         .await
     {
         Ok(served) => served.body,

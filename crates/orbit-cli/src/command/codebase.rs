@@ -10,11 +10,12 @@ use std::fmt::Write as _;
 
 use clap::Args;
 use orbit_common::governance::codebase::CodebaseVerb;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::codebase::{self, Command, Input};
 use serde_json::Value;
 
 use super::operation_args::Invocation;
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 use crate::output::common::payload::Block;
 use crate::output::common::table::{Column, Table};
 
@@ -76,10 +77,11 @@ pub struct CodebaseCommand {
     pub command: Invocation<CodebaseVerb>,
 }
 
-impl Execute for CodebaseCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for CodebaseCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         let Invocation { spec, input } = self.command;
-        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        let value =
+            codebase::exec(core, Command::Operation(spec.verb, Input::new(input)))?.into_value()?;
         let blocks = match spec.verb {
             CodebaseVerb::Analytics => analytics_blocks(&value),
             CodebaseVerb::Show => show_blocks(&value),

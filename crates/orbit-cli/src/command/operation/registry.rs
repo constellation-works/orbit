@@ -262,18 +262,16 @@ impl Commands {
             }
             Commands::Gc(command) => {
                 use super::super::gc::GcTarget;
-                let (target, reaps, runtime_need) = match &command.target {
-                    GcTarget::Worktrees(args) => ("worktrees", args.confirm, RuntimeNeed::Required),
+                let (target, runtime_need) = match &command.target {
+                    GcTarget::Worktrees(_) => ("worktrees", RuntimeNeed::Required),
                     // Tmp GC must observe pending/running/retrying rows without bootstrap
                     // reconciliation turning stale owners into terminal runs.
-                    GcTarget::Tmp(args) => ("tmp", args.confirm, RuntimeNeed::ReadOnly),
+                    GcTarget::Tmp(_) => ("tmp", RuntimeNeed::ReadOnly),
                     // Host-level leftovers outside any run; nothing to reconcile.
-                    GcTarget::Deployments(args) => {
-                        ("deployments", args.confirm, RuntimeNeed::ReadOnly)
-                    }
-                    GcTarget::Audit(args) => ("audit", args.confirm, RuntimeNeed::Required),
-                    GcTarget::Runs(args) => ("runs", args.confirm, RuntimeNeed::Required),
-                    GcTarget::Journal(args) => ("journal", args.confirm, RuntimeNeed::Required),
+                    GcTarget::Deployments(_) => ("deployments", RuntimeNeed::ReadOnly),
+                    GcTarget::Audit(_) => ("audit", RuntimeNeed::Required),
+                    GcTarget::Runs(_) => ("runs", RuntimeNeed::Required),
+                    GcTarget::Journal(_) => ("journal", RuntimeNeed::Required),
                 };
                 CommandOperation::new(
                     runtime_need,
@@ -284,9 +282,9 @@ impl Commands {
                         Some(target),
                     )),
                     None,
-                    runtime_dispatch!(Gc),
+                    // The gc app's `exec` authorizes a reaping `--confirm`.
+                    core_dispatch!(Gc),
                 )
-                .governed_when(reaps, "gc", target)
             }
             Commands::Clock(command) => {
                 use super::super::clock::ClockSubcommand;
@@ -450,7 +448,7 @@ impl Commands {
                 )
             }
             Commands::Search(command) => {
-                let mut operation = registry_operation(&command.query, runtime_dispatch!(Search));
+                let mut operation = registry_operation(&command.query, core_dispatch!(Search));
                 if command.command.is_some() {
                     operation.runtime_need = RuntimeNeed::Required;
                 }
@@ -484,7 +482,7 @@ impl Commands {
             }
             // Fleet notices are registry-driven like friction.
             Commands::Notice(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Notice))
+                registry_operation(&command.command, core_dispatch!(Notice))
             }
             // Resident mandates are registry-driven like notices.
             Commands::Evolution(command) => {
@@ -499,20 +497,19 @@ impl Commands {
             }
             // Codebase analytics is registry-driven like friction.
             Commands::Attention(command) => {
-                let mut operation =
-                    registry_operation(&command.query, runtime_env_dispatch!(Attention));
+                let mut operation = registry_operation(&command.query, core_dispatch!(Attention));
                 operation.runtime_need = RuntimeNeed::HostReadOnly;
                 operation
             }
             Commands::Codebase(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Codebase))
+                registry_operation(&command.command, core_dispatch!(Codebase))
             }
             // The agent scorecards are registry-driven like codebase.
             Commands::Agents(command) => {
                 use super::super::agents::AgentsSubcommand;
                 match &command.command {
                     AgentsSubcommand::Operation(invocation) => {
-                        registry_operation(invocation, runtime_dispatch!(Agents))
+                        registry_operation(invocation, core_dispatch!(Agents))
                     }
                     // The ranking reads the scan; calibration writes the
                     // workspace's season file and audits as an admin action.
@@ -521,7 +518,7 @@ impl Commands {
                             RuntimeNeed::ReadOnly,
                             None,
                             None,
-                            runtime_dispatch!(Agents),
+                            core_dispatch!(Agents),
                         ),
                         Some(_) => CommandOperation::new(
                             RuntimeNeed::Required,
@@ -532,7 +529,7 @@ impl Commands {
                                 None,
                             )),
                             None,
-                            runtime_dispatch!(Agents),
+                            core_dispatch!(Agents),
                         ),
                     },
                     // The probe submits one canary run per crew, so it opens
@@ -546,7 +543,7 @@ impl Commands {
                             None,
                         )),
                         None,
-                        runtime_dispatch!(Agents),
+                        core_dispatch!(Agents),
                     ),
                 }
             }
