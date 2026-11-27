@@ -1,6 +1,6 @@
 //! Internal attempt lifecycle on the existing task commit journal. No public pull route.
 
-mod codec;
+pub(super) mod codec;
 mod evidence;
 mod inspect;
 mod late_effort;

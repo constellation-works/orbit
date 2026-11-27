@@ -158,56 +158,7 @@ impl Screen<'_> {
             ));
             return None;
         }
-        // A task whose `os:` tags the executor's OS does not satisfy stays
-        // for a host that does, rather than being claimed and failed. The
-        // tags are read at each admission, so a retag applies to the next.
-        if let Some(reason) = os_unavailable(request.os, task, self.executor_host_os) {
-            receipt.os_unavailable.push(diagnostic(reason, Vec::new()));
-            return None;
-        }
-        // Nor one requiring a capability label the executor lacks. Read at
-        // each admission, so a relabelled host or task applies to the next.
-        if let Some(reason) = labels_unavailable_with_tag_requirements(
-            request.os,
-            &request.labels,
-            task,
-            self.tag_label_requirements,
-        ) {
-            receipt
-                .labels_unavailable
-                .push(diagnostic(reason, Vec::new()));
-            return None;
-        }
-        // Nor one tagged `ui` that the executor has no verified browser kit
-        // to render.
-        if let Some(reason) = browser_kit_unavailable(request.browser_kit, task) {
-            receipt
-                .browser_kit_unavailable
-                .push(diagnostic(reason, Vec::new()));
-            return None;
-        }
-        // A task the executor cannot run stays for the owner or another
-        // follower; claiming it would only burn the claim [ORB-13941].
-        if let Some(reason) = request
-            .crews
-            .as_ref()
-            .and_then(|crews| crews.unrunnable_reason(task.crew.as_deref()))
-        {
-            receipt
-                .crew_unavailable
-                .push(diagnostic(reason, Vec::new()));
-            return None;
-        }
-        // Nor one whose work the executor's host load forecast has no room
-        // for: it stays until that host has room, or for another host.
-        if let Some(reason) = request
-            .admissible
-            .as_ref()
-            .and_then(|fit| fit.unfit_reason(task))
-        {
-            receipt
-                .capacity_unavailable
-                .push(diagnostic(reason, Vec::new()));
+        if !self.screen_executor_capability(task, receipt) {
             return None;
         }
         // Nor one this drain already gave back after an operator cancel or
@@ -234,16 +185,7 @@ impl Screen<'_> {
         }
         // Inside the section, so a claim the previous pull committed is
         // visible. Prefer the lane over a footprint overlap when both apply.
-        if orbit_types::task::needs_perf_lane(&task.tags)
-            && let Some(holder) = self
-                .perf_lane_holders
-                .iter()
-                .find(|holder| holder.as_str() != task.id.as_str())
-        {
-            receipt.deferred_conflicts.push(diagnostic(
-                orbit_types::task::perf_lane_hold_reason(holder),
-                vec![holder.clone()],
-            ));
+        if !self.screen_perf_lane(task, receipt) {
             return None;
         }
         let footprint = match canonical_footprint(&task.context_files, self.repo_root) {
@@ -290,6 +232,85 @@ impl Screen<'_> {
             return None;
         }
         Some(footprint)
+    }
+
+    /// Screen `task` against executor OS, labels, browser kit, crew, and capacity.
+    /// Returns `true` if eligible; otherwise records the diagnostic on `receipt` and returns `false`.
+    pub(super) fn screen_executor_capability(
+        &self,
+        task: &Task,
+        receipt: &mut AdmissionReceipt,
+    ) -> bool {
+        let diagnostic = |reason: String| AdmissionDiagnostic {
+            task_id: task.id.clone(),
+            reason,
+            blocked_by: Vec::new(),
+        };
+        let request = self.request;
+        // A task whose `os:` tags the executor's OS does not satisfy stays
+        // for a host that does, rather than being claimed and failed. The
+        // tags are read at each admission, so a retag applies to the next.
+        if let Some(reason) = os_unavailable(request.os, task, self.executor_host_os) {
+            receipt.os_unavailable.push(diagnostic(reason));
+            return false;
+        }
+        // Nor one requiring a capability label the executor lacks. Read at
+        // each admission, so a relabelled host or task applies to the next.
+        if let Some(reason) = labels_unavailable_with_tag_requirements(
+            request.os,
+            &request.labels,
+            task,
+            self.tag_label_requirements,
+        ) {
+            receipt.labels_unavailable.push(diagnostic(reason));
+            return false;
+        }
+        // Nor one tagged `ui` that the executor has no verified browser kit
+        // to render.
+        if let Some(reason) = browser_kit_unavailable(request.browser_kit, task) {
+            receipt.browser_kit_unavailable.push(diagnostic(reason));
+            return false;
+        }
+        // A task the executor cannot run stays for the owner or another
+        // follower; claiming it would only burn the claim [ORB-13941].
+        if let Some(reason) = request
+            .crews
+            .as_ref()
+            .and_then(|crews| crews.unrunnable_reason(task.crew.as_deref()))
+        {
+            receipt.crew_unavailable.push(diagnostic(reason));
+            return false;
+        }
+        // Nor one whose work the executor's host load forecast has no room
+        // for: it stays until that host has room, or for another host.
+        if let Some(reason) = request
+            .admissible
+            .as_ref()
+            .and_then(|fit| fit.unfit_reason(task))
+        {
+            receipt.capacity_unavailable.push(diagnostic(reason));
+            return false;
+        }
+        true
+    }
+
+    /// Screen `task` against active perf-lane holders on the requester's machine.
+    /// Returns `true` if free; otherwise records the deferral on `receipt` and returns `false`.
+    pub(super) fn screen_perf_lane(&self, task: &Task, receipt: &mut AdmissionReceipt) -> bool {
+        if orbit_types::task::needs_perf_lane(&task.tags)
+            && let Some(holder) = self
+                .perf_lane_holders
+                .iter()
+                .find(|holder| holder.as_str() != task.id.as_str())
+        {
+            receipt.deferred_conflicts.push(AdmissionDiagnostic {
+                task_id: task.id.clone(),
+                reason: orbit_types::task::perf_lane_hold_reason(holder),
+                blocked_by: vec![holder.clone()],
+            });
+            return false;
+        }
+        true
     }
 }
 

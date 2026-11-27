@@ -3,11 +3,10 @@
 use std::collections::BTreeSet;
 
 use super::super::Section;
-use super::{RECEIPT_KIND, StoredReceipt, TaskCommitBoundary, decode, digest, row};
+use super::super::lifecycle::codec;
+use super::{RECEIPT_KIND, StoredReceipt, TaskCommitBoundary, digest};
 use crate::contract::{AdmissionReceiptMaintenance, AdmissionReceiptStorage, ExecutionClaimPhase};
 use orbit_common::OrbitError;
-
-const CLAIM_MUTATION_RECEIPT_KIND: &str = "distributed-claim-mutation-v1";
 
 impl TaskCommitBoundary {
     /// Read logical receipt counts and bytes without recovering interrupted
@@ -54,7 +53,7 @@ impl TaskCommitBoundary {
                 .store
                 .task_coordination_rows(&self.workspace_id, RECEIPT_KIND)?
             {
-                let StoredReceipt::Full { receipt } = decode(&existing.payload_json)? else {
+                let StoredReceipt::Full { receipt } = codec::decode(&existing.payload_json)? else {
                     continue;
                 };
                 if let Some(original) = &receipt.claim {
@@ -68,7 +67,7 @@ impl TaskCommitBoundary {
                     request_id: receipt.request.request_id.clone(),
                     input_digest: digest(&receipt.request)?,
                 };
-                compacted.push(row(RECEIPT_KIND, &existing.row_id, &tombstone)?);
+                compacted.push(codec::row(RECEIPT_KIND, &existing.row_id, &tombstone)?);
             }
             self.store
                 .upsert_sql_task_coordination_rows(&self.workspace_id, &compacted)?;
@@ -85,7 +84,7 @@ impl TaskCommitBoundary {
             .store
             .task_coordination_rows(&self.workspace_id, RECEIPT_KIND)?
         {
-            let category = match decode::<StoredReceipt>(&row.payload_json)? {
+            let category = match codec::decode::<StoredReceipt>(&row.payload_json)? {
                 StoredReceipt::Full { .. } => &mut usage.full_receipts,
                 StoredReceipt::Tombstone { .. } => &mut usage.tombstones,
             };
@@ -94,7 +93,7 @@ impl TaskCommitBoundary {
         }
         for row in self
             .store
-            .task_coordination_rows(&self.workspace_id, CLAIM_MUTATION_RECEIPT_KIND)?
+            .task_coordination_rows(&self.workspace_id, codec::RECEIPT)?
         {
             usage.claim_mutation_receipts.count += 1;
             usage.claim_mutation_receipts.logical_payload_bytes += row.payload_json.len() as u64;
