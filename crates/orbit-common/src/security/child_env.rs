@@ -20,7 +20,7 @@
 //! consulted — they cannot classify names an operator's environment actually
 //! uses, and treating them as a gate is what let the bypass exist.
 //!
-//! [`inherited_child_env`] is the explicit opt-out for an operator who really
+//! [`inherited_child_env_from`] is the explicit opt-out for an operator who really
 //! does want full inheritance. Privilege-bearing `ORBIT_*` names are still
 //! withheld: inheritance is not a way to hand `ORBIT_OPERATOR` or
 //! `ORBIT_WORKSPACE_CLAIM_TOKEN` to a child.
@@ -358,7 +358,7 @@ pub fn crew_env_file_problem(env: &crate::Env, entry: &CrewEnvVar) -> Option<Str
         .map(|error| error.to_string())
 }
 
-/// [`inherited_child_env`] over an explicit parent snapshot.
+/// Full inheritance of an explicit parent snapshot.
 ///
 /// Every ambient name is forwarded, credentials included, except
 /// privilege-bearing `ORBIT_*` names: any `ORBIT_*` name outside the named
@@ -371,15 +371,6 @@ pub fn inherited_child_env_from(parent: &[(String, String)]) -> Vec<(String, Str
         .filter(|(name, _)| !is_privilege_bearing_orbit_name(name))
         .cloned()
         .collect()
-}
-
-/// Full inheritance of the parent environment, minus privilege-bearing
-/// `ORBIT_*` names.
-///
-/// The explicit opt-in behind `[execution.env] inherit = true`. Callers that
-/// do not opt in use [`allowlisted_child_env`].
-pub fn inherited_child_env(env: &crate::Env) -> Vec<(String, String)> {
-    inherited_child_env_from(&utf8_vars_owned(env))
 }
 
 fn utf8_vars_owned(env: &crate::Env) -> Vec<(String, String)> {
