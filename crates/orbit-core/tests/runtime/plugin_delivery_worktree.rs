@@ -13,8 +13,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use orbit_core::app::plugin::{PluginAddOptions, install_plugin};
 use orbit_core::app::run::ShipMode;
-use orbit_core::application::plugin::{PluginAddOptions, install_plugin};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::WorkspaceRuntimeBinding;

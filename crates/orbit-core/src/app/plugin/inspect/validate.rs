@@ -105,7 +105,7 @@ pub fn validate_plugin_dir_for_workspace(
     }
     for skill_dir in &plugin.skills {
         if let Some(skill_id) =
-            super::super::skills::plugin_skill_link_id(plugin.namespace(), skill_dir)
+            super::super::skill::plugin_skill_link_id(plugin.namespace(), skill_dir)
         {
             warnings.push(format!(
                 "skill '{}' will be linked into provider discovery as '{skill_id}' when enabled",

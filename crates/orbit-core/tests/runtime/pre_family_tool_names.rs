@@ -488,9 +488,8 @@ fn record_plugin(runtime: &OrbitRuntime, name: &str, install: &Path, manifest: &
     .unwrap();
 }
 
-fn callback_plugin(runtime: &OrbitRuntime) -> orbit_core::application::plugin::PluginSummary {
-    runtime
-        .list_plugins()
+fn callback_plugin(runtime: &OrbitRuntime) -> orbit_core::app::plugin::PluginSummary {
+    orbit_core::app::plugin::list_plugins(runtime)
         .unwrap()
         .into_iter()
         .find(|plugin| plugin.name == "callback")
@@ -864,8 +863,7 @@ fn a_competing_plugin_migration_survives_a_failed_digest_write() {
 
     let runtime = fixture.open();
     assert_callback_loads(&runtime, &healed);
-    let edited = runtime
-        .list_plugins()
+    let edited = orbit_core::app::plugin::list_plugins(&runtime)
         .unwrap()
         .into_iter()
         .find(|plugin| plugin.name == "edited")

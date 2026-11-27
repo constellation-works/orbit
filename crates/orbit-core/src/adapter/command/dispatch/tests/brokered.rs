@@ -23,7 +23,7 @@ use tempfile::TempDir;
 use super::super::brokered::RunDispatch;
 use super::super::execute::ToolEntryPoint;
 use crate::OrbitRuntime;
-use crate::application::plugin::{
+use crate::app::plugin::{
     PluginAddOptions, PluginEnableOptions, enable_plugin, install_plugin, set_plugin_secret,
 };
 use crate::runtime::plugin::broker::{

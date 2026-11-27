@@ -7,14 +7,14 @@ use orbit_types::plugin::is_valid_namespace;
 use orbit_types::record::OrbitEvent;
 
 use crate::OrbitRuntime;
-use crate::application::plugin::build::build_log_path;
+use crate::app::plugin::build::build_log_path;
 use crate::runtime::plugin::build_witness::forget_build_witness;
 use crate::runtime::plugin::grants::forget_authorized_grants;
 use crate::runtime::plugin::paths::{plugin_namespace_dir, plugin_state_dir};
 use crate::runtime::plugin::sandbox_mask::{not_visible, plugin_trees_masked};
 
 use super::super::install::lock_plugin_namespace;
-use super::super::secrets::delete_plugin_secrets;
+use super::super::secret::delete_plugin_secrets;
 use super::disable::unlink_namespace_skills;
 use super::record::{installed_plugin, set_enabled, verified_install_path};
 

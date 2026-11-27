@@ -15,9 +15,9 @@ use crate::OrbitRuntime;
 use crate::runtime::plugin::grants::{recorded_program_paths, witnessed_program_paths};
 
 use super::super::inspect::PluginSummary;
-use super::super::secrets::unset_secret_warnings;
+use super::super::secret::unset_secret_warnings;
 use super::super::seed::{PluginSeedOutcome, seed_plugin_definitions};
-use super::super::skills::{PluginSkillLink, link_plugin_skills};
+use super::super::skill::{PluginSkillLink, link_plugin_skills};
 use super::record::{installed_plugin, set_enabled, verified_install_path};
 use crate::runtime::plugin::definitions::load_plugin_definitions;
 
@@ -35,10 +35,10 @@ pub struct PluginEnableOptions {
 
 /// What a plugin contributes to the workspace once it is enabled.
 #[derive(Debug, Clone, Default)]
-pub(in crate::application::plugin) struct PluginContributions {
-    pub(in crate::application::plugin) seeded: Vec<PluginSeedOutcome>,
-    pub(in crate::application::plugin) skills: Vec<PluginSkillLink>,
-    pub(in crate::application::plugin) warnings: Vec<String>,
+pub(in crate::app::plugin) struct PluginContributions {
+    pub(in crate::app::plugin) seeded: Vec<PluginSeedOutcome>,
+    pub(in crate::app::plugin) skills: Vec<PluginSkillLink>,
+    pub(in crate::app::plugin) warnings: Vec<String>,
 }
 
 /// Everything `orbit plugin enable` did, beyond flipping the record.
@@ -168,7 +168,7 @@ fn enable_plugin_checked(
 /// this process's `PATH` — the consenting operator's — together with a
 /// warning for every entry that did not resolve, and for every one that now
 /// resolves somewhere other than the last consent recorded (design §4.3).
-pub(in crate::application::plugin) fn resolve_consented_programs(
+pub(in crate::app::plugin) fn resolve_consented_programs(
     global_root: &Path,
     plugin: &LoadedPlugin,
     env: &orbit_common::Env,
@@ -209,7 +209,7 @@ pub(in crate::application::plugin) fn resolve_consented_programs(
 /// a seeded file has to exist before the clock tick can see it. `orbit plugin
 /// add --enable` runs the same path, so the two ways of enabling leave the
 /// workspace in the same state.
-pub(in crate::application::plugin) fn apply_enabled_contributions(
+pub(in crate::app::plugin) fn apply_enabled_contributions(
     runtime: &OrbitRuntime,
     install_path: &Path,
     force: bool,
@@ -239,7 +239,7 @@ pub(in crate::application::plugin) fn apply_enabled_contributions(
     })
 }
 
-pub(in crate::application::plugin) fn unrequested_grant_warnings(
+pub(in crate::app::plugin) fn unrequested_grant_warnings(
     plugin: &orbit_tools::plugin::LoadedPlugin,
     grants: &[String],
 ) -> Vec<String> {

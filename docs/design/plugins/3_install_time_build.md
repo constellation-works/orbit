@@ -5,7 +5,7 @@ summary: "Threat model and binding decisions for an opt-in spec.build that build
 owner: claude
 status: Implemented
 tags: [plugins, security, sandbox, supply-chain, install]
-paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build/**", "crates/orbit-core/src/application/plugin/build.rs", "crates/orbit-runtime/src/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/application/plugin/install/**", "crates/orbit-core/src/application/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
+paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build/**", "crates/orbit-core/src/app/plugin/build.rs", "crates/orbit-runtime/src/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/app/plugin/install/**", "crates/orbit-core/src/app/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
 related_features: [plugins, policy-sandbox]
 related_artifacts: [ORB-12878, ORB-12843, ORB-12874, ORB-12816]
 created_date: 2026-10-04
@@ -422,10 +422,10 @@ deterministic, matching the archive-digest finding that already exists.
 | Commit fetch and `HEAD` check (§3.1) | `crates/orbit-tools/src/plugin/source.rs` (`fetch_git_commit`) |
 | Profiles, probes, supervision (§3.2–§3.4) | `orbit-exec` `build_sandbox/` (`linux.rs`, `macos.rs`, `supervise.rs`); goldens `plugin_build_{fetch,offline}` |
 | Plan, environment, build directory, outputs, digest (§3.4–§3.6) | `orbit-tools` `plugin/build/` |
-| Consent, pin `artifact_digest` check at install (§3.7, §3.8) | `orbit-core` `application/plugin/build.rs`, called from `application/plugin/install/flow.rs` |
+| Consent, pin `artifact_digest` check at install (§3.7, §3.8) | `orbit-core` `app/plugin/build.rs`, called from `app/plugin/install/flow.rs` |
 | Build record on the row (schema v35 `build_json`) and witness (§3.6) | `orbit-store` `repository/plugin.rs`; `orbit-core` `runtime/plugin/build_witness.rs`, checked in the load pass |
-| Sync never builds; pin drift (§3.7) | `orbit-core` `application/plugin/lifecycle/sync.rs` |
-| Doctor and `plugin show` (§3.9) | `orbit-core` `application/plugin/inspect/doctor.rs`; the `plugin-builds` row of `orbit doctor` |
+| Sync never builds; pin drift (§3.7) | `orbit-core` `app/plugin/lifecycle/sync.rs` |
+| Doctor and `plugin show` (§3.9) | `orbit-core` `app/plugin/inspect/doctor.rs`; the `plugin-builds` row of `orbit doctor` |
 
 Where the implementation makes a decision above more precise:
 

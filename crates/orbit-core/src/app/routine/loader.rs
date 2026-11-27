@@ -141,7 +141,7 @@ struct WorkspacePluginState {
     switched_off: BTreeSet<String>,
 }
 
-impl crate::application::plugin::PluginActivity for WorkspacePluginState {
+impl crate::app::plugin::PluginActivity for WorkspacePluginState {
     fn is_active(&self, namespace: &str) -> bool {
         self.active.contains(namespace)
     }
@@ -156,7 +156,7 @@ impl crate::application::plugin::PluginActivity for WorkspacePluginState {
 /// applies.
 struct HostPluginActivity<'a>(&'a [WorkspacePluginState]);
 
-impl crate::application::plugin::PluginActivity for HostPluginActivity<'_> {
+impl crate::app::plugin::PluginActivity for HostPluginActivity<'_> {
     fn is_active(&self, namespace: &str) -> bool {
         self.0.iter().any(|state| state.active.contains(namespace))
     }
@@ -395,10 +395,10 @@ fn workspace_plugin_states(workspaces: &[&(Workspace, OrbitRuntime)]) -> Vec<Wor
 /// fire, and the reason names the plugin (design §4.5). This is deliberately
 /// not a load error: a disabled plugin is an ordinary operator state, not a
 /// broken workspace. The judgement is the shared
-/// [`inactive_plugin`](crate::application::plugin::inactive_plugin) rule, so
+/// [`inactive_plugin`](crate::app::plugin::inactive_plugin) rule, so
 /// `routine list` hides exactly what the sweep skips.
 fn inactive_plugin_skip(path: &Path, states: &[WorkspacePluginState]) -> Option<String> {
-    use crate::application::plugin::inactive_plugin;
+    use crate::app::plugin::inactive_plugin;
     if let Some(state) = states
         .iter()
         .find(|state| path.starts_with(&state.routines_dir))

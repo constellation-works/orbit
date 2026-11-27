@@ -9,9 +9,7 @@ use orbit_tools::plugin::load_plugin_dir;
 
 use super::definition_fixture::DefinitionPlugin;
 use super::fixture::PluginFixture;
-use crate::application::plugin::skills::{
-    dangling_plugin_skill_links_in, unlink_plugin_skills_from,
-};
+use crate::app::plugin::skill::{dangling_plugin_skill_links_in, unlink_plugin_skills_from};
 
 /// Discovery names that unlink must remove and doctor must treat as this
 /// plugin's links. Spellings that only look local, or that cannot be resolved,

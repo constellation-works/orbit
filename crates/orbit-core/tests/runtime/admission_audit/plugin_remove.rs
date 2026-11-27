@@ -5,7 +5,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 
-use orbit_core::application::plugin::{
+use orbit_core::app::plugin::{
     PluginAddOptions, PluginRemoveOptions, install_plugin, list_plugins, remove_plugin,
 };
 

@@ -6,7 +6,7 @@ use crate::OrbitRuntime;
 use crate::runtime::plugin::paths::plugin_namespace_dir;
 
 use super::super::inspect::PluginSummary;
-use super::super::skills::unlink_plugin_skills;
+use super::super::skill::unlink_plugin_skills;
 use super::record::{installed_plugin, set_enabled, verified_install_path};
 
 /// Take the plugin off the surface: its tools stop registering, its seeded

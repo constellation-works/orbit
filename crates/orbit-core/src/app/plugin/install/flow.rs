@@ -20,7 +20,7 @@ use crate::runtime::plugin::paths::plugin_install_path;
 
 use super::super::inspect::{PluginSummary, summary_for_installed};
 use super::super::lifecycle::{resolve_consented_programs, unrequested_grant_warnings};
-use super::super::secrets::{prune_undeclared_secrets, unset_secret_warnings};
+use super::super::secret::{prune_undeclared_secrets, unset_secret_warnings};
 
 use super::permissions::{
     fs_compare_layout, fs_request_references_config, permission_diff, permission_widening_message,
@@ -44,6 +44,7 @@ struct ExpectedPluginIdentity<'a> {
 
 /// Install `source` for this host: a local directory, a `git+<url>#<ref>`
 /// reference, a local archive, or a digest-pinned `https://` archive.
+#[cfg(feature = "test-support")]
 pub fn install_plugin(
     runtime: &OrbitRuntime,
     source: &str,
@@ -68,7 +69,7 @@ pub(crate) fn install_plugin_reporting_enable(
 /// Install a workspace pin only when its declared identity matches the source
 /// manifest. The checks happen before the install tree or host row is written,
 /// so a mismatching pin is refused the same way on every sync attempt.
-pub(in crate::application::plugin) fn install_pinned_plugin(
+pub(in crate::app::plugin) fn install_pinned_plugin(
     runtime: &OrbitRuntime,
     expected_name: &str,
     expected_version: Option<&str>,

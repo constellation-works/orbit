@@ -1,9 +1,7 @@
 use super::fixture::{PluginFixture, PluginSpecFixture, enter_isolated_child};
 use crate::OrbitRuntime;
+use crate::app::plugin::{PluginAddOptions, PluginEnableOptions, enable_plugin, install_plugin};
 use crate::application::contracts::EngineHostPort;
-use crate::application::plugin::{
-    PluginAddOptions, PluginEnableOptions, enable_plugin, install_plugin,
-};
 use crate::application::task::TaskAddParams;
 use orbit_engine::Recovery;
 

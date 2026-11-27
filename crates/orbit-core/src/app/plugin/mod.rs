@@ -1,7 +1,37 @@
-//! The plugin lifecycle, inspection and tool dispatch entry.
+//! The plugin lifecycle, inspection and tool dispatch entry: install,
+//! enable, disable, remove, inspect, validate, migrate and sync (design
+//! `docs/design/plugins/1_scope.md` §3).
+//!
+//! Install is global only: a plugin lives once per host under
+//! `~/.orbit/plugins/<ns>/<version>/` and every workspace on that host shares
+//! it. A checkout keeps only its `.orbit/plugins.yaml` pins, which git ignores
+//! with the rest of `.orbit/`.
+//!
+//! Beyond tools, a plugin contributes definitions, seeded schedules
+//! (`seed`), skills (`skill`), a `[plugins.<ns>]` config section,
+//! dashboard panels (`panel`), conformance goldens (`conformance`) and
+//! the names of the secrets an operator sets for it (`secret`).
+//! Everything a plugin contributes is refused as a unit: a manifest whose
+//! definitions break the §4.5 rules registers no tools either, because half a
+//! plugin is not a state an operator can reason about.
 
+mod build;
+mod conformance;
 mod dashboard;
+mod inspect;
+mod install;
+mod lifecycle;
+mod mcp_surface;
+mod panel;
+mod runtime;
 mod scaffold;
+mod secret;
+mod seed;
+mod skill;
+mod visibility;
+
+#[cfg(test)]
+mod tests;
 
 use std::path::PathBuf;
 
@@ -13,25 +43,95 @@ use super::exec::{self, App, DashboardRow, Operation};
 use crate::Core;
 use crate::app::exec::Caller;
 use crate::application::contracts::ToolInvocationPort;
-use crate::application::plugin::{
-    PluginAddResult, PluginDoctorResult, PluginEnableResult, PluginSyncOutcome, PluginTestReport,
-    PluginValidationReport, migrate_plugin_sidecars,
-};
 use crate::runtime::tool_exec::CapabilityEnforcement;
+
+pub(crate) use crate::runtime::plugin::definitions::{
+    load_plugin_definitions, read_definition_provenance, shipped_job_names,
+};
+pub(crate) use inspect::{
+    PluginDoctorResult, PluginValidationReport, validate_plugin_dir,
+    validate_plugin_dir_for_workspace,
+};
+pub(crate) use install::install_plugin_reporting_enable;
+pub(crate) use lifecycle::{
+    PluginEnableResult, PluginSyncOutcome, enable_plugin_from_dashboard, migrate_plugin_sidecars,
+};
+pub(crate) use mcp_surface::{
+    FileIdentity, FileStamp, global_only_config, global_only_config_with_env,
+};
+pub(crate) use panel::{plugin_panel_refresh_ms, read_plugin_panel};
+pub(crate) use runtime::{
+    ensure_plugin_state_visible, plugin_installed_changed, stale_plugin_callback_session_count,
+};
+pub(crate) use seed::plugin_seeded_definitions;
+pub(crate) use visibility::{InactivePlugin, PluginActivity, inactive_plugin, is_listed};
+
+// The operations integration fixtures drive directly, public only under the
+// dev-only `test-support` feature.
+#[cfg(not(feature = "test-support"))]
+pub(crate) use conformance::test_plugin_dir;
+#[cfg(feature = "test-support")]
+pub use conformance::test_plugin_dir;
+#[cfg(not(feature = "test-support"))]
+pub(crate) use inspect::{list_plugins, plugin_build_doctor, plugin_doctor, show_plugin};
+#[cfg(feature = "test-support")]
+pub use inspect::{list_plugins, plugin_build_doctor, plugin_doctor, show_plugin};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use install::upgrade_plugin;
+#[cfg(feature = "test-support")]
+pub use install::{install_plugin, upgrade_plugin};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use lifecycle::{
+    disable_plugin, disable_plugin_in_workspace, enable_plugin, enable_plugin_in_workspace,
+    remove_plugin, sync_plugins,
+};
+#[cfg(feature = "test-support")]
+pub use lifecycle::{
+    disable_plugin, disable_plugin_in_workspace, enable_plugin, enable_plugin_in_workspace,
+    remove_plugin, sync_plugins,
+};
+#[cfg(not(feature = "test-support"))]
+pub(crate) use runtime::add_plugin;
+#[cfg(feature = "test-support")]
+pub use runtime::add_plugin;
+#[cfg(not(feature = "test-support"))]
+pub(crate) use secret::{list_plugin_secrets, remove_plugin_secret, set_plugin_secret};
+#[cfg(feature = "test-support")]
+pub use secret::{list_plugin_secrets, remove_plugin_secret, set_plugin_secret};
 
 pub use dashboard::{DashboardScope, DashboardToggle, PanelRead};
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
 pub use crate::adapter::command::{
-    HostPluginMcpCache, HostPluginMcpSurface, MAX_PLUGIN_SECRET_BYTES, PluginAddOptions,
-    PluginCliGroup, PluginCliVerb, PluginEnableOptions, PluginMigrateRequest,
-    PluginPermissionChange, PluginRemoveOptions, PluginSecretStatus, PluginSecretValue,
-    PluginSeedOutcome, PluginSkillLink, PluginSummary, PluginSummaryJsonProfile, PluginTestOptions,
-    PluginTestValidationGate, PluginUpgradeOptions, PluginUpgradeResult,
-    execute_global_plugin_tool, host_plugin_cli_groups, host_plugin_rows, plugin_summary_json,
+    MAX_PLUGIN_SECRET_BYTES, PluginCliGroup, PluginCliVerb, PluginSecretValue,
+    execute_global_plugin_tool, host_plugin_cli_groups, host_plugin_rows,
     refuse_plugin_child_cli_command, refuse_plugin_child_remote_callback,
 };
-pub use crate::application::plugin::load_sidecar_manifest;
+pub use conformance::{PluginTestOptions, PluginTestReport, PluginTestValidationGate};
+pub use inspect::{PluginSummary, PluginSummaryJsonProfile, plugin_summary_json};
+pub use install::{
+    PluginAddOptions, PluginPermissionChange, PluginUpgradeOptions, PluginUpgradeResult,
+};
+pub use lifecycle::{
+    PluginEnableOptions, PluginMigrateRequest, PluginRemoveOptions, load_sidecar_manifest,
+};
+pub use mcp_surface::{HostPluginMcpCache, HostPluginMcpSurface};
+pub use secret::PluginSecretStatus;
+pub use seed::PluginSeedOutcome;
+pub use skill::PluginSkillLink;
+
+/// What `orbit plugin add --enable` produced, kept alongside the install
+/// summary rather than collapsed into it, so the CLI can render seeded
+/// schedules, linked skills and warnings the same way `orbit plugin enable`
+/// does. `seeded`, `skills` and `warnings` are empty when `--enable` was not
+/// set.
+#[derive(Debug, Clone)]
+pub struct PluginAddResult {
+    pub summary: PluginSummary,
+    pub seeded: Vec<PluginSeedOutcome>,
+    pub skills: Vec<PluginSkillLink>,
+    pub warnings: Vec<String>,
+}
 
 /// One plugin command, shared by the surfaces that invoke it.
 pub enum Command<'a> {
@@ -207,13 +307,13 @@ impl<'a> App for PluginApp<'a> {
         let runtime = core.runtime();
         let outcome = match command {
             Command::Add { source, options } => {
-                Outcome::Added(runtime.add_plugin(&source, &options)?)
+                Outcome::Added(add_plugin(runtime, &source, &options)?)
             }
             Command::Upgrade {
                 name,
                 source,
                 options,
-            } => Outcome::Upgraded(runtime.upgrade_plugin(&name, source.as_deref(), &options)?),
+            } => Outcome::Upgraded(upgrade_plugin(runtime, &name, source.as_deref(), &options)?),
             Command::Enable {
                 name,
                 options,
@@ -225,14 +325,14 @@ impl<'a> App for PluginApp<'a> {
                                 .into(),
                         ).into());
                 }
-                runtime.enable_plugin_in_workspace(&name, options.force)?
+                enable_plugin_in_workspace(runtime, &name, options.force)?
             } else {
-                runtime.enable_plugin(&name, &options)?
+                enable_plugin(runtime, &name, &options)?
             }),
             Command::Disable { name, workspace } => Outcome::Disabled(if workspace {
-                runtime.disable_plugin_in_workspace(&name)?
+                disable_plugin_in_workspace(runtime, &name)?
             } else {
-                runtime.disable_plugin(&name)?
+                disable_plugin(runtime, &name)?
             }),
             Command::Remove {
                 name,
@@ -246,17 +346,17 @@ impl<'a> App for PluginApp<'a> {
                     .into());
                 }
                 let state_dir = runtime.global_root().join("state/plugins").join(&name);
-                runtime.remove_plugin(&name, &options)?;
+                remove_plugin(runtime, &name, &options)?;
                 Outcome::Removed(state_dir)
             }
-            Command::List => Outcome::Listed(runtime.list_plugins()?),
+            Command::List => Outcome::Listed(list_plugins(runtime)?),
             Command::Show(name) => Outcome::Shown {
-                plugin: runtime.show_plugin(&name)?,
-                state_visible: runtime.ensure_plugin_state_visible().is_ok(),
+                plugin: show_plugin(runtime, &name)?,
+                state_visible: ensure_plugin_state_visible(runtime).is_ok(),
             },
             Command::Doctor => {
-                let results = runtime.plugin_doctor()?;
-                let stale_callbacks = runtime.stale_plugin_callback_session_count()?;
+                let results = plugin_doctor(runtime)?;
+                let stale_callbacks = stale_plugin_callback_session_count(runtime)?;
                 let issues = results
                     .iter()
                     .filter(|result| !result.intentional && !result.message.is_empty())
@@ -281,21 +381,21 @@ impl<'a> App for PluginApp<'a> {
                          file`) or run the command in a terminal to be prompted"
                     )).into());
                 }
-                runtime.ensure_plugin_state_visible()?;
-                Outcome::SecretSet(runtime.set_plugin_secret(&plugin, &name, &read()?)?)
+                ensure_plugin_state_visible(runtime)?;
+                Outcome::SecretSet(set_plugin_secret(runtime, &plugin, &name, &read()?)?)
             }
             Command::ListSecrets(plugin) => {
-                Outcome::SecretsListed(runtime.list_plugin_secrets(&plugin)?)
+                Outcome::SecretsListed(list_plugin_secrets(runtime, &plugin)?)
             }
             Command::RemoveSecret { plugin, name } => {
-                Outcome::SecretRemoved(runtime.remove_plugin_secret(&plugin, &name)?)
+                Outcome::SecretRemoved(remove_plugin_secret(runtime, &plugin, &name)?)
             }
             Command::Validate {
                 dir,
                 first_party,
                 render,
             } => Outcome::Validated(if render {
-                runtime.validate_plugin_dir_rendered(&dir, first_party, &runtime.paths().repo_root)
+                validate_plugin_dir_for_workspace(runtime, &dir, first_party, Some(&runtime.paths().repo_root))
                         .map_err(|error| {
                             if runtime.shared_root() == runtime.global_root() {
                                 OrbitError::InvalidInput(format!(
@@ -306,10 +406,10 @@ impl<'a> App for PluginApp<'a> {
                             }
                         })?
             } else {
-                runtime.validate_plugin_dir(&dir, first_party)?
+                validate_plugin_dir(runtime, &dir, first_party)?
             }),
             Command::Test { dir, options } => {
-                Outcome::Tested(runtime.test_plugin_dir(&dir, &options)?)
+                Outcome::Tested(test_plugin_dir(runtime, &dir, &options)?)
             }
             Command::Scaffold {
                 namespace,
@@ -317,7 +417,7 @@ impl<'a> App for PluginApp<'a> {
                 force,
             } => Outcome::Scaffolded(scaffold::scaffold(&namespace, dir, force)?),
             Command::Sync { dry_run, grants } => {
-                Outcome::Synced(runtime.sync_plugins(dry_run, &grants)?)
+                Outcome::Synced(sync_plugins(runtime, dry_run, &grants)?)
             }
             Command::Migrate(request) => {
                 let (yaml, path) = migrate_plugin_sidecars(&request)?;

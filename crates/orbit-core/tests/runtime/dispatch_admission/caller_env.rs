@@ -5,10 +5,10 @@ use orbit_common::Env;
 use orbit_core::adapter::command::{
     GlobalAuditStoreCache, ToolEntryPoint, execute_global_plugin_tool,
 };
-use orbit_core::app::workspace::WorkspacePreset;
-use orbit_core::application::plugin::{
+use orbit_core::app::plugin::{
     PluginAddOptions, PluginEnableOptions, enable_plugin, install_plugin,
 };
+use orbit_core::app::workspace::WorkspacePreset;
 use orbit_store::Store;
 use orbit_store::contract::{AuditEventFilter, AuditEventInsertParams, AuditInvocationFields};
 use orbit_types::telemetry::AuditEventStatus;

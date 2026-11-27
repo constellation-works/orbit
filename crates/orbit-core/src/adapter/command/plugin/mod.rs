@@ -3,12 +3,12 @@
 
 mod host;
 
-pub use crate::application::plugin::{HostPluginMcpCache, HostPluginMcpSurface};
+pub use crate::app::plugin::{HostPluginMcpCache, HostPluginMcpSurface};
 pub use host::{execute_global_plugin_tool, host_plugin_cli_groups, host_plugin_rows};
 
-pub use crate::application::plugin::skills::PluginSkillLink;
+pub use crate::app::plugin::PluginSkillLink;
 
-pub use crate::application::plugin::{
+pub use crate::app::plugin::{
     PluginAddOptions, PluginEnableOptions, PluginMigrateRequest, PluginPermissionChange,
     PluginRemoveOptions, PluginSecretStatus, PluginSeedOutcome, PluginSummary,
     PluginSummaryJsonProfile, PluginTestOptions, PluginTestReport, PluginTestValidationGate,

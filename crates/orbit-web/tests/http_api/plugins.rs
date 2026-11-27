@@ -5,6 +5,7 @@ use orbit_core::adapter::command::{
     PluginAddOptions, PluginEnableOptions, PluginSecretValue, PluginSummaryJsonProfile,
     plugin_summary_json,
 };
+use orbit_core::app::plugin;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, error_code, isolated, json_ok, write_json};
@@ -22,10 +23,12 @@ fn install(fixture: &Fixture, extra: &str) {
     fs::write(source.join("plugin.yaml"), format!(
         "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: http-fixture\n  version: 0.1.0\n  description: HTTP security fixture.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: status\n      description: Read status.\n      execution_kind: read_only\n      mcp_scope: workspace\n{extra}"
     )).unwrap();
-    fixture
-        .runtime
-        .add_plugin(source.to_str().unwrap(), &PluginAddOptions::default())
-        .unwrap();
+    plugin::add_plugin(
+        &fixture.runtime,
+        source.to_str().unwrap(),
+        &PluginAddOptions::default(),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -47,11 +50,13 @@ fn plugin_enable_requires_matching_recorded_grants_and_program_paths() {
                 )
             };
             error_code(enable(), 409, "plugin_refused");
-            fixture
-                .runtime
-                .enable_plugin("http-fixture", &PluginEnableOptions::default())
-                .unwrap();
-            fixture.runtime.disable_plugin("http-fixture").unwrap();
+            plugin::enable_plugin(
+                &fixture.runtime,
+                "http-fixture",
+                &PluginEnableOptions::default(),
+            )
+            .unwrap();
+            plugin::disable_plugin(&fixture.runtime, "http-fixture").unwrap();
             error_code(enable(), 409, "plugin_refused");
             let listed = json_ok(server.get("/api/plugins?workspace=ws_http_fixture"));
             assert_eq!(
@@ -64,17 +69,16 @@ fn plugin_enable_requires_matching_recorded_grants_and_program_paths() {
                 "HTTP cannot mint consent on behalf of an operator"
             );
 
-            fixture
-                .runtime
-                .enable_plugin(
-                    "http-fixture",
-                    &PluginEnableOptions {
-                        grants: vec!["network".into()],
-                        force: false,
-                    },
-                )
-                .unwrap();
-            fixture.runtime.disable_plugin("http-fixture").unwrap();
+            plugin::enable_plugin(
+                &fixture.runtime,
+                "http-fixture",
+                &PluginEnableOptions {
+                    grants: vec!["network".into()],
+                    force: false,
+                },
+            )
+            .unwrap();
+            plugin::disable_plugin(&fixture.runtime, "http-fixture").unwrap();
             let witness = fixture.global.join("plugins/.grants/http-fixture.json");
             let mut recorded: Value = serde_json::from_slice(&fs::read(&witness).unwrap()).unwrap();
             recorded["programs"]["sh"] = json!("/changed/sh");
@@ -85,11 +89,13 @@ fn plugin_enable_requires_matching_recorded_grants_and_program_paths() {
                 false
             );
 
-            fixture
-                .runtime
-                .enable_plugin("http-fixture", &PluginEnableOptions::default())
-                .unwrap();
-            fixture.runtime.disable_plugin("http-fixture").unwrap();
+            plugin::enable_plugin(
+                &fixture.runtime,
+                "http-fixture",
+                &PluginEnableOptions::default(),
+            )
+            .unwrap();
+            plugin::disable_plugin(&fixture.runtime, "http-fixture").unwrap();
             let enabled = json_ok(enable());
             assert_eq!(
                 enabled["plugin"]["host_enabled"], true,
@@ -123,10 +129,12 @@ fn plugin_program_paths_abbreviate_home_on_http_only() {
                 &fixture,
                 &format!("  requires:\n    programs: [\"{}\", sh]\n", uv.display()),
             );
-            fixture
-                .runtime
-                .enable_plugin("http-fixture", &PluginEnableOptions::default())
-                .unwrap();
+            plugin::enable_plugin(
+                &fixture.runtime,
+                "http-fixture",
+                &PluginEnableOptions::default(),
+            )
+            .unwrap();
 
             // Operator mode, so the enable call below is authorized.
             let server = fixture.server_with_path(true, &bin);
@@ -147,7 +155,7 @@ fn plugin_program_paths_abbreviate_home_on_http_only() {
             // re-resolves bare names on the server's PATH, so this server keeps
             // the PATH the consent was recorded under; the shadowing server would
             // correctly refuse it as changed consent.
-            fixture.runtime.disable_plugin("http-fixture").unwrap();
+            plugin::disable_plugin(&fixture.runtime, "http-fixture").unwrap();
             let plain = fixture.server(true);
             let enabled = json_ok(plain.send(
                 "POST",
@@ -162,7 +170,7 @@ fn plugin_program_paths_abbreviate_home_on_http_only() {
             // Reopen so the in-process runtime loads the plugin installed above;
             // an empty append leaves `config.toml` as it was.
             let fixture = fixture.with_workspace_config("");
-            let summaries = fixture.runtime.list_plugins().unwrap();
+            let summaries = plugin::list_plugins(&fixture.runtime).unwrap();
             let cli = plugin_summary_json(&summaries[0], PluginSummaryJsonProfile::Cli);
             assert_eq!(
                 cli["programs"][0]["path"],
@@ -188,23 +196,24 @@ fn plugin_listings_never_expose_stored_secret_values() {
                 &fixture,
                 "  secrets:\n    - name: token\n      description: API token.\n",
             );
-            fixture
-                .runtime
-                .enable_plugin("http-fixture", &PluginEnableOptions::default())
-                .unwrap();
-            fixture
-                .runtime
-                .set_plugin_secret(
-                    "http-fixture",
-                    "token",
-                    &PluginSecretValue::new(SECRET.into()).unwrap(),
-                )
-                .unwrap();
+            plugin::enable_plugin(
+                &fixture.runtime,
+                "http-fixture",
+                &PluginEnableOptions::default(),
+            )
+            .unwrap();
+            plugin::set_plugin_secret(
+                &fixture.runtime,
+                "http-fixture",
+                "token",
+                &PluginSecretValue::new(SECRET.into()).unwrap(),
+            )
+            .unwrap();
             for operator in [false, true] {
                 let server = fixture.server(operator);
                 for enabled in [true, false] {
                     if !enabled {
-                        fixture.runtime.disable_plugin("http-fixture").unwrap();
+                        plugin::disable_plugin(&fixture.runtime, "http-fixture").unwrap();
                     }
                     let response = server.get("/api/plugins?workspace=ws_http_fixture");
                     assert_eq!(response.status().as_u16(), 200);
@@ -217,10 +226,12 @@ fn plugin_listings_never_expose_stored_secret_values() {
                     assert_eq!(listed[0]["name"], "http-fixture");
                     assert_eq!(listed[0]["host_enabled"], enabled);
                 }
-                fixture
-                    .runtime
-                    .enable_plugin("http-fixture", &PluginEnableOptions::default())
-                    .unwrap();
+                plugin::enable_plugin(
+                    &fixture.runtime,
+                    "http-fixture",
+                    &PluginEnableOptions::default(),
+                )
+                .unwrap();
             }
         },
     );

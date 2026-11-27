@@ -8,7 +8,7 @@ use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
 use crate::adapter::command::ToolEntryPoint;
-use crate::application::plugin::{global_only_config, global_only_config_with_env};
+use crate::app::plugin::{global_only_config, global_only_config_with_env};
 use crate::application::store_opener::StoreOpener;
 use crate::runtime::plugin::discovery::{self, PluginCliGroup};
 

@@ -4,7 +4,7 @@
 use orbit_core::runtime::plugin::secrets::{PluginSecretStore, PluginSecretValue};
 
 use super::plugin_fixture::{PluginFixture, PluginSpecFixture};
-use orbit_core::application::plugin::{
+use orbit_core::app::plugin::{
     PluginAddOptions, PluginEnableOptions, PluginRemoveOptions, enable_plugin, install_plugin,
     list_plugin_secrets, remove_plugin, remove_plugin_secret, set_plugin_secret,
 };
@@ -202,7 +202,7 @@ fn a_masked_sandbox_refuses_secret_verbs_and_removal_without_changing_anything()
     std::fs::remove_file(&sentinel).expect("lift the mask");
     assert_eq!(stored_names(&fixture), ["api_key"]);
     assert!(
-        orbit_core::application::plugin::show_plugin(&fixture.reopen(), "demo").is_ok(),
+        orbit_core::app::plugin::show_plugin(&fixture.reopen(), "demo").is_ok(),
         "the plugin is still installed"
     );
 }

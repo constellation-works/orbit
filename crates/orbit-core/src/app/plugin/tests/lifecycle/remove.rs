@@ -3,7 +3,7 @@
 
 use orbit_common::OrbitError;
 
-use crate::application::plugin::build::build_log_path;
+use crate::app::plugin::build::build_log_path;
 use crate::runtime::plugin::build_witness::plugin_build_witness_path;
 use crate::runtime::plugin::grants::plugin_grant_witness_path;
 use crate::runtime::plugin::paths::plugin_namespace_dir;

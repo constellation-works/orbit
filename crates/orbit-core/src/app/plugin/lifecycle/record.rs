@@ -31,7 +31,7 @@ use super::workspace::workspace_plugin_toggles;
 /// their first mutation: a refused row is the one an operator most needs to be
 /// able to act on, so the refusal must leave the record, and the recovery the
 /// diagnostic names, intact [ORB-12800].
-pub(in crate::application::plugin) fn verified_install_path(
+pub(in crate::app::plugin) fn verified_install_path(
     runtime: &OrbitRuntime,
     installed: &InstalledPlugin,
 ) -> Result<PathBuf, OrbitError> {
@@ -40,7 +40,7 @@ pub(in crate::application::plugin) fn verified_install_path(
 }
 
 /// The recorded row for `name`, or the diagnostic naming what to do instead.
-pub(in crate::application::plugin) fn installed_plugin(
+pub(in crate::app::plugin) fn installed_plugin(
     runtime: &OrbitRuntime,
     name: &str,
 ) -> Result<InstalledPlugin, OrbitError> {
