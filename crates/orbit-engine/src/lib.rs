@@ -62,13 +62,6 @@ mod template;
 pub use context::{Dispatch, HostEnvironment, Recovery, ReviewGate, RunLifecycle, RunSettings};
 pub use executor::automation::vcs::claim::CandidateCheckout;
 
-#[cfg(test)]
-#[path = "../tests/support/git.rs"]
-mod git_test_support;
-
-#[cfg(test)]
-mod tests;
-
 pub use activity_job::{
     DispatchError, DispatchInvocationTrace, DispatchOutcome, JobOutcome,
     LinuxRuntimeWriteAuthority, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
@@ -126,3 +119,10 @@ pub use orbit_agent::provider_supports_continuity;
 pub use executor::automation::vcs::completion_hold::{
     candidate_commit_completion_hold, candidate_completion_hold,
 };
+
+#[cfg(test)]
+#[path = "../tests/support/git.rs"]
+mod git_test_support;
+
+#[cfg(test)]
+mod tests;

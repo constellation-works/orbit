@@ -452,8 +452,15 @@ pub(super) fn backlog_snapshot_in_mode(
     // A done dependency whose commits have not reached the base would fail
     // worktree setup on every pass. Only admission refreshes a stale
     // tracking ref; an observation never touches the network.
+    let dependency_repo_root = runtime.paths().repo_root.as_path();
+    let dependency_base = runtime.workspace_base_branch().to_string();
     super::dependency_delivery::withhold_undelivered_dependencies(
         runtime,
+        super::dependency_delivery::DependencyDeliveryContext {
+            env: runtime.env(),
+            repo_root: dependency_repo_root,
+            base: &dependency_base,
+        },
         mode,
         matches!(read_mode, BacklogReadMode::Admission { .. }),
         &mut backlog,

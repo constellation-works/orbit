@@ -194,7 +194,13 @@ impl DeliveryRefusal {
                 "Wait for the origin to recover; a later normal admission retries the work. A task already in progress follows ordinary run failure handling instead.".into()
             }
             Self::DependencyNotDelivered => {
-                "Merge or land the dependency's pull request into the base; a later normal admission then runs the task. Admit it now with `--ignore-dependency-delivery` only when the dependency's work reached the base under another commit message. A task already in progress follows ordinary run failure handling instead.".into()
+                concat!(
+                    "Merge or land the dependency's pull request into the base; a later normal ",
+                    "admission then runs the task. Use `--ignore-dependency-delivery` only when ",
+                    "the dependency's work reached the base under another commit message. A task ",
+                    "already in progress follows ordinary run failure handling instead."
+                )
+                .into()
             }
             Self::CheckRepairActivityAbsent => {
                 "Configure step_failure_recovery and start a new authorized delivery run on the same head to admit another repair attempt while per-PR budget remains (this held run is terminal), or repair and publish a new head, then start a new delivery attempt. Exhausting the per-PR budget fails the run.".into()

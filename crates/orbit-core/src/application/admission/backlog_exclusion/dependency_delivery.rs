@@ -6,6 +6,9 @@
 //! dispatch it again on every pass. The snapshot withholds it until the
 //! dependency's commits reach the base, which is the engine's own question.
 
+use std::path::Path;
+
+use orbit_common::Env;
 use orbit_engine::{BaseSyncMode, fetch_remote_base, undelivered_dependency_for_admission};
 use orbit_types::task::Task;
 use orbit_types::workflow::ShipMode;
@@ -13,6 +16,12 @@ use orbit_types::workflow::ShipMode;
 use super::{BacklogTaskExclusion, BacklogTaskExclusionReason};
 use crate::OrbitRuntime;
 use crate::application::contracts::EngineHostPort;
+
+pub(super) struct DependencyDeliveryContext<'a> {
+    pub(super) env: &'a Env,
+    pub(super) repo_root: &'a Path,
+    pub(super) base: &'a str,
+}
 
 /// Withhold each task of `backlog` whose done dependency has commits only on
 /// other refs than the base a `mode` delivery cuts from.
@@ -23,16 +32,20 @@ use crate::application::contracts::EngineHostPort;
 /// fetch for the pass and the check is asked again; a pass that only observes
 /// never touches the network. A failed fetch leaves the task withheld, as
 /// `worktree_setup` would hold it too.
-pub(super) fn withhold_undelivered_dependencies(
-    runtime: &OrbitRuntime,
+pub(super) fn withhold_undelivered_dependencies<R: EngineHostPort>(
+    runtime: &R,
+    context: DependencyDeliveryContext<'_>,
     mode: ShipMode,
     refresh: bool,
     backlog: &mut Vec<&Task>,
     excluded: &mut Vec<BacklogTaskExclusion>,
 ) {
+    let DependencyDeliveryContext {
+        env,
+        repo_root,
+        base,
+    } = context;
     let host = runtime.engine_host();
-    let repo_root = runtime.paths().repo_root.as_path();
-    let base = runtime.workspace_base_branch().to_string();
     let sync_mode = match mode {
         ShipMode::Local => BaseSyncMode::Local,
         ShipMode::Pr => BaseSyncMode::Remote,
@@ -43,7 +56,7 @@ pub(super) fn withhold_undelivered_dependencies(
             return true;
         }
         let check = || {
-            undelivered_dependency_for_admission(&host, repo_root, &task.id, &base, sync_mode)
+            undelivered_dependency_for_admission(&host, env, repo_root, &task.id, base, sync_mode)
         };
         let mut undelivered = match check() {
             Ok(undelivered) => undelivered,
@@ -54,9 +67,11 @@ pub(super) fn withhold_undelivered_dependencies(
         };
         if undelivered.is_some() && !fetched {
             fetched = true;
-            let env = runtime.env();
-            if let Err(error) = fetch_remote_base(env, repo_root, &base) {
-                tracing::warn!(base = %base, "could not refresh the base for dependency delivery: {error}");
+            if let Err(error) = fetch_remote_base(env, repo_root, base) {
+                tracing::warn!(
+                    base,
+                    "could not refresh the base for dependency delivery: {error}"
+                );
             } else if let Ok(rechecked) = check() {
                 undelivered = rechecked;
             }

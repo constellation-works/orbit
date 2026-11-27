@@ -19,14 +19,14 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use orbit_common::{DependencyNotDelivered, OrbitError};
+use orbit_common::{DependencyNotDelivered, Env, OrbitError};
 use orbit_types::task::{TaskStatus, archived_task_completed_before_archive};
 use serde_json::Value;
 
 use crate::context::{RunLifecycle, RuntimeHostProcessEnvironment};
 
-use super::super::delivery_marker::commits_matching;
-use super::super::git::{BaseSyncMode, git_output, normalize_base_branch};
+use crate::executor::automation::vcs::delivery_marker::commits_matching;
+use crate::executor::automation::vcs::git::{BaseSyncMode, git_output, normalize_base_branch};
 
 /// How many delivery commits to name per undelivered dependency. Enough to
 /// identify the branch to land; the message stays readable.
@@ -168,6 +168,7 @@ pub fn undelivered_dependency_for_admission<
     H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
 >(
     host: &H,
+    process_env: &Env,
     repo_root: &Path,
     task_id: &str,
     base: &str,
@@ -180,9 +181,8 @@ pub fn undelivered_dependency_for_admission<
         BaseSyncMode::Local => format!("refs/heads/{branch}"),
         BaseSyncMode::Remote => format!("refs/remotes/origin/{branch}"),
     };
-    let process_env = host.process_env();
     let Ok(base_sha) = git_output(
-        &process_env,
+        process_env,
         repo_root,
         &["rev-parse", "--verify", &format!("{base_ref}^{{commit}}")],
     ) else {
