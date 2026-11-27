@@ -27,6 +27,87 @@ use super::entry::ToolEntryPoint;
 #[cfg(unix)]
 use super::entry::{broker_entry_point, mark_tool_audit_recorded};
 
+/// One writable audit store shared across global dispatches on a long-lived
+/// host. Reopened when the `config.toml` stamp or the database file identity
+/// changes, as [`crate::adapter::command::HostPluginMcpCache`] does for its
+/// read-only store. A warm cache neither runs `ResolvedConfig::load` nor opens
+/// the store.
+pub struct GlobalAuditStoreCache {
+    opener: StoreOpener,
+    cached: Mutex<Option<CachedGlobalAuditStore>>,
+}
+
+struct CachedGlobalAuditStore {
+    global_root: PathBuf,
+    config_stamp: FileStamp,
+    audit_db: PathBuf,
+    database_identity: Option<FileIdentity>,
+    store: Store,
+}
+
+impl GlobalAuditStoreCache {
+    /// An empty cache that opens the global audit store through `opener`.
+    pub fn new(opener: StoreOpener) -> Self {
+        Self {
+            opener,
+            cached: Mutex::new(None),
+        }
+    }
+
+    /// Insert one audit row through the shared store, opening or reopening
+    /// it only when the stamps above say the cached handle is stale.
+    pub fn insert_audit_event_record(
+        &self,
+        env: &orbit_common::Env,
+        global_root: &Path,
+        params: &AuditEventInsertParams,
+        invocation: AuditInvocationFields<'_>,
+    ) -> Result<(), OrbitError> {
+        self.store(env, global_root)?
+            .write(|tx| tx.audit_event().insert_with_invocation(params, invocation))
+    }
+
+    fn store(&self, env: &orbit_common::Env, global_root: &Path) -> Result<Store, OrbitError> {
+        let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
+        let config_stamp = FileStamp::read(&global_root.join("config.toml"));
+        if cached
+            .as_ref()
+            .is_none_or(|host| host.global_root != global_root || host.config_stamp != config_stamp)
+        {
+            *cached = None;
+            let audit_db = orbit_config::resolved_audit_db_path(
+                env,
+                &orbit_config::ConfigRoots::global_only(global_root),
+            )?;
+            let store = self.opener.open(&audit_db)?;
+            let database_identity = FileIdentity::read(&audit_db).ok();
+            *cached = Some(CachedGlobalAuditStore {
+                global_root: global_root.to_path_buf(),
+                config_stamp,
+                audit_db,
+                database_identity,
+                store,
+            });
+        }
+        let Some(host) = cached.as_mut() else {
+            return Err(OrbitError::Store("audit store cache unavailable".into()));
+        };
+        match FileIdentity::read(&host.audit_db) {
+            Ok(current) if host.database_identity.as_ref() != Some(&current) => {
+                host.store = self.opener.open(&host.audit_db)?;
+                host.database_identity = Some(current);
+            }
+            Ok(_) => {}
+            Err(_) => {
+                let audit_db = host.audit_db.clone();
+                host.store = self.opener.open(&audit_db)?;
+                host.database_identity = FileIdentity::read(&audit_db).ok();
+            }
+        }
+        Ok(host.store.clone())
+    }
+}
+
 /// Execute a server-global implementation inside Core's ordinary tool audit
 /// boundary without constructing a workspace runtime.
 ///
@@ -120,87 +201,6 @@ where
             dispatch(input)
         },
     )
-}
-
-/// One writable audit store shared across global dispatches on a long-lived
-/// host. Reopened when the `config.toml` stamp or the database file identity
-/// changes, as [`crate::adapter::command::HostPluginMcpCache`] does for its
-/// read-only store. A warm cache neither runs `ResolvedConfig::load` nor opens
-/// the store.
-pub struct GlobalAuditStoreCache {
-    opener: StoreOpener,
-    cached: Mutex<Option<CachedGlobalAuditStore>>,
-}
-
-struct CachedGlobalAuditStore {
-    global_root: PathBuf,
-    config_stamp: FileStamp,
-    audit_db: PathBuf,
-    database_identity: Option<FileIdentity>,
-    store: Store,
-}
-
-impl GlobalAuditStoreCache {
-    /// An empty cache that opens the global audit store through `opener`.
-    pub fn new(opener: StoreOpener) -> Self {
-        Self {
-            opener,
-            cached: Mutex::new(None),
-        }
-    }
-
-    /// Insert one audit row through the shared store, opening or reopening
-    /// it only when the stamps above say the cached handle is stale.
-    pub fn insert_audit_event_record(
-        &self,
-        env: &orbit_common::Env,
-        global_root: &Path,
-        params: &AuditEventInsertParams,
-        invocation: AuditInvocationFields<'_>,
-    ) -> Result<(), OrbitError> {
-        self.store(env, global_root)?
-            .write(|tx| tx.audit_event().insert_with_invocation(params, invocation))
-    }
-
-    fn store(&self, env: &orbit_common::Env, global_root: &Path) -> Result<Store, OrbitError> {
-        let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
-        let config_stamp = FileStamp::read(&global_root.join("config.toml"));
-        if cached
-            .as_ref()
-            .is_none_or(|host| host.global_root != global_root || host.config_stamp != config_stamp)
-        {
-            *cached = None;
-            let audit_db = orbit_config::resolved_audit_db_path(
-                env,
-                &orbit_config::ConfigRoots::global_only(global_root),
-            )?;
-            let store = self.opener.open(&audit_db)?;
-            let database_identity = FileIdentity::read(&audit_db).ok();
-            *cached = Some(CachedGlobalAuditStore {
-                global_root: global_root.to_path_buf(),
-                config_stamp,
-                audit_db,
-                database_identity,
-                store,
-            });
-        }
-        let Some(host) = cached.as_mut() else {
-            return Err(OrbitError::Store("audit store cache unavailable".into()));
-        };
-        match FileIdentity::read(&host.audit_db) {
-            Ok(current) if host.database_identity.as_ref() != Some(&current) => {
-                host.store = self.opener.open(&host.audit_db)?;
-                host.database_identity = Some(current);
-            }
-            Ok(_) => {}
-            Err(_) => {
-                let audit_db = host.audit_db.clone();
-                host.store = self.opener.open(&audit_db)?;
-                host.database_identity = FileIdentity::read(&audit_db).ok();
-            }
-        }
-        Ok(host.store.clone())
-    }
 }
 
 /// Execute one host-global plugin tool inside the audited dispatch boundary.

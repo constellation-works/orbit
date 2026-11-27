@@ -21,35 +21,6 @@ const PROMPT_SECRET: &str = "tenant-42-authorization-bearer-zzz";
 const SUCCESS_ENVELOPE: &str =
     r#"{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"edited\":true},\"error\":null}"#;
 
-/// Install a fake `copilot` on disk and return its path.
-///
-/// `body` runs after the harness has recorded argv and stdin, so every
-/// scenario shares one recording contract and differs only in what the agent
-/// then does. The recording paths are baked into the script rather than passed
-/// through the environment, so cases stay independent under a parallel test
-/// runner.
-fn fake_copilot(dir: &Path, body: &str, argv_path: &Path, stdin_path: &Path) -> PathBuf {
-    let program = dir.join("copilot");
-    let script = format!(
-        r#"#!/bin/sh
-: > '{argv}'
-for arg in "$@"; do printf '%s\n' "$arg" >> '{argv}'; done
-cat > '{stdin}'
-{body}
-"#,
-        argv = argv_path.display(),
-        stdin = stdin_path.display(),
-    );
-    std::fs::write(&program, script).expect("write fake copilot");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod fake copilot");
-    }
-    program
-}
-
 struct Harness {
     _dir: tempfile::TempDir,
     argv_path: PathBuf,
@@ -91,6 +62,35 @@ impl Harness {
     fn stdin(&self) -> String {
         std::fs::read_to_string(&self.stdin_path).expect("fake agent must have recorded stdin")
     }
+}
+
+/// Install a fake `copilot` on disk and return its path.
+///
+/// `body` runs after the harness has recorded argv and stdin, so every
+/// scenario shares one recording contract and differs only in what the agent
+/// then does. The recording paths are baked into the script rather than passed
+/// through the environment, so cases stay independent under a parallel test
+/// runner.
+fn fake_copilot(dir: &Path, body: &str, argv_path: &Path, stdin_path: &Path) -> PathBuf {
+    let program = dir.join("copilot");
+    let script = format!(
+        r#"#!/bin/sh
+: > '{argv}'
+for arg in "$@"; do printf '%s\n' "$arg" >> '{argv}'; done
+cat > '{stdin}'
+{body}
+"#,
+        argv = argv_path.display(),
+        stdin = stdin_path.display(),
+    );
+    std::fs::write(&program, script).expect("write fake copilot");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake copilot");
+    }
+    program
 }
 
 /// Seed the *shipped* copilot executor definition, retargeted at the fake

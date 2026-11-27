@@ -559,17 +559,19 @@ impl Delivery {
         let started = pair._root.path().join("started-{run_id}");
         let mut workers = crate::worker_fixture::install_owned_workers(&started, repo.clone());
         workers.retain_workspace(pair._root.clone());
+        let claim_id = claim["claim_id"].as_str().unwrap().to_string();
+        let handoff_id = claim["handoff"]["handoff_id"].as_str().unwrap().to_string();
 
         Self {
             _workers: workers,
-            claim_id: claim["claim_id"].as_str().unwrap().to_string(),
-            handoff_id: claim["handoff"]["handoff_id"].as_str().unwrap().to_string(),
             pair,
             owner,
             repo,
             task,
             leaf,
             landing,
+            claim_id,
+            handoff_id,
             head,
             merge,
         }

@@ -100,8 +100,8 @@ pub(super) fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Val
             has_external_ref_system,
             ..Default::default()
         },
-        pilot_warnings: pilot_warnings_filter,
         ready: input.optional_bool("ready")? == Some(true),
+        pilot_warnings: pilot_warnings_filter,
         runs_on: input
             .optional_string("runs_on")?
             .map(|value| {

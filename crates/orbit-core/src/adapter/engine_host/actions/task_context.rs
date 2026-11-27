@@ -44,6 +44,20 @@ const MAX_TASK_COMMENTS_BYTES: usize = 16 * 1024;
 /// pass.
 const COMMENT_TRUNCATION_MARKER: &str = "\n\n[comment truncated to fit the envelope byte budget]";
 
+/// The comment projection for one envelope: the retained comments plus what
+/// had to be cut to hold them to [`MAX_TASK_COMMENTS_BYTES`].
+struct BoundedTaskComments {
+    /// Retained comments, in chronological order. The newest non-pilot body may
+    /// have been cut down; a retained pilot comment is its summary line once
+    /// the budget forced a choice; every other body is verbatim.
+    comments: Vec<TaskComment>,
+    /// How many comments were dropped entirely, superseded pilot passes
+    /// included.
+    omitted_count: usize,
+    /// Whether a retained body was cut down to fit the budget.
+    body_truncated: bool,
+}
+
 pub(crate) fn associated_task_ids(input: &Value) -> Vec<String> {
     let mut task_ids = Vec::new();
     if let Some(task_id) = input.get("task_id").and_then(Value::as_str) {
@@ -454,20 +468,6 @@ fn envelope_context_files(task: &Task, input: &Value, fallback_repo_root: &Path)
         .collect()
 }
 
-/// The comment projection for one envelope: the retained comments plus what
-/// had to be cut to hold them to [`MAX_TASK_COMMENTS_BYTES`].
-struct BoundedTaskComments {
-    /// Retained comments, in chronological order. The newest non-pilot body may
-    /// have been cut down; a retained pilot comment is its summary line once
-    /// the budget forced a choice; every other body is verbatim.
-    comments: Vec<TaskComment>,
-    /// How many comments were dropped entirely, superseded pilot passes
-    /// included.
-    omitted_count: usize,
-    /// Whether a retained body was cut down to fit the budget.
-    body_truncated: bool,
-}
-
 /// Hold the comments to [`MAX_TASK_COMMENTS`] and [`MAX_TASK_COMMENTS_BYTES`].
 ///
 /// Comments that already fit are returned untouched. Otherwise the budget is
@@ -539,10 +539,11 @@ fn bounded_task_comments(comments: &[TaskComment]) -> BoundedTaskComments {
         pilot_body_replaced = admit(index, pilot, &mut kept) && summary_replaced;
     }
     kept.sort_by_key(|(index, _)| *index);
+    let omitted_count = comments.len() - kept.len();
 
     BoundedTaskComments {
-        omitted_count: comments.len() - kept.len(),
         comments: kept.into_iter().map(|(_, comment)| comment).collect(),
+        omitted_count,
         body_truncated: body_truncated || pilot_body_replaced,
     }
 }

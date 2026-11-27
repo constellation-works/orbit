@@ -66,6 +66,22 @@ use crate::application::task_bundle::publication::{
     AttachmentPolicy, PublicationInspection, PublicationPublishOutcome, PublicationRestoreOutcome,
 };
 
+macro_rules! outcome_accessors {
+    ($($(#[$doc:meta])* $method:ident => $variant:ident($inner:ty)),* $(,)?) => {
+        impl Outcome {
+            $(
+                $(#[$doc])*
+                pub fn $method(self) -> Result<$inner, crate::Error> {
+                    match self {
+                        Self::$variant(inner) => Ok(inner),
+                        _ => Err(unexpected_outcome(stringify!($variant))),
+                    }
+                }
+            )*
+        }
+    };
+}
+
 /// One task command.
 pub enum Command<'a> {
     /// A verb of the task operation registry.
@@ -587,22 +603,6 @@ pub struct RowRead {
     pub dependency_statuses: Result<BTreeMap<String, TaskStatus>, OrbitError>,
 }
 
-macro_rules! outcome_accessors {
-    ($($(#[$doc:meta])* $method:ident => $variant:ident($inner:ty)),* $(,)?) => {
-        impl Outcome {
-            $(
-                $(#[$doc])*
-                pub fn $method(self) -> Result<$inner, crate::Error> {
-                    match self {
-                        Self::$variant(inner) => Ok(inner),
-                        _ => Err(unexpected_outcome(stringify!($variant))),
-                    }
-                }
-            )*
-        }
-    };
-}
-
 outcome_accessors! {
     /// The JSON answer.
     into_answer => Answer(Value),
@@ -663,13 +663,6 @@ impl Outcome {
     }
 }
 
-/// A command answered another outcome than the one its surface renders.
-fn unexpected_outcome(expected: &str) -> crate::Error {
-    OrbitError::Execution(format!(
-        "task command answered an outcome other than {expected}"
-    ))
-}
-
 /// Why a task command failed.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -684,11 +677,6 @@ impl From<Error> for crate::Error {
             Error::Flow(error) => error,
         }
     }
-}
-
-/// Run one task command: authorize it, audit it, run it.
-pub fn exec<'a>(core: &Core, command: Command<'a>) -> Result<Outcome, crate::Error> {
-    exec::run::<TaskApp<'a>>(core, command)
 }
 
 struct TaskApp<'a>(PhantomData<&'a ()>);
@@ -786,4 +774,16 @@ impl<'a> App for TaskApp<'a> {
             _ => None,
         }
     }
+}
+
+/// A command answered another outcome than the one its surface renders.
+fn unexpected_outcome(expected: &str) -> crate::Error {
+    OrbitError::Execution(format!(
+        "task command answered an outcome other than {expected}"
+    ))
+}
+
+/// Run one task command: authorize it, audit it, run it.
+pub fn exec<'a>(core: &Core, command: Command<'a>) -> Result<Outcome, crate::Error> {
+    exec::run::<TaskApp<'a>>(core, command)
 }

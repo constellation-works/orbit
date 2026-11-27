@@ -56,19 +56,6 @@ impl PullTransportPort for OrbitRuntime {
     }
 }
 
-fn refused(message: impl Into<String>) -> OrbitError {
-    OrbitError::PolicyDenied(message.into())
-}
-
-/// The claim an admission record is acting on.
-fn admitted_claim(admission: &LocalPullAdmission) -> Result<ExecutionClaim, OrbitError> {
-    admission
-        .receipt
-        .as_ref()
-        .and_then(|receipt| receipt.claim.clone())
-        .ok_or_else(|| refused("this admission holds no claim to act on"))
-}
-
 /// The follower half of the pull protocol: every call is delivered to the
 /// owner's registered tools over the composition-supplied transport.
 ///
@@ -92,15 +79,6 @@ impl RoutedPullPeer<'_> {
             .call(&destination.selector, tool, input)
             .map_err(crate::application::distributed::owner_protocol_error)
     }
-}
-
-fn decode<T: serde::de::DeserializeOwned>(value: Value, what: &str) -> Result<T, OrbitError> {
-    serde_json::from_value(value)
-        .map_err(|error| OrbitError::Store(format!("owner {what} response: {error}")))
-}
-
-fn encode<T: serde::Serialize>(value: &T) -> Result<Value, OrbitError> {
-    serde_json::to_value(value).map_err(|error| OrbitError::Store(error.to_string()))
 }
 
 impl PullPeer for RoutedPullPeer<'_> {
@@ -395,4 +373,26 @@ impl orbit_tools::OwnerCoordinator for LocalOwnerCoordinator {
         self.runtime
             .execute_owner_coordination(name, input, session)
     }
+}
+
+fn refused(message: impl Into<String>) -> OrbitError {
+    OrbitError::PolicyDenied(message.into())
+}
+
+/// The claim an admission record is acting on.
+fn admitted_claim(admission: &LocalPullAdmission) -> Result<ExecutionClaim, OrbitError> {
+    admission
+        .receipt
+        .as_ref()
+        .and_then(|receipt| receipt.claim.clone())
+        .ok_or_else(|| refused("this admission holds no claim to act on"))
+}
+
+fn decode<T: serde::de::DeserializeOwned>(value: Value, what: &str) -> Result<T, OrbitError> {
+    serde_json::from_value(value)
+        .map_err(|error| OrbitError::Store(format!("owner {what} response: {error}")))
+}
+
+fn encode<T: serde::Serialize>(value: &T) -> Result<Value, OrbitError> {
+    serde_json::to_value(value).map_err(|error| OrbitError::Store(error.to_string()))
 }

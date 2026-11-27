@@ -44,42 +44,6 @@ const STATIC_ARGS: &[&str] = &[
     "--no-session-log",
 ];
 
-/// Records argv, stdin, cwd, environment, and the prompt file (its bytes, path
-/// and mode) before running `body`.
-fn fake_muse(dir: &Path, body: &str) -> PathBuf {
-    let program = dir.join("muse");
-    let script = format!(
-        r#"#!/bin/sh
-out='{out}'
-: > "$out/argv.txt"
-for arg in "$@"; do printf '%s\n' "$arg" >> "$out/argv.txt"; done
-pwd > "$out/cwd.txt"
-env > "$out/env.txt"
-cat > "$out/stdin.txt"
-prompt=''
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = '--prompt-file' ]; then prompt="$2"; fi
-  shift
-done
-if [ -n "$prompt" ]; then
-  printf '%s' "$prompt" > "$out/prompt-path.txt"
-  cat "$prompt" > "$out/prompt.txt"
-  if stat -c %a "$prompt" > "$out/prompt-mode.txt" 2>/dev/null; then :; else stat -f %Lp "$prompt" > "$out/prompt-mode.txt"; fi
-fi
-{body}
-"#,
-        out = dir.display(),
-    );
-    std::fs::write(&program, script).expect("write fake muse");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod fake muse");
-    }
-    program
-}
-
 struct Harness {
     dir: tempfile::TempDir,
     edit_path: PathBuf,
@@ -139,6 +103,42 @@ impl Harness {
             .find(|(key, _)| key == name)
             .map(|(_, value)| value)
     }
+}
+
+/// Records argv, stdin, cwd, environment, and the prompt file (its bytes, path
+/// and mode) before running `body`.
+fn fake_muse(dir: &Path, body: &str) -> PathBuf {
+    let program = dir.join("muse");
+    let script = format!(
+        r#"#!/bin/sh
+out='{out}'
+: > "$out/argv.txt"
+for arg in "$@"; do printf '%s\n' "$arg" >> "$out/argv.txt"; done
+pwd > "$out/cwd.txt"
+env > "$out/env.txt"
+cat > "$out/stdin.txt"
+prompt=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--prompt-file' ]; then prompt="$2"; fi
+  shift
+done
+if [ -n "$prompt" ]; then
+  printf '%s' "$prompt" > "$out/prompt-path.txt"
+  cat "$prompt" > "$out/prompt.txt"
+  if stat -c %a "$prompt" > "$out/prompt-mode.txt" 2>/dev/null; then :; else stat -f %Lp "$prompt" > "$out/prompt-mode.txt"; fi
+fi
+{body}
+"#,
+        out = dir.display(),
+    );
+    std::fs::write(&program, script).expect("write fake muse");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake muse");
+    }
+    program
 }
 
 fn muse_resource() -> ExecutorResource {

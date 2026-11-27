@@ -53,148 +53,14 @@ esac
 pub(crate) const JOB_NAME: &str = "Check / Clippy / Test";
 pub(crate) const FAILED_STEP: &str = "Test";
 
-#[test]
-fn missing_failed_jobs_are_held_then_escalated_or_filed_when_available() {
-    if !isolated_with_fake_gh(
-        "sweep::missing_failed_jobs_are_held_then_escalated_or_filed_when_available",
-    ) {
-        return;
-    }
-    let mut workspace = Workspace::new();
-    workspace.push_red_run(8100, 9200, &unbindable_log());
-    let view_path = workspace.state.join("run-8100.json");
-    let complete_view = std::fs::read_to_string(&view_path).unwrap();
-    let mut empty_view: Value = serde_json::from_str(&complete_view).unwrap();
-    empty_view["jobs"] = json!([]);
-    write_json(&view_path, &empty_view);
+const DECLARED_DOWNLOAD_CONFIG: &str = "[workflow]\nci_infrastructure_signatures = \
+     [\"ci-download: outcome=failed class=transient\"]\n";
 
-    for _ in 0..2 {
-        let (evidence, filed) = workspace.sweep();
-        assert!(
-            evidence["retryable_errors"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|error| {
-                    error["stage"] == "registration"
-                        && error["operation"] == "run_view"
-                        && error["message"] == "failed run returned no failed jobs"
-                }),
-            "{evidence:#}"
-        );
-        let filed = filed.expect("missing jobs should hold the sweep");
-        assert_eq!(filed["outcome"], "deferred", "{filed:#}");
-        assert_eq!(filed["filed_count"], 0, "{filed:#}");
-        assert!(open_sweep_tasks(&workspace.runtime).is_empty());
-    }
-    let incidents = workspace
-        .runtime
-        .audit_failure_incidents(&orbit_core::FailureIncidentQuery::default())
-        .unwrap();
-    assert_eq!(incidents.affected_runs_by_class.get("deferred"), Some(&2));
-    assert_eq!(incidents.affected_runs_by_class.get("unexpected"), None);
-    let (evidence, filed) = workspace.sweep();
-    assert_eq!(
-        evidence["landing_evidence_incomplete"][0]["consecutive_sweeps"], 3,
-        "{evidence:#}"
-    );
-    let filed = filed.unwrap();
-    assert_eq!(
-        filed["evidence_incomplete"].as_array().unwrap().len(),
-        1,
-        "{filed:#}"
-    );
-    let tasks = open_sweep_tasks(&workspace.runtime);
-    assert_eq!(tasks.len(), 1);
-    assert!(
-        tasks[0]
-            .tags
-            .iter()
-            .any(|tag| tag == "ci-evidence-incomplete")
-    );
+/// The merge commit the helper checkout lands, distinct from any workspace head
+/// these tests build.
+const HELPER_MERGE_COMMIT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-    let mut recovered = Workspace::new();
-    let log = [
-        "HEAD is now at {checkout} Merge into agent-main",
-        "##[group]Run cargo test",
-        "##[endgroup]",
-        "thread 'regression' panicked at src/lib.rs:9:5:",
-        "assertion `left == right` failed",
-        "error: test failed",
-        "##[error]Process completed with exit code 101.",
-    ]
-    .map(|line| format!("{JOB_NAME}\t{FAILED_STEP}\t2026-10-10T06:37:01.0000000Z {line}\n"))
-    .concat();
-    recovered.push_red_run(8101, 9201, &log);
-    let path = recovered.state.join("run-8101.json");
-    let complete = std::fs::read_to_string(&path).unwrap();
-    let mut empty: Value = serde_json::from_str(&complete).unwrap();
-    empty["jobs"] = json!([]);
-    write_json(&path, &empty);
-    assert_eq!(recovered.sweep().1.unwrap()["outcome"], "deferred");
-    std::fs::write(path, complete).unwrap();
-    let (_, filed) = recovered.sweep();
-    let filed = filed.unwrap();
-    assert_eq!(filed["filed_count"], 1, "{filed:#}");
-}
-
-/// Run `test` in a child whose `PATH` starts with the substitute `gh`.
-/// Returns true inside that child.
-pub(crate) fn isolated_with_fake_gh(test: &str) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-
-    if std::env::var_os(CHILD_ENV).is_some() {
-        return true;
-    }
-    let sandbox = TempDir::new().unwrap();
-    let bin = sandbox.path().join("bin");
-    let state = sandbox.path().join("gh-state");
-    std::fs::create_dir_all(&bin).unwrap();
-    std::fs::create_dir_all(&state).unwrap();
-    let gh = bin.join("gh");
-    std::fs::write(&gh, FAKE_GH).unwrap();
-    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let primer = TempDir::new().unwrap();
-    std::fs::create_dir_all(primer.path().join("gh-state")).unwrap();
-    orbit_common::test_env::prime_executable(
-        std::process::Command::new(&gh)
-            .args(["auth", "status"])
-            .env("HOME", primer.path()),
-    );
-    let mut path = vec![bin];
-    path.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
-    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-    orbit_common::test_env::clear_inherited_authority(|key| {
-        command.env_remove(key);
-    });
-    for (name, _) in std::env::vars_os() {
-        let name = name.to_string_lossy();
-        if name.starts_with("GIT_") || name.starts_with("GH_") {
-            command.env_remove(name.as_ref());
-        }
-    }
-    command
-        .args(["--exact", test, "--nocapture", "--test-threads=1"])
-        .env(CHILD_ENV, "1")
-        .env(STATE_ENV, &state)
-        .env("PATH", std::env::join_paths(path).unwrap())
-        .env_remove("GITHUB_TOKEN")
-        .env_remove("GITHUB_ENTERPRISE_TOKEN")
-        .env("HOME", sandbox.path())
-        .env("USERPROFILE", sandbox.path())
-        .current_dir(sandbox.path());
-    let logs = TempDir::new().unwrap();
-    let output = orbit_common::test_env::run_child_test(&mut command, test, logs.path());
-    orbit_common::test_env::assert_child_test_passed(
-        test,
-        output.status,
-        output.stdout,
-        output.stderr,
-    );
-    false
-}
+const HELPER_MERGE_PARENT: &str = "cccccccccccccccccccccccccccccccccccccccc";
 
 /// A workspace whose `origin` holds `agent-main` and `main` at one commit.
 pub(crate) struct Workspace {
@@ -392,6 +258,149 @@ impl Workspace {
             .map_err(|error| error.to_string());
         (evidence, filed)
     }
+}
+
+#[test]
+fn missing_failed_jobs_are_held_then_escalated_or_filed_when_available() {
+    if !isolated_with_fake_gh(
+        "sweep::missing_failed_jobs_are_held_then_escalated_or_filed_when_available",
+    ) {
+        return;
+    }
+    let mut workspace = Workspace::new();
+    workspace.push_red_run(8100, 9200, &unbindable_log());
+    let view_path = workspace.state.join("run-8100.json");
+    let complete_view = std::fs::read_to_string(&view_path).unwrap();
+    let mut empty_view: Value = serde_json::from_str(&complete_view).unwrap();
+    empty_view["jobs"] = json!([]);
+    write_json(&view_path, &empty_view);
+
+    for _ in 0..2 {
+        let (evidence, filed) = workspace.sweep();
+        assert!(
+            evidence["retryable_errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|error| {
+                    error["stage"] == "registration"
+                        && error["operation"] == "run_view"
+                        && error["message"] == "failed run returned no failed jobs"
+                }),
+            "{evidence:#}"
+        );
+        let filed = filed.expect("missing jobs should hold the sweep");
+        assert_eq!(filed["outcome"], "deferred", "{filed:#}");
+        assert_eq!(filed["filed_count"], 0, "{filed:#}");
+        assert!(open_sweep_tasks(&workspace.runtime).is_empty());
+    }
+    let incidents = workspace
+        .runtime
+        .audit_failure_incidents(&orbit_core::FailureIncidentQuery::default())
+        .unwrap();
+    assert_eq!(incidents.affected_runs_by_class.get("deferred"), Some(&2));
+    assert_eq!(incidents.affected_runs_by_class.get("unexpected"), None);
+    let (evidence, filed) = workspace.sweep();
+    assert_eq!(
+        evidence["landing_evidence_incomplete"][0]["consecutive_sweeps"], 3,
+        "{evidence:#}"
+    );
+    let filed = filed.unwrap();
+    assert_eq!(
+        filed["evidence_incomplete"].as_array().unwrap().len(),
+        1,
+        "{filed:#}"
+    );
+    let tasks = open_sweep_tasks(&workspace.runtime);
+    assert_eq!(tasks.len(), 1);
+    assert!(
+        tasks[0]
+            .tags
+            .iter()
+            .any(|tag| tag == "ci-evidence-incomplete")
+    );
+
+    let mut recovered = Workspace::new();
+    let log = [
+        "HEAD is now at {checkout} Merge into agent-main",
+        "##[group]Run cargo test",
+        "##[endgroup]",
+        "thread 'regression' panicked at src/lib.rs:9:5:",
+        "assertion `left == right` failed",
+        "error: test failed",
+        "##[error]Process completed with exit code 101.",
+    ]
+    .map(|line| format!("{JOB_NAME}\t{FAILED_STEP}\t2026-10-10T06:37:01.0000000Z {line}\n"))
+    .concat();
+    recovered.push_red_run(8101, 9201, &log);
+    let path = recovered.state.join("run-8101.json");
+    let complete = std::fs::read_to_string(&path).unwrap();
+    let mut empty: Value = serde_json::from_str(&complete).unwrap();
+    empty["jobs"] = json!([]);
+    write_json(&path, &empty);
+    assert_eq!(recovered.sweep().1.unwrap()["outcome"], "deferred");
+    std::fs::write(path, complete).unwrap();
+    let (_, filed) = recovered.sweep();
+    let filed = filed.unwrap();
+    assert_eq!(filed["filed_count"], 1, "{filed:#}");
+}
+
+/// Run `test` in a child whose `PATH` starts with the substitute `gh`.
+/// Returns true inside that child.
+pub(crate) fn isolated_with_fake_gh(test: &str) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    if std::env::var_os(CHILD_ENV).is_some() {
+        return true;
+    }
+    let sandbox = TempDir::new().unwrap();
+    let bin = sandbox.path().join("bin");
+    let state = sandbox.path().join("gh-state");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(&gh, FAKE_GH).unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let primer = TempDir::new().unwrap();
+    std::fs::create_dir_all(primer.path().join("gh-state")).unwrap();
+    orbit_common::test_env::prime_executable(
+        std::process::Command::new(&gh)
+            .args(["auth", "status"])
+            .env("HOME", primer.path()),
+    );
+    let mut path = vec![bin];
+    path.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    orbit_common::test_env::clear_inherited_authority(|key| {
+        command.env_remove(key);
+    });
+    for (name, _) in std::env::vars_os() {
+        let name = name.to_string_lossy();
+        if name.starts_with("GIT_") || name.starts_with("GH_") {
+            command.env_remove(name.as_ref());
+        }
+    }
+    command
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(CHILD_ENV, "1")
+        .env(STATE_ENV, &state)
+        .env("PATH", std::env::join_paths(path).unwrap())
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GITHUB_ENTERPRISE_TOKEN")
+        .env("HOME", sandbox.path())
+        .env("USERPROFILE", sandbox.path())
+        .current_dir(sandbox.path());
+    let logs = TempDir::new().unwrap();
+    let output = orbit_common::test_env::run_child_test(&mut command, test, logs.path());
+    orbit_common::test_env::assert_child_test_passed(
+        test,
+        output.status,
+        output.stdout,
+        output.stderr,
+    );
+    false
 }
 
 fn write_json(path: &Path, value: &Value) {
@@ -933,9 +942,6 @@ fn shard_dependency_record() -> String {
     )
 }
 
-const DECLARED_DOWNLOAD_CONFIG: &str = "[workflow]\nci_infrastructure_signatures = \
-     [\"ci-download: outcome=failed class=transient\"]\n";
-
 /// The shard folds into infrastructure; the waiter keeps its own filed task.
 fn assert_waiter_filed_beside_infrastructure_shard(runtime: &OrbitRuntime, filed: &Value) {
     assert_eq!(filed["filed_count"], json!(1), "{filed:#}");
@@ -1192,11 +1198,6 @@ fn ci_retired_ref_candidates_do_not_starve_an_agent_main_failure() {
     assert_eq!(output["outcome"], json!("current_failures"), "{output:#}");
     assert_eq!(open_sweep_tasks(&workspace.runtime).len(), 1);
 }
-
-/// The merge commit the helper checkout lands, distinct from any workspace head
-/// these tests build.
-const HELPER_MERGE_COMMIT: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-const HELPER_MERGE_PARENT: &str = "cccccccccccccccccccccccccccccccccccccccc";
 
 fn gh_line(step: &str, payload: &str) -> String {
     format!("{JOB_NAME}\t{step}\t2026-10-10T06:37:01.0000000Z {payload}\n")

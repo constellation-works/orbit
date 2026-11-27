@@ -79,9 +79,9 @@ impl PullFixture {
         };
         Self {
             _root: root,
-            destination,
             jobs,
             parent,
+            destination,
         }
     }
     fn admit(&self, request_id: &str, ceiling: usize) -> bool {

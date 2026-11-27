@@ -83,17 +83,53 @@ const NOTICE_POST: &str = "orbit.notice.post";
 const NOTICE_SHOW: &str = "orbit.notice.show";
 const NOTICE_CLOSE: &str = "orbit.notice.close";
 
-/// Whether this process is a claimed worker whose owner is another machine:
-/// the only caller whose coordination calls need the bridge. A worker on its
-/// owner's machine reaches the owner store in process and keeps that route.
-pub(super) fn remote_owner<'a>(
-    binding: Option<&'a WorkerInvocation>,
-    process_machine_id: Option<&str>,
-) -> Option<&'a WorkerInvocation> {
-    let binding = binding?;
-    let local = process_machine_id?;
-    (binding.execution.machine_id == local && binding.owner_machine_id != local).then_some(binding)
-}
+/// The fields a claimed worker's `orbit.task.show` may carry. The binding
+/// supplies the workspace and the broker the view, so neither is accepted.
+const TASK_SHOW_FIELDS: [&str; 9] = [
+    "id",
+    "fields",
+    "field",
+    "run_id",
+    "model",
+    "limit",
+    "comments_offset",
+    "history_offset",
+    "artifacts_offset",
+];
+
+/// The fields that select the owner's bounded, paginated task view.
+const TASK_SHOW_PAGE_FIELDS: [&str; 4] = [
+    "limit",
+    "comments_offset",
+    "history_offset",
+    "artifacts_offset",
+];
+
+/// The fields a claimed worker's `orbit.task.artifact.get` may carry.
+const GET_FIELDS: [&str; 3] = ["id", "path", "model"];
+
+/// The fields a claimed worker's `orbit.notice.post` may carry.
+const NOTICE_POST_FIELDS: [&str; 13] = [
+    "kind",
+    "title",
+    "body",
+    "scope",
+    "dedupe_key",
+    "linked_task",
+    "close_on_linked_done",
+    "evidence",
+    "hosts",
+    "expires_in_hours",
+    "expires_at",
+    "model",
+    "orchestrator",
+];
+
+/// The fields a claimed worker's `orbit.notice.show` may carry.
+const NOTICE_SHOW_FIELDS: [&str; 3] = ["id", "model", "orchestrator"];
+
+/// The fields a claimed worker's `orbit.notice.close` may carry.
+const NOTICE_CLOSE_FIELDS: [&str; 5] = ["id", "dedupe_key", "reason", "model", "orchestrator"];
 
 /// How a claimed worker's coordination call leaves the nested `orbit`.
 #[derive(Debug)]
@@ -106,6 +142,18 @@ pub enum ClaimedOwnerRoute {
     /// Nothing else can be relied on to have recorded it, so the caller
     /// audits the refusal.
     Refused(OrbitError),
+}
+
+/// Whether this process is a claimed worker whose owner is another machine:
+/// the only caller whose coordination calls need the bridge. A worker on its
+/// owner's machine reaches the owner store in process and keeps that route.
+pub(super) fn remote_owner<'a>(
+    binding: Option<&'a WorkerInvocation>,
+    process_machine_id: Option<&str>,
+) -> Option<&'a WorkerInvocation> {
+    let binding = binding?;
+    let local = process_machine_id?;
+    (binding.execution.machine_id == local && binding.owner_machine_id != local).then_some(binding)
 }
 
 /// Route a claimed worker's coordination call from the nested `orbit` (CLI
@@ -532,54 +580,6 @@ fn refuse_unaccepted_field(
          {accepted}"
     )))
 }
-
-/// The fields a claimed worker's `orbit.task.show` may carry. The binding
-/// supplies the workspace and the broker the view, so neither is accepted.
-const TASK_SHOW_FIELDS: [&str; 9] = [
-    "id",
-    "fields",
-    "field",
-    "run_id",
-    "model",
-    "limit",
-    "comments_offset",
-    "history_offset",
-    "artifacts_offset",
-];
-
-/// The fields that select the owner's bounded, paginated task view.
-const TASK_SHOW_PAGE_FIELDS: [&str; 4] = [
-    "limit",
-    "comments_offset",
-    "history_offset",
-    "artifacts_offset",
-];
-
-/// The fields a claimed worker's `orbit.task.artifact.get` may carry.
-const GET_FIELDS: [&str; 3] = ["id", "path", "model"];
-
-/// The fields a claimed worker's `orbit.notice.post` may carry.
-const NOTICE_POST_FIELDS: [&str; 13] = [
-    "kind",
-    "title",
-    "body",
-    "scope",
-    "dedupe_key",
-    "linked_task",
-    "close_on_linked_done",
-    "evidence",
-    "hosts",
-    "expires_in_hours",
-    "expires_at",
-    "model",
-    "orchestrator",
-];
-
-/// The fields a claimed worker's `orbit.notice.show` may carry.
-const NOTICE_SHOW_FIELDS: [&str; 3] = ["id", "model", "orchestrator"];
-
-/// The fields a claimed worker's `orbit.notice.close` may carry.
-const NOTICE_CLOSE_FIELDS: [&str; 5] = ["id", "dedupe_key", "reason", "model", "orchestrator"];
 
 /// Check a claimed worker's `orbit.task.show` request, of any task in the
 /// claimed workspace, and say whether it asks for a bounded page.

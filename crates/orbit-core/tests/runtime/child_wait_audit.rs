@@ -161,7 +161,6 @@ impl Fixture {
         )
         .unwrap();
         Self {
-            root,
             global,
             repo,
             runtime,
@@ -175,6 +174,7 @@ impl Fixture {
             cleaned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(unix)]
             acquisition_events: None,
+            root,
         }
     }
 

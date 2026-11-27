@@ -40,6 +40,13 @@ const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ),
 ];
 
+struct AutoTaskProjection {
+    rows: Vec<Value>,
+    cursor_state_error: Option<String>,
+    errors: Vec<Value>,
+    error_total: usize,
+}
+
 fn text(value: &str) -> String {
     let (value, truncated) = bounded_redacted_text(value, 4096);
     if truncated {
@@ -129,12 +136,6 @@ pub(super) fn read(
         result["load_errors"] = json!(errors);
     }
     Ok(result)
-}
-struct AutoTaskProjection {
-    rows: Vec<Value>,
-    cursor_state_error: Option<String>,
-    errors: Vec<Value>,
-    error_total: usize,
 }
 
 /// The shared listing's rows and bounded diagnostics.

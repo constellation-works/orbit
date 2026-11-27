@@ -352,11 +352,11 @@ fn worker_cleanup_retains_completion_and_joins_the_reaper() {
         let pid = worker.pid;
         let completion = Arc::clone(&worker.completion);
         let fixture = Fixture {
+            _worker: worker,
             _resources: Resources {
                 pid,
                 completion: Arc::clone(&completion),
             },
-            _worker: worker,
         };
         let (returned, on_returned) = mpsc::channel();
         let cleanup = std::thread::spawn(move || {

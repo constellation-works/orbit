@@ -41,6 +41,14 @@ pub(super) struct PluginWorktreeBinding {
     pub(super) task_id: String,
 }
 
+struct AuthenticatedWorktreeCheckpoint {
+    workspace_path: String,
+    job_run_id: String,
+    step_index: usize,
+    step_input: Option<Value>,
+    input_schema: Option<Value>,
+}
+
 /// Authenticate and resolve the admitted single-task worktree for a
 /// deterministic `plugin.tool_call`, or return `Ok(None)` when the call stays
 /// on its existing primary-checkout routing.
@@ -219,14 +227,6 @@ pub(super) fn resolve_plugin_delivery_worktree(
         run_id: run.run_id,
         task_id: step_task_id,
     }))
-}
-
-struct AuthenticatedWorktreeCheckpoint {
-    workspace_path: String,
-    job_run_id: String,
-    step_index: usize,
-    step_input: Option<Value>,
-    input_schema: Option<Value>,
 }
 
 fn host_attested_run_id<'a>(

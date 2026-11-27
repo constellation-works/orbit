@@ -24,6 +24,11 @@ use super::super::callback::take_callback_plugin_provenance;
 use super::entry::{ToolEntryPoint, mark_tool_audit_recorded};
 use super::finalize::finalize_successful_dispatch;
 
+/// Largest serialized redacted argument payload an invalid-input refusal row
+/// stores. Past it the row keeps only the top-level key names that fit (see
+/// [`refused_key_names_json`]).
+const REFUSED_ARGUMENTS_MAX_BYTES: usize = 4096;
+
 /// Outcome of [`crate::OrbitRuntime::execute_tool_command_dispatch`]: the tool's JSON
 /// return value plus a flag indicating whether the runtime persisted an audit
 /// row for this invocation.
@@ -58,6 +63,30 @@ pub(in crate::adapter::command::dispatch) struct BrokeredAudit {
     pub(in crate::adapter::command::dispatch) working_directory: String,
     /// The job's resolved crew model, when the run recorded one.
     pub(in crate::adapter::command::dispatch) session_model: Option<String>,
+}
+
+/// This dispatch's audit execution id, pushed before the tool runs and popped
+/// when the dispatch ends so a nested callback sees it as the entry id.
+struct DispatchAuditFrame {
+    id: String,
+}
+
+impl DispatchAuditFrame {
+    fn enter() -> Self {
+        Self {
+            id: orbit_common::observability::audit_id::push_dispatch_execution_id(),
+        }
+    }
+
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+impl Drop for DispatchAuditFrame {
+    fn drop(&mut self) {
+        orbit_common::observability::audit_id::pop_dispatch_execution_id();
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -316,11 +345,6 @@ where
     finalize_successful_dispatch(name, execution_kind, value, audit_write)
 }
 
-/// Largest serialized redacted argument payload an invalid-input refusal row
-/// stores. Past it the row keeps only the top-level key names that fit (see
-/// [`refused_key_names_json`]).
-const REFUSED_ARGUMENTS_MAX_BYTES: usize = 4096;
-
 /// The `arguments_json` of an invalid-input refusal: the refused call's
 /// arguments after secret redaction (property names included, since the
 /// caller chooses them), or just their top-level key names, as a
@@ -371,28 +395,4 @@ fn refused_key_names_json(keys: &[String]) -> String {
 /// Serialized length of `text` as a JSON string, quotes and escapes included.
 fn json_string_len(text: &str) -> usize {
     Value::String(text.to_owned()).to_string().len()
-}
-
-/// This dispatch's audit execution id, pushed before the tool runs and popped
-/// when the dispatch ends so a nested callback sees it as the entry id.
-struct DispatchAuditFrame {
-    id: String,
-}
-
-impl DispatchAuditFrame {
-    fn enter() -> Self {
-        Self {
-            id: orbit_common::observability::audit_id::push_dispatch_execution_id(),
-        }
-    }
-
-    fn id(&self) -> &str {
-        &self.id
-    }
-}
-
-impl Drop for DispatchAuditFrame {
-    fn drop(&mut self) {
-        orbit_common::observability::audit_id::pop_dispatch_execution_id();
-    }
 }

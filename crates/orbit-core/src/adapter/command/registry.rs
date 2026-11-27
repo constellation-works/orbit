@@ -93,15 +93,17 @@ impl OrbitRuntime {
                 let stored = stored_tools.iter().find(|s| s.name == schema.name);
                 let enabled = stored.is_none_or(|s| s.enabled);
                 let active = self.tool_registry().is_active(&schema.name);
+                let input_schema = self.tool_registry().get_input_schema(&schema.name);
+                let mcp_toolset = self.tool_registry().mcp_toolset(&schema.name);
                 ToolInfo {
-                    input_schema: self.tool_registry().get_input_schema(&schema.name),
-                    mcp_toolset: self.tool_registry().mcp_toolset(&schema.name),
                     name: schema.name.clone(),
                     description: schema.description.clone(),
                     enabled,
                     active,
                     builtin: schema.builtin,
                     parameters: schema.parameters,
+                    input_schema,
+                    mcp_toolset,
                 }
             })
             .collect();
@@ -148,16 +150,18 @@ impl OrbitRuntime {
             .and_then(|snapshot| snapshot.tool().get(name))?;
         let enabled = stored.is_none_or(|s| s.enabled);
         let active = self.tool_registry().is_active(&schema.name);
+        let input_schema = self.tool_registry().get_input_schema(&schema.name);
+        let mcp_toolset = self.tool_registry().mcp_toolset(&schema.name);
 
         Ok(ToolInfo {
-            input_schema: self.tool_registry().get_input_schema(&schema.name),
-            mcp_toolset: self.tool_registry().mcp_toolset(&schema.name),
             name: schema.name,
             description: schema.description,
             enabled,
             active,
             builtin: schema.builtin,
             parameters: schema.parameters,
+            input_schema,
+            mcp_toolset,
         })
     }
 

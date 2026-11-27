@@ -239,11 +239,6 @@ impl From<Error> for crate::Error {
     }
 }
 
-/// Run one friction command: authorize it, audit it and return its outcome.
-pub fn exec(core: &Core, command: Command) -> Result<Outcome, crate::Error> {
-    exec::run::<FrictionApp>(core, command)
-}
-
 struct FrictionApp;
 
 impl App for FrictionApp {
@@ -309,4 +304,9 @@ impl App for FrictionApp {
         };
         Ok(Outcome::new(verb, value))
     }
+}
+
+/// Run one friction command: authorize it, audit it and return its outcome.
+pub fn exec(core: &Core, command: Command) -> Result<Outcome, crate::Error> {
+    exec::run::<FrictionApp>(core, command)
 }

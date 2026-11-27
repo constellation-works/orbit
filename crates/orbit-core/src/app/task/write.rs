@@ -63,6 +63,29 @@ const APPROVE_ALLOWED_FIELDS: &[&str] = &[
     TASK_CLI_OPTIONS_PARAM,
 ];
 
+const APPROVAL_ALLOWED_FIELDS: &[&str] = &[
+    "id",
+    "status",
+    "note",
+    "comment",
+    "model",
+    "workspace",
+    "fields",
+    "field",
+];
+
+enum GuardedLifecycleWrite {
+    Approve,
+    Start,
+}
+
+/// The persisted identity travels beside the caller's response projection so
+/// redaction audit attribution does not depend on which fields were requested.
+pub(super) struct TaskWriteOutput {
+    pub response: Value,
+    pub persisted_id: String,
+}
+
 /// The CLI-only options of a request the CLI built; `None` for any other
 /// caller. The tool entry refuses the field from MCP.
 fn cli_options<'a>(input: &'a Value, allowed: &[&str]) -> Result<Option<&'a Value>, OrbitError> {
@@ -151,7 +174,6 @@ pub(super) fn add(
                 .unwrap_or_default(),
             not_before: parse_optional_not_before(input)?.flatten(),
             plan: optional_raw_string(options, "plan")?.unwrap_or_default(),
-            crew_source: None,
             comment: filed_by.map(|binding| {
                 format!(
                     "Filed by a claimed worker: claim {}, run {} on machine {}.",
@@ -186,6 +208,7 @@ pub(super) fn add(
             source_task_id: optional_string(options, "source_task_id")?
                 .or(optional_string(input, "source_task_id")?),
             crew: optional_string(input, "crew")?,
+            crew_source: None,
             orchestrator: optional_string(input, "orchestrator")?,
             orchestrator_model: optional_string(input, "orchestrator_model")?,
             origin: parse_optional_task_origin(input, "origin")?,
@@ -558,22 +581,6 @@ fn screened_write_response(
     })
 }
 
-enum GuardedLifecycleWrite {
-    Approve,
-    Start,
-}
-
-const APPROVAL_ALLOWED_FIELDS: &[&str] = &[
-    "id",
-    "status",
-    "note",
-    "comment",
-    "model",
-    "workspace",
-    "fields",
-    "field",
-];
-
 /// Choose the special transition body only when this write actually needs it.
 ///
 /// `proposed → backlog` is approval. Every `in-progress` write goes through
@@ -648,7 +655,6 @@ fn task_update_params_from_input(
     status: Option<TaskStatus>,
 ) -> Result<TaskUpdateParams, OrbitError> {
     Ok(TaskUpdateParams {
-        review_settlement: None,
         trusted_artifact_origin: None,
         title: optional_string(input, "title")?,
         description: input
@@ -669,6 +675,7 @@ fn task_update_params_from_input(
         plan: optional_plan(input)?,
         execution_summary: optional_raw_string(input, "execution_summary")?,
         comment: optional_string(input, "comment")?,
+        review_settlement: None,
         status,
         priority: optional_string(input, "priority")?
             .map(|value| parse_task_priority("priority", &value))
@@ -711,13 +718,6 @@ fn task_update_params_from_input(
 /// intent rather than skipping validation.
 fn allows_missing_context(input: &Value) -> Result<bool, OrbitError> {
     Ok(optional_bool_alias(input, &["allow_missing_context"])?.unwrap_or(false))
-}
-
-/// The persisted identity travels beside the caller's response projection so
-/// redaction audit attribution does not depend on which fields were requested.
-pub(super) struct TaskWriteOutput {
-    pub response: Value,
-    pub persisted_id: String,
 }
 
 /// Read-only projection controls are accepted by mutating task tools solely

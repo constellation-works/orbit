@@ -11,44 +11,6 @@ use crate::OrbitRuntime;
 
 use crate::adapter::tool_host::json::serialize_task_artifact_read;
 
-/// Read one stored artifact's bytes through the task's own artifact owner.
-///
-/// Discovery stays separate from retrieval: the task's artifact listing shows
-/// compact metadata, and only this call pays for a payload. Path containment,
-/// workspace ownership, and the symlink-safe blob resolve all belong to the
-/// store, so this handler adds no second access rule of its own — a caller can
-/// only ever reach an artifact through the task that owns it.
-pub(super) fn artifact_get(
-    runtime: &OrbitRuntime,
-    session: &ToolSessionContext,
-    input: &OperationInput,
-) -> Result<Value, OrbitError> {
-    let id = input.required_string("id")?;
-    let listing_hint = artifact_listing_hint(session);
-    let path = input
-        .required_string("path")
-        .map_err(|error| OrbitError::InvalidInput(format!("{error}; {listing_hint}")))?;
-    if path == "." {
-        return Err(OrbitError::InvalidInput(format!(
-            "`path` must name one artifact, not a directory; {listing_hint}"
-        )));
-    }
-    validate_relative_artifact_path(&path)
-        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-    // Resolve the task first so an unknown or foreign id fails as not-found
-    // before any artifact lookup reports on a task the caller cannot see.
-    let task = runtime.get_task(&id)?;
-    let artifact = runtime
-        .get_task_artifact_inline(&task.id, &path)?
-        .ok_or_else(|| {
-            OrbitError::not_found(
-                orbit_common::NotFoundKind::Artifact,
-                format!("{}/{path}; {listing_hint}", task.id),
-            )
-        })?;
-    serialize_task_artifact_read(&task.id, &artifact)
-}
-
 impl OrbitRuntime {
     /// Run a read callback that application consent admitted: `orbit.task.show`
     /// limited to the admitted fields (the application ceiling when the call
@@ -154,4 +116,42 @@ impl OrbitRuntime {
             orbit_common::security::redaction::redact_sensitive_env_json(output),
         ))
     }
+}
+
+/// Read one stored artifact's bytes through the task's own artifact owner.
+///
+/// Discovery stays separate from retrieval: the task's artifact listing shows
+/// compact metadata, and only this call pays for a payload. Path containment,
+/// workspace ownership, and the symlink-safe blob resolve all belong to the
+/// store, so this handler adds no second access rule of its own — a caller can
+/// only ever reach an artifact through the task that owns it.
+pub(super) fn artifact_get(
+    runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
+    input: &OperationInput,
+) -> Result<Value, OrbitError> {
+    let id = input.required_string("id")?;
+    let listing_hint = artifact_listing_hint(session);
+    let path = input
+        .required_string("path")
+        .map_err(|error| OrbitError::InvalidInput(format!("{error}; {listing_hint}")))?;
+    if path == "." {
+        return Err(OrbitError::InvalidInput(format!(
+            "`path` must name one artifact, not a directory; {listing_hint}"
+        )));
+    }
+    validate_relative_artifact_path(&path)
+        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+    // Resolve the task first so an unknown or foreign id fails as not-found
+    // before any artifact lookup reports on a task the caller cannot see.
+    let task = runtime.get_task(&id)?;
+    let artifact = runtime
+        .get_task_artifact_inline(&task.id, &path)?
+        .ok_or_else(|| {
+            OrbitError::not_found(
+                orbit_common::NotFoundKind::Artifact,
+                format!("{}/{path}; {listing_hint}", task.id),
+            )
+        })?;
+    serialize_task_artifact_read(&task.id, &artifact)
 }

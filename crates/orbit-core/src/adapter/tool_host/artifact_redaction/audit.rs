@@ -17,6 +17,13 @@ use crate::runtime::audit::system::{
 
 use super::ArtifactRedactionReport;
 
+#[derive(Debug)]
+pub(super) struct ArtifactTarget<'a> {
+    artifact_type: &'static str,
+    artifact_id: &'a str,
+    task_id: Option<&'a str>,
+}
+
 pub(super) fn emit_audit_events(
     runtime: &OrbitRuntime,
     action: OrbitBuiltinAction,
@@ -65,13 +72,6 @@ pub(super) fn emit_audit_events(
         )?;
     }
     Ok(())
-}
-
-#[derive(Debug)]
-pub(super) struct ArtifactTarget<'a> {
-    artifact_type: &'static str,
-    artifact_id: &'a str,
-    task_id: Option<&'a str>,
 }
 
 fn artifact_target<'a>(

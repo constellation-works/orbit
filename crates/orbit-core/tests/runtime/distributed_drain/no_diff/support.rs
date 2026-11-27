@@ -54,10 +54,12 @@ impl GateOn {
 impl Gate {
     pub(crate) fn new() -> Self {
         let dir = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let script = dir.path().join("affected-gate.sh");
+        let runs = dir.path().join("affected-gate.runs");
         let gate = Self {
-            script: dir.path().join("affected-gate.sh"),
-            runs: dir.path().join("affected-gate.runs"),
             _dir: dir,
+            script,
+            runs,
         };
         gate.executes(3);
         gate
@@ -131,11 +133,14 @@ impl RedCheck {
 
     pub(crate) fn new() -> Self {
         let dir = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let script = dir.path().join("red-check.sh");
+        let passes = dir.path().join("passes");
+        let runs = dir.path().join("runs");
         let check = Self {
-            script: dir.path().join("red-check.sh"),
-            passes: dir.path().join("passes"),
-            runs: dir.path().join("runs"),
             _dir: dir,
+            script,
+            passes,
+            runs,
         };
         std::fs::write(
             &check.script,
@@ -1252,11 +1257,14 @@ impl Replay {
     pub(crate) fn new() -> Self {
         use std::os::unix::fs::PermissionsExt;
         let dir = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let bin = dir.path().join("bin");
+        let script = dir.path().join("replay.sh");
+        let runs = dir.path().join("replay.runs");
         let replay = Self {
-            bin: dir.path().join("bin"),
-            script: dir.path().join("replay.sh"),
-            runs: dir.path().join("replay.runs"),
             _dir: dir,
+            bin,
+            script,
+            runs,
         };
         std::fs::create_dir_all(&replay.bin).unwrap();
         let cargo = replay.bin.join("cargo");

@@ -55,19 +55,6 @@ const REVIEW_EVIDENCE: [(&str, &str); 5] = [
     (REVIEW_BASELINE_ARTIFACT, r#"{"claims":[]}"#),
 ];
 
-/// The tools `final_recovery.yaml` withholds that a claimed worker's broker
-/// would otherwise carry.
-fn recovery_policy() -> ActivityToolDenyPolicy {
-    ActivityToolDenyPolicy {
-        activity: FINAL_RECOVERY_ACTIVITY.into(),
-        disallow_list: vec![
-            "orbit.task.add".into(),
-            "orbit.task.update".into(),
-            PUT.into(),
-        ],
-    }
-}
-
 /// A claimed leaf on the follower: admitted for the owner's claim on
 /// [`TASK`], created, bound and launched through its durable admission, its
 /// run running, with final recovery admitted for its failed step. Shared
@@ -404,6 +391,19 @@ impl Leaf {
             self.owner.calls.lock().unwrap().is_empty(),
             "{case}: nothing refused reaches the owner"
         );
+    }
+}
+
+/// The tools `final_recovery.yaml` withholds that a claimed worker's broker
+/// would otherwise carry.
+fn recovery_policy() -> ActivityToolDenyPolicy {
+    ActivityToolDenyPolicy {
+        activity: FINAL_RECOVERY_ACTIVITY.into(),
+        disallow_list: vec![
+            "orbit.task.add".into(),
+            "orbit.task.update".into(),
+            PUT.into(),
+        ],
     }
 }
 
