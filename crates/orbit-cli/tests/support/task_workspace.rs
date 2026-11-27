@@ -342,7 +342,8 @@ fn seed_if_requested() -> bool {
         roots.global_root,
         home
     );
-    let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(roots)
+    let runtime = orbit_cmd::test_support::open_resolved_roots(roots)
+        .map(orbit_core::composition::Opening::into_runtime)
         .unwrap()
         .with_actor(orbit_core::ActorIdentity::human("fixture"));
     let seeded: Vec<Value> = tasks

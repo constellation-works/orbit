@@ -1,6 +1,7 @@
 use super::selection::*;
 use super::*;
 
+use orbit_core::ActorIdentity;
 use orbit_core::adapter::command::host_plugin_rows;
 use orbit_core::composition::{
     WorkspaceAuthorityAdoption, adopt_workspace_layout_authority, verify_workspace_layout_authority,
@@ -165,19 +166,6 @@ enum OpenAccess {
 pub struct RegisteredRuntimeFactory;
 
 impl RegisteredRuntimeFactory {
-    /// The opaque handle a one-command process passes to an app's `exec`,
-    /// over the runtime this factory opened for that command. Handed out
-    /// beside the runtime while surfaces are converted to call the apps.
-    pub fn core_for_command(runtime: OrbitRuntime) -> orbit_core::Core {
-        orbit_core::composition::core_for_command(runtime)
-    }
-
-    /// The opaque handle a long-lived server passes to an app's `exec`, over
-    /// the runtime this factory opened for one of its workspaces.
-    pub fn core_for_service(runtime: OrbitRuntime) -> orbit_core::Core {
-        orbit_core::composition::core_for_service(runtime)
-    }
-
     /// The handle a server passes to an app's `exec` for one request, derived
     /// from the `Core` it keeps for the request's workspace and the session
     /// the request arrived on. Opens nothing.
@@ -192,12 +180,21 @@ impl RegisteredRuntimeFactory {
     pub fn initialize_pipeline_worker_with_overrides(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
-    ) -> Result<OrbitRuntime, OrbitError> {
+        actor: ActorIdentity,
+    ) -> Result<orbit_core::Core, OrbitError> {
         retry_pipeline_worker_bootstrap(
-            || Self::initialize_with_overrides(root_override, workspace_selector),
+            || {
+                Self::initialize_with_overrides_mode(
+                    root_override,
+                    workspace_selector,
+                    OpenAccess::Write,
+                    false,
+                )
+            },
             PIPELINE_WORKER_BOOTSTRAP_RETRY_DEADLINE,
             PIPELINE_WORKER_BOOTSTRAP_RETRY_INTERVAL,
         )
+        .map(|opened| command_core(opened, actor))
     }
 
     pub fn resolve_roots_for_cwd(
@@ -205,7 +202,7 @@ impl RegisteredRuntimeFactory {
         root_override: Option<&Path>,
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
         let hint = workspace_root_hint(cwd);
-        OrbitRuntime::resolve_roots_for_cwd_with_hint(cwd, root_override, hint.as_ref())
+        Opening::resolve_roots_for_cwd(cwd, root_override, hint.as_ref())
     }
 
     pub fn resolve_bootstrap_roots_for_cwd(
@@ -213,7 +210,7 @@ impl RegisteredRuntimeFactory {
         root_override: Option<&Path>,
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
         let hint = bootstrap_workspace_root_hint(cwd);
-        OrbitRuntime::resolve_bootstrap_roots_for_cwd_with_hint(cwd, root_override, hint.as_ref())
+        Opening::resolve_bootstrap_roots_for_cwd(cwd, root_override, hint.as_ref())
     }
 
     pub fn try_resolve_initialized_roots(
@@ -279,13 +276,15 @@ impl RegisteredRuntimeFactory {
     pub fn initialize_with_overrides(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
-    ) -> Result<OrbitRuntime, OrbitError> {
+        actor: ActorIdentity,
+    ) -> Result<orbit_core::Core, OrbitError> {
         Self::initialize_with_overrides_mode(
             root_override,
             workspace_selector,
             OpenAccess::Write,
             false,
         )
+        .map(|opened| command_core(opened, actor))
     }
 
     /// Construct a workspace runtime for an observation command without the
@@ -293,13 +292,15 @@ impl RegisteredRuntimeFactory {
     pub fn initialize_read_only_with_overrides(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
-    ) -> Result<OrbitRuntime, OrbitError> {
+        actor: ActorIdentity,
+    ) -> Result<orbit_core::Core, OrbitError> {
         Self::initialize_with_overrides_mode(
             root_override,
             workspace_selector,
             OpenAccess::ReadOnly,
             false,
         )
+        .map(|opened| command_core(opened, actor))
     }
 
     /// Construct a workspace runtime for an inspection report that audits
@@ -309,13 +310,15 @@ impl RegisteredRuntimeFactory {
     pub fn initialize_observational_with_overrides(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
-    ) -> Result<OrbitRuntime, OrbitError> {
+        actor: ActorIdentity,
+    ) -> Result<orbit_core::Core, OrbitError> {
         Self::initialize_with_overrides_mode(
             root_override,
             workspace_selector,
             OpenAccess::Observational,
             false,
         )
+        .map(|opened| command_core(opened, actor))
     }
 
     /// Plugin inspection uses a registered checkout when one is selected by
@@ -324,13 +327,15 @@ impl RegisteredRuntimeFactory {
     pub fn initialize_plugin_read_only_with_overrides(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
-    ) -> Result<OrbitRuntime, OrbitError> {
+        actor: ActorIdentity,
+    ) -> Result<orbit_core::Core, OrbitError> {
         Self::initialize_with_overrides_mode(
             root_override,
             workspace_selector,
             OpenAccess::ReadOnly,
             true,
         )
+        .map(|opened| command_core(opened, actor))
     }
 
     /// Host-scoped inspection uses a registered checkout when one is selected
@@ -341,13 +346,15 @@ impl RegisteredRuntimeFactory {
     pub fn initialize_host_read_only_with_overrides(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
-    ) -> Result<OrbitRuntime, OrbitError> {
+        actor: ActorIdentity,
+    ) -> Result<orbit_core::Core, OrbitError> {
         Self::initialize_with_overrides_mode(
             root_override,
             workspace_selector,
             OpenAccess::ReadOnly,
             true,
         )
+        .map(|opened| command_core(opened, actor))
     }
 
     /// Open a registered checkout as a long-lived service [`orbit_core::Core`].
@@ -358,7 +365,7 @@ impl RegisteredRuntimeFactory {
         host_lifetime: HostLifetime,
     ) -> Result<orbit_core::Core, OrbitError> {
         Self::open_registered_checkout_for(global_root, workspace, checkout, host_lifetime)
-            .map(Self::core_for_service)
+            .map(Opening::into_service_core)
     }
 
     /// Open an explicitly selected registered checkout for observational
@@ -368,8 +375,13 @@ impl RegisteredRuntimeFactory {
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
     ) -> Result<orbit_core::Core, OrbitError> {
-        Self::open_registered_checkout_observational(global_root, workspace, checkout)
-            .map(|runtime| Self::core_for_service(runtime.with_workspace_explicitly_selected(true)))
+        Self::open_registered_checkout_observational(global_root, workspace, checkout).map(
+            |opened| {
+                opened
+                    .with_workspace_explicitly_selected(true)
+                    .into_service_core()
+            },
+        )
     }
 
     /// Open a resolved checkout as the [`orbit_core::Core`] a long-lived
@@ -388,7 +400,7 @@ impl RegisteredRuntimeFactory {
             binding,
             host_lifetime,
         )
-        .map(Self::core_for_service)
+        .map(Opening::into_service_core)
     }
 
     /// Normalize an explicit CLI owner selector without changing the opened core.
@@ -465,150 +477,8 @@ impl RegisteredRuntimeFactory {
                     &identity,
                     Some(&registry),
                 )
-                .map(|runtime| Some(Self::core_for_command(runtime)))
+                .map(|opened| Some(opened.into_command_core()))
             }
-        }
-    }
-
-    fn initialize_with_overrides_mode(
-        root_override: Option<&Path>,
-        workspace_selector: Option<&str>,
-        access: OpenAccess,
-        host_fallback: bool,
-    ) -> Result<OrbitRuntime, OrbitError> {
-        let read_only = access != OpenAccess::Write;
-        let explicit_selector = workspace_selector
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-        let selector = explicit_selector.or_else(|| {
-            if root_override.is_some() {
-                None
-            } else {
-                managed_workspace_selector_from_env(&orbit_core::composition::composition_env())
-            }
-        });
-        let Some(selector) = selector else {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            // Without `--root`, the roots resolve against `resolve_global_root`,
-            // so one read of that registry serves both the catalog hint and
-            // the selection below. A failed read keeps the hint absent, as
-            // before; the error surfaces from the re-read once roots resolve.
-            let preloaded = match root_override {
-                Some(_) => None,
-                None => orbit_core::runtime::resolve_global_root(
-                    &orbit_core::composition::composition_env(),
-                )
-                .and_then(|global_root| RuntimeOpenInputs::read(&global_root))
-                .ok(),
-            };
-            let hint = preloaded
-                .as_ref()
-                .and_then(|inputs| checkout_root_hint(&inputs.registry, &cwd));
-            // A host read launched from HOME has no workspace root to resolve.
-            // Keep the ordinary resolver's refusal to adopt ~/.orbit for every
-            // workspace operation; only this existing host-fallback route lends it.
-            let host_root = preloaded.as_ref().filter(|inputs| {
-                host_fallback
-                    && hint.is_none()
-                    && canonical_or_original(&cwd.join(".orbit"))
-                        == canonical_or_original(&inputs.global_root)
-            });
-            let mut roots = if let Some(inputs) = host_root {
-                OrbitRuntimeRoots {
-                    global_root: inputs.global_root.clone(),
-                    shared_root: inputs.global_root.clone(),
-                    local_root: inputs.global_root.clone(),
-                }
-            } else {
-                OrbitRuntime::resolve_roots_for_cwd_with_hint(&cwd, root_override, hint.as_ref())?
-            };
-            let inputs = match preloaded {
-                Some(inputs) if inputs.global_root == roots.global_root => inputs,
-                _ => RuntimeOpenInputs::read(&roots.global_root)?,
-            };
-            crate::workspace_rebind::refuse_pending_checkout_rebind(
-                &roots.global_root,
-                &roots.shared_root,
-            )?;
-            let selection = select_workspace_for_cwd_and_roots(&cwd, &roots, &inputs.registry)?;
-            if host_fallback && selection.is_none() {
-                // A plugin inspection without a registered checkout has no
-                // workspace pin file or workspace config to read. Keep every
-                // runtime path at the host root, including the local root.
-                roots.shared_root = roots.global_root.clone();
-                roots.local_root = roots.global_root.clone();
-            }
-            let binding = selection
-                .as_ref()
-                .map(|selection| {
-                    workspace_runtime_binding(&selection.workspace, &selection.checkout)
-                })
-                .transpose()?;
-            if !read_only {
-                // A discovered workspace may belong to another generation
-                // authority: refuse before this open writes anything.
-                verify_workspace_layout_authority(&roots.global_root, &roots.shared_root)?;
-            }
-            let replica_owner = selection
-                .as_ref()
-                .and_then(|selection| replica_owner_for_checkout(&selection.checkout));
-            let global_root = roots.global_root.clone();
-            let runtime = if access == OpenAccess::Observational {
-                OrbitRuntime::initialize_from_resolved_roots_observational(roots, binding)
-            } else if read_only {
-                OrbitRuntime::initialize_from_resolved_roots_read_only(roots, binding)
-            } else {
-                OrbitRuntime::initialize_from_resolved_roots_with_task_prefix(
-                    roots,
-                    binding,
-                    sync_task_prefix_for_identity(&inputs.identity),
-                )
-            };
-            return runtime.map(|runtime| {
-                attach_registry_context(
-                    runtime.with_coordination_write_owner(replica_owner),
-                    &global_root,
-                    &inputs.identity,
-                    Some(&inputs.registry),
-                )
-            });
-        };
-
-        let global_root = global_root_for(root_override)?;
-        let identity = inspect_machine_identity(&global_root)?;
-        let registry = load_registry_for_selector_resolution(
-            &workspace_registry::registry_path_for(&global_root),
-            &identity,
-        )?;
-        let selected = Self::resolve_selector_in(&registry, &selector, identity.id())?;
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let local_root = local_root_for_runtime_open(&selected, &cwd, read_only);
-        if access == OpenAccess::Observational {
-            Self::open_registered_checkout_observational(
-                &global_root,
-                &selected.workspace,
-                &selected.checkout,
-            )
-        } else if read_only {
-            Self::open_registered_checkout_read_only_with_identity(
-                &global_root,
-                &selected.workspace,
-                &selected.checkout,
-                &local_root,
-                &identity,
-                Some(&registry),
-            )
-        } else {
-            Self::open_registered_checkout_with_identity_and_local_root(
-                &global_root,
-                &selected.workspace,
-                &selected.checkout,
-                &local_root,
-                HostLifetime::ShortLived,
-                &identity,
-                Some(&registry),
-            )
         }
     }
 
@@ -684,7 +554,10 @@ impl RegisteredRuntimeFactory {
         adopt_workspace_layout_authority(global_root, shared_root, claimed, registered)
     }
 
-    pub fn open_resolved_roots(roots: OrbitRuntimeRoots) -> Result<OrbitRuntime, OrbitError> {
+    /// Open resolved roots with the registry context of their registered
+    /// checkout, if any. Only downstream tests open this way.
+    #[cfg(feature = "test-support")]
+    pub(crate) fn open_resolved_roots(roots: OrbitRuntimeRoots) -> Result<Opening, OrbitError> {
         crate::workspace_rebind::refuse_pending_checkout_rebind(
             &roots.global_root,
             &roots.shared_root,
@@ -702,20 +575,8 @@ impl RegisteredRuntimeFactory {
         let replica_owner =
             registered.and_then(|(_, checkout)| replica_owner_for_checkout(checkout));
         let runtime = match binding {
-            Some(binding) => OrbitRuntime::from_resolved_roots_with_binding_for_task_prefix(
-                &roots.global_root,
-                &roots.shared_root,
-                &roots.local_root,
-                binding,
-                HostLifetime::ShortLived,
-                task_prefix,
-            ),
-            None => OrbitRuntime::from_resolved_roots_with_task_prefix(
-                &roots.global_root,
-                &roots.shared_root,
-                &roots.local_root,
-                task_prefix,
-            ),
+            Some(binding) => Opening::bound(&roots, binding, HostLifetime::ShortLived, task_prefix),
+            None => Opening::unbound(&roots, task_prefix),
         }?;
         Ok(attach_registry_context(
             runtime.with_coordination_write_owner(replica_owner),
@@ -725,11 +586,11 @@ impl RegisteredRuntimeFactory {
         ))
     }
 
-    pub fn open_registered_checkout(
+    pub(crate) fn open_registered_checkout(
         global_root: &Path,
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
-    ) -> Result<OrbitRuntime, OrbitError> {
+    ) -> Result<Opening, OrbitError> {
         Self::open_registered_checkout_for(
             global_root,
             workspace,
@@ -738,12 +599,196 @@ impl RegisteredRuntimeFactory {
         )
     }
 
-    pub fn open_registered_checkout_for(
+    /// Open a registered checkout for an observation command without stale-run
+    /// reconciliation or other normal runtime-open writes.
+    pub(crate) fn open_registered_checkout_read_only(
+        global_root: &Path,
+        workspace: &Workspace,
+        checkout: &WorkspaceCheckout,
+    ) -> Result<Opening, OrbitError> {
+        let identity = inspect_machine_identity(global_root)?;
+        Self::open_registered_checkout_read_only_with_identity(
+            global_root,
+            workspace,
+            checkout,
+            &checkout.orbit_dir,
+            &identity,
+            None,
+        )
+    }
+
+    /// Open existing registered state for routine inspection with no incidental
+    /// database or task-index writes. Scheduling keeps its normal writable open.
+    pub(crate) fn open_registered_checkout_observational(
+        global_root: &Path,
+        workspace: &Workspace,
+        checkout: &WorkspaceCheckout,
+    ) -> Result<Opening, OrbitError> {
+        crate::workspace_rebind::refuse_pending_checkout_rebind(global_root, &checkout.orbit_dir)?;
+        let identity = inspect_machine_identity(global_root)?;
+        Opening::bound_observational(
+            global_root,
+            &checkout.orbit_dir,
+            workspace_runtime_binding(workspace, checkout)?,
+        )
+        .map(|runtime| {
+            attach_registry_context(
+                runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
+                global_root,
+                &identity,
+                None,
+            )
+        })
+    }
+
+    fn initialize_with_overrides_mode(
+        root_override: Option<&Path>,
+        workspace_selector: Option<&str>,
+        access: OpenAccess,
+        host_fallback: bool,
+    ) -> Result<Opening, OrbitError> {
+        let read_only = access != OpenAccess::Write;
+        let explicit_selector = workspace_selector
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let selector = explicit_selector.or_else(|| {
+            if root_override.is_some() {
+                None
+            } else {
+                managed_workspace_selector_from_env(&orbit_core::composition::composition_env())
+            }
+        });
+        let Some(selector) = selector else {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            // Without `--root`, the roots resolve against `resolve_global_root`,
+            // so one read of that registry serves both the catalog hint and
+            // the selection below. A failed read keeps the hint absent, as
+            // before; the error surfaces from the re-read once roots resolve.
+            let preloaded = match root_override {
+                Some(_) => None,
+                None => orbit_core::runtime::resolve_global_root(
+                    &orbit_core::composition::composition_env(),
+                )
+                .and_then(|global_root| RuntimeOpenInputs::read(&global_root))
+                .ok(),
+            };
+            let hint = preloaded
+                .as_ref()
+                .and_then(|inputs| checkout_root_hint(&inputs.registry, &cwd));
+            // A host read launched from HOME has no workspace root to resolve.
+            // Keep the ordinary resolver's refusal to adopt ~/.orbit for every
+            // workspace operation; only this existing host-fallback route lends it.
+            let host_root = preloaded.as_ref().filter(|inputs| {
+                host_fallback
+                    && hint.is_none()
+                    && canonical_or_original(&cwd.join(".orbit"))
+                        == canonical_or_original(&inputs.global_root)
+            });
+            let mut roots = if let Some(inputs) = host_root {
+                OrbitRuntimeRoots {
+                    global_root: inputs.global_root.clone(),
+                    shared_root: inputs.global_root.clone(),
+                    local_root: inputs.global_root.clone(),
+                }
+            } else {
+                Opening::resolve_roots_for_cwd(&cwd, root_override, hint.as_ref())?
+            };
+            let inputs = match preloaded {
+                Some(inputs) if inputs.global_root == roots.global_root => inputs,
+                _ => RuntimeOpenInputs::read(&roots.global_root)?,
+            };
+            crate::workspace_rebind::refuse_pending_checkout_rebind(
+                &roots.global_root,
+                &roots.shared_root,
+            )?;
+            let selection = select_workspace_for_cwd_and_roots(&cwd, &roots, &inputs.registry)?;
+            if host_fallback && selection.is_none() {
+                // A plugin inspection without a registered checkout has no
+                // workspace pin file or workspace config to read. Keep every
+                // runtime path at the host root, including the local root.
+                roots.shared_root = roots.global_root.clone();
+                roots.local_root = roots.global_root.clone();
+            }
+            let binding = selection
+                .as_ref()
+                .map(|selection| {
+                    workspace_runtime_binding(&selection.workspace, &selection.checkout)
+                })
+                .transpose()?;
+            if !read_only {
+                // A discovered workspace may belong to another generation
+                // authority: refuse before this open writes anything.
+                verify_workspace_layout_authority(&roots.global_root, &roots.shared_root)?;
+            }
+            let replica_owner = selection
+                .as_ref()
+                .and_then(|selection| replica_owner_for_checkout(&selection.checkout));
+            let global_root = roots.global_root.clone();
+            let runtime = if access == OpenAccess::Observational {
+                Opening::initialize_observational(roots, binding)
+            } else if read_only {
+                Opening::initialize_read_only(roots, binding)
+            } else {
+                Opening::initialize(
+                    roots,
+                    binding,
+                    sync_task_prefix_for_identity(&inputs.identity),
+                )
+            };
+            return runtime.map(|runtime| {
+                attach_registry_context(
+                    runtime.with_coordination_write_owner(replica_owner),
+                    &global_root,
+                    &inputs.identity,
+                    Some(&inputs.registry),
+                )
+            });
+        };
+
+        let global_root = global_root_for(root_override)?;
+        let identity = inspect_machine_identity(&global_root)?;
+        let registry = load_registry_for_selector_resolution(
+            &workspace_registry::registry_path_for(&global_root),
+            &identity,
+        )?;
+        let selected = Self::resolve_selector_in(&registry, &selector, identity.id())?;
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let local_root = local_root_for_runtime_open(&selected, &cwd, read_only);
+        if access == OpenAccess::Observational {
+            Self::open_registered_checkout_observational(
+                &global_root,
+                &selected.workspace,
+                &selected.checkout,
+            )
+        } else if read_only {
+            Self::open_registered_checkout_read_only_with_identity(
+                &global_root,
+                &selected.workspace,
+                &selected.checkout,
+                &local_root,
+                &identity,
+                Some(&registry),
+            )
+        } else {
+            Self::open_registered_checkout_with_identity_and_local_root(
+                &global_root,
+                &selected.workspace,
+                &selected.checkout,
+                &local_root,
+                HostLifetime::ShortLived,
+                &identity,
+                Some(&registry),
+            )
+        }
+    }
+
+    fn open_registered_checkout_for(
         global_root: &Path,
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
         host_lifetime: HostLifetime,
-    ) -> Result<OrbitRuntime, OrbitError> {
+    ) -> Result<Opening, OrbitError> {
         // One identity read serves both the task-prefix projection and the
         // automation machine identity; a long-lived host opens enough runtimes
         // for a second resolution of the same global config to be pure overhead.
@@ -771,7 +816,7 @@ impl RegisteredRuntimeFactory {
         host_lifetime: HostLifetime,
         identity: &MachineIdentityState,
         registry: Option<&WorkspaceRegistry>,
-    ) -> Result<OrbitRuntime, OrbitError> {
+    ) -> Result<Opening, OrbitError> {
         Self::open_registered_checkout_with_identity_and_local_root(
             global_root,
             workspace,
@@ -797,14 +842,16 @@ impl RegisteredRuntimeFactory {
         host_lifetime: HostLifetime,
         identity: &MachineIdentityState,
         registry: Option<&WorkspaceRegistry>,
-    ) -> Result<OrbitRuntime, OrbitError> {
+    ) -> Result<Opening, OrbitError> {
         crate::workspace_rebind::refuse_pending_checkout_rebind(global_root, &checkout.orbit_dir)?;
         verify_workspace_layout_authority(global_root, &checkout.orbit_dir)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
-        OrbitRuntime::from_resolved_roots_with_binding_for_task_prefix(
-            global_root,
-            &checkout.orbit_dir,
-            local_root,
+        Opening::bound(
+            &OrbitRuntimeRoots {
+                global_root: global_root.to_path_buf(),
+                shared_root: checkout.orbit_dir.clone(),
+                local_root: local_root.to_path_buf(),
+            },
             binding,
             host_lifetime,
             sync_task_prefix_for_identity(identity),
@@ -821,48 +868,6 @@ impl RegisteredRuntimeFactory {
         })
     }
 
-    /// Open a registered checkout for an observation command without stale-run
-    /// reconciliation or other normal runtime-open writes.
-    pub fn open_registered_checkout_read_only(
-        global_root: &Path,
-        workspace: &Workspace,
-        checkout: &WorkspaceCheckout,
-    ) -> Result<OrbitRuntime, OrbitError> {
-        let identity = inspect_machine_identity(global_root)?;
-        Self::open_registered_checkout_read_only_with_identity(
-            global_root,
-            workspace,
-            checkout,
-            &checkout.orbit_dir,
-            &identity,
-            None,
-        )
-    }
-
-    /// Open existing registered state for routine inspection with no incidental
-    /// database or task-index writes. Scheduling keeps its normal writable open.
-    pub fn open_registered_checkout_observational(
-        global_root: &Path,
-        workspace: &Workspace,
-        checkout: &WorkspaceCheckout,
-    ) -> Result<OrbitRuntime, OrbitError> {
-        crate::workspace_rebind::refuse_pending_checkout_rebind(global_root, &checkout.orbit_dir)?;
-        let identity = inspect_machine_identity(global_root)?;
-        OrbitRuntime::from_resolved_roots_observational_with_binding(
-            global_root,
-            &checkout.orbit_dir,
-            workspace_runtime_binding(workspace, checkout)?,
-        )
-        .map(|runtime| {
-            attach_registry_context(
-                runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
-                global_root,
-                &identity,
-                None,
-            )
-        })
-    }
-
     fn open_registered_checkout_read_only_with_identity(
         global_root: &Path,
         workspace: &Workspace,
@@ -870,13 +875,15 @@ impl RegisteredRuntimeFactory {
         local_root: &Path,
         identity: &MachineIdentityState,
         registry: Option<&WorkspaceRegistry>,
-    ) -> Result<OrbitRuntime, OrbitError> {
+    ) -> Result<Opening, OrbitError> {
         crate::workspace_rebind::refuse_pending_checkout_rebind(global_root, &checkout.orbit_dir)?;
         let binding = workspace_runtime_binding(workspace, checkout)?;
-        OrbitRuntime::from_resolved_roots_read_only_with_binding(
-            global_root,
-            &checkout.orbit_dir,
-            local_root,
+        Opening::bound_read_only(
+            &OrbitRuntimeRoots {
+                global_root: global_root.to_path_buf(),
+                shared_root: checkout.orbit_dir.clone(),
+                local_root: local_root.to_path_buf(),
+            },
             binding,
         )
         .map(|runtime| {
@@ -891,20 +898,22 @@ impl RegisteredRuntimeFactory {
         })
     }
 
-    pub fn open_resolved_checkout_for(
+    fn open_resolved_checkout_for(
         global_root: &Path,
         shared_root: &Path,
         local_root: &Path,
         binding: WorkspaceRuntimeBinding,
         host_lifetime: HostLifetime,
-    ) -> Result<OrbitRuntime, OrbitError> {
+    ) -> Result<Opening, OrbitError> {
         crate::workspace_rebind::refuse_pending_checkout_rebind(global_root, shared_root)?;
         let identity = inspect_machine_identity(global_root)?;
         let replica_owner = replica_owner_for_binding(&binding);
-        OrbitRuntime::from_resolved_roots_with_binding_for_task_prefix(
-            global_root,
-            shared_root,
-            local_root,
+        Opening::bound(
+            &OrbitRuntimeRoots {
+                global_root: global_root.to_path_buf(),
+                shared_root: shared_root.to_path_buf(),
+                local_root: local_root.to_path_buf(),
+            },
             binding,
             host_lifetime,
             sync_task_prefix_for_identity(&identity),
@@ -928,4 +937,9 @@ pub fn workspace_runtime_binding(
     checkout: &WorkspaceCheckout,
 ) -> Result<WorkspaceRuntimeBinding, OrbitError> {
     orbit_core::runtime::workspace_runtime_binding(workspace, checkout)
+}
+
+/// The `Core` of a one-command process, attributed to `actor`.
+fn command_core(opened: Opening, actor: ActorIdentity) -> orbit_core::Core {
+    opened.with_actor(actor).into_command_core()
 }

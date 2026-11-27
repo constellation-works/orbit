@@ -9,9 +9,14 @@ use orbit_registry::hosts::{ResolvedHost, load_host_registry};
 use orbit_registry::workspace_registry::{
     find_workspace_by_id, load_registry_from_read_only, registry_path_for,
 };
-use orbit_types::workspace::{Workspace, WorkspaceCheckoutRole, WorkspaceRegistry};
+use orbit_types::workspace::{
+    Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry,
+};
 
-use super::{HostDependents, PullDrains, ReplicaDependent};
+use super::{HostDependents, PullDrainDependent, PullDrains, ReplicaDependent};
+use crate::application::contracts::PULL_DRAIN_JOB;
+use crate::application::job::JobRunListParams;
+use orbit_types::workflow::JobRunState;
 
 impl HostDependents {
     pub fn is_empty(&self) -> bool {
@@ -71,11 +76,50 @@ pub(super) fn host_dependents(
             workspace_name: workspace.name.clone(),
             repo_root: checkout.repo_root.clone(),
         });
-        dependents
-            .pull_drains
-            .extend(pull_drains.pull_drains(global_root, workspace, checkout));
+        dependents.pull_drains.extend(pull_drains_in(
+            pull_drains,
+            global_root,
+            workspace,
+            checkout,
+        ));
     }
     Ok(dependents)
+}
+
+/// The pull drains pending or running in `checkout` of `workspace`. A
+/// checkout that cannot be opened or listed contributes none.
+fn pull_drains_in(
+    opener: &dyn PullDrains,
+    global_root: &Path,
+    workspace: &Workspace,
+    checkout: &WorkspaceCheckout,
+) -> Vec<PullDrainDependent> {
+    let core = match opener.open_read_only(global_root, workspace, checkout) {
+        Ok(core) => core,
+        Err(error) => {
+            tracing::warn!(%error, workspace = %workspace.id, "cannot inspect pull drains");
+            return Vec::new();
+        }
+    };
+    let mut drains = Vec::new();
+    for state in [JobRunState::Running, JobRunState::Pending] {
+        let runs = core.runtime().list_job_runs(JobRunListParams {
+            job_id: Some(PULL_DRAIN_JOB.to_string()),
+            state: Some(state),
+            ..Default::default()
+        });
+        match runs {
+            Ok(runs) => drains.extend(runs.into_iter().map(|run| PullDrainDependent {
+                workspace_id: workspace.id.clone(),
+                run_id: run.run_id,
+                state: run.state.to_string(),
+            })),
+            Err(error) => {
+                tracing::warn!(%error, workspace = %workspace.id, "cannot list pull drains");
+            }
+        }
+    }
+    drains
 }
 
 fn replica_checkouts_of<'a>(

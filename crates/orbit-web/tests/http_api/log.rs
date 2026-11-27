@@ -663,13 +663,13 @@ fn diagnostics_errors_scope_process_rows_to_the_selected_workspaces_runs() {
             registry.checkouts.push(checkout.clone());
             orbit_registry::workspace_registry::save_registry_to(&registry, &registry_path)
                 .unwrap();
-            let other =
-                orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
-                    &fixture.global,
-                    &workspace,
-                    &checkout,
-                )
-                .unwrap();
+            let other = orbit_cmd::test_support::open_registered_checkout(
+                &fixture.global,
+                &workspace,
+                &checkout,
+            )
+            .map(orbit_core::composition::Opening::into_runtime)
+            .unwrap();
 
             let recent = Utc::now() - Duration::minutes(2);
             let finish = |runtime: &OrbitRuntime, run: &str, message: &str| {

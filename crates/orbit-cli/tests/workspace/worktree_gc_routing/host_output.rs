@@ -1,7 +1,6 @@
 //! Host-output controls driven by the existing public CLI and GC routine.
 
 use super::*;
-use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::OrbitRuntimeRoots;
 use orbit_engine::RuntimeHost;
@@ -46,11 +45,12 @@ impl HostOutput {
                 "--seed-from-global",
             ],
         );
-        let runtime = RegisteredRuntimeFactory::open_resolved_roots(OrbitRuntimeRoots {
+        let runtime = orbit_cmd::test_support::open_resolved_roots(OrbitRuntimeRoots {
             global_root: home.join(".orbit"),
             shared_root: workspace.orbit_dir.clone(),
             local_root: workspace.orbit_dir.clone(),
         })
+        .map(orbit_core::composition::Opening::into_runtime)
         .unwrap();
         let build = |checkout: &Path| {
             let result = orbit_engine::review_gate::run_required_validation(

@@ -350,19 +350,21 @@ fn refusal_message(global: &Path) -> String {
     let selected = RegisteredRuntimeFactory::resolve_workspace_selector(global, WORKSPACE)
         .expect("resolve the workspace the rebind left registered");
     let observational = expect_refused(
-        RegisteredRuntimeFactory::open_registered_checkout_observational(
+        orbit_cmd::test_support::open_registered_checkout_observational(
             global,
             &selected.workspace,
             &selected.checkout,
-        ),
+        )
+        .map(orbit_core::composition::Opening::into_runtime),
         "observational open",
     );
     let registered = expect_refused(
-        RegisteredRuntimeFactory::open_registered_checkout(
+        orbit_cmd::test_support::open_registered_checkout(
             global,
             &selected.workspace,
             &selected.checkout,
-        ),
+        )
+        .map(orbit_core::composition::Opening::into_runtime),
         "writable factory open",
     );
     assert_eq!(
@@ -383,19 +385,21 @@ fn open_normally(global: &Path) {
     let selected = RegisteredRuntimeFactory::resolve_workspace_selector(global, WORKSPACE)
         .expect("resolve the recovered workspace");
     expect_opened(
-        RegisteredRuntimeFactory::open_registered_checkout_observational(
+        orbit_cmd::test_support::open_registered_checkout_observational(
             global,
             &selected.workspace,
             &selected.checkout,
-        ),
+        )
+        .map(orbit_core::composition::Opening::into_runtime),
         "observational open after recovery",
     );
     expect_opened(
-        RegisteredRuntimeFactory::open_registered_checkout(
+        orbit_cmd::test_support::open_registered_checkout(
             global,
             &selected.workspace,
             &selected.checkout,
-        ),
+        )
+        .map(orbit_core::composition::Opening::into_runtime),
         "writable factory open after recovery",
     );
 }

@@ -257,13 +257,12 @@ fn parse(stdout: &[u8], args: &[&str]) -> Value {
 // Setup and state probes use the owning public runtime; the routed CLI/MCP
 // calls below still exercise parsing, transport, output and refusals.
 fn owner_runtime(home: &Path, repo: &Path) -> OrbitRuntime {
-    orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
-        orbit_core::runtime::OrbitRuntimeRoots {
-            global_root: home.join(".orbit"),
-            shared_root: repo.join(".orbit"),
-            local_root: repo.join(".orbit"),
-        },
-    )
+    orbit_cmd::test_support::open_resolved_roots(orbit_core::runtime::OrbitRuntimeRoots {
+        global_root: home.join(".orbit"),
+        shared_root: repo.join(".orbit"),
+        local_root: repo.join(".orbit"),
+    })
+    .map(orbit_core::composition::Opening::into_runtime)
     .expect("registered fixture owner runtime")
 }
 

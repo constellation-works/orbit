@@ -1152,7 +1152,8 @@ fn open_runtime(fixture: &Fixture) -> orbit_core::OrbitRuntime {
 
     let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&fixture.repo, Some(&fixture.root))
         .unwrap_or_else(|error| panic!("resolve roots: {error}"));
-    RegisteredRuntimeFactory::open_resolved_roots(roots)
+    orbit_cmd::test_support::open_resolved_roots(roots)
+        .map(orbit_core::composition::Opening::into_runtime)
         .unwrap_or_else(|error| panic!("runtime: {error}"))
         .with_actor(orbit_core::ActorIdentity::human("fixture"))
 }

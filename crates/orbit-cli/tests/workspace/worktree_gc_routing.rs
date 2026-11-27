@@ -467,17 +467,17 @@ pub(super) fn seed_archived_run(orbit_dir: &Path, home: &Path, label: &str) -> (
     // public registered-runtime composition so machine identity, task prefix
     // and workspace binding stay identical to the CLI path. In particular,
     // a bare Core runtime would leave a fresh allocator at its default prefix.
-    use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
     use orbit_core::application::task::TaskAddParams;
     use orbit_core::runtime::OrbitRuntimeRoots;
     use orbit_engine::RuntimeHost;
     use orbit_types::workflow::JobRunState;
 
-    let runtime = RegisteredRuntimeFactory::open_resolved_roots(OrbitRuntimeRoots {
+    let runtime = orbit_cmd::test_support::open_resolved_roots(OrbitRuntimeRoots {
         global_root: home.join(".orbit"),
         shared_root: orbit_dir.to_path_buf(),
         local_root: orbit_dir.to_path_buf(),
     })
+    .map(orbit_core::composition::Opening::into_runtime)
     .expect("registered GC fixture runtime");
     let task = runtime
         .add_task(TaskAddParams {

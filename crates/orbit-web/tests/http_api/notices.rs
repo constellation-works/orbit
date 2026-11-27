@@ -183,12 +183,10 @@ fn seed_second_workspace(fixture: &Fixture) -> (PathBuf, String) {
     workspace.name = "second".into();
     workspace.status = WorkspaceStatus::Active;
     let checkout = WorkspaceCheckout::owner(workspace.id.clone(), repo, work.clone());
-    let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
-        &fixture.global,
-        &workspace,
-        &checkout,
-    )
-    .unwrap();
+    let runtime =
+        orbit_cmd::test_support::open_registered_checkout(&fixture.global, &workspace, &checkout)
+            .map(orbit_core::composition::Opening::into_runtime)
+            .unwrap();
     let notice_id = post(&runtime, NoticeKind::Incident, "second incident", "second");
     registry.workspaces.push(workspace);
     registry.checkouts.push(checkout);

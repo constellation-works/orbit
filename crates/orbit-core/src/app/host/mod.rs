@@ -56,15 +56,16 @@ pub trait Probe: Send + Sync {
     fn probe_ssh(&self, ssh: &str, caller_machine_id: &str) -> Result<ProbedHost, OrbitError>;
 }
 
-/// The pull-drain read of one local checkout, implemented above this crate.
+/// Opens the local checkout whose pull drains a host command reads,
+/// implemented above this crate.
 pub trait PullDrains: Send + Sync {
-    /// The pull drains pending or running in `checkout` of `workspace`.
-    fn pull_drains(
+    /// `checkout` of `workspace`, opened read-only.
+    fn open_read_only(
         &self,
         global_root: &Path,
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
-    ) -> Vec<PullDrainDependent>;
+    ) -> Result<crate::Core, OrbitError>;
 }
 
 /// The reads a host command needs from above this crate.

@@ -251,13 +251,12 @@ impl Fixture {
         fs::write(jobs.join(file), yaml).unwrap();
     }
     fn registered_runtime(&self) -> OrbitRuntime {
-        orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
-            orbit_core::runtime::OrbitRuntimeRoots {
-                global_root: self.home.join(".orbit"),
-                shared_root: self.work.join(".orbit"),
-                local_root: self.work.join(".orbit"),
-            },
-        )
+        orbit_cmd::test_support::open_resolved_roots(orbit_core::runtime::OrbitRuntimeRoots {
+            global_root: self.home.join(".orbit"),
+            shared_root: self.work.join(".orbit"),
+            local_root: self.work.join(".orbit"),
+        })
+        .map(orbit_core::composition::Opening::into_runtime)
         .expect("registered fixture runtime")
     }
     fn store(&self, runtime: &OrbitRuntime, id: &str, state: &PipelineState) {

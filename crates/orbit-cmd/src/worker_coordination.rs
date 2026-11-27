@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_core::OrbitRuntime;
+use orbit_core::composition::Opening;
 use orbit_mcp::McpHost;
 use orbit_mcp::federated::{self, FederatedMcpHost, SshDestinationProbe};
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator};
@@ -13,7 +13,7 @@ use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
 struct WorkerOwner {
-    runtime: OrbitRuntime,
+    runtime: Opening,
 }
 
 impl OwnerCoordinator for WorkerOwner {
@@ -161,9 +161,9 @@ impl OwnerCoordinator for FederatedWorkerRoute {
     }
 }
 
-pub(crate) fn attach(runtime: OrbitRuntime) -> OrbitRuntime {
+pub(crate) fn attach(runtime: Opening) -> Opening {
     let runtime = attach_drain_owner(runtime);
-    if !runtime.role().is_worker() {
+    if !runtime.is_worker() {
         return runtime;
     }
     let transport = Arc::new(WorkerOwner {
@@ -176,7 +176,7 @@ pub(crate) fn attach(runtime: OrbitRuntime) -> OrbitRuntime {
 /// [ORB-13625] [ORB-14448]. Nothing is contacted here: the file is read
 /// when a pull drain actually calls, so a host that never pulls pays nothing
 /// and one whose destinations change picks them up on the next call.
-fn attach_drain_owner(runtime: OrbitRuntime) -> OrbitRuntime {
+fn attach_drain_owner(runtime: Opening) -> Opening {
     let Some(machine_id) = runtime.automation_machine_identity().map(ToOwned::to_owned) else {
         return runtime;
     };

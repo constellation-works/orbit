@@ -69,7 +69,8 @@ fn open_runtime(fixture: &Fixture) -> orbit_core::OrbitRuntime {
     let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&fixture.repo, Some(&fixture.root))
         .unwrap();
     assert!(roots.global_root.starts_with(fixture._temp.path()));
-    RegisteredRuntimeFactory::open_resolved_roots(roots)
+    orbit_cmd::test_support::open_resolved_roots(roots)
+        .map(orbit_core::composition::Opening::into_runtime)
         .unwrap()
         .with_actor(ActorIdentity::human("fixture"))
 }

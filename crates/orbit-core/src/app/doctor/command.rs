@@ -423,3 +423,14 @@ pub(super) fn actionable_check(
         duration_ms: 0,
     }
 }
+
+/// The workspace-level doctor rows of a kernel a kernel interface handed
+/// back, such as the one a workspace catalog's attention read receives.
+pub fn kernel_workspace_doctor(
+    kernel: &crate::runtime::RuntimeKernel,
+    env: &Env,
+    deep: bool,
+    host: &dyn Host,
+) -> Result<Vec<WorkspaceDoctorResult>, OrbitError> {
+    OrbitRuntime::from_kernel(kernel.clone()).doctor_workspace_with_depth(env, deep, host)
+}

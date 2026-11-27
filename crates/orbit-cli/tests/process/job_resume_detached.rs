@@ -148,13 +148,14 @@ mod unix {
             // Workers persist their own success/failed outcomes. Keep running
             // and interrupted reads on the CLI path, including SIGKILL repair.
             let observer = matches!(state, "success" | "failed").then(|| {
-                orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
+                orbit_cmd::test_support::open_resolved_roots(
                     orbit_core::runtime::OrbitRuntimeRoots {
                         global_root: self.home.join(".orbit"),
                         shared_root: self.repo.join(".orbit"),
                         local_root: self.repo.join(".orbit"),
                     },
                 )
+                .map(orbit_core::composition::Opening::into_runtime)
                 .expect("registered terminal observer")
             });
             loop {

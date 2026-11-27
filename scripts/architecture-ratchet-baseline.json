@@ -7,9 +7,9 @@
     "from_kernel_ref_uses": 0,
     "impl_orbit_runtime_files": 336,
     "orbit_runtime_naming_files.orbit-cli": 0,
-    "orbit_runtime_naming_files.orbit-cmd": 8,
+    "orbit_runtime_naming_files.orbit-cmd": 0,
     "orbit_runtime_naming_files.orbit-web": 0,
-    "orbit_runtime_ref_param_fns": 1122,
+    "orbit_runtime_ref_param_fns": 1121,
     "runtime_host_required_methods": 153,
     "runtime_top_level_modules_outside_layers": 2,
     "worker_or_owner_reads": 19

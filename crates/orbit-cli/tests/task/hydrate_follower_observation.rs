@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::Duration;
 
-use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::test_env;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::OrbitRuntimeRoots;
@@ -361,11 +360,12 @@ fn hydration_through_operator_route_leaves_an_orphaned_leaf_unchanged() {
 }
 
 fn open_runtime(global: &Path, workspace: &Path) -> OrbitRuntime {
-    RegisteredRuntimeFactory::open_resolved_roots(OrbitRuntimeRoots {
+    orbit_cmd::test_support::open_resolved_roots(OrbitRuntimeRoots {
         global_root: global.to_path_buf(),
         shared_root: workspace.to_path_buf(),
         local_root: workspace.to_path_buf(),
     })
+    .map(orbit_core::composition::Opening::into_runtime)
     .unwrap_or_else(|error| panic!("open runtime: {error}"))
 }
 

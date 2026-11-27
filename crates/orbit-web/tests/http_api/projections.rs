@@ -6,7 +6,6 @@ use std::fs;
 use std::path::Path;
 
 use chrono::{DateTime, Duration, Timelike, Utc};
-use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::AutoTaskAddParams;
 use orbit_core::InvocationInsertParams;
@@ -1741,7 +1740,8 @@ fn add_scope_workspace(fixture: &Fixture, id: &str, name: &str) -> orbit_core::O
     registry.workspaces.push(workspace.clone());
     registry.checkouts.push(checkout.clone());
     orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
-    RegisteredRuntimeFactory::open_registered_checkout(&fixture.global, &workspace, &checkout)
+    orbit_cmd::test_support::open_registered_checkout(&fixture.global, &workspace, &checkout)
+        .map(orbit_core::composition::Opening::into_runtime)
         .unwrap()
 }
 

@@ -151,13 +151,13 @@ impl Fixture {
             &orbit_registry::workspace_registry::registry_path_for(&global),
         )
         .unwrap();
-        let runtime =
-            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
-                &global,
-                &registry.workspaces[0],
-                &registry.checkouts[0],
-            )
-            .expect("reopened disposable runtime");
+        let runtime = orbit_cmd::test_support::open_registered_checkout(
+            &global,
+            &registry.workspaces[0],
+            &registry.checkouts[0],
+        )
+        .map(orbit_core::composition::Opening::into_runtime)
+        .expect("reopened disposable runtime");
         Self {
             temp,
             global,
@@ -183,13 +183,13 @@ impl Fixture {
         registry.checkouts[0].role = Some(WorkspaceCheckoutRole::Replica);
         registry.checkouts[0].owner_machine_id = Some(owner_machine_id.to_owned());
         orbit_registry::workspace_registry::save_registry_to(&registry, &registry_path).unwrap();
-        let runtime =
-            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
-                &global,
-                &registry.workspaces[0],
-                &registry.checkouts[0],
-            )
-            .expect("reopened disposable replica runtime");
+        let runtime = orbit_cmd::test_support::open_registered_checkout(
+            &global,
+            &registry.workspaces[0],
+            &registry.checkouts[0],
+        )
+        .map(orbit_core::composition::Opening::into_runtime)
+        .expect("reopened disposable replica runtime");
 
         Self {
             temp,
@@ -258,13 +258,13 @@ impl Fixture {
             &orbit_registry::workspace_registry::registry_path_for(&global),
         )
         .unwrap();
-        let runtime =
-            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
-                &global,
-                &registry.workspaces[0],
-                &registry.checkouts[0],
-            )
-            .expect("disposable registered runtime");
+        let runtime = orbit_cmd::test_support::open_registered_checkout(
+            &global,
+            &registry.workspaces[0],
+            &registry.checkouts[0],
+        )
+        .map(orbit_core::composition::Opening::into_runtime)
+        .expect("disposable registered runtime");
         Self {
             temp,
             global,
@@ -904,13 +904,13 @@ pub(super) fn serve_fixture() {
             &orbit_registry::workspace_registry::registry_path_for(&global),
         )
         .unwrap();
-        let runtime =
-            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
-                &global,
-                &registry.workspaces[0],
-                &registry.checkouts[0],
-            )
-            .unwrap();
+        let runtime = orbit_cmd::test_support::open_registered_checkout(
+            &global,
+            &registry.workspaces[0],
+            &registry.checkouts[0],
+        )
+        .map(orbit_core::composition::Opening::into_runtime)
+        .unwrap();
         // fixture_command runs from root, outside repo and its .orbit directory.
         assert_eq!(
             std::env::current_dir().unwrap(),
@@ -971,10 +971,9 @@ pub(super) fn execute_replay_worker() {
             continue;
         };
         let runtime =
-            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
-                &global, workspace, checkout,
-            )
-            .unwrap();
+            orbit_cmd::test_support::open_registered_checkout(&global, workspace, checkout)
+                .map(orbit_core::composition::Opening::into_runtime)
+                .unwrap();
         // The read-only lookup: NotFound from any other workspace's store.
         if runtime.show_job_run_observed(&run_id).is_ok() {
             runtime.execute_pipeline_run_worker(&run_id).unwrap();
@@ -1273,12 +1272,9 @@ pub(super) fn add_workspace(fixture: &Fixture, id: &str, name: &str) -> FixtureR
     registry.workspaces.push(workspace.clone());
     registry.checkouts.push(checkout.clone());
     orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
-    orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
-        &fixture.global,
-        &workspace,
-        &checkout,
-    )
-    .unwrap()
+    orbit_cmd::test_support::open_registered_checkout(&fixture.global, &workspace, &checkout)
+        .map(orbit_core::composition::Opening::into_runtime)
+        .unwrap()
 }
 
 /// A successful `task_pr_pipeline` run for `ORB-2` in another workspace,
