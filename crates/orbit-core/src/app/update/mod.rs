@@ -44,3 +44,6 @@ pub type Outcome = UpdateReport;
 
 /// Errors returned by the update application.
 pub type Error = orbit_common::OrbitError;
+
+#[cfg(test)]
+mod tests;

@@ -107,8 +107,7 @@ impl Drop for StagedExecutable {
 
 /// Stream at most `limit` bytes of `executable` into a staging file beside
 /// `destination`, without installing it.
-#[doc(hidden)]
-pub fn stage_executable(
+pub(super) fn stage_executable(
     destination: &Path,
     executable: impl Read,
     limit: u64,
@@ -156,8 +155,7 @@ pub(super) fn reject_installed_candidate(
 /// Keeping the replace operation injectable lets the sibling tests exercise
 /// the recovery evidence and cleanup path without depending on filesystem
 /// permission behavior.
-#[doc(hidden)]
-pub fn restore_backup_with_rename(
+pub(super) fn restore_backup_with_rename(
     destination: &Path,
     backup: &Path,
     replace: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
@@ -273,8 +271,7 @@ fn write_staging_file(
 
 /// Inject the mode operation to exercise staging cleanup without relying on
 /// filesystem-specific permission failures.
-#[doc(hidden)]
-pub fn write_staging_file_with_mode(
+pub(super) fn write_staging_file_with_mode(
     destination: &Path,
     executable: impl Read,
     limit: u64,
