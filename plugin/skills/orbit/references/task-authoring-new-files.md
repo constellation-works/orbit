@@ -3,6 +3,8 @@
 Contents:
 
 - [Split, migration and other tasks that create files](#split-migration-and-other-tasks-that-create-files)
+- [Rust parent module declarations](#rust-parent-module-declarations)
+  - [Deterministic parent-declaration check](#deterministic-parent-declaration-check)
 
 ## Split, migration and other tasks that create files
 
@@ -14,20 +16,27 @@ task whose outcome creates a file:
 
 1. Scan the draft title, description, scope and acceptance criteria for every
    path the task names as new, moved-to, split-out or to-be-created. Naming a
-   new file only in prose grants nothing.
+   new file only in prose grants nothing. For any new or moved Rust module
+   (including a `dir:` destination), also trace its parent declaration chain
+   under [Rust parent module declarations](#rust-parent-module-declarations).
 2. List each such path exactly once as its canonical `file:` selector (or
    `dir:` for a new directory) in `context_files`, alongside the verified
-   existing targets. A missing `file:` whose parent directory exists gets an
-   automatic creation grant for that exact path, with a warning. Use
+   existing targets and any self-owned parent declaration selectors required by
+   the parent check below. A missing `file:` whose parent directory exists gets
+   an automatic creation grant for that exact path, with a warning. Use
    `allow_missing_context: true` when an intended missing target has no
    existing parent or is another missing selector type; that explicit grant
    covers every missing selector in the list, so review them all before filing.
-3. If an exact destination cannot be named yet, do not file the task. Record
-   the unnamed destination as an evidence gap in your own execution summary or
-   artifact instead; never file first and leave task-pilot to hold promotion
-   for an operator to authorize a footprint the filer could have granted.
+   Never add a creation grant for a missing parent owned by another task; link
+   the verified predecessor in `dependencies` instead.
+3. If an exact destination (including a required new parent layout) cannot be
+   named yet, do not file the task. Record the unnamed destination as an
+   evidence gap in your own execution summary or artifact instead; never file
+   first and leave task-pilot to hold promotion for an operator to authorize a
+   footprint the filer could have granted.
 4. Read the filed task back with `orbit.task.show` and confirm its history
-   carries a creation grant for each new target that is still missing. If any
+   carries a creation grant for each new target that is still missing (and no
+   duplicate grant for a predecessor-owned path). If any self-owned target
    lacks one, reauthorize through `orbit.task.update` with the full
    `context_files` list plus `allow_missing_context: true`, and note the
    correction in your summary.
@@ -108,3 +117,100 @@ complexity. It does not reach the proposed stage, so approval still needs a
 prepared task. Host OS, labels, browser kit, human-crew assignment,
 dependencies, real lock holders and live pilot holds still apply.
 Read the gaps after filing and fix what blocks, or leave it to task-pilot.
+
+## Rust parent module declarations
+
+When a task creates or moves a Rust source file or module directory under `src/`
+(including `src/**/tests/*.rs` under the sibling-test layout), a `dir:` or child
+`file:` selector grants only the child path itself — it does not authorize or
+lock the enclosing parent module files (`main.rs`, `lib.rs`, `mod.rs`, or
+`<dir>.rs`) needed to declare `mod <child>;` (or `#[path = "..."]`) so the
+crate compiles and stays free of orphan modules. Skip this check only for
+Cargo-discovered entrypoints (`src/lib.rs`, `src/main.rs`, `src/bin/*.rs`,
+`src/bin/*/main.rs`, and crate-root `tests/*.rs` integration binaries).
+
+Starting from each new or moved Rust module destination at the pinned base
+revision, trace its parent declaration chain upward until reaching an existing
+file already reachable from the crate root. For each missing or unwired parent
+declaration on that chain, resolve it under exactly one of these three cases:
+
+1. **New child module needing a new parent (owned by this task):** neither the
+   immediate parent (`<dir>/mod.rs` or `<dir>.rs`) nor a verified predecessor
+   supplies it at the pinned revision.
+   - Choose the single exact parent path matching the crate layout or approved
+     design (`<dir>/mod.rs` or `<dir>.rs`; never list both or guess). If the
+     parent layout cannot be determined, do not file: record an evidence gap
+     instead.
+   - Add `file:<parent-path>` to `context_files`, keep walking up to declare the
+     existing enclosing file (`src/lib.rs`, `src/main.rs`, or an existing
+     `mod.rs`) as a verified existing `file:` selector (or add each intermediate
+     missing parent the same way), and pass `allow_missing_context: true` so
+     every new selector receives an explicit `context_creation_authorized`
+     grant. Confirm in `orbit.task.show` history that both the child and every
+     self-owned new parent appear in the grant.
+2. **Existing parent needing wiring:** the declaration file (`main.rs`, `lib.rs`,
+   `mod.rs`, or `<dir>.rs`) already exists at the pinned revision and does not
+   yet declare `mod <child>;` (or the `#[path = "..."]` attribute or re-exports
+   required to reach the child).
+   - Declare that existing parent as a verified existing `file:` selector in
+     `context_files` and explain the wiring edit in the description. Never
+     request a creation grant for an existing file, and omit the selector when
+     the parent already declares the child.
+3. **Verified predecessor supplying the parent (owned by another task):** the
+   parent declaration file does not exist at the pinned revision, and another
+   task owns creating it.
+   - **Never grant a path owned by another task** and never assume ownership from
+     a task title or prose reference alone. Inspect the candidate predecessor
+     with `orbit.task.show` to confirm both that it is recorded in this task's
+     `dependencies` and that either it is already `done` (so the parent is
+     present at the base — re-classify as case 2) or its own `context_files`
+     and `context_creation_authorized` history explicitly cover creating that
+     exact parent selector and wiring its enclosing root.
+   - If the predecessor is missing from `dependencies`, add it to `dependencies`.
+     If its grants do not cover creating the parent, it is not a verified
+     supplier: update or coordinate the owning predecessor first, or record an
+     evidence gap rather than duplicating the creation grant here.
+   - When verified, omit the predecessor-owned parent from this task's creation
+     grants, name the predecessor task ID and supplied parent path under
+     `## Scope and prerequisites` in the description, and keep the blocking edge
+     in `dependencies`. If this task must also wire its own `mod <child>;`
+     line into that parent after the predecessor lands, record that wiring
+     dependency in `## Scope and prerequisites` so execution and re-piloting
+     wire it as an existing file once the predecessor lands without creating a
+     duplicate creation grant.
+
+### Deterministic parent-declaration check
+
+Run this fixed check at the pinned base revision `<rev>` (for example `HEAD`)
+before calling `orbit.task.add` and again after filing:
+
+1. **Check parent existence and existing declarations at `<rev>`:**
+
+   ```sh
+   git ls-tree -r --name-only <rev> -- <crate>/src/lib.rs <crate>/src/main.rs <crate>/src/<parent>.rs <crate>/src/<parent>/mod.rs
+   git grep -n -E '\bmod[[:space:]]+<child>\b' <rev> -- <crate>/src/<parent-file>
+   ```
+
+   An absent parent with no `mod <child>;` match requires either case 1 (new
+   parent owned here) or case 3 (verified predecessor); an existing parent
+   without a `mod <child>;` match requires case 2 (existing `file:` selector).
+2. **Verify every claimed predecessor before omitting a missing parent:**
+
+   ```sh
+   orbit tool run orbit.task.show --input '{"id":"<predecessor-id>","fields":["id","status","dependencies","context_files","history"]}'
+   ```
+
+   Confirm `<predecessor-id>` is listed in this task's `dependencies` and its
+   `context_files` plus latest `context_creation_authorized` history entry
+   explicitly cover `file:<parent-path>`.
+3. **Confirm filed grants and non-duplication after `orbit.task.add` or `orbit.task.update`:**
+
+   ```sh
+   orbit tool run orbit.task.show --input '{"id":"<filed-id>","fields":["context_files","dependencies","history"]}'
+   ```
+
+   Verify that every self-owned new child and new parent appears once in
+   `context_files` and in the latest `context_creation_authorized` history
+   entry, every existing parent needing wiring appears as an existing `file:`
+   selector, and no predecessor-owned parent carries a duplicate creation grant
+   on this task.
