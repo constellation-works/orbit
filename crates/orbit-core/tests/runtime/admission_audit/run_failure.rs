@@ -58,7 +58,7 @@ fn create_task(
 /// Mirror `worktree_setup`'s coupling-in: stamp the run's `job_run_id` and move
 /// the task to `status`.
 fn couple_task(runtime: &OrbitRuntime, task_id: &str, run_id: &str, status: TaskStatus) {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .apply_task_automation_update(
             task_id,
             TaskAutomationUpdate {
@@ -110,7 +110,7 @@ fn record_failing_step_with_message(runtime: &OrbitRuntime, run_id: &str, messag
 }
 
 fn finalize_failed(runtime: &OrbitRuntime, run_id: &str) -> bool {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .finalize_job_run(run_id, JobRunState::Failed, Utc::now(), Some(1))
         .expect("finalize failed run")
 }
@@ -283,7 +283,7 @@ fn a_red_base_failure_holds_the_task_until_the_command_passes() {
     assert_eq!(recorded.base_sha, hold.base_sha);
 
     let backlog = |runtime: &OrbitRuntime| {
-        runtime
+        orbit_core::test_support::EngineHost::new(runtime)
             .run_deterministic(
                 "list_backlog_tasks",
                 &serde_json::json!({}),

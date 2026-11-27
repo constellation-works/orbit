@@ -54,7 +54,7 @@ fn an_agent_session_cannot_delete_a_task_through_any_tool_path() {
     let runtime = OrbitRuntime::in_memory().expect("build runtime");
     let task_id = seed_task(&runtime);
 
-    let error = runtime
+    let error = orbit_core::test_support::EngineHost::new(&runtime)
         .run_tool_with_context(
             "orbit.task.delete",
             json!({ "id": task_id, "force": true }),
@@ -90,7 +90,7 @@ fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
             ..Default::default()
         })
         .unwrap();
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .run_tool_with_context(
             "orbit.task.update",
             json!({"id": task.id, "granted_tools": ["orbit.auto_task:update"]}),
@@ -111,7 +111,7 @@ fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
         activity: "agent_implement".into(),
         disallow_list: vec!["orbit.auto_task:update".into()],
     });
-    let error = runtime
+    let error = orbit_core::test_support::EngineHost::new(&runtime)
         .run_tool_with_context(
             "orbit.auto_task.update",
             json!({"name": "never-applied"}),

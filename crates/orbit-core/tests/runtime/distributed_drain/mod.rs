@@ -429,14 +429,15 @@ impl DrainOwnerTransport for Wire {
             effective_capabilities: BTreeSet::from([McpCapability::Agent]),
             ..ToolSessionContext::default()
         };
-        let mut answer = self.owner.run_tool_with_context(
-            name,
-            input,
-            ToolContext {
-                session_context: session,
-                ..ToolContext::default()
-            },
-        )?;
+        let mut answer = orbit_core::test_support::EngineHost::new(&self.owner)
+            .run_tool_with_context(
+                name,
+                input,
+                ToolContext {
+                    session_context: session,
+                    ..ToolContext::default()
+                },
+            )?;
         if name == "orbit.drain.probe"
             && let Some(revision) = *self.protocol.lock().unwrap()
         {
@@ -918,7 +919,7 @@ impl Pair {
         for (key, value) in overrides.as_object().expect("override object") {
             input[key] = value.clone();
         }
-        self.follower
+        orbit_core::test_support::EngineHost::new(&self.follower)
             .run_deterministic("pull_refill", &json!({}), &input, ToolContext::default())
             .expect("a pass reports its errors instead of failing the drain")
     }

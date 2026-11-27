@@ -225,7 +225,7 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
 
     // The pipeline's failure handoff receives the typed refusal.
     let handoff = execute_deterministic_action(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         "pr_failure_handoff",
         &json!({}),
         &json!({
@@ -319,12 +319,10 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
         "a base where the check passes lifts the hold"
     );
     let previous = fixture.runtime.show_job_run(&run_id).unwrap();
-    let next = fixture
-        .runtime
+    let next = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), previous.input, None)
         .unwrap();
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .apply_task_automation_update(
             &fixture.task_id,
             orbit_engine::TaskAutomationUpdate {
@@ -337,7 +335,7 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
     fixture.input["job_run_id"] = json!(next.run_id);
     git(&fixture.repo, &["checkout", "--quiet", "--detach", &green]);
     let resumed = execute_deterministic_action(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         "candidate_resume",
         &json!({}),
         &json!({
@@ -368,7 +366,7 @@ fn a_check_failing_identically_on_the_pinned_base_holds_the_kept_candidate() {
         &["checkout", "--quiet", "-b", "resumed-final"],
     );
     let validated = execute_deterministic_action(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         "candidate_validate",
         &json!({}),
         &json!({
@@ -487,7 +485,7 @@ pub(super) fn held_on_red_base() -> (Fixture, BaselineRedHold) {
         failures: Default::default(),
     };
     let handoff = execute_deterministic_action(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         "pr_failure_handoff",
         &json!({}),
         &json!({
@@ -547,8 +545,7 @@ fn a_moved_base_never_runs_the_check_inside_a_snapshot() {
 
     let started = std::time::Instant::now();
     let entry = readiness(&fixture);
-    let backlog = fixture
-        .runtime
+    let backlog = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -894,7 +891,11 @@ fn a_selection_hold_lifts_only_on_a_tip_that_passes_the_selection() -> Outcome {
         &affected_check(false, ".", FAILS_BUILD),
         "base stops honouring the selection",
     );
-    match orbit_engine::baseline_hold_status(&fixture.runtime, &fixture.repo, &hold) {
+    match orbit_engine::baseline_hold_status(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        &fixture.repo,
+        &hold,
+    ) {
         orbit_engine::BaselineHoldStatus::Holding(reason) => {
             assert!(reason.contains("not comparable"), "{reason}");
         }
@@ -906,7 +907,11 @@ fn a_selection_hold_lifts_only_on_a_tip_that_passes_the_selection() -> Outcome {
     );
     assert!(
         matches!(
-            orbit_engine::baseline_hold_status(&fixture.runtime, &fixture.repo, &hold),
+            orbit_engine::baseline_hold_status(
+                &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+                &fixture.repo,
+                &hold
+            ),
             orbit_engine::BaselineHoldStatus::Lifted(_)
         ),
         "a tip that passes the held selection lifts the hold"

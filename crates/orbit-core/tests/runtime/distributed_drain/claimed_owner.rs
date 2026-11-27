@@ -487,7 +487,7 @@ fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
     );
 
     // The engine's typed call uses host provenance and can supply these fields.
-    leaf.bound
+    orbit_core::test_support::EngineHost::new(&leaf.bound)
         .apply_task_automation_update(
             &leaf.task,
             orbit_engine::TaskAutomationUpdate {
@@ -510,7 +510,7 @@ fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
             .any(|entry| entry.note.as_deref() == Some("host-owned note"))
     );
     let task = RunLifecycle::update_task_from_activity(
-        &leaf.bound,
+        &orbit_core::test_support::EngineHost::new(&leaf.bound),
         &leaf.task,
         orbit_engine::TaskActivityUpdate {
             status: orbit_types::task::TaskStatus::InProgress,

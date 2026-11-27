@@ -226,7 +226,7 @@ fn claimed_worker_reads_owner_records_and_preserves_workspace_routing() {
     .expect("bind worker invocation");
 
     orbit_core::test_support::fixture_engine::RunLifecycle::register_worker_process(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         std::process::id(),
     )
     .expect("register worker process");

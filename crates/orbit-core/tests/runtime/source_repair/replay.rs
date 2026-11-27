@@ -9,8 +9,7 @@ pub(super) fn lost_spawn_reply_reconciles_the_reserved_run_after_older_retries()
     let f = Fixture::new();
     // Historical retries are real store rows, with no workers or source effects.
     for _ in 0..5 {
-        let mut run = f
-            .runtime
+        let mut run = orbit_core::test_support::EngineHost::new(&f.runtime)
             .insert_job_run(
                 "task_pr_pipeline",
                 2,

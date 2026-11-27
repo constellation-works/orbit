@@ -24,7 +24,7 @@ pub(super) fn checkpoint(f: &Fixture, run: &str, index: u32, id: &str, output: V
     state.record_step(index, JobRunState::Success, Some(output.clone()), None);
     state.record_pipeline_output(id, output);
     f.runtime.write_run_state(run, &state).unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .complete_job_run_step(
             run,
             &orbit_store::contract::JobRunStepParams {
@@ -128,11 +128,11 @@ esac
 "#, calls=f._root.path().join("gh-calls").display(), created=created.display(), answer=f.answer.display(), denied=denied.display(), historical=historical.display(), body=f._root.path().join("pr-body").display())).unwrap();
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
     if discarded {
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .run_private_vcs_operation("pr.close", json!({"pr":"17", "workspace_path":f.repo, "comment":"Discarded before the fresh delivery."}))
             .unwrap();
         assert_eq!(
-            f.runtime
+            orbit_core::test_support::EngineHost::new(&f.runtime)
                 .run_private_vcs_operation("pr.status", json!({"pr":"17", "workspace_path":f.repo}))
                 .unwrap()["pull_request"]["state"],
             "CLOSED"
@@ -141,8 +141,8 @@ esac
 
     // Replace the fixture's illustrative historical run with one whose host
     // actions actually produce every candidate/publication checkpoint.
-    let mut run = f
-        .runtime
+    let mut run = orbit_core::test_support::EngineHost::new(&f
+        .runtime)
         .insert_job_run(
             "task_pr_pipeline",
             1,
@@ -165,7 +165,7 @@ esac
             ),
         )
         .unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -197,7 +197,22 @@ esac
         format!("complete published candidate {number}\n"),
     )
     .unwrap();
-    f.runtime.apply_task_automation_update(&f.task, TaskAutomationUpdate { execution_summary:Some("Outcome: success\nChanges: complete the source repair and preserve its public behavior.\nAssessment: candidate ready for host validation.".into()), ..Default::default() }).unwrap();
+    orbit_core::test_support::EngineHost::new(&f.runtime)
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                execution_summary: Some(
+                    concat!(
+                        "Outcome: success\n",
+                        "Changes: complete the source repair and preserve its public behavior.\n",
+                        "Assessment: candidate ready for host validation.",
+                    )
+                    .into(),
+                ),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     let commit = f.action("git_commit", json!({"job_run_id":run.run_id,"scope":"all","workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}));
     checkpoint(f, &run.run_id, 1, "commit", commit);
     if validated {
@@ -289,7 +304,10 @@ esac
     let failure = orbit_engine::test_support::with_vcs_retry_wait(
         |_| {},
         || {
-            execute_deterministic_action(&f.runtime, "pr_complete", &json!({}),
+            execute_deterministic_action(
+                &orbit_core::test_support::EngineHost::new(&f.runtime),
+                "pr_complete",
+                &json!({}),
             &json!({"job_run_id":run.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,
                 "pr_number":number,"completion":"done","auto_fix":auto_fix,"head":f.branch,
                 "published_head_sha":f.head,"base":"main","max_wait_seconds":0}),
@@ -302,7 +320,7 @@ esac
     );
     std::fs::rename(&denied, denied.with_extension("recovered")).unwrap();
     assert_eq!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .run_private_vcs_operation("pr.status", json!({"pr":"17","workspace_path":f.repo}))
             .unwrap()["pull_request"]["headRefOid"],
         json!(f.head),
@@ -363,8 +381,7 @@ pub(super) fn next(f: &Fixture) -> (JobRun, Value) {
 }
 
 fn next_with(f: &Fixture, input: Value) -> (JobRun, Value) {
-    let mut run = f
-        .runtime
+    let mut run = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input), None)
         .unwrap();
     run.state = JobRunState::Running;
@@ -435,7 +452,7 @@ fn successful_publication_requires_fresh_same_pr_implementation() {
             .is_err()
     );
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .owner_published_candidate(&f.task, Some(&f.source.run_id))
             .is_err(),
         "automatic reuse cannot authorize rework of a successful publication"
@@ -804,8 +821,7 @@ fn successful_rework_refuses_changed_authority_scope_and_publication() {
                     .unwrap();
             }
             "superseded" => {
-                let mut newer = f
-                    .runtime
+                let mut newer = orbit_core::test_support::EngineHost::new(&f.runtime)
                     .insert_job_run(
                         "task_pr_pipeline",
                         2,
@@ -817,7 +833,7 @@ fn successful_rework_refuses_changed_authority_scope_and_publication() {
                 newer.state = JobRunState::Cancelled;
                 newer.finished_at = Some(Utc::now());
                 save_run(&f, &newer);
-                f.runtime
+                orbit_core::test_support::EngineHost::new(&f.runtime)
                     .apply_task_automation_update(
                         &f.task,
                         TaskAutomationUpdate {
@@ -828,7 +844,7 @@ fn successful_rework_refuses_changed_authority_scope_and_publication() {
                     .unwrap();
             }
             "terminal" => {
-                f.runtime
+                orbit_core::test_support::EngineHost::new(&f.runtime)
                     .apply_task_automation_update(
                         &f.task,
                         TaskAutomationUpdate {
@@ -953,7 +969,10 @@ fn successful_rework_binds_current_policy_before_submission_and_source_effects()
     );
     std::fs::write(&config, changed).unwrap();
     reload(&mut f);
-    let error = execute_deterministic_action(&f.runtime, "candidate_resume", &json!({}),
+    let error = execute_deterministic_action(
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
+        "candidate_resume",
+        &json!({}),
         &json!({"job_run_id":id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]}),
         false, &HashMap::new(), None).unwrap_err();
     assert!(error.to_string().contains("current policy"), "{error}");
@@ -1088,7 +1107,7 @@ pub(super) fn failed_requeued_direct_publisher_retains_authority_and_drift_refus
             f.source.pid = None;
             f.source.finished_at = Some(Utc::now());
             save_run(&f, &f.source);
-            f.runtime
+            orbit_core::test_support::EngineHost::new(&f.runtime)
                 .apply_task_automation_update(
                     &f.task,
                     TaskAutomationUpdate {
@@ -1208,7 +1227,22 @@ pub(super) fn published_requeue_refuses_changed_scope_head_and_incomplete_source
             _ => unreachable!(),
         }
         let (run, setup) = next(&f);
-        let error = execute_deterministic_action(&f.runtime,"candidate_resume",&json!({}),&json!({"job_run_id":run.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"],"prior_job_run_id":setup["prior_job_run_id"]}),false,&HashMap::new(),None).unwrap_err();
+        let error = execute_deterministic_action(
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
+            "candidate_resume",
+            &json!({}),
+            &json!({
+                "job_run_id":run.run_id,
+                "task_ids":[f.task],
+                "workspace_path":setup["workspace_path"],
+                "base_sha":setup["base_sha"],
+                "prior_job_run_id":setup["prior_job_run_id"]
+            }),
+            false,
+            &HashMap::new(),
+            None,
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("refused"), "{case}: {error}");
         assert_eq!(
             git(
@@ -1272,7 +1306,7 @@ pub(super) fn stopped_successor_is_explicitly_bound_when_repairing_older_publica
         .write_run_state(&successor.run_id, &changed)
         .unwrap();
     let refused = execute_deterministic_action(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         "candidate_resume",
         &json!({}),
         &resume_input,
@@ -1299,7 +1333,7 @@ pub(super) fn legacy_publication_behind_a_stopped_successor_cannot_start_fresh()
     // A pre-preservation publication has host evidence and a task PR reference,
     // but no new preservation event. A stopped fresh successor must not hide it.
     let f = Fixture::new();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -1333,7 +1367,22 @@ pub(super) fn legacy_publication_behind_a_stopped_successor_cannot_start_fresh()
         .unwrap();
     assert!(successor_state.pipeline.get("worktree").is_some());
     assert!(successor_state.pipeline.get("push").is_none());
-    let error = execute_deterministic_action(&f.runtime,"candidate_resume",&json!({}),&json!({"job_run_id":incoming.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"],"prior_job_run_id":setup["prior_job_run_id"]}),false,&HashMap::new(),None).unwrap_err();
+    let error = execute_deterministic_action(
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
+        "candidate_resume",
+        &json!({}),
+        &json!({
+            "job_run_id":incoming.run_id,
+            "task_ids":[f.task],
+            "workspace_path":setup["workspace_path"],
+            "base_sha":setup["base_sha"],
+            "prior_job_run_id":setup["prior_job_run_id"]
+        }),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .unwrap_err();
     let guidance = error.to_string();
     assert!(
         guidance.contains("explicit source repair"),
@@ -1403,7 +1452,7 @@ pub(super) fn move_published_branch(f: &Fixture, checkout: &Path, content: &str)
 
 /// Record a repaired head published on the PR, as the completion watcher does.
 pub(super) fn record_auto_fix_push(f: &Fixture, by: &str, from: &str, to: &str, run_id: &str) {
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -1452,7 +1501,7 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
         .unwrap()
         .id;
     let set_status = |id: &str, status| {
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 id,
                 TaskAutomationUpdate {
@@ -1486,7 +1535,7 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
     assert_eq!(entry["published_delivery"]["pull_request"], "17");
 
     let reserve = |input: Value| {
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .run_deterministic("reserve_locks", &json!({}), &input, Default::default())
             .unwrap()
     };
@@ -1519,8 +1568,7 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
         }),
         "deferred grants preserve publication metadata and gate defaults"
     );
-    let open = f
-        .runtime
+    let open = orbit_core::test_support::EngineHost::new(&f.runtime)
         .run_deterministic(
             "gate_starvation_defer",
             &json!({}),
@@ -1540,8 +1588,7 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
     assert_eq!(resumed["prior_pull_request"], "17");
     checkpoint(&f, &run.run_id, 6, "resume_candidate", resumed);
 
-    let refused = f
-        .runtime
+    let refused = orbit_core::test_support::EngineHost::new(&f.runtime)
         .acquire_deferred_footprint(&run.run_id, "agent_implement")
         .unwrap_err();
     assert!(
@@ -1549,11 +1596,11 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
             && refused.to_string().contains(&holder),
         "an agent that may edit waits for the holder, and names it: {refused}"
     );
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .acquire_deferred_footprint(&run.run_id, "final_recovery")
         .expect("a decision-only recovery edits nothing and takes no lock");
     set_status(&holder, TaskStatus::Done);
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .acquire_deferred_footprint(&run.run_id, "agent_implement")
         .expect("the footprint is taken once the holder releases it");
     set_status(&holder, TaskStatus::Backlog);
@@ -1567,7 +1614,7 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
             .any(|conflict| conflict["held_by"] == "reservation"),
         "the run's reservation holds the file against another writer: {blocked}"
     );
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .acquire_deferred_footprint(&run.run_id, "agent_review_repair")
         .expect("a run already holding its footprint reserves nothing again");
 
@@ -1606,7 +1653,7 @@ pub(super) fn operator_shipped_published_requeue_overrides_held_local_lock() {
         })
         .unwrap()
         .id;
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &holder,
             TaskAutomationUpdate {
@@ -1616,7 +1663,7 @@ pub(super) fn operator_shipped_published_requeue_overrides_held_local_lock() {
         )
         .unwrap();
     let reserve = |input: Value| {
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .run_deterministic("reserve_locks", &json!({}), &input, Default::default())
             .unwrap()
     };
@@ -1674,7 +1721,7 @@ pub(super) fn operator_shipped_published_requeue_overrides_held_local_lock() {
     assert_eq!(resumed["outcome"], "resumed_carried");
     assert_eq!(resumed["prior_pull_request"], "17");
     checkpoint(&f, &run.run_id, 6, "resume_candidate", resumed);
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .acquire_deferred_footprint(&run.run_id, "agent_implement")
         .expect("the editing activity does not wait for the overridden local holder");
 }
@@ -1703,7 +1750,7 @@ pub(super) fn footprint_held_resume_keeps_the_preserved_publication() {
         .unwrap()
         .id;
     let set_status = |id: &str, status| {
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 id,
                 TaskAutomationUpdate {
@@ -1715,7 +1762,7 @@ pub(super) fn footprint_held_resume_keeps_the_preserved_publication() {
     };
     set_status(&holder, TaskStatus::Review);
     let reserve = |input: Value| {
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .run_deterministic("reserve_locks", &json!({}), &input, Default::default())
             .unwrap()
     };
@@ -1748,14 +1795,13 @@ pub(super) fn footprint_held_resume_keeps_the_preserved_publication() {
     let commit = f.action("git_commit", json!({"job_run_id":held.run_id,"scope":"all","workspace_path":checkout,"base_sha":setup["base_sha"],"base_ref":setup["base_ref"]}));
     assert_eq!(commit["committed"], true);
     checkpoint(&f, &held.run_id, 1, "commit", commit);
-    let refused = f
-        .runtime
+    let refused = orbit_core::test_support::EngineHost::new(&f.runtime)
         .acquire_deferred_footprint(&held.run_id, "agent_review_repair")
         .unwrap_err();
     assert!(refused.to_string().contains(&holder), "{refused}");
     // The worker records the typed hold, then the terminal write runs the
     // real task cleanup.
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .complete_job_run_step(
             &held.run_id,
             &orbit_store::contract::JobRunStepParams {
@@ -1775,7 +1821,7 @@ pub(super) fn footprint_held_resume_keeps_the_preserved_publication() {
         )
         .unwrap();
     RunLifecycle::finalize_job_run(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         &held.run_id,
         JobRunState::Held,
         Utc::now(),
@@ -1864,7 +1910,7 @@ pub(super) fn deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn
             .id
     };
     let set_status = |id: &str, status| {
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 id,
                 TaskAutomationUpdate {
@@ -1880,8 +1926,7 @@ pub(super) fn deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn
     set_status(&first, TaskStatus::InProgress);
     set_status(&second, TaskStatus::InProgress);
     let deferred_run = |task: &str| {
-        let mut run = f
-            .runtime
+        let mut run = orbit_core::test_support::EngineHost::new(&f.runtime)
             .insert_job_run(
                 "task_pr_pipeline",
                 1,
@@ -1899,7 +1944,10 @@ pub(super) fn deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn
         run.run_id
     };
     let (first_run, second_run) = (deferred_run(&first), deferred_run(&second));
-    let acquire = |run: &str| f.runtime.acquire_deferred_footprint(run, "agent_implement");
+    let acquire = |run: &str| {
+        orbit_core::test_support::EngineHost::new(&f.runtime)
+            .acquire_deferred_footprint(run, "agent_implement")
+    };
 
     for run in [&first_run, &second_run] {
         let refused = acquire(run).unwrap_err().to_string();
@@ -1986,7 +2034,21 @@ pub(super) fn unrecorded_publication_move_is_refused() {
     record_auto_fix_push(&f, "human:someone", &published, &moved, &f.source.run_id);
     requeue(&mut f);
     let (run, setup) = next(&f);
-    let refused = execute_deterministic_action(&f.runtime,"candidate_resume",&json!({}),&json!({"job_run_id":run.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]}),false,&HashMap::new(),None).unwrap_err();
+    let refused = execute_deterministic_action(
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
+        "candidate_resume",
+        &json!({}),
+        &json!({
+            "job_run_id":run.run_id,
+            "task_ids":[f.task],
+            "workspace_path":setup["workspace_path"],
+            "base_sha":setup["base_sha"]
+        }),
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .unwrap_err();
     assert!(
         refused.to_string().contains("moved"),
         "the unauthenticated move is refused: {refused}"

@@ -102,7 +102,7 @@ fn two_task_landing_counts_only_that_tasks_reviewable_lines() {
     let after = head(&repo);
 
     RunLifecycle::record_direct_landing(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         &DirectLandingRequest {
             run_id: "run-reviewable".into(),
             branch: "main".into(),
@@ -181,7 +181,7 @@ fn single_commit_landing_reviewable(message: fn(&str, &str) -> String) -> Option
     git(&repo, &["commit", "-m", &message(&owner, &other)]);
     let landed = head(&repo);
 
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &owner,
             TaskAutomationUpdate {
@@ -190,7 +190,7 @@ fn single_commit_landing_reviewable(message: fn(&str, &str) -> String) -> Option
             },
         )
         .unwrap();
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(&owner, TaskAutomationUpdate {
             status: Some(TaskStatus::Done),
             expected_status: Some(TaskStatus::Review),

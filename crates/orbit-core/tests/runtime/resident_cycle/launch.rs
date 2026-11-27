@@ -104,7 +104,14 @@ fn launch_cycle_step(fx: &Fixture, run: &str, brief: &Value) {
         None,
     )
     .unwrap();
-    let outcome = execute_job_with_resume(&job, input, run, audit, &fx.runtime, Some(&resume));
+    let outcome = execute_job_with_resume(
+        &job,
+        input,
+        run,
+        audit,
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
+        Some(&resume),
+    );
     assert!(
         outcome.as_ref().is_ok_and(|outcome| outcome.success),
         "{outcome:?}"

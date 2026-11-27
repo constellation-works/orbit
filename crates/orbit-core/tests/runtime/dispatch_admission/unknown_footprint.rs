@@ -49,7 +49,7 @@ fn empty(runtime: &OrbitRuntime, title: &str) -> String {
 }
 
 fn classify_with(runtime: &OrbitRuntime, drain: &str, slots: u32) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),

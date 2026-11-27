@@ -161,7 +161,7 @@ impl Fixture {
     /// Record pull request `number` on `task`, as delivery records it.
     pub(super) fn record_pull_request(&self, task: &str, number: u64) {
         RunLifecycle::apply_task_automation_update(
-            &self.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
             task,
             TaskAutomationUpdate {
                 external_refs: vec![ExternalRef::github_pr(number.to_string()).unwrap()],

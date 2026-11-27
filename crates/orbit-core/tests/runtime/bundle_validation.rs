@@ -25,7 +25,7 @@ fn validate(
     bundles: Value,
     known_task_ids: Value,
 ) -> Result<Value, DispatchError> {
-    runtime.run_deterministic(
+    orbit_core::test_support::EngineHost::new(runtime).run_deterministic(
         "validate_bundles",
         &json!({}),
         &json!({
@@ -79,7 +79,7 @@ fn nonempty_allowed_set_admits_only_its_members() {
 #[test]
 fn named_omissions_report_the_hold_after_eligible_bundles() {
     let (_root, runtime) = runtime();
-    let result = runtime.run_deterministic(
+    let result = orbit_core::test_support::EngineHost::new(&runtime).run_deterministic(
         "validate_bundles",
         &json!({}),
         &json!({

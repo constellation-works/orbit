@@ -72,7 +72,7 @@ pub(super) fn record_flaky_validation(
     record: &orbit_types::workflow::FlakyValidation,
 ) -> Result<(), OrbitError> {
     crate::application::review::flaky::record_frictions(runtime, task_id, record)?;
-    runtime.apply_task_automation_update(
+    super::EngineHost::new(runtime).apply_task_automation_update(
         task_id,
         orbit_engine::TaskAutomationUpdate {
             append_history: vec![orbit_types::task::TaskHistoryEntry {

@@ -8,6 +8,7 @@ use orbit_store::TaskReservationReleaseReason;
 use orbit_types::task::{TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate, JobRunState};
 
+use crate::application::contracts::EngineHostPort;
 use crate::application::task::TaskAddParams;
 use crate::application::task::params::TaskRecordUpdateParams;
 use crate::application::task::records::TaskRecords;
@@ -45,7 +46,7 @@ fn requeue_reports_the_candidate_its_stopped_run_held() {
         )
         .expect("stop the run");
     RunLifecycle::apply_task_automation_update(
-        &runtime,
+        &runtime.engine_host(),
         &task.id,
         TaskAutomationUpdate {
             status: Some(TaskStatus::Blocked),

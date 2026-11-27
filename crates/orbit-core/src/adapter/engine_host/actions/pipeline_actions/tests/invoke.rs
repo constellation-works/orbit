@@ -123,7 +123,7 @@ fn a_finished_ci_sweep_stores_child_summaries_and_no_resume_state() {
 
     // The fan-in checkpoint and the terminal write, as the engine makes them.
     let collected = Value::Array(summaries);
-    runtime
+    crate::adapter::engine_host::EngineHost::new(&runtime)
         .checkpoint_step(
             &parent.run_id,
             2,
@@ -362,7 +362,7 @@ fn an_expired_gate_wait_cancels_its_delivery_child_and_keeps_its_candidate() {
                 .put(&runtime.workspace_id().unwrap(), &child_run, None)
         })
         .unwrap();
-    runtime
+    crate::adapter::engine_host::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &task,
             TaskAutomationUpdate {

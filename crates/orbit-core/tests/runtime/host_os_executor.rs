@@ -119,7 +119,7 @@ fn add(
 }
 
 fn backlog(runtime: &OrbitRuntime) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -217,7 +217,7 @@ fn a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it() {
     );
 
     let drain = running_run(&linux);
-    let wave = linux
+    let wave = orbit_core::test_support::EngineHost::new(&linux)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),
@@ -276,7 +276,7 @@ fn a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it() {
         vec![drawn.id.clone(), muse.id.clone()]
     );
     let mac_drain = running_run(&mac);
-    let mac_wave = mac
+    let mac_wave = orbit_core::test_support::EngineHost::new(&mac)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),
@@ -522,7 +522,8 @@ fn a_supported_explicit_run_crew_survives_discovery_and_replay() {
     let pinned = add(&linux, "pinned", Some("muse-wonder"), &[]).unwrap();
     let tagged = add(&linux, "tagged", None, &["os:macos"]).unwrap();
     let other = add(&linux, "other", None, &[]).unwrap();
-    let listed = linux.run_deterministic("list_backlog_tasks", &json!({}),
+    let listed = orbit_core::test_support::EngineHost::new(&linux)
+        .run_deterministic("list_backlog_tasks", &json!({}),
         &json!({"run_id": replay.run_id, "task_ids": [task.id, pinned.id, tagged.id, other.id]}),
         ToolContext::default()).unwrap();
     assert_eq!(admitted(&listed), vec![task.id.clone()]);
@@ -556,7 +557,7 @@ fn a_supported_explicit_run_crew_survives_discovery_and_replay() {
         update["id"] = json!(task.id);
         update["model"] = json!("codex");
         linux.run_tool("orbit.task.update", update).unwrap();
-        let listed = linux
+        let listed = orbit_core::test_support::EngineHost::new(&linux)
             .run_deterministic(
                 "list_backlog_tasks",
                 &json!({}),
@@ -608,7 +609,7 @@ fn an_excluded_default_crew_is_not_pinned() {
         );
 
         if pool.is_empty() {
-            let explicit = linux
+            let explicit = orbit_core::test_support::EngineHost::new(&linux)
                 .run_deterministic(
                     "list_backlog_tasks",
                     &json!({}),
@@ -634,7 +635,7 @@ fn an_excluded_default_crew_is_not_pinned() {
                 .unwrap();
             assert_eq!(entry["reason"], "host_os_mismatch", "{readiness}");
             let run = running_run(&linux);
-            let wave = linux
+            let wave = orbit_core::test_support::EngineHost::new(&linux)
                 .run_deterministic(
                     "classify_workspace_auto_tasks",
                     &json!({}),
@@ -709,7 +710,7 @@ fn activity_defaults_and_unrestricted_crews_remain_consistent() {
             input["inspection_revision"] = json!("fixture-revision");
             input["partition_index"] = json!(0);
         }
-        let refused = linux
+        let refused = orbit_core::test_support::EngineHost::new(&linux)
             .agent_crew_config_for_input(&input)
             .expect_err("unsupported activity default is refused");
         assert!(refused.to_string().contains(WAIT), "{refused}");
@@ -722,7 +723,10 @@ fn activity_defaults_and_unrestricted_crews_remain_consistent() {
                 .is_empty()
         );
         let mac = linux.clone().with_host_os(Some(HostOs::Macos));
-        let selected = mac.agent_crew_config_for_input(&input).unwrap().unwrap();
+        let selected = orbit_core::test_support::EngineHost::new(&mac)
+            .agent_crew_config_for_input(&input)
+            .unwrap()
+            .unwrap();
         assert_eq!(selected.model.as_deref(), Some("muse-spark-1.3"));
     }
     executor.host_os = None;

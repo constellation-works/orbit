@@ -22,6 +22,7 @@ use orbit_types::task::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams, TaskRecords};
 
@@ -150,7 +151,12 @@ fn reconcile_task(runtime: &OrbitRuntime, metadata: &Task) -> Result<Option<Task
     let all_discarded = repair
         .values()
         .all(|(_, at)| discarded.is_some_and(|discard| discard > *at));
-    if !all_discarded && runtime.kept_claim_candidate(&task.id)?.is_some() {
+    if !all_discarded
+        && runtime
+            .engine_host()
+            .kept_claim_candidate(&task.id)?
+            .is_some()
+    {
         return Ok(None);
     }
     let mut protected = BTreeSet::new();

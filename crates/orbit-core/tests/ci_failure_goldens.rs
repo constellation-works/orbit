@@ -186,7 +186,9 @@ fn set_status(rt: &OrbitRuntime, id: &str, status: TaskStatus) {
         status: Some(status),
         ..Default::default()
     };
-    rt.apply_task_automation_update(id, u).unwrap();
+    orbit_core::test_support::EngineHost::new(rt)
+        .apply_task_automation_update(id, u)
+        .unwrap();
 }
 fn add_task(
     rt: &OrbitRuntime,
@@ -269,7 +271,7 @@ fn evidence_input(runs: Vec<Value>, extra: Value) -> Value {
     json!({ "ci_evidence": ev })
 }
 fn file_input(rt: &OrbitRuntime, input: Value) -> Result<Value, DispatchError> {
-    rt.run_deterministic(
+    orbit_core::test_support::EngineHost::new(rt).run_deterministic(
         "file_ci_failure_tasks",
         &json!({}),
         &input,
@@ -1481,7 +1483,9 @@ fn protecting_branch_claim(rt: &OrbitRuntime, owner_id: &str) -> ExecutionClaim 
         status_note: Some(note),
         ..Default::default()
     };
-    rt.apply_task_automation_update(owner_id, u).unwrap();
+    orbit_core::test_support::EngineHost::new(rt)
+        .apply_task_automation_update(owner_id, u)
+        .unwrap();
     insert_protecting_claim(rt, owner_id)
 }
 /// Insert the follower's claim row, leaving the owner's status alone.
@@ -1881,7 +1885,9 @@ fn record_owner_landing(rt: &OrbitRuntime, task_id: &str, landed: &str) {
         append_history: vec![entry],
         ..Default::default()
     };
-    rt.apply_task_automation_update(task_id, u).unwrap();
+    orbit_core::test_support::EngineHost::new(rt)
+        .apply_task_automation_update(task_id, u)
+        .unwrap();
     let hist = history(rt, task_id);
     let ok = |e: &TaskHistoryEntry| {
         e.event == "landing_completed"
@@ -1905,7 +1911,7 @@ fn record_landing(rt: &OrbitRuntime, task_id: &str, base: &str, landed: &str) {
     let job_yaml = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: fixture_delivery\nspec:\n  state: enabled\n  task_delivery: {}\n  steps:\n    - id: commit\n      target: activity:git_commit\n    - id: complete_pr\n      target: activity:pr_complete\n";
     std::fs::write(res.join("jobs/fixture_delivery.yaml"), job_yaml).unwrap();
     let tids = Some(json!({"task_ids": [task_id]}));
-    let mut run = rt
+    let mut run = orbit_core::test_support::EngineHost::new(rt)
         .insert_job_run("fixture_delivery", 1, chrono::Utc::now(), tids, None)
         .unwrap();
     run.state = JobRunState::Success;

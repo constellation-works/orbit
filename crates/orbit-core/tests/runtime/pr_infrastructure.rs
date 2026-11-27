@@ -37,7 +37,13 @@ fn owner_reservation_survives_concurrent_sibling_and_reopened_store() {
             let id = task.id.to_string();
             std::thread::spawn(move || {
                 barrier.wait();
-                ReviewGate::admit_pr_infrastructure(&host, execution, &[id], &evidence).unwrap()
+                ReviewGate::admit_pr_infrastructure(
+                    &orbit_core::test_support::EngineHost::new(&host),
+                    execution,
+                    &[id],
+                    &evidence,
+                )
+                .unwrap()
             })
         });
     let outcomes = calls.map(|call| call.join().unwrap());
@@ -59,7 +65,13 @@ fn owner_reservation_survives_concurrent_sibling_and_reopened_store() {
     let reopened = OrbitRuntime::from_roots(&global, &workspace).unwrap();
     let ids = vec![task.id.to_string()];
     assert!(matches!(
-        ReviewGate::admit_pr_infrastructure(&reopened, "resumed-run", &ids, &evidence).unwrap(),
+        ReviewGate::admit_pr_infrastructure(
+            &orbit_core::test_support::EngineHost::new(&reopened),
+            "resumed-run",
+            &ids,
+            &evidence
+        )
+        .unwrap(),
         PrInfrastructureAdmission::Observe(_)
     ));
     let history = reopened.get_task_history(&task.id).unwrap();
@@ -72,13 +84,25 @@ fn owner_reservation_survives_concurrent_sibling_and_reopened_store() {
     let mut advanced = evidence.clone();
     advanced.run_attempt = 2;
     assert!(matches!(
-        ReviewGate::admit_pr_infrastructure(&reopened, "later-run", &ids, &advanced).unwrap(),
+        ReviewGate::admit_pr_infrastructure(
+            &orbit_core::test_support::EngineHost::new(&reopened),
+            "later-run",
+            &ids,
+            &advanced
+        )
+        .unwrap(),
         PrInfrastructureAdmission::Refused(_)
     ));
     let mut next_head = evidence.clone();
     next_head.head_sha = "d".repeat(40);
     assert!(matches!(
-        ReviewGate::admit_pr_infrastructure(&reopened, "next-head", &ids, &next_head).unwrap(),
+        ReviewGate::admit_pr_infrastructure(
+            &orbit_core::test_support::EngineHost::new(&reopened),
+            "next-head",
+            &ids,
+            &next_head
+        )
+        .unwrap(),
         PrInfrastructureAdmission::Refused(_)
     ));
     assert_eq!(
@@ -87,7 +111,7 @@ fn owner_reservation_survives_concurrent_sibling_and_reopened_store() {
         "observation/refusal never resets or consumes another attempt"
     );
     RunLifecycle::apply_task_automation_update(
-        &owner,
+        &orbit_core::test_support::EngineHost::new(&owner),
         &task.id,
         TaskAutomationUpdate {
             append_history: vec![orbit_types::task::TaskHistoryEntry {
@@ -108,8 +132,13 @@ fn owner_reservation_survives_concurrent_sibling_and_reopened_store() {
     .unwrap();
     assert!(
         matches!(
-            ReviewGate::admit_pr_infrastructure(&reopened, "corrupt-ledger", &ids, &evidence)
-                .unwrap(),
+            ReviewGate::admit_pr_infrastructure(
+                &orbit_core::test_support::EngineHost::new(&reopened),
+                "corrupt-ledger",
+                &ids,
+                &evidence
+            )
+            .unwrap(),
             PrInfrastructureAdmission::Refused(_)
         ),
         "a malformed ledger cannot grant a fresh budget"
@@ -152,7 +181,12 @@ fn base_update_reservation_is_shared_by_causes_and_survives_reopen() {
         let id = task.id.clone();
         std::thread::spawn(move || {
             barrier.wait();
-            ReviewGate::admit_pr_base_update(&host, &[id], &request).unwrap()
+            ReviewGate::admit_pr_base_update(
+                &orbit_core::test_support::EngineHost::new(&host),
+                &[id],
+                &request,
+            )
+            .unwrap()
         })
     });
     let outcomes = calls.map(|call| call.join().unwrap());
@@ -176,9 +210,12 @@ fn base_update_reservation_is_shared_by_causes_and_survives_reopen() {
     let mut resumed = request.clone();
     resumed.execution = "resumed-sibling".into();
     resumed.deadline_ms = 99999;
-    let PrBaseUpdateAdmission::Observe(recorded) =
-        ReviewGate::admit_pr_base_update(&reopened, &ids, &resumed).unwrap()
-    else {
+    let PrBaseUpdateAdmission::Observe(recorded) = ReviewGate::admit_pr_base_update(
+        &orbit_core::test_support::EngineHost::new(&reopened),
+        &ids,
+        &resumed,
+    )
+    .unwrap() else {
         panic!("resume observes the one reservation");
     };
     assert_eq!(
@@ -194,7 +231,12 @@ fn base_update_reservation_is_shared_by_causes_and_survives_reopen() {
         }
         assert!(
             matches!(
-                ReviewGate::admit_pr_base_update(&reopened, &ids, &changed).unwrap(),
+                ReviewGate::admit_pr_base_update(
+                    &orbit_core::test_support::EngineHost::new(&reopened),
+                    &ids,
+                    &changed
+                )
+                .unwrap(),
                 PrBaseUpdateAdmission::Refused(PrBaseUpdateRefusal::BudgetSpent { .. })
             ),
             "{field} cannot reset the inherited/absent cumulative budget"
@@ -205,7 +247,7 @@ fn base_update_reservation_is_shared_by_causes_and_survives_reopen() {
         vec![request]
     );
     RunLifecycle::apply_task_automation_update(
-        &reopened,
+        &orbit_core::test_support::EngineHost::new(&reopened),
         &task.id,
         TaskAutomationUpdate {
             append_history: vec![orbit_types::task::TaskHistoryEntry {
@@ -226,7 +268,12 @@ fn base_update_reservation_is_shared_by_causes_and_survives_reopen() {
     .unwrap();
     assert!(
         matches!(
-            ReviewGate::admit_pr_base_update(&reopened, &ids, &resumed).unwrap(),
+            ReviewGate::admit_pr_base_update(
+                &orbit_core::test_support::EngineHost::new(&reopened),
+                &ids,
+                &resumed
+            )
+            .unwrap(),
             PrBaseUpdateAdmission::Refused(PrBaseUpdateRefusal::UnreadableHistory(_))
         ),
         "unreadable history cannot grant a new budget"

@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::job::ReviewAdmissionHook;
 use crate::application::job::seed_default_jobs;
 use crate::application::review::review_gate_admit;
@@ -62,7 +63,7 @@ impl Gated {
     /// Record `run_id` as running since `started_at`.
     pub(super) fn start(&self, run_id: &str, started_at: chrono::DateTime<Utc>) {
         RunLifecycle::mark_job_run_running(
-            &self.fixture.runtime,
+            &self.fixture.runtime.engine_host(),
             run_id,
             started_at,
             std::process::id(),
@@ -163,8 +164,15 @@ fn admitted_run(runtime: &OrbitRuntime, job: &str, task_ids: &[String]) -> JobRu
     runtime
         .install_review_admission(job, &mut input, None, false)
         .expect("capture admission");
-    let run = RunLifecycle::insert_job_run(runtime, job, 1, Utc::now(), Some(input), None)
-        .expect("insert run");
+    let run = RunLifecycle::insert_job_run(
+        &runtime.engine_host(),
+        job,
+        1,
+        Utc::now(),
+        Some(input),
+        None,
+    )
+    .expect("insert run");
     bind_tasks(runtime, task_ids, &run.run_id);
     run
 }

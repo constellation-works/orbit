@@ -53,7 +53,7 @@ fn a_claimed_before_landing_review_reads_the_current_implementers_summary() {
         );
         // Exercise the real compound-step checkpoint boundary, which puts
         // implement_one in the run state before review admission.
-        leaf.bound
+        orbit_core::test_support::EngineHost::new(&leaf.bound)
             .checkpoint_step(
                 &leaf.leaf,
                 0,
@@ -302,7 +302,7 @@ fn before_landing_hosts_capture_landing_review_only_for_listed_machines() {
             Some("test"),
         )
         .expect("the owner submits its own delivery");
-    let input = owner
+    let input = orbit_core::test_support::EngineHost::new(owner)
         .get_job_run(&own.run_id)
         .unwrap()
         .unwrap()
@@ -363,7 +363,7 @@ fn a_review_pool_owner_captures_one_reviewer_crew_per_claim() {
 
 /// The owner's probe as `machine`'s trusted SSH session asks it.
 fn probe_as(owner: &OrbitRuntime, machine: &str) -> Value {
-    owner
+    orbit_core::test_support::EngineHost::new(owner)
         .run_tool_with_context(
             "orbit.drain.probe",
             json!({

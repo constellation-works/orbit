@@ -16,7 +16,7 @@ const REPLICA: &str = "[workflow.tag_instructions.no-diff-expected]\nimplement =
 
 fn implement_tags(host: &OrbitRuntime, task: &str) -> Vec<String> {
     Dispatch::tag_instructions_for_activity(
-        host,
+        &orbit_core::test_support::EngineHost::new(host),
         "jrun-tag-instructions",
         "agent_implement",
         &json!({ "task_id": task }),
@@ -205,7 +205,7 @@ fn a_pull_captures_the_shipping_modes_authoritative_tag_instructions() {
             )
             .unwrap();
         let received = Dispatch::tag_instructions_for_activity(
-            &bound,
+            &orbit_core::test_support::EngineHost::new(&bound),
             &leaf,
             "agent_implement",
             &json!({"task_id": claim.task_id}),

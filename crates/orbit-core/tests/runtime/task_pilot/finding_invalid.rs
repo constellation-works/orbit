@@ -192,7 +192,7 @@ impl Workspace {
     /// The report an implementer writes after judging the prompt it was given.
     fn implementer_report(&self, task: &Task) -> FindingInvalidReport {
         let prompt = Dispatch::task_context_for_agent_input(
-            &self.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
             "jrun-fixture",
             "implement",
             &json!({ "task_id": task.id }),
@@ -255,8 +255,12 @@ fn implementer_rejection_binds_the_material_its_prompt_carried() {
         )
         .unwrap();
     let history = workspace.runtime.get_task_history(&task.id).unwrap();
-    let error = RunLifecycle::reject_invalid_finding(&workspace.runtime, &report, "main")
-        .expect_err("a stale report refuses");
+    let error = RunLifecycle::reject_invalid_finding(
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
+        &report,
+        "main",
+    )
+    .expect_err("a stale report refuses");
     assert!(error.to_string().contains("material_changed"), "{error}");
     assert_eq!(
         workspace.runtime.get_task(&task.id).unwrap().status,
@@ -269,7 +273,12 @@ fn implementer_rejection_binds_the_material_its_prompt_carried() {
 
     // A report for the current prompt rejects, and replays without a write.
     let report = workspace.implementer_report(&workspace.runtime.get_task(&task.id).unwrap());
-    RunLifecycle::reject_invalid_finding(&workspace.runtime, &report, "main").unwrap();
+    RunLifecycle::reject_invalid_finding(
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
+        &report,
+        "main",
+    )
+    .unwrap();
     assert_eq!(
         workspace.runtime.get_task(&task.id).unwrap().status,
         TaskStatus::Rejected
@@ -285,7 +294,12 @@ fn implementer_rejection_binds_the_material_its_prompt_carried() {
         Some(report.finding_fingerprint.as_str())
     );
     let history = workspace.runtime.get_task_history(&task.id).unwrap();
-    RunLifecycle::reject_invalid_finding(&workspace.runtime, &report, "main").unwrap();
+    RunLifecycle::reject_invalid_finding(
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
+        &report,
+        "main",
+    )
+    .unwrap();
     assert_eq!(
         workspace.runtime.get_task_history(&task.id).unwrap(),
         history
@@ -300,8 +314,12 @@ fn implementer_rejection_never_reaches_a_task_outside_its_run() {
         let report = workspace.implementer_report(&task);
         workspace.set_status(&task.id, status);
         let history = workspace.runtime.get_task_history(&task.id).unwrap();
-        let error = RunLifecycle::reject_invalid_finding(&workspace.runtime, &report, "main")
-            .expect_err("a task outside its run refuses");
+        let error = RunLifecycle::reject_invalid_finding(
+            &orbit_core::test_support::EngineHost::new(&workspace.runtime),
+            &report,
+            "main",
+        )
+        .expect_err("a task outside its run refuses");
         assert!(
             error.to_string().contains("status_changed"),
             "{status}: {error}"

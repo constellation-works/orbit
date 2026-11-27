@@ -93,7 +93,7 @@ fn owed_task(fixture: &Fixture) -> String {
         }),
     );
     HostEnvironment::admit_owed_criteria(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &id,
         "run-fixture",
         &[OwedCriterion {

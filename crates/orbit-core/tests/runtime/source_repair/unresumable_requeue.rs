@@ -110,7 +110,22 @@ pub(super) fn candidate_resume_identity_refusals_name_their_predicate() {
         requeue(&mut f);
         break_identity(&mut f, predicate);
         let (run, setup) = next(&f);
-        let refused = execute_deterministic_action(&f.runtime,"candidate_resume",&json!({}),&json!({"job_run_id":run.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"],"prior_job_run_id":setup["prior_job_run_id"]}),false,&HashMap::new(),None).unwrap_err();
+        let refused = execute_deterministic_action(
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
+            "candidate_resume",
+            &json!({}),
+            &json!({
+                "job_run_id":run.run_id,
+                "task_ids":[f.task],
+                "workspace_path":setup["workspace_path"],
+                "base_sha":setup["base_sha"],
+                "prior_job_run_id":setup["prior_job_run_id"]
+            }),
+            false,
+            &HashMap::new(),
+            None,
+        )
+        .unwrap_err();
         assert!(
             refused.to_string().contains(&format!(
                 "not an exact owner-local single-task execution: {predicate} ("

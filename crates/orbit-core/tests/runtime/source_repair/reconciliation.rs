@@ -23,7 +23,7 @@ fn plan(f: &Fixture, value: &str) {
 }
 
 fn append(f: &Fixture, event: &str, value: Value) {
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -127,7 +127,7 @@ fn count_worker_starts(marker: &std::path::Path) {
 fn legacy_plan_correction_gets_one_fresh_same_pr_authorization() {
     for (status, missing) in [(TaskStatus::Blocked, ""), (TaskStatus::Review, PLACEHOLDER)] {
         let (f, _, _) = super::inline_publication::supported_incident();
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 &f.task,
                 TaskAutomationUpdate {
@@ -502,8 +502,7 @@ fn reconciliation_refuses_missing_ambiguous_and_unreadable_run_evidence() {
                 if case == "unreadable" {
                     input["__source_repair"] = json!({"binding":{}});
                 }
-                let mut run = f
-                    .runtime
+                let mut run = orbit_core::test_support::EngineHost::new(&f.runtime)
                     .insert_job_run(
                         "task_pr_pipeline",
                         2,

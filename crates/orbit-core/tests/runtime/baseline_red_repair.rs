@@ -64,7 +64,12 @@ fn held_task_with(
             ..Default::default()
         })
         .unwrap();
-    RunLifecycle::apply_task_automation_update(&fixture.runtime, &task.id, update).unwrap();
+    RunLifecycle::apply_task_automation_update(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        &task.id,
+        update,
+    )
+    .unwrap();
     assert_eq!(
         fixture.runtime.get_task(&task.id).unwrap().status,
         TaskStatus::Backlog,
@@ -295,7 +300,7 @@ fn diagnostic_fingerprints_file_one_repair_and_link_later_holds() {
     let base_sha = git(&fixture.repo, &["rev-parse", "main"]);
     let make_hold = |command: &str| {
         let check = verify_base_failure(
-            &fixture.runtime,
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
             &fixture.repo,
             &base_sha,
             command,
@@ -530,7 +535,11 @@ fn a_cached_green_base_lifts_a_hold_without_filing_its_repair() {
     git(&fixture.repo, &["checkout", "--quiet", "candidate"]);
     assert!(
         matches!(
-            orbit_engine::baseline_hold_status(&fixture.runtime, &fixture.repo, &hold),
+            orbit_engine::baseline_hold_status(
+                &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+                &fixture.repo,
+                &hold
+            ),
             BaselineHoldStatus::Lifted(_)
         ),
         "the passing tip lifts the hold"
@@ -594,7 +603,7 @@ fn holds_and_verdicts_written_as_notes_alone_still_hold_and_lift() {
     assert_eq!(hold_entry(&note_held).decision, None);
     let note_lifted = held_task_with(&fixture, "Note-only lifted hold", note_only("jrun-lifted"));
     RunLifecycle::apply_task_automation_update(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &note_lifted,
         orbit_engine::TaskAutomationUpdate {
             append_history: vec![TaskHistoryEntry {

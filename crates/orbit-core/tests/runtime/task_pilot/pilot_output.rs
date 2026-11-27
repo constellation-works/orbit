@@ -281,8 +281,7 @@ fn a_run_prepared_before_the_proof_existed_applies_its_result_without_one() {
     let workspace = Workspace::new();
     // Applied directly: the fixture's `action` fills in a proof.
     let apply = |prepared: &Value, task: &Task| {
-        workspace
-            .runtime
+        orbit_core::test_support::EngineHost::new(&workspace.runtime)
             .run_deterministic(
                 "apply_task_pilot_results",
                 &json!({}),

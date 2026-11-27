@@ -109,7 +109,7 @@ fn detached_replay_recaptures_automatic_crews_and_preserves_explicit_choices() {
                 not_before: Utc::now() + Duration::hours(1),
                 run_id: source.run_id.clone(),
             };
-            runtime
+            orbit_core::test_support::EngineHost::new(&runtime)
                 .apply_task_automation_update(
                     &task.id,
                     TaskAutomationUpdate {
@@ -118,7 +118,7 @@ fn detached_replay_recaptures_automatic_crews_and_preserves_explicit_choices() {
                     },
                 )
                 .unwrap();
-            runtime
+            orbit_core::test_support::EngineHost::new(&runtime)
                 .apply_task_automation_update(
                     &task.id,
                     TaskAutomationUpdate {

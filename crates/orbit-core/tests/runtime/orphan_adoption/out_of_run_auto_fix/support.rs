@@ -663,7 +663,9 @@ pub(in super::super) fn apply_update(
     task: &str,
     update: TaskAutomationUpdate,
 ) {
-    runtime.apply_task_automation_update(task, update).unwrap();
+    orbit_core::test_support::EngineHost::new(runtime)
+        .apply_task_automation_update(task, update)
+        .unwrap();
 }
 
 /// A history entry of `event`, recorded now by the system, carrying `note`.

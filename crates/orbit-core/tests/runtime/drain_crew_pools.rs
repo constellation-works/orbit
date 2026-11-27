@@ -151,7 +151,7 @@ impl LocalDrainFixture {
     }
 
     fn settle_leaf(&self, leaf_run_id: &str, task: &Task) {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 &task.id,
                 TaskAutomationUpdate {

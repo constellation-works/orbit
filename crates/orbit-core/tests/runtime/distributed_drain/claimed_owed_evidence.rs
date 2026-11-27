@@ -740,7 +740,7 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
         "workspace_path": resumed.worktree, "base": "main", "base_sync": "local",
         "base_sha": resumed.base_sha, "mode": "pr", "skipped_no_diff_expected": false,
     });
-    let admitted = owner
+    let admitted = orbit_core::test_support::EngineHost::new(&owner)
         .run_deterministic(
             "review_gate_admit",
             &json!({}),
@@ -751,7 +751,7 @@ fn owner_fulfilment_resumes_the_held_mac_candidate_without_rework() {
     assert_eq!(admitted["decision"], "evidence_received", "{admitted}");
     assert_eq!(admitted["held_attempt_id"], hold.attempt_id.as_str());
     gate_input["admission"] = admitted;
-    let settled = owner
+    let settled = orbit_core::test_support::EngineHost::new(&owner)
         .run_deterministic(
             "review_gate_settle",
             &json!({}),
@@ -897,7 +897,7 @@ pub(super) fn owner_resumes(leaf: &ReviewedLeaf, timing: ReviewTiming) -> Resume
 #[cfg(unix)]
 pub(super) fn owner_action(owner: &OrbitRuntime, name: &str, input: &Value) -> Value {
     orbit_engine::execute_deterministic_action(
-        owner,
+        &orbit_core::test_support::EngineHost::new(owner),
         name,
         &json!({}),
         input,
@@ -1121,7 +1121,7 @@ fn a_before_landing_evidence_hold_settles_once_matching_evidence_arrives() {
         "base_sha": resumed.base_sha, "mode": "pr", "skipped_no_diff_expected": false,
         "before_landing": true,
     });
-    let admitted = owner
+    let admitted = orbit_core::test_support::EngineHost::new(&owner)
         .run_deterministic(
             "review_gate_admit",
             &json!({}),
@@ -1134,7 +1134,7 @@ fn a_before_landing_evidence_hold_settles_once_matching_evidence_arrives() {
     assert_eq!(admitted["timing"], "before-landing", "{admitted}");
     assert_eq!(admitted["held_attempt_id"], hold.attempt_id.as_str());
     gate_input["admission"] = admitted;
-    let settled = owner
+    let settled = orbit_core::test_support::EngineHost::new(&owner)
         .run_deterministic(
             "review_gate_settle",
             &json!({}),

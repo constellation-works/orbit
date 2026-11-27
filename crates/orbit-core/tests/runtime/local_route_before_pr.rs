@@ -133,7 +133,7 @@ fn install_local_delivery_plugin(runtime: &OrbitRuntime) -> OrbitRuntime {
 }
 
 fn backlog(runtime: &OrbitRuntime, input: Value) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -225,7 +225,7 @@ fn assert_held(runtime: &OrbitRuntime, task: &str, source: &str) {
     assert_eq!(admitted(&as_pr), vec![task.to_string()], "{as_pr}");
 
     let drain = running_drain(runtime);
-    let wave = runtime
+    let wave = orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),
@@ -434,7 +434,7 @@ fn local_ship_review_holds_local_delivery_but_allows_plugin_route() {
     let plugin_task = seed_with_tags(&local, "plugin delivery", &["delivery:routeproof_delivery"]);
     let local_task = seed(&local, "default local delivery");
 
-    let route = local
+    let route = orbit_core::test_support::EngineHost::new(&local)
         .run_deterministic(
             "resolve_delivery_job",
             &json!({}),
@@ -443,7 +443,7 @@ fn local_ship_review_holds_local_delivery_but_allows_plugin_route() {
         )
         .expect("resolve plugin delivery route");
     assert_eq!(route["job_name"], "routeproof_delivery", "{route}");
-    let local_route = local
+    let local_route = orbit_core::test_support::EngineHost::new(&local)
         .run_deterministic(
             "resolve_delivery_job",
             &json!({}),

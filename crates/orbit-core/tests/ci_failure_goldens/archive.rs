@@ -49,7 +49,7 @@ fn automatic_pilot_archive_reports_the_status_actor_without_rewriting_history() 
     assert!(output.status.success(), "{output:?}");
     let first = file(&runtime, vec![failure(DOWNLOAD, 0, &commits[0])]);
     let owner = first["filed"][0]["task_id"].as_str().unwrap();
-    let prepared = runtime
+    let prepared = orbit_core::test_support::EngineHost::new(&runtime)
         .run_deterministic(
             "prepare_task_pilot",
             &json!({}),
@@ -67,7 +67,8 @@ fn automatic_pilot_archive_reports_the_status_actor_without_rewriting_history() 
         .unwrap();
     assert!(tree.status.success());
     let evidence = format!("The registry finding is resolved by commit {}.", commits[2]);
-    let applied = runtime.run_deterministic("apply_task_pilot_results", &json!({}), &json!({
+    let applied = orbit_core::test_support::EngineHost::new(&runtime)
+        .run_deterministic("apply_task_pilot_results", &json!({}), &json!({
         "workspace_path": repo, "prepared": prepared,
         "ci_sweep_filing": first["filed"][0], "promotion_authorized": true,
         "results": [{"partition_index": 0, "task_ids": [owner],

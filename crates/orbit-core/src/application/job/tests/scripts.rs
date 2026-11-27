@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use orbit_engine::ScriptStepRequest;
 use orbit_types::workflow::activity_job::{ScriptGrant, ScriptGrantLimits};
 
+use crate::application::contracts::EngineHostPort;
 use crate::application::job::scripts::execution::{script_env, script_launcher_env_from};
 
 fn env_value<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -230,7 +231,7 @@ fn attach_script_files_attaches_verified_outputs_and_refuses_changed_bytes() {
     };
     let attach = |input: serde_json::Value| {
         Dispatch::run_deterministic(
-            &runtime,
+            &runtime.engine_host(),
             "attach_script_files",
             &json!({}),
             &input,

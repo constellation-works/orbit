@@ -9,6 +9,7 @@ use orbit_types::workflow::ClaimFailureClass;
 use orbit_types::workflow::handoff::{HandoffValidationLog, TaskHandoff};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 
 use super::{refusal, settlement};
 
@@ -171,7 +172,7 @@ impl OrbitRuntime {
                 .map(|()| report.failures.clone())
             } else {
                 orbit_engine::verify_claimed_known_red(
-                    self,
+                    &self.engine_host(),
                     &self.paths().repo_root,
                     &orbit_engine::ClaimedKnownRed {
                         base_branch: &ship.base_branch,

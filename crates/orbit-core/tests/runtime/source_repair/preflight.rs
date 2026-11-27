@@ -31,7 +31,7 @@ fn invalid_plans_refuse_before_any_admission_effect() {
     for status in [TaskStatus::Blocked, TaskStatus::Review] {
         for plan in ["", PLACEHOLDER] {
             let (f, _, _) = super::inline_publication::supported_incident();
-            f.runtime
+            orbit_core::test_support::EngineHost::new(&f.runtime)
                 .apply_task_automation_update(
                     &f.task,
                     TaskAutomationUpdate {

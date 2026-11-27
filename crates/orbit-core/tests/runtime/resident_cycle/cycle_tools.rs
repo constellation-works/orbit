@@ -48,8 +48,7 @@ fn the_cycle_tool_list_follows_the_rights_its_grant_holds() {
         fx.grant(&mandate, rights);
         let run = fx.cycle_run(&mandate, &format!("cycle-tools-{}", rights.join("-")));
         fx.begin_cycle(&run, Utc::now());
-        let resolved = fx
-            .runtime
+        let resolved = orbit_core::test_support::EngineHost::new(&fx.runtime)
             .resolve_activity_tool_denials(
                 Some(&run),
                 &[],
@@ -91,7 +90,7 @@ fn a_cycle_without_a_live_grant_receives_neither_guarded_tool() {
 
     let run = fx.cycle_run(&mandate, "cycle-tools-finished");
     let granted = |activity| {
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .resolve_activity_tool_denials(Some(&run), &[], activity, &cycle_disallow_list())
             .unwrap()
             .resident_tools

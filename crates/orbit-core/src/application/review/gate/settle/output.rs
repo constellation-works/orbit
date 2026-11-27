@@ -11,6 +11,7 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::review::gate::context::GateContext;
 use crate::application::review::gate::judgement::review_fixes_section;
 
@@ -90,7 +91,7 @@ pub(super) fn settled_outcome(
                     && hold.candidate == certificate.final_candidate
                     && hold.task_meaning_digest == certificate.task_meaning_digest
             }) {
-                runtime.apply_task_automation_update(
+                runtime.engine_host().apply_task_automation_update(
                     task_id,
                     TaskAutomationUpdate {
                         expected_status: Some(orbit_types::task::TaskStatus::InProgress),

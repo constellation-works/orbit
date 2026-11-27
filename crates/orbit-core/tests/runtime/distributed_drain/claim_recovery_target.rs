@@ -212,7 +212,7 @@ fn recover_through_tool(
         "reason": reason,
         "request_key": request_key,
     });
-    pair.wire.owner.run_tool_with_context(
+    orbit_core::test_support::EngineHost::new(&pair.wire.owner).run_tool_with_context(
         "orbit.task.recover_claim",
         input,
         ToolContext {

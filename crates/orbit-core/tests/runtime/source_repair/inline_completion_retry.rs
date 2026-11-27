@@ -193,7 +193,7 @@ fn supported_retry_refuses_source_audits_and_mutation_history() {
         if case == "source audit" {
             audit_started(&f, &retry, "implement");
         } else {
-            f.runtime
+            orbit_core::test_support::EngineHost::new(&f.runtime)
                 .apply_task_automation_update(
                     &f.task,
                     TaskAutomationUpdate {

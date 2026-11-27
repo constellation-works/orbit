@@ -27,7 +27,7 @@ fn assess(pair: &Pair, typed: bool) {
     let owner = &pair.wire.owner;
     let task = &pair.tasks[0];
     let action = |name: &str, input: Value| {
-        owner
+        orbit_core::test_support::EngineHost::new(owner)
             .run_deterministic(name, &json!({}), &input, ToolContext::default())
             .unwrap()
     };
@@ -131,7 +131,9 @@ fn a_claimed_handoff_owing_a_typed_criterion_lands_in_review() {
     assert!(settled["error"].is_null(), "{settled}");
     let owner = &pair.wire.owner;
     let (handoff_id, _) = authorize_landing(&pair, &delivered);
-    ReviewGate::record_handoff_landing(owner, &orbit_engine::HandoffLandingUpdate {
+    ReviewGate::record_handoff_landing(
+        &orbit_core::test_support::EngineHost::new(owner),
+        &orbit_engine::HandoffLandingUpdate {
         handoff_id,
         step: orbit_engine::HandoffLandingStep::Complete,
         observed: Some(delivered.candidate.clone()),
@@ -226,7 +228,7 @@ fn a_repair_omitting_criteria_preserves_the_prior_operator_obligation() {
         let (first_id, _) = authorize_landing(&pair, &first);
         if outcome == "owed" {
             ReviewGate::record_handoff_landing(
-                owner,
+                &orbit_core::test_support::EngineHost::new(owner),
                 &orbit_engine::HandoffLandingUpdate {
                     handoff_id: first_id,
                     step: orbit_engine::HandoffLandingStep::Stop { repairable: true },
@@ -237,7 +239,9 @@ fn a_repair_omitting_criteria_preserves_the_prior_operator_obligation() {
             .unwrap();
             assert_eq!(pair.owner_status(&first.task_id), "in-progress");
         } else {
-            ReviewGate::record_handoff_landing(owner, &orbit_engine::HandoffLandingUpdate {
+            ReviewGate::record_handoff_landing(
+                &orbit_core::test_support::EngineHost::new(owner),
+                &orbit_engine::HandoffLandingUpdate {
                 handoff_id: first_id,
                 step: orbit_engine::HandoffLandingStep::Complete,
                 observed: Some(first.candidate.clone()),
@@ -287,7 +291,9 @@ fn a_repair_omitting_criteria_preserves_the_prior_operator_obligation() {
         let settled = pair.pass(&drain);
         assert!(settled["error"].is_null(), "{settled}");
         let (handoff_id, _) = authorize_landing(&pair, &replacement);
-        ReviewGate::record_handoff_landing(owner, &orbit_engine::HandoffLandingUpdate {
+        ReviewGate::record_handoff_landing(
+            &orbit_core::test_support::EngineHost::new(owner),
+            &orbit_engine::HandoffLandingUpdate {
             handoff_id,
             step: orbit_engine::HandoffLandingStep::Complete,
             observed: Some(replacement.candidate.clone()),
@@ -307,7 +313,7 @@ fn a_repair_omitting_criteria_preserves_the_prior_operator_obligation() {
         if outcome != "met" {
             record_measurement(&pair, &first.task_id, "met");
             let completed = orbit_engine::execute_deterministic_action(
-                owner,
+                &orbit_core::test_support::EngineHost::new(owner),
                 "task_complete",
                 &json!({}),
                 &json!({"run_id": replacement.run_id, "task_id": first.task_id}),

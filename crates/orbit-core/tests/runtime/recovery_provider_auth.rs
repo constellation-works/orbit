@@ -52,8 +52,7 @@ fn auth_card(fx: &Fixture) -> Value {
 }
 
 fn purpose_draw(fx: &Fixture, only_credits: bool) -> String {
-    let run = fx
-        .runtime
+    let run = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run("fixture_draw", 1, Utc::now(), Some(json!({})), None)
         .unwrap();
     fx.runtime
@@ -62,7 +61,7 @@ fn purpose_draw(fx: &Fixture, only_credits: bool) -> String {
             &PipelineState::new(run.run_id.clone(), run.job_id, json!({})),
         )
         .unwrap();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .agent_crew_config_for_input(&json!({
             "job_run_id":run.run_id, "crew_config_key":"workflow.purpose_crews.failure_recovery",
             "allowed_crews": if only_credits { vec!["credits"] } else { vec!["credits", "sol"] },
@@ -82,8 +81,7 @@ fn success(
     host: Option<&str>,
     started: DateTime<Utc>,
 ) {
-    let run = fx
-        .runtime
+    let run = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run("fixture_success", 1, Utc::now(), None, None)
         .unwrap();
     let mut stored = fx.runtime.show_job_run(&run.run_id).unwrap();
@@ -124,7 +122,7 @@ fn recovery_failure_is_observed_and_cleared_only_by_its_account_and_host() {
     let run = fx.admit(&task, "sol");
     let before_recovery = Utc::now() - Duration::minutes(1);
     let primary_at = Utc::now();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .complete_job_run_step(
             &run,
             &JobRunStepParams {
@@ -172,7 +170,7 @@ fn recovery_failure_is_observed_and_cleared_only_by_its_account_and_host() {
         )
     };
     let outcome = orbit_engine::activity_job::cli_runner::run_cli_backend(
-        &fx.runtime,
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
         &spec,
         "final_recovery",
         &run,
@@ -182,7 +180,7 @@ fn recovery_failure_is_observed_and_cleared_only_by_its_account_and_host() {
     )
     .unwrap();
     assert!(!outcome.success);
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .finalize_job_run(&run, JobRunState::Failed, Utc::now(), Some(1))
         .unwrap();
     let primary = fx.runtime.show_job_run(&run).unwrap();
@@ -239,13 +237,12 @@ fn recovery_failure_is_observed_and_cleared_only_by_its_account_and_host() {
 cat > /dev/null
 printf '%s\n' '{"type":"result","is_error":false,"result":"{\"schemaVersion\":1,\"status\":\"success\",\"result\":{},\"error\":null}"}'
 "#).unwrap();
-    let next = fx
-        .runtime
+    let next = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run("recovery_probe_fixture", 1, Utc::now(), None, None)
         .unwrap();
     assert!(
         orbit_engine::activity_job::cli_runner::run_cli_backend(
-            &fx.runtime,
+            &orbit_core::test_support::EngineHost::new(&fx.runtime),
             &spec,
             "final_recovery",
             &next.run_id,

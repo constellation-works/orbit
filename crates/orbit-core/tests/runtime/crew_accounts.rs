@@ -243,7 +243,7 @@ fn mixed_account_auth_failure(run_crew: &str, account: Option<&str>, excluded: &
 
     // Remove the task hold from admission: later tasks must still avoid
     // the failing account because its outage is stored on this host.
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task,
             TaskAutomationUpdate {
@@ -283,7 +283,7 @@ fn a_hold_stored_before_accounts_were_named_applies_as_written() {
             Some(legacy),
         ),
     ] {
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {

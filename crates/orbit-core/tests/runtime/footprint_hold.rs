@@ -82,7 +82,7 @@ fn busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
     // Both tasks claim `file:feature.txt`; the holder in review keeps it.
     let task = fx.task("fixture");
     let holder = fx.task("fixture");
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &holder,
             TaskAutomationUpdate {
@@ -98,8 +98,7 @@ fn busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
         "footprint_deferred": true,
         "footprint_wait_seconds": 0,
     });
-    let run = fx
-        .runtime
+    let run = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input.clone()), None)
         .unwrap();
     fx.runtime
@@ -108,7 +107,7 @@ fn busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
             &PipelineState::new(run.run_id.clone(), run.job_id.clone(), input),
         )
         .unwrap();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task,
             TaskAutomationUpdate {
@@ -153,7 +152,7 @@ fn busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
     assert_eq!(deferred, [orbit_store::contract::FailureClass::Deferred]);
 
     let replay_count = fx.runtime.get_task_history(&task).unwrap().len();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .finalize_job_run(&run.run_id, JobRunState::Held, Utc::now(), Some(1))
         .unwrap();
     assert_eq!(
@@ -163,7 +162,7 @@ fn busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
     );
 
     // Once the holder releases, a later admission takes the footprint.
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &holder,
             TaskAutomationUpdate {
@@ -172,8 +171,7 @@ fn busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
             },
         )
         .unwrap();
-    let next = fx
-        .runtime
+    let next = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run(
             "task_pr_pipeline",
             1,
@@ -186,8 +184,12 @@ fn busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
             None,
         )
         .unwrap();
-    Dispatch::acquire_deferred_footprint(&fx.runtime, &next.run_id, "agent_review_repair")
-        .expect("the footprint is taken once the holder releases it");
+    Dispatch::acquire_deferred_footprint(
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
+        &next.run_id,
+        "agent_review_repair",
+    )
+    .expect("the footprint is taken once the holder releases it");
 }
 
 #[test]
@@ -203,7 +205,7 @@ fn stopped_run_waiting_for_its_footprint_is_not_held() {
     );
     let task = fx.task("fixture");
     let holder = fx.task("fixture");
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &holder,
             TaskAutomationUpdate {
@@ -214,8 +216,7 @@ fn stopped_run_waiting_for_its_footprint_is_not_held() {
         .unwrap();
     // The run is not `Running`, so the wait ends on the stopped-run check
     // before any sleep, even with a long wait bound.
-    let run = fx
-        .runtime
+    let run = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run(
             "task_pr_pipeline",
             1,
@@ -228,9 +229,12 @@ fn stopped_run_waiting_for_its_footprint_is_not_held() {
             None,
         )
         .unwrap();
-    let error =
-        Dispatch::acquire_deferred_footprint(&fx.runtime, &run.run_id, "agent_review_repair")
-            .unwrap_err();
+    let error = Dispatch::acquire_deferred_footprint(
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
+        &run.run_id,
+        "agent_review_repair",
+    )
+    .unwrap_err();
     assert!(
         matches!(error, DispatchError::CliInvocationPermanent(_)),
         "a stopped run keeps the permanent failure, got: {error}"
@@ -263,7 +267,7 @@ fn an_exhausted_footprint_wait_keeps_a_stopped_run_permanent() {
     );
     let task = fx.task("fixture");
     let holder = fx.task("fixture");
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &holder,
             TaskAutomationUpdate {
@@ -273,7 +277,7 @@ fn an_exhausted_footprint_wait_keeps_a_stopped_run_permanent() {
         )
         .unwrap();
     let insert = || {
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .insert_job_run(
                 "task_pr_pipeline",
                 1,
@@ -290,8 +294,12 @@ fn an_exhausted_footprint_wait_keeps_a_stopped_run_permanent() {
     };
 
     let stopped = insert();
-    let error = Dispatch::acquire_deferred_footprint(&fx.runtime, &stopped, "agent_review_repair")
-        .unwrap_err();
+    let error = Dispatch::acquire_deferred_footprint(
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
+        &stopped,
+        "agent_review_repair",
+    )
+    .unwrap_err();
     assert!(
         matches!(error, DispatchError::CliInvocationPermanent(_)),
         "a stopped run with a spent budget keeps the permanent failure, got: {error}"
@@ -307,11 +315,15 @@ fn an_exhausted_footprint_wait_keeps_a_stopped_run_permanent() {
     );
 
     let running = insert();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .mark_job_run_running(&running, Utc::now(), std::process::id())
         .unwrap();
-    let error = Dispatch::acquire_deferred_footprint(&fx.runtime, &running, "agent_review_repair")
-        .unwrap_err();
+    let error = Dispatch::acquire_deferred_footprint(
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
+        &running,
+        "agent_review_repair",
+    )
+    .unwrap_err();
     assert!(
         matches!(error, DispatchError::FootprintUnavailable(_)),
         "a running run with a spent budget is held, got: {error}"
@@ -325,7 +337,7 @@ fn an_exhausted_footprint_wait_keeps_a_stopped_run_permanent() {
         Some(HeldFailure::FootprintUnavailable),
     );
 
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &holder,
             TaskAutomationUpdate {
@@ -334,8 +346,12 @@ fn an_exhausted_footprint_wait_keeps_a_stopped_run_permanent() {
             },
         )
         .unwrap();
-    Dispatch::acquire_deferred_footprint(&fx.runtime, &running, "agent_review_repair")
-        .expect("the running run takes the footprint once the holder releases it");
+    Dispatch::acquire_deferred_footprint(
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
+        &running,
+        "agent_review_repair",
+    )
+    .expect("the running run takes the footprint once the holder releases it");
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {
@@ -487,7 +503,7 @@ fn step_recovery_busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
         ));
         let task = fx.task("fixture");
         let holder = fx.task("fixture");
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {
@@ -499,7 +515,7 @@ fn step_recovery_busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
                 },
             )
             .unwrap();
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &holder,
                 TaskAutomationUpdate {
@@ -574,8 +590,7 @@ fn step_recovery_busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
             "footprint_deferred": true,
             "footprint_wait_seconds": 0,
         });
-        let run = fx
-            .runtime
+        let run = orbit_core::test_support::EngineHost::new(&fx.runtime)
             .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input.clone()), None)
             .unwrap();
         fx.runtime
@@ -584,7 +599,7 @@ fn step_recovery_busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
                 &PipelineState::new(run.run_id.clone(), run.job_id.clone(), input),
             )
             .unwrap();
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {
@@ -792,8 +807,7 @@ fn non_footprint_and_stopped_run_recovery_dispatch_errors_preserve_existing_outc
         "task_ids": [task],
         "crew": "fixture",
     });
-    let run = fx
-        .runtime
+    let run = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input.clone()), None)
         .unwrap();
     fx.runtime
@@ -802,7 +816,7 @@ fn non_footprint_and_stopped_run_recovery_dispatch_errors_preserve_existing_outc
             &PipelineState::new(run.run_id.clone(), run.job_id.clone(), input),
         )
         .unwrap();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task,
             TaskAutomationUpdate {
@@ -834,7 +848,7 @@ fn non_footprint_and_stopped_run_recovery_dispatch_errors_preserve_existing_outc
     // 2. A run stopped while step recovery waits for its deferred footprint
     //    returns the permanent run-stopped refusal, so the run keeps the
     //    original step failure rather than holding.
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &holder,
             TaskAutomationUpdate {
@@ -849,8 +863,7 @@ fn non_footprint_and_stopped_run_recovery_dispatch_errors_preserve_existing_outc
         "footprint_deferred": true,
         "footprint_wait_seconds": 3600,
     });
-    let stopped_run = fx
-        .runtime
+    let stopped_run = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run(
             "task_pr_pipeline",
             1,
@@ -869,7 +882,7 @@ fn non_footprint_and_stopped_run_recovery_dispatch_errors_preserve_existing_outc
             ),
         )
         .unwrap();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &stopped_task,
             TaskAutomationUpdate {
@@ -914,7 +927,7 @@ fn non_footprint_and_stopped_run_recovery_dispatch_errors_preserve_existing_outc
         stopped_input,
         &stopped_run.run_id,
         audit.clone(),
-        &fx.runtime,
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
         None,
     )
     .unwrap_err();

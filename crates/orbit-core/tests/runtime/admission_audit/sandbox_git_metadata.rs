@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use orbit_core::adapter::engine_host::EngineHost;
 use orbit_engine::Dispatch;
 use orbit_types::workflow::ExecutorSandboxKind;
 
@@ -71,7 +72,7 @@ fn macos_implementer_worktree_denies_registered_and_linked_git_metadata() {
             Some(ExecutorSandboxKind::MacosSandboxExec),
         );
         for checkout in &checkouts {
-            let sandbox = runtime
+            let sandbox = EngineHost::new(&runtime)
                 .resolve_executor_sandbox(provider, Some("implementer"), Some(checkout))
                 .expect("resolve implementer sandbox")
                 .expect("sandbox");

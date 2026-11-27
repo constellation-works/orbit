@@ -220,8 +220,7 @@ impl Workspace {
 
     /// One scheduled sweep: a fresh job run identity, collection, then filing.
     pub(crate) fn sweep(&self) -> (Value, Result<Value, String>) {
-        let job_run = self
-            .runtime
+        let job_run = orbit_core::test_support::EngineHost::new(&self.runtime)
             .insert_job_run(
                 "ci_failure_sweep_pipeline",
                 1,
@@ -231,7 +230,7 @@ impl Workspace {
             )
             .unwrap();
         let collected = orbit_engine::execute_deterministic_action(
-            &self.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
             "collect_ci_evidence",
             &json!({}),
             &json!({
@@ -247,8 +246,7 @@ impl Workspace {
         )
         .expect("collect CI evidence");
         let evidence = collected["ci_evidence"].clone();
-        let filed = self
-            .runtime
+        let filed = orbit_core::test_support::EngineHost::new(&self.runtime)
             .run_deterministic(
                 "file_ci_failure_tasks",
                 &json!({}),

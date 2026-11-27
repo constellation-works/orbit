@@ -102,7 +102,7 @@ impl Fixture {
 
     /// The crew an activity input resolves to, by model.
     fn model_for(&self, input: Value) -> String {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .agent_crew_config_for_input(&input)
             .unwrap()
             .expect("a crew config")
@@ -418,8 +418,7 @@ fn an_inspecting_draw_falls_through_to_the_next_tier_then_the_default_then_fails
         r#"default_crew = "medium_grok""#,
     ));
     let run = fx.run("task_pilot_pipeline");
-    let error = fx
-        .runtime
+    let error = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .agent_crew_config_for_input(&pilot_input(&run, MEDIUM))
         .expect_err("no crew can inspect");
     assert!(

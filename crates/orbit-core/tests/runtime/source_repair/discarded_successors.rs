@@ -52,7 +52,7 @@ fn discard(f: &Fixture) {
 /// Admit the next owner attempt and run its candidate adoption with the
 /// prior run its worktree setup recorded.
 fn attempt(f: &Fixture) -> (JobRun, Value, Result<Value, String>) {
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -68,7 +68,7 @@ fn attempt(f: &Fixture) -> (JobRun, Value, Result<Value, String>) {
 
 fn adopt(f: &Fixture, run: &JobRun, setup: &Value) -> Result<Value, String> {
     execute_deterministic_action(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         "candidate_resume",
         &json!({}),
         &json!({"job_run_id":run.run_id,"task_ids":[f.task],
@@ -271,7 +271,7 @@ pub(super) fn discard_across_successors_keeps_every_refusal() {
             "publisher_preserved" => {
                 let note = json!({"schema_version":1,"source_run_id":f.source.run_id,
                     "task_digest":"fixture"});
-                f.runtime
+                orbit_core::test_support::EngineHost::new(&f.runtime)
                     .apply_task_automation_update(
                         &f.task,
                         TaskAutomationUpdate {
@@ -295,7 +295,7 @@ pub(super) fn discard_across_successors_keeps_every_refusal() {
             "newer_execution" => {}
             _ => unreachable!(),
         }
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 &f.task,
                 TaskAutomationUpdate {
@@ -306,8 +306,7 @@ pub(super) fn discard_across_successors_keeps_every_refusal() {
             .unwrap();
         let (incoming, setup) = next(&f);
         if case == "newer_execution" {
-            let mut newer = f
-                .runtime
+            let mut newer = orbit_core::test_support::EngineHost::new(&f.runtime)
                 .insert_job_run(
                     "task_pr_pipeline",
                     1,
@@ -353,7 +352,7 @@ pub(super) fn unbound_published_candidate_resume_holds_the_run() {
         json!({"phase":"push","local_sha":f.head,"branch":f.branch}),
     );
     f.runtime.write_run_state(&held.run_id, &state).unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -363,8 +362,7 @@ pub(super) fn unbound_published_candidate_resume_holds_the_run() {
         )
         .unwrap();
 
-    let mut incoming = f
-        .runtime
+    let mut incoming = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run(
             "task_pr_pipeline",
             1,

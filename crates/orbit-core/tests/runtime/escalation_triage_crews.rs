@@ -51,8 +51,7 @@ fn triage_fixture(purposes: &str) -> Fixture {
 
 /// `prepare_escalation_triage` for `subject` over `task`.
 fn prepare(fx: &Fixture, subject: &str, task: &str) -> Value {
-    let prepared = fx
-        .runtime
+    let prepared = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .run_deterministic(
             "prepare_escalation_triage",
             &json!({}),
@@ -184,8 +183,7 @@ fn the_retired_block_subject_is_refused_and_points_at_final_recovery() {
     let fx = triage_fixture("");
     let task = fx.task(&[]);
     fx.escalate(&task);
-    let error = fx
-        .runtime
+    let error = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .run_deterministic(
             "prepare_escalation_triage",
             &json!({}),
@@ -209,8 +207,7 @@ fn partitions_stay_crew_homogeneous_with_at_most_five_tasks_each() {
     let tasks = (0..7)
         .map(|_| held_pilot_warning(&fx, None))
         .collect::<Vec<_>>();
-    let prepared = fx
-        .runtime
+    let prepared = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .run_deterministic(
             "prepare_escalation_triage",
             &json!({}),
@@ -285,7 +282,7 @@ fn a_capped_automatic_pass_reports_its_tail_as_unexamined() {
     fx.runtime.write_run_state(&run.run_id, &state).unwrap();
 
     let prepare_automatic = |max_tasks| {
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .run_deterministic(
                 "prepare_escalation_triage",
                 &json!({}),

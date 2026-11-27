@@ -74,9 +74,12 @@ fn bytes(value: &Value) -> String {
 fn settle_with(fixture: &Fixture, admission: Value) -> Result<Value, DispatchError> {
     let mut input = fixture.input.clone();
     input["admission"] = admission;
-    fixture
-        .runtime
-        .run_deterministic("review_gate_settle", &json!({}), &input, Default::default())
+    orbit_core::test_support::EngineHost::new(&fixture.runtime).run_deterministic(
+        "review_gate_settle",
+        &json!({}),
+        &input,
+        Default::default(),
+    )
 }
 
 /// An admitted gate records the fields job templates and settlement read, in
@@ -218,8 +221,7 @@ fn not_applicable_and_preflight_outputs_keep_their_recorded_shape_scenario() {
 
     let mut input = fixture.input.clone();
     input["preflight"] = json!(true);
-    let preflight = fixture
-        .runtime
+    let preflight = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic("review_gate_admit", &json!({}), &input, Default::default())
         .unwrap();
     let lineage_key = preflight["lineage_key"].as_str().unwrap();
@@ -276,8 +278,7 @@ fn a_run_captured_under_the_deprecated_switches_gates_as_it_captured_scenario() 
             "required_validation_commands": [],
             "captured_at": "2026-10-01T00:00:00Z",
         });
-        let run = fixture
-            .runtime
+        let run = orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .insert_job_run(
                 "task_pr_pipeline",
                 1,

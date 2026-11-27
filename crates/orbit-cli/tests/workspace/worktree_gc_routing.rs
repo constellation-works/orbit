@@ -491,7 +491,7 @@ pub(super) fn seed_archived_run(orbit_dir: &Path, home: &Path, label: &str) -> (
         .expect("archive GC fixture task");
     let task_id = task.id.to_string();
     let now = Utc::now();
-    let run = runtime
+    let run = orbit_core::test_support::EngineHost::new(&runtime)
         .insert_job_run(
             "gc_fixture_pipeline",
             1,
@@ -517,13 +517,13 @@ pub(super) fn seed_archived_run(orbit_dir: &Path, home: &Path, label: &str) -> (
             .expect("GC fixture owner"),
     );
     assert!(
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .mark_job_run_running(&run.run_id, now, owner.id())
             .expect("start GC fixture run")
             .owns_execution()
     );
     assert!(
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .finalize_job_run(&run.run_id, JobRunState::Success, now, Some(0))
             .expect("finish GC fixture run")
     );

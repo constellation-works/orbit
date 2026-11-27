@@ -568,7 +568,12 @@ fn decision_rewrite_repilots_before_dispatch() {
     apply_explicit_pilot_assessment(&workspace, &task, false);
     let runtime = &workspace.runtime;
     runtime.approve_task(&task.id, None, None).unwrap();
-    RunLifecycle::admit_task_for_workflow(runtime, &task.id, "worktree_setup").unwrap();
+    RunLifecycle::admit_task_for_workflow(
+        &orbit_core::test_support::EngineHost::new(runtime),
+        &task.id,
+        "worktree_setup",
+    )
+    .unwrap();
     let running = runtime.get_task(&task.id).unwrap();
     let observed = runtime.final_recovery_revision(&running).unwrap();
     let criteria = ["Verify the retry also covers the failure path."];
@@ -620,9 +625,13 @@ fn decision_rewrite_repilots_before_dispatch() {
     assert_eq!(ready_for_pilot.description, blocked.description);
     assert_eq!(ready_for_pilot.tags, blocked.tags);
 
-    let held = RunLifecycle::admit_task_for_workflow(runtime, &task.id, "worktree_setup")
-        .unwrap_err()
-        .to_string();
+    let held = RunLifecycle::admit_task_for_workflow(
+        &orbit_core::test_support::EngineHost::new(runtime),
+        &task.id,
+        "worktree_setup",
+    )
+    .unwrap_err()
+    .to_string();
     assert!(held.contains("changed after its latest pilot"), "{held}");
     let runs = workspace.jobs.list_job_runs("task_pilot_pipeline").unwrap();
     assert_eq!(runs.len(), 1, "the answer must request a new pilot");
@@ -638,9 +647,13 @@ fn decision_rewrite_repilots_before_dispatch() {
     workspace.record_steps(&run.run_id, &[("prepare", &prepared), ("apply", &applied)]);
     runtime.cancel_job_run(&run.run_id).unwrap();
     assert_eq!(
-        RunLifecycle::admit_task_for_workflow(runtime, &task.id, "worktree_setup")
-            .unwrap()
-            .status,
+        RunLifecycle::admit_task_for_workflow(
+            &orbit_core::test_support::EngineHost::new(runtime),
+            &task.id,
+            "worktree_setup"
+        )
+        .unwrap()
+        .status,
         TaskStatus::InProgress
     );
 }

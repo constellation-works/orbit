@@ -243,7 +243,7 @@ fn record_verified_repair(
     use orbit_common::security::release::sha256_hex;
     use orbit_types::task::TaskArtifact;
     use orbit_types::workflow::{JobRunState, PipelineState};
-    let mut job = runtime
+    let mut job = orbit_core::test_support::EngineHost::new(runtime)
         .insert_job_run(
             "task_pr_pipeline",
             1,
@@ -320,7 +320,7 @@ fn record_verified_repair(
             "human:fixture".into(),
         )
         .unwrap();
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .apply_task_automation_update(
             owner,
             TaskAutomationUpdate {

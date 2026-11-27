@@ -61,8 +61,7 @@ fn resumed_fixture() -> Resumed {
 
     let input =
         json!({"task_ids":[f.task],"base_branch":"main","completion":"review","auto_fix":false});
-    let mut owner = f
-        .runtime
+    let mut owner = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input.clone()), None)
         .unwrap();
     owner.state = JobRunState::Running;
@@ -75,7 +74,7 @@ fn resumed_fixture() -> Resumed {
             &PipelineState::new(owner_id.clone(), owner.job_id.clone(), input.clone()),
         )
         .unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -98,7 +97,8 @@ fn resumed_fixture() -> Resumed {
         "inventory awaiting repair\n",
     )
     .unwrap();
-    f.runtime.apply_task_automation_update(&f.task, TaskAutomationUpdate {
+    orbit_core::test_support::EngineHost::new(&f.runtime)
+        .apply_task_automation_update(&f.task, TaskAutomationUpdate {
         execution_summary: Some("Outcome: success\nChanges: prepare candidate inventory.\nAssessment: host checks required.".into()),
         ..Default::default()
     }).unwrap();
@@ -110,8 +110,7 @@ fn resumed_fixture() -> Resumed {
     stop(&f, &owner_id, JobRunState::Interrupted);
 
     // Generic resume: checkpoints are copied and the worktree keeps naming O.
-    let resumed = f
-        .runtime
+    let resumed = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run(
             "task_pr_pipeline",
             2,
@@ -121,7 +120,7 @@ fn resumed_fixture() -> Resumed {
         )
         .unwrap()
         .run_id;
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .mark_job_run_running(&resumed, Utc::now(), std::process::id())
         .unwrap();
     let mut state = f.runtime.read_run_state(&owner_id).unwrap().unwrap();
@@ -141,7 +140,7 @@ fn resumed_fixture() -> Resumed {
         base_ref: Some("origin/main".into()),
     };
     assert_eq!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .admit_final_recovery(&resumed, &admission)
             .unwrap(),
         FinalRecoveryAdmission::Admitted
@@ -179,13 +178,18 @@ fn resumed_fixture() -> Resumed {
         infrastructure: None,
     };
     assert_eq!(
-        Recovery::apply_final_recovery(&f.runtime, &resumed, &application).unwrap(),
+        Recovery::apply_final_recovery(
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
+            &resumed,
+            &application
+        )
+        .unwrap(),
         FinalRecoveryApplied::Resume
     );
 
     // The commit boundary of the time read only the owner's state.
     let error = execute_deterministic_action(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         "git_commit",
         &json!({}),
         &commit_input,
@@ -214,7 +218,7 @@ fn resumed_fixture() -> Resumed {
     state.record_failure_activity("pr_failure_handoff".into(), "commit".into(), handoff);
     f.runtime.write_run_state(&resumed, &state).unwrap();
     stop(&f, &resumed, JobRunState::Failed);
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -243,7 +247,14 @@ fn resumed_fixture() -> Resumed {
 /// Finalize through the host, then release the fixture's own live PID: a
 /// stopped worker no longer holds it.
 fn stop(f: &Fixture, id: &str, state: JobRunState) {
-    RunLifecycle::finalize_job_run(&f.runtime, id, state, Utc::now(), None).unwrap();
+    RunLifecycle::finalize_job_run(
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
+        id,
+        state,
+        Utc::now(),
+        None,
+    )
+    .unwrap();
     let mut run = f.runtime.show_job_run_observed(id).unwrap();
     run.pid = None;
     published_owner::save_run(f, &run);
@@ -409,8 +420,7 @@ fn stopped_resumed_repair_refuses_unauthenticated_lineage() {
     // Lineage: the resume must reach its owner through stopped same-job runs.
     let run = f.runtime.show_job_run_observed(&source).unwrap();
     let owner = f.runtime.show_job_run_observed(&r.owner).unwrap();
-    let foreign = f
-        .runtime
+    let foreign = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), run.input.clone(), None)
         .unwrap();
     stop(f, &foreign.run_id, JobRunState::Interrupted);
@@ -441,7 +451,7 @@ fn stopped_resumed_repair_refuses_unauthenticated_lineage() {
 
     // A status or binding edit alone grants no authority.
     for rebound in [source.clone(), foreign.run_id.clone()] {
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 &f.task,
                 TaskAutomationUpdate {
@@ -452,7 +462,7 @@ fn stopped_resumed_repair_refuses_unauthenticated_lineage() {
             .unwrap();
         refused_without_writes(f, &source, &binding, "rebound");
     }
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -558,7 +568,7 @@ fn stopped_resumed_repair_refuses_unauthenticated_lineage() {
     );
     f.runtime.write_run_state(&r.owner, &changed).unwrap();
     let error = execute_deterministic_action(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         "candidate_resume",
         &json!({}),
         &json!({"job_run_id":id,"task_ids":[f.task],

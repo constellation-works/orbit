@@ -6,6 +6,7 @@ use orbit_types::workflow::handoff::{LandingAttempt, LandingRetryRequest, Landin
 
 use super::LandingDispatch;
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 
 // Count all attempts, including explicit retries, so neither restarts nor
 // alternating stop reasons replenish the automatic budget for this handoff.
@@ -39,7 +40,7 @@ impl OrbitRuntime {
             return Ok(None);
         };
         let context = self.handoff_landing_context(&attempt.handoff_id)?;
-        if !orbit_engine::landing_wait_gate_cleared(self, &context, gate)? {
+        if !orbit_engine::landing_wait_gate_cleared(&self.engine_host(), &context, gate)? {
             return Ok(None);
         }
         // Reserve atomically with exactly the same identity, authority and

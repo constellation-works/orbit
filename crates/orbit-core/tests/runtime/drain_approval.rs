@@ -280,8 +280,7 @@ impl Workspace {
     /// A successful catalog-backed delivery whose merge checkpoint names `landed`.
     fn record_landed_delivery(&self, task: &Task, landed: &str) {
         self.install_delivery_job();
-        let mut run = self
-            .runtime
+        let mut run = orbit_core::test_support::EngineHost::new(&self.runtime)
             .insert_job_run(
                 "fixture_delivery",
                 1,
@@ -331,8 +330,7 @@ impl Workspace {
     /// The same delivery job, pinned as a present file that does not parse.
     fn pin_malformed_delivery(&self, task: &Task) {
         self.install_delivery_job();
-        let run = self
-            .runtime
+        let run = orbit_core::test_support::EngineHost::new(&self.runtime)
             .insert_job_run(
                 "fixture_delivery",
                 1,
@@ -379,8 +377,7 @@ impl Workspace {
              target: activity:git_commit\n    - id: merge\n      target: activity:git_merge\n",
         )
         .unwrap();
-        let mut run = self
-            .runtime
+        let mut run = orbit_core::test_support::EngineHost::new(&self.runtime)
             .insert_job_run(
                 "fixture_local_delivery",
                 1,
@@ -549,7 +546,7 @@ impl Workspace {
                 }
             }
         }
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .run_deterministic(action, &json!({}), &input, ToolContext::default())
             .map_err(|error| error.to_string())
     }

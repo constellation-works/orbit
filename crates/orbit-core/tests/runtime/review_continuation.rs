@@ -71,12 +71,10 @@ pub(super) fn interrupted_report(fixture: &Fixture) -> Value {
 
 fn fresh_review(fixture: &mut Fixture, hold: &ReviewEvidenceHold) -> String {
     let previous = fixture.runtime.show_job_run(&hold.run_id).unwrap();
-    let next = fixture
-        .runtime
+    let next = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), previous.input, None)
         .unwrap();
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .apply_task_automation_update(
             &fixture.task_id,
             orbit_engine::TaskAutomationUpdate {
@@ -160,7 +158,7 @@ fn the_manifest_advertises_the_deadline_the_host_hands_the_reviewer() {
         let mut fixture = Fixture::new_with_review_minutes(minutes);
         fixture.admit();
         RunLifecycle::mark_job_run_running(
-            &fixture.runtime,
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
             fixture.input["job_run_id"].as_str().unwrap(),
             Utc::now(),
             std::process::id(),
@@ -169,7 +167,7 @@ fn the_manifest_advertises_the_deadline_the_host_hands_the_reviewer() {
         let advertised = manifest(&fixture);
         assert_eq!(advertised.budget.minutes, minutes);
         let bound = ReviewGate::record_reviewer_invocation(
-            &fixture.runtime,
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
             &ReviewerInvocationRequest {
                 run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
                 lineage_key: fixture.input["admission"]["lineage_key"]
@@ -204,7 +202,7 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     let mut fixture = Fixture::new();
     fixture.admit();
     RunLifecycle::mark_job_run_running(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         fixture.input["job_run_id"].as_str().unwrap(),
         Utc::now(),
         std::process::id(),
@@ -225,7 +223,7 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
         event,
     };
     let bound = ReviewGate::record_reviewer_invocation(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &request(ReviewerInvocationEvent::Started),
     )
     .unwrap()
@@ -240,9 +238,13 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     let finished = request(ReviewerInvocationEvent::TimedOut {
         runtime_seconds: ran,
     });
-    ReviewGate::record_reviewer_invocation(&fixture.runtime, &finished).unwrap();
+    ReviewGate::record_reviewer_invocation(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        &finished,
+    )
+    .unwrap();
     ReviewGate::release_review_attempt(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &ReviewReleaseRequest {
             run_id: finished.run_id.clone(),
             lineage_key: finished.lineage_key.clone(),
@@ -284,7 +286,7 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
         partial
     );
     RunLifecycle::apply_task_automation_update(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &fixture.task_id,
         TaskAutomationUpdate {
             status: Some(TaskStatus::Backlog),
@@ -295,7 +297,7 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     )
     .unwrap();
     RunLifecycle::finalize_job_run(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &finished.run_id,
         JobRunState::Failed,
         Utc::now(),
@@ -351,14 +353,12 @@ fn start_fresh_run(fixture: &mut Fixture) {
         .runtime
         .show_job_run(fixture.input["job_run_id"].as_str().unwrap())
         .unwrap();
-    let next = fixture
-        .runtime
+    let next = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), previous.input, None)
         .unwrap();
     assert!(next.retry_source_run_id.is_none());
     assert_ne!(next.run_id, previous.run_id);
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .apply_task_automation_update(
             &fixture.task_id,
             orbit_engine::TaskAutomationUpdate {
@@ -376,7 +376,7 @@ fn start_fresh_run(fixture: &mut Fixture) {
 fn reviewer_timeout_handoff(fixture: &mut Fixture) -> Value {
     fixture.admit();
     RunLifecycle::mark_job_run_running(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         fixture.input["job_run_id"].as_str().unwrap(),
         Utc::now(),
         std::process::id(),
@@ -396,13 +396,13 @@ fn reviewer_timeout_handoff(fixture: &mut Fixture) -> Value {
         event,
     };
     let bound = ReviewGate::record_reviewer_invocation(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &request(ReviewerInvocationEvent::Started),
     )
     .unwrap()
     .unwrap();
     ReviewGate::record_reviewer_invocation(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &request(ReviewerInvocationEvent::TimedOut {
             runtime_seconds: bound,
         }),
@@ -434,7 +434,11 @@ fn review_gate_handoff(
     if !admission.is_null() {
         pipeline["review_gate_admit"] = admission.clone();
     }
-    execute_deterministic_action(&fixture.runtime, "pr_failure_handoff", &json!({}), &json!({
+    execute_deterministic_action(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        "pr_failure_handoff",
+        &json!({}),
+        &json!({
         "failed_step_id": failed_step_id, "error_code": refused.failure_code(),
         "error_message": refused.to_string(),
         "run_id": fixture.input["job_run_id"],
@@ -445,7 +449,7 @@ fn review_gate_handoff(
 
 fn finalize_failed_run(fixture: &Fixture) {
     RunLifecycle::finalize_job_run(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         fixture.input["job_run_id"].as_str().unwrap(),
         JobRunState::Failed,
         Utc::now(),
@@ -731,8 +735,7 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
             TaskStatus::InProgress
         );
         assert!(
-            fixture
-                .runtime
+            orbit_core::test_support::EngineHost::new(&fixture.runtime)
                 .run_deterministic(
                     "review_gate_admit",
                     &json!({}),
@@ -926,8 +929,7 @@ fn an_admission_refusal_for_missing_evidence_is_handed_off_as_a_hold() {
             .is_some()
     );
 
-    let refused = fixture
-        .runtime
+    let refused = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "review_gate_admit",
             &json!({}),
@@ -1030,8 +1032,7 @@ fn received_external_evidence_does_not_cover_a_reviewer_repair_on_another_tree()
         TaskStatus::InProgress
     );
     assert!(
-        fixture
-            .runtime
+        orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .run_deterministic(
                 "review_gate_admit",
                 &json!({}),
@@ -1168,7 +1169,7 @@ fn a_late_review_handoff_cannot_overwrite_an_operator_block() {
         )
         .unwrap();
     let refused = RunLifecycle::apply_task_automation_update(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &fixture.task_id,
         TaskAutomationUpdate {
             expected_status: Some(TaskStatus::InProgress),
@@ -1200,7 +1201,7 @@ fn an_abandoned_before_pr_review_is_released_and_the_handoff_says_so() {
     add_origin(&fixture);
     fixture.admit();
     RunLifecycle::mark_job_run_running(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         fixture.input["job_run_id"].as_str().unwrap(),
         Utc::now(),
         std::process::id(),

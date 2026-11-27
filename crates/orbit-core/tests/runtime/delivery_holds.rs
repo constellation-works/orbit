@@ -291,7 +291,7 @@ fn completion_outcome(
         _ => None,
     };
     if let Some(event) = provenance {
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {
@@ -313,8 +313,7 @@ fn completion_outcome(
             .unwrap();
     }
     let input = json!({"workspace_path": fx.repo, "task_ids": [task]});
-    let run = fx
-        .runtime
+    let run = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run(
             "delivery_hold_fixture",
             1,
@@ -323,7 +322,7 @@ fn completion_outcome(
             None,
         )
         .unwrap();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task,
             TaskAutomationUpdate {
@@ -539,7 +538,7 @@ fn completion_outcome(
             .expect("a run held on unreadable completion observations is resumable");
         // This one-step job binds its task to the executing run; a pipeline's
         // batch id comes from its worktree checkpoint instead.
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {

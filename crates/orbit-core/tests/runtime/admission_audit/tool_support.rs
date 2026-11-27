@@ -26,7 +26,7 @@ pub(crate) fn run_tool_as_operator(
     name: &str,
     input: Value,
 ) -> Result<Value, OrbitError> {
-    runtime.run_tool_with_context(
+    orbit_core::test_support::EngineHost::new(runtime).run_tool_with_context(
         name,
         input,
         ToolContext {

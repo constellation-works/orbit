@@ -287,8 +287,15 @@ fn a_forge_outage_holds_the_claim_and_the_same_head_reaches_pr_open() {
         Some(follower),
     )
     .unwrap();
-    let outcome =
-        execute_job_with_resume(&job, input, &leaf, audit, &bound, Some(&resume)).unwrap();
+    let outcome = execute_job_with_resume(
+        &job,
+        input,
+        &leaf,
+        audit,
+        &orbit_core::test_support::EngineHost::new(&bound),
+        Some(&resume),
+    )
+    .unwrap();
 
     assert!(outcome.success, "{outcome:#?}");
     assert_eq!(outcome.forge_hold, None, "the leaf never held");

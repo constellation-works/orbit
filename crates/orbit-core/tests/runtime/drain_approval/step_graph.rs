@@ -145,7 +145,7 @@ impl Workspace {
     /// it again: that duplicate never runs, so it holds the drain's only slot
     /// until its substitute worker gives up.
     pub(super) fn settle_leaf(&self, leaf: &str, task: &Task) {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 &task.id,
                 orbit_engine::TaskAutomationUpdate {

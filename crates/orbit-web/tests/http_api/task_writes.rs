@@ -623,8 +623,7 @@ fn dashboard_answers_a_decision_request_as_human() {
                 chrono::Utc::now(),
             );
             let request_id = request.id.clone();
-            fixture
-                .runtime
+            orbit_core::test_support::EngineHost::new(&fixture.runtime)
                 .apply_task_automation_update(
                     &id,
                     TaskAutomationUpdate {

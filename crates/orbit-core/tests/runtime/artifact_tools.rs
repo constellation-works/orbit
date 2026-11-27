@@ -255,8 +255,7 @@ fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
         stored.content
     );
 
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .record_review_landing(&ReviewLandingRequest {
             run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
             task_ids: vec![fixture.task_id.clone()],

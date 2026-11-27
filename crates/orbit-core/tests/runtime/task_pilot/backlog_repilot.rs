@@ -270,7 +270,7 @@ fn manual_backlog_starts_after_edits_without_a_routine_pilot() {
             assert_eq!(run.input.unwrap()["task_ids"], json!([task.id]));
 
             let delivery = RunLifecycle::insert_job_run(
-                &workspace.runtime,
+                &orbit_core::test_support::EngineHost::new(&workspace.runtime),
                 "task_pr_pipeline",
                 1,
                 Utc::now(),
@@ -289,7 +289,7 @@ fn manual_backlog_starts_after_edits_without_a_routine_pilot() {
             );
             assert_eq!(owner.run_id.as_deref(), Some(delivery.run_id.as_str()));
             RunLifecycle::finalize_job_run(
-                &workspace.runtime,
+                &orbit_core::test_support::EngineHost::new(&workspace.runtime),
                 &delivery.run_id,
                 JobRunState::Cancelled,
                 Utc::now(),
@@ -547,8 +547,7 @@ fn only_non_edit_writes_leave_a_held_backlog_task_unselected() {
     update_as(&workspace, &task, "plan", json!("Inspect Cargo.toml."));
     update_as(&workspace, &task, "execution_summary", json!("Summary."));
     update_as(&workspace, &task, "comment", json!("Answered the warning."));
-    workspace
-        .runtime
+    orbit_core::test_support::EngineHost::new(&workspace.runtime)
         .widen_task_context_files(
             &task.id,
             "fixture-run",

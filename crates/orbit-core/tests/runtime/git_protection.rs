@@ -114,7 +114,8 @@ fn git_protection_tolerates_object_store_leftovers_and_refuses_outside_aliases()
                 updated_at: None,
             })
             .expect("sandboxed executor");
-        let resolved = runtime.resolve_executor_sandbox("claude", None, Some(&repo_root));
+        let resolved = orbit_core::test_support::EngineHost::new(&runtime)
+            .resolve_executor_sandbox("claude", None, Some(&repo_root));
         match (resolved, refusal) {
             (Ok(Some(_)), false) => {}
             (Err(error), true) => {

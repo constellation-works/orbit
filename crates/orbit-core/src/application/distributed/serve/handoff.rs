@@ -6,6 +6,7 @@ use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery, TaskHand
 
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
+use crate::application::contracts::EngineHostPort;
 
 use super::refusal;
 
@@ -66,7 +67,7 @@ impl OrbitRuntime {
         let receipt = self.claim_receipt(&handoff.claim_id)?;
         let candidate = match handoff.candidate.delivery {
             HandoffDelivery::NoDiff { .. } => orbit_engine::observe_no_diff_candidate(
-                self,
+                &self.engine_host(),
                 &self.paths().repo_root,
                 handoff,
                 if receipt.request.ship.mode == "pr" {
@@ -101,13 +102,13 @@ impl OrbitRuntime {
             // objects are resolved in this checkout.
             HandoffDelivery::PullRequest { .. } if accepted.is_some() => {
                 orbit_engine::observe_accepted_published_handoff(
-                    self,
+                    &self.engine_host(),
                     &self.paths().repo_root,
                     accepted.ok_or_else(|| refusal::refused("accepted handoff required"))?,
                 )?
             }
             HandoffDelivery::PullRequest { .. } => orbit_engine::observe_published_candidate(
-                self,
+                &self.engine_host(),
                 &self.paths().repo_root,
                 &handoff.candidate,
             )?,

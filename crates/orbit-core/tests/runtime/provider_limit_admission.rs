@@ -652,7 +652,7 @@ fn live_provider_policy_reloads_and_keeps_the_last_good_config() {
     jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
         .unwrap();
     let pass = || {
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .run_deterministic(
                 "classify_workspace_auto_tasks",
                 &json!({}),

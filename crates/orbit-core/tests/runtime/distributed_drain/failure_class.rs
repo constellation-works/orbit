@@ -233,7 +233,7 @@ fn handoff_fetch_timeout_releases_the_owner_but_missing_ref_still_blocks() {
         let repo = &pair.follower_repo;
         let action = |name: &str, input: &Value| {
             orbit_engine::execute_deterministic_action(
-                &leaf.bound,
+                &orbit_core::test_support::EngineHost::new(&leaf.bound),
                 name,
                 &json!({}),
                 input,
@@ -682,17 +682,18 @@ impl FollowerRunObserver for FollowerShow<'_> {
         self.asked
             .borrow_mut()
             .push((machine_id.to_string(), run_id.to_string()));
-        let mut answer = self.pair.follower.run_tool_with_context(
-            "orbit.workflow.run.observe",
-            json!({"id": run_id}),
-            ToolContext {
-                session_context: ToolSessionContext {
-                    effective_capabilities: BTreeSet::from([McpCapability::Operator]),
-                    ..ToolSessionContext::default()
+        let mut answer = orbit_core::test_support::EngineHost::new(&self.pair.follower)
+            .run_tool_with_context(
+                "orbit.workflow.run.observe",
+                json!({"id": run_id}),
+                ToolContext {
+                    session_context: ToolSessionContext {
+                        effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+                        ..ToolSessionContext::default()
+                    },
+                    ..ToolContext::default()
                 },
-                ..ToolContext::default()
-            },
-        )?;
+            )?;
         // The fixture's drain run is created without its input and host; a
         // real one records the destination it pulls from and where it ran.
         if answer["job_id"] == "workspace_pull_pipeline" {
@@ -975,11 +976,12 @@ fn hydration_observes_stored_runs_without_reconciliation() {
             before_reservations,
             vec![("fixture-reservation".to_string(), None)]
         );
-        let denied = pair.follower.run_tool_with_context(
-            "orbit.workflow.run.observe",
-            json!({"id": leaf}),
-            ToolContext::default(),
-        );
+        let denied = orbit_core::test_support::EngineHost::new(&pair.follower)
+            .run_tool_with_context(
+                "orbit.workflow.run.observe",
+                json!({"id": leaf}),
+                ToolContext::default(),
+            );
         assert!(
             denied.is_err(),
             "an agent without operator authority is refused"
@@ -1329,7 +1331,11 @@ fn a_leaf_whose_red_base_turned_green_keeps_its_candidate_without_a_hold() {
     // The host has already checked the moved base, as its hold refresh does;
     // settlement only reads that recorded result.
     assert!(matches!(
-        orbit_engine::baseline_hold_status(&pair.follower, repo, &hold),
+        orbit_engine::baseline_hold_status(
+            &orbit_core::test_support::EngineHost::new(&pair.follower),
+            repo,
+            &hold
+        ),
         orbit_engine::BaselineHoldStatus::Lifted(_)
     ));
     let drain = pair.run_drain();
@@ -2072,7 +2078,7 @@ fn a_lost_owner_route_during_envelope_loading_fails_as_owner_route() {
     let bound = bound_to(&pair.follower, &pair, &leaf, Arc::new(Unreachable));
 
     let error = Dispatch::task_context_for_agent_input(
-        &bound,
+        &orbit_core::test_support::EngineHost::new(&bound),
         &leaf,
         "implement_one",
         &json!({"task_id": task}),
@@ -2106,7 +2112,7 @@ fn a_lost_owner_route_during_envelope_loading_fails_as_owner_route() {
 
     let broken = bound_to(&pair.follower, &pair, &leaf, Arc::new(Broken));
     let untyped = Dispatch::task_context_for_agent_input(
-        &broken,
+        &orbit_core::test_support::EngineHost::new(&broken),
         &leaf,
         "implement_one",
         &json!({"task_id": task}),
@@ -2370,9 +2376,7 @@ model = \"gpt-luna\"
         );
 
         // The owner's own admission draws another provider, or waits.
-        let backlog = pair
-            .wire
-            .owner
+        let backlog = orbit_core::test_support::EngineHost::new(&pair.wire.owner)
             .run_deterministic(
                 "list_backlog_tasks",
                 &json!({}),
@@ -2500,7 +2504,7 @@ fn a_stale_branch_setup_refusal_holds_and_settles_outside_failure_accounting() {
         Arc::new(super::claimed_review::ToOwner(pair.wire.owner.clone())),
     );
     let seeded = orbit_engine::execute_deterministic_action(
-        &bound_stale,
+        &orbit_core::test_support::EngineHost::new(&bound_stale),
         "worktree_setup",
         &json!({}),
         &json!({
@@ -2646,7 +2650,7 @@ fn a_stale_branch_setup_refusal_holds_and_settles_outside_failure_accounting() {
         Arc::new(super::claimed_review::ToOwner(pair.wire.owner.clone())),
     );
     let valid_seeded = orbit_engine::execute_deterministic_action(
-        &bound_valid,
+        &orbit_core::test_support::EngineHost::new(&bound_valid),
         "worktree_setup",
         &json!({}),
         &json!({

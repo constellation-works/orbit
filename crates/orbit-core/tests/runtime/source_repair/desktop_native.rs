@@ -346,7 +346,7 @@ fn same_pr_task_link_uses_authenticated_target() {
         machine_id: "hm_fixture".into(),
         machine_name: None,
     }));
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {

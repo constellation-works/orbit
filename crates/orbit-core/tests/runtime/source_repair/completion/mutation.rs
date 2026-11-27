@@ -53,7 +53,7 @@ pub(crate) fn enabled_completion_refuses_repair_and_mutation_provenance() {
                 .to_string()
             }
         };
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 &f.task,
                 TaskAutomationUpdate {
@@ -80,8 +80,7 @@ pub(crate) fn enabled_completion_refuses_repair_and_mutation_provenance() {
         }
         admit(&f);
         let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
-        let refusal = f
-            .runtime
+        let refusal = orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .unwrap_err();
         assert!(
@@ -118,7 +117,7 @@ pub(crate) fn enabled_completion_refuses_repair_and_mutation_provenance() {
 pub(crate) fn expired_completion_budget_never_merges() {
     let (f, checkout) = fixture();
     let calls = tail_forge(&f, "lost_read");
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .completion_deadline(&f.source.run_id, "17", 1)
         .unwrap();
     let before = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
@@ -127,7 +126,7 @@ pub(crate) fn expired_completion_budget_never_merges() {
         "head":f.branch,"published_head_sha":f.head,"base":"main","max_wait_seconds":60});
     for _ in 0..2 {
         let failure = execute_deterministic_action(
-            &f.runtime,
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
             "pr_complete",
             &json!({}),
             &input,

@@ -922,7 +922,7 @@ fn hard_requests_queue_by_priority_and_age_and_are_granted_when_blockers_end() {
         "a lease never preempts an in-progress task"
     );
     orbit_engine::RunLifecycle::apply_task_automation_update(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         &task.id,
         orbit_engine::TaskAutomationUpdate {
             status: Some(TaskStatus::Done),
@@ -1101,7 +1101,7 @@ fn grant_that_closes_a_lease_cycle_refuses_the_ranked_last_expansion() {
     );
 
     orbit_engine::RunLifecycle::apply_task_automation_update(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         &task.id,
         orbit_engine::TaskAutomationUpdate {
             status: Some(TaskStatus::Done),

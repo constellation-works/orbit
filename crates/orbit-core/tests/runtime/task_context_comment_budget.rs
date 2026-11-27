@@ -78,7 +78,7 @@ fn human_comments_outrank_superseded_pilot_assessments_in_the_comment_budget() {
     pilot_comment(&runtime, &task, "latest pass");
 
     let context = Dispatch::task_context_for_agent_input(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "run",
         "step",
         &json!({ "task_id": task }),
@@ -152,7 +152,7 @@ fn pilot_summary_replacement_marks_comments_truncated_without_omitting_a_comment
     comment_as(&runtime, &task, &oversized_pilot, "task-pilot");
 
     let context = Dispatch::task_context_for_agent_input(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "run",
         "step",
         &json!({ "task_id": task }),

@@ -165,7 +165,7 @@ fn managed_run_environment_denies_ship_and_resume_end_to_end() {
     ));
     assert!(resume.contains("managed runs cannot dispatch"), "{resume}");
 
-    let managed_show = runtime.run_tool_with_context(
+    let managed_show = orbit_core::test_support::EngineHost::new(&runtime).run_tool_with_context(
         "orbit.workflow.run.show",
         json!({"id": source_run_id}),
         ToolContext {
@@ -388,7 +388,7 @@ fn workflow_auto_stop_records_the_calling_surface_as_drain_intent_source() {
             origin_session_id,
             ..ToolSessionContext::default()
         };
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .run_tool_with_context(
                 "orbit.workflow.auto",
                 json!({"workspace": runtime.workspace_id().unwrap(), "action": "stop"}),

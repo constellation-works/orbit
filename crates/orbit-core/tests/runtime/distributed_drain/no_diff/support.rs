@@ -25,7 +25,7 @@ pub(crate) fn engine_action(
     input: &Value,
 ) -> Result<Value, OrbitError> {
     orbit_engine::execute_deterministic_action(
-        host,
+        &orbit_core::test_support::EngineHost::new(host),
         action,
         &json!({}),
         input,
@@ -700,8 +700,16 @@ impl CleanLeaf {
             }),
         );
         let report = if already_landed {
-            let task = RunLifecycle::get_task(&fixture.bound, &fixture.task).unwrap();
-            let comments = RunLifecycle::get_task_comments(&fixture.bound, &fixture.task).unwrap();
+            let task = RunLifecycle::get_task(
+                &orbit_core::test_support::EngineHost::new(&fixture.bound),
+                &fixture.task,
+            )
+            .unwrap();
+            let comments = RunLifecycle::get_task_comments(
+                &orbit_core::test_support::EngineHost::new(&fixture.bound),
+                &fixture.task,
+            )
+            .unwrap();
             json!({
                 "schema_version": 1, "task_id": fixture.task, "run_id": fixture.leaf,
                 "tested_head": fixture.base, "covering_commit": fixture.base,
@@ -756,9 +764,11 @@ impl CleanLeaf {
     }
 
     pub(crate) fn assert_bulk_evidence_exceeds_ceiling(&self) {
-        let error = RunLifecycle::get_task_artifacts(&self.bound, &self.task).expect_err(
-            "ORB-16120: former bulk evidence read must overflow the unchanged MCP ceiling",
-        );
+        let error = RunLifecycle::get_task_artifacts(
+            &orbit_core::test_support::EngineHost::new(&self.bound),
+            &self.task,
+        )
+        .expect_err("ORB-16120: former bulk evidence read must overflow the unchanged MCP ceiling");
         assert!(error.to_string().contains("67108864"), "{error}");
         self.evidence_reads.lock().unwrap().clear();
     }
@@ -803,14 +813,14 @@ impl CleanLeaf {
     }
 
     pub(crate) fn attach(&self, path: &str, value: Value) {
-        self.bound
+        orbit_core::test_support::EngineHost::new(&self.bound)
             .attach_claim_validation_log(path, serde_json::to_vec(&value).unwrap())
             .unwrap();
     }
 
     pub(crate) fn action(&self, action: &str, input: &Value) -> Value {
         if action == "review_gate_admit" {
-            self.bound
+            orbit_core::test_support::EngineHost::new(&self.bound)
                 .run_deterministic(action, &json!({}), input, ToolContext::default())
                 .unwrap()
         } else {
@@ -938,7 +948,14 @@ impl CleanLeaf {
             Some(&self.pair.follower_repo),
         )
         .unwrap();
-        execute_job_with_resume(&job, input, &self.leaf, audit, &self.bound, Some(&resume))
+        execute_job_with_resume(
+            &job,
+            input,
+            &self.leaf,
+            audit,
+            &orbit_core::test_support::EngineHost::new(&self.bound),
+            Some(&resume),
+        )
     }
 
     pub(crate) fn settle(&self, handoff: &TaskHandoff) -> Result<Value, OrbitError> {
@@ -1183,8 +1200,11 @@ impl CleanLeaf {
 
     /// The commands the owner holds a passing log for.
     pub(crate) fn owner_validated_commands(&self, handoff: &TaskHandoff) -> Vec<String> {
-        let artifacts =
-            RunLifecycle::get_task_artifacts(&self.pair.wire.owner, &self.task).unwrap();
+        let artifacts = RunLifecycle::get_task_artifacts(
+            &orbit_core::test_support::EngineHost::new(&self.pair.wire.owner),
+            &self.task,
+        )
+        .unwrap();
         handoff
             .validation
             .iter()
@@ -1207,8 +1227,11 @@ impl CleanLeaf {
             self.pair.admission(&self.leaf).settlement.is_none(),
             "a refused leaf records no handoff"
         );
-        let artifacts =
-            RunLifecycle::get_task_artifacts(&self.pair.wire.owner, &self.task).unwrap();
+        let artifacts = RunLifecycle::get_task_artifacts(
+            &orbit_core::test_support::EngineHost::new(&self.pair.wire.owner),
+            &self.task,
+        )
+        .unwrap();
         let logs = artifacts
             .iter()
             .filter(|artifact| artifact.path.starts_with("validation/"))
@@ -1414,6 +1437,10 @@ impl CleanLeaf {
 
     /// Every artifact the owner holds for this leaf's task.
     pub(crate) fn owner_artifacts(&self) -> Vec<TaskArtifact> {
-        RunLifecycle::get_task_artifacts(&self.pair.wire.owner, &self.task).unwrap()
+        RunLifecycle::get_task_artifacts(
+            &orbit_core::test_support::EngineHost::new(&self.pair.wire.owner),
+            &self.task,
+        )
+        .unwrap()
     }
 }

@@ -178,7 +178,7 @@ fn granted_tasks_stay_on_the_owner_before_any_claim_or_leaf() {
             )
             .unwrap();
     }
-    let local = owner
+    let local = orbit_core::test_support::EngineHost::new(owner)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -273,7 +273,7 @@ fn grants_and_labels_require_the_owner_to_carry_every_label() {
     ] {
         assert!(wait.contains(detail), "{wait}");
     }
-    let local = owner
+    let local = orbit_core::test_support::EngineHost::new(owner)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -324,7 +324,7 @@ fn grants_and_labels_require_the_owner_to_carry_every_label() {
             .task_placement_wait(&owner.get_task(&task).unwrap())
             .is_none()
     );
-    let eligible = matching_owner
+    let eligible = orbit_core::test_support::EngineHost::new(&matching_owner)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -433,7 +433,7 @@ fn configured_fixture_labels_gate_ui_claims_and_local_admission() {
         .clone()
         .with_browser_kit_home(kit_home.path())
         .with_machine_labels(vec!["image-export".into()]);
-    let discovered = plain_owner
+    let discovered = orbit_core::test_support::EngineHost::new(&plain_owner)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),

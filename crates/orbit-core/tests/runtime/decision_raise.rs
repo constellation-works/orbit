@@ -193,8 +193,7 @@ fn managed_raise_keeps_shared_root_read_only() -> crate::scenarios::Outcome {
             updated_at: None,
         })
         .unwrap();
-    let resolved = fx
-        .runtime
+    let resolved = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .resolve_executor_sandbox("codex", Some("implementer"), Some(&worktree))
         .unwrap()
         .expect("shipped Codex sandbox");

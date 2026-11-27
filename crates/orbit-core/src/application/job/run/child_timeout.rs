@@ -19,6 +19,7 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 
 use super::actions::{CancellationRequest, cancellation_note};
 use super::owner::signal_run_owner_confirmed;
@@ -138,7 +139,7 @@ impl OrbitRuntime {
             "run_id": run.run_id,
         });
         let output = orbit_engine::execute_deterministic_action(
-            self,
+            &self.engine_host(),
             FAILURE_HANDOFF,
             &json!({}),
             &input,

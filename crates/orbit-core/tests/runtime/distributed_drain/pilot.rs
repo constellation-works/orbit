@@ -6,8 +6,7 @@ use super::*;
 use orbit_engine::Dispatch;
 
 fn action(pair: &Pair, name: &str, input: Value) -> Value {
-    pair.wire
-        .owner
+    orbit_core::test_support::EngineHost::new(&pair.wire.owner)
         .run_deterministic(name, &json!({}), &input, ToolContext::default())
         .unwrap()
 }

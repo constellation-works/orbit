@@ -225,8 +225,7 @@ fn incomplete_step_diagnostics_survive_without_making_resume_skip_the_step() {
         "conflicting_paths": ["file.txt"],
         "conflicting_files": [{"path": "file.txt", "deterministically_resolvable": false}],
     });
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .checkpoint_step_diagnostic(&run.run_id, "sync_base", &diagnostic)
         .unwrap();
     let persisted = fixture.jobs.read_run_state(&run.run_id).unwrap().unwrap();

@@ -48,7 +48,7 @@ fn owner_run_fails(pair: &Pair, task: &str, crew: &str, class: ProviderFailureCl
         &PipelineState::new(run.run_id.clone(), run.job_id, input),
     )
     .unwrap();
-    owner
+    orbit_core::test_support::EngineHost::new(owner)
         .apply_task_automation_update(
             task,
             TaskAutomationUpdate {
@@ -58,7 +58,7 @@ fn owner_run_fails(pair: &Pair, task: &str, crew: &str, class: ProviderFailureCl
             },
         )
         .unwrap();
-    owner
+    orbit_core::test_support::EngineHost::new(owner)
         .complete_job_run_step(
             &run.run_id,
             &JobRunStepParams {
@@ -80,7 +80,7 @@ fn owner_run_fails(pair: &Pair, task: &str, crew: &str, class: ProviderFailureCl
             },
         )
         .unwrap();
-    owner
+    orbit_core::test_support::EngineHost::new(owner)
         .finalize_job_run(&run.run_id, JobRunState::Failed, now, Some(1))
         .unwrap();
 }
@@ -109,9 +109,7 @@ fn an_owners_failed_login_does_not_keep_the_task_from_a_follower() {
     );
 
     // On the owner, whose login failed, the task waits.
-    let backlog = pair
-        .wire
-        .owner
+    let backlog = orbit_core::test_support::EngineHost::new(&pair.wire.owner)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),

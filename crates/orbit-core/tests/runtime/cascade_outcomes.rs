@@ -181,7 +181,7 @@ impl Fixture {
 
     /// Move `task` in progress under `run_id`, as admission does.
     fn couple(&self, task: &str, run_id: &str) {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 task,
                 TaskAutomationUpdate {
@@ -602,7 +602,7 @@ fn root_cause_preserves_interleaved_control_and_backlog_policy() {
             .unwrap();
         },
         || {
-            fixture.runtime.run_deterministic(
+            orbit_core::test_support::EngineHost::new(&fixture.runtime).run_deterministic(
             "pipeline_success_guard", &json!({}),
             &json!({"run_id": parent, "results": [{"status": "failed", "run_id": leaf.run_id}]}),
             ToolContext::default(),
@@ -633,7 +633,7 @@ fn root_cause_preserves_interleaved_control_and_backlog_policy() {
 
     // Missing parent state must not replace the child's failure with a
     // persistence error: root-cause propagation is deliberately best effort.
-    let result = fixture.runtime.run_deterministic(
+    let result = orbit_core::test_support::EngineHost::new(&fixture.runtime).run_deterministic(
         "pipeline_success_guard", &json!({}),
         &json!({"run_id": "missing-parent", "results": [{"status": "failed", "run_id": leaf.run_id}]}),
         ToolContext::default(),
@@ -646,7 +646,7 @@ fn root_cause_preserves_interleaved_control_and_backlog_policy() {
         "UPDATE job_run_states SET pipeline_state_json = 'invalid-json' WHERE workspace_id = ?1 AND run_id = ?2",
         rusqlite::params![fixture.runtime.workspace_id().unwrap(), corrupt],
     ).unwrap();
-    let result = fixture.runtime.run_deterministic(
+    let result = orbit_core::test_support::EngineHost::new(&fixture.runtime).run_deterministic(
         "pipeline_success_guard",
         &json!({}),
         &json!({"run_id": corrupt, "results": [{"status": "failed", "run_id": leaf.run_id}]}),
@@ -727,8 +727,7 @@ fn an_owner_signoff_hold_blocks_its_task_outside_the_recovery_backstop() {
     assert!(note.contains("error_code=owner_signoff_required"), "{note}");
 
     let failed_task = fixture.task();
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .apply_task_automation_update(
             &failed_task,
             blocked_workflow_failure_update(

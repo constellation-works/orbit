@@ -30,7 +30,7 @@ fn archive_of_a_run_owned_task_requires_explicit_force() {
     let tasks = fixture.json(&["task", "list", "--json"]);
     let id = tasks[0]["id"].as_str().unwrap();
     let run = RunLifecycle::insert_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "archive-fixture",
         1,
         Utc::now(),
@@ -101,7 +101,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
     // The tool's proposal-approval route is a status write too, and a
     // submitted run owns its selection before it starts executing.
     let pending = RunLifecycle::insert_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "local-run-fixture",
         1,
         Utc::now(),
@@ -124,7 +124,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
     );
     assert_eq!(fixture.json(&["task", "show", &id, "--json"]), before);
     RunLifecycle::finalize_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         &pending.run_id,
         JobRunState::Cancelled,
         Utc::now(),
@@ -135,7 +135,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
     fixture.json(&["task", "update", &id, "--status", "backlog", "--json"]);
     fixture.json(&["task", "update", &id, "--status", "in-progress", "--json"]);
     let run = RunLifecycle::insert_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "local-run-fixture",
         1,
         Utc::now(),
@@ -143,12 +143,17 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
         None,
     )
     .unwrap();
-    RunLifecycle::mark_job_run_running(&runtime, &run.run_id, Utc::now(), std::process::id())
-        .unwrap();
+    RunLifecycle::mark_job_run_running(
+        &orbit_core::test_support::EngineHost::new(&runtime),
+        &run.run_id,
+        Utc::now(),
+        std::process::id(),
+    )
+    .unwrap();
     // A newer run naming only a singular task_id must neither confer
     // ownership nor hide the older run whose task_ids names the task.
     RunLifecycle::insert_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "local-run-fixture",
         1,
         Utc::now(),
@@ -245,7 +250,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
         String::from_utf8_lossy(&refused.stderr)
     );
     RunLifecycle::finalize_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         &run.run_id,
         JobRunState::Success,
         Utc::now(),
@@ -322,7 +327,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
             .all(|inspection| inspection.claim.task_id != trusted_id)
     );
     let trusted_run = RunLifecycle::insert_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "local-run-fixture",
         1,
         Utc::now(),
@@ -338,10 +343,13 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
         TaskStatus::Backlog
     );
     assert_eq!(
-        RunLifecycle::get_job_run(&runtime, &trusted_run.run_id)
-            .unwrap()
-            .unwrap()
-            .state,
+        RunLifecycle::get_job_run(
+            &orbit_core::test_support::EngineHost::new(&runtime),
+            &trusted_run.run_id
+        )
+        .unwrap()
+        .unwrap()
+        .state,
         JobRunState::Pending
     );
 }

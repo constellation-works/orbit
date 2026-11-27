@@ -213,7 +213,7 @@ fn a_before_landing_evidence_hold_leaves_its_task_one_open_pull_request() {
         "{release}"
     );
     let owner = leaf.pair.wire.owner.clone();
-    let kept = owner
+    let kept = orbit_core::test_support::EngineHost::new(&owner)
         .kept_claim_candidate(&leaf.task)
         .unwrap()
         .expect("the owner keeps the held candidate");
@@ -429,7 +429,7 @@ fn a_before_landing_evidence_hold_preserves_reviewer_fixes_for_next_claim() {
         leaf.leaf_holds(&hold);
         leaf.pair.pass(&leaf.drain);
         let owner = &leaf.pair.wire.owner;
-        let kept = owner
+        let kept = orbit_core::test_support::EngineHost::new(owner)
             .kept_claim_candidate(&leaf.task)
             .unwrap()
             .expect("the release keeps the reviewed tip");

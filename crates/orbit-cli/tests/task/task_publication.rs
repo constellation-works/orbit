@@ -696,7 +696,7 @@ fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
         captured_at: Utc::now(),
         host_evidence: Vec::new(),
     };
-    let run = runtime
+    let run = orbit_core::test_support::EngineHost::new(&runtime)
         .insert_job_run(
             "task_pr_pipeline",
             1,
@@ -721,7 +721,7 @@ fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
         "workspace_path": fixture.repo.canonicalize().unwrap(),
         "base": "main", "base_sync": "local", "mode": "pr",
     });
-    input["admission"] = runtime
+    input["admission"] = orbit_core::test_support::EngineHost::new(&runtime)
         .run_deterministic("review_gate_admit", &json!({}), &input, Default::default())
         .unwrap();
     let scratch = fixture.repo.join(".orbit/tmp");
@@ -743,7 +743,12 @@ fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
         )
         .unwrap();
     assert!(matches!(
-        runtime.run_deterministic("review_gate_settle", &json!({}), &input, Default::default()),
+        orbit_core::test_support::EngineHost::new(&runtime).run_deterministic(
+            "review_gate_settle",
+            &json!({}),
+            &input,
+            Default::default()
+        ),
         Err(orbit_core::test_support::fixture_engine::DispatchError::ReviewEvidenceHold(_))
     ));
     let certificate = runtime

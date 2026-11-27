@@ -366,7 +366,7 @@ fn seed_if_requested() -> bool {
                 .expect("seed task through runtime");
             if !history.is_empty() {
                 RunLifecycle::apply_task_automation_update(
-                    &runtime,
+                    &orbit_core::test_support::EngineHost::new(&runtime),
                     &created.id,
                     TaskAutomationUpdate {
                         append_history: history,

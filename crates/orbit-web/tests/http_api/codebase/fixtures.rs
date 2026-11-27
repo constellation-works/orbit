@@ -197,8 +197,7 @@ pub(super) fn denied_events(fixture: &Fixture) -> Vec<orbit_types::telemetry::Au
 }
 
 pub(super) fn request_lock(fixture: &Fixture, task: &str) -> Value {
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "reserve_locks",
             &json!({}),

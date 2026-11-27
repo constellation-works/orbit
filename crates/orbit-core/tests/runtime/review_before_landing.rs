@@ -42,8 +42,7 @@ fn an_owner_before_landing_review_keeps_the_durable_task_summary() {
         .unwrap()
         .execution_summary;
     let run_id = fixture.input["job_run_id"].as_str().unwrap();
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .checkpoint_step(
             run_id,
             0,
@@ -80,8 +79,7 @@ fn an_owner_before_landing_review_keeps_the_durable_task_summary() {
 /// out reviewer alike — and finalizing the failed run does not block it.
 fn a_before_landing_review_that_does_not_approve_keeps_the_pr_open_in_review() {
     let mut fixture = Fixture::before_landing();
-    let pre_push = fixture
-        .runtime
+    let pre_push = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "review_gate_admit",
             &json!({}),
@@ -152,10 +150,15 @@ fn a_before_landing_review_that_does_not_approve_keeps_the_pr_open_in_review() {
     );
 
     let run_id = fixture.input["job_run_id"].as_str().unwrap();
-    RunLifecycle::mark_job_run_running(&fixture.runtime, run_id, Utc::now(), std::process::id())
-        .unwrap();
+    RunLifecycle::mark_job_run_running(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        run_id,
+        Utc::now(),
+        std::process::id(),
+    )
+    .unwrap();
     RunLifecycle::finalize_job_run(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         run_id,
         JobRunState::Failed,
         Utc::now(),
@@ -171,8 +174,7 @@ fn a_before_landing_review_that_does_not_approve_keeps_the_pr_open_in_review() {
 
 /// `pr_open` published PR #42 and `pr_promote` moved the task to review.
 pub(super) fn published(fixture: &Fixture) {
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .apply_task_automation_update(
             &fixture.task_id,
             TaskAutomationUpdate {
@@ -215,7 +217,7 @@ fn failure_handoff_after(
         .unwrap()
         .extend(steps.as_object().unwrap().clone());
     execute_deterministic_action(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         "pr_failure_handoff",
         &json!({}),
         &json!({

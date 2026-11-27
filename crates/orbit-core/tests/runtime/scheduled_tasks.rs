@@ -54,7 +54,7 @@ fn task(runtime: &OrbitRuntime, title: &str, not_before: Option<&str>) -> Task {
 }
 
 fn backlog(runtime: &OrbitRuntime) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -117,7 +117,7 @@ fn ship(
 
 /// `orbit.workflow.ship` as an operator session calls it.
 fn ship_tool(runtime: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
-    runtime.run_tool_with_context(
+    orbit_core::test_support::EngineHost::new(runtime).run_tool_with_context(
         "orbit.workflow.ship",
         input,
         ToolContext {

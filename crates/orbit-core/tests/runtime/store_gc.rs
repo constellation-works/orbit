@@ -142,7 +142,7 @@ fn orphan_timing_uses_exit_observation_or_detection_after_a_silent_step() {
         let (_root, runtime) = gc_runtime();
         let owner = orbit_common::test_env::spawn_unrelated_process();
         let started = Utc::now() - chrono::Duration::minutes(9);
-        let run = runtime
+        let run = orbit_core::test_support::EngineHost::new(&runtime)
             .insert_job_run("store_gc_pipeline", 1, started, None, None)
             .unwrap();
         runtime

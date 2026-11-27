@@ -56,7 +56,7 @@ fn task(runtime: &OrbitRuntime, title: &str, tags: &[&str], labels: &[&str]) -> 
 }
 
 fn backlog(runtime: &OrbitRuntime) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),

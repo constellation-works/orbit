@@ -64,14 +64,22 @@ fn runs(fixture: &Fixture) -> Vec<Value> {
 }
 
 fn refresh(fixture: &Fixture, hold: &BaselineRedHold, lifted: bool) {
-    let status = baseline_hold_status(&fixture.runtime, &fixture.repo, hold);
+    let status = baseline_hold_status(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        &fixture.repo,
+        hold,
+    );
     assert_eq!(
         matches!(status, BaselineHoldStatus::Lifted(_)),
         lifted,
         "{status:?}"
     );
     assert_eq!(
-        recorded_baseline_hold_status(&fixture.runtime, &fixture.repo, hold),
+        recorded_baseline_hold_status(
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+            &fixture.repo,
+            hold
+        ),
         Some(status)
     );
 }
@@ -81,7 +89,11 @@ fn recorded_failures_keep_the_hold_without_a_full_run_and_reuse_the_cache() {
     let hold = hold(&fixture);
     move_base(&fixture, "red");
     assert_eq!(
-        recorded_baseline_hold_status(&fixture.runtime, &fixture.repo, &hold),
+        recorded_baseline_hold_status(
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+            &fixture.repo,
+            &hold
+        ),
         None
     );
     refresh(&fixture, &hold, false);
@@ -118,11 +130,19 @@ fn recorded_failures_keep_the_hold_without_a_full_run_and_reuse_the_cache() {
     )
     .unwrap();
     assert_eq!(
-        recorded_baseline_hold_status(&runtime, &fixture.repo, &hold),
+        recorded_baseline_hold_status(
+            &orbit_core::test_support::EngineHost::new(&runtime),
+            &fixture.repo,
+            &hold
+        ),
         None
     );
     assert!(matches!(
-        baseline_hold_status(&runtime, &fixture.repo, &hold),
+        baseline_hold_status(
+            &orbit_core::test_support::EngineHost::new(&runtime),
+            &fixture.repo,
+            &hold
+        ),
         BaselineHoldStatus::Lifted(_)
     ));
     assert_eq!(
@@ -130,7 +150,14 @@ fn recorded_failures_keep_the_hold_without_a_full_run_and_reuse_the_cache() {
         ran.len() + 2,
         "new bindings replay failing tests and the full selection"
     );
-    assert!(recorded_baseline_hold_status(&runtime, &fixture.repo, &hold).is_some());
+    assert!(
+        recorded_baseline_hold_status(
+            &orbit_core::test_support::EngineHost::new(&runtime),
+            &fixture.repo,
+            &hold
+        )
+        .is_some()
+    );
     assert_eq!(
         runs(&fixture).len(),
         ran.len() + 2,

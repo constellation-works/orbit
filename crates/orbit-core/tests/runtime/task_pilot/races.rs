@@ -75,8 +75,7 @@ fn admitted_and_retired_targets_settle_as_superseded_without_pilot_writes() {
         .collect::<Vec<_>>();
     let prepared = workspace.prepare(&ids);
     for task in &tasks[..2] {
-        workspace
-            .runtime
+        orbit_core::test_support::EngineHost::new(&workspace.runtime)
             .admit_task_for_workflow(&task.id, "worktree_setup")
             .unwrap();
     }
@@ -151,8 +150,7 @@ fn human_material_edits_supersede_preparation_without_writes() {
                 .unwrap();
             let prepared = workspace.prepare(&[&task.id]);
             if admitted {
-                workspace
-                    .runtime
+                orbit_core::test_support::EngineHost::new(&workspace.runtime)
                     .admit_task_for_workflow(&task.id, "worktree_setup")
                     .unwrap();
             }

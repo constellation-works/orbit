@@ -631,8 +631,7 @@ fn an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backof
     assert_eq!(pair.wire.calls("orbit.drain.claim.settle").len(), 1);
 
     *pair.wire.refuse_settle.lock().unwrap() = None;
-    let stopped = pair
-        .follower
+    let stopped = orbit_core::test_support::EngineHost::new(&pair.follower)
         .run_tool_with_context(
             "orbit.workflow.auto",
             json!({

@@ -269,8 +269,7 @@ fn failed_application_is_visible_case() {
 fn run_without_review_refuses_proposals_case() {
     let fixture = granted_fixture_with(ReviewTiming::None);
     put(&fixture, PROPOSAL, &describe("revised")).unwrap();
-    let error = fixture
-        .runtime
+    let error = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "review_gate_admit",
             &json!({}),
@@ -409,13 +408,13 @@ fn move_to_review(runtime: &OrbitRuntime, task_id: &str) {
 fn stop_fixture_run(fixture: &Fixture) {
     let run_id = fixture.input["job_run_id"].as_str().unwrap().to_string();
     let _ = RunLifecycle::mark_job_run_running(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &run_id,
         chrono::Utc::now(),
         std::process::id(),
     );
     let _ = RunLifecycle::finalize_job_run(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &run_id,
         orbit_types::workflow::JobRunState::Success,
         chrono::Utc::now(),
@@ -476,7 +475,7 @@ fn approve_unapplied_proposal_blocks_and_force_completes_case() {
 fn automation_done_unapplied_proposal_blocks_case() {
     let (_root, runtime, task_id) = unapplied_review_task();
     let error = RunLifecycle::apply_task_automation_update(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         &task_id,
         TaskAutomationUpdate {
             status: Some(TaskStatus::Done),
@@ -654,7 +653,7 @@ impl TaskPrForge for MergedForge {
 fn external_merge_runtime(fixture: &Fixture) -> OrbitRuntime {
     stop_fixture_run(fixture);
     RunLifecycle::apply_task_automation_update(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &fixture.task_id,
         TaskAutomationUpdate {
             external_refs: vec![ExternalRef::github_pr("7".to_string()).unwrap()],
@@ -712,7 +711,7 @@ fn applied_proposals_still_complete_case() {
     // automation done
     let fixture = applied_fixture();
     RunLifecycle::apply_task_automation_update(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &fixture.task_id,
         TaskAutomationUpdate {
             status: Some(TaskStatus::Done),
@@ -730,7 +729,7 @@ fn applied_proposals_still_complete_case() {
     move_to_review(&fixture.runtime, &fixture.task_id);
     let run_id = fixture.input["job_run_id"].as_str().unwrap().to_string();
     RunLifecycle::update_task_from_activity(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &fixture.task_id,
         TaskActivityUpdate {
             status: TaskStatus::Done,

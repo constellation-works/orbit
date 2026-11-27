@@ -75,7 +75,7 @@ pub(super) fn raise_block_triage(f: &Fixture) -> DecisionRequest {
         "block_triage".to_string(),
         Utc::now().max(blocked_at),
     );
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             orbit_engine::TaskAutomationUpdate {
@@ -237,8 +237,7 @@ fn park_source(f: &mut Fixture, state: JobRunState, decision_hold: bool) {
     }
     save_run(f, &run);
     if decision_hold {
-        let recorded = f
-            .runtime
+        let recorded = orbit_core::test_support::EngineHost::new(&f.runtime)
             .complete_job_run_step(
                 &run.run_id,
                 &orbit_store::contract::JobRunStepParams {
@@ -308,7 +307,7 @@ fn raise_split(f: &Fixture, rewrite_criteria: bool) -> DecisionRequest {
         "block_triage".to_string(),
         Utc::now().max(blocked_at),
     );
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             orbit_engine::TaskAutomationUpdate {
@@ -572,7 +571,7 @@ fn plant_open_low_finding(f: &Fixture) {
             line: "`low-1` [low, open] one low finding remains open".into(),
         }],
     };
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             orbit_engine::TaskAutomationUpdate {

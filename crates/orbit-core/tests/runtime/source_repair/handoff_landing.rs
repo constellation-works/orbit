@@ -535,7 +535,7 @@ fn the_owner_sweep_merges_a_stopped_publication_only_while_the_pull_request_is_u
     let (mut f, _, _) = escalated_completion_fixture();
     f.source.state = JobRunState::Success;
     super::published_owner::save_run(&f, &f.source);
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {

@@ -142,7 +142,9 @@ model = "fixture-b"
         json!({"task_id": task_id, "run_id": leaf}),
     ] {
         assert_eq!(
-            owner.activity_implementer_identity(&input).unwrap(),
+            orbit_core::test_support::EngineHost::new(&owner)
+                .activity_implementer_identity(&input)
+                .unwrap(),
             (None, None),
             "ORB-14635: task-derived attribution must not read a foreign run locally"
         );
@@ -215,7 +217,7 @@ model = "fixture-b"
             .collect::<Vec<_>>(),
         [("recovery_a", 7), ("recovery_b", 3)]
     );
-    let config = owner
+    let config = orbit_core::test_support::EngineHost::new(&owner)
         .agent_crew_config_for_input(&json!({
             "run_id": leaf,
             "job_run_id": recovery.run_id,
@@ -225,7 +227,7 @@ model = "fixture-b"
         .unwrap();
     assert_eq!(
         config,
-        owner
+        orbit_core::test_support::EngineHost::new(&owner)
             .agent_crew_config_for_input(&json!({"crew": frozen.crew}))
             .unwrap()
             .unwrap()
@@ -306,7 +308,7 @@ model = "fixture-b"
                 ..Default::default()
             })
             .unwrap();
-        owner
+        orbit_core::test_support::EngineHost::new(&owner)
             .apply_task_automation_update(
                 &task.id,
                 orbit_engine::TaskAutomationUpdate {
@@ -316,7 +318,7 @@ model = "fixture-b"
                 },
             )
             .unwrap();
-        owner
+        orbit_core::test_support::EngineHost::new(&owner)
             .apply_task_automation_update(
                 &task.id,
                 orbit_engine::TaskAutomationUpdate {
@@ -335,7 +337,7 @@ model = "fixture-b"
         assert_eq!(shown["resolved_crew"], "recorded_local_crew");
         assert_eq!(shown["crew_model"], "gpt-6-sol");
         assert_eq!(
-            owner
+            orbit_core::test_support::EngineHost::new(&owner)
                 .activity_implementer_identity(&json!({"task_id": task.id}))
                 .unwrap(),
             (Some("codex".into()), Some("codex".into()))

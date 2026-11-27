@@ -47,7 +47,7 @@ fn advisory_findings_are_approved_and_reach_the_worker() {
     assert_eq!(audit["assessment"]["surface_warnings"], json!([surface]));
     assert_eq!(audit["assessment"]["utility_warnings"], json!([utility]));
     let context = Dispatch::task_context_for_agent_input(
-        &workspace.runtime,
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
         &drain,
         "implement",
         &json!({"task_id": task.id}),

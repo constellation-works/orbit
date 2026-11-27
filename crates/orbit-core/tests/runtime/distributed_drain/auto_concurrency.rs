@@ -725,8 +725,7 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                     !counters.held_by_reason.contains_key("admissions_stopped"),
                     "{counters:?}"
                 );
-                let shown = pair
-                    .follower
+                let shown = orbit_core::test_support::EngineHost::new(&pair.follower)
                     .run_tool_with_context(
                         "orbit.workflow.run.show",
                         json!({"id": drain}),
@@ -1016,7 +1015,8 @@ fn pending_pull_capacity_is_released_when_no_claim_will_execute() {
                 }
                 Ok(())
             }));
-            let result = pair.follower.run_deterministic("pull_refill", &json!({}), &json!({
+            let result = orbit_core::test_support::EngineHost::new(&pair.follower)
+                .run_deterministic("pull_refill", &json!({}), &json!({
             "run_id": drain, "destination": pair.destination, "window_expired": false, "max_active_leaf_runs": 1,
         }), ToolContext::default());
             if outcome == "refusal" {

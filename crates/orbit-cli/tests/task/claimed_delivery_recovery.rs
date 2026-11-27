@@ -568,7 +568,7 @@ fn version_one_receipts_still_read_as_accepted_coverage(
     assert_eq!(receipts.len(), 1);
     let evidence =
         orbit_core::test_support::fixture_engine::RunLifecycle::accepted_automation_coverage(
-            runtime,
+            &orbit_core::test_support::EngineHost::new(runtime),
             &receipts[0].action_id,
         )
         .unwrap()

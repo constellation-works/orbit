@@ -127,7 +127,7 @@ impl Fixture {
     }
 
     fn bind(&self, task: &str, run: &str) {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 task,
                 orbit_engine::TaskAutomationUpdate {
@@ -332,7 +332,7 @@ fn checkpoint_resume_preserves_the_later_interrupted_review_repair() {
         fx.jobs.write_run_state(&resumed.run_id, &seeded).unwrap();
         // The live engine checkpoint merges keys into the resumed pipeline;
         // an inherited record survives this write and must not suppress B.
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .checkpoint_step(
                 &resumed.run_id,
                 1,
@@ -685,7 +685,7 @@ fn resume_handoff_admission_cases() {
         state.record_pipeline_output("worktree", worktree);
         fx.bind(&task, &source);
         if promoted {
-            fx.runtime
+            orbit_core::test_support::EngineHost::new(&fx.runtime)
                 .apply_task_automation_update(
                     &task,
                     orbit_engine::TaskAutomationUpdate {
@@ -717,7 +717,7 @@ fn resume_handoff_admission_cases() {
         } else {
             resume_handoff_note(event, note_run)
         };
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &task,
                 orbit_engine::TaskAutomationUpdate {
@@ -833,14 +833,13 @@ fn a_run_that_does_not_own_the_task_cannot_attach_validation_evidence() {
     let owner = fx.failed_run(&fx.located(fx.local.clone()), &task, "owner", None);
     fx.bind(&task, &owner);
     let path = "validation-log.json";
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .attach_task_validation_log(&task, &owner, path, br#"{"ok":true}"#.to_vec())
         .expect("the owning run still attaches validation evidence");
     assert_eq!(fx.runtime.get_task_artifacts(&task).unwrap().len(), 1);
 
     let other = "jrun-foreign-owner";
-    let error = fx
-        .runtime
+    let error = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .attach_task_validation_log(&task, other, path, br#"{"ok":false}"#.to_vec())
         .expect_err("a non-owning run cannot attach validation evidence");
     let OrbitError::PolicyDenied(message) = error else {

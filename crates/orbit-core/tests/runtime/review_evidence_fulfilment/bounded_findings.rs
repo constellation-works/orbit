@@ -59,8 +59,7 @@ fn combined_findings_remain_readable_with_near_limit_results_and_json_escaping()
             || {},
             || {},
             || {
-                fixture
-                    .runtime
+                orbit_core::test_support::EngineHost::new(&fixture.runtime)
                     .run_deterministic(
                         "fulfil_review_evidence",
                         &json!({}),

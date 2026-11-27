@@ -185,7 +185,7 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
             answer.as_object_mut().unwrap().remove("risk_tier");
         }
         entry.note = Some(legacy.to_string());
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .apply_task_automation_update(
                 &task.id,
                 TaskAutomationUpdate {
@@ -479,7 +479,7 @@ fn decision_channel_cli_registers_submits_and_revokes() {
             chrono::Utc::now(),
         );
         let request_id = request.id.clone();
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .apply_task_automation_update(
                 &task.id,
                 TaskAutomationUpdate {
@@ -553,7 +553,7 @@ fn decision_channel_cli_registers_submits_and_revokes() {
             chrono::Utc::now(),
         );
         let fresh_request_id = fresh_request.id.clone();
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .apply_task_automation_update(
                 &fresh_task.id,
                 TaskAutomationUpdate {
@@ -1050,7 +1050,7 @@ fn attention_preserves_review_decisions_bound_to_nonempty_requirements() {
             "digest".into(),
             chrono::Utc::now(),
         );
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .apply_task_automation_update(
                 &task.id,
                 TaskAutomationUpdate {

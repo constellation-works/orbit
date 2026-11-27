@@ -17,6 +17,9 @@ mod claimed_leaf;
 mod crew_draw;
 mod distributed_gate;
 mod drain_entry;
+
+mod engine_host;
+
 mod experiment;
 mod filing_tags;
 mod host_provider_hold;
@@ -39,6 +42,7 @@ pub(crate) use crew_draw::{
 };
 pub use distributed_gate::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 pub use drain_entry::DrainEntryPoint;
+pub(crate) use engine_host::EngineHostPort;
 pub(in crate::application) use experiment::ExperimentCrewPool;
 pub(crate) use filing_tags::{
     CI_FAILURE_TAG, CODE_SCANNING_TAG, DEPENDABOT_TAG, RECONCILIATION_FOLLOW_UP_TAG_PREFIX,

@@ -149,7 +149,10 @@ fn a_network_request_beyond_the_grant_refuses_before_spawn() {
         code,
         message,
         record,
-    } = Dispatch::run_script_step(&fixture.runtime, &request())
+    } = Dispatch::run_script_step(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        &request(),
+    )
     else {
         panic!("a manifest asking for more network than its grant must refuse");
     };
@@ -211,7 +214,10 @@ fn granted_variables_alone_reach_the_script_and_their_values_are_redacted_in_chi
         ScriptGrantOptions::default(),
     );
 
-    let ran = match Dispatch::run_script_step(&fixture.runtime, &request()) {
+    let ran = match Dispatch::run_script_step(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        &request(),
+    ) {
         ScriptStepRun::Refused {
             code,
             message,

@@ -566,7 +566,7 @@ fn complete_evidence(attempt: &BatchAttempt) -> CoverageEvidence {
 /// Records an execution summary as the review agent's own.
 fn persist_agent_summary(runtime: &orbit_core::runtime::OrbitRuntime, action_id: &str) {
     RunLifecycle::apply_task_automation_update(
-        runtime,
+        &orbit_core::test_support::EngineHost::new(runtime),
         action_id,
         TaskAutomationUpdate {
             execution_summary: Some("Read fixture.txt in the frozen delivery; no defects.".into()),
@@ -697,7 +697,7 @@ fn admitted_action(
     let action_id = attempt.action_id.clone().expect("admitted action");
 
     let run = RunLifecycle::insert_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "delivery-evidence",
         1,
         Utc::now(),
@@ -706,7 +706,7 @@ fn admitted_action(
     )
     .expect("insert the executor run");
     RunLifecycle::apply_task_automation_update(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         &action_id,
         TaskAutomationUpdate {
             job_run_id: Some(run.run_id.clone()),

@@ -214,7 +214,7 @@ fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
         execute_empty_claim_worker(&pair, &second_bound, &second);
         assert_eq!(
             Recovery::agent_crew_config_for_input(
-                &second_bound,
+                &orbit_core::test_support::EngineHost::new(&second_bound),
                 &json!({"run_id":second,"task_id":second_claim.task_id})
             )
             .unwrap()
@@ -407,7 +407,7 @@ fn dispatch_envelope(host: &OrbitRuntime, run_id: &str, task_id: &str, stdin_pat
         input: json!({"task_id": task_id, "prompt": "Implement the task."}),
         audit,
         run_id,
-        host: Some(host),
+        host: Some(&orbit_core::test_support::EngineHost::new(host)),
     })
     .unwrap_or_else(|error| panic!("dispatch {run_id} failed: {error}"));
     assert!(

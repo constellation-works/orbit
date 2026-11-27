@@ -67,8 +67,7 @@ fn discard_candidate_from_open_states_and_refuse_live_run() {
                 fixture.seed_run("jrun-resume-held", "task_pr_pipeline", JobRunState::Held);
             held.input = Some(json!({"task_id": ids[0], "task_ids": [ids[0]]}));
             fixture.save_run(&held);
-            fixture
-                .runtime
+            orbit_core::test_support::EngineHost::new(&fixture.runtime)
                 .apply_task_automation_update(
                     &ids[0],
                     TaskAutomationUpdate {
@@ -237,8 +236,7 @@ fn discard_closes_held_tasks_undelivered_pull_request() {
             let mut held = fixture.seed_run("jrun-held", "task_pr_pipeline", JobRunState::Held);
             held.input = Some(json!({"task_id": id, "task_ids": [id]}));
             fixture.save_run(&held);
-            fixture
-                .runtime
+            orbit_core::test_support::EngineHost::new(&fixture.runtime)
                 .apply_task_automation_update(
                     &id,
                     TaskAutomationUpdate {

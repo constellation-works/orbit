@@ -20,7 +20,7 @@ fn open() -> (TempDir, OrbitRuntime) {
 }
 
 fn guard(runtime: &OrbitRuntime, input: Value) -> Result<Value, String> {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "pipeline_success_guard",
             &json!({}),

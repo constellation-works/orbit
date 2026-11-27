@@ -213,7 +213,7 @@ fn try_dispatch_activity(
         }),
         audit,
         run_id: "muse-fake",
-        host: Some(&harness.runtime),
+        host: Some(&orbit_core::test_support::EngineHost::new(&harness.runtime)),
     })
     .map_err(|error| error.to_string())
 }
@@ -414,8 +414,7 @@ fn assert_muse_state_roots_are_granted(harness: &Harness, roots: [&Path; 2]) {
         &harness.dir.path().join("muse"),
         Some(sandbox_kind),
     );
-    let sandbox = harness
-        .runtime
+    let sandbox = orbit_core::test_support::EngineHost::new(&harness.runtime)
         .resolve_executor_sandbox("muse", None, Some(harness.dir.path()))
         .expect("resolve Muse sandbox")
         .expect("Muse sandbox is configured");

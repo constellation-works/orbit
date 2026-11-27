@@ -370,7 +370,7 @@ fn escalated_publication_requeue_refuses_a_changed_specification_and_terminal_ta
     for terminal in [TaskStatus::Done, TaskStatus::Rejected, TaskStatus::Archived] {
         let (mut f, _, _) = escalated_completion_fixture();
         green_forge(&mut f);
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 &f.task,
                 TaskAutomationUpdate {
@@ -438,7 +438,7 @@ fn record_pr_auto_fix_attempt(f: &Fixture) {
         crew_source: "default".into(),
     })
     .unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -563,7 +563,7 @@ fn succeeded_review_publication_is_requeued_preserving_repair_budget() {
     record_pr_auto_fix_attempt(&f);
     let forge = green_forge(&mut f);
 
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -627,7 +627,7 @@ fn combined_specification_edit_and_backlog_move_refuses_a_no_receipt_publication
         f.source.state = JobRunState::Success;
         published_owner::save_run(&f, &f.source);
         green_forge(&mut f);
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 &f.task,
                 TaskAutomationUpdate {

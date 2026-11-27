@@ -351,7 +351,7 @@ impl Fixture {
             head,
             ..
         } = (*checkout).clone();
-        let mut source = runtime
+        let mut source = orbit_core::test_support::EngineHost::new(&runtime)
             .insert_job_run(
                 "task_pr_pipeline",
                 1,
@@ -401,7 +401,7 @@ impl Fixture {
         ] {
             state.record_step(index, JobRunState::Success, Some(output.clone()), None);
             state.record_pipeline_output(id, output);
-            runtime
+            orbit_core::test_support::EngineHost::new(&runtime)
                 .complete_job_run_step(
                     &source.run_id,
                     &JobRunStepParams {
@@ -431,7 +431,7 @@ impl Fixture {
             })
             .unwrap();
         runtime.write_run_state(&source.run_id, &state).unwrap();
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {
@@ -592,7 +592,7 @@ impl Fixture {
             if let Some(output) = self.state.pipeline.get(id).cloned() {
                 self.state
                     .record_step(index as u32, JobRunState::Success, Some(output), None);
-                self.runtime
+                orbit_core::test_support::EngineHost::new(&self.runtime)
                     .complete_job_run_step(
                         &self.source.run_id,
                         &JobRunStepParams {
@@ -679,12 +679,12 @@ impl Fixture {
     }
     pub(super) fn action(&self, name: &str, input: Value) -> Value {
         if name.starts_with("review_gate_") {
-            self.runtime
+            orbit_core::test_support::EngineHost::new(&self.runtime)
                 .run_deterministic(name, &json!({}), &input, Default::default())
                 .unwrap()
         } else {
             execute_deterministic_action(
-                &self.runtime,
+                &orbit_core::test_support::EngineHost::new(&self.runtime),
                 name,
                 &json!({}),
                 &input,

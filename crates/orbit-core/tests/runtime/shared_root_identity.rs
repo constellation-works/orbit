@@ -38,7 +38,7 @@ fn call(
     name: &str,
     input: Value,
 ) -> Result<Value, orbit_common::OrbitError> {
-    runtime.run_tool_with_context(
+    orbit_core::test_support::EngineHost::new(runtime).run_tool_with_context(
         name,
         input,
         ToolContext {

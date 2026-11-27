@@ -7,6 +7,8 @@ use orbit_exec::{
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::adapter::engine_host::EngineHost;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::adapter::engine_host::actions::sandbox::resolve::{
     append_codex_side_write_roots, append_orbit_child_runtime_write_roots,
     deny_registered_checkout_host_stores, resolve_fs_profile_absolute,
@@ -283,7 +285,7 @@ fn linux_worktree_sandbox_preparation_revalidates_disappearing_git_entries() {
             }
             Ok(())
         });
-        let sandbox = runtime
+        let sandbox = EngineHost::new(&runtime)
             .resolve_executor_sandbox("claude", None, Some(&worktree))
             .expect("a genuinely vanished Git lock must not deny sandbox preparation")
             .unwrap();
@@ -356,7 +358,7 @@ fn linux_worktree_sandbox_preparation_refuses_git_aliases_when_scan_workers_cann
         Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
     );
     let refusal = GitWorkerSpawnRefusal::install();
-    runtime
+    EngineHost::new(&runtime)
         .resolve_executor_sandbox("claude", None, None)
         .expect("a clean store prepares without scan workers");
     assert!(refusal.refused() > 0, "the spawn failure must be exercised");
@@ -364,7 +366,7 @@ fn linux_worktree_sandbox_preparation_refuses_git_aliases_when_scan_workers_cann
     let outside = repo_root.join("outside-object");
     std::fs::write(&outside, "host state").unwrap();
     std::fs::hard_link(&outside, objects.join("62/escaped")).unwrap();
-    let error = runtime
+    let error = EngineHost::new(&runtime)
         .resolve_executor_sandbox("claude", None, None)
         .expect_err("an aliased object must refuse preparation, not pass unscanned");
     assert!(
@@ -476,7 +478,7 @@ fn undeclared_sandbox_still_resolves_to_none_on_every_os() {
 /// The side roots must be in play, or the reachability assertions are vacuous.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_codex_side_roots_configured(runtime: &crate::OrbitRuntime) {
-    let config = HostEnvironment::agent_provider_config(runtime);
+    let config = HostEnvironment::agent_provider_config(&EngineHost::new(runtime));
     let dirs: Vec<String> = serde_json::from_str(
         config
             .get("writable_dirs_json")

@@ -186,8 +186,7 @@ fn admitted_type_edits_keep_crew_until_fresh_admission_and_explicit_correction()
             )
             .unwrap();
         held_worker.wait_for_reap();
-        workspace
-            .runtime
+        orbit_core::test_support::EngineHost::new(&workspace.runtime)
             .apply_task_automation_update(
                 &task.id,
                 TaskAutomationUpdate {
@@ -257,8 +256,7 @@ fn admitted_type_edits_keep_crew_until_fresh_admission_and_explicit_correction()
             )
             .unwrap();
         // Internal recovery returns this isolated task for a genuinely fresh run.
-        workspace
-            .runtime
+        orbit_core::test_support::EngineHost::new(&workspace.runtime)
             .apply_task_automation_update(
                 &task.id,
                 TaskAutomationUpdate {

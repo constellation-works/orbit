@@ -339,8 +339,7 @@ fn assert_findings_writer_exclusion(change: &'static str, test: &str) {
 }
 
 fn fulfil_findings(fixture: &Fixture, hold: &ReviewEvidenceHold) -> Value {
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "fulfil_review_evidence",
             &json!({}),

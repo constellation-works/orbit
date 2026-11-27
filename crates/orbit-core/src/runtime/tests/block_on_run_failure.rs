@@ -9,6 +9,7 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use tempfile::tempdir;
 
 use crate::OrbitRuntime;
+use crate::adapter::engine_host::EngineHost;
 use crate::application::task::TaskRecords;
 use crate::task_params_test_support::task_create_params;
 
@@ -56,7 +57,7 @@ fn create_task(
 /// Mirror `worktree_setup`'s coupling-in: stamp the run's `job_run_id` and move
 /// the task to `status`.
 fn couple_task(runtime: &OrbitRuntime, task_id: &str, run_id: &str, status: TaskStatus) {
-    runtime
+    EngineHost::new(runtime)
         .apply_task_automation_update(
             task_id,
             TaskAutomationUpdate {
@@ -121,7 +122,12 @@ fn terminal_run_publication_precedes_coupled_task_cleanup() {
                 finalize_failed(&worker_runtime, &run_id);
             }));
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while runtime.get_job_run(&run.run_id)?.unwrap().state != JobRunState::Failed {
+            while EngineHost::new(&runtime)
+                .get_job_run(&run.run_id)?
+                .unwrap()
+                .state
+                != JobRunState::Failed
+            {
                 assert!(
                     std::time::Instant::now() < deadline,
                     "run must terminalize while coupled-task cleanup waits for the task commit"

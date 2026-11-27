@@ -71,7 +71,7 @@ fn typed_decisions(fixture: &Fixture, task: &str) -> Vec<(String, RecordedFinalR
 /// decision wrote its record.
 fn system_comment(fixture: &Fixture, task: &str, message: String) {
     RunLifecycle::apply_task_automation_update(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         task,
         TaskAutomationUpdate {
             append_comments: vec![TaskComment {
@@ -127,7 +127,7 @@ fn untrusted_legacy_outcomes_do_not_suppress_a_fresh_decision() {
         ] {
             let task = fixture.task();
             RunLifecycle::apply_task_automation_update(
-                &fixture.runtime,
+                &orbit_core::test_support::EngineHost::new(&fixture.runtime),
                 &task,
                 TaskAutomationUpdate {
                     append_comments: vec![TaskComment {

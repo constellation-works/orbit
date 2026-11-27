@@ -72,8 +72,7 @@ fn add_task(runtime: &OrbitRuntime, title: &str, status: TaskStatus) -> Task {
 
 fn prepare(workspace: &Workspace, task_id: &str) -> Value {
     let path = workspace.repo.canonicalize().expect("canonicalize repo");
-    workspace
-        .runtime
+    orbit_core::test_support::EngineHost::new(&workspace.runtime)
         .run_deterministic(
             "prepare_task_pilot",
             &json!({}),
@@ -133,7 +132,7 @@ fn apply_naming_blockers(
         assert!(output.status.success(), "{output:?}");
         String::from_utf8(output.stdout).unwrap().trim().to_string()
     };
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "apply_task_pilot_results",
             &json!({}),
@@ -693,8 +692,7 @@ fn missing_assessment_artifact_degrades_only_its_own_readout() {
     );
 
     // [ORB-25722] Automatic discovery excludes only the broken task.
-    let discovered = workspace
-        .runtime
+    let discovered = orbit_core::test_support::EngineHost::new(&workspace.runtime)
         .run_deterministic(
             "prepare_task_pilot",
             &json!({}),

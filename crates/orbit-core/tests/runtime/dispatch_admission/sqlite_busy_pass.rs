@@ -133,19 +133,20 @@ fn store_gc_allows_task_updates_and_dispatch_during_history_selection() {
             .create_scalar_function("julianday", 1, FunctionFlags::SQLITE_UTF8, move |_| {
                 if !called_on_connection.swap(true, Ordering::SeqCst) {
                     let attempt = attempted.fetch_add(1, Ordering::SeqCst) + 1;
-                    let update = writer.run_tool_with_context(
-                        "orbit.task.update",
-                        json!({"id": task_id, "title": format!("updated during GC {attempt}")}),
-                        ToolContext {
-                            session_context: orbit_types::tool::ToolSessionContext {
-                                effective_capabilities: std::collections::BTreeSet::from([
-                                    orbit_types::tool::McpCapability::Operator,
-                                ]),
+                    let update = orbit_core::test_support::EngineHost::new(&writer)
+                        .run_tool_with_context(
+                            "orbit.task.update",
+                            json!({"id": task_id, "title": format!("updated during GC {attempt}")}),
+                            ToolContext {
+                                session_context: orbit_types::tool::ToolSessionContext {
+                                    effective_capabilities: std::collections::BTreeSet::from([
+                                        orbit_types::tool::McpCapability::Operator,
+                                    ]),
+                                    ..Default::default()
+                                },
                                 ..Default::default()
                             },
-                            ..Default::default()
-                        },
-                    );
+                        );
                     if let Err(error) = update {
                         failures
                             .lock()
@@ -224,13 +225,13 @@ fn a_drain_retries_after_its_adoption_checkpoint_hits_a_sqlite_writer() {
     let holder = rusqlite::Connection::open(database).unwrap();
     holder.execute_batch("BEGIN IMMEDIATE").unwrap();
     let input = json!({"run_id": drain, "max_active_leaf_runs": 2, "poll_sleep_seconds": 0});
-    let adoption = runtime.run_deterministic(
+    let adoption = orbit_core::test_support::EngineHost::new(&runtime).run_deterministic(
         "adopt_orphaned_deliveries",
         &json!({}),
         &input,
         ToolContext::default(),
     );
-    let admission = runtime.run_deterministic(
+    let admission = orbit_core::test_support::EngineHost::new(&runtime).run_deterministic(
         "classify_workspace_auto_tasks",
         &json!({}),
         &input,
@@ -244,7 +245,7 @@ fn a_drain_retries_after_its_adoption_checkpoint_hits_a_sqlite_writer() {
         runtime.show_job_run(&drain).unwrap().state.to_string(),
         "running"
     );
-    let next = runtime
+    let next = orbit_core::test_support::EngineHost::new(&runtime)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),
@@ -294,7 +295,7 @@ fn a_drain_defers_an_admission_pass_held_out_by_a_sqlite_writer() {
         });
         held_rx.recv().expect("the holder takes the lock");
 
-        let deferred = runtime
+        let deferred = orbit_core::test_support::EngineHost::new(&runtime)
             .run_deterministic(
                 "classify_workspace_auto_tasks",
                 &json!({}),

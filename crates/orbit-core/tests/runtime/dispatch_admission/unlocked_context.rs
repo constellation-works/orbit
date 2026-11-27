@@ -35,7 +35,7 @@ fn task(runtime: &OrbitRuntime, title: &str, status: TaskStatus, files: &[&str])
 
 fn wave(runtime: &OrbitRuntime) -> Value {
     let drain = running_run(runtime, "workspace_auto_pipeline", json!({}));
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),
@@ -112,7 +112,7 @@ fn shared_markdown_beside_distinct_code_admits_both_and_stays_in_context() {
     );
 
     let envelope = Dispatch::task_context_for_agent_input(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "jrun-envelope",
         "implement",
         &json!({"task_id": first}),

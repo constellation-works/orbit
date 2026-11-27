@@ -2,6 +2,7 @@
 //! must land exactly between a committed transition into done and its
 //! post-commit effects, which no public boundary can time deterministically.
 
+use crate::application::contracts::EngineHostPort;
 use crate::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use chrono::Utc;
 use orbit_engine::RunLifecycle;
@@ -72,6 +73,7 @@ fn landing_keeps_every_named_target_through_a_failed_history_read() {
         })
         .expect("add task");
     runtime
+        .engine_host()
         .apply_task_automation_update(
             &task.id,
             TaskAutomationUpdate {
@@ -83,6 +85,7 @@ fn landing_keeps_every_named_target_through_a_failed_history_read() {
     let commit = "e".repeat(40);
     FAIL_HISTORY_READ.with(|fail| fail.set(true));
     runtime
+        .engine_host()
         .apply_task_automation_update(
             &task.id,
             TaskAutomationUpdate {

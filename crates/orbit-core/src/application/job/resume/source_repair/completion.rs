@@ -1,5 +1,6 @@
 //! Reuse only the successful prefix of this worker's unchanged publication.
 use super::*;
+use crate::application::contracts::EngineHostPort;
 use crate::application::job::ReviewAdmissionHook;
 use crate::runtime::recovery_authority::RecoveryAuthority;
 use orbit_engine::HostEnvironment;
@@ -62,7 +63,7 @@ impl OrbitRuntime {
             .map(task_digest)
             .collect::<Result<Vec<_>, _>>()?;
         // Only the digest leaves the host. Environment values may contain secrets.
-        let environment = self.validation_subprocess_environment();
+        let environment = self.engine_host().validation_subprocess_environment();
         let mut material = json!({
             // Older captures predate write-ahead completion mutation provenance.
             "schema_version": 2, "run_id": run_id, "input": run.input,
@@ -298,7 +299,7 @@ impl OrbitRuntime {
             return Err(refuse("completion candidate or checkout changed"));
         }
         let validation = checkpoint("validate", "candidate_validate")?;
-        let commands = self.required_validation_commands();
+        let commands = self.engine_host().required_validation_commands();
         let policy = self
             .published_completion_policy(run_id, &[task_id.into()])?
             .ok_or_else(|| refuse("completion policy unavailable"))?;

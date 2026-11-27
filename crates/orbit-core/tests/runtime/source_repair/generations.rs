@@ -20,7 +20,7 @@ fn checkpoint(f: &Fixture, id: &str, step: &str, output: Value) {
     state.record_step(index, JobRunState::Success, Some(output.clone()), None);
     state.record_pipeline_output(step, output);
     f.runtime.write_run_state(id, &state).unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .complete_job_run_step(
             id,
             &JobRunStepParams {
@@ -96,7 +96,7 @@ pub(super) fn publish_and_stop(
         answer["number"] = json!(18);
         std::fs::write(&f.answer, answer.to_string()).unwrap();
         let error = execute_deterministic_action(
-            &f.runtime,
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
             "pr_open",
             &json!({}),
             &input,
@@ -119,7 +119,7 @@ pub(super) fn publish_and_stop(
         assert_eq!(opened["pr_number"], "17");
         assert_eq!(opened["pr_reused"], true);
         checkpoint(f, id, "pr_open", opened);
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 &f.task,
                 TaskAutomationUpdate {
@@ -276,7 +276,7 @@ fn changed_adoption_and_admission_refuse(f: &Fixture, id: &str, binding: &Value)
             .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
             .is_err()
     );
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -286,7 +286,7 @@ fn changed_adoption_and_admission_refuse(f: &Fixture, id: &str, binding: &Value)
         )
         .unwrap();
     assert_refused(f, id, binding, "task binding");
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -323,7 +323,8 @@ pub(super) fn cancelled_published_repair_accepts_fresh_generation() {
     changed_adoption_and_admission_refuse(&f, id, &inspected["binding"]);
     // One automatic fix and two explicit generations share the same budget;
     // cancelling either generation must never refund its reservation.
-    f.runtime.apply_task_automation_update(&f.task, TaskAutomationUpdate {
+    orbit_core::test_support::EngineHost::new(&f.runtime)
+        .apply_task_automation_update(&f.task, TaskAutomationUpdate {
         append_history: vec![orbit_types::task::TaskHistoryEntry {
             at: Utc::now(), by: "system".into(), event: "pr_auto_fix_admitted".into(),
             note: Some(json!({"pr_number":"17","head_sha":f.base,"blocker":"failed_checks","attempt":1,"budget":3,"run_id":"earlier-automatic-fix","crew":"fixture","crew_source":"fixture"}).to_string()),
@@ -374,7 +375,7 @@ pub(super) fn cancelled_published_repair_accepts_fresh_generation() {
     );
     // A conflicting durable link must not let an otherwise intact admission
     // authenticate a different run. Append-only history is never repaired here.
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {

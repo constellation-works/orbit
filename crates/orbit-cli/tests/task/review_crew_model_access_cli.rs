@@ -79,7 +79,7 @@ fn seed_access(
 ) {
     let at = Utc::now() - ago;
     let input = json!({"task_id": "ORB-1"});
-    let run = runtime
+    let run = orbit_core::test_support::EngineHost::new(runtime)
         .insert_job_run(job, 1, at, Some(input.clone()), None)
         .unwrap();
     let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), input);
@@ -96,10 +96,10 @@ fn seed_access(
         },
     });
     runtime.write_run_state(&run.run_id, &state).unwrap();
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .mark_job_run_running(&run.run_id, at, std::process::id())
         .unwrap();
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .finalize_job_run(&run.run_id, JobRunState::Failed, at, None)
         .unwrap();
 }

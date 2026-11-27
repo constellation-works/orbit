@@ -176,7 +176,7 @@ impl Fixture {
     }
 
     fn admit(&self, run: &str, task: &str) -> FinalRecoveryAdmission {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .admit_final_recovery(
                 run,
                 &FinalRecoveryAdmissionRequest {
@@ -209,7 +209,7 @@ impl Fixture {
         // Named through the trait: `OrbitRuntime` also has the applier's own
         // `apply_final_recovery`, which the host method calls after recording.
         Recovery::apply_final_recovery(
-            &self.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
             run,
             &FinalRecoveryApplication {
                 fault: Default::default(),
@@ -327,7 +327,7 @@ impl Fixture {
             })
             .unwrap();
         RunLifecycle::apply_task_automation_update(
-            &self.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
             &task,
             orbit_engine::blocked_workflow_failure_update(
                 "task_pr_pipeline",
@@ -376,7 +376,7 @@ impl Fixture {
     fn apply_backstop(&self, recovery: &str, episode: &Value, result: Value) -> Value {
         use orbit_tools::{ReservationOwnerContext, ToolContext};
         Dispatch::run_deterministic(
-            &self.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
             "apply_blocked_task_recovery",
             &json!({}),
             &json!({
@@ -516,7 +516,7 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
         };
         assert_eq!(
             Recovery::apply_final_recovery(
-                &fixture.runtime,
+                &orbit_core::test_support::EngineHost::new(&fixture.runtime),
                 &run,
                 &FinalRecoveryApplication {
                     fault: Default::default(),
@@ -849,9 +849,12 @@ fn final_recovery_log_tail_reads_only_the_requested_runs_bounded_log() {
     )
     .unwrap();
     std::fs::write(logs.join("jrun-other.worker.log"), "foreign-log").unwrap();
-    let tail = Recovery::final_recovery_log_tail(&fixture.runtime, "jrun-own")
-        .unwrap()
-        .unwrap();
+    let tail = Recovery::final_recovery_log_tail(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        "jrun-own",
+    )
+    .unwrap()
+    .unwrap();
     assert!(
         tail.len() < 64 * 1024,
         "worker log stays within the recovery text bound"
@@ -860,11 +863,19 @@ fn final_recovery_log_tail_reads_only_the_requested_runs_bounded_log() {
     assert!(!tail.contains("discarded-prefix"));
     assert!(!tail.contains("foreign-log"));
     assert_eq!(
-        Recovery::final_recovery_log_tail(&fixture.runtime, "jrun-missing").unwrap(),
+        Recovery::final_recovery_log_tail(
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+            "jrun-missing"
+        )
+        .unwrap(),
         None
     );
     assert!(
-        Recovery::final_recovery_log_tail(&fixture.runtime, "../jrun-other").is_err(),
+        Recovery::final_recovery_log_tail(
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+            "../jrun-other"
+        )
+        .is_err(),
         "run identity cannot escape the log directory"
     );
 }
@@ -898,8 +909,7 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
                 "ORB-14267: {activity} must withhold {observer}; recovery receives run evidence without operator authority"
             );
         }
-        let resolved = fixture
-            .runtime
+        let resolved = orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .resolve_activity_tool_denials(None, &[], activity, &denied)
             .unwrap();
         assert!(
@@ -989,8 +999,7 @@ fn agent_loop_activities_withhold_run_show_and_keep_its_operator_gate() {
             orbit_types::workflow::tool_allowed("orbit.workflow.run.show", &denied),
             "{activity} must withhold the operator-only run observer from its agent"
         );
-        let resolved = fixture
-            .runtime
+        let resolved = orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .resolve_activity_tool_denials(None, &[], activity, &denied)
             .unwrap();
         assert!(
@@ -1031,8 +1040,7 @@ fn final_recovery_drops_a_required_tool_its_disallow_list_covers() {
         denied.iter().any(|tool| tool == "orbit.task.add"),
         "ORB-15156: final_recovery disallows orbit.task.add"
     );
-    let resolved = fixture
-        .runtime
+    let resolved = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .resolve_activity_tool_denials(None, tasks, "final_recovery", &denied)
         .expect("final recovery starts when the implementer requires a disallowed tool");
     assert!(
@@ -1067,8 +1075,7 @@ fn final_recovery_drops_a_required_tool_its_disallow_list_covers() {
     );
 
     let covering = vec!["orbit.task.add".to_string()];
-    let step = fixture
-        .runtime
+    let step = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .resolve_activity_tool_denials(None, tasks, "step_failure_recovery", &covering)
         .expect("step recovery drops a covered requirement instead of refusing to start");
     assert!(
@@ -1100,8 +1107,7 @@ fn assert_admission_refused(
     disallow_list: &[String],
     task_id: &str,
 ) {
-    let refused = fixture
-        .runtime
+    let refused = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .resolve_activity_tool_denials(None, tasks, activity, disallow_list)
         .expect_err(
             "an implementing activity stays fail-closed when the list covers a requirement",

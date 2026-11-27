@@ -134,8 +134,15 @@ fn admitted_run(runtime: &OrbitRuntime, job: &str, task_ids: &[String]) -> JobRu
         captured_at: Utc::now(),
     })
     .unwrap();
-    let run = RunLifecycle::insert_job_run(runtime, job, 1, Utc::now(), Some(input), None)
-        .expect("insert run");
+    let run = RunLifecycle::insert_job_run(
+        &orbit_core::test_support::EngineHost::new(runtime),
+        job,
+        1,
+        Utc::now(),
+        Some(input),
+        None,
+    )
+    .expect("insert run");
     bind_tasks(runtime, task_ids, &run.run_id);
     run
 }
@@ -300,12 +307,12 @@ impl Gated {
     /// by `retry_source_run_id`, started now and owning the bundle.
     pub(super) fn resume(&self, source: &str) -> String {
         let runtime = &self.fixture.runtime;
-        let input = runtime
+        let input = orbit_core::test_support::EngineHost::new(runtime)
             .get_job_run(source)
             .expect("read source run")
             .and_then(|run| run.input);
         let run = RunLifecycle::insert_job_run(
-            runtime,
+            &orbit_core::test_support::EngineHost::new(runtime),
             "task_pr_pipeline",
             2,
             Utc::now(),
@@ -328,7 +335,7 @@ impl Gated {
     /// Record `run_id` as running since `started_at`.
     pub(super) fn start(&self, run_id: &str, started_at: chrono::DateTime<Utc>) {
         RunLifecycle::mark_job_run_running(
-            &self.fixture.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
             run_id,
             started_at,
             std::process::id(),
@@ -505,7 +512,7 @@ pub(super) fn review_gate_admit(
     action: &str,
     input: &Value,
 ) -> Result<Value, orbit_engine::DispatchError> {
-    runtime.run_deterministic(
+    orbit_core::test_support::EngineHost::new(runtime).run_deterministic(
         action,
         &serde_json::json!({}),
         input,
@@ -517,7 +524,7 @@ fn review_gate_settle(
     action: &str,
     input: &Value,
 ) -> Result<Value, orbit_engine::DispatchError> {
-    runtime.run_deterministic(
+    orbit_core::test_support::EngineHost::new(runtime).run_deterministic(
         action,
         &serde_json::json!({}),
         input,
@@ -528,19 +535,25 @@ pub(super) fn record_reviewer_invocation(
     runtime: &OrbitRuntime,
     request: &ReviewerInvocationRequest,
 ) -> Result<Option<u64>, orbit_common::OrbitError> {
-    ReviewGate::record_reviewer_invocation(runtime, request)
+    ReviewGate::record_reviewer_invocation(
+        &orbit_core::test_support::EngineHost::new(runtime),
+        request,
+    )
 }
 fn release_review_attempt(
     runtime: &OrbitRuntime,
     request: &ReviewReleaseRequest,
 ) -> Result<(), orbit_common::OrbitError> {
-    ReviewGate::release_review_attempt(runtime, request)
+    ReviewGate::release_review_attempt(&orbit_core::test_support::EngineHost::new(runtime), request)
 }
 pub(super) fn review_report_correction(
     runtime: &OrbitRuntime,
     request: &orbit_engine::ReviewReportCorrectionRequest,
 ) -> Result<Option<String>, orbit_common::OrbitError> {
-    ReviewGate::review_report_correction(runtime, request)
+    ReviewGate::review_report_correction(
+        &orbit_core::test_support::EngineHost::new(runtime),
+        request,
+    )
 }
 // The persisted lineage key used when preparing a hostile pre-admission ledger.
 pub(super) fn lineage_key(workspace: &str, tasks: &[String], base: &str, run: &str) -> String {

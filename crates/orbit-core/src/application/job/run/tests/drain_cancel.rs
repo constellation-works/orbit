@@ -1,6 +1,7 @@
 //! Deterministic stop-time interleavings: work persisted by the selected
 //! drain before its stop is confirmed must not escape forced cancellation.
 
+use crate::application::contracts::EngineHostPort;
 use crate::application::job::JobRunCancelOutcome;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -261,6 +262,7 @@ pub(super) fn in_progress_task(runtime: &OrbitRuntime, run: &JobRun) -> String {
         })
         .expect("create task");
     runtime
+        .engine_host()
         .apply_task_automation_update(
             &task.id,
             TaskAutomationUpdate {

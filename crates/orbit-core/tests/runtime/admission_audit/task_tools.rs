@@ -147,7 +147,7 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
         caller_machine_name: Some("untrusted-caller-host".into()),
         ..Default::default()
     };
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .run_tool_with_context(
             "orbit.task.artifact.put",
             json!({
@@ -173,7 +173,7 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
         caller_machine_id: Some("untrusted-caller-box".into()),
         ..Default::default()
     };
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .run_tool_with_context(
             "orbit.task.artifact.put",
             json!({
@@ -200,7 +200,7 @@ fn task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution
         caller_machine_name: Some("remote-spoke-host".into()),
         ..Default::default()
     };
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .run_tool_with_context(
             "orbit.task.artifact.put",
             json!({
@@ -507,7 +507,7 @@ fn delivery_coverage_write_refuses_outside_own_orbit_run_and_accepts_own_run() {
     let attempt = seed_open_delivery_batch_attempt(&runtime, machine_id, &task.id);
 
     let own_run = RunLifecycle::insert_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "task_local_pipeline",
         1,
         chrono::Utc::now(),
@@ -516,7 +516,7 @@ fn delivery_coverage_write_refuses_outside_own_orbit_run_and_accepts_own_run() {
     )
     .expect("insert own run");
     let other_run = RunLifecycle::insert_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "task_local_pipeline",
         1,
         chrono::Utc::now(),
@@ -525,7 +525,7 @@ fn delivery_coverage_write_refuses_outside_own_orbit_run_and_accepts_own_run() {
     )
     .expect("insert other run");
     RunLifecycle::apply_task_automation_update(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         &task.id,
         TaskAutomationUpdate {
             job_run_id: Some(own_run.run_id.clone()),
@@ -576,7 +576,7 @@ fn delivery_coverage_write_refuses_outside_own_orbit_run_and_accepts_own_run() {
     );
 
     // 2. A different Orbit run is also refused.
-    let other_err = runtime
+    let other_err = orbit_core::test_support::EngineHost::new(&runtime)
         .run_tool_with_context(
             "orbit.task.artifact.put",
             put_input.clone(),
@@ -611,7 +611,7 @@ fn delivery_coverage_write_refuses_outside_own_orbit_run_and_accepts_own_run() {
     );
 
     // 3. The task's own Orbit run succeeds and records the evidence authority.
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .run_tool_with_context(
             "orbit.task.artifact.put",
             put_input,

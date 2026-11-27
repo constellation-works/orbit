@@ -60,7 +60,7 @@ fn activity_resolved_tools(
         panic!("agent activity")
     };
     let denied = spec.tool_disallow_list.unwrap_or_default();
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .resolve_activity_tool_denials(None, &[], activity, &denied)
         .unwrap()
 }
@@ -112,7 +112,7 @@ fn dispatched_deny_list(runtime: &OrbitRuntime, root: &Path, activity: &str) -> 
         panic!("agent activity")
     };
     spec.provider = orbit_types::workflow::activity_job::Provider::Claude;
-    let run = runtime
+    let run = orbit_core::test_support::EngineHost::new(runtime)
         .insert_job_run("notice_policy_fixture", 1, chrono::Utc::now(), None, None)
         .unwrap();
     let audit = orbit_engine::V2AuditWriter::with_disk_sinks(
@@ -125,7 +125,7 @@ fn dispatched_deny_list(runtime: &OrbitRuntime, root: &Path, activity: &str) -> 
     )
     .unwrap();
     orbit_engine::activity_job::cli_runner::run_cli_backend(
-        runtime,
+        &orbit_core::test_support::EngineHost::new(runtime),
         &spec,
         activity,
         &run.run_id,
@@ -536,7 +536,7 @@ fn linked_task_done_closes_the_notice_and_frees_its_key() {
         json!({"id": task, "status": "review", "execution_summary": "Fixed.",
                   "model": "codex"}),
     );
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &task,
             orbit_engine::TaskAutomationUpdate {
@@ -593,7 +593,7 @@ fn updated_task_links_control_notice_closure() {
         ] {
             runtime.run_tool("orbit.task.update", input).unwrap();
         }
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .apply_task_automation_update(
                 task,
                 orbit_engine::TaskAutomationUpdate {
@@ -867,7 +867,7 @@ fn close_preserves_corroboration_committed_after_close_read() {
             ));
         },
         || {
-            runtime
+            orbit_core::test_support::EngineHost::new(&runtime)
                 .apply_task_automation_update(
                     &task,
                     orbit_engine::TaskAutomationUpdate {
@@ -941,7 +941,7 @@ fn agent_posting_baseline_governs_managed_runs() {
     assert_eq!(posted["notice"]["author"]["task_id"], task.as_str());
     assert_eq!(posted["notice"]["author"]["run_id"], "jrun-notice-1");
     let id = posted["notice"]["id"].as_str().unwrap().to_string();
-    let brief = runtime
+    let brief = orbit_core::test_support::EngineHost::new(&runtime)
         .notices_for_agent_input("jrun-second", "agent_implement", &json!({"task_id": task}))
         .expect("a second run's brief carries the open notice");
     assert_eq!(brief.block["trust"], "untrusted_data");
@@ -1216,7 +1216,7 @@ fn cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick() {
     update(
         json!({"id": task, "status": "review", "execution_summary": "Fixed.", "model": "codex"}),
     );
-    other
+    orbit_core::test_support::EngineHost::new(&other)
         .apply_task_automation_update(
             &task,
             orbit_engine::TaskAutomationUpdate {

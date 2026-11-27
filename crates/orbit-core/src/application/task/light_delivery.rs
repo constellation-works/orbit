@@ -20,6 +20,7 @@ use orbit_types::task::{
 use orbit_types::workflow::handoff::HandoffCandidate;
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::task::TaskJobPort;
 
 impl OrbitRuntime {
@@ -80,7 +81,13 @@ pub(crate) fn review_skip_decisions(
             continue;
         }
         decisions.extend(orbit_engine::review_skip_decision(
-            runtime, workspace, base, head, &task_ids, tag, profile,
+            &runtime.engine_host(),
+            workspace,
+            base,
+            head,
+            &task_ids,
+            tag,
+            profile,
         )?);
     }
     Ok(decisions)
@@ -150,7 +157,7 @@ pub(crate) fn record_light_delivery(
         if records_light_delivery(&runtime.get_task_history(task_id)?, decision) {
             continue;
         }
-        runtime.apply_task_automation_update(
+        runtime.engine_host().apply_task_automation_update(
             task_id,
             TaskAutomationUpdate {
                 append_history: vec![light_delivery_history_entry(decision)],

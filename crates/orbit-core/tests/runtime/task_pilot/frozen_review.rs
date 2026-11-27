@@ -117,8 +117,7 @@ fn executor_run_owned_by(workspace: &Workspace, task: &str, pid: u32) -> String 
         .jobs
         .mark_job_run_running(&run.run_id, Utc::now(), pid)
         .unwrap();
-    workspace
-        .runtime
+    orbit_core::test_support::EngineHost::new(&workspace.runtime)
         .apply_task_automation_update(
             task,
             TaskAutomationUpdate {
@@ -402,8 +401,7 @@ fn an_operator_block_after_a_failed_frozen_review_is_not_that_failures_stop() {
         (TaskStatus::Backlog, "operator_requeue"),
         (TaskStatus::Blocked, "operator_block"),
     ] {
-        workspace
-            .runtime
+        orbit_core::test_support::EngineHost::new(&workspace.runtime)
             .apply_task_automation_update(
                 &review.review,
                 TaskAutomationUpdate {

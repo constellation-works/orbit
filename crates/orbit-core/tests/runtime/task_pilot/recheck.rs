@@ -317,8 +317,7 @@ fn a_recheck_is_held_to_the_same_revision_proof() {
     let prepared = workspace.prepare_with(&task.id, json!({}));
     assert_eq!(prepared["tasks"][0]["pilot_mode"], "recheck");
     let apply = |result: Value| {
-        workspace
-            .runtime
+        orbit_core::test_support::EngineHost::new(&workspace.runtime)
             .run_deterministic(
                 "apply_task_pilot_results",
                 &json!({}),

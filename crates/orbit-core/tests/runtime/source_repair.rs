@@ -466,7 +466,7 @@ fn cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift() {
                     .unwrap();
             }
             "rebound" => {
-                f.runtime
+                orbit_core::test_support::EngineHost::new(&f.runtime)
                     .apply_task_automation_update(
                         &f.task,
                         TaskAutomationUpdate {
@@ -574,7 +574,7 @@ fn current_policy_is_captured_and_review_runs_at_its_scheduled_boundary() {
         std::fs::write(&f.answer, answer.to_string()).unwrap();
         let push_input = json!({"job_run_id":id,"workspace_path":checkout,"branch":f.branch,"base":"main","base_ref":setup["base_ref"]});
         let refused = execute_deterministic_action(
-            &f.runtime,
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
             "git_push",
             &json!({}),
             &push_input,
@@ -603,7 +603,7 @@ fn current_policy_is_captured_and_review_runs_at_its_scheduled_boundary() {
         std::fs::write(&f.answer, answer.to_string()).unwrap();
         let open_input = json!({"job_run_id":id,"completed_task_ids":[f.task],"workspace_path":checkout,"head":f.branch,"base":"main","base_ref":setup["base_ref"],"base_sha":setup["base_sha"]});
         let refused = execute_deterministic_action(
-            &f.runtime,
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
             "pr_open",
             &json!({}),
             &open_input,
@@ -627,7 +627,7 @@ fn current_policy_is_captured_and_review_runs_at_its_scheduled_boundary() {
             git(&checkout, &["commit", "-qm", "reviewer correction"]);
             let followup = json!({"job_run_id":id,"workspace_path":checkout,"branch":f.branch,"lease_remote_sha":repaired_head,"pr_number":"17"});
             let refused = execute_deterministic_action(
-                &f.runtime,
+                &orbit_core::test_support::EngineHost::new(&f.runtime),
                 "git_push",
                 &json!({}),
                 &followup,
@@ -664,7 +664,7 @@ fn current_policy_is_captured_and_review_runs_at_its_scheduled_boundary() {
         let mut gate = json!({"job_run_id":id,"completed_task_ids":[f.task],"workspace_path":checkout,"base":"main","base_sha":setup["base_sha"],"base_sync":"remote","mode":"pr"});
         let pre_push = f.action("review_gate_admit", gate.clone());
         assert_eq!(pre_push["applies"], false, "{pre_push}");
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 &f.task,
                 TaskAutomationUpdate {
@@ -687,8 +687,7 @@ fn current_policy_is_captured_and_review_runs_at_its_scheduled_boundary() {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, report.to_string()).unwrap();
             f.runtime.run_tool("orbit.task.artifact.put",json!({"id":f.task,"model":"codex","path":"review-report.json","source_path":path})).unwrap();
-            let error = f
-                .runtime
+            let error = orbit_core::test_support::EngineHost::new(&f.runtime)
                 .run_deterministic("review_gate_settle", &json!({}), &gate, Default::default())
                 .unwrap_err();
             assert!(error.to_string().contains("review_gate_blocked"), "{error}");
@@ -748,7 +747,7 @@ fn concurrent_replay_and_cancelled_attempt_keep_one_durable_reservation() {
             .count(),
         1
     );
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -795,7 +794,7 @@ fn exhausted_budget_and_unreadable_ledger_refuse_without_run_admission() {
                 json!({"pr_number":"17","head_sha":format!("{i:040x}"),"blocker":"failed_checks","attempt":i+1,"budget":3,"run_id":format!("old-{i}"),"crew":"fixture","crew_source":"fixture"}).to_string()
             )).collect()
         };
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 &f.task,
                 TaskAutomationUpdate {
@@ -881,7 +880,10 @@ fn scope_and_cancellation_are_rechecked_before_source_effects() {
                 )
                 .unwrap();
         }
-        let error = execute_deterministic_action(&f.runtime,"candidate_resume",&json!({}),
+        let error = execute_deterministic_action(
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
+            "candidate_resume",
+            &json!({}),
         &json!({"job_run_id":id,"task_ids":[f.task],"workspace_path":checkout,"base_sha":setup["base_sha"]}),
         false,&HashMap::new(),None).unwrap_err();
         assert!(

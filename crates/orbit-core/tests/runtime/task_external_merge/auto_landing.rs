@@ -86,7 +86,7 @@ fn observe_passed(fx: &Fixture, task: &str) {
     )
     .to_note()
     .unwrap();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             task,
             TaskAutomationUpdate {

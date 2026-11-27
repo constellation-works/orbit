@@ -583,7 +583,11 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
         Arc::new(follower),
     )
     .unwrap();
-    RunLifecycle::register_worker_process(&runtime, std::process::id()).unwrap();
+    RunLifecycle::register_worker_process(
+        &orbit_core::test_support::EngineHost::new(&runtime),
+        std::process::id(),
+    )
+    .unwrap();
     let denied = McpWorkspace::orbit_command(&owner.work, &owner.home)
         .args([
             "mcp",

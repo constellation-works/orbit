@@ -201,7 +201,7 @@ fn wildcard_covered_grant_refuses_admission_case() {
         })
         .unwrap();
 
-    let error = runtime
+    let error = orbit_core::test_support::EngineHost::new(&runtime)
         .resolve_activity_tool_denials(
             None,
             std::slice::from_ref(&task.id),

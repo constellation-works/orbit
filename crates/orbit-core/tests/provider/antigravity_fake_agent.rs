@@ -161,7 +161,7 @@ fn try_dispatch_with_audit(
         }),
         audit,
         run_id: "agy-fake",
-        host: Some(&harness.runtime),
+        host: Some(&orbit_core::test_support::EngineHost::new(&harness.runtime)),
     })
     .map(|outcome| (outcome, store))
     .map_err(|error| error.to_string())

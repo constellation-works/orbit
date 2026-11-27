@@ -130,7 +130,7 @@ impl HumanCrewFixture {
         if let Some(task_ids) = task_ids {
             input["task_ids"] = json!(task_ids);
         }
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .run_deterministic(
                 "prepare_task_pilot",
                 &json!({}),
@@ -325,8 +325,7 @@ fn a_task_pilot_run_keeps_an_agent_crew_when_its_task_crew_is_human() {
             ),
         )
         .unwrap();
-    let selection = fx
-        .runtime
+    let selection = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .run_deterministic(
             "select_proposed_approvals",
             &json!({}),

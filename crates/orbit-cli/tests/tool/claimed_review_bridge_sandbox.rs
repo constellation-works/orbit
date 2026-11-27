@@ -578,7 +578,8 @@ impl Confined {
             env!("CARGO_BIN_EXE_orbit").to_string(),
         ];
         argv.extend(args.iter().map(ToString::to_string));
-        let mut env = runner.agent_subprocess_environment(&[]);
+        let mut env =
+            orbit_core::test_support::EngineHost::new(runner).agent_subprocess_environment(&[]);
         env.push((
             "ORBIT_PLUGIN_BROKER".to_string(),
             brokers[0].socket_path().display().to_string(),
@@ -600,8 +601,16 @@ impl Confined {
         // What the step runner records for the provider it just spawned.
         // The provider waits on `start_signal` before it opens the follower
         // store, so these writes finish first.
-        RunLifecycle::register_worker_process(runner, pid).expect("record the worker");
-        RunLifecycle::register_worker_pid_namespace(runner, pid).expect("record the namespace");
+        RunLifecycle::register_worker_process(
+            &orbit_core::test_support::EngineHost::new(runner),
+            pid,
+        )
+        .expect("record the worker");
+        RunLifecycle::register_worker_pid_namespace(
+            &orbit_core::test_support::EngineHost::new(runner),
+            pid,
+        )
+        .expect("record the namespace");
         for broker in brokers {
             broker.bind_sandbox(pid).expect("authenticate the sandbox");
         }
@@ -1402,7 +1411,7 @@ fn sandbox_fixture() {
     fs::write(&provider, PROVIDER).expect("provider");
 
     // Phase 1: the running reviewer reads, writes, retries and is refused.
-    let broker = runner
+    let broker = orbit_core::test_support::EngineHost::new(&runner)
         .start_plugin_broker(&broker_run(LEAF, REVIEWER, &task, &workspace, &caller))
         .expect("start broker")
         .expect("Unix broker");
@@ -1669,7 +1678,7 @@ fn sandbox_fixture() {
             )
         })
         .expect("reviewer finished");
-    let stopped = runner
+    let stopped = orbit_core::test_support::EngineHost::new(&runner)
         .start_plugin_broker(&broker_run(
             "leaf-review-stopped",
             REVIEWER,
@@ -1681,7 +1690,7 @@ fn sandbox_fixture() {
         .expect("Unix broker");
     let dead_socket = stopped.socket_path().to_path_buf();
     drop(stopped);
-    let finished = runner
+    let finished = orbit_core::test_support::EngineHost::new(&runner)
         .start_plugin_broker(&broker_run(
             "leaf-review-finished",
             REVIEWER,
@@ -1691,7 +1700,7 @@ fn sandbox_fixture() {
         ))
         .expect("start broker")
         .expect("Unix broker");
-    let implementer = runner
+    let implementer = orbit_core::test_support::EngineHost::new(&runner)
         .start_plugin_broker(&broker_run(
             "leaf-implement",
             "agent_implement",
@@ -1784,7 +1793,7 @@ fn sandbox_fixture() {
         })
         .expect("reviewer restarted");
     let bridged = |run_id: &str| {
-        let broker = runner
+        let broker = orbit_core::test_support::EngineHost::new(&runner)
             .start_plugin_broker(&broker_run(run_id, REVIEWER, &task, &workspace, &caller))
             .expect("start broker")
             .expect("Unix broker");
