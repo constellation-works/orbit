@@ -32,7 +32,7 @@ fn refresh(server: &Server) -> [Value; 3] {
 #[test]
 fn one_frictions_refresh_computes_the_rates_once() {
     isolated(
-        "friction_stats::one_frictions_refresh_computes_the_rates_once",
+        "friction_refresh::one_frictions_refresh_computes_the_rates_once",
         || {
             let fixture = Fixture::new();
             let server = fixture.counted_task_server();

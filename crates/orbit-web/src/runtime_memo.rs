@@ -297,6 +297,16 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
             .await
     }
 
+    /// Drop every entry computed for `runtime`, so its next read recomputes.
+    /// A compute already running finishes into a slot no later read finds.
+    pub(crate) fn invalidate(&self, runtime: &Arc<Core>) {
+        let identity = Arc::as_ptr(runtime) as usize;
+        self.slots
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(owner, _), _| *owner != identity);
+    }
+
     async fn compute<F>(
         &self,
         runtime: Option<&Arc<Core>>,
@@ -360,16 +370,6 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
             body: computed,
             age: Duration::ZERO,
         })
-    }
-
-    /// Drop every entry computed for `runtime`, so its next read recomputes.
-    /// A compute already running finishes into a slot no later read finds.
-    pub(crate) fn invalidate(&self, runtime: &Arc<Core>) {
-        let identity = Arc::as_ptr(runtime) as usize;
-        self.slots
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|(owner, _), _| *owner != identity);
     }
 
     fn slot(&self, key: (usize, K)) -> Arc<Slot<V>> {

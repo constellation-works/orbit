@@ -160,19 +160,42 @@ pub(super) struct FrictionPatchBody {
     extra: Map<String, Value>,
 }
 
-async fn run_friction(core: Arc<Core>, call: FrictionCall) -> Result<Value, Box<Response>> {
-    blocking("friction tool", move || {
-        friction::exec(&core, call.into_command()).map(Outcome::into_value)
-    })
-    .await
-}
-
 /// A friction request's per-request [`Core`] and the shared runtime it was
 /// derived from. The memo keys on the runtime, which every request of a
 /// workspace shares; the per-request core is what runs the verbs.
 pub(super) struct FrictionWs {
     core: Arc<Core>,
     runtime: Arc<Core>,
+}
+
+impl FrictionWs {
+    /// The workspace's friction rates, computed once for the Open list, the
+    /// Triaged list and the Stats read of one Frictions refresh. Keyed by the
+    /// workspace runtime, so one workspace never serves another's rates, and a
+    /// failed computation is not kept: the next read retries it.
+    async fn stats(&self, state: &DashboardState) -> Result<Value, Box<Response>> {
+        let core = Arc::clone(&self.core);
+        state
+            .friction_stats_memo()
+            .get_or_compute(&self.runtime, (), FRICTION_STATS_TTL, move || {
+                friction::exec(&core, FrictionCall::new(FrictionVerb::Stats).into_command())
+                    .map(Outcome::into_value)
+            })
+            .await
+            .map(|served| (*served.body).clone())
+            .map_err(|error| Box::new(map_runtime_error(error)))
+    }
+
+    /// Run a friction write and drop the workspace's memoized rates, so the
+    /// next read reflects it instead of waiting out the memo.
+    async fn write(&self, state: &DashboardState, call: FrictionCall) -> Response {
+        let result = run_friction(Arc::clone(&self.core), call).await;
+        state.friction_stats_memo().invalidate(&self.runtime);
+        match result {
+            Ok(friction) => Json(friction).into_response(),
+            Err(response) => *response,
+        }
+    }
 }
 
 impl FromRequestParts<DashboardState> for FrictionWs {
@@ -188,35 +211,11 @@ impl FromRequestParts<DashboardState> for FrictionWs {
     }
 }
 
-impl FrictionWs {
-    /// The workspace's friction rates, computed once for the Open list, the
-    /// Triaged list and the Stats read of one Frictions refresh. Keyed by the
-    /// workspace runtime, so one workspace never serves another's rates, and a
-    /// failed computation is not kept: the next read retries it.
-    async fn stats(&self, state: &DashboardState) -> Result<Value, Response> {
-        let core = Arc::clone(&self.core);
-        state
-            .friction_stats_memo()
-            .get_or_compute(&self.runtime, (), FRICTION_STATS_TTL, move || {
-                friction::exec(&core, FrictionCall::new(FrictionVerb::Stats).into_command())
-                    .map(Outcome::into_value)
-                    .map_err(Into::into)
-            })
-            .await
-            .map(|served| (*served.body).clone())
-            .map_err(map_runtime_error)
-    }
-
-    /// Run a friction write and drop the workspace's memoized rates, so the
-    /// next read reflects it instead of waiting out the memo.
-    async fn write(&self, state: &DashboardState, call: FrictionCall) -> Response {
-        let result = run_friction(Arc::clone(&self.core), call).await;
-        state.friction_stats_memo().invalidate(&self.runtime);
-        match result {
-            Ok(friction) => Json(friction).into_response(),
-            Err(response) => *response,
-        }
-    }
+async fn run_friction(core: Arc<Core>, call: FrictionCall) -> Result<Value, Box<Response>> {
+    blocking("friction tool", move || {
+        friction::exec(&core, call.into_command()).map(Outcome::into_value)
+    })
+    .await
 }
 
 pub(super) async fn list_frictions(
@@ -262,7 +261,7 @@ pub(super) async fn list_frictions(
     };
     let stats = match stats {
         Ok(stats) => stats,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let (items, notes) = match items_json {
         Value::Array(items) => (items, Vec::new()),
@@ -365,7 +364,7 @@ pub(super) async fn friction_stats(
 ) -> Response {
     match ws.stats(&state).await {
         Ok(stats) => Json(stats).into_response(),
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
