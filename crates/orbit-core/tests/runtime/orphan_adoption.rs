@@ -213,7 +213,7 @@ impl Fixture {
             .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input), None)
             .unwrap();
         self.stop_delivery(&run.run_id, &head, number, stop, code);
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {
@@ -360,7 +360,7 @@ impl Fixture {
 
     /// The drain's adoption step, as `workspace_auto_pipeline` runs it.
     fn pass(&self, drain: &str, completion: &str, auto_fix: bool) -> Value {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .run_deterministic(
                 "adopt_orphaned_deliveries",
                 &json!({}),
@@ -505,7 +505,7 @@ fn runs_that_no_longer_own_an_open_pull_request_are_left_alone() {
     // Its task moved on: an operator sent it back to the backlog.
     let (moved_task, moved, moved_head) = fx.dead_leaf(Some(22));
     fx.forge.open(22, &moved_head);
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &moved_task,
             TaskAutomationUpdate {

@@ -77,9 +77,11 @@ fn fixture_with_command(command: &str) -> Fixture {
         )
         .unwrap();
     let run = fixture.input["job_run_id"].as_str().unwrap();
-    let record = fixture.runtime.get_job_run(run).unwrap().unwrap();
-    fixture
-        .runtime
+    let record = orbit_core::test_support::EngineHost::new(&fixture.runtime)
+        .get_job_run(run)
+        .unwrap()
+        .unwrap();
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .mark_job_run_running(run, Utc::now(), std::process::id())
         .unwrap();
     fixture
@@ -120,8 +122,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         if self.repair.starts_with("scratch-") && !update.upsert_artifacts.is_empty() {
             return Err(OrbitError::Execution("synthetic artifact refusal".into()));
         }
-        self.fixture
-            .runtime
+        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
             .apply_task_automation_update(task_id, update)
     }
 
@@ -130,15 +131,18 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
     }
 
     fn get_job_run(&self, run: &str) -> Result<Option<orbit_types::workflow::JobRun>, OrbitError> {
-        self.fixture.runtime.get_job_run(run)
+        orbit_core::test_support::EngineHost::new(&self.fixture.runtime).get_job_run(run)
     }
 
     fn required_validation_commands(&self) -> Vec<String> {
-        self.fixture.runtime.required_validation_commands()
+        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+            .required_validation_commands()
     }
 
     fn run_settings(&self) -> orbit_engine::RunSettings {
-        HostEnvironment::run_settings(&self.fixture.runtime)
+        HostEnvironment::run_settings(&orbit_core::test_support::EngineHost::new(
+            &self.fixture.runtime,
+        ))
     }
 
     fn attach_task_validation_log(
@@ -148,8 +152,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         path: &str,
         content: Vec<u8>,
     ) -> Result<(), OrbitError> {
-        self.fixture
-            .runtime
+        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
             .attach_task_validation_log(task, run, path, content)
     }
 
@@ -201,7 +204,9 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                     }]) } else { json!([]) },
                     "validation": [{
                         "id": "V1",
-                        "command": self.fixture.runtime.required_validation_commands()[0],
+                        "command":
+                            orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+                                .required_validation_commands()[0],
                         "outcome": "passed",
                         "role": "required",
                     }],
@@ -466,9 +471,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                 )
             }
             _ => {
-                let mut result = self
-                    .fixture
-                    .runtime
+                let mut result = orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
                     .run_deterministic(action, config, input, context)?;
                 if action == "review_gate_admit" {
                     if self.repair == "landing-review" {
@@ -499,7 +502,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                 git(self.fixture, &["status", "--porcelain"]),
             ));
         }
-        self.fixture.runtime.checkpoint_step(
+        orbit_core::test_support::EngineHost::new(&self.fixture.runtime).checkpoint_step(
             run_id,
             index,
             step_id,
@@ -517,7 +520,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         evidence: &Value,
     ) -> Result<(), OrbitError> {
         Recovery::persist_final_recovery_evidence(
-            &self.fixture.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
             run_id,
             task_id,
             workspace,
@@ -526,7 +529,8 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
     }
 
     fn final_recovery_log_tail(&self, run: &str) -> Result<Option<String>, OrbitError> {
-        self.fixture.runtime.final_recovery_log_tail(run)
+        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+            .final_recovery_log_tail(run)
     }
 
     fn admit_final_recovery(
@@ -534,7 +538,8 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         run: &str,
         request: &FinalRecoveryAdmissionRequest,
     ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        self.fixture.runtime.admit_final_recovery(run, request)
+        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+            .admit_final_recovery(run, request)
     }
 
     fn apply_final_recovery(
@@ -542,7 +547,11 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         run: &str,
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError> {
-        Recovery::apply_final_recovery(&self.fixture.runtime, run, application)
+        Recovery::apply_final_recovery(
+            &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
+            run,
+            application,
+        )
     }
 }
 
@@ -647,8 +656,7 @@ fn run_pipeline<'a>(
     let run = fixture.input["job_run_id"].as_str().unwrap();
     let host = repair_host(fixture, repair);
     let audit = audit(fixture, run);
-    let input = fixture
-        .runtime
+    let input = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .get_job_run(run)
         .unwrap()
         .unwrap()
@@ -659,7 +667,7 @@ fn run_pipeline<'a>(
         // Exercise authoritative checkpoint refusals without changing task
         // policy or teaching the deterministic commit action a fixture hook.
         let mut committed = orbit_engine::execute_deterministic_action(
-            &fixture.runtime,
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
             "git_commit",
             &json!({}),
             &fixture.input,
@@ -1045,7 +1053,7 @@ fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
         git(&fixture, &["add", "candidate.txt"]);
         git(&fixture, &["commit", "-m", "unrecorded HEAD change"]);
         let error = orbit_engine::execute_deterministic_action(
-            &fixture.runtime,
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
             "git_commit",
             &json!({}),
             &fixture.input,
@@ -1364,7 +1372,7 @@ fn final_recovery_evidence_refuses_unisolatable_object_store() {
 fn interrupted_and_resumed(fixture: &Fixture) -> (PipelineState, String, PipelineState) {
     let owner = fixture.input["job_run_id"].as_str().unwrap();
     let committed = orbit_engine::execute_deterministic_action(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         "git_commit",
         &json!({}),
         &fixture.input,
@@ -1384,16 +1392,18 @@ fn interrupted_and_resumed(fixture: &Fixture) -> (PipelineState, String, Pipelin
     }
     fixture.runtime.write_run_state(owner, &state).unwrap();
     RunLifecycle::finalize_job_run(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         owner,
         JobRunState::Interrupted,
         Utc::now(),
         None,
     )
     .unwrap();
-    let record = fixture.runtime.get_job_run(owner).unwrap().unwrap();
-    let resumed = fixture
-        .runtime
+    let record = orbit_core::test_support::EngineHost::new(&fixture.runtime)
+        .get_job_run(owner)
+        .unwrap()
+        .unwrap();
+    let resumed = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .insert_job_run(
             &record.job_id,
             2,
@@ -1404,8 +1414,7 @@ fn interrupted_and_resumed(fixture: &Fixture) -> (PipelineState, String, Pipelin
         .unwrap()
         .run_id
         .to_string();
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .mark_job_run_running(&resumed, Utc::now(), std::process::id())
         .unwrap();
     let mut seeded = state.clone();
@@ -1420,7 +1429,7 @@ fn commit_as(fixture: &Fixture, run: Option<&str>) -> Result<Value, OrbitError> 
         input["run_id"] = json!(run);
     }
     orbit_engine::execute_deterministic_action(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         "git_commit",
         &json!({}),
         &input,
@@ -1444,8 +1453,7 @@ fn resumed_final_recovery_repair_keeps_the_original_checkpoint_owner() {
     let owner = fixture.input["job_run_id"].as_str().unwrap().to_string();
     let (owner_state, resumed, seeded) = interrupted_and_resumed(&fixture);
     let host = repair_host(&fixture, "committed");
-    let input = fixture
-        .runtime
+    let input = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .get_job_run(&resumed)
         .unwrap()
         .unwrap()
@@ -1509,13 +1517,15 @@ fn resumed_final_recovery_repair_keeps_the_original_checkpoint_owner() {
     commit_as(&fixture, Some(&resumed)).unwrap();
     assert_head_refused(&fixture, None, "original owner without a receipt");
     let receipt = fixture.runtime.read_run_state(&resumed).unwrap().unwrap();
-    let record = fixture.runtime.get_job_run(&owner).unwrap().unwrap();
+    let record = orbit_core::test_support::EngineHost::new(&fixture.runtime)
+        .get_job_run(&owner)
+        .unwrap()
+        .unwrap();
     for (case, job_id, source) in [
         ("unrelated run", record.job_id.as_str(), None),
         ("other job lineage", "other_job", Some(owner.clone())),
     ] {
-        let copy = fixture
-            .runtime
+        let copy = orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .insert_job_run(job_id, 2, Utc::now(), record.input.clone(), source)
             .unwrap()
             .run_id

@@ -381,7 +381,7 @@ fn admission_and_mint_rewrite_pre_family_names_they_meet() {
     let task = add_task(&runtime, "Stored before tool families");
     store_pre_family_task_tools(&fixture.global, &task, &["orbit.task.artifact.put"], &[]);
     let runtime = fixture.open();
-    let admitted = runtime
+    let admitted = orbit_core::test_support::EngineHost::new(&runtime)
         .resolve_activity_tools(std::slice::from_ref(&task), &[])
         .unwrap();
     assert_eq!(admitted.requested_tools, vec!["orbit.task.artifact:put"]);

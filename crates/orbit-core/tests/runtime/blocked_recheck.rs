@@ -174,7 +174,7 @@ fn record_base_red(fx: &Fixture, task: &str, head: &str, storage: BaseRedStorage
         BaseRedStorage::LegacyMinimal => (json!({"failed_head": head, "reason": "base_red"}), None),
     };
     RunLifecycle::apply_task_automation_update(
-        &fx.runtime,
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
         task,
         TaskAutomationUpdate {
             append_history: vec![TaskHistoryEntry {
@@ -203,7 +203,7 @@ fn run_blocks(fx: &Fixture, task: &str, base_red_head: Option<&str>, storage: Ba
         record_base_red(fx, task, head, storage);
     }
     RunLifecycle::apply_task_automation_update(
-        &fx.runtime,
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
         task,
         blocked_workflow_failure_update(
             "task_delivery_pipeline",

@@ -15,6 +15,7 @@ use super::super::drain_promotion::approval_hook::{self, Hook};
 use super::super::drain_promotion::held_classification;
 use super::persist::{Workspace, proof, workspace};
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 /// A running run of `job`, as the drain and its pilot child are.
@@ -81,6 +82,7 @@ fn qualifying_task(runtime: &OrbitRuntime) -> Task {
 
 fn action(runtime: &OrbitRuntime, action: &str, input: Value) -> Value {
     runtime
+        .engine_host()
         .run_deterministic(action, &json!({}), &input, ToolContext::default())
         .unwrap_or_else(|error| panic!("{action}: {error}"))
 }
@@ -155,7 +157,7 @@ fn pilot_with_findings(
     }
     let (revision, tree) = proof(&prepared);
     approval_hook::set_before_lock(race);
-    let applied = runtime.run_deterministic(
+    let applied = runtime.engine_host().run_deterministic(
         "apply_task_pilot_results",
         &json!({}),
         &json!({

@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use crate::application::contracts::EngineHostPort;
 use crate::git_test_support::run as run_git;
 use crate::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use chrono::Utc;
@@ -110,6 +111,7 @@ fn terminal_replay_finishes_side_effects_after_a_post_lock_read_failure() {
             )
             .expect("record relation");
         runtime
+            .engine_host()
             .apply_task_automation_update(
                 &task.id,
                 TaskAutomationUpdate {

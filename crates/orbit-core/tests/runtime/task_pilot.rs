@@ -396,7 +396,7 @@ impl Workspace {
         } else {
             input
         };
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .run_deterministic(action, &json!({}), &input, ToolContext::default())
             .unwrap_or_else(|error| panic!("{action}: {error}"))
     }

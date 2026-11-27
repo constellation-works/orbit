@@ -425,7 +425,9 @@ pub(super) fn codex_side_write_roots(
         return Ok(Vec::new());
     }
 
-    let config = HostEnvironment::agent_provider_config(runtime);
+    let config = HostEnvironment::agent_provider_config(
+        &crate::adapter::engine_host::EngineHost::new(runtime),
+    );
     let Some(raw_dirs) = config.get("writable_dirs_json") else {
         return Ok(Vec::new());
     };

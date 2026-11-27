@@ -158,7 +158,7 @@ fn automation_update_to_done_resolves_related_friction_scenario() {
     let friction_id = add_test_friction(&runtime);
     let task_id = add_task_with_resolves(&runtime, &repo_root, &friction_id, "backlog");
 
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &task_id,
             TaskAutomationUpdate {
@@ -330,7 +330,7 @@ fn cross_workspace_resolves_automation_update_is_rejected_scenario() {
     let owner = runtime_a.workspace_id().expect("workspace a id");
     let task_id = add_task_with_resolves(&runtime_b, &repo_b, &friction_id, "backlog");
 
-    let error = runtime_b
+    let error = orbit_core::test_support::EngineHost::new(&runtime_b)
         .apply_task_automation_update(
             &task_id,
             TaskAutomationUpdate {
@@ -415,7 +415,7 @@ fn writes_to_a_done_task_do_not_re_resolve_a_friction_a_human_reopened_scenario(
     assert_friction_still_open(&runtime, &friction_id);
 
     // Delivery automation syncing the merged PR onto the done task.
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &task_id,
             TaskAutomationUpdate {
@@ -511,7 +511,7 @@ fn manual_done_settles_a_text_target_without_resolving_it_scenario() {
         )
         .expect("name the text target");
     move_backlog_task_to_review(&runtime, &task);
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &task,
             TaskAutomationUpdate {

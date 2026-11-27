@@ -70,7 +70,12 @@ fn flaky_signatures_are_filed_once_across_runs_and_tasks() {
         let id = task["id"].as_str().unwrap();
         record.run_id = format!("jrun-{index}");
         for _ in 0..2 {
-            ReviewGate::record_flaky_validation(&runtime, id, &record).unwrap();
+            ReviewGate::record_flaky_validation(
+                &orbit_core::test_support::EngineHost::new(&runtime),
+                id,
+                &record,
+            )
+            .unwrap();
         }
         let history = runtime.get_task_history(id).unwrap();
         let observed = history

@@ -12,6 +12,7 @@ use orbit_types::workflow::{
 use serde_json::json;
 
 use super::task::{enter_isolated_child, test_runtime};
+use crate::application::contracts::EngineHostPort;
 use crate::application::task::TaskAddParams;
 use crate::application::task::params::TaskRecordUpdateParams;
 use crate::application::task::records::TaskRecords;
@@ -73,7 +74,7 @@ fn transient_infra_deferral_redacts_the_authentication_error() {
         .write_run_state(&run.run_id, &state)
         .expect("handoff receipt");
     RunLifecycle::apply_task_automation_update(
-        &runtime,
+        &runtime.engine_host(),
         &task.id,
         TaskAutomationUpdate {
             status: Some(TaskStatus::Blocked),

@@ -85,7 +85,7 @@ fn run_leaf(pair: &Pair, leaf: &str) -> Result<DispatchOutcome, orbit_engine::Di
         )
     };
     orbit_engine::activity_job::cli_runner::run_cli_backend(
-        &pair.follower,
+        &orbit_core::test_support::EngineHost::new(&pair.follower),
         &spec,
         "auth_fixture_leaf",
         leaf,

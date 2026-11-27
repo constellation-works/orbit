@@ -203,7 +203,7 @@ fn resume_run_resumes_the_failed_run_once_within_the_shared_bound() {
     jobs.finalize_job_run(&run.run_id, JobRunState::Failed, Utc::now(), Some(1))
         .unwrap();
     RunLifecycle::apply_task_automation_update(
-        &fx.runtime,
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
         &task,
         TaskAutomationUpdate {
             status: Some(TaskStatus::InProgress),

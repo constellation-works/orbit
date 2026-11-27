@@ -98,7 +98,7 @@ fn file(runtime: &OrbitRuntime, snapshot: Value, severity: Option<&str>) -> Valu
     if let Some(severity) = severity {
         input["min_severity"] = json!(severity);
     }
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "file_dependabot_alert_tasks",
             &json!({}),
@@ -168,7 +168,7 @@ fn consolidation_retires_every_duplicate_alert_owner_once() {
         unique_numbers.sort_unstable();
         unique_numbers.dedup();
         let consolidate = |apply| {
-            runtime
+            orbit_core::test_support::EngineHost::new(&runtime)
                 .run_deterministic(
                     "consolidate_code_scanning_tasks",
                     &json!({}),
@@ -802,7 +802,7 @@ fn typed_code_scanning_evidence_consolidates_despite_edited_prose() {
     }
     source_ids.sort();
     let consolidate = |apply| {
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .run_deterministic(
                 "consolidate_code_scanning_tasks",
                 &json!({}),
@@ -858,7 +858,7 @@ fn typed_code_scanning_evidence_consolidates_despite_edited_prose() {
 }
 
 fn consolidate_on(runtime: &OrbitRuntime) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "consolidate_code_scanning_tasks",
             &json!({}),
@@ -1060,7 +1060,7 @@ fn mixed_legacy_and_typed_code_scanning_evidence_with_missing_guid_consolidates(
         .unwrap();
 
     let consolidate = |apply| {
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .run_deterministic(
                 "consolidate_code_scanning_tasks",
                 &json!({}),

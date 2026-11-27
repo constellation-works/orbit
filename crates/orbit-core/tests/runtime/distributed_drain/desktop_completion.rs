@@ -95,7 +95,7 @@ fn an_owner_repairs_a_legacy_missing_handoff_pr_ref_once() {
         Some("https://example.com/issues/123".into()),
     )
     .unwrap();
-    owner
+    orbit_core::test_support::EngineHost::new(owner)
         .apply_task_automation_update(
             task,
             orbit_engine::TaskAutomationUpdate {
@@ -727,7 +727,7 @@ impl Delivery {
     fn reconcile_on(&self, owner: &OrbitRuntime, input: Value) -> Result<Value, OrbitError> {
         let mut input = input;
         input["id"] = json!(self.task);
-        owner.run_tool_with_context(
+        orbit_core::test_support::EngineHost::new(owner).run_tool_with_context(
             RECONCILE,
             input,
             ToolContext {
@@ -963,7 +963,7 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
     // A legacy owner's task may have no PR reference. Even with history
     // alone, the exact accepted handoff selects #42.
     let without_history = delivery.snapshot(McpCapability::Operator).reviewed_head;
-    owner
+    orbit_core::test_support::EngineHost::new(owner)
         .apply_task_automation_update(
             task,
             orbit_engine::TaskAutomationUpdate {
@@ -980,7 +980,7 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
         delivery.snapshot(McpCapability::Operator).reviewed_head,
         without_history
     );
-    owner
+    orbit_core::test_support::EngineHost::new(owner)
         .apply_task_automation_update(
             task,
             orbit_engine::TaskAutomationUpdate {
@@ -1090,7 +1090,7 @@ fn a_recovered_follower_delivery_completes_through_a_reconciled_merged_head() {
 
     // Agents can neither produce the evidence nor complete.
     let agent = session(McpCapability::Agent);
-    let denied = owner
+    let denied = orbit_core::test_support::EngineHost::new(owner)
         .run_tool_with_context(
             RECONCILE,
             json!({"action": "submit", "id": task, "request_key": "agent"}),
@@ -2408,7 +2408,7 @@ fn a_settled_follower_release_completes_on_current_review_evidence() {
     );
     // Release evidence proves only stopped execution. It does not make a PR
     // reconciliation eligible without an accepted PR handoff.
-    let reconciliation = owner
+    let reconciliation = orbit_core::test_support::EngineHost::new(owner)
         .run_tool_with_context(
             RECONCILE,
             json!({"id": task, "action": "inspect"}),

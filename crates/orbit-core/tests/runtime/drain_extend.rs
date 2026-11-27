@@ -95,7 +95,7 @@ impl Drains {
 
     /// The drain's own window answer for the deadline its loop echoes.
     fn window(&self, run_id: &str, echoed: DateTime<Utc>) -> Value {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .run_deterministic(
                 "drain_window",
                 &json!({}),

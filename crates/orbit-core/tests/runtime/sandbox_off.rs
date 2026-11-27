@@ -91,7 +91,7 @@ fn explicit_off_survives_opens_and_sync_then_spawns_bare_without_inner_sandbox()
     }
 
     let runtime = open_runtime(&global, &workspace);
-    let resolved = runtime
+    let resolved = orbit_core::test_support::EngineHost::new(&runtime)
         .resolve_executor_sandbox("codex", Some("implementer"), None)
         .expect("resolve off")
         .expect("explicit descriptor");
@@ -185,7 +185,7 @@ fn dispatch_codex(
         input: serde_json::json!({"prompt": "Return success."}),
         audit: audit.clone(),
         run_id: "sandbox-off",
-        host: Some(runtime),
+        host: Some(&orbit_core::test_support::EngineHost::new(runtime)),
     })
     .expect("dispatch explicit off without a wrapper probe");
     assert!(outcome.success, "{:?}", outcome.message);

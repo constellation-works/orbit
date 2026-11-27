@@ -161,7 +161,10 @@ fn declared_inputs_are_read_only_at_in_and_recorded_with_their_digests() {
         "brief": "docs/brief.txt",
         "library": fixture.library.display().to_string(),
     });
-    let run = Dispatch::run_script_step(&fixture.runtime, &request(input.clone()));
+    let run = Dispatch::run_script_step(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        &request(input.clone()),
+    );
     let ran = match run {
         ScriptStepRun::Refused {
             code,
@@ -214,8 +217,10 @@ fn declared_inputs_are_read_only_at_in_and_recorded_with_their_digests() {
     // A nested change moves the directory input's recorded digest.
     let first = ran.record.input_files[1].sha256.clone();
     std::fs::write(fixture.repo.join("site/dist/sub/a.txt"), "b\n").unwrap();
-    let ScriptStepRun::Ran(again) = Dispatch::run_script_step(&fixture.runtime, &request(input))
-    else {
+    let ScriptStepRun::Ran(again) = Dispatch::run_script_step(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        &request(input),
+    ) else {
         panic!("second attempt refused");
     };
     assert_ne!(again.record.input_files[1].sha256, first);
@@ -243,7 +248,7 @@ fn a_missing_or_out_of_bounds_input_refuses_before_spawn_naming_it() {
         (".", "overlaps protected state"),
     ] {
         let run = Dispatch::run_script_step(
-            &fixture.runtime,
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
             &request(json!({"brief": brief, "library": library})),
         );
         let ScriptStepRun::Refused {
@@ -281,7 +286,7 @@ fn an_input_from_an_ungranted_root_refuses_naming_it() {
     let fixture = fixture("      - {from: \"{{ input.path }}\", as: elsewhere}\n");
     let elsewhere = fixture._root.path().join("home");
     let run = Dispatch::run_script_step(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &request(json!({"path": elsewhere.display().to_string()})),
     );
     let ScriptStepRun::Refused { code, message, .. } = run else {

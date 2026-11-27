@@ -257,7 +257,7 @@ fn readiness_reads_open_work_and_the_closed_tasks_its_rules_reach() {
     assert_eq!(withheld["eligible"], false, "{report}");
     assert_eq!(withheld["reason"], "inherited_only_epic_root", "{report}");
 
-    let backlog = runtime
+    let backlog = orbit_core::test_support::EngineHost::new(&runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -344,7 +344,7 @@ fn restored_closed_child_retains_inherited_epic_footprint() {
         "inherited_only_epic_root",
         "{report}"
     );
-    let backlog = runtime
+    let backlog = orbit_core::test_support::EngineHost::new(&runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),

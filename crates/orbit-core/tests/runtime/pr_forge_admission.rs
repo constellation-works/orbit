@@ -118,7 +118,7 @@ fn ship(runtime: &OrbitRuntime, task: &str) -> OrbitError {
 }
 
 fn action(runtime: &OrbitRuntime, action: &str, input: Value) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(action, &json!({}), &input, ToolContext::default())
         .unwrap_or_else(|error| panic!("{action}: {error}"))
 }
@@ -252,7 +252,7 @@ fn multi_task_pr_is_refused_before_gate_reservation() {
         ],
     );
     let tasks = [first, second];
-    let refused = runtime
+    let refused = orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "resolve_delivery_job",
             &json!({}),
@@ -265,7 +265,7 @@ fn multi_task_pr_is_refused_before_gate_reservation() {
         "{refused}"
     );
     assert!(refused.to_string().contains("local"), "{refused}");
-    let local = runtime
+    let local = orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "resolve_delivery_job",
             &json!({}),
@@ -422,7 +422,7 @@ fn bundled_pr_submission_refuses_before_any_delivery_effect() {
         seed(runtime, "selected first", &["delivery:renamed_pr"]),
         seed(runtime, "selected second", &["delivery:renamed_pr"]),
     ];
-    let selected_error = runtime
+    let selected_error = orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "resolve_delivery_job",
             &json!({}),
@@ -440,7 +440,7 @@ fn bundled_pr_submission_refuses_before_any_delivery_effect() {
         seed(runtime, "local first", &[LOCAL_TAG]),
         seed(runtime, "local second", &[LOCAL_TAG]),
     ];
-    let local_error = runtime
+    let local_error = orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "resolve_delivery_job",
             &json!({}),
@@ -534,7 +534,7 @@ fn bundled_pr_submission_refuses_before_any_delivery_effect() {
             "{foreground}"
         );
 
-        let child = runtime.run_deterministic(
+        let child = orbit_core::test_support::EngineHost::new(runtime).run_deterministic(
         "invoke_and_wait", &json!({}),
         &json!({"job_name": leaf, "run_input": input, "run_id": parent.run_id, "step_id": "deliver", "timeout_seconds": 1}),
         ToolContext {
@@ -673,7 +673,7 @@ fn supported_local_contracts_commit_candidates() {
         } else {
             vec![seed(runtime, "first", &[]), seed(runtime, "second", &[])]
         };
-        let run = runtime
+        let run = orbit_core::test_support::EngineHost::new(runtime)
             .insert_job_run(
                 "local_commit_control",
                 1,
@@ -724,7 +724,7 @@ fn supported_local_contracts_commit_candidates() {
         }
         if scope == "all" {
             let output = orbit_engine::execute_deterministic_action(
-                runtime,
+                &orbit_core::test_support::EngineHost::new(runtime),
                 "git_commit",
                 &json!({}),
                 &input,
@@ -778,7 +778,7 @@ fn supported_local_contracts_commit_candidates() {
         if scope == "per_task" {
             let before = git(&fixture.repo, &["rev-parse", "HEAD"]);
             let error = orbit_engine::execute_deterministic_action(
-                runtime,
+                &orbit_core::test_support::EngineHost::new(runtime),
                 "git_commit",
                 &json!({}),
                 &json!({

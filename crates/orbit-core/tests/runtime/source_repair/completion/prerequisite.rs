@@ -235,7 +235,7 @@ pub(crate) fn prerequisite_read_after_mutation_provenance_never_resumes() {
     use orbit_types::task::TaskHistoryEntry;
     let (f, _) = fixture();
     let calls = prerequisite_forge(&f);
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {

@@ -104,6 +104,10 @@ pub mod test_support {
         pub use orbit_automation::checkpoint::{commit_state, initialize, stall};
     }
 
+    /// Adapter implementing `orbit-engine`'s host traits over a borrowed
+    /// [`FixtureRuntime`], for fixtures that drive engine entry points or host
+    /// traits directly.
+    pub use crate::adapter::engine_host::EngineHost;
     pub use crate::application::auto_tasks::completion_test_support::with_completion_adapter_run;
     /// Freeze source budget time in an isolated test process and its CLI children.
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;

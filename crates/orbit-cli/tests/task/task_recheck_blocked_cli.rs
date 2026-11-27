@@ -75,7 +75,7 @@ fn recheck_blocked_cli_previews_and_requeues_only_cleared_launchers_without_exec
             "step `implement_one` completed with success=false".to_string(),
         ),
     ] {
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .apply_task_automation_update(
                 id,
                 TaskAutomationUpdate {

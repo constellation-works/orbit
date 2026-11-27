@@ -248,7 +248,7 @@ impl Fixture {
             captured_at: Utc::now(),
             host_evidence: Vec::new(),
         };
-        let run = runtime
+        let run = orbit_core::test_support::EngineHost::new(&runtime)
             .insert_job_run(
                 "task_pr_pipeline",
                 1,
@@ -284,8 +284,7 @@ impl Fixture {
     }
 
     pub(super) fn admit(&mut self) {
-        self.input["admission"] = self
-            .runtime
+        self.input["admission"] = orbit_core::test_support::EngineHost::new(&self.runtime)
             .run_deterministic(
                 "review_gate_admit",
                 &json!({}),
@@ -325,7 +324,7 @@ impl Fixture {
 
     /// Run the deterministic settlement for the admitted attempt.
     pub(super) fn settle(&self) -> Result<Value, orbit_engine::DispatchError> {
-        self.runtime.run_deterministic(
+        orbit_core::test_support::EngineHost::new(&self.runtime).run_deterministic(
             "review_gate_settle",
             &json!({}),
             &self.input,
@@ -468,12 +467,13 @@ fn settled_negative_verdicts_are_successful_calls_with_decision_detail() {
         let mut fixture = Fixture::new();
         fixture.admit();
         fixture.report(report);
-        let settled = fixture.runtime.run_deterministic(
-            "review_gate_settle",
-            &json!({}),
-            &fixture.input,
-            Default::default(),
-        );
+        let settled = orbit_core::test_support::EngineHost::new(&fixture.runtime)
+            .run_deterministic(
+                "review_gate_settle",
+                &json!({}),
+                &fixture.input,
+                Default::default(),
+            );
         assert!(
             settled.is_err(),
             "a negative verdict must still stop delivery"
@@ -577,7 +577,7 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
         },
     ] {
         ReviewGate::record_reviewer_invocation(
-            &fixture.runtime,
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
             &ReviewerInvocationRequest {
                 run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
                 lineage_key: fixture.input["admission"]["lineage_key"]
@@ -597,8 +597,7 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
         let mut input = fixture.input.clone();
         input["preflight"] = json!(preflight);
         assert!(
-            fixture
-                .runtime
+            orbit_core::test_support::EngineHost::new(&fixture.runtime)
                 .run_deterministic("review_gate_admit", &json!({}), &input, Default::default())
                 .is_err()
         );
@@ -619,8 +618,7 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
         assert_eq!(detail["outcome"], "refused");
     }
     fixture.report("accept");
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "review_gate_settle",
             &json!({}),
@@ -757,8 +755,7 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
             "external_landing_race",
         ),
     ] {
-        fixture
-            .runtime
+        orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .record_review_landing(&ReviewLandingRequest {
                 run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
                 task_ids: vec![fixture.task_id.clone()],
@@ -794,8 +791,7 @@ fn execution_failures_have_messages_and_remain_unexpected() {
     let mut input = fixture.input.clone();
     input["base_sha"] = json!("missing-git-object");
     assert!(
-        fixture
-            .runtime
+        orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .run_deterministic("review_gate_admit", &json!({}), &input, Default::default())
             .is_err()
     );
@@ -803,8 +799,7 @@ fn execution_failures_have_messages_and_remain_unexpected() {
     input = fixture.input.clone();
     input["admission"]["attempt_id"] = json!("missing-attempt");
     assert!(
-        fixture
-            .runtime
+        orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .run_deterministic("review_gate_settle", &json!({}), &input, Default::default())
             .is_err()
     );

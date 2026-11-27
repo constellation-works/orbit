@@ -44,7 +44,7 @@ fn held_delivery_leaves_are_handed_back_to_completion() {
     let completion_held =
         fx.delivered_leaf(301, "done", Shelf::Review, LeafEnd::Held(INCONCLUSIVE));
     fx.blocked(&completion_held, "hold-head", "orbit-bot", false, &[]);
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &completion_held.task,
             TaskAutomationUpdate {

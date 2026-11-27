@@ -28,7 +28,7 @@ fn admitted(required: &[&str]) -> Fixture {
 
 fn ask(fixture: &Fixture) -> Option<String> {
     ReviewGate::review_report_evidence_hold(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &ReviewReportCorrectionRequest {
             run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
             lineage_key: fixture.input["admission"]["lineage_key"]

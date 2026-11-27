@@ -41,7 +41,7 @@ fn context_files(fixture: &Fixture, task: &str) -> Vec<String> {
 /// Widen `task` over `path` as a recovery agent's repair in `run` does.
 fn recovery_widens(fixture: &Fixture, task: &str, run: &str, path: &str) {
     let widened = RunLifecycle::widen_task_context_files(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         task,
         run,
         ContextWideningStep::Recovery,
@@ -112,7 +112,7 @@ fn writes_the_recovery_may_cause_leave_its_requeue_standing() {
         .unwrap();
     recovery_widens(&fixture, &task, &run, "src/repair.rs");
     RunLifecycle::apply_task_automation_update(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &task,
         TaskAutomationUpdate {
             execution_summary: Some("Recovery verified the environment.".to_string()),
@@ -297,7 +297,7 @@ fn a_revision_observed_before_the_digest_compares_by_update_time() {
     legacy(&run);
     let observed = updated_at(&fixture, &task);
     RunLifecycle::apply_task_automation_update(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &task,
         TaskAutomationUpdate {
             execution_summary: Some("Recovery verified the environment.".to_string()),

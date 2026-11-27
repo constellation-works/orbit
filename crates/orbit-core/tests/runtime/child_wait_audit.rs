@@ -216,7 +216,7 @@ impl Fixture {
                 child
             });
             let observe = || {
-                self.runtime
+                orbit_core::test_support::EngineHost::new(&self.runtime)
                     .run_deterministic(
                         "invoke_and_wait",
                         &json!({}),

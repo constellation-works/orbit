@@ -101,8 +101,7 @@ fn a_finished_leaf_is_recorded_terminal_on_the_drain() {
     );
 
     let finished_at = Utc::now();
-    workspace
-        .runtime
+    orbit_core::test_support::EngineHost::new(&workspace.runtime)
         .apply_task_automation_update(
             &task.id,
             orbit_engine::TaskAutomationUpdate {
@@ -203,8 +202,7 @@ fn a_leaf_finished_after_the_drain_ended_is_recorded_terminal() {
     assert_eq!(open.phase, ChildDispatchPhase::Submitted, "{open:?}");
     assert_eq!(open.child_status, None, "{open:?}");
 
-    workspace
-        .runtime
+    orbit_core::test_support::EngineHost::new(&workspace.runtime)
         .apply_task_automation_update(
             &task.id,
             orbit_engine::TaskAutomationUpdate {

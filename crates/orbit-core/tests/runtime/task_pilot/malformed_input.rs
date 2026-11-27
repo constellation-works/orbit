@@ -49,8 +49,7 @@ fn apply(workspace: &Workspace, input: &Value) -> Result<Value, String> {
     // The fixture pilot read its checkout: results that do not carry an
     // observed-revision proof get the real one, as in `Workspace::action`.
     let input = workspace.with_inspection_proof(input.clone());
-    workspace
-        .runtime
+    orbit_core::test_support::EngineHost::new(&workspace.runtime)
         .run_deterministic(
             "apply_task_pilot_results",
             &json!({}),

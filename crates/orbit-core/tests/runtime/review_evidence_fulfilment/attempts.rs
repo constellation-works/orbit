@@ -17,8 +17,7 @@ fn hold_key(hold: &ReviewEvidenceHold) -> String {
 
 /// Seed a persisted run and optional outcome, without starting a worker.
 fn seed_run(fixture: &Fixture, input: Value, at: DateTime<Utc>, output: Option<Value>) {
-    let mut run = fixture
-        .runtime
+    let mut run = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .insert_job_run(
             REVIEW_EVIDENCE_FULFILMENT_JOB,
             1,
@@ -198,7 +197,10 @@ fn retryable_and_missing_outcomes_keep_their_budget_after_aging_out() {
         for attempt in 2..=3 {
             age_out(&fixture, &key);
             let (run_id, result) = fulfil_once(&fixture);
-            let run = fixture.runtime.get_job_run(&run_id).unwrap().unwrap();
+            let run = orbit_core::test_support::EngineHost::new(&fixture.runtime)
+                .get_job_run(&run_id)
+                .unwrap()
+                .unwrap();
             assert_eq!(
                 run.input.unwrap()["attempt_key"],
                 format!("{key}#{attempt}"),

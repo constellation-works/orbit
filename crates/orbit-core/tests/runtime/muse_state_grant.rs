@@ -160,7 +160,8 @@ fn only_the_muse_lane_may_write_muse_state_roots() {
         ]);
         OrbitRuntime::from_roots(&global, &workspace).expect("runtime with composed XDG")
     };
-    let child_environment = composed_runtime.agent_subprocess_environment(&[]);
+    let child_environment = orbit_core::test_support::EngineHost::new(&composed_runtime)
+        .agent_subprocess_environment(&[]);
     for (name, expected) in [
         ("XDG_CONFIG_HOME", &composed_config),
         ("XDG_DATA_HOME", &composed_data),
@@ -208,7 +209,7 @@ fn only_the_muse_lane_may_write_muse_state_roots() {
 
 fn resolved_modify(runtime: &OrbitRuntime, provider: &str, worktree: &Path) -> Vec<String> {
     seed_executor(runtime, provider);
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .resolve_executor_sandbox(provider, None, Some(worktree))
         .unwrap_or_else(|error| panic!("{provider} sandbox must resolve: {error}"))
         .unwrap_or_else(|| panic!("{provider} must resolve a sandbox"))

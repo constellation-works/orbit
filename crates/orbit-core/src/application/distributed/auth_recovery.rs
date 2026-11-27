@@ -15,6 +15,7 @@ use orbit_store::contract::{ClaimMutation, JobRunQuery, LocalPullAdmission};
 use orbit_types::workflow::{Provider, PullAuthExclusion, PullAuthRecovery};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 
 const INITIAL_DELAY: Duration = Duration::minutes(10);
 const MAX_DELAY: Duration = Duration::minutes(30);
@@ -110,7 +111,11 @@ impl OrbitRuntime {
                 excluded_at: at,
                 error_class: "provider_unavailable/auth".into(),
                 relogin_hint,
-                credential_source: auth_credential_source(self, &provider, &crew.env),
+                credential_source: auth_credential_source(
+                    &self.engine_host(),
+                    &provider,
+                    &crew.env,
+                ),
                 next_probe_at: probe.as_ref().map(|_| at + INITIAL_DELAY),
                 attempts: 0,
             },
@@ -224,7 +229,7 @@ impl OrbitRuntime {
             }
             let crew_env = self.auth_probe_crew_env(account.as_deref());
             let outcome = run_auth_probe(
-                self,
+                &self.engine_host(),
                 &provider,
                 &crew_env,
                 &probe,

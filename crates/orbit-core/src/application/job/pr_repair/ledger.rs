@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::admission::{pr_auto_fix_budget, pr_auto_fix_spent};
 use super::adoption::Verdict;
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::task::SYSTEM_ACTOR_LABEL;
 
 /// Task history event recording one out-of-run auto-fix a drain or the
@@ -46,25 +47,26 @@ impl OrbitRuntime {
         let result = serde_json::to_string(start)
             .map_err(|error| OrbitError::Execution(error.to_string()))
             .and_then(|note| {
-                self.apply_task_automation_update(
-                    task_id,
-                    TaskAutomationUpdate {
-                        append_history: vec![TaskHistoryEntry {
-                            at: Utc::now(),
-                            by: SYSTEM_ACTOR_LABEL.to_string(),
-                            event: PR_AUTO_FIX_OUT_OF_RUN_EVENT.to_string(),
-                            note: Some(note),
-                            from_status: None,
-                            to_status: None,
-                            operation_id: None,
-                            decision: None,
-                            surface: None,
-                            caller: None,
-                        }],
-                        ..TaskAutomationUpdate::default()
-                    },
-                )
-                .map(|_| ())
+                self.engine_host()
+                    .apply_task_automation_update(
+                        task_id,
+                        TaskAutomationUpdate {
+                            append_history: vec![TaskHistoryEntry {
+                                at: Utc::now(),
+                                by: SYSTEM_ACTOR_LABEL.to_string(),
+                                event: PR_AUTO_FIX_OUT_OF_RUN_EVENT.to_string(),
+                                note: Some(note),
+                                from_status: None,
+                                to_status: None,
+                                operation_id: None,
+                                decision: None,
+                                surface: None,
+                                caller: None,
+                            }],
+                            ..TaskAutomationUpdate::default()
+                        },
+                    )
+                    .map(|_| ())
             });
         if let Err(error) = result {
             tracing::warn!(

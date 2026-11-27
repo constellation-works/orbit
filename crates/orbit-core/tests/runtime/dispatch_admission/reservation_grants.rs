@@ -308,7 +308,7 @@ fn closing_rescued_blocked_task_through_the_task_tool_succeeds_without_force_whi
     );
     let summary = "rescued work already landed by hand";
     let task_update = |capability, input: Value| {
-        runtime.run_tool_with_context(
+        orbit_core::test_support::EngineHost::new(&runtime).run_tool_with_context(
             "orbit.task.update",
             input,
             ToolContext {
@@ -559,7 +559,7 @@ fn deferred_footprint_reservation_outlives_the_resolved_edit_budget() {
         "task_pr_pipeline",
         json!({"task_ids": [task.id], "footprint_deferred": true, "footprint_wait_seconds": 0}),
     );
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .acquire_deferred_footprint(&run, "agent_implement")
         .expect("the leaf takes its deferred footprint through the dispatch boundary");
     let locks = as_operator(&runtime, "orbit.task.locks", json!({}));

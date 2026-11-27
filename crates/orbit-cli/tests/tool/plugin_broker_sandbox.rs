@@ -1016,7 +1016,7 @@ fn sandbox_fixture() {
             proc_disallowed_programs: None,
         },
     };
-    let broker = runtime
+    let broker = orbit_core::test_support::EngineHost::new(&runtime)
         .start_plugin_broker(&run)
         .expect("start broker")
         .expect("Unix broker");

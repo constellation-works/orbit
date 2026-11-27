@@ -43,7 +43,7 @@ impl Fixture {
     }
 
     pub(super) fn step(&self, run: &JobRun, index: u32, id: &str) {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .complete_job_run_step(
                 &run.run_id,
                 &JobRunStepParams {

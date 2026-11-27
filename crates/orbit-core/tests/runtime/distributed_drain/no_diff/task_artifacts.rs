@@ -137,7 +137,10 @@ fn claimed_artifact_refusals_name_path_and_attach_nothing() {
     ] {
         let mut fixture = CleanLeaf::new(false, "done");
         task_artifact(&mut fixture, "ledger.json", b"{}");
-        let claim = fixture.bound.claim_execution_context().unwrap().claim_id;
+        let claim = orbit_core::test_support::EngineHost::new(&fixture.bound)
+            .claim_execution_context()
+            .unwrap()
+            .claim_id;
         let reference = &mut fixture.input["implementation"]["task_artifacts"][0];
         let named = match case {
             "missing" => {

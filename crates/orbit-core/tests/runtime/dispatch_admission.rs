@@ -303,7 +303,7 @@ fn seed(runtime: &OrbitRuntime, seed: Seed<'_>) -> Task {
 }
 
 fn list_backlog_tasks(runtime: &OrbitRuntime, input: Value) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -355,7 +355,7 @@ fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
         assert_eq!(output["excluded"], json!([]), "{output}");
     }
     let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
-    let wave = runtime
+    let wave = orbit_core::test_support::EngineHost::new(&runtime)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),
@@ -940,7 +940,7 @@ fn no_diff_expected_does_not_hold_a_context_lock() {
 }
 
 fn reserve_locks(runtime: &OrbitRuntime, task_id: &str) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "reserve_locks",
             &json!({}),
@@ -955,7 +955,7 @@ fn reserve_locks(runtime: &OrbitRuntime, task_id: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 fn as_operator(runtime: &OrbitRuntime, tool: &str, input: Value) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_tool_with_context(
             tool,
             input,
@@ -1195,7 +1195,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             captured_at: Utc::now(),
             host_evidence: Vec::new(),
         };
-        let run = runtime
+        let run = orbit_core::test_support::EngineHost::new(&runtime)
             .insert_job_run(
                 "task_pr_pipeline",
                 1,
@@ -1225,7 +1225,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             "mode": "pr",
             "allowed_crews": [],
         });
-        let admitted = runtime
+        let admitted = orbit_core::test_support::EngineHost::new(&runtime)
             .run_deterministic(
                 "review_gate_admit",
                 &json!({}),
@@ -1281,7 +1281,7 @@ fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
             .unwrap();
         input["admission"] = admitted;
         for _ in 0..2 {
-            let settled = runtime.run_deterministic(
+            let settled = orbit_core::test_support::EngineHost::new(&runtime).run_deterministic(
                 "review_gate_settle",
                 &json!({}),
                 &input,
@@ -1539,7 +1539,7 @@ fn last_pass(runtime: &OrbitRuntime, drain: &str) -> orbit_types::workflow::Drai
 }
 
 fn classify(runtime: &OrbitRuntime, drain: &str) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),
@@ -1838,7 +1838,7 @@ fn sustained_host_pressure(kind: HostPressure) {
             },
             ..ToolContext::default()
         };
-        let status = runtime
+        let status = orbit_core::test_support::EngineHost::new(runtime)
             .run_tool_with_context(
                 "orbit.workflow.auto",
                 json!({

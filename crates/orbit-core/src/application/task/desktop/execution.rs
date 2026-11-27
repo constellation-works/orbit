@@ -17,6 +17,7 @@ use orbit_types::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 
 use super::validation::invalid;
 
@@ -165,6 +166,7 @@ impl OrbitRuntime {
         selector: &str,
     ) -> Result<PullRequestStatus, OrbitError> {
         let response = self
+            .engine_host()
             .run_private_vcs_operation(
                 "pr.status",
                 serde_json::json!({

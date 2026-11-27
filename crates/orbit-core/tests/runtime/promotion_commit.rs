@@ -37,7 +37,7 @@ fn no_diff_promotion_records_attribution_and_review_in_one_commit() {
         })
         .expect("task");
     let run = RunLifecycle::insert_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "task_pr_pipeline",
         1,
         Utc::now(),
@@ -46,7 +46,7 @@ fn no_diff_promotion_records_attribution_and_review_in_one_commit() {
     )
     .expect("run");
     RunLifecycle::apply_task_automation_update(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         &task.id,
         TaskAutomationUpdate {
             status: Some(TaskStatus::InProgress),
@@ -58,7 +58,7 @@ fn no_diff_promotion_records_attribution_and_review_in_one_commit() {
     .expect("start");
 
     let output = orbit_engine::execute_deterministic_action(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "pr_promote",
         &json!({}),
         &json!({

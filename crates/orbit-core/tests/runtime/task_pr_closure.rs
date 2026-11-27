@@ -217,7 +217,7 @@ impl Fixture {
 
     /// Record PRs on the task the way delivery automation does.
     fn record_prs(&self, task_id: &str, numbers: &[u64]) {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 task_id,
                 TaskAutomationUpdate {
@@ -287,7 +287,7 @@ fn landing_through_a_pr_closes_the_tasks_other_orbit_prs_naming_the_landing() {
     fx.record_prs(&task_id, &[11, 13, 12]);
     fx.move_to_review(&task_id);
 
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task_id,
             TaskAutomationUpdate {
@@ -451,7 +451,7 @@ fn a_new_run_leaves_blocked_prs_open() {
     fx.seed_forge(&task_id, &other);
     fx.record_prs(&task_id, &[13]);
     fx.update(json!({ "id": task_id, "status": "in_progress", "model": "codex" }));
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task_id,
             TaskAutomationUpdate {
@@ -639,7 +639,7 @@ fn leaving_blocked_keeps_the_failure_handoff_pr_until_its_candidate_is_discarded
     fx.record_prs(&task_id, &[13]);
     let block = |fx: &Fixture| {
         fx.update(json!({ "id": task_id, "status": "in_progress", "model": "codex" }));
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &task_id,
                 TaskAutomationUpdate {
@@ -690,7 +690,7 @@ fn automation_requeues_close_nothing() {
     fx.record_prs(&task_id, &[11]);
     fx.update(json!({ "id": task_id, "status": "in_progress", "model": "codex" }));
 
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task_id,
             TaskAutomationUpdate {
@@ -722,7 +722,7 @@ fn a_shelved_failure_handoff_pr_stays_open_across_later_shelf_moves() {
     fx.seed_forge(&task_id, &other);
     fx.record_prs(&task_id, &[13]);
     fx.update(json!({ "id": task_id, "status": "in_progress", "model": "codex" }));
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task_id,
             TaskAutomationUpdate {
@@ -771,7 +771,7 @@ fn a_requeue_while_the_tasks_run_is_live_closes_nothing() {
         .unwrap();
     jobs.mark_job_run_running(&run.run_id, chrono::Utc::now(), std::process::id())
         .unwrap();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task_id,
             TaskAutomationUpdate {
@@ -859,7 +859,7 @@ fn a_requeue_while_a_resumed_retry_is_live_closes_nothing() {
         .unwrap(),
         "the source run the task stays bound to is terminal"
     );
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task_id,
             TaskAutomationUpdate {

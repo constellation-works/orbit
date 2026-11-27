@@ -56,7 +56,7 @@ fn owner_drain(owner: &OrbitRuntime) -> String {
 }
 
 fn local_order(owner: &OrbitRuntime) -> Value {
-    owner
+    orbit_core::test_support::EngineHost::new(owner)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -100,7 +100,7 @@ fn census_orders_the_mac_dk_server_and_owner_mix() {
     // A pass with no free slot declares the owner's row and admits nothing,
     // so no owner-wave footprint holds the tasks back from the followers.
     let drain = owner_drain(&owner);
-    owner
+    orbit_core::test_support::EngineHost::new(&owner)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),
@@ -176,7 +176,7 @@ fn pull_matches_local_dispatch_for_an_expiring_frozen_batch() {
         distant,
         chrono::Duration::hours(5),
     );
-    let local = owner
+    let local = orbit_core::test_support::EngineHost::new(owner)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),

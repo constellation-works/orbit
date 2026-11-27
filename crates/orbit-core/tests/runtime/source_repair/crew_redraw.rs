@@ -78,7 +78,7 @@ fn redraw_crew(f: &Fixture, to: &str, recorded: Recorded) {
 fn resume(f: &Fixture) -> (orbit_types::workflow::JobRun, Value, Result<Value, String>) {
     let (run, setup) = next(f);
     let resumed = execute_deterministic_action(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         "candidate_resume",
         &json!({}),
         &json!({"job_run_id":run.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]}),

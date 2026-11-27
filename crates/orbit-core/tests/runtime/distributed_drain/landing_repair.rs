@@ -329,9 +329,12 @@ fn a_spent_repair_whose_candidate_fails_its_check_returns_to_the_backlog_until_b
         )
     };
     let spent = |owner: &OwnerLocal, task: &str| {
-        ReviewGate::handoff_landing_context(&owner.pair.wire.owner, &owner.dispatched_handoff(task))
-            .expect("landing context")
-            .automatic_repair_spent
+        ReviewGate::handoff_landing_context(
+            &orbit_core::test_support::EngineHost::new(&owner.pair.wire.owner),
+            &owner.dispatched_handoff(task),
+        )
+        .expect("landing context")
+        .automatic_repair_spent
     };
     let requeues = |owner: &OwnerLocal, task: &str| {
         owner.pair.owner_task(task)["history"]
@@ -761,8 +764,15 @@ impl OwnerLocal {
             Some(&pair.owner_repo),
         )
         .unwrap();
-        let outcome =
-            execute_job_with_resume(&job, input, leaf, audit, &bound, Some(&resume)).unwrap();
+        let outcome = execute_job_with_resume(
+            &job,
+            input,
+            leaf,
+            audit,
+            &orbit_core::test_support::EngineHost::new(&bound),
+            Some(&resume),
+        )
+        .unwrap();
         assert!(outcome.success, "{outcome:#?}");
         let ClaimMutation::AcceptHandoff(_) = pair.admission(leaf).settlement.unwrap() else {
             panic!("the shipped leaf records a typed handoff")
@@ -814,7 +824,7 @@ impl OwnerLocal {
         let job_run_id = job_run_id.expect("acceptance submitted the landing job");
         self.own_landing_worker(&job_run_id);
         orbit_engine::execute_deterministic_action(
-            owner,
+            &orbit_core::test_support::EngineHost::new(owner),
             "handoff_land",
             &json!({}),
             &json!({"handoff_id": handoff_id, "task_id": task, "run_id": job_run_id}),
@@ -986,7 +996,7 @@ impl OwnerLocal {
         let handoff_id = attempt.handoff_id.clone();
         self.own_landing_worker(attempt.job_run_id.as_deref().expect("landing job"));
         ReviewGate::record_handoff_landing(
-            runtime,
+            &orbit_core::test_support::EngineHost::new(runtime),
             &orbit_engine::HandoffLandingUpdate {
                 handoff_id: handoff_id.clone(),
                 step,
@@ -1123,7 +1133,7 @@ fn landing_stopped_notes(task: &Value) -> Vec<String> {
 
 fn engine_action(host: &OrbitRuntime, action: &str, input: &Value) -> Value {
     orbit_engine::execute_deterministic_action(
-        host,
+        &orbit_core::test_support::EngineHost::new(host),
         action,
         &json!({}),
         input,

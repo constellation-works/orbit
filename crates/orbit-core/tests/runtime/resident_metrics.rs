@@ -314,7 +314,7 @@ fn closed_interactive_baseline_bounds_related_task_events_to_active_span() {
         "During the baseline?",
     );
 
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &baseline_id,
             TaskAutomationUpdate {
@@ -713,7 +713,7 @@ fn baseline_reads_references_in_another_workspace() {
 }
 
 fn append_history(runtime: &OrbitRuntime, task_id: &str, entries: Vec<TaskHistoryEntry>) {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .apply_task_automation_update(
             task_id,
             TaskAutomationUpdate {
@@ -731,7 +731,7 @@ fn append_comment(
     by: &str,
     message: &str,
 ) {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .apply_task_automation_update(
             task_id,
             TaskAutomationUpdate {
@@ -941,7 +941,7 @@ fn ended_mandate_bounds_active_days_by_its_end() {
     // Assignment closed via Review 6d ago (activated 8d ago -> 2 active days).
     let (closed_id, _) = mandate_with_watched(&runtime);
     seed_cycle_grant(&runtime, &closed_id, now - Duration::days(8), "rcy-rev");
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &closed_id,
             TaskAutomationUpdate {

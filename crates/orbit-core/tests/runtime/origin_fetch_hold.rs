@@ -105,7 +105,7 @@ fn worktree_setup_origin_outage_holds_backlog_and_fails_in_progress() {
     );
 
     let child = json!({"status": "held", "run_id": admitted[0].1});
-    let parent = runtime
+    let parent = orbit_core::test_support::EngineHost::new(&runtime)
         .run_deterministic(
             "pipeline_success_guard",
             &json!({}),
@@ -319,7 +319,7 @@ fn submit_setup_run(runtime: &OrbitRuntime, task_id: &str, run_id: &str, base: &
         "base": base,
         "base_sync": "remote"
     });
-    let run = runtime
+    let run = orbit_core::test_support::EngineHost::new(runtime)
         .insert_job_run(JOB, 1, Utc::now(), Some(input.clone()), None)
         .unwrap();
     runtime

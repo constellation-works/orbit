@@ -296,7 +296,7 @@ fn write_proc(proc_root: &Path, used_gib: u64) {
 
 fn classify(runtime: &OrbitRuntime, drain: &str, slots: u32) -> Value {
     crate::scenarios::with_immutable_host_load(|| {
-        runtime
+        orbit_core::test_support::EngineHost::new(runtime)
             .run_deterministic(
                 "classify_workspace_auto_tasks",
                 &json!({}),
@@ -643,7 +643,7 @@ fn per_run_mode_overrides_the_host_and_survives_reopen() {
         let reopened = fixture.with_mode("shadow");
         let input = reopened.show_job_run(&drain).unwrap().input.unwrap();
         let pass = crate::scenarios::with_immutable_host_load(|| {
-            reopened.run_deterministic(
+            orbit_core::test_support::EngineHost::new(&reopened).run_deterministic(
             "classify_workspace_auto_tasks", &json!({}),
             &json!({"run_id":drain,"auto_concurrency":input["auto_concurrency"],"max_active_leaf_runs":4}),
             ToolContext::default()).unwrap()
@@ -682,8 +682,7 @@ fn a_live_local_drain_refreshes_only_its_inherited_mode() {
         let drain = fixture.drain();
         let pass = |mode: &str, source: &str| {
             crate::scenarios::with_immutable_host_load(|| {
-                fixture
-                    .runtime
+                orbit_core::test_support::EngineHost::new(&fixture.runtime)
                     .run_deterministic(
                         "classify_workspace_auto_tasks",
                         &json!({}),

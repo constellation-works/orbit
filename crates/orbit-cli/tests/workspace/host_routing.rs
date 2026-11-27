@@ -402,7 +402,7 @@ fn task_show_projections_match_the_owning_host() {
 /// A run-blocked task with a recorded final-recovery decision. The decision
 /// does not replace the workflow-failure block `next_step` reads.
 fn block_with_final_recovery(runtime: &OrbitRuntime, repo: &Path, id: &str, run_id: &str) {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .apply_task_automation_update(
             id,
             TaskAutomationUpdate {

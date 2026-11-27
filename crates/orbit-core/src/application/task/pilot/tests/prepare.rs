@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use super::persist::{Workspace, proof, workspace};
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 use super::super::prepare::hydration_test_hook;
@@ -27,6 +28,7 @@ fn add_task(runtime: &OrbitRuntime, title: &str, status: TaskStatus) -> Task {
 fn run(workspace: &Workspace, action: &str, input: Value) -> Value {
     workspace
         .runtime
+        .engine_host()
         .run_deterministic(action, &json!({}), &input, ToolContext::default())
         .unwrap_or_else(|error| panic!("{action}: {error}"))
 }
@@ -104,6 +106,7 @@ fn apply(workspace: &Workspace, prepared: &Value) -> Value {
 
 fn admit(runtime: &OrbitRuntime, task_id: &str) {
     runtime
+        .engine_host()
         .admit_task_for_workflow(task_id, "worktree_setup")
         .expect("admit task");
 }

@@ -11,6 +11,7 @@ use orbit_types::task::{TaskHistoryEntry, TaskStatus, task_id_prefix};
 use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
 
+use crate::application::contracts::EngineHostPort;
 use crate::{OrbitError, OrbitRuntime};
 
 impl OrbitRuntime {
@@ -27,7 +28,7 @@ impl OrbitRuntime {
         collect_worktrees(
             &self.paths().repo_root,
             &runs,
-            self,
+            &self.engine_host(),
             &WorktreeGcOptions {
                 target_only: true,
                 reclaim_patterns: Some(self.settings().worktree_reclaim().to_vec()),
@@ -128,7 +129,7 @@ impl OrbitRuntime {
             // Scope collection to this delivery, but retain every run in the
             // path index so another run sharing its token or fallback protects it.
             &self.list_job_runs_for_worktree_gc()?,
-            self,
+            &self.engine_host(),
             &WorktreeGcOptions {
                 delete: true,
                 run_id: Some(run_id.to_string()),
@@ -382,7 +383,7 @@ impl OrbitRuntime {
         collect_worktrees(
             &self.paths().repo_root,
             runs,
-            self,
+            &self.engine_host(),
             &WorktreeGcOptions {
                 delete: true,
                 run_id: Some(run_id.to_string()),
@@ -424,7 +425,7 @@ impl OrbitRuntime {
         collect_worktrees(
             &self.paths().repo_root,
             &runs,
-            self,
+            &self.engine_host(),
             &WorktreeGcOptions {
                 delete,
                 run_id,

@@ -2,6 +2,7 @@
 use super::engine_support::{runtime_with_workspace_config, seed_executor};
 #[cfg(target_os = "macos")]
 use super::sandbox_resolve::last_compiled_file_write_allows_under;
+use orbit_core::adapter::engine_host::EngineHost;
 use orbit_engine::{Dispatch, HostEnvironment};
 #[cfg(target_os = "linux")]
 use orbit_exec::{compile_linux_bwrap_argv, prepare_linux_bwrap_write_grants};
@@ -81,7 +82,7 @@ impl CodexSideRootFixture {
 /// The side roots must be in play, or the reachability assertions are vacuous.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_codex_side_roots_configured(runtime: &orbit_core::runtime::OrbitRuntime) {
-    let config = HostEnvironment::agent_provider_config(runtime);
+    let config = HostEnvironment::agent_provider_config(&EngineHost::new(runtime));
     let dirs: Vec<String> = serde_json::from_str(
         config
             .get("writable_dirs_json")
@@ -145,7 +146,7 @@ fn linux_codex_side_roots_from_a_managed_checkout_reach_only_runtime_stores() {
     assert_codex_side_roots_configured(&runtime);
 
     for cwd in [&fixture.worktree, &fixture.recovery] {
-        let resolved = runtime
+        let resolved = EngineHost::new(&runtime)
             .resolve_executor_sandbox("codex", None, Some(cwd))
             .expect("resolve Codex sandbox")
             .expect("descriptor");
@@ -231,7 +232,7 @@ fn linux_reviewer_profile_grants_only_the_lexical_index_in_workspace_state() {
     let semantic_db = seed_indexed_task(&runtime);
     let fixture = CodexSideRootFixture::new(&runtime);
 
-    let resolved = runtime
+    let resolved = EngineHost::new(&runtime)
         .resolve_executor_sandbox("claude", Some("reviewer"), Some(&fixture.worktree))
         .expect("resolve reviewer sandbox")
         .expect("descriptor");
@@ -293,7 +294,7 @@ fn macos_codex_side_roots_from_a_managed_checkout_reach_only_runtime_stores() {
     assert_codex_side_roots_configured(&runtime);
 
     for cwd in [&fixture.worktree, &fixture.recovery] {
-        let resolved = runtime
+        let resolved = EngineHost::new(&runtime)
             .resolve_executor_sandbox("codex", None, Some(cwd))
             .expect("resolve Codex sandbox")
             .expect("descriptor");
@@ -346,7 +347,7 @@ fn macos_reviewer_profile_grants_only_the_lexical_index_in_workspace_state() {
     let semantic_db = seed_indexed_task(&runtime);
     let fixture = CodexSideRootFixture::new(&runtime);
 
-    let resolved = runtime
+    let resolved = EngineHost::new(&runtime)
         .resolve_executor_sandbox("claude", Some("reviewer"), Some(&fixture.worktree))
         .expect("resolve reviewer sandbox")
         .expect("descriptor");

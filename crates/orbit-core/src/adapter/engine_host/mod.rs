@@ -2,3 +2,5 @@
 
 pub(crate) mod actions;
 mod runtime_host;
+
+pub use runtime_host::EngineHost;

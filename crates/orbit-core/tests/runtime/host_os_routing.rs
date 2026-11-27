@@ -53,7 +53,7 @@ fn task(runtime: &OrbitRuntime, title: &str, tags: &[&str], status: TaskStatus) 
 }
 
 fn backlog(runtime: &OrbitRuntime) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -145,7 +145,7 @@ fn a_linux_host_withholds_and_refuses_a_macos_task_and_names_the_wait() {
     assert_eq!(skipped["detail"], wait, "{discovered}");
 
     let drain = running_run(&linux, "workspace_auto_pipeline", json!({}));
-    let wave = linux
+    let wave = orbit_core::test_support::EngineHost::new(&linux)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),

@@ -91,8 +91,7 @@ fn owed(criterion: usize, host: &str) -> OwedCriterion {
 
 fn in_review(workspace: &Workspace, task: &Task) {
     for status in [TaskStatus::InProgress, TaskStatus::Review] {
-        workspace
-            .runtime
+        orbit_core::test_support::EngineHost::new(&workspace.runtime)
             .apply_task_automation_update(
                 &task.id,
                 TaskAutomationUpdate {
@@ -106,7 +105,7 @@ fn in_review(workspace: &Workspace, task: &Task) {
 
 fn complete(workspace: &Workspace, task: &Task) -> Value {
     orbit_engine::execute_deterministic_action(
-        &workspace.runtime,
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
         "task_complete",
         &json!({}),
         &json!({"run_id": RUN, "task_id": task.id}),
@@ -182,14 +181,23 @@ fn an_owed_post_deploy_criterion_settles_in_review_until_an_operator_records_it(
     // Only the criterion the pilot typed, on its host, may be owed. Every
     // other unmet criterion still fails the implementer's step.
     for refused in [vec![owed(1, HOST)], vec![owed(2, "another-host")]] {
-        let error =
-            HostEnvironment::admit_owed_criteria(&workspace.runtime, &task.id, RUN, &refused)
-                .unwrap_err();
+        let error = HostEnvironment::admit_owed_criteria(
+            &orbit_core::test_support::EngineHost::new(&workspace.runtime),
+            &task.id,
+            RUN,
+            &refused,
+        )
+        .unwrap_err();
         assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
     }
     assert!(show(&workspace, &task).get("owed_criteria").is_none());
-    HostEnvironment::admit_owed_criteria(&workspace.runtime, &task.id, RUN, &[owed(2, HOST)])
-        .unwrap();
+    HostEnvironment::admit_owed_criteria(
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
+        &task.id,
+        RUN,
+        &[owed(2, HOST)],
+    )
+    .unwrap();
 
     let refused = workspace
         .runtime
@@ -276,7 +284,7 @@ fn a_reused_candidate_keeps_its_previous_runs_post_deploy_obligation() {
     assert_eq!(applied["status"], "succeeded", "{applied}");
     in_review(&workspace, &task);
     HostEnvironment::admit_owed_criteria(
-        &workspace.runtime,
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
         &task.id,
         "jrun-previous-delivery",
         &[owed(2, HOST)],
@@ -334,7 +342,7 @@ fn unreadable_newest_post_deploy_history_refuses_completion_and_show() {
     })
     .collect();
     RunLifecycle::apply_task_automation_update(
-        &workspace.runtime,
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
         &task.id,
         TaskAutomationUpdate {
             append_history: history,
@@ -385,8 +393,12 @@ fn post_deploy_operator_measurements_do_not_hold_candidate_admission() {
         .unwrap();
     let applied = apply(&workspace, &task, latency_after_deploy());
     assert_eq!(applied["status"], "succeeded", "{applied}");
-    RunLifecycle::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
-        .expect("an operator measurement owed after deploy must not hold candidate admission");
+    RunLifecycle::admit_task_for_workflow(
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
+        &task.id,
+        "worktree_setup",
+    )
+    .expect("an operator measurement owed after deploy must not hold candidate admission");
     let backlog = workspace.action("list_backlog_tasks", json!({"task_ids": [task.id]}));
     assert!(
         backlog["task_ids"]
@@ -416,9 +428,12 @@ fn post_deploy_operator_measurements_do_not_hold_candidate_admission() {
         .unwrap();
     let applied = apply(&workspace, &task, latency_after_deploy());
     assert_eq!(applied["status"], "succeeded", "{applied}");
-    let error =
-        RunLifecycle::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
-            .expect_err("an ordinary operator requirement must still hold candidate admission");
+    let error = RunLifecycle::admit_task_for_workflow(
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
+        &task.id,
+        "worktree_setup",
+    )
+    .expect_err("an ordinary operator requirement must still hold candidate admission");
     assert!(
         error
             .to_string()
@@ -482,7 +497,7 @@ fn stopped_delivery_owing_measurement(workspace: &Workspace) -> Task {
         )
         .unwrap();
     HostEnvironment::admit_owed_criteria(
-        &workspace.runtime,
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
         &task.id,
         &run.run_id,
         &[owed(2, HOST)],
@@ -549,7 +564,7 @@ fn attempt_completion(
                 .map(|_| ())
         }
         CompletionBoundary::Activity => RunLifecycle::update_task_from_activity(
-            runtime,
+            &orbit_core::test_support::EngineHost::new(runtime),
             &task.id,
             TaskActivityUpdate {
                 status: TaskStatus::Done,
@@ -564,7 +579,7 @@ fn attempt_completion(
         )
         .map(|_| ()),
         CompletionBoundary::Automation => RunLifecycle::apply_task_automation_update(
-            runtime,
+            &orbit_core::test_support::EngineHost::new(runtime),
             &task.id,
             TaskAutomationUpdate {
                 status: Some(TaskStatus::Done),

@@ -26,7 +26,7 @@ type Refusal<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
 fn claim(runtime: &OrbitRuntime, id: &str) {
     let claim_id = format!("claim-{id}");
     let request_id = format!("request-{id}");
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .apply_task_automation_update(
             id,
             TaskAutomationUpdate {

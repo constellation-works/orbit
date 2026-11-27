@@ -1,3 +1,4 @@
+use orbit_core::adapter::engine_host::EngineHost;
 use orbit_engine::Dispatch;
 #[cfg(target_os = "linux")]
 use orbit_exec::{
@@ -33,7 +34,7 @@ fn registered_checkout_denies_live_orbit_versioned_stores() {
     };
     for provider in ["claude", "codex"] {
         seed_executor(&runtime, provider, Some(sandbox));
-        let resolved = runtime
+        let resolved = EngineHost::new(&runtime)
             .resolve_executor_sandbox(provider, None, Some(&repo_root))
             .unwrap_or_else(|error| panic!("{provider} sandbox must resolve: {error}"))
             .unwrap_or_else(|| panic!("{provider} must resolve a sandbox"));
@@ -49,7 +50,7 @@ fn registered_checkout_denies_live_orbit_versioned_stores() {
         std::fs::create_dir_all(worktree.join(".orbit/resources")).expect("worktree resources");
         std::fs::write(worktree.join(".orbit/config.toml"), "versioned = true")
             .expect("worktree config");
-        let resolved = runtime
+        let resolved = EngineHost::new(&runtime)
             .resolve_executor_sandbox("claude", None, Some(&worktree))
             .expect("resolve worktree sandbox")
             .expect("sandbox");
@@ -336,7 +337,7 @@ fn macos_reviewer_profile_grants_no_source_or_workspace_writes() {
             Some(orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec),
         );
         for cwd in [&inspection_root, &worktree] {
-            let sandbox = runtime
+            let sandbox = EngineHost::new(&runtime)
                 .resolve_executor_sandbox(provider, Some("reviewer"), Some(cwd))
                 .expect("resolve reviewer sandbox")
                 .expect("macOS sandbox");
@@ -425,7 +426,7 @@ fn macos_writer_from_a_managed_worktree_keeps_its_policy_inside_the_worktree() {
             Some(orbit_types::workflow::ExecutorSandboxKind::MacosSandboxExec),
         );
         for (profile, writable, denied, not_granted) in &cases {
-            let sandbox = runtime
+            let sandbox = EngineHost::new(&runtime)
                 .resolve_executor_sandbox(provider, Some(profile), Some(&worktree))
                 .expect("resolve writer sandbox")
                 .expect("macOS sandbox");
@@ -509,7 +510,7 @@ fn linux_leaf_keeps_run_store_grants_but_never_reaches_the_recovery_authority() 
         Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
     );
 
-    let resolved = runtime
+    let resolved = EngineHost::new(&runtime)
         .resolve_executor_sandbox("claude", None, Some(&repo_root))
         .expect("resolve Linux sandbox")
         .expect("descriptor");
@@ -597,7 +598,7 @@ fn resolved_sandbox_never_materializes_checkout_identity_as_a_write_anchor() {
     std::fs::write(worktree.join(".orbit/config.toml"), "versioned = true")
         .expect("create versioned config fixture");
 
-    let resolved = runtime
+    let resolved = EngineHost::new(&runtime)
         .resolve_executor_sandbox("claude", None, Some(&worktree))
         .expect("resolve")
         .expect("descriptor");
@@ -683,7 +684,7 @@ fn a_failed_linux_resolution_still_writes_nothing_at_a_redirect_target() {
         "claude",
         Some(orbit_types::workflow::ExecutorSandboxKind::LinuxBwrap),
     );
-    runtime
+    EngineHost::new(&runtime)
         .resolve_executor_sandbox("claude", None, Some(&repo_root))
         .expect_err("a symlinked global state root must not resolve a sandbox");
 
@@ -719,7 +720,7 @@ fn resident_cycle_worktree_launch_is_enforceable_while_direct_reviewer_refuses()
     let worktree = repo.join(".orbit/state/worktrees/resident-jrun-fixture");
     std::fs::create_dir_all(worktree.join("src")).expect("cycle worktree layout");
 
-    let direct = runtime
+    let direct = EngineHost::new(&runtime)
         .resolve_executor_sandbox("claude", Some("reviewer"), Some(&repo))
         .expect("resolve direct reviewer sandbox")
         .expect("sandbox");
@@ -728,7 +729,7 @@ fn resident_cycle_worktree_launch_is_enforceable_while_direct_reviewer_refuses()
         "a reviewer launch in the registered checkout stays direct"
     );
 
-    let resident = runtime
+    let resident = EngineHost::new(&runtime)
         .resolve_executor_sandbox("claude", Some("reviewer"), Some(&worktree))
         .expect("resolve resident reviewer sandbox")
         .expect("sandbox");

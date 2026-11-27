@@ -110,7 +110,7 @@ fn fixture_with_timing(
 
 fn admit(f: &Fixture) {
     assert!(matches!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .admit_final_recovery(
                 &f.source.run_id,
                 &FinalRecoveryAdmissionRequest {
@@ -235,7 +235,7 @@ fn run_tail(
                 f.source.input.clone().unwrap(),
                 &f.source.run_id,
                 audit.clone(),
-                &f.runtime,
+                &orbit_core::test_support::EngineHost::new(&f.runtime),
                 Some(&state),
             )
         },
@@ -332,7 +332,7 @@ pub(super) fn managed_sync_recovery_refuses_unproven_or_changed_evidence() {
     insert_managed_sync_recovery(&f);
     admit(&f);
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .unwrap()
     );
@@ -360,7 +360,7 @@ pub(super) fn managed_sync_recovery_refuses_unproven_or_changed_evidence() {
             .write_run_state(&f.source.run_id, &changed)
             .unwrap();
         assert!(
-            f.runtime
+            orbit_core::test_support::EngineHost::new(&f.runtime)
                 .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
                 .is_err(),
             "{key}"
@@ -378,7 +378,7 @@ pub(super) fn managed_sync_recovery_refuses_unproven_or_changed_evidence() {
         .write_run_state(&f.source.run_id, &changed)
         .unwrap();
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .is_err()
     );
@@ -421,14 +421,14 @@ pub(super) fn refreshed_preparation_retry_admits_unchanged_and_refuses_drift() {
     insert_refreshed_preparation(&f);
     admit(&f);
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .unwrap(),
         "control: refreshed preparation alone does not refuse reuse"
     );
     std::fs::write(checkout.join("source.txt"), "changed").unwrap();
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .is_err(),
         "a changed candidate is still refused"
@@ -440,7 +440,7 @@ pub(super) fn refreshed_preparation_retry_admits_unchanged_and_refuses_drift() {
     insert_refreshed_preparation(&f);
     admit(&f);
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .unwrap(),
         "control"
@@ -460,8 +460,7 @@ pub(super) fn refreshed_preparation_retry_admits_unchanged_and_refuses_drift() {
         machine_id: "hm_fixture".into(),
         machine_name: None,
     }));
-    let refusal = f
-        .runtime
+    let refusal = orbit_core::test_support::EngineHost::new(&f.runtime)
         .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
         .unwrap_err();
     assert!(
@@ -636,7 +635,7 @@ pub(super) fn empty_requirements_still_bind_completion_policy() {
     let (mut f, _) = fixture_with(true, false, false);
     admit(&f);
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .unwrap(),
         "control"
@@ -657,8 +656,7 @@ pub(super) fn empty_requirements_still_bind_completion_policy() {
         machine_id: "hm_fixture".into(),
         machine_name: None,
     }));
-    let refusal = f
-        .runtime
+    let refusal = orbit_core::test_support::EngineHost::new(&f.runtime)
         .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
         .unwrap_err();
     assert!(
@@ -740,7 +738,7 @@ pub(super) fn completion_reuse_refuses_drift() {
         let (mut f, checkout) = fixture();
         admit(&f);
         assert!(
-            f.runtime
+            orbit_core::test_support::EngineHost::new(&f.runtime)
                 .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
                 .unwrap(),
             "control"
@@ -802,7 +800,7 @@ pub(super) fn completion_reuse_refuses_drift() {
             "missing_log" | "failed_log" => {
                 let reference = &before.pipeline["validate"]["validation"][0];
                 let path = reference["path"].as_str().unwrap();
-                f.runtime
+                orbit_core::test_support::EngineHost::new(&f.runtime)
                     .attach_task_validation_log(
                         &f.task,
                         &f.source.run_id,
@@ -874,7 +872,7 @@ pub(super) fn completion_reuse_refuses_drift() {
                     .unwrap();
             }
             "rebound" => {
-                f.runtime
+                orbit_core::test_support::EngineHost::new(&f.runtime)
                     .apply_task_automation_update(
                         &f.task,
                         TaskAutomationUpdate {
@@ -897,8 +895,7 @@ pub(super) fn completion_reuse_refuses_drift() {
             _ => unreachable!(),
         }
         let expected = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
-        let refusal = f
-            .runtime
+        let refusal = orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .unwrap_err();
         let condition = match case {
@@ -931,7 +928,7 @@ pub(super) fn completion_observation_requires_a_stopped_owner() {
     super::published_owner::save_run(&f, &f.source);
 
     assert!(matches!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .completion_observation_admission(&f.source.run_id, &f.task, "complete_pr")
             .unwrap(),
         orbit_engine::CompletionObservationAdmission::Stopped { .. }
@@ -945,8 +942,7 @@ pub(super) fn completion_observation_requires_a_stopped_owner() {
     f.source.pid = Some(std::process::id());
     super::published_owner::save_run(&f, &f.source);
 
-    let refusal = f
-        .runtime
+    let refusal = orbit_core::test_support::EngineHost::new(&f.runtime)
         .completion_observation_admission(&f.source.run_id, &f.task, "complete_pr")
         .unwrap_err();
     assert!(
@@ -965,7 +961,7 @@ pub(super) fn changed_base_gets_fresh_native_validation() {
     git(&f.repo, &["commit", "-qm", "new base"]);
     git(&f.repo, &["push", "origin", "HEAD:main"]);
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .unwrap(),
         "a moved base alone leaves the published candidate unchanged"
@@ -975,7 +971,7 @@ pub(super) fn changed_base_gets_fresh_native_validation() {
     let head = git(&checkout, &["rev-parse", "HEAD"]);
     assert_ne!(head, old);
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .is_err(),
         "a rebased candidate is not the published head"
@@ -1004,7 +1000,7 @@ pub(super) fn concurrent_and_lost_admission_keep_one_completion_budget() {
     let results = std::thread::scope(|scope| {
         let apply = || {
             barrier.wait();
-            f.runtime
+            orbit_core::test_support::EngineHost::new(&f.runtime)
                 .admit_final_recovery(&f.source.run_id, &request)
                 .unwrap()
         };
@@ -1026,12 +1022,11 @@ pub(super) fn concurrent_and_lost_admission_keep_one_completion_budget() {
             .count(),
         1
     );
-    let deadline = f
-        .runtime
+    let deadline = orbit_core::test_support::EngineHost::new(&f.runtime)
         .completion_deadline(&f.source.run_id, "17", 1000)
         .unwrap();
     assert_eq!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .completion_deadline(&f.source.run_id, "17", 2000)
             .unwrap(),
         deadline,
@@ -1039,7 +1034,7 @@ pub(super) fn concurrent_and_lost_admission_keep_one_completion_budget() {
     );
     let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .unwrap()
     );
@@ -1061,7 +1056,12 @@ pub(super) fn concurrent_and_lost_admission_keep_one_completion_budget() {
     };
     for _ in 0..2 {
         assert!(matches!(
-            Recovery::apply_final_recovery(&f.runtime, &f.source.run_id, &application).unwrap(),
+            Recovery::apply_final_recovery(
+                &orbit_core::test_support::EngineHost::new(&f.runtime),
+                &f.source.run_id,
+                &application
+            )
+            .unwrap(),
             orbit_engine::FinalRecoveryApplied::Resume
         ));
     }
@@ -1073,7 +1073,7 @@ pub(super) fn concurrent_and_lost_admission_keep_one_completion_budget() {
     );
     assert!(
         matches!(
-            f.runtime
+            orbit_core::test_support::EngineHost::new(&f.runtime)
                 .admit_final_recovery(&f.source.run_id, &request)
                 .unwrap(),
             orbit_engine::FinalRecoveryAdmission::Skipped { .. }
@@ -1090,7 +1090,7 @@ pub(super) fn unknown_merge_reply_is_reconciled_without_republication() {
         "completion":"done","auto_fix":true,"head":f.branch,"published_head_sha":f.head,
         "base":"main","max_wait_seconds":60});
     let failed = execute_deterministic_action(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         "pr_complete",
         &json!({}),
         &input,
@@ -1123,7 +1123,7 @@ pub(super) fn unknown_merge_reply_is_reconciled_without_republication() {
     )
     .unwrap();
     let retry = execute_deterministic_action(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         "pr_complete",
         &json!({}),
         &input,
@@ -1140,7 +1140,7 @@ pub(super) fn unknown_merge_reply_is_reconciled_without_republication() {
     );
     admit(&f);
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .is_err()
     );
@@ -1175,7 +1175,7 @@ pub(super) fn configured_review_requires_unchanged_host_certificate() {
     let source = configure_review(&mut f, &checkout);
     admit(&f);
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .unwrap()
     );
@@ -1199,7 +1199,7 @@ pub(super) fn configured_review_requires_unchanged_host_certificate() {
     changed["reviewed_head_sha"] = json!(f.base);
     published_owner::checkpoint(&f, &f.source.run_id, 5, "review_gate_settle", changed);
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
             .is_err()
     );
@@ -1208,7 +1208,7 @@ pub(super) fn configured_review_requires_unchanged_host_certificate() {
 pub(super) fn refused_receipts_stop_before_agent_or_republication() {
     let (f, _) = fixture();
     tail_forge(&f, "lost_read");
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .attach_task_validation_log(
             &f.task,
             &f.source.run_id,
@@ -1344,7 +1344,7 @@ pub(super) fn timing_alias_rewrites_preserve_published_completion_authentication
                 "{spelling}, saved={save}"
             );
             assert!(
-                f.runtime
+                orbit_core::test_support::EngineHost::new(&f.runtime)
                     .authenticate_completion_tail(&f.source.run_id, &f.task, "complete_pr")
                     .unwrap(),
                 "published receipt survives {spelling}, saved={save}"

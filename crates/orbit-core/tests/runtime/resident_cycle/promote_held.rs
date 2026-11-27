@@ -17,7 +17,7 @@ fn assess_with(fx: &Fixture, runtime: &OrbitRuntime, task: &str, overrides: Valu
         .unwrap()
         .run_id;
     let action = |name, input| {
-        runtime
+        orbit_core::test_support::EngineHost::new(runtime)
             .run_deterministic(name, &json!({}), &input, ToolContext::default())
             .unwrap()
     };

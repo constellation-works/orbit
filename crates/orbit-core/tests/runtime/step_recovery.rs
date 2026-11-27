@@ -233,7 +233,10 @@ impl RecoveryHost<'_> {
 
 impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        Recovery::final_recovery_log_tail(self.runtime, run_id)
+        Recovery::final_recovery_log_tail(
+            &orbit_core::test_support::EngineHost::new(self.runtime),
+            run_id,
+        )
     }
 
     fn run_deterministic(
@@ -322,8 +325,12 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
         fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
         proc_allowed_programs: Option<&[String]>,
     ) -> orbit_tools::ToolContext {
-        self.runtime
-            .tool_context_for_activity(run_id, fs_profile, fs_audit, proc_allowed_programs)
+        orbit_core::test_support::EngineHost::new(self.runtime).tool_context_for_activity(
+            run_id,
+            fs_profile,
+            fs_audit,
+            proc_allowed_programs,
+        )
     }
 
     fn agent_crew_config_for_input(
@@ -362,8 +369,12 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
         activity: &str,
         disallow_list: &[String],
     ) -> Result<ResolvedActivityTools, DispatchError> {
-        self.runtime
-            .resolve_activity_tool_denials(None, &[], activity, disallow_list)
+        orbit_core::test_support::EngineHost::new(self.runtime).resolve_activity_tool_denials(
+            None,
+            &[],
+            activity,
+            disallow_list,
+        )
     }
 
     fn worker_invocation(&self) -> Option<WorkerInvocation> {
@@ -394,7 +405,8 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
         &self,
         request: &StepRecoveryDecisionRequest,
     ) -> Result<Option<StepRecoveryDecisionSlot>, OrbitError> {
-        let slot = self.runtime.allocate_step_recovery_decision(request)?;
+        let slot = orbit_core::test_support::EngineHost::new(self.runtime)
+            .allocate_step_recovery_decision(request)?;
         self.slots.lock().unwrap().extend(slot.clone());
         Ok(slot)
     }
@@ -406,7 +418,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
         if self.read_failure {
             return Err(OrbitError::Io("injected decision read failure".to_string()));
         }
-        self.runtime.read_step_recovery_decision(slot)
+        orbit_core::test_support::EngineHost::new(self.runtime).read_step_recovery_decision(slot)
     }
 
     fn update_task_from_activity(
@@ -929,8 +941,7 @@ fn evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry() {
     };
     let source: Value = serde_json::from_slice(&std::fs::read(&source_slot.path).unwrap()).unwrap();
     assert!(matches!(
-        fixture
-            .runtime
+        orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .read_step_recovery_decision(source_slot)
             .unwrap(),
         StepRecoveryDecisionRead::Verified {
@@ -953,8 +964,7 @@ fn evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry() {
         ("external_blocker_without_blocker", "needs a blocker"),
         ("retry_with_blocker", "only an external_blocker"),
     ] {
-        let slot = fixture
-            .runtime
+        let slot = orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .allocate_step_recovery_decision(&StepRecoveryDecisionRequest {
                 run_id: source_slot.run_id.clone(),
                 failed_step_id: source_slot.failed_step_id.clone(),
@@ -1001,7 +1011,9 @@ fn evidence_for_another_invocation_or_an_unsafe_path_admits_no_retry() {
             _ => {}
         }
         std::fs::write(&slot.path, bytes).unwrap();
-        let read = fixture.runtime.read_step_recovery_decision(&slot).unwrap();
+        let read = orbit_core::test_support::EngineHost::new(&fixture.runtime)
+            .read_step_recovery_decision(&slot)
+            .unwrap();
         let StepRecoveryDecisionRead::Invalid { diagnostic } = read else {
             panic!("{name}: hostile captured-provider bytes authorize nothing: {read:?}");
         };

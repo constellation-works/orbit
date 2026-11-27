@@ -55,7 +55,7 @@ impl HostOutput {
         .unwrap();
         let build = |checkout: &Path| {
             let result = fixture_engine::review_gate::run_required_validation(
-                &runtime, checkout,
+                &orbit_core::test_support::EngineHost::new(&runtime), checkout,
                 "mkdir -p \"$BUILD_OUTPUT_DIR/debug\" && printf 'fixture host output' > \"$BUILD_OUTPUT_DIR/debug/output\"",
             ).unwrap();
             assert!(result.passed, "{}", result.output);
@@ -272,7 +272,7 @@ impl Drop for HostOutput {
     fn drop(&mut self) {
         // Settle the passive active control before the routine-worker guard
         // inventories all fixture runs. ChildGuard also reaps on an unwind.
-        let _ = self.runtime.finalize_job_run(
+        let _ = orbit_core::test_support::EngineHost::new(&self.runtime).finalize_job_run(
             &self.active_run,
             JobRunState::Success,
             Utc::now(),
@@ -303,7 +303,7 @@ fn attach_run(runtime: &OrbitRuntime, workspace: &Workspace, run_id: &str) -> Pa
 }
 
 fn start_run(runtime: &OrbitRuntime) -> (String, crate::child_guard::ChildGuard) {
-    let run = runtime
+    let run = orbit_core::test_support::EngineHost::new(runtime)
         .insert_job_run("gc_fixture_pipeline", 1, Utc::now(), None, None)
         .unwrap();
     let mut child = std::process::Command::new("/bin/sh");
@@ -320,7 +320,7 @@ fn start_run(runtime: &OrbitRuntime) -> (String, crate::child_guard::ChildGuard)
             .unwrap(),
     );
     assert!(
-        runtime
+        orbit_core::test_support::EngineHost::new(runtime)
             .mark_job_run_running(&run.run_id, Utc::now(), owner.id())
             .unwrap()
             .owns_execution()
@@ -330,7 +330,7 @@ fn start_run(runtime: &OrbitRuntime) -> (String, crate::child_guard::ChildGuard)
 
 fn finish_run(runtime: &OrbitRuntime, run_id: &str, mut owner: crate::child_guard::ChildGuard) {
     assert!(
-        runtime
+        orbit_core::test_support::EngineHost::new(runtime)
             .finalize_job_run(run_id, JobRunState::Success, Utc::now(), Some(0))
             .unwrap()
     );

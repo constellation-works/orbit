@@ -29,6 +29,7 @@ use orbit_types::workflow::CrewEnvUnset;
 use orbit_types::workflow::activity_job::Provider;
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 
 /// Why a crew cannot run on this host.
 enum Unrunnable {
@@ -63,7 +64,7 @@ impl OrbitRuntime {
             }));
         }
         (is_claude(crew)
-            && HostEnvironment::run_settings(self).requires_claude_worker_credential
+            && HostEnvironment::run_settings(&self.engine_host()).requires_claude_worker_credential
             && !claude_worker_credential_held(&policy.crew_agent_subprocess_env(&crew.env, &[])))
         .then_some(Unrunnable::NoClaudeCredential)
     }

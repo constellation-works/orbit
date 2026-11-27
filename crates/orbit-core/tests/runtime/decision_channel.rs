@@ -286,7 +286,7 @@ impl Fixture {
             chrono::Utc::now(),
         );
         request.expires_at = expires_at.unwrap_or(request.expires_at);
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {
@@ -441,7 +441,7 @@ impl Fixture {
             },
             "already_landed": null,
         }});
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 task,
                 TaskAutomationUpdate {
@@ -522,7 +522,7 @@ impl Fixture {
             surface: None,
             caller: None,
         };
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 task,
                 TaskAutomationUpdate {
@@ -1721,7 +1721,7 @@ fn simple_body_signature_survives_governed_submit() {
         let submit = |raw_message: &str| {
             if through_tool {
                 with_decision_dkim_resolver(FixtureResolver, || {
-                    fx.runtime.run_tool_with_context(
+                    orbit_core::test_support::EngineHost::new(&fx.runtime).run_tool_with_context(
                         "orbit.decision.submit",
                         json!({
                             "id": b.request.id,

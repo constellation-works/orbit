@@ -5,6 +5,7 @@ use orbit_engine::Dispatch;
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullCrewPreflight};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::distributed::PullCrewWindow;
 
 /// The drain's crew window, taking and persisting its preflight on the first
@@ -69,7 +70,7 @@ fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
                 unset.describe()
             ))
         } else if crew.enabled {
-            match Dispatch::resolve_cli_executor(runtime, &crew.provider) {
+            match Dispatch::resolve_cli_executor(&runtime.engine_host(), &crew.provider) {
                 Ok(executor) => runtime
                     .locate_provider_launcher(&executor.command)
                     .is_none()

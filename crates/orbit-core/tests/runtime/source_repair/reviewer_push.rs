@@ -80,7 +80,7 @@ fn held_reviewer_push_fixture() -> (Fixture, PathBuf, String) {
     run.finished_at = Some(Utc::now());
     save_run(&f, &run);
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .complete_job_run_step(
                 &run.run_id,
                 &orbit_store::contract::JobRunStepParams {
@@ -306,7 +306,7 @@ fn a_rejected_landing_review_requeue_resumes_the_preserved_fix_commit() {
     run.finished_at = Some(Utc::now());
     save_run(&f, &run);
     assert!(
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .complete_job_run_step(
                 &run.run_id,
                 &orbit_store::contract::JobRunStepParams {

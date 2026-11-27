@@ -26,7 +26,7 @@ fn revert_on_red_fails_instead_of_reporting_success() {
     std::fs::create_dir_all(&workspace).expect("workspace orbit dir");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("build runtime");
 
-    let error = runtime
+    let error = orbit_core::test_support::EngineHost::new(&runtime)
         .run_deterministic(
             "revert_on_red",
             &json!({}),

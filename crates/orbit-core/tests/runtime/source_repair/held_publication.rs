@@ -24,7 +24,7 @@ fn held_completion_fixture_with_policy(code: DeliveryRefusal, timing: &str) -> F
         .unwrap();
     // Completion failed after publication. The worker leaves the last
     // successful checkpoints intact and appends a run-level diagnostic.
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .complete_job_run_step(
             &f.source.run_id,
             &JobRunStepParams {
@@ -50,7 +50,7 @@ fn published_completion_hold_starts_repair_at_published_head() {
     let f = held_completion_fixture();
     let binding = f.inspect();
     assert_eq!(binding["head_sha"], f.head);
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -370,8 +370,7 @@ fn held_review_task_diagnosis_reaches_agent_prompt_and_spends_budget() {
 /// source's published checkpoints and original job definition snapshot. The
 /// task stays bound to `f.source`.
 fn insert_held_retry(f: &Fixture, input: Value, code: DeliveryRefusal) -> JobRun {
-    let mut retry = f
-        .runtime
+    let mut retry = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run(
             "task_pr_pipeline",
             2,
@@ -413,7 +412,7 @@ fn insert_held_retry(f: &Fixture, input: Value, code: DeliveryRefusal) -> JobRun
     f.runtime
         .write_run_state(&retry.run_id, &retry_state)
         .unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .complete_job_run_step(
             &retry.run_id,
             &JobRunStepParams {
@@ -467,7 +466,7 @@ fn held_completion_retry_on_review_task_carries_diagnosis_and_follows_pushed_hea
         run_id: retry.run_id.clone(),
     })
     .unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -656,7 +655,7 @@ fn spend_pr_auto_fix_budget(f: &Fixture) {
             caller: None,
         })
         .collect();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -734,8 +733,7 @@ fn held_owner_refused_while_its_handback_is_newer_names_the_handback() {
 
 fn held_run_outside_the_task_lineage_is_still_refused_as_unbound() {
     let f = held_completion_fixture_with(DeliveryRefusal::CompletionBudgetExpired);
-    let mut stray = f
-        .runtime
+    let mut stray = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run(
             "task_pr_pipeline",
             2,
@@ -815,8 +813,7 @@ fn resident_recovery_cycle(
         McpCapability::Operator,
     )
     .unwrap();
-    let run = f
-        .runtime
+    let run = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run(
             "resident_cycle_pipeline",
             1,
@@ -857,7 +854,7 @@ fn resident_resume_delivery(
 }
 
 fn block_fixture_task(f: &Fixture) {
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -1001,7 +998,7 @@ fn drive_resident_leaf_publication(
 
     std::fs::write(checkout.join("source.txt"), content).unwrap();
     if validate {
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 &f.task,
                 TaskAutomationUpdate {

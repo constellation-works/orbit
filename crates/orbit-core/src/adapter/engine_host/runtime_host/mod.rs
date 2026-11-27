@@ -1,4 +1,4 @@
-//! The `RuntimeHost` implementation for `OrbitRuntime`: one impl per capability
+//! The `RuntimeHost` implementation for [`EngineHost`]: one impl per capability
 //! trait in `host` (`RunLifecycle`, `ReviewGate`, `HostEnvironment`, `Dispatch`
 //! and `Recovery`), with their method bodies grouped by concern beside it. Each
 //! body in `host` delegates to `claims`, `validation`, `recovery`,
@@ -19,3 +19,5 @@ mod recovery;
 mod recovery_evidence;
 mod task_automation;
 mod validation;
+
+pub use host::EngineHost;

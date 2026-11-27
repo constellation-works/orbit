@@ -69,7 +69,13 @@ fn final_recovery_handoff_persists_only_its_claimed_tasks_evidence() {
     let evidence = json!({"execution_summary": "Outcome: success\nChanges: repaired claimed candidate.",
         "task_artifacts": [{"path": "recovery/repair.log", "source_path": ".orbit/tmp/repair.log"}]});
     let persist = |id: &str| {
-        Recovery::persist_final_recovery_evidence(&bound, &leaf, id, &pair.follower_repo, &evidence)
+        Recovery::persist_final_recovery_evidence(
+            &orbit_core::test_support::EngineHost::new(&bound),
+            &leaf,
+            id,
+            &pair.follower_repo,
+            &evidence,
+        )
     };
     assert!(
         persist(other).is_err(),
@@ -154,7 +160,11 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
         task_id: &str,
         update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
-        RunLifecycle::apply_task_automation_update(&self.bound, task_id, update)
+        RunLifecycle::apply_task_automation_update(
+            &orbit_core::test_support::EngineHost::new(&self.bound),
+            task_id,
+            update,
+        )
     }
 
     fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
@@ -162,15 +172,15 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
     }
 
     fn get_job_run(&self, run: &str) -> Result<Option<orbit_types::workflow::JobRun>, OrbitError> {
-        self.bound.get_job_run(run)
+        orbit_core::test_support::EngineHost::new(&self.bound).get_job_run(run)
     }
 
     fn required_validation_commands(&self) -> Vec<String> {
-        self.bound.required_validation_commands()
+        orbit_core::test_support::EngineHost::new(&self.bound).required_validation_commands()
     }
 
     fn run_settings(&self) -> orbit_engine::RunSettings {
-        HostEnvironment::run_settings(&self.bound)
+        HostEnvironment::run_settings(&orbit_core::test_support::EngineHost::new(&self.bound))
     }
 
     fn attach_task_validation_log(
@@ -180,7 +190,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
         path: &str,
         content: Vec<u8>,
     ) -> Result<(), OrbitError> {
-        self.bound
+        orbit_core::test_support::EngineHost::new(&self.bound)
             .attach_task_validation_log(task, run, path, content)
     }
 
@@ -209,7 +219,8 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
                     "rationale": "repaired candidate",
                 }))
             }
-            _ => self.bound.run_deterministic(action, config, input, context),
+            _ => orbit_core::test_support::EngineHost::new(&self.bound)
+                .run_deterministic(action, config, input, context),
         }
     }
 
@@ -222,8 +233,14 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
         compound: &BTreeMap<String, Value>,
         script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
     ) -> Result<(), DispatchError> {
-        self.bound
-            .checkpoint_step(run_id, index, step_id, output, compound, script_outputs)
+        orbit_core::test_support::EngineHost::new(&self.bound).checkpoint_step(
+            run_id,
+            index,
+            step_id,
+            output,
+            compound,
+            script_outputs,
+        )
     }
 
     fn persist_final_recovery_evidence(
@@ -233,11 +250,17 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
         workspace: &Path,
         evidence: &Value,
     ) -> Result<(), OrbitError> {
-        Recovery::persist_final_recovery_evidence(&self.bound, run_id, task_id, workspace, evidence)
+        Recovery::persist_final_recovery_evidence(
+            &orbit_core::test_support::EngineHost::new(&self.bound),
+            run_id,
+            task_id,
+            workspace,
+            evidence,
+        )
     }
 
     fn final_recovery_log_tail(&self, run: &str) -> Result<Option<String>, OrbitError> {
-        self.bound.final_recovery_log_tail(run)
+        orbit_core::test_support::EngineHost::new(&self.bound).final_recovery_log_tail(run)
     }
 
     fn admit_final_recovery(
@@ -245,7 +268,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
         run: &str,
         request: &FinalRecoveryAdmissionRequest,
     ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        self.bound.admit_final_recovery(run, request)
+        orbit_core::test_support::EngineHost::new(&self.bound).admit_final_recovery(run, request)
     }
 
     fn apply_final_recovery(
@@ -253,7 +276,11 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
         run: &str,
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError> {
-        Recovery::apply_final_recovery(&self.bound, run, application)
+        Recovery::apply_final_recovery(
+            &orbit_core::test_support::EngineHost::new(&self.bound),
+            run,
+            application,
+        )
     }
 }
 
@@ -529,7 +556,7 @@ fn claimed_final_recovery_refused_commit_routes_patch_to_owner_or_fallback() {
     // Claim fence preservation on the active claim:
     // - Cannot write an artifact to another task.
     let foreign_err = RunLifecycle::apply_task_automation_update(
-        &accepted.bound,
+        &orbit_core::test_support::EngineHost::new(&accepted.bound),
         &accepted.other,
         TaskAutomationUpdate {
             upsert_artifacts: vec![TaskArtifact::from_text(
@@ -594,7 +621,7 @@ fn claimed_final_recovery_refused_commit_routes_patch_to_owner_or_fallback() {
     accepted.pair.leaf_fails_with(&accepted.leaf, "claim ended");
     accepted.pair.pass(&accepted.drain);
     let stale_err = RunLifecycle::apply_task_automation_update(
-        &accepted.bound,
+        &orbit_core::test_support::EngineHost::new(&accepted.bound),
         &accepted.task,
         TaskAutomationUpdate {
             upsert_artifacts: vec![TaskArtifact::from_text(

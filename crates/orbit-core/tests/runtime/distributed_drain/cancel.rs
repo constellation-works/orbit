@@ -738,8 +738,7 @@ fn the_mcp_stop_control_with_force_stops_claimed_leaves() {
     let (leaf, worker) = pair.running_leaf_with_worker(&drain, 1);
     let task = pair.claimed_task(&leaf);
 
-    let stopped = pair
-        .follower
+    let stopped = orbit_core::test_support::EngineHost::new(&pair.follower)
         .run_tool_with_context(
             "orbit.workflow.auto",
             json!({
@@ -852,7 +851,7 @@ fn a_forced_local_drain_cancel_reports_mixed_child_outcomes() {
     pair.follower
         .write_run_state(&another.run_id, &state)
         .unwrap();
-    let error = pair.follower.run_tool_with_context(
+    let error = orbit_core::test_support::EngineHost::new(&pair.follower).run_tool_with_context(
         "orbit.workflow.auto",
         json!({"workspace": pair.follower.workspace_id().unwrap(), "action": "stop", "force": true}),
         ToolContext {

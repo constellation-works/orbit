@@ -92,7 +92,7 @@ fn requeue_ignores_a_colliding_owner_run_for_a_settled_follower() {
                 JobRunState::Failed
             }
         );
-        owner
+        orbit_core::test_support::EngineHost::new(owner)
             .apply_task_automation_update(
                 &task_id,
                 orbit_engine::TaskAutomationUpdate {
@@ -106,7 +106,7 @@ fn requeue_ignores_a_colliding_owner_run_for_a_settled_follower() {
 }
 
 fn requeue(owner: &OrbitRuntime, task: &str) -> Result<Value, OrbitError> {
-    owner.run_tool_with_context(
+    orbit_core::test_support::EngineHost::new(owner).run_tool_with_context(
         "orbit.task.requeue",
         json!({"id": task, "reason": "retry after the delivery stops"}),
         ToolContext {
@@ -173,7 +173,7 @@ fn requeue_names_the_live_run_or_pr_pipeline() {
             .unwrap();
         jobs.mark_job_run_running(&local.run_id, Utc::now(), std::process::id())
             .unwrap();
-        owner
+        orbit_core::test_support::EngineHost::new(owner)
             .apply_task_automation_update(
                 &task,
                 orbit_engine::TaskAutomationUpdate {

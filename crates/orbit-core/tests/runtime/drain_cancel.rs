@@ -56,7 +56,7 @@ fn forced_local_cancel_and_admissions_stop_preserve_task_disposition() {
                 ..Default::default()
             })
             .unwrap();
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .apply_task_automation_update(
                 &task.id,
                 TaskAutomationUpdate {

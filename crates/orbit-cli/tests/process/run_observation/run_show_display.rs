@@ -980,7 +980,7 @@ fn run_show_reports_the_failed_step_before_a_later_skip() {
         Default::default(),
     );
     let failure = orbit_core::test_support::fixture_engine::Dispatch::run_deterministic(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "pipeline_success_guard",
         &serde_json::json!({}),
         &serde_json::json!({

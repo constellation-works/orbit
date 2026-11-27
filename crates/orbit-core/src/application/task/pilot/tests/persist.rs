@@ -14,6 +14,7 @@ use tempfile::TempDir;
 
 use super::super::persist::lock_hook::{self, Point};
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 use crate::application::test_support::runtime_with_workspace_config;
 
@@ -97,6 +98,7 @@ fn prepare(workspace: &Workspace, task_id: &str) -> Value {
     let path = workspace.repo.canonicalize().expect("canonicalize repo");
     workspace
         .runtime
+        .engine_host()
         .run_deterministic(
             "prepare_task_pilot",
             &json!({}),
@@ -138,6 +140,7 @@ fn apply_naming_blockers(
     });
     let (revision, tree) = proof(prepared);
     runtime
+        .engine_host()
         .run_deterministic(
             "apply_task_pilot_results",
             &json!({}),
@@ -291,7 +294,7 @@ fn seeded_scope_is_retained_when_pilot_widens_selectors() {
     let task_entry = prepared["tasks"][0].clone();
     let (revision, tree) = proof(&prepared);
     let output = workspace
-        .runtime
+        .runtime.engine_host()
         .run_deterministic(
             "apply_task_pilot_results",
             &json!({}),
@@ -343,6 +346,7 @@ fn apply_finding_invalid(runtime: &OrbitRuntime, prepared: &Value) -> Value {
     let task = &prepared["tasks"][0];
     let (revision, tree) = proof(prepared);
     runtime
+        .engine_host()
         .run_deterministic(
             "apply_task_pilot_results",
             &json!({}),

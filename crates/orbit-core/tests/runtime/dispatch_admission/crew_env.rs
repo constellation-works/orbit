@@ -393,7 +393,7 @@ impl orbit_tools::DrainOwnerTransport for CredentialOwnerProbe {
     fn call(&self, _selector: &str, name: &str, input: Value) -> Result<Value, OrbitError> {
         assert_eq!(name, "orbit.drain.probe");
         self.calls.fetch_add(1, Ordering::SeqCst);
-        self.owner.run_tool_with_context(
+        orbit_core::test_support::EngineHost::new(&self.owner).run_tool_with_context(
             name,
             input,
             ToolContext {

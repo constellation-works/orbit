@@ -55,7 +55,7 @@ fn extend(
 
 /// The drain's own window answer for the stamp its loop echoes.
 fn window(pair: &Pair, drain: &str, echoed: DateTime<Utc>) -> Value {
-    pair.follower
+    orbit_core::test_support::EngineHost::new(&pair.follower)
         .run_deterministic(
             "drain_window",
             &json!({}),

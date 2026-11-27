@@ -80,6 +80,7 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::task::TaskRecordUpdateParams;
 
 use super::judgement::{Judgement, SettlementInputs, extend_note, write_artifact};
@@ -153,7 +154,7 @@ impl Judgement {
                 .as_ref()
                 .map_or(&[][..], |claim| &claim.failures);
             let check = verify_base_failure(
-                runtime,
+                &runtime.engine_host(),
                 &context.workspace_path,
                 &base.commit,
                 &command,

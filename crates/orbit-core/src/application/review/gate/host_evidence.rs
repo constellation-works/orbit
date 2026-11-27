@@ -46,6 +46,7 @@ use orbit_types::workflow::{
 use serde_json::json;
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 
 use super::super::evidence::{
     canonical_requirements, covers_deferral, satisfied_external_evidence,
@@ -153,7 +154,7 @@ impl Judgement {
             };
             let (artifact, log_artifact) = fulfilment_artifact_paths(&required.artifact)?;
             let run = run_host_sandbox_test(
-                runtime,
+                &runtime.engine_host(),
                 &context.workspace_path,
                 candidate,
                 &command,

@@ -35,7 +35,7 @@ fn resume_receipt(f: &Fixture) -> FinalRecoveryCheckpoint {
 }
 
 fn record_admitted_attempt(f: &Fixture, attempt: u32, head: &str) {
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -113,7 +113,7 @@ fn incident() -> (Fixture, PathBuf, String, String) {
     f.source.finished_at = Some(Utc::now());
     save_run(&f, &f.source);
     f.state = state;
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {

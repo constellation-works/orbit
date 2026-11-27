@@ -139,7 +139,7 @@ impl WaitingOwner {
     /// refuse, leaving the stopped attempt production recorded.
     fn land_refused(&self, context: &str) {
         let result = orbit_engine::execute_deterministic_action(
-            &self.owner.pair.wire.owner,
+            &orbit_core::test_support::EngineHost::new(&self.owner.pair.wire.owner),
             "handoff_land",
             &json!({}),
             &json!({"handoff_id":self.handoff, "max_wait_seconds":0}),

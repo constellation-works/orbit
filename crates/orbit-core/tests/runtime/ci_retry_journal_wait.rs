@@ -166,7 +166,11 @@ fn ci_retry_journal_read_passes_a_queued_admission() {
     // while the long reader holds the partition.
     let ordinary =
         orbit_core::test_support::with_task_commit_lock_timeout(Duration::from_millis(500), || {
-            RunLifecycle::get_task_artifact(&fixture.runtime, &fixture.task_id, JOURNAL)
+            RunLifecycle::get_task_artifact(
+                &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+                &fixture.task_id,
+                JOURNAL,
+            )
         });
     let error = ordinary.expect_err("an ordinary read queues behind the admission");
     assert!(error.to_string().contains("timed out"), "{error}");
@@ -175,7 +179,11 @@ fn ci_retry_journal_read_passes_a_queued_admission() {
     // instead of waiting out the holder.
     let (observed, lock_wait_ms) = orbit_common::fs::lock_wait::measure(|| {
         orbit_core::test_support::with_task_commit_lock_timeout(Duration::from_secs(2), || {
-            RunLifecycle::observe_task_artifact(&fixture.runtime, &fixture.task_id, JOURNAL)
+            RunLifecycle::observe_task_artifact(
+                &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+                &fixture.task_id,
+                JOURNAL,
+            )
         })
     });
     let observed = observed
@@ -187,7 +195,7 @@ fn ci_retry_journal_read_passes_a_queued_admission() {
         "journal read waited {lock_wait_ms} ms behind a queued admission"
     );
     let missing = RunLifecycle::observe_task_artifact(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &fixture.task_id,
         "ci-rerun/other/diagnostics.json",
     )
@@ -197,9 +205,13 @@ fn ci_retry_journal_read_passes_a_queued_admission() {
     // The admission still runs once the reader leaves, and ordinary reads see
     // the same journal.
     convoy.release();
-    let ordinary = RunLifecycle::get_task_artifact(&fixture.runtime, &fixture.task_id, JOURNAL)
-        .unwrap()
-        .unwrap();
+    let ordinary = RunLifecycle::get_task_artifact(
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+        &fixture.task_id,
+        JOURNAL,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(ordinary.content, observed.content);
 }
 

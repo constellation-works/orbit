@@ -56,7 +56,12 @@ fn action(
     name: &str,
     input: &Value,
 ) -> Result<Value, orbit_engine::DispatchError> {
-    runtime.run_deterministic(name, &json!({}), input, ToolContext::default())
+    orbit_core::test_support::EngineHost::new(runtime).run_deterministic(
+        name,
+        &json!({}),
+        input,
+        ToolContext::default(),
+    )
 }
 
 #[track_caller]
@@ -1137,7 +1142,7 @@ fn owner_only_required_tools_stay_in_backlog_for_the_owner() {
         local["task_ids"].as_array().unwrap().contains(&json!(held)),
         "owner-local dispatch remains eligible: {local}"
     );
-    let grant = owner
+    let grant = orbit_core::test_support::EngineHost::new(owner)
         .resolve_activity_tool_denials(None, std::slice::from_ref(&held), "agent_implement", &[])
         .unwrap();
     assert!(
@@ -1273,7 +1278,7 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
         );
         assert!(mutation.is_err(), "requirements remain immutable");
         // The owner-local implementer keeps its existing activity admission.
-        let grant = owner
+        let grant = orbit_core::test_support::EngineHost::new(owner)
             .resolve_activity_tool_denials(None, std::slice::from_ref(task), "agent_implement", &[])
             .unwrap();
         assert_eq!(grant.requested_tools, vec![tool.to_string()]);
@@ -2317,7 +2322,7 @@ fn a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change() {
     let pair = Pair::new(3);
     let owner = &pair.wire.owner;
     let gate = |task: &str| {
-        owner
+        orbit_core::test_support::EngineHost::new(owner)
             .run_deterministic(
                 "invoke_and_wait",
                 &json!({"run_id": "parent-run"}),
@@ -2415,7 +2420,7 @@ fn a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change() {
 /// Ask `owner`'s probe, as the routed follower does, whether a pull with
 /// `caller_before_pr` would be admitted.
 fn probe_owner(owner: &OrbitRuntime, caller_before_pr: bool) -> Value {
-    owner
+    orbit_core::test_support::EngineHost::new(owner)
         .run_tool_with_context(
             "orbit.drain.probe",
             json!({
@@ -2681,19 +2686,29 @@ fn cross_workspace_dependency_resolves_through_claim_lookup() {
         owner_a.get_task(&prerequisite).is_err(),
         "the prerequisite is not in the dependent's workspace"
     );
-    let resolved = RunLifecycle::get_dependency_task(&owner_a, &prerequisite)
-        .expect("dependency lookup")
-        .expect("cross-workspace dependency resolves through its owner");
+    let resolved = RunLifecycle::get_dependency_task(
+        &orbit_core::test_support::EngineHost::new(&owner_a),
+        &prerequisite,
+    )
+    .expect("dependency lookup")
+    .expect("cross-workspace dependency resolves through its owner");
     assert_eq!(resolved.id, prerequisite);
     assert_eq!(resolved.status, orbit_types::task::TaskStatus::Done);
-    let history = RunLifecycle::get_dependency_history(&owner_a, &prerequisite)
-        .expect("dependency history")
-        .expect("cross-workspace dependency history resolves");
+    let history = RunLifecycle::get_dependency_history(
+        &orbit_core::test_support::EngineHost::new(&owner_a),
+        &prerequisite,
+    )
+    .expect("dependency history")
+    .expect("cross-workspace dependency history resolves");
     assert!(!history.is_empty(), "history is read from the owner");
 
     // A dangling dependency is absent, not a `not_found` failure.
     assert_eq!(
-        RunLifecycle::get_dependency_task(&owner_a, "ORB-999999").unwrap(),
+        RunLifecycle::get_dependency_task(
+            &orbit_core::test_support::EngineHost::new(&owner_a),
+            "ORB-999999"
+        )
+        .unwrap(),
         None
     );
 }
@@ -2919,7 +2934,7 @@ fn pull_from_owner(
         effective_capabilities: BTreeSet::from([McpCapability::Agent]),
         ..ToolSessionContext::default()
     };
-    let probe = owner
+    let probe = orbit_core::test_support::EngineHost::new(owner)
         .run_tool_with_context(
             "orbit.drain.probe",
             json!({}),
@@ -2930,7 +2945,7 @@ fn pull_from_owner(
         )
         .expect("probe owner");
     let fingerprint = orbit_store::contract::distributed_drain_protocol_fingerprint();
-    owner
+    orbit_core::test_support::EngineHost::new(owner)
         .run_tool_with_context(
             "orbit.task.pull",
             json!({

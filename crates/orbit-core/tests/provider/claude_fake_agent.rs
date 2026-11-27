@@ -200,7 +200,7 @@ fn try_dispatch_spec(
         input: serde_json::json!({"prompt": "Finish the task and return the envelope."}),
         audit,
         run_id: "claude-fake",
-        host: Some(runtime),
+        host: Some(&orbit_core::test_support::EngineHost::new(runtime)),
     })
 }
 
@@ -305,7 +305,7 @@ fn crew_child_env(
     let _ = std::fs::remove_file(env_file);
     let inline = spec();
     let resolved = orbit_engine::resolve_crew_settings(
-        runtime,
+        &orbit_core::test_support::EngineHost::new(runtime),
         &inline,
         &serde_json::json!({ "crew": crew }),
         &serde_json::json!({}),

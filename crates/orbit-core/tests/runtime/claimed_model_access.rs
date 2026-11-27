@@ -88,7 +88,7 @@ fn held(runtime: &OrbitRuntime, input: &Value) -> String {
 fn seed_claimed_refusal(runtime: &OrbitRuntime, task: &str, ago: Duration) {
     let at = Utc::now() - ago;
     let input = leaf(task, "wonder", "pool:hard", "hard");
-    let run = runtime
+    let run = orbit_core::test_support::EngineHost::new(runtime)
         .insert_job_run(
             TASK_CLAIMED_LOCAL_PIPELINE_JOB,
             1,
@@ -111,10 +111,10 @@ fn seed_claimed_refusal(runtime: &OrbitRuntime, task: &str, ago: Duration) {
         },
     });
     runtime.write_run_state(&run.run_id, &state).unwrap();
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .mark_job_run_running(&run.run_id, at, std::process::id())
         .unwrap();
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .finalize_job_run(&run.run_id, JobRunState::Failed, at, None)
         .unwrap();
 }

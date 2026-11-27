@@ -113,8 +113,7 @@ impl Fixture {
             }
             other => panic!("unknown case {other}"),
         };
-        let sandbox = self
-            .runtime
+        let sandbox = orbit_core::test_support::EngineHost::new(&self.runtime)
             .resolve_executor_sandbox(provider, fs_profile, Some(cwd))
             .expect("resolve sandbox")
             .expect("a Linux executor resolves a sandbox");

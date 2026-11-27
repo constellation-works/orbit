@@ -19,6 +19,7 @@ use super::super::evidence::{
 };
 use super::codeql::admitted_codeql_args;
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskUpdateParams, recovery_checkout_path};
 
 use super::tick::{free_mib, fulfilable_hold, hold_key, min_free_mib_of};
@@ -262,7 +263,7 @@ impl OrbitRuntime {
         command: &HostSandboxCommand,
     ) -> EvidenceRun {
         let ran = run_host_sandbox_test(
-            self,
+            &self.engine_host(),
             &self.paths().repo_root,
             &hold.candidate,
             command,

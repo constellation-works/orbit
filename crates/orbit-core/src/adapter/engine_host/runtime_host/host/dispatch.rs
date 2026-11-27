@@ -1,4 +1,4 @@
-//! [`Dispatch`] for [`OrbitRuntime`]: each method delegates to a sibling
+//! [`Dispatch`] for [`EngineHost`]: each method delegates to a sibling
 //! helper grouped by concern, or adapts a type on the way through.
 
 use std::collections::HashMap;
@@ -17,15 +17,16 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::actions::{cli_executor, dispatch, sandbox, task_context};
-
 use crate::adapter::engine_host::runtime_host::{agent, invocation, recovery};
 
-impl Dispatch for OrbitRuntime {
+use super::EngineHost;
+
+impl Dispatch for EngineHost<'_> {
     fn run_script_step(
         &self,
         request: &orbit_engine::ScriptStepRequest,
     ) -> orbit_engine::ScriptStepRun {
-        crate::application::job::script_step::run_script_step(self, request)
+        crate::application::job::script_step::run_script_step(self.runtime, request)
     }
 
     fn verify_script_output_set(
@@ -34,7 +35,7 @@ impl Dispatch for OrbitRuntime {
         set: &orbit_types::workflow::activity_job::ScriptOutputSet,
     ) -> Result<(), String> {
         crate::application::job::script_outputs::verify_script_output_set(
-            self,
+            self.runtime,
             consumer_run_id,
             set,
         )
@@ -47,7 +48,7 @@ impl Dispatch for OrbitRuntime {
         input: &Value,
         tool_context: ToolContext,
     ) -> Result<Value, DispatchError> {
-        dispatch::run_deterministic(self, action, config, input, tool_context)
+        dispatch::run_deterministic(self.runtime, action, config, input, tool_context)
     }
 
     /// [ORB-10385] Report this binary's deterministic-action registry so job
@@ -58,18 +59,18 @@ impl Dispatch for OrbitRuntime {
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        cli_executor::resolve_cli_executor(self, provider)
+        cli_executor::resolve_cli_executor(self.runtime, provider)
     }
 
     fn resolve_local_shell_executor(
         &self,
         executor: &str,
     ) -> Result<ResolvedShellExecutor, DispatchError> {
-        cli_executor::resolve_local_shell_executor(self, executor)
+        cli_executor::resolve_local_shell_executor(self.runtime, executor)
     }
 
     fn provider_cli_config(&self, provider: &str) -> HashMap<String, String> {
-        invocation::provider_cli_config(self, provider)
+        invocation::provider_cli_config(self.runtime, provider)
     }
 
     fn resolve_executor_sandbox(
@@ -81,8 +82,8 @@ impl Dispatch for OrbitRuntime {
         #[cfg(not(target_os = "macos"))] _subprocess_cwd: Option<&Path>,
     ) -> Result<Option<ResolvedSandbox>, DispatchError> {
         sandbox::resolve_executor_sandbox(
-            self,
-            self.env(),
+            self.runtime,
+            self.runtime.env(),
             provider,
             #[cfg(target_os = "macos")]
             fs_profile,
@@ -101,7 +102,7 @@ impl Dispatch for OrbitRuntime {
         step_id: &str,
         input: &Value,
     ) -> Result<Option<Value>, DispatchError> {
-        task_context::task_context_for_agent_input(self, run_id, step_id, input)
+        task_context::task_context_for_agent_input(self.runtime, run_id, step_id, input)
     }
 
     fn agent_corpus_for_activity(
@@ -109,7 +110,7 @@ impl Dispatch for OrbitRuntime {
         run_id: &str,
         activity_name: &str,
     ) -> Result<Option<orbit_types::workflow::AgentCorpusInjection>, DispatchError> {
-        OrbitRuntime::agent_corpus_for_activity(self, run_id, activity_name)
+        OrbitRuntime::agent_corpus_for_activity(self.runtime, run_id, activity_name)
             .map_err(DispatchError::CliInvocationPermanent)
     }
 
@@ -119,7 +120,7 @@ impl Dispatch for OrbitRuntime {
         activity_name: &str,
         input: &Value,
     ) -> Result<Vec<TagInstruction>, DispatchError> {
-        agent::tag_instructions_for_activity(self, run_id, activity_name, input)
+        agent::tag_instructions_for_activity(self.runtime, run_id, activity_name, input)
     }
 
     fn notices_for_agent_input(
@@ -128,7 +129,7 @@ impl Dispatch for OrbitRuntime {
         activity_name: &str,
         input: &Value,
     ) -> Option<orbit_types::workflow::FleetNoticeBrief> {
-        task_context::notices_for_agent_input(self, run_id, activity_name, input)
+        task_context::notices_for_agent_input(self.runtime, run_id, activity_name, input)
     }
 
     fn experiment_overlays_for_activity(
@@ -138,7 +139,7 @@ impl Dispatch for OrbitRuntime {
         input: &Value,
         model: Option<&str>,
     ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
-        agent::experiment_overlays_for_activity(self, run_id, activity_name, input, model)
+        agent::experiment_overlays_for_activity(self.runtime, run_id, activity_name, input, model)
     }
 
     fn acquire_deferred_footprint(
@@ -146,15 +147,16 @@ impl Dispatch for OrbitRuntime {
         run_id: &str,
         activity_name: &str,
     ) -> Result<(), DispatchError> {
-        recovery::acquire_deferred_footprint(self, run_id, activity_name)
+        recovery::acquire_deferred_footprint(self.runtime, run_id, activity_name)
     }
 
     fn mid_run_steering_enabled(&self) -> bool {
-        self.mid_run_steering().enabled
+        self.runtime.mid_run_steering().enabled
     }
 
     fn record_resident_continuity_rebuilt(&self, run_id: &str) -> Result<(), OrbitError> {
-        self.record_resident_continuity_rebuilt_for_run(run_id)
+        self.runtime
+            .record_resident_continuity_rebuilt_for_run(run_id)
     }
 
     fn steering_gate(
@@ -163,7 +165,8 @@ impl Dispatch for OrbitRuntime {
         task_id: &str,
         candidate_source: Option<&str>,
     ) -> Result<SteeringGateReading, OrbitError> {
-        self.steering_gate_reading(run_id, task_id, candidate_source)
+        self.runtime
+            .steering_gate_reading(run_id, task_id, candidate_source)
     }
 
     fn admit_steering_round(
@@ -173,7 +176,13 @@ impl Dispatch for OrbitRuntime {
         outstanding: &[CommentLogMark],
         candidate_source: Option<&str>,
     ) -> Result<SteeringRoundAdmission, OrbitError> {
-        OrbitRuntime::admit_steering_round(self, run_id, task_id, outstanding, candidate_source)
+        OrbitRuntime::admit_steering_round(
+            self.runtime,
+            run_id,
+            task_id,
+            outstanding,
+            candidate_source,
+        )
     }
 
     fn run_deferral_probe(

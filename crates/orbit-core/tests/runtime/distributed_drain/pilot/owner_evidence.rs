@@ -169,7 +169,7 @@ fn owner_evidence_applied_after_selection_is_rechecked_before_claim() {
     let drain = pair.start_drain();
     let pass = orbit_core::test_support::with_pull_admission_checkpoint(
         move || {
-            let output = owner
+            let output = orbit_core::test_support::EngineHost::new(&owner)
                 .run_deterministic(
                     "apply_task_pilot_results",
                     &json!({}),

@@ -427,7 +427,7 @@ fn an_active_member_settles_when_its_request_is_answered() {
     fire(&fx, &task, now);
 
     RunLifecycle::apply_task_automation_update(
-        &fx.runtime,
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
         &task,
         TaskAutomationUpdate {
             append_history: vec![orbit_types::task::TaskHistoryEntry {

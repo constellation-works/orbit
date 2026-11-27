@@ -1,6 +1,7 @@
 use super::V2RunFinalizationOptions;
 use crate::OrbitRuntime;
 use crate::application::SYSTEM_AUDIT_IDENTITY;
+use crate::application::contracts::EngineHostPort;
 use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission};
 use crate::application::job::resume::ResumePlan;
 use crate::application::job::{
@@ -357,8 +358,14 @@ impl OrbitRuntime {
             retry_source_run_id,
         });
 
-        let dispatch_result =
-            execute_job_with_resume(&asset.spec, input, &run_id, writer.clone(), self, resume);
+        let dispatch_result = execute_job_with_resume(
+            &asset.spec,
+            input,
+            &run_id,
+            writer.clone(),
+            &self.engine_host(),
+            resume,
+        );
         let error_diagnostic = dispatch_result
             .as_ref()
             .err()

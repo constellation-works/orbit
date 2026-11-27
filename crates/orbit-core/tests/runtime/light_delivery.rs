@@ -64,7 +64,7 @@ fn validate(fixture: &Fixture) -> Value {
     input["base_sha"] = json!(git(fixture, &["rev-parse", "main"]));
     input["base_ref"] = json!("main");
     execute_deterministic_action(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         "candidate_validate",
         &json!({}),
         &input,
@@ -249,8 +249,7 @@ fn mapped_delivery_preview(guard_exit: Option<u8>) {
     git(&fixture, &["add", "."]);
     git(&fixture, &["commit", "--quiet", "-m", "landed candidate"]);
     let after = git(&fixture, &["rev-parse", "HEAD"]);
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .record_direct_landing_intent(&DirectLandingRequest {
             run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
             branch: "main".into(),
@@ -396,7 +395,7 @@ fn a_mapped_guard_sees_the_candidate_not_the_owners_checkout() {
 
     let decide = |head: &str| {
         orbit_engine::review_skip_decision(
-            &fixture.runtime,
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
             &fixture.repo,
             &base,
             head,

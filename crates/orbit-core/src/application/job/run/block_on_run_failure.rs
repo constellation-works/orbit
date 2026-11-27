@@ -79,6 +79,7 @@ use orbit_types::workflow::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::runtime::run::task_coupling::provider_hold::{
     held_by_run, provider_failure_hold_update,
 };
@@ -327,7 +328,7 @@ impl OrbitRuntime {
                     }
                     if footprint_unavailable && hold.is_none() && provider_failure.is_none() {
                         return RunLifecycle::apply_task_automation_update(
-                            self,
+                            &self.engine_host(),
                             &task.id,
                             TaskAutomationUpdate {
                                 status: Some(TaskStatus::Backlog),
@@ -351,7 +352,7 @@ impl OrbitRuntime {
                     }
                     if upgrade_pending && hold.is_none() && provider_failure.is_none() {
                         return RunLifecycle::apply_task_automation_update(
-                            self,
+                            &self.engine_host(),
                             &task.id,
                             TaskAutomationUpdate {
                                 status: Some(TaskStatus::Backlog),
@@ -413,7 +414,8 @@ impl OrbitRuntime {
                             ),
                         }
                     };
-                    RunLifecycle::apply_task_automation_update(self, &task.id, update)
+                    let host = self.engine_host();
+                    RunLifecycle::apply_task_automation_update(&host, &task.id, update)
                 });
             // Per-task best-effort: one task's write failure must not strand the
             // rest of the bundle.

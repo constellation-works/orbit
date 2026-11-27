@@ -155,7 +155,7 @@ fn dispatch(harness: &Harness, spec: AgentLoopSpec) -> DispatchOutcome {
         }),
         audit,
         run_id: "copilot-fake",
-        host: Some(&harness.runtime),
+        host: Some(&orbit_core::test_support::EngineHost::new(&harness.runtime)),
     })
     .expect("dispatch copilot cli backend")
 }

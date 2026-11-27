@@ -295,8 +295,7 @@ fn requeue_keeps_the_published_owner_refusals() {
     set_origin(&foreign);
     refused(&f, false, "foreign");
     set_origin(&stopped);
-    let newer = f
-        .runtime
+    let newer = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run(
             "task_pr_pipeline",
             1,
@@ -314,8 +313,7 @@ fn requeue_keeps_the_published_owner_refusals() {
 fn requeue_refuses_a_newer_different_publication() {
     for (pr, head) in [("18", "old-head"), ("17", "different-head")] {
         let (f, _) = escalated_handoff_fixture(None, None);
-        let mut newer = f
-            .runtime
+        let mut newer = orbit_core::test_support::EngineHost::new(&f.runtime)
             .insert_job_run(
                 "task_pr_pipeline",
                 1,
@@ -347,8 +345,7 @@ fn requeue_refuses_a_newer_different_publication() {
 
 fn requeue_names_the_held_completion_resume() {
     let (f, _) = escalated_handoff_fixture(None, None);
-    let mut newer = f
-        .runtime
+    let mut newer = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run(
             "task_pr_pipeline",
             2,
@@ -362,7 +359,7 @@ fn requeue_names_the_held_completion_resume() {
     newer.finished_at = Some(Utc::now());
     save_run(&f, &newer);
     let now = Utc::now();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .complete_job_run_step(
             &newer.run_id,
             &orbit_store::contract::JobRunStepParams {
@@ -508,7 +505,7 @@ fn transient_requeues_are_bounded_per_publication() {
         surface: None,
         caller: None,
     };
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -745,7 +742,7 @@ fn automatic_authentication_failures_are_bounded() {
 fn a_refused_publication_is_recorded_once() {
     use orbit_types::workflow::TRANSIENT_INFRA_REQUEUE_REFUSED_EVENT;
     let (f, _) = escalated_handoff_fixture(None, Some(TransientInfrastructure::LockBusy));
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -1012,8 +1009,7 @@ fn plain_status_update_refuses_an_unbound_pull_request() {
     f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
     let error = plain_refused(&f, "unbound pull request");
     assert!(error.contains("--discard-candidate"), "{error}");
-    let resume_error = f
-        .runtime
+    let resume_error = orbit_core::test_support::EngineHost::new(&f.runtime)
         .owner_published_candidate(&f.task, Some(&f.source.run_id))
         .expect_err("an unbound publication refuses candidate resume")
         .to_string();

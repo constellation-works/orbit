@@ -156,7 +156,7 @@ impl Fixture {
     /// The task context `step` of `run` embeds in its agent prompt.
     fn prompt(&self, run: &str, step: &str) -> Value {
         Dispatch::task_context_for_agent_input(
-            &self.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
             run,
             step,
             &json!({ "task_id": self.task }),
@@ -291,7 +291,7 @@ fn two_runs_of_one_task_hold_independent_watermarks() {
     // A dispatch outside any persisted run has no record to hold a
     // watermark: the prompt fails rather than silently losing it.
     let refused = Dispatch::task_context_for_agent_input(
-        &fx.runtime,
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
         "jrun-without-state",
         "implement",
         &json!({ "task_id": fx.task }),
@@ -313,7 +313,7 @@ fn a_prompt_whose_run_has_no_state_fails_instead_of_dropping_the_watermark() {
         )
         .unwrap();
     let refused = Dispatch::task_context_for_agent_input(
-        &fx.runtime,
+        &orbit_core::test_support::EngineHost::new(&fx.runtime),
         &run.run_id,
         "implement",
         &json!({ "task_id": fx.task }),

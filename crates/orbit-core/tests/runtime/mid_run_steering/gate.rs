@@ -259,7 +259,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
                     input["task_id"].as_str().unwrap()
                 };
                 let prompt = Dispatch::task_context_for_agent_input(
-                    &self.runtime(),
+                    &orbit_core::test_support::EngineHost::new(&self.runtime()),
                     &self.run,
                     "implement_one",
                     &json!({ "task_id": task }),
@@ -275,7 +275,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
             }
             "commit" if self.candidate.is_some() => {
                 return orbit_engine::execute_deterministic_action(
-                    &self.runtime(),
+                    &orbit_core::test_support::EngineHost::new(&self.runtime()),
                     "git_commit",
                     &json!({}),
                     input,
@@ -300,7 +300,12 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         } else {
             task_id
         };
-        let reading = Dispatch::steering_gate(&self.runtime(), run_id, task, candidate_source);
+        let reading = Dispatch::steering_gate(
+            &orbit_core::test_support::EngineHost::new(&self.runtime()),
+            run_id,
+            task,
+            candidate_source,
+        );
         if std::mem::take(&mut *self.comment_after_gate_read.lock().unwrap()) {
             self.fx
                 .operator_comment("STEER-LATE: written while the gate's verdict stands.");
@@ -316,7 +321,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         candidate_source: Option<&str>,
     ) -> Result<SteeringRoundAdmission, OrbitError> {
         Dispatch::admit_steering_round(
-            &self.fx.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.fx.runtime),
             run_id,
             task_id,
             outstanding,
@@ -329,7 +334,11 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         task_id: &str,
         update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
-        RunLifecycle::apply_task_automation_update(&self.fx.runtime, task_id, update)
+        RunLifecycle::apply_task_automation_update(
+            &orbit_core::test_support::EngineHost::new(&self.fx.runtime),
+            task_id,
+            update,
+        )
     }
 }
 
@@ -480,7 +489,13 @@ fn a_refusal_spends_one_round_whose_prompt_delivers_and_then_commits() {
         assert_eq!(fx.deliveries().len(), 1, "{pipeline}: delivered once");
         assert_eq!(rounds(&fx, &run), 1, "{pipeline}");
         assert_eq!(
-            Dispatch::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
+            Dispatch::steering_gate(
+                &orbit_core::test_support::EngineHost::new(&fx.runtime),
+                &run,
+                &fx.task,
+                None
+            )
+            .unwrap(),
             SteeringGateReading::Clear
         );
     }
@@ -618,7 +633,13 @@ fn a_fresh_run_carrying_a_candidate_delivers_guidance_written_after_its_source_p
         );
         assert_eq!(fx.deliveries().len(), 1, "{pipeline}");
         assert_eq!(
-            Dispatch::steering_gate(&fx.runtime, &run, &fx.task, Some(&source)).unwrap(),
+            Dispatch::steering_gate(
+                &orbit_core::test_support::EngineHost::new(&fx.runtime),
+                &run,
+                &fx.task,
+                Some(&source)
+            )
+            .unwrap(),
             SteeringGateReading::Clear
         );
     }
@@ -849,9 +870,13 @@ fn an_unreadable_gate_fails_closed_and_a_later_comment_waits_for_the_next_gate()
         assert_eq!(host.labels(), with(head_labels(pipeline), &["commit"]));
         assert!(fx.deliveries().is_empty(), "{pipeline}");
         let late = fx.runtime.get_task_comments(&fx.task).unwrap().len() - 1;
-        let SteeringGateReading::Outstanding(outstanding) =
-            Dispatch::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap()
-        else {
+        let SteeringGateReading::Outstanding(outstanding) = Dispatch::steering_gate(
+            &orbit_core::test_support::EngineHost::new(&fx.runtime),
+            &run,
+            &fx.task,
+            None,
+        )
+        .unwrap() else {
             panic!("{pipeline}: the late comment is the next gate's steering");
         };
         assert_eq!(
@@ -873,7 +898,7 @@ fn a_terminal_task_stops_the_run_and_reports_its_outstanding_steering() {
         host.on_implement = Box::new(|fx, _| {
             fx.operator_comment("STEER: never mind, this is done elsewhere.");
             RunLifecycle::apply_task_automation_update(
-                &fx.runtime,
+                &orbit_core::test_support::EngineHost::new(&fx.runtime),
                 &fx.task,
                 TaskAutomationUpdate {
                     status: Some(TaskStatus::Archived),

@@ -576,8 +576,7 @@ fn a_codeql_finding_is_attached_and_routes_the_kept_candidate_to_repair() {
 
     // The task's next run resumes the held candidate for its implementer,
     // with the findings as the repair's output.
-    let next = fixture
-        .runtime
+    let next = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .insert_job_run(
             "task_pr_pipeline",
             1,
@@ -586,8 +585,7 @@ fn a_codeql_finding_is_attached_and_routes_the_kept_candidate_to_repair() {
             None,
         )
         .unwrap();
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .apply_task_automation_update(
             &fixture.task_id,
             orbit_engine::TaskAutomationUpdate {
@@ -601,7 +599,7 @@ fn a_codeql_finding_is_attached_and_routes_the_kept_candidate_to_repair() {
     git(&fixture, &["checkout", "--quiet", "--detach", "main"]);
     let base_sha = git(&fixture, &["rev-parse", "HEAD"]);
     let resumed = execute_deterministic_action(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         "candidate_resume",
         &json!({}),
         &json!({
@@ -1024,7 +1022,7 @@ fn a_fixture_owned_host_invocation_signal_survives_checkout_cleanup() {
     let (fixture, hold, bin) = held_host(PASSING_PROBE, HOST_TEST);
     let command = orbit_types::workflow::HostSandboxCommand::admit(HOST_TEST, &[]).unwrap();
     let run = orbit_engine::review_gate::run_host_sandbox_test(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         &fixture.repo,
         &hold.candidate,
         &command,

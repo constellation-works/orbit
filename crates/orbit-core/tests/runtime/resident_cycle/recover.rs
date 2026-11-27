@@ -51,7 +51,7 @@ fn operator_only_calls(task: &str, run: &str, workspace: &str) -> Vec<(&'static 
 
 fn blocked_task(fx: &Fixture, title: &str) -> String {
     let id = fx.task(title);
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &id,
             TaskAutomationUpdate {
@@ -429,7 +429,7 @@ fn delivery_recovery_refuses_missing_right_scope_and_irreversible_decisions() {
         })
         .unwrap()
         .id;
-    other_runtime
+    orbit_core::test_support::EngineHost::new(&other_runtime)
         .apply_task_automation_update(
             &foreign_task,
             TaskAutomationUpdate {

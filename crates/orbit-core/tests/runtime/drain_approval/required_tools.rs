@@ -154,7 +154,7 @@ fn approval_drain_runs_a_pilot_with_a_disallowed_implementer_requirement() {
         }),
         &pilot,
         audit.clone(),
-        &workspace.runtime,
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
         None,
     )
     .expect("ORB-15207: the approval drain's pilot must admit implementer tool requirements");

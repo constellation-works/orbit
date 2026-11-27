@@ -4,7 +4,7 @@ use orbit_engine::RunLifecycle;
 use orbit_types::task::TaskHistoryEntry;
 
 fn put_in_review(f: &Fixture) {
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -33,7 +33,7 @@ fn review_return_refuses_an_unauthenticated_inline_publication() {
         // than stopping at the incorrectly admitted task update.
         let (run, setup) = published_owner::next(&f);
         let error = execute_deterministic_action(
-            &f.runtime,
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
             "candidate_resume",
             &json!({}),
             &json!({"job_run_id":run.run_id,"task_ids":[f.task],
@@ -259,7 +259,7 @@ fn review_returns_refuse_ambiguous_or_unreadable_preservations() {
             "untrusted" => entry.by = "human".into(),
             _ => (),
         }
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .apply_task_automation_update(
                 &f.task,
                 TaskAutomationUpdate {
@@ -277,7 +277,7 @@ fn review_returns_refuse_discarded_candidates_and_newer_executions() {
         let (f, _) = failed_publication::escalated_handoff_fixture(None, None);
         put_in_review(&f);
         if case == "discarded" {
-            f.runtime
+            orbit_core::test_support::EngineHost::new(&f.runtime)
                 .apply_task_automation_update(
                     &f.task,
                     TaskAutomationUpdate {
@@ -298,7 +298,7 @@ fn review_returns_refuse_discarded_candidates_and_newer_executions() {
                 )
                 .unwrap();
         } else {
-            f.runtime
+            orbit_core::test_support::EngineHost::new(&f.runtime)
                 .insert_job_run(
                     "task_pr_pipeline",
                     1,

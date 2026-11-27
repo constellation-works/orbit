@@ -193,8 +193,7 @@ impl ReviewedLeaf {
     }
 
     pub(super) fn admit_review(&mut self) -> Value {
-        let admission = self
-            .bound
+        let admission = orbit_core::test_support::EngineHost::new(&self.bound)
             .run_deterministic(
                 "review_gate_admit",
                 &json!({}),
@@ -429,7 +428,7 @@ impl ReviewedLeaf {
     }
 
     pub(super) fn settle(&self) -> Result<Value, String> {
-        self.bound
+        orbit_core::test_support::EngineHost::new(&self.bound)
             .run_deterministic(
                 "review_gate_settle",
                 &json!({}),

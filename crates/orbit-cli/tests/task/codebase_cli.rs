@@ -1078,7 +1078,7 @@ fn codebase_delivery_reads_are_lazy_and_window_bounded() {
             .to_string();
         // No host checkpoint is present: observing the run must still resolve
         // its repository and report unavailable delivery rather than a landing.
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .insert_job_run(
                 "codebase_fixture",
                 1,

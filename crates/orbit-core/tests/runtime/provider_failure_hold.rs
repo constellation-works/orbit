@@ -221,7 +221,7 @@ impl Fixture {
                 &PipelineState::new(run.run_id.clone(), run.job_id, input),
             )
             .unwrap();
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 task,
                 TaskAutomationUpdate {
@@ -238,7 +238,7 @@ impl Fixture {
     /// worker does.
     pub(super) fn fail(&self, run: &str, message: &str) {
         let now = Utc::now();
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .complete_job_run_step(
                 run,
                 &JobRunStepParams {
@@ -257,7 +257,7 @@ impl Fixture {
                 },
             )
             .unwrap();
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .finalize_job_run(run, JobRunState::Failed, now, Some(1))
             .unwrap();
     }
@@ -278,7 +278,7 @@ impl Fixture {
     }
 
     fn backlog(&self, allowed_crews: &[&str]) -> Value {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .run_deterministic(
                 "list_backlog_tasks",
                 &json!({}),
@@ -544,7 +544,7 @@ fn a_hold_that_excludes_every_crew_defers_the_task_until_not_before() {
             Some(lapsed.text("lapsed fixture hold")),
         ),
     ] {
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {
@@ -605,7 +605,7 @@ fn a_providerless_failure_with_no_crew_to_exclude_defers_until_not_before() {
             Some(lapsed.text("lapsed fixture hold")),
         ),
     ] {
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {
@@ -656,7 +656,7 @@ fn an_unavailable_login_keeps_this_host_off_the_crew_for_every_task() {
     );
 
     // The held task leaves the backlog; a later task still avoids the account.
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &held,
             TaskAutomationUpdate {

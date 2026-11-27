@@ -107,7 +107,7 @@ fn decision_answer_refusals_keep_structured_client_errors() {
                 "block_triage".into(),
                 chrono::Utc::now(),
             );
-            runtime
+            orbit_core::test_support::EngineHost::new(runtime)
                 .apply_task_automation_update(
                     &task.id,
                     TaskAutomationUpdate {
@@ -186,7 +186,7 @@ fn raise_block_triage(
         "block_triage".into(),
         chrono::Utc::now(),
     );
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .apply_task_automation_update(
             task_id,
             TaskAutomationUpdate {

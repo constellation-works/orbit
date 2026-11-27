@@ -120,7 +120,7 @@ fn out_of_run_resume_completes_a_green_audited_refresh() {
         Shelf::Review,
         LeafEnd::Held(DeliveryRefusal::CompletionBudgetExpired.error_code()),
     );
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &leaf.task,
             TaskAutomationUpdate {
@@ -211,7 +211,7 @@ esac
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
     let complete = || {
         orbit_engine::execute_deterministic_action(
-            &fx.runtime,
+            &orbit_core::test_support::EngineHost::new(&fx.runtime),
             "pr_complete",
             &json!({}),
             &input,

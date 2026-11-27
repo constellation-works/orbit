@@ -263,12 +263,15 @@ fn landed_no_diff_completion_replays_after_admission_receipt_compaction() {
         observed: Some(handoff.candidate.clone()),
         evidence: landed["evidence"].to_string(),
     };
-    ReviewGate::record_handoff_landing(owner, &update)
+    ReviewGate::record_handoff_landing(&orbit_core::test_support::EngineHost::new(owner), &update)
         .expect("recorded Complete replays without the compacted admission receipt");
     let mut changed = update;
     changed.evidence = json!({"delivery": "changed"}).to_string();
-    let error = ReviewGate::record_handoff_landing(owner, &changed)
-        .expect_err("changed completion input must not reuse the receipt");
+    let error = ReviewGate::record_handoff_landing(
+        &orbit_core::test_support::EngineHost::new(owner),
+        &changed,
+    )
+    .expect_err("changed completion input must not reuse the receipt");
     assert!(error.to_string().contains("mutation_mismatch"), "{error}");
     fixture.assert_status("done");
     assert_eq!(owner.get_task_history(&fixture.task).unwrap(), history);

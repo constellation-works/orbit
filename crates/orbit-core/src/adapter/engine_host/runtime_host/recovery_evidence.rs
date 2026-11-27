@@ -42,7 +42,7 @@ pub(super) fn persist_final_recovery_evidence(
     workspace: &Path,
     evidence: &Value,
 ) -> Result<(), OrbitError> {
-    let run = runtime
+    let run = super::EngineHost::new(runtime)
         .get_job_run(run_id)?
         .ok_or_else(|| refused("the run does not exist"))?;
     let running = run.state == JobRunState::Running;

@@ -75,7 +75,7 @@ fn qualifying_task(runtime: &OrbitRuntime) -> Task {
 }
 
 fn action(runtime: &OrbitRuntime, action: &str, input: Value) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(action, &json!({}), &input, ToolContext::default())
         .unwrap_or_else(|error| panic!("{action}: {error}"))
 }
@@ -164,7 +164,7 @@ fn pilot_with_findings(
         assert!(output.status.success(), "{output:?}");
         String::from_utf8(output.stdout).unwrap().trim().to_string()
     };
-    let applied = runtime.run_deterministic(
+    let applied = orbit_core::test_support::EngineHost::new(runtime).run_deterministic(
         "apply_task_pilot_results",
         &json!({}),
         &json!({

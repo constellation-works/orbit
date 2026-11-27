@@ -48,7 +48,7 @@ pub(super) fn file(runtime: &OrbitRuntime, snapshot: Value, extra: Value) -> Val
     if let (Some(target), Some(source)) = (input.as_object_mut(), extra.as_object()) {
         target.extend(source.clone());
     }
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "file_dependabot_alert_tasks",
             &json!({}),

@@ -55,7 +55,7 @@ fn audit_started(f: &Fixture, run: &JobRun, step_id: &str) {
 /// A dispatched run that set up its worktree, failed at candidate adoption
 /// and stopped, with its final recovery settled when `settle` is set.
 fn failed_pre_adoption(f: &Fixture, settle: bool) -> (JobRun, PathBuf) {
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -101,7 +101,7 @@ fn step_row(f: &Fixture, run: &JobRun, index: usize, target: Option<&str>) {
             .unwrap();
         return;
     };
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .complete_job_run_step(
             &run.run_id,
             &orbit_store::contract::JobRunStepParams {
@@ -175,7 +175,7 @@ pub(super) fn failed_pre_adoption_chain_rebinds_the_original_publication() {
     first.duration_ms = Some(42);
     save_run(&f, &first);
     let refused = execute_deterministic_action(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         "candidate_resume",
         &json!({}),
         &resume_input,

@@ -50,13 +50,14 @@ fn evidence_arriving_after_a_checkpoint_resume_requeues_the_original_owners_task
     }
     let mut fixture = Fixture::new();
     let owner = fixture.input["job_run_id"].as_str().unwrap().to_string();
-    let record = fixture.runtime.get_job_run(&owner).unwrap().unwrap();
-    fixture
-        .runtime
+    let record = orbit_core::test_support::EngineHost::new(&fixture.runtime)
+        .get_job_run(&owner)
+        .unwrap()
+        .unwrap();
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .mark_job_run_running(&owner, Utc::now(), std::process::id())
         .unwrap();
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .finalize_job_run(&owner, JobRunState::Interrupted, Utc::now(), None)
         .unwrap();
     // Resume admission restores in-progress without changing the reused
@@ -73,8 +74,7 @@ fn evidence_arriving_after_a_checkpoint_resume_requeues_the_original_owners_task
             None,
         )
         .unwrap();
-    let resumed = fixture
-        .runtime
+    let resumed = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .insert_job_run(
             &record.job_id,
             2,
@@ -107,8 +107,7 @@ fn evidence_arriving_after_a_checkpoint_resume_requeues_the_original_owners_task
 
     // A later unrelated delivery cannot be requeued by this hold, even if
     // it uses the same job and the original evidence subsequently arrives.
-    let unrelated = fixture
-        .runtime
+    let unrelated = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .insert_job_run(&record.job_id, 1, Utc::now(), record.input, None)
         .unwrap()
         .run_id;
@@ -210,12 +209,10 @@ fn hold_and_receive(fixture: &mut Fixture) -> (ReviewEvidenceHold, Value) {
 /// The task's next delivery run, admitted and linked as worktree setup does.
 fn next_run(fixture: &mut Fixture, hold: &ReviewEvidenceHold) -> String {
     let previous = fixture.runtime.show_job_run(&hold.run_id).unwrap();
-    let next = fixture
-        .runtime
+    let next = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), previous.input, None)
         .unwrap();
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .apply_task_automation_update(
             &fixture.task_id,
             orbit_engine::TaskAutomationUpdate {
@@ -235,7 +232,7 @@ fn resume_onto_main(fixture: &Fixture, hold: &ReviewEvidenceHold) -> Value {
     git(&fixture.repo, &["checkout", "--quiet", "--detach", "main"]);
     let base_sha = git(&fixture.repo, &["rev-parse", "HEAD"]);
     let resumed = execute_deterministic_action(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         "candidate_resume",
         &json!({}),
         &json!({
@@ -406,8 +403,7 @@ fn evidence_carries_across_a_rebase_only_while_the_patch_is_unchanged() {
     let mut rereview = fixture.input.clone();
     rereview["re_review_after"] = json!("complete_pr");
     rereview["completion"] = json!("done");
-    let admitted = fixture
-        .runtime
+    let admitted = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "review_gate_admit",
             &json!({}),
@@ -440,8 +436,7 @@ fn evidence_carries_across_a_rebase_only_while_the_patch_is_unchanged() {
     let resolved = git(&fixture.repo, &["rev-parse", "HEAD"]);
     state.pipeline["complete_pr"]["rebased"]["head_sha"] = json!(resolved);
     fixture.runtime.write_run_state(&next, &state).unwrap();
-    let admitted = fixture
-        .runtime
+    let admitted = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "review_gate_admit",
             &json!({}),

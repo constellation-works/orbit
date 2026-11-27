@@ -223,8 +223,7 @@ pub(crate) fn candidate_drift_refuses_equivalent_policy_retry() {
                 answer["baseRefName"] = json!("other-base");
                 std::fs::write(&f.answer, answer.to_string()).unwrap();
             }
-            "receipt" => f
-                .runtime
+            "receipt" => orbit_core::test_support::EngineHost::new(&f.runtime)
                 .attach_task_validation_log(
                     &f.task,
                     &f.source.run_id,

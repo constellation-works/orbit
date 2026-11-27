@@ -36,7 +36,7 @@ fn infra_escalate(
         FinalRecoveryApplied,
     };
     let admission = Recovery::admit_final_recovery(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         run_id,
         &FinalRecoveryAdmissionRequest {
             task_id: f.task.clone(),
@@ -47,7 +47,7 @@ fn infra_escalate(
     .unwrap();
     assert_eq!(admission, FinalRecoveryAdmission::Admitted);
     let applied = Recovery::apply_final_recovery(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         run_id,
         &FinalRecoveryApplication {
             fault: Default::default(),
@@ -292,7 +292,8 @@ fn escalated_handoff(
             "default_input":{"ownership_base_sha":"{{ steps.review_gate_settle.output.implementation_head_sha }}"}}));
     }
     std::fs::write(&definition_path, serde_yaml::to_string(&job).unwrap()).unwrap();
-    let mut run = f.runtime.insert_job_run("task_pr_pipeline", 1, Utc::now(),
+    let mut run = orbit_core::test_support::EngineHost::new(&f.runtime)
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(),
         Some(json!({"task_ids":[f.task],"base_branch":"main","completion":"review","auto_fix":false})), None).unwrap();
     run.state = JobRunState::Running;
     run.pid = Some(std::process::id());
@@ -307,7 +308,7 @@ fn escalated_handoff(
             ),
         )
         .unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -329,7 +330,8 @@ fn escalated_handoff(
         "inventory awaiting repair\n",
     )
     .unwrap();
-    f.runtime.apply_task_automation_update(&f.task, TaskAutomationUpdate {
+    orbit_core::test_support::EngineHost::new(&f.runtime)
+        .apply_task_automation_update(&f.task, TaskAutomationUpdate {
         execution_summary: Some("Outcome: success\nChanges: prepare candidate inventory.\nAssessment: host checks required.".into()),
         ..Default::default()
     }).unwrap();
@@ -363,7 +365,7 @@ fn escalated_handoff(
         let error = orbit_engine::test_support::with_prerequisite_clock(
             move || {
                 // Expire the budget after the first refresh is recorded.
-                if runtime
+                if orbit_core::test_support::EngineHost::new(&runtime)
                     .rebase_recovery_attempts(&run_id, "sync_base_preparation")
                     .unwrap()
                     .is_empty()
@@ -376,7 +378,7 @@ fn escalated_handoff(
             |_, _| {},
             || {
                 execute_deterministic_action(
-                    &f.runtime,
+                    &orbit_core::test_support::EngineHost::new(&f.runtime),
                     "git_rebase",
                     &json!({}),
                     &input,
@@ -394,7 +396,7 @@ fn escalated_handoff(
             "{error}"
         );
         assert_eq!(
-            f.runtime
+            orbit_core::test_support::EngineHost::new(&f.runtime)
                 .rebase_recovery_attempts(&run.run_id, "sync_base_preparation")
                 .unwrap()
                 .len(),
@@ -420,7 +422,7 @@ fn escalated_handoff(
         )
         .unwrap();
         let error = execute_deterministic_action(
-            &f.runtime,
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
             "pr_open",
             &json!({}),
             &open,
@@ -433,7 +435,7 @@ fn escalated_handoff(
         (7, "pr_open", "pr_open", error, parent)
     } else {
         let error = execute_deterministic_action(
-            &f.runtime,
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
             "candidate_validate",
             &json!({}),
             &validation,
@@ -1409,7 +1411,7 @@ fn uncertified_rebase_tips_and_drifted_publications_still_refuse() {
         let history = serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap();
         let state = serde_json::to_value(f.runtime.read_run_state(&source).unwrap()).unwrap();
         let error = execute_deterministic_action(
-            &f.runtime,
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
             "candidate_resume",
             &json!({}),
             &resume_input(&run, &setup, &f.task),
@@ -1526,7 +1528,7 @@ fn uncertified_rebase_tips_and_drifted_publications_still_refuse() {
         ],
     );
     let refused = execute_deterministic_action(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         "candidate_resume",
         &json!({}),
         &resume_input(&run, &setup, &f.task),

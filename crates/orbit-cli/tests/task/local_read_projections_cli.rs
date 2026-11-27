@@ -136,7 +136,8 @@ fn task_show_formats_status_history_and_whole_second_timestamps_without_changing
         surface: None,
         caller: None,
     };
-    runtime.apply_task_automation_update(&id, TaskAutomationUpdate {
+    orbit_core::test_support::EngineHost::new(&runtime)
+        .apply_task_automation_update(&id, TaskAutomationUpdate {
         append_history: vec![entry("decision_requested", &note), entry("resident_action", r#"{"tool":"orbit.task.show","phase":"started","input_digest":"sha256:secret-digest","key":"secret-operation-id"}"#), entry("fixture_event", "ordinary note")],
         ..Default::default()
     }).unwrap();
@@ -351,7 +352,7 @@ fn task_show_summarizes_active_run_and_limits_artifacts() {
                 "task-show-fixture".into(),
             )
             .unwrap();
-        runtime
+        orbit_core::test_support::EngineHost::new(&runtime)
             .apply_task_automation_update(
                 &task.id.to_string(),
                 TaskAutomationUpdate {
@@ -550,7 +551,7 @@ fn task_show_and_list_json_match_the_tool_host_projection() {
 
 /// A run-blocked task with an escalation recorded without another status change.
 fn block_with_final_recovery(runtime: &OrbitRuntime, repo: &Path, id: &str, run_id: &str) {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .apply_task_automation_update(
             id,
             TaskAutomationUpdate {
@@ -936,7 +937,7 @@ fn task_show_text_names_retry_exhaustion_classification_and_attempts() {
         "reason": "fixture budget spent",
     })
     .to_string();
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &id,
             TaskAutomationUpdate {
@@ -999,7 +1000,7 @@ fn task_show_explains_latest_block() {
     let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
         .unwrap()
         .with_actor(ActorIdentity::human("block-readout-fixture"));
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &id,
             blocked_workflow_failure_update(
@@ -1053,7 +1054,7 @@ fn task_show_explains_latest_block() {
         ])["block"]
     );
 
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &id,
             TaskAutomationUpdate {
@@ -1065,7 +1066,7 @@ fn task_show_explains_latest_block() {
     let queued = fixture.json(&["task", "show", &id, "--json"]);
     assert!(queued.get("block").is_none());
     assert!(queued.get("next_step").is_none());
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &id,
             TaskAutomationUpdate {
@@ -1349,7 +1350,7 @@ fn requeued_task_with_fresh_pr(fixture: &Fixture) -> String {
         .unwrap();
     // The requeue back to backlog with a discarded candidate keeps the
     // old ref; it does not clear `external_refs`.
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &task.id.to_string(),
             TaskAutomationUpdate {
@@ -1360,7 +1361,7 @@ fn requeued_task_with_fresh_pr(fixture: &Fixture) -> String {
         )
         .unwrap();
     // The fresh run opens its own pull request, appended after the old one.
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .apply_task_automation_update(
             &task.id.to_string(),
             TaskAutomationUpdate {

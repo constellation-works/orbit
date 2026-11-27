@@ -49,6 +49,7 @@ use serde_json::{Value, json};
 use super::baseline_repair::{RepairIndex, RepairLink};
 use super::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams};
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::task::{TaskJobPort, TaskRecords};
 
 /// The job a clock tick dispatches to check holds whose base moved to a tip
@@ -116,7 +117,7 @@ impl OrbitRuntime {
         let repo = &self.paths().repo_root;
         let mut refresh = self.check_baseline_holds(
             Some(deadline),
-            &|hold| recorded_baseline_hold_status(self, repo, hold),
+            &|hold| recorded_baseline_hold_status(&self.engine_host(), repo, hold),
             Some(&mut RepairIndex::default()),
         )?;
         if refresh.unchecked.is_empty() || self.baseline_hold_refresh_live()? {
@@ -149,7 +150,7 @@ impl OrbitRuntime {
         let repo = &self.paths().repo_root;
         self.check_baseline_holds(
             deadline,
-            &|hold| Some(baseline_hold_status(self, repo, hold)),
+            &|hold| Some(baseline_hold_status(&self.engine_host(), repo, hold)),
             None,
         )
     }

@@ -72,7 +72,7 @@ impl Fixture {
 
     /// Admit a recovery of the stopped rebase from `head_before` onto `pinned`.
     fn admit(&self, head_before: &str, pinned: &str) -> u64 {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .begin_rebase_recovery_attempt(
                 &self.run,
                 STEP,
@@ -127,7 +127,7 @@ impl Fixture {
     }
 
     fn verifies(&self, checkpoint: &Value) -> bool {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .verify_rebase_recovery(&self.run, STEP, checkpoint)
             .unwrap()
     }
@@ -140,8 +140,7 @@ fn a_resumed_run_certifies_its_second_recovery_of_one_step_scenario() {
     // again, so A keeps the pinned result.
     let attempt = fixture.admit(CANDIDATE, PINNED);
     let recovery_a = fixture.completion(attempt, CANDIDATE, PINNED, HEAD_A);
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .checkpoint_rebase_recovery(&fixture.run, STEP, &recovery_a)
         .unwrap();
     assert_eq!(fixture.stored(), Some(recovery_a.clone()));
@@ -152,8 +151,7 @@ fn a_resumed_run_certifies_its_second_recovery_of_one_step_scenario() {
     let attempt = fixture.admit(HEAD_A, ADVANCED);
     assert_eq!(attempt, 2);
     let recovery_b = fixture.completion(attempt, HEAD_A, ADVANCED, HEAD_B);
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .checkpoint_rebase_recovery(&fixture.run, STEP, &recovery_b)
         .expect("a second legitimate recovery of the step certifies");
     assert_eq!(fixture.stored(), Some(recovery_b.clone()));
@@ -179,18 +177,23 @@ fn a_resumed_run_certifies_its_second_recovery_of_one_step_scenario() {
     let restarted =
         OrbitRuntime::from_roots(&fixture.global, &fixture.repo.join(".orbit")).unwrap();
     assert!(
-        restarted
+        orbit_core::test_support::EngineHost::new(&restarted)
             .verify_rebase_recovery(&fixture.run, STEP, &recovery_b)
             .unwrap()
     );
     assert!(
-        !restarted
+        !orbit_core::test_support::EngineHost::new(&restarted)
             .verify_rebase_recovery(&fixture.run, STEP, &recovery_a)
             .unwrap()
     );
     // A recovery admitted before the restart cannot certify after a newer one.
-    let error = Recovery::checkpoint_rebase_recovery(&restarted, &fixture.run, STEP, &recovery_a)
-        .expect_err("a superseded attempt never certifies");
+    let error = Recovery::checkpoint_rebase_recovery(
+        &orbit_core::test_support::EngineHost::new(&restarted),
+        &fixture.run,
+        STEP,
+        &recovery_a,
+    )
+    .expect_err("a superseded attempt never certifies");
     assert!(error.to_string().contains("superseded"), "{error}");
     assert_eq!(fixture.stored(), Some(recovery_b));
 }
@@ -202,16 +205,14 @@ fn a_certified_attempt_whose_copy_failed_is_reissued_unchanged_scenario() {
     let fixture = fixture();
     let attempt = fixture.admit(CANDIDATE, PINNED);
     let recovery_a = fixture.completion(attempt, CANDIDATE, PINNED, HEAD_A);
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .checkpoint_rebase_recovery(&fixture.run, STEP, &recovery_a)
         .unwrap();
 
     let attempt = fixture.admit(HEAD_A, ADVANCED);
     let recovery_c = fixture.completion(attempt, HEAD_A, ADVANCED, HEAD_C);
     let fault = fail_writes_naming(&fixture, HEAD_C);
-    let error = fixture
-        .runtime
+    let error = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .checkpoint_rebase_recovery(&fixture.run, STEP, &recovery_c)
         .expect_err("the run-store copy fails");
     assert!(
@@ -227,8 +228,7 @@ fn a_certified_attempt_whose_copy_failed_is_reissued_unchanged_scenario() {
     );
 
     drop(fault);
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .checkpoint_rebase_recovery(&fixture.run, STEP, &recovery_c)
         .expect("the identical completion is re-issued and persisted");
     assert_eq!(fixture.stored(), Some(recovery_c.clone()));
@@ -244,8 +244,7 @@ fn the_host_reports_each_reserved_attempt_and_certifies_a_chase_as_the_newest_sc
     let fixture = fixture();
     let attempt = fixture.admit(CANDIDATE, PINNED);
     let recovery = fixture.completion(attempt, CANDIDATE, PINNED, HEAD_A);
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .checkpoint_rebase_recovery(&fixture.run, STEP, &recovery)
         .unwrap();
 
@@ -253,15 +252,14 @@ fn the_host_reports_each_reserved_attempt_and_certifies_a_chase_as_the_newest_sc
     let attempt = fixture.admit(CANDIDATE, ADVANCED);
     let mut chase = fixture.completion(attempt, CANDIDATE, ADVANCED, HEAD_B);
     chase["chased_from"] = json!(HEAD_A);
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .checkpoint_rebase_recovery(&fixture.run, STEP, &chase)
         .expect("a chase certifies as the step's newest attempt");
     assert!(fixture.verifies(&chase));
     assert!(!fixture.verifies(&recovery));
 
     let reserved = |runtime: &OrbitRuntime, step: &str| {
-        runtime
+        orbit_core::test_support::EngineHost::new(runtime)
             .rebase_recovery_attempts(&fixture.run, step)
             .unwrap()
             .into_iter()
@@ -322,7 +320,7 @@ impl Drop for WriteFault {
 fn fresh_preparation_certificates_bind_all_observations_across_restart_scenario() {
     let fixture = fixture();
     let certify = |runtime: &OrbitRuntime, step: &str, base: &str, extra: Value| {
-        let attempt = runtime
+        let attempt = orbit_core::test_support::EngineHost::new(runtime)
             .begin_rebase_recovery_attempt(
                 &fixture.run,
                 step,
@@ -343,7 +341,7 @@ fn fresh_preparation_certificates_bind_all_observations_across_restart_scenario(
             .as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
-        runtime
+        orbit_core::test_support::EngineHost::new(runtime)
             .checkpoint_rebase_recovery(&fixture.run, step, &payload)
             .unwrap();
         payload
@@ -367,12 +365,12 @@ fn fresh_preparation_certificates_bind_all_observations_across_restart_scenario(
     let restarted =
         OrbitRuntime::from_roots(&fixture.global, &fixture.repo.join(".orbit")).unwrap();
     assert!(
-        restarted
+        orbit_core::test_support::EngineHost::new(&restarted)
             .verify_rebase_recovery(&fixture.run, "prepare_branch", &initial)
             .unwrap()
     );
     assert!(
-        restarted
+        orbit_core::test_support::EngineHost::new(&restarted)
             .verify_rebase_recovery(&fixture.run, "sync_base_preparation", &fresh)
             .unwrap()
     );
@@ -394,15 +392,15 @@ fn fresh_preparation_certificates_bind_all_observations_across_restart_scenario(
     ] {
         let mut altered = fresh.clone();
         altered[field] = json!("foreign");
-        let verified =
-            restarted.verify_rebase_recovery(&fixture.run, "sync_base_preparation", &altered);
+        let verified = orbit_core::test_support::EngineHost::new(&restarted)
+            .verify_rebase_recovery(&fixture.run, "sync_base_preparation", &altered);
         assert!(
             matches!(verified, Ok(false)),
             "altered {field} must be rejected, not authenticated or errored: {verified:?}"
         );
     }
     assert_eq!(
-        restarted
+        orbit_core::test_support::EngineHost::new(&restarted)
             .rebase_recovery_attempts(&fixture.run, "sync_base_preparation")
             .unwrap()
             .len(),

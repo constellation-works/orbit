@@ -309,7 +309,7 @@ fn shadow_memory_readout_labels_captures_not_delivered() {
             }]
         });
         orbit_core::test_support::fixture_engine::RunLifecycle::insert_job_run(
-            &runtime,
+            &orbit_core::test_support::EngineHost::new(&runtime),
             "task_local_pipeline",
             1,
             chrono::Utc::now(),

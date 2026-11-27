@@ -109,7 +109,7 @@ impl Fixture {
         task: &str,
     ) -> Result<Vec<TagInstruction>, DispatchError> {
         Dispatch::tag_instructions_for_activity(
-            &self.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
             run,
             activity,
             &json!({ "task_id": task }),

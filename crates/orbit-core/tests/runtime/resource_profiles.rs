@@ -126,8 +126,7 @@ impl Fixture {
         seed: RunSeed,
     ) -> String {
         let started = admitted + Duration::minutes(seed.start_minute);
-        let mut run = self
-            .runtime
+        let mut run = orbit_core::test_support::EngineHost::new(&self.runtime)
             .insert_job_run(seed.job, 1, started, Some(json!({"task_id": task})), None)
             .unwrap();
         run.created_at = started;
@@ -168,7 +167,10 @@ impl Fixture {
 
     /// Mark a seeded live run finished `minutes` after it started.
     fn finish(&self, workspace: &str, run_id: &str, minutes: i64) {
-        let mut run = self.runtime.get_job_run(run_id).unwrap().unwrap();
+        let mut run = orbit_core::test_support::EngineHost::new(&self.runtime)
+            .get_job_run(run_id)
+            .unwrap()
+            .unwrap();
         run.state = JobRunState::Success;
         run.finished_at = Some(run.created_at + Duration::minutes(minutes));
         self.store

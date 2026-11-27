@@ -24,7 +24,7 @@ fn finalize(
     state: JobRunState,
     finished_at: DateTime<Utc>,
 ) -> bool {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .finalize_job_run(&run.run_id, state, finished_at, Some(1_000))
         .expect("finalize run")
 }

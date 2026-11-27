@@ -309,8 +309,11 @@ fn receipts_respect_step_expiry_after_downtime() {
             run: &str,
             request: &orbit_engine::AutoTaskStepRequest,
         ) -> Result<orbit_engine::AutoTaskObservation, orbit_engine::DispatchError> {
-            let mut observation =
-                orbit_engine::Recovery::observe_auto_task_step(self.runtime, run, request)?;
+            let mut observation = orbit_engine::Recovery::observe_auto_task_step(
+                &orbit_core::test_support::EngineHost::new(self.runtime),
+                run,
+                request,
+            )?;
             if let Some(receipt) = &mut observation.receipt {
                 receipt.settled_at -= Duration::hours(self.backdate_hours);
             }
@@ -322,7 +325,12 @@ fn receipts_respect_step_expiry_after_downtime() {
             step: &str,
             record: &AutoTaskStepRecord,
         ) -> Result<(), orbit_engine::DispatchError> {
-            orbit_engine::Recovery::checkpoint_auto_task_step(self.runtime, run, step, record)
+            orbit_engine::Recovery::checkpoint_auto_task_step(
+                &orbit_core::test_support::EngineHost::new(self.runtime),
+                run,
+                step,
+                record,
+            )
         }
     }
     for (expiry, age_hours, backdate_hours, expected) in [
@@ -487,7 +495,7 @@ fn nested_parallel_branch_waits_observe_durable_outcomes() {
         });
         jobs.write_run_state(&run.run_id, &state).unwrap();
         Recovery::observe_auto_task_step(
-            &runtime,
+            &orbit_core::test_support::EngineHost::new(&runtime),
             &run.run_id,
             &AutoTaskStepRequest {
                 step_id: "qa".into(),
@@ -623,7 +631,7 @@ fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
         });
         jobs.write_run_state(&source.run_id, &state).unwrap();
         let observation = Recovery::observe_auto_task_step(
-            &runtime,
+            &orbit_core::test_support::EngineHost::new(&runtime),
             &source.run_id,
             &AutoTaskStepRequest {
                 step_id: "qa".into(),
@@ -644,18 +652,35 @@ fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
             settled_at: None,
             diagnostic: None,
         };
-        Recovery::checkpoint_auto_task_step(&runtime, &source.run_id, "qa", &record).unwrap();
+        Recovery::checkpoint_auto_task_step(
+            &orbit_core::test_support::EngineHost::new(&runtime),
+            &source.run_id,
+            "qa",
+            &record,
+        )
+        .unwrap();
         let AutoTaskAdmission::Bound {
             task_id,
             minted: true,
-        } = Recovery::admit_auto_task_step(&runtime, &source.run_id, "qa").unwrap()
+        } = Recovery::admit_auto_task_step(
+            &orbit_core::test_support::EngineHost::new(&runtime),
+            &source.run_id,
+            "qa",
+        )
+        .unwrap()
         else {
             panic!("the reserved step must mint its child")
         };
         record.task_id = Some(task_id.clone());
         record.minted = true;
         record.status = AutoTaskStepStatus::Queued;
-        Recovery::checkpoint_auto_task_step(&runtime, &source.run_id, "qa", &record).unwrap();
+        Recovery::checkpoint_auto_task_step(
+            &orbit_core::test_support::EngineHost::new(&runtime),
+            &source.run_id,
+            "qa",
+            &record,
+        )
+        .unwrap();
         // Implementation mints now await approval. Keep the continuation
         // admission checks below focused on an approved child.
         assert_eq!(
@@ -737,7 +762,12 @@ fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
         let AutoTaskAdmission::Bound {
             task_id: rebound,
             minted: true,
-        } = Recovery::admit_auto_task_step(&runtime, &resumed.run_id, "qa").unwrap()
+        } = Recovery::admit_auto_task_step(
+            &orbit_core::test_support::EngineHost::new(&runtime),
+            &resumed.run_id,
+            "qa",
+        )
+        .unwrap()
         else {
             panic!("resume must reuse the keyed child")
         };

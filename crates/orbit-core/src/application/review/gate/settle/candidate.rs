@@ -3,6 +3,7 @@ use orbit_engine::review_gate::committed_paths;
 use orbit_types::workflow::{CommitIdentity, ReviewCertificate};
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::review::gate::baseline;
 use crate::application::review::gate::context::GateContext;
 
@@ -64,7 +65,7 @@ pub(super) fn carry_evidence_candidate(
         })
     });
     orbit_engine::review_gate::carry_evidence_candidate(
-        runtime,
+        &runtime.engine_host(),
         &context.workspace_path,
         commit,
         task_id,

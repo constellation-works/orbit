@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 
 use super::super::plan::ResumePlan;
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::job::pipeline::PipelineSubmission;
 use crate::application::job::{ReviewAdmissionHook, RunOwnerLiveness, run_owner_liveness};
 use crate::runtime::run_input::carried_task_ids;
@@ -111,7 +112,7 @@ impl OrbitRuntime {
             .as_object_mut()
             .ok_or_else(|| refuse("current review admission unavailable"))?
             .remove("captured_at");
-        let environment = self.validation_subprocess_environment();
+        let environment = self.engine_host().validation_subprocess_environment();
         digest(&json!({
             "schema_version":1, "workspace":self.workspace_id()?,
             "machine":self.automation_machine_identity(), "actor":actor, "provenance":provenance,
@@ -589,7 +590,7 @@ impl OrbitRuntime {
             } else {
                 "operator"
             };
-            self.apply_task_automation_update(&task.id, TaskAutomationUpdate {
+            self.engine_host().apply_task_automation_update(&task.id, TaskAutomationUpdate {
                 status:Some(TaskStatus::InProgress),expected_status:Some(task.status),
                 status_event:Some("source_repair_readmitted".into()),status_note:Some(format!("{authority} source repair request {key}; source={source_id}; completion=review")),
                 ..Default::default()
@@ -610,7 +611,7 @@ impl OrbitRuntime {
     }
 
     fn source_repair_event(&self, task: &str, event: &str, value: Value) -> Result<(), OrbitError> {
-        self.apply_task_automation_update(
+        self.engine_host().apply_task_automation_update(
             task,
             TaskAutomationUpdate {
                 append_history: vec![TaskHistoryEntry {

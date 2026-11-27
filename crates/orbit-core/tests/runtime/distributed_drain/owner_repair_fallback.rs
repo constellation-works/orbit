@@ -132,7 +132,7 @@ fn owner_fallback(busy: bool, with_backlog: bool, distinct_logical: bool) {
             .unwrap();
     }
     ReviewGate::record_handoff_landing(
-        &owner,
+        &orbit_core::test_support::EngineHost::new(&owner),
         &orbit_engine::HandoffLandingUpdate {
             handoff_id,
             step: orbit_engine::HandoffLandingStep::Stop { repairable: true },
@@ -183,7 +183,7 @@ fn owner_fallback(busy: bool, with_backlog: bool, distinct_logical: bool) {
         assert_eq!(owner_jobs.drain_leaf_occupancy().unwrap().occupied, 1);
     }
     let auto_pass = |ceiling| {
-        let wave = owner
+        let wave = orbit_core::test_support::EngineHost::new(&owner)
             .run_deterministic(
                 "classify_workspace_auto_tasks",
                 &json!({}),
@@ -327,7 +327,7 @@ fn owner_fallback(busy: bool, with_backlog: bool, distinct_logical: bool) {
         }
         // The pass stops after the leaf exists and the owner bound its claim.
         itself.lose_next_reply("orbit.drain.claim.bind");
-        let pass = owner
+        let pass = orbit_core::test_support::EngineHost::new(&owner)
             .run_deterministic(
                 "pull_refill",
                 &json!({}),
@@ -366,7 +366,7 @@ fn owner_fallback(busy: bool, with_backlog: bool, distinct_logical: bool) {
                 )
                 .unwrap();
             let claims_before = pair.owner_claims().len();
-            let full = owner
+            let full = orbit_core::test_support::EngineHost::new(&owner)
                 .run_deterministic(
                     "pull_refill",
                     &json!({}),

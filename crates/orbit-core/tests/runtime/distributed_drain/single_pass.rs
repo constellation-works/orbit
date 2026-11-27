@@ -542,7 +542,7 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
         "the legacy checkpoint remains marker-free"
     );
 
-    let pass = follower
+    let pass = orbit_core::test_support::EngineHost::new(&follower)
         .run_deterministic(
             "pull_refill",
             &json!({}),
@@ -604,7 +604,7 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
         .unwrap();
     let replayed = replay.run_id;
     assert_eq!(replay.retry_source_run_id.as_deref(), Some(source.as_str()));
-    let replayed_pass = follower
+    let replayed_pass = orbit_core::test_support::EngineHost::new(&follower)
         .run_deterministic(
             "pull_refill",
             &json!({}),

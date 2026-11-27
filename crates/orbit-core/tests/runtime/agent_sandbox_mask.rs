@@ -11,6 +11,7 @@
 //! runtime API.
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
+use orbit_core::adapter::engine_host::EngineHost;
 use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
@@ -118,7 +119,7 @@ fn agent_mask_hides_clock_env_under_a_relocated_global_root() {
     for provider in ["claude", "codex"] {
         seed_executor(&runtime, provider, sandbox);
         for fs_profile in [None, Some("reviewer")] {
-            let resolved = runtime
+            let resolved = EngineHost::new(&runtime)
                 .resolve_executor_sandbox(provider, fs_profile, Some(&worktree))
                 .unwrap_or_else(|error| panic!("{provider} sandbox must resolve: {error}"))
                 .unwrap_or_else(|| panic!("{provider} must resolve a sandbox"));

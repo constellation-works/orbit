@@ -31,7 +31,7 @@ pub(super) fn repair_evidence_output(fixture: &Fixture, step_id: &str) -> Value 
     for task in [&fixture.task_id, &other] {
         for tool in ["orbit.task.update", "orbit.task.artifact.put"] {
             let error = HostEnvironment::run_tool_with_context(
-                &fixture.runtime,
+                &orbit_core::test_support::EngineHost::new(&fixture.runtime),
                 tool,
                 json!({"id": task, "model": "codex"}),
                 ToolContext {
@@ -52,7 +52,13 @@ pub(super) fn repair_evidence_output(fixture: &Fixture, step_id: &str) -> Value 
     });
     let run = fixture.input["job_run_id"].as_str().unwrap();
     let persist = |task: &str, value: &Value| {
-        Recovery::persist_final_recovery_evidence(&fixture.runtime, run, task, &fixture.repo, value)
+        Recovery::persist_final_recovery_evidence(
+            &orbit_core::test_support::EngineHost::new(&fixture.runtime),
+            run,
+            task,
+            &fixture.repo,
+            value,
+        )
     };
     let error = persist(&other, &evidence).unwrap_err();
     assert!(

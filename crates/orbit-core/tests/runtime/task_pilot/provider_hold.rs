@@ -375,8 +375,7 @@ fn low_draw(workspace: &Workspace) -> (String, ActivityCrewDraw) {
         .unwrap();
     let state = PipelineState::new(run.run_id.clone(), run.job_id, json!({}));
     workspace.jobs.write_run_state(&run.run_id, &state).unwrap();
-    let model = workspace
-        .runtime
+    let model = orbit_core::test_support::EngineHost::new(&workspace.runtime)
         .agent_crew_config_for_input(&json!({
             "job_run_id": run.run_id,
             "crew_config_key": LOW,

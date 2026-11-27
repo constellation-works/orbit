@@ -19,7 +19,10 @@ fn composed_provider_override_reaches_executor_resolution() {
     // composed value instead of capturing the ambient environment again.
     let _ambient = orbit_common::test_env::scoped([("ORBIT_V2_CLI_CODEX", Some(AMBIENT))]);
 
-    let executor = Dispatch::resolve_cli_executor(&runtime, "codex")
-        .expect("the composed override resolves the codex executor");
+    let executor = Dispatch::resolve_cli_executor(
+        &orbit_core::test_support::EngineHost::new(&runtime),
+        "codex",
+    )
+    .expect("the composed override resolves the codex executor");
     assert_eq!(executor.command, COMPOSED);
 }

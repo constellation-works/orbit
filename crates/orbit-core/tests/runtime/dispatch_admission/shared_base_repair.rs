@@ -133,7 +133,7 @@ fn red_pr(runtime: &OrbitRuntime, proof: Proof) -> Task {
             );
         }
     }
-    let added = runtime
+    let added = orbit_core::test_support::EngineHost::new(runtime)
         .widen_task_context_files(
             &pr.id,
             RECOVERY_RUN,
@@ -173,7 +173,7 @@ fn append(
     note: &str,
     decision: Option<TaskDecision>,
 ) {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .apply_task_automation_update(
             task,
             TaskAutomationUpdate {

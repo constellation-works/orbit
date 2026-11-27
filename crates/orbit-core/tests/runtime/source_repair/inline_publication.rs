@@ -17,7 +17,7 @@ fn incident() -> (Fixture, JobRun) {
     f.runtime
         .write_run_state(&f.source.run_id, &f.state)
         .unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -32,7 +32,10 @@ fn incident() -> (Fixture, JobRun) {
         .unwrap();
     f.wait(&retry.run_id);
     f.start_actions(&retry.run_id);
-    let expired = execute_deterministic_action(&f.runtime, "pr_complete", &json!({}),
+    let expired = execute_deterministic_action(
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
+        "pr_complete",
+        &json!({}),
         &json!({"job_run_id":f.source.run_id,"completed_task_ids":[f.task],"workspace_path":checkout,
             "pr_number":"17","completion":"done","auto_fix":true,"head":f.branch,
             "published_head_sha":f.head,"base":"main","max_wait_seconds":60}),
@@ -47,7 +50,7 @@ fn incident() -> (Fixture, JobRun) {
     stopped.finished_at = Some(Utc::now());
     save_run(&f, &stopped);
 
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -57,7 +60,10 @@ fn incident() -> (Fixture, JobRun) {
         )
         .unwrap();
     let (mut empty, setup) = next(&f);
-    let refused = execute_deterministic_action(&f.runtime, "candidate_resume", &json!({}),
+    let refused = execute_deterministic_action(
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
+        "candidate_resume",
+        &json!({}),
         &json!({"job_run_id":empty.run_id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],
             "base_sha":setup["base_sha"],"prior_job_run_id":f.source.run_id}),
         false, &HashMap::new(), None).unwrap_err();
@@ -100,7 +106,7 @@ pub(super) fn supported_incident() -> (Fixture, JobRun, JobRun) {
     f.runtime
         .write_run_state(&f.source.run_id, &f.state)
         .unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -109,8 +115,7 @@ pub(super) fn supported_incident() -> (Fixture, JobRun, JobRun) {
             },
         )
         .unwrap();
-    let drain = f
-        .runtime
+    let drain = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run(
             "workspace_auto_pipeline",
             1,
@@ -119,8 +124,7 @@ pub(super) fn supported_incident() -> (Fixture, JobRun, JobRun) {
             None,
         )
         .unwrap();
-    let pass = f
-        .runtime
+    let pass = orbit_core::test_support::EngineHost::new(&f.runtime)
         .run_deterministic(
             "adopt_orphaned_deliveries",
             &json!({}),
@@ -605,7 +609,7 @@ fn inline_repair_rechecks_policy_and_stopped_lineage_before_source_effects() {
     let input = json!({"job_run_id":id,"task_ids":[f.task],"workspace_path":setup["workspace_path"],"base_sha":setup["base_sha"]});
     let refuse_adoption = |f: &Fixture| {
         execute_deterministic_action(
-            &f.runtime,
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
             "candidate_resume",
             &json!({}),
             &input,

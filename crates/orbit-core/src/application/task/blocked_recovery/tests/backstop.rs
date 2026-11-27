@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use crate::application::contracts::EngineHostPort;
 use crate::git_test_support::run as run_git;
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
@@ -124,6 +125,7 @@ fn block_by_failed_run(runtime: &OrbitRuntime, task: &Task) -> String {
     jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
         .expect("mark run running");
     runtime
+        .engine_host()
         .apply_task_automation_update(
             &task.id,
             TaskAutomationUpdate {
@@ -157,6 +159,7 @@ fn block_by_failed_run(runtime: &OrbitRuntime, task: &Task) -> String {
 
 fn block_with(runtime: &OrbitRuntime, task: &Task, update: TaskAutomationUpdate) {
     runtime
+        .engine_host()
         .apply_task_automation_update(&task.id, update)
         .expect("block task");
 }
@@ -655,6 +658,7 @@ fn a_recovery_applies_one_decision_recorded_with_its_run_id() {
         };
         crate::application::test_support::seed_executor(&runtime, "claude", Some(kind));
         let sandbox = runtime
+            .engine_host()
             .resolve_executor_sandbox("claude", None, Some(&prepared.checkout))
             .expect("resolve recovery sandbox")
             .expect("native sandbox");

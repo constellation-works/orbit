@@ -71,7 +71,9 @@ fn complete_landing(pair: &Pair) -> String {
             },
         )
         .unwrap();
-    ReviewGate::record_handoff_landing(owner, &HandoffLandingUpdate {
+    ReviewGate::record_handoff_landing(
+        &orbit_core::test_support::EngineHost::new(owner),
+        &HandoffLandingUpdate {
             handoff_id,
             step: HandoffLandingStep::Complete,
             observed: Some(delivered.candidate),
@@ -122,7 +124,7 @@ fn landing_resolves_named_frictions_and_preserves_prior_resolutions() {
             complete_landing(&pair)
         } else {
             let task = pair.tasks[0].clone();
-            owner
+            orbit_core::test_support::EngineHost::new(owner)
                 .apply_task_automation_update(
                     &task,
                     TaskAutomationUpdate {
@@ -131,7 +133,8 @@ fn landing_resolves_named_frictions_and_preserves_prior_resolutions() {
                     },
                 )
                 .unwrap();
-            owner.apply_task_automation_update(&task, TaskAutomationUpdate {
+            orbit_core::test_support::EngineHost::new(owner)
+                .apply_task_automation_update(&task, TaskAutomationUpdate {
                 status: Some(TaskStatus::Done),
                 expected_status: Some(TaskStatus::Review),
                 status_note: Some(format!("completion authorized by run fixture; delivered by pull request #42 merged as {}", "e".repeat(40))),
@@ -377,7 +380,7 @@ fn the_owners_review_batch_names_the_tasks_handoff_landings_delivered() {
     let after = git(repo, &["rev-parse", "HEAD"]).trim().to_string();
     git(repo, &["checkout", "-q", "main"]);
     for run_id in ["jrun-landing", "jrun-landing-retry"] {
-        owner
+        orbit_core::test_support::EngineHost::new(owner)
             .record_direct_landing_intent(&DirectLandingRequest {
                 run_id: run_id.into(),
                 branch: "main".into(),

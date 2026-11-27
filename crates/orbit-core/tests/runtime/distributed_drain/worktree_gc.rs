@@ -486,7 +486,7 @@ fn a_linked_replica_reclaims_a_settled_leafs_host_validation_output() {
     assert!(settled["error"].is_null(), "{settled}");
     let (worktree, _) = leaf_worktree(&pair, &leaf);
     let built = orbit_engine::review_gate::run_required_validation(
-        &pair.follower,
+        &orbit_core::test_support::EngineHost::new(&pair.follower),
         &worktree,
         "mkdir -p \"$BUILD_OUTPUT_DIR/debug\" && printf 'leaf host output' > \"$BUILD_OUTPUT_DIR/debug/output\"",
     )

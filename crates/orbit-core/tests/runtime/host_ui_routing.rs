@@ -119,7 +119,7 @@ fn task(runtime: &OrbitRuntime, title: &str, crew: Option<&str>, tags: &[&str]) 
 }
 
 fn backlog(runtime: &OrbitRuntime) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -223,7 +223,7 @@ fn a_host_without_a_verified_kit_withholds_ui_tasks_until_its_kit_is_verified() 
     );
 
     let drain = running_drain(&linux);
-    let wave = linux
+    let wave = orbit_core::test_support::EngineHost::new(&linux)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),

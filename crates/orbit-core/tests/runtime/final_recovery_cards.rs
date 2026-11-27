@@ -96,7 +96,7 @@ impl orbit_core::runtime::task_pr_forge::TaskPrForge for ReconsideringForge {
                     json!({"id": self.task, "status": "backlog", "model": "codex"}),
                 )
                 .unwrap();
-            self.runtime
+            orbit_core::test_support::EngineHost::new(&self.runtime)
                 .apply_task_automation_update(
                     &self.task,
                     orbit_engine::TaskAutomationUpdate {
@@ -583,7 +583,7 @@ fn a_reject_option_records_its_resolution_before_pull_request_closure() {
         .remove("rewrite");
     decision["options"][0]["action"] = json!({"kind": "reject"});
     let (task, request_id) = blocked_on_decision(&fx, decision);
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task,
             orbit_engine::TaskAutomationUpdate {

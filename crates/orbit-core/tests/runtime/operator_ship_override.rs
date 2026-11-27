@@ -58,7 +58,7 @@ fn task(
 }
 
 fn deterministic(runtime: &OrbitRuntime, action: &str, input: Value) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(action, &json!({}), &input, ToolContext::default())
         .unwrap_or_else(|error| panic!("{action}: {error}"))
 }
@@ -106,7 +106,7 @@ fn ship(runtime: &OrbitRuntime, task: &str, operator_override: bool) -> Result<(
 
 /// `orbit.workflow.ship` as an operator session calls it.
 fn ship_tool(runtime: &OrbitRuntime, task: &str) -> Result<Value, OrbitError> {
-    runtime.run_tool_with_context(
+    orbit_core::test_support::EngineHost::new(runtime).run_tool_with_context(
         "orbit.workflow.ship",
         json!({"task_ids": [task], "mode": "local"}),
         ToolContext {

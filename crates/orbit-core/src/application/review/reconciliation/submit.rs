@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use super::observe::{contract, observe};
 use super::{RECONCILIATION_AUDIT, next_step};
 use crate::OrbitRuntime;
-use crate::application::contracts::RetryKey;
+use crate::application::contracts::{EngineHostPort, RetryKey};
 use crate::application::job::pipeline::PipelineSubmission;
 use crate::application::task::TaskUpdateParams;
 
@@ -673,7 +673,9 @@ fn run_remediation_command(
             )
         })
         .transpose()
-        .and_then(|_lease| review_gate::run_required_validation(runtime, &checkout, command));
+        .and_then(|_lease| {
+            review_gate::run_required_validation(&runtime.engine_host(), &checkout, command)
+        });
     let cleanup = runtime.remove_recovery_checkout(&checkout_id);
     let run: RequiredValidationRun = run?;
     cleanup?;

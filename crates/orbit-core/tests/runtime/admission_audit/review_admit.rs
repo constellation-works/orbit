@@ -131,7 +131,7 @@ fn a_run_that_dies_mid_review_releases_its_attempt_when_it_terminates() {
         })
         .expect("record the reviewer start");
     RunLifecycle::finalize_job_run(
-        runtime,
+        &orbit_core::test_support::EngineHost::new(runtime),
         &gated.run_id,
         JobRunState::Interrupted,
         started + Duration::hours(3),

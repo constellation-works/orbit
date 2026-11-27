@@ -31,7 +31,7 @@ impl TaskPrForge for OpenPublication {
 }
 
 fn admission(f: &Fixture) -> Value {
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -86,7 +86,7 @@ fn published_repair_drop(use_pull: bool) {
     let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
     answer["headRefOid"] = json!(repaired_head);
     std::fs::write(&f.answer, serde_json::to_vec(&answer).unwrap()).unwrap();
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .widen_task_context_files(
             &f.task,
             &f.source.run_id,
@@ -138,8 +138,7 @@ fn published_repair_drop(use_pull: bool) {
     std::fs::write(&f.answer, serde_json::to_vec(&answer).unwrap()).unwrap();
 
     // Even an observed clean publication cannot release an active repair.
-    let active = f
-        .runtime
+    let active = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run(
             "task_pr_pipeline",
             2,
@@ -152,7 +151,7 @@ fn published_repair_drop(use_pull: bool) {
         !selected(&admission(&f)),
         "a pending successor still owns the repair"
     );
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .finalize_job_run(&active.run_id, JobRunState::Cancelled, Utc::now(), Some(0))
         .unwrap();
     // An unreadable provider answer is outcome-unknown, even with no leaf.
@@ -165,8 +164,7 @@ fn published_repair_drop(use_pull: bool) {
 
     // The owner drain may still be running with an explicit task selection;
     // it is not a repair leaf and must be able to admit the remediation.
-    let drain = f
-        .runtime
+    let drain = orbit_core::test_support::EngineHost::new(&f.runtime)
         .insert_job_run(
             "task_auto_pipeline",
             1,
@@ -188,8 +186,7 @@ fn published_repair_drop(use_pull: bool) {
             "a stopped repair absent from the observed PR must release its reservation"
         );
         assert!(selected(&admission(&f)), "cleanup is idempotent");
-        let grant = f
-            .runtime
+        let grant = orbit_core::test_support::EngineHost::new(&f.runtime)
             .run_deterministic(
                 "reserve_locks",
                 &json!({}),
@@ -206,7 +203,7 @@ fn published_repair_drop(use_pull: bool) {
         f.runtime.get_task(&f.task).unwrap().context_files,
         ["file:source.txt"]
     );
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .finalize_job_run(&drain.run_id, JobRunState::Cancelled, Utc::now(), Some(0))
         .unwrap();
 }
@@ -237,7 +234,7 @@ fn refused_unpublished_repair_releases_after_worktree_restoration() {
         );
         std::fs::write(candidate.join("logging.txt"), "uncommittable CI repair\n").unwrap();
         std::fs::write(f.repo.join("logging.txt"), "shared logging\n").unwrap();
-        f.runtime
+        orbit_core::test_support::EngineHost::new(&f.runtime)
             .widen_task_context_files(
                 &f.task,
                 &f.source.run_id,

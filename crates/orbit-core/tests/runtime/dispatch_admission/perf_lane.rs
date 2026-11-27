@@ -2,7 +2,7 @@ use super::*;
 use orbit_engine::Dispatch;
 
 fn classify(runtime: &OrbitRuntime, drain: &str) -> Value {
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .run_deterministic(
             "classify_workspace_auto_tasks",
             &json!({}),

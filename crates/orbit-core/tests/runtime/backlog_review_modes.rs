@@ -117,7 +117,7 @@ fn record_admitted(
     activity: &str,
 ) -> String {
     let now = Utc::now();
-    let run = runtime
+    let run = orbit_core::test_support::EngineHost::new(runtime)
         .insert_job_run(
             "task_pr_pipeline",
             1,
@@ -126,7 +126,7 @@ fn record_admitted(
             None,
         )
         .unwrap();
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .complete_job_run_step(
             &run.run_id,
             &JobRunStepParams {
@@ -245,7 +245,7 @@ fn done_task(runtime: &OrbitRuntime, title: &str) -> String {
 
 fn exempt_step(runtime: &OrbitRuntime, run_id: &str) {
     let now = Utc::now();
-    runtime
+    orbit_core::test_support::EngineHost::new(runtime)
         .complete_job_run_step(
             run_id,
             &JobRunStepParams {
@@ -521,7 +521,8 @@ fn historical_uncertainty_and_running_admission_remain_explicit() {
             "agent_implement",
         );
         let now = Utc::now();
-        runtime.complete_job_run_step(&run, &JobRunStepParams {
+        orbit_core::test_support::EngineHost::new(&runtime)
+            .complete_job_run_step(&run, &JobRunStepParams {
             step_index: 1,
             target_type: JobTargetType::Activity,
             target_id: "review_gate_admit".into(),

@@ -105,7 +105,8 @@ fn apply_task_automation_update_under_lock(
         update.model.as_deref(),
     );
     let runtime_model_identity =
-        <OrbitRuntime as HostEnvironment>::run_settings(runtime).actor_model_identity;
+        <super::EngineHost<'_> as HostEnvironment>::run_settings(&super::EngineHost::new(runtime))
+            .actor_model_identity;
     let attribution = assemble_task_attribution(
         &existing_task,
         TaskAttributionInput {
@@ -258,8 +259,8 @@ pub(super) fn reject_invalid_finding(
             "a claimed run cannot reject the owner's review finding".to_string(),
         ));
     }
-    let crew =
-        RunLifecycle::get_job_run(runtime, &report.run_id)?.and_then(|run| run.resolved_crew);
+    let crew = RunLifecycle::get_job_run(&super::EngineHost::new(runtime), &report.run_id)?
+        .and_then(|run| run.resolved_crew);
     let finding = InvalidFinding {
         source: VerdictSource::Implementer,
         analyzed: AnalyzedFinding {

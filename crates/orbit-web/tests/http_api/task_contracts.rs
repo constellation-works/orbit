@@ -929,7 +929,7 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
                         caller: None,
                     }
                 };
-                runtime
+                orbit_core::test_support::EngineHost::new(&runtime)
                     .apply_task_automation_update(
                         &recovered.id,
                         TaskAutomationUpdate {
@@ -949,7 +949,7 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
                         },
                     )
                     .expect("record recovered repair history");
-                runtime
+                orbit_core::test_support::EngineHost::new(&runtime)
                     .apply_task_automation_update(
                         &stale.id,
                         TaskAutomationUpdate {

@@ -59,7 +59,7 @@ fn classify(runtime: &OrbitRuntime, drain: &str, extra: Value) -> Result<Value, 
         input.extend(extra);
     }
     crate::scenarios::with_immutable_host_load(|| {
-        runtime
+        orbit_core::test_support::EngineHost::new(runtime)
             .run_deterministic(
                 "classify_workspace_auto_tasks",
                 &json!({}),

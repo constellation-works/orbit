@@ -193,7 +193,7 @@ impl Fixture {
             .jobs
             .insert_job_run(job_id, 1, Utc::now(), Some(input.clone()), None)
             .unwrap();
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {
@@ -280,7 +280,7 @@ impl Fixture {
         self.jobs
             .mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
             .unwrap();
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 task,
                 TaskAutomationUpdate {
@@ -460,7 +460,7 @@ fn expired_hold_does_not_block_or_log_again_after_readmission() {
             serde_json::to_value(fx.jobs.read_run_state(&run).unwrap().unwrap()).unwrap();
         assert!(!expired_state["forge_hold_expired_at"].is_null());
 
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &task,
                 TaskAutomationUpdate {
@@ -472,7 +472,7 @@ fn expired_hold_does_not_block_or_log_again_after_readmission() {
         let current_run = if unrelated_run {
             fx.admit_unrelated_run(&task)
         } else {
-            fx.runtime
+            orbit_core::test_support::EngineHost::new(&fx.runtime)
                 .apply_task_automation_update(
                     &task,
                     TaskAutomationUpdate {
@@ -653,7 +653,7 @@ fn completion_with_inconclusive_check_evidence_can_be_resumed() {
         .collect::<Vec<_>>();
     let fx = Fixture::with_job("task_pr_pipeline", json!(steps));
     let (task, run) = fx.held_delivery_for_job("task_pr_pipeline", None);
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task,
             TaskAutomationUpdate {

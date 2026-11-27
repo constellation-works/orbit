@@ -127,7 +127,7 @@ fn same_pr_publication_retains_each_refused_observation() {
         drop(stderr);
         std::fs::write(&f.answer, &response).unwrap();
         let error = execute_deterministic_action(
-            &f.runtime,
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
             "pr_open",
             &json!({}),
             &input,
@@ -243,7 +243,7 @@ fn same_pr_publication_retains_each_refused_observation() {
         }
         f.runtime.write_run_state(id, &changed).unwrap();
         let error = execute_deterministic_action(
-            &f.runtime,
+            &orbit_core::test_support::EngineHost::new(&f.runtime),
             "pr_open",
             &json!({}),
             &input,
@@ -371,7 +371,7 @@ impl Publication {
 
     fn open(&self) -> Result<Value, orbit_common::OrbitError> {
         execute_deterministic_action(
-            &self.f.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.f.runtime),
             "pr_open",
             &json!({}),
             &self.input,
@@ -780,7 +780,10 @@ fn publication_lag_rechecks_identity_authority_and_remote_on_convergence() {
                             .unwrap();
                     }
                     "hostile_authority" => {
-                        let mut run = runtime.get_job_run(&id).unwrap().unwrap();
+                        let mut run = orbit_core::test_support::EngineHost::new(&runtime)
+                            .get_job_run(&id)
+                            .unwrap()
+                            .unwrap();
                         run.input.as_mut().unwrap()["__source_repair"]["binding"]["schema_version"] =
                             json!(format!("private-password{}", "x".repeat(20_000)));
                         runtime
@@ -791,7 +794,7 @@ fn publication_lag_rechecks_identity_authority_and_remote_on_convergence() {
                                     .put(&runtime.workspace_id().unwrap(), &run, None)
                             })
                             .unwrap();
-                        let raw = runtime
+                        let raw = orbit_core::test_support::EngineHost::new(&runtime)
                             .source_repair_admission(&id)
                             .unwrap_err()
                             .to_string();
@@ -799,7 +802,7 @@ fn publication_lag_rechecks_identity_authority_and_remote_on_convergence() {
                         assert!(raw.len() > 16_384);
                     }
                     "owner" => {
-                        runtime
+                        orbit_core::test_support::EngineHost::new(&runtime)
                             .apply_task_automation_update(
                                 &task,
                                 orbit_engine::TaskAutomationUpdate {
@@ -957,7 +960,7 @@ fn publication_history_replays_legacy_notes_and_typed_decisions() {
         let note = json!({"schema_version":1,"run_id":p.id,"published_head":p.candidate,
             "successful_push":proof,"settling":{"reserved_delay_seconds":5,"decision":"waiting"}});
         let append = |entry| {
-            p.f.runtime
+            orbit_core::test_support::EngineHost::new(&p.f.runtime)
                 .apply_task_automation_update(
                     &p.f.task,
                     orbit_engine::TaskAutomationUpdate {
@@ -1073,7 +1076,7 @@ fn publication_history_refuses_unreadable_reservations_without_note_fallback() {
             )),
             _ => unreachable!(),
         };
-        p.f.runtime
+        orbit_core::test_support::EngineHost::new(&p.f.runtime)
             .apply_task_automation_update(
                 &p.f.task,
                 orbit_engine::TaskAutomationUpdate {
@@ -1128,7 +1131,7 @@ fn repair_run_footprint_edits_refuse_and_host_widening_publishes() {
     let p = Publication::with_worker(|f, run, checkout| {
         let as_run = |input: Value| {
             HostEnvironment::run_tool_with_context(
-                &f.runtime,
+                &orbit_core::test_support::EngineHost::new(&f.runtime),
                 "orbit.task.update",
                 input,
                 orbit_tools::ToolContext {

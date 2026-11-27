@@ -80,7 +80,7 @@ fn run_pages_filter_in_sql_and_project_task_ids_without_task_reads() {
         .enumerate()
     {
         let at = now - Duration::hours(hours) + Duration::milliseconds(index as i64);
-        let mut run = runtime
+        let mut run = orbit_core::test_support::EngineHost::new(&runtime)
             .insert_job_run("task_pr_pipeline", 1, at, Some(input), None)
             .unwrap();
         run.state = state;

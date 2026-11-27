@@ -86,8 +86,7 @@ impl Fixture {
 
     fn run(&self, name: &str, job: &str, time: i64, input: Option<Value>) -> JobRun {
         let at = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap() + Duration::seconds(time);
-        let mut run = self
-            .runtime
+        let mut run = orbit_core::test_support::EngineHost::new(&self.runtime)
             .insert_job_run(job, 1, at, input, None)
             .unwrap();
         let original_id = run.run_id.clone();
@@ -334,8 +333,7 @@ fn measure_delivery_lookup() {
     let payload = "x".repeat(384);
     let store = fixture.runtime.sqlite_store().unwrap();
     let workspace = fixture.runtime.workspace_id().unwrap();
-    let mut template = fixture
-        .runtime
+    let mut template = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .insert_job_run("fixture_delivery", 1, Utc::now(), None, None)
         .unwrap();
     store

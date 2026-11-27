@@ -559,7 +559,7 @@ fn dispatch(
 }
 fn run_det(runtime: &OrbitRuntime, name: &str, input: Value) -> Value {
     orbit_core::test_support::fixture_engine::Dispatch::run_deterministic(
-        runtime,
+        &orbit_core::test_support::EngineHost::new(runtime),
         name,
         &serde_json::json!({}),
         &input,
@@ -2077,7 +2077,7 @@ fn run_show_exposes_degraded_pull_pass_health() {
     runtime.write_run_state(id, &state).unwrap();
     fixture.db().execute("INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type, target_id, state, started_at, finished_at, error_code, error_message) VALUES (?1, ?2, 0, 'job', 'workspace_pull_pipeline', 'failed', ?3, ?3, 'protocol_skew', ?4)", params![fixture.workspace_id(), id, now.to_rfc3339(), skew_message]).unwrap();
     orbit_core::test_support::fixture_engine::RunLifecycle::finalize_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         id,
         orbit_types::workflow::JobRunState::Failed,
         now,

@@ -26,7 +26,7 @@ use super::RECONCILIATION_AUDIT;
 use super::observe::observe;
 use super::submit::bind_attempt_run;
 use crate::OrbitRuntime;
-use crate::application::contracts::RECONCILIATION_FOLLOW_UP_TAG_PREFIX;
+use crate::application::contracts::{EngineHostPort, RECONCILIATION_FOLLOW_UP_TAG_PREFIX};
 use crate::application::task::{TaskAddParams, TaskListFilter, TaskUpdateParams};
 
 /// An authenticated step of one admitted attempt.
@@ -269,7 +269,9 @@ fn run_commands(
         .and_then(|_lease| {
             commands
                 .iter()
-                .map(|command| review_gate::run_required_validation(runtime, &checkout, command))
+                .map(|command| {
+                    review_gate::run_required_validation(&runtime.engine_host(), &checkout, command)
+                })
                 .collect::<Result<Vec<_>, _>>()
         });
     // The checkout is this run's own scratch; remove it whatever happened.

@@ -39,7 +39,7 @@ fn exhausted_review_admission_holds_the_run_without_reserving_again() {
             },
         ] {
             ReviewGate::record_reviewer_invocation(
-                runtime,
+                &orbit_core::test_support::EngineHost::new(runtime),
                 &ReviewerInvocationRequest {
                     run_id: run_id.into(),
                     lineage_key: lineage.into(),
@@ -67,7 +67,7 @@ fn exhausted_review_admission_holds_the_run_without_reserving_again() {
                 .unwrap();
         } else {
             ReviewGate::release_review_attempt(
-                runtime,
+                &orbit_core::test_support::EngineHost::new(runtime),
                 &ReviewReleaseRequest {
                     run_id: run_id.into(),
                     lineage_key: lineage.into(),
@@ -91,7 +91,7 @@ fn exhausted_review_admission_holds_the_run_without_reserving_again() {
         let status = runtime.get_task(&fixture.task_id).unwrap().status;
         let mut input = fixture.input.clone();
         input["preflight"] = json!(preflight);
-        let refusal = runtime
+        let refusal = orbit_core::test_support::EngineHost::new(runtime)
             .run_deterministic("review_gate_admit", &json!({}), &input, Default::default())
             .expect_err("exhaustion stops admission");
         let reason = if reviewed {

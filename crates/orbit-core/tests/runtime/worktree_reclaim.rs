@@ -89,7 +89,7 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
         std::fs::write(worktree.join("cache/output"), vec![0; 37]).unwrap();
         if host_gc && age >= 3 {
             let built = orbit_engine::review_gate::run_required_validation(
-                &runtime,
+                &orbit_core::test_support::EngineHost::new(&runtime),
                 &worktree,
                 "mkdir -p \"$BUILD_OUTPUT_DIR/debug\" && printf output > \"$BUILD_OUTPUT_DIR/debug/output\"",
             )
@@ -135,7 +135,7 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
             .all(|(_, path)| path.join("cache/output").exists())
     );
     assert!(host_targets.iter().all(|target| target.exists()));
-    runtime
+    orbit_core::test_support::EngineHost::new(&runtime)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -275,14 +275,17 @@ fn admission_skips_empty_terminal_history_without_git_and_detects_new_output() {
     unsafe { std::env::set_var("PATH", std::env::join_paths(paths).unwrap()) };
     let admit = || {
         assert!(fs2::available_space(repo.join(".orbit")).unwrap() / (1024 * 1024) < threshold);
-        orbit_core::test_support::with_runtime_env(runtime.clone(), orbit_common::Env::capture())
-            .run_deterministic(
-                "list_backlog_tasks",
-                &json!({}),
-                &json!({}),
-                ToolContext::default(),
-            )
-            .unwrap();
+        orbit_core::test_support::EngineHost::new(&orbit_core::test_support::with_runtime_env(
+            runtime.clone(),
+            orbit_common::Env::capture(),
+        ))
+        .run_deterministic(
+            "list_backlog_tasks",
+            &json!({}),
+            &json!({}),
+            ToolContext::default(),
+        )
+        .unwrap();
     };
     for _ in 0..2 {
         admit();

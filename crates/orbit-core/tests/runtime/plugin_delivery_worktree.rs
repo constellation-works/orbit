@@ -312,8 +312,13 @@ exit 99
     }
 
     fn deterministic_context(&self, run_id: &str) -> ToolContext {
-        let mut ctx =
-            Recovery::tool_context_for_activity(&self.runtime, Some(run_id), None, None, None);
+        let mut ctx = Recovery::tool_context_for_activity(
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
+            Some(run_id),
+            None,
+            None,
+            None,
+        );
         ctx.caller = ToolCaller::DeterministicStep(Default::default());
         ctx.activity_binding = Some(ActivityBinding {
             job_run_id: run_id.to_string(),
@@ -334,8 +339,7 @@ exit 99
             "base_branch": "main",
             "base_sync": "remote",
         });
-        let run = self
-            .runtime
+        let run = orbit_core::test_support::EngineHost::new(&self.runtime)
             .insert_job_run(job_name, 1, Utc::now(), Some(run_input.clone()), None)
             .unwrap();
         self.runtime
@@ -358,7 +362,7 @@ exit 99
         .unwrap();
 
         let setup_output = orbit_engine::execute_deterministic_action(
-            &self.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
             "worktree_setup",
             &json!({}),
             &json!({
@@ -846,8 +850,7 @@ fn pr_mode_plugin_delivery_binds_worktree_and_completes_pr_ci_route_without_agen
     );
 
     // Route resolution selects the plugin delivery job in PR mode.
-    let route = fixture
-        .runtime
+    let route = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "resolve_delivery_job",
             &json!({}),
@@ -1004,9 +1007,12 @@ fn missing_mismatched_unowned_invalid_and_multi_task_bindings_fail_closed_before
     let config = json!({"tool": "syncproof.sync", "input": {}});
     let mut_call = |run_id: &str, step_input: Value| {
         let ctx = fixture.deterministic_context(run_id);
-        fixture
-            .runtime
-            .run_deterministic("plugin.tool_call", &config, &step_input, ctx)
+        orbit_core::test_support::EngineHost::new(&fixture.runtime).run_deterministic(
+            "plugin.tool_call",
+            &config,
+            &step_input,
+            ctx,
+        )
     };
 
     let cases: Vec<(&str, Value, &str)> = vec![
@@ -1133,8 +1139,7 @@ fn missing_mismatched_unowned_invalid_and_multi_task_bindings_fail_closed_before
     );
 
     // Explicit workspace_path outside a task-delivery job fails closed.
-    let no_run_error = fixture
-        .runtime
+    let no_run_error = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "plugin.tool_call",
             &config,
@@ -1326,8 +1331,7 @@ fn setup_prefix_from_prior_step_output_binds_and_rejects_mismatches() {
         "base_branch": "main",
         "base_sync": "remote",
     });
-    let run_step = fixture
-        .runtime
+    let run_step = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .insert_job_run(
             "syncproof_step_prefix_delivery",
             1,
@@ -1358,7 +1362,7 @@ fn setup_prefix_from_prior_step_output_binds_and_rejects_mismatches() {
 
     let prepare_output = json!({"prefix": "step-out-prefix"});
     let setup_output = orbit_engine::execute_deterministic_action(
-        &fixture.runtime,
+        &orbit_core::test_support::EngineHost::new(&fixture.runtime),
         "worktree_setup",
         &json!({}),
         &json!({
@@ -1397,8 +1401,7 @@ fn setup_prefix_from_prior_step_output_binds_and_rejects_mismatches() {
         .filter(|line| *line == "syncproof.sync")
         .count();
 
-    let mismatch_err = fixture
-        .runtime
+    let mismatch_err = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "plugin.tool_call",
             &sync_config,
@@ -1429,8 +1432,7 @@ fn setup_prefix_from_prior_step_output_binds_and_rejects_mismatches() {
         .runtime
         .write_run_state(&run_step.run_id, &forged_wt)
         .unwrap();
-    let unowned_err = fixture
-        .runtime
+    let unowned_err = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "plugin.tool_call",
             &sync_config,
@@ -1457,8 +1459,7 @@ fn setup_prefix_from_prior_step_output_binds_and_rejects_mismatches() {
         .runtime
         .write_run_state(&run_step.run_id, &tampered_prepare)
         .unwrap();
-    let inconsistent_err = fixture
-        .runtime
+    let inconsistent_err = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "plugin.tool_call",
             &sync_config,
@@ -1493,8 +1494,7 @@ fn setup_prefix_from_prior_step_output_binds_and_rejects_mismatches() {
         .runtime
         .write_run_state(&run_step.run_id, &state)
         .unwrap();
-    let ok = fixture
-        .runtime
+    let ok = orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .run_deterministic(
             "plugin.tool_call",
             &sync_config,

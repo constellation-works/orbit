@@ -123,7 +123,7 @@ fn pilot_reservation_contention_is_held_before_agent_work() {
     let input = json!({"task_ids": [held.id, free.id], "workspace_path": workspace.repo, "base_branch": "main", "run_id": waiter});
     let prepared =
         orbit_core::test_support::with_task_commit_lock_timeout(Duration::from_millis(250), || {
-            workspace.runtime.run_deterministic(
+            orbit_core::test_support::EngineHost::new(&workspace.runtime).run_deterministic(
                 "prepare_task_pilot",
                 &json!({}),
                 &input,
@@ -214,7 +214,7 @@ fn pilot_reservation_contention_is_held_before_agent_work() {
     let state_dir = workspace.runtime.paths().state_dir.clone();
     let permissions = std::fs::metadata(&state_dir).unwrap().permissions();
     std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o500)).unwrap();
-    let failed = workspace.runtime.run_deterministic(
+    let failed = orbit_core::test_support::EngineHost::new(&workspace.runtime).run_deterministic(
         "prepare_task_pilot", &json!({}),
         &json!({"task_ids": [free.id], "workspace_path": workspace.repo, "base_branch": "main", "run_id": waiter}),
         ToolContext::default(),

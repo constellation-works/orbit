@@ -52,7 +52,10 @@ fn reviewer_publication_preserves_the_pr(landing: bool) {
     f.runtime
         .write_run_state(&f.source.run_id, &changed)
         .unwrap();
-    let error = execute_deterministic_action(&f.runtime, "candidate_resume", &json!({}),
+    let error = execute_deterministic_action(
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
+        "candidate_resume",
+        &json!({}),
         &json!({"job_run_id":id,"task_ids":[f.task],"workspace_path":checkout,"base_sha":setup["base_sha"]}),
         false, &HashMap::new(), None).unwrap_err();
     assert!(

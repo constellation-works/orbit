@@ -486,7 +486,7 @@ fn full_capacity_still_reports_the_pull_requests_left_alone() {
     fx.blocked(&leaf, "capacity-head", BOT, true, &[]);
     let drain = fx.drain();
     let pass_with_slots = |slots: u64| {
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .run_deterministic(
                 "adopt_orphaned_deliveries",
                 &json!({}),

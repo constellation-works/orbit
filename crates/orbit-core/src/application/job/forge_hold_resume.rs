@@ -25,6 +25,7 @@ use orbit_types::workflow::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
 use crate::runtime::run::task_coupling::resumed_task_run_id;
 
@@ -202,7 +203,8 @@ impl OrbitRuntime {
                     }) {
                         return Ok(());
                     }
-                    self.apply_task_automation_update(&task_id, update.clone())?;
+                    self.engine_host()
+                        .apply_task_automation_update(&task_id, update.clone())?;
                     changed = true;
                     Ok(())
                 })?;

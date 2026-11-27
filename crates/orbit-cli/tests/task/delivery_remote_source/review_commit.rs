@@ -45,7 +45,7 @@ fn git_commit(
     worktree: &Path,
 ) -> Result<Value, orbit_common::OrbitError> {
     orbit_core::test_support::fixture_engine::execute_deterministic_action(
-        runtime,
+        &orbit_core::test_support::EngineHost::new(runtime),
         "git_commit",
         &json!({}),
         &json!({ "job_run_id": run_id, "workspace_path": worktree }),
@@ -122,7 +122,7 @@ fn review_coverage_bound_to_the_batch_is_the_no_diff_evidence() {
         })
         .unwrap();
     let plain_run = RunLifecycle::insert_job_run(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         "task-pr-pipeline",
         1,
         Utc::now(),
@@ -131,7 +131,7 @@ fn review_coverage_bound_to_the_batch_is_the_no_diff_evidence() {
     )
     .unwrap();
     RunLifecycle::apply_task_automation_update(
-        &runtime,
+        &orbit_core::test_support::EngineHost::new(&runtime),
         &plain.id,
         TaskAutomationUpdate {
             job_run_id: Some(plain_run.run_id.clone()),

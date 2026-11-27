@@ -469,7 +469,7 @@ impl Fixture {
             .unwrap();
         jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
             .unwrap();
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 task_id,
                 TaskAutomationUpdate {

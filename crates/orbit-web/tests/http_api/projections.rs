@@ -293,8 +293,7 @@ projections_test!(
         let unread_run = "jrun-worktree-unreadable";
         let missing_run = "jrun-worktree-missing";
         for (task, run_id) in [(&unread, unread_run), (&missing, missing_run)] {
-            fixture
-                .runtime
+            orbit_core::test_support::EngineHost::new(&fixture.runtime)
                 .apply_task_automation_update(
                     task,
                     TaskAutomationUpdate {
@@ -1503,7 +1502,9 @@ fn block_with_final_recovery(
         job_run_id: Some(run_id.into()),
         ..failure
     };
-    runtime.apply_task_automation_update(id, update).unwrap();
+    orbit_core::test_support::EngineHost::new(runtime)
+        .apply_task_automation_update(id, update)
+        .unwrap();
     let task = runtime.get_task(id).unwrap();
     let observed = runtime.final_recovery_revision(&task).unwrap();
     let request = FinalRecoveryRequest {

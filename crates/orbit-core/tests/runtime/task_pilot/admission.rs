@@ -139,16 +139,24 @@ fn verdicts(workspace: &Workspace, task: &Task) -> Vec<PilotAdmissionVerdict> {
 }
 fn assert_workflow_admitted(workspace: &Workspace, task: &Task) {
     assert_eq!(
-        RunLifecycle::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
-            .unwrap()
-            .status,
+        RunLifecycle::admit_task_for_workflow(
+            &orbit_core::test_support::EngineHost::new(&workspace.runtime),
+            &task.id,
+            "worktree_setup"
+        )
+        .unwrap()
+        .status,
         TaskStatus::InProgress
     );
 }
 fn workflow_refusal(workspace: &Workspace, task: &Task) -> String {
-    RunLifecycle::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
-        .unwrap_err()
-        .to_string()
+    RunLifecycle::admit_task_for_workflow(
+        &orbit_core::test_support::EngineHost::new(&workspace.runtime),
+        &task.id,
+        "worktree_setup",
+    )
+    .unwrap_err()
+    .to_string()
 }
 fn update_task_history(workspace: &Workspace, task: &Task, params: TaskHistoryUpdateParams) {
     let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(

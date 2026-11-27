@@ -140,8 +140,7 @@ model = "muse-spark-1.3"
         "medium_complexity_crews": ["wonder@high:1", "wonder-alias:3", "spark:1"],
         "crew_selection": {"task_id": task.id, "source": "pool:medium", "crew": "wonder@high"},
     });
-    let run = fx
-        .runtime
+    let run = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run(
             "task_local_pipeline",
             1,
@@ -156,7 +155,7 @@ model = "muse-spark-1.3"
             &PipelineState::new(run.run_id.clone(), run.job_id, input),
         )
         .unwrap();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task.id,
             TaskAutomationUpdate {
@@ -220,7 +219,7 @@ model = "muse-spark-1.3"
         OrbitRuntime::from_roots(&fx.runtime.global_root(), &fx.repo.join(".orbit"))
             .unwrap()
             .with_automation_machine_identity(Some("hm_model_access_fixture".into()));
-    let backlog = different_host
+    let backlog = orbit_core::test_support::EngineHost::new(&different_host)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -477,8 +476,7 @@ model = "muse-spark-1.3"
         "medium_complexity_crews": ["wonder@high:1", "wonder-alias:3", "spark:1"],
         "crew_selection": {"task_id": task_a.id, "source": "pool:medium", "crew": "wonder@high"},
     });
-    let run_a = fx
-        .runtime
+    let run_a = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run(
             TASK_LOCAL_PIPELINE_JOB,
             1,
@@ -493,7 +491,7 @@ model = "muse-spark-1.3"
             &PipelineState::new(run_a.run_id.clone(), run_a.job_id, input_a),
         )
         .unwrap();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task_a.id,
             TaskAutomationUpdate {
@@ -558,7 +556,7 @@ model = "muse-spark-1.3"
     let other_host = OrbitRuntime::from_roots(&fx.runtime.global_root(), &fx.repo.join(".orbit"))
         .unwrap()
         .with_automation_machine_identity(Some("hm_local_shared_model_access_other".into()));
-    let other_backlog = other_host
+    let other_backlog = orbit_core::test_support::EngineHost::new(&other_host)
         .run_deterministic(
             "list_backlog_tasks",
             &json!({}),
@@ -631,8 +629,7 @@ model = "muse-spark-1.3"
     // A newer verified success on the same host and account clears the refusal across tasks.
     std::fs::write(&recovered, "").unwrap();
     let verify_input = json!({"task_ids": [task_explicit.id], "crew": "wonder@high"});
-    let verify_run = fx
-        .runtime
+    let verify_run = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run(
             TASK_LOCAL_PIPELINE_JOB,
             1,
@@ -668,8 +665,7 @@ model = "muse-spark-1.3"
     let seed_refusal_at = |task_id: &str, ago: Duration| {
         let at = Utc::now() - ago;
         let input = json!({"task_ids": [task_id]});
-        let run = expiry_fx
-            .runtime
+        let run = orbit_core::test_support::EngineHost::new(&expiry_fx.runtime)
             .insert_job_run(TASK_LOCAL_PIPELINE_JOB, 1, at, Some(input.clone()), None)
             .unwrap();
         let mut state = PipelineState::new(run.run_id.clone(), run.job_id, input);
@@ -689,12 +685,10 @@ model = "muse-spark-1.3"
             .runtime
             .write_run_state(&run.run_id, &state)
             .unwrap();
-        expiry_fx
-            .runtime
+        orbit_core::test_support::EngineHost::new(&expiry_fx.runtime)
             .mark_job_run_running(&run.run_id, at, std::process::id())
             .unwrap();
-        expiry_fx
-            .runtime
+        orbit_core::test_support::EngineHost::new(&expiry_fx.runtime)
             .finalize_job_run(&run.run_id, JobRunState::Failed, at, None)
             .unwrap();
     };
@@ -772,8 +766,7 @@ fn local_provider_outcome(detail: &str, class: Option<ProviderFailureClass>) {
 
     let task = fx.task("fixture");
     let input = json!({"task_ids": [task], "crew": "fixture"});
-    let run = fx
-        .runtime
+    let run = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input.clone()), None)
         .unwrap();
     fx.runtime
@@ -782,7 +775,7 @@ fn local_provider_outcome(detail: &str, class: Option<ProviderFailureClass>) {
             &PipelineState::new(run.run_id.clone(), run.job_id, input),
         )
         .unwrap();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task,
             TaskAutomationUpdate {
@@ -841,7 +834,7 @@ fn local_provider_outcome(detail: &str, class: Option<ProviderFailureClass>) {
             .collect::<Vec<_>>();
         assert_eq!(deferred, [orbit_store::contract::FailureClass::Deferred]);
         let replay_count = fx.runtime.get_task_history(&task).unwrap().len();
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .finalize_job_run(&run.run_id, JobRunState::Held, Utc::now(), Some(1))
             .unwrap();
         assert_eq!(
@@ -1006,8 +999,7 @@ fn declared_blocker_holds_the_local_run_and_passes_parent_guard() {
     std::fs::write(jobs.join("task_pr_pipeline.yaml"), json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": "task_pr_pipeline"}, "spec": job}).to_string()).unwrap();
     let task = fx.task("fixture");
     let input = json!({"task_ids": [task], "crew": "fixture"});
-    let run = fx
-        .runtime
+    let run = orbit_core::test_support::EngineHost::new(&fx.runtime)
         .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input.clone()), None)
         .unwrap();
     fx.runtime
@@ -1016,7 +1008,7 @@ fn declared_blocker_holds_the_local_run_and_passes_parent_guard() {
             &PipelineState::new(run.run_id.clone(), run.job_id, input),
         )
         .unwrap();
-    fx.runtime
+    orbit_core::test_support::EngineHost::new(&fx.runtime)
         .apply_task_automation_update(
             &task,
             TaskAutomationUpdate {

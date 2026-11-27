@@ -260,7 +260,7 @@ fn stored_script_grant_timeout_checks() {
             message,
             record,
         } = Dispatch::run_script_step(
-            &fx.runtime,
+            &orbit_core::test_support::EngineHost::new(&fx.runtime),
             &ScriptStepRequest {
                 run_id: "stored-grant-timeout".to_string(),
                 step_id: "run".to_string(),

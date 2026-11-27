@@ -477,7 +477,7 @@ impl Fixture {
             input: json!({"brief": brief, "crew": "sol"}),
             audit,
             run_id: run,
-            host: Some(&self.runtime),
+            host: Some(&orbit_core::test_support::EngineHost::new(&self.runtime)),
         })
         .map(|outcome| outcome.success)
         .map_err(|error| error.to_string())

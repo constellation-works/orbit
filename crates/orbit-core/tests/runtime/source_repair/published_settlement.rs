@@ -61,7 +61,7 @@ fn requeued_publisher() -> Fixture {
     state.completion_deadlines.insert("17".into(), 1);
     f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
     let failure = execute_deterministic_action(
-        &f.runtime,
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
         "pr_complete",
         &json!({}),
         &json!({"job_run_id":f.source.run_id,"completed_task_ids":[f.task],
@@ -241,7 +241,8 @@ fn requeued_publication_keeps_its_lifecycle_and_completion_guards() {
             }
             "discard" => append_history(&f, CANDIDATE_DISCARDED_EVENT, None),
             "successor" | "live run" => {
-                let mut successor = f.runtime.insert_job_run(
+                let mut successor = orbit_core::test_support::EngineHost::new(&f.runtime)
+                    .insert_job_run(
                     "task_pr_pipeline", 1, Utc::now(), Some(json!({"task_ids":[f.task]})), None,
                 ).unwrap();
                 if case == "successor" {
@@ -264,7 +265,7 @@ fn requeued_publication_keeps_its_lifecycle_and_completion_guards() {
 }
 
 fn append_history(f: &Fixture, event: &str, note: Option<String>) {
-    f.runtime
+    orbit_core::test_support::EngineHost::new(&f.runtime)
         .apply_task_automation_update(
             &f.task,
             TaskAutomationUpdate {
@@ -293,7 +294,7 @@ fn changes_during_forge_lookup_refuse_the_settlement_write() {
             Some(merge),
             Some(Box::new(move || {
                 if change_status {
-                    writer
+                    orbit_core::test_support::EngineHost::new(&writer)
                         .apply_task_automation_update(
                             &task,
                             TaskAutomationUpdate {
@@ -303,7 +304,7 @@ fn changes_during_forge_lookup_refuse_the_settlement_write() {
                         )
                         .unwrap();
                 } else {
-                    writer
+                    orbit_core::test_support::EngineHost::new(&writer)
                         .insert_job_run(
                             "task_auto_pipeline",
                             1,

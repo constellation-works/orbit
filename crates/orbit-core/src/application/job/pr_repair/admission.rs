@@ -21,6 +21,7 @@ use orbit_types::workflow::{
 use serde_json::json;
 
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 use crate::application::job::JobDrainPort;
 use crate::application::job::crew_pools::{complexity_crews_key, random_crew_ticket};
 use crate::runtime::engine::crew::enforce_crew_allowlist;
@@ -120,7 +121,7 @@ impl OrbitRuntime {
                             "auto-fix attempt could not be recorded: {error}"
                         ))
                     })?;
-                    self.apply_task_automation_update(
+                    self.engine_host().apply_task_automation_update(
                         primary,
                         TaskAutomationUpdate {
                             append_history: vec![TaskHistoryEntry {
@@ -182,7 +183,7 @@ impl OrbitRuntime {
                 if let PrInfrastructureAdmission::Reserved(reservation) = &admitted {
                     let note = serde_json::to_string(reservation)
                         .map_err(|error| OrbitError::Execution(error.to_string()))?;
-                    self.apply_task_automation_update(
+                    self.engine_host().apply_task_automation_update(
                         primary,
                         TaskAutomationUpdate {
                             append_history: vec![TaskHistoryEntry {
@@ -247,7 +248,7 @@ impl OrbitRuntime {
         }
         if request.head_sha != accepted.handoff.candidate.candidate.commit {
             let response = orbit_engine::HostEnvironment::run_private_vcs_operation(
-                self,
+                &self.engine_host(),
                 "pr.status",
                 serde_json::json!({
                     "workspace_path":self.paths().repo_root,"pr":request.pr_number,
@@ -314,7 +315,7 @@ impl OrbitRuntime {
             .with_task_write_lock(primary, &mut || {
                 let admitted = decide_pr_base_update(&self.get_task_history(primary)?, request);
                 if matches!(admitted, PrBaseUpdateAdmission::Reserved) {
-                    self.apply_task_automation_update(
+                    self.engine_host().apply_task_automation_update(
                         primary,
                         TaskAutomationUpdate {
                             append_history: vec![TaskHistoryEntry {
@@ -392,7 +393,7 @@ impl OrbitRuntime {
             }
             if plan.head_sha != candidate.candidate.commit {
                 let response = orbit_engine::HostEnvironment::run_private_vcs_operation(
-                    self,
+                    &self.engine_host(),
                     "pr.status",
                     serde_json::json!({"workspace_path":self.paths().repo_root,"pr":plan.pr_number}),
                 )?;
@@ -453,7 +454,7 @@ impl OrbitRuntime {
                     now_ms,
                 );
                 if matches!(admitted, CiRerunAdmission::Reserved) {
-                    self.apply_task_automation_update(
+                    self.engine_host().apply_task_automation_update(
                         primary,
                         TaskAutomationUpdate {
                             append_history: vec![

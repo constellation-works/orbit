@@ -206,11 +206,12 @@ fn sandbox_fixture() {
         Some(&mask),
     )
     .expect("compile the agent sandbox");
-    let broker = runtime
+    let broker = orbit_core::test_support::EngineHost::new(&runtime)
         .start_plugin_broker(&run)
         .expect("start broker")
         .expect("Unix broker");
-    let mut env = runtime.agent_subprocess_environment(&[]);
+    let mut env =
+        orbit_core::test_support::EngineHost::new(&runtime).agent_subprocess_environment(&[]);
     env.push((
         "ORBIT_PLUGIN_BROKER".to_string(),
         broker.socket_path().display().to_string(),

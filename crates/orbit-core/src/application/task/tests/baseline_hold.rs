@@ -10,6 +10,7 @@ use orbit_types::workflow::{
 };
 
 use super::task::{enter_isolated_child, test_runtime};
+use crate::application::contracts::EngineHostPort;
 use crate::application::task::TaskAddParams;
 use crate::application::task::baseline_hold::FAIL_BASELINE_HOLD_HISTORY;
 
@@ -44,7 +45,7 @@ fn one_unreadable_history_does_not_abort_the_baseline_hold_tick() {
             })
             .expect("add task");
         RunLifecycle::apply_task_automation_update(
-            &runtime,
+            &runtime.engine_host(),
             &task.id,
             baseline_red_hold_update("task_pr_pipeline", &hold(&format!("jrun-hold-{index}"))),
         )

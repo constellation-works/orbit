@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 
 use super::projection::job_run_task_ids;
 use crate::OrbitRuntime;
+use crate::application::contracts::EngineHostPort;
 
 impl OrbitRuntime {
     /// Keep the uncommitted repair of the review `run` stopped inside, if
@@ -102,7 +103,7 @@ impl OrbitRuntime {
                     record["repair_ref"] = json!(kept.repair_ref);
                     record["repair_commit"] = json!(commit);
                     if carry {
-                        match carry_interrupted_review(self, workspace, &kept) {
+                        match carry_interrupted_review(&self.engine_host(), workspace, &kept) {
                             Ok(()) => record["carried"] = json!(true),
                             Err(why) => record["carry_failure"] = json!(why),
                         }
@@ -130,7 +131,7 @@ impl OrbitRuntime {
                 "in this repository only"
             };
             RunLifecycle::apply_task_automation_update(
-                self,
+                &self.engine_host(),
                 task_id,
                 TaskAutomationUpdate {
                     append_comments: vec![TaskComment {

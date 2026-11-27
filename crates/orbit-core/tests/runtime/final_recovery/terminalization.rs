@@ -52,8 +52,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
         match action {
             "setup" => {
                 if !self.keep_status {
-                    self.fixture
-                        .runtime
+                    orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
                         .apply_task_automation_update(
                             self.task,
                             TaskAutomationUpdate {
@@ -69,8 +68,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
             "implement" => {
                 // A task may have returned to backlog before the failure.
                 if !self.keep_status {
-                    self.fixture
-                        .runtime
+                    orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
                         .apply_task_automation_update(
                             self.task,
                             TaskAutomationUpdate {
@@ -105,7 +103,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
         compound: &BTreeMap<String, Value>,
         script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
     ) -> Result<(), DispatchError> {
-        self.fixture.runtime.checkpoint_step(
+        orbit_core::test_support::EngineHost::new(&self.fixture.runtime).checkpoint_step(
             run_id,
             index,
             step_id,
@@ -116,7 +114,10 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
     }
 
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        Recovery::final_recovery_log_tail(&self.fixture.runtime, run_id)
+        Recovery::final_recovery_log_tail(
+            &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
+            run_id,
+        )
     }
 
     fn admit_final_recovery(
@@ -124,7 +125,8 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
         run_id: &str,
         request: &FinalRecoveryAdmissionRequest,
     ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        self.fixture.runtime.admit_final_recovery(run_id, request)
+        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
+            .admit_final_recovery(run_id, request)
     }
 
     fn apply_final_recovery(
@@ -132,7 +134,11 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
         run_id: &str,
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError> {
-        Recovery::apply_final_recovery(&self.fixture.runtime, run_id, application)
+        Recovery::apply_final_recovery(
+            &orbit_core::test_support::EngineHost::new(&self.fixture.runtime),
+            run_id,
+            application,
+        )
     }
 
     fn apply_task_automation_update(
@@ -140,8 +146,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
         task_id: &str,
         update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
-        self.fixture
-            .runtime
+        orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
             .apply_task_automation_update(task_id, update)
     }
 }
@@ -259,8 +264,7 @@ fn fail_pipeline_with(
         .run_tool("orbit.task.show", json!({"id": task}))
         .unwrap();
     let now = Utc::now();
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .complete_job_run_step(
             run,
             &JobRunStepParams {
@@ -279,8 +283,7 @@ fn fail_pipeline_with(
             },
         )
         .unwrap();
-    fixture
-        .runtime
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .finalize_job_run(run, JobRunState::Failed, now, Some(1))
         .unwrap();
     assert_eq!(
@@ -679,8 +682,7 @@ fn failure_cleanup_still_blocks_backlog_without_a_current_requeue_from_that_run(
         let task = fixture.task();
         let mut run = fixture.running_run(&task);
         let couple = |run: &str, status| {
-            fixture
-                .runtime
+            orbit_core::test_support::EngineHost::new(&fixture.runtime)
                 .apply_task_automation_update(
                     &task,
                     TaskAutomationUpdate {
@@ -709,8 +711,7 @@ fn failure_cleanup_still_blocks_backlog_without_a_current_requeue_from_that_run(
             }
         }
         couple(&run, TaskStatus::Backlog);
-        fixture
-            .runtime
+        orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .finalize_job_run(&run, JobRunState::Failed, Utc::now(), Some(1))
             .unwrap();
         assert_eq!(fixture.status(&task), "blocked", "{case}");

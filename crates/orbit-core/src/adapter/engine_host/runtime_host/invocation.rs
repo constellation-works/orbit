@@ -95,7 +95,7 @@ pub(super) fn provider_cli_config(
     runtime: &OrbitRuntime,
     _provider: &str,
 ) -> std::collections::HashMap<String, String> {
-    orbit_engine::HostEnvironment::agent_provider_config(runtime)
+    orbit_engine::HostEnvironment::agent_provider_config(&super::EngineHost::new(runtime))
 }
 
 pub(super) fn begin_agent_execution(

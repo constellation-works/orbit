@@ -464,7 +464,9 @@ fn unreadable_retrying_inventory_or_state_prevents_all_scratch_deletion() {
         assert_eq!(fixture.db().execute(sql, []).unwrap(), 1);
         // Use the public GC host boundary so corrupt inventory cannot be
         // rejected earlier by the CLI's own run submission or observation.
-        let error = HostEnvironment::gc_scratch(&runtime, 0).unwrap_err();
+        let error =
+            HostEnvironment::gc_scratch(&orbit_core::test_support::EngineHost::new(&runtime), 0)
+                .unwrap_err();
         assert!(
             matches!(error, orbit_common::OrbitError::Store(_)),
             "{error}"

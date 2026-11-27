@@ -78,7 +78,8 @@ impl Delivery {
         state.record_step(3, JobRunState::Success, Some(Value::Null), None);
         state.record_pipeline_output("promote_no_diff", Value::Null);
         runtime.write_run_state(&run, &state).unwrap();
-        runtime.apply_task_automation_update(&task, TaskAutomationUpdate {
+        orbit_core::test_support::EngineHost::new(&runtime)
+            .apply_task_automation_update(&task, TaskAutomationUpdate {
             status: Some(TaskStatus::InProgress), job_run_id: Some(run.clone()),
             execution_summary: Some("Outcome: success\nImplemented the delivery fixture and validated its output.".into()),
             ..Default::default()
@@ -113,7 +114,7 @@ impl Delivery {
 
     fn action(&self, action: &str) -> Result<Value, orbit_common::OrbitError> {
         execute_deterministic_action(
-            &self.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
             action,
             &json!({}),
             &self.input,
@@ -128,7 +129,7 @@ impl Delivery {
         let mut input = self.input.clone();
         input.as_object_mut().unwrap().remove("base");
         let output = execute_deterministic_action(
-            &self.runtime,
+            &orbit_core::test_support::EngineHost::new(&self.runtime),
             "pr_promote",
             &json!({}),
             &input,
@@ -163,7 +164,7 @@ impl Delivery {
 
     /// A system failure-handoff block. `note` must carry the producer's `: run=<id>,` field.
     fn block_handoff(&self, event: &str, note: &str) {
-        self.runtime
+        orbit_core::test_support::EngineHost::new(&self.runtime)
             .apply_task_automation_update(
                 &self.task,
                 TaskAutomationUpdate {
@@ -388,7 +389,7 @@ fn resumed_terminal_runs_block_readmitted_tasks() {
     for case in ["failed", "interrupted", "superseded"] {
         let fx = Delivery::new();
         fx.skip_promotion();
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &fx.task,
                 orbit_core::test_support::fixture_engine::blocked_workflow_failure_update(
@@ -426,7 +427,7 @@ fn resumed_terminal_runs_block_readmitted_tasks() {
         );
         // An earlier attempt changed this binding. Resume must restore the
         // checkpoint batch and couple this already-in-progress task as well.
-        fx.runtime
+        orbit_core::test_support::EngineHost::new(&fx.runtime)
             .apply_task_automation_update(
                 &companion,
                 TaskAutomationUpdate {
@@ -481,7 +482,7 @@ fn resumed_terminal_runs_block_readmitted_tasks() {
                     None,
                     &json!({"task_ids": [fx.task]}),
                 );
-                fx.runtime
+                orbit_core::test_support::EngineHost::new(&fx.runtime)
                     .apply_task_automation_update(
                         &fx.task,
                         TaskAutomationUpdate {
@@ -578,7 +579,7 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
             fx.promote();
         }
         if case == "early" {
-            fx.runtime
+            orbit_core::test_support::EngineHost::new(&fx.runtime)
                 .apply_task_automation_update(
                     &fx.task,
                     orbit_core::test_support::fixture_engine::blocked_workflow_failure_update(
@@ -634,7 +635,7 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
                     (case != "unrelated").then_some(fx.run.as_str()),
                     &json!({"task_ids":[fx.task]}),
                 );
-                fx.runtime
+                orbit_core::test_support::EngineHost::new(&fx.runtime)
                     .apply_task_automation_update(
                         &fx.task,
                         TaskAutomationUpdate {
@@ -645,7 +646,7 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
                     )
                     .unwrap();
                 if case == "superseding_review" {
-                    fx.runtime
+                    orbit_core::test_support::EngineHost::new(&fx.runtime)
                         .apply_task_automation_update(
                             &fx.task,
                             TaskAutomationUpdate {
@@ -659,7 +660,7 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
                 fx.fail(other);
             }
             "manual_block" => {
-                fx.runtime
+                orbit_core::test_support::EngineHost::new(&fx.runtime)
                     .apply_task_automation_update(
                         &fx.task,
                         TaskAutomationUpdate {

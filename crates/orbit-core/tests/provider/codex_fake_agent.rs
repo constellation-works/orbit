@@ -186,7 +186,7 @@ fn dispatch_as(harness: &Harness, activity_name: &str) -> DispatchOutcome {
         input: serde_json::json!({"prompt": "Run python3 --version."}),
         audit,
         run_id: "codex-fake",
-        host: Some(&harness.runtime),
+        host: Some(&orbit_core::test_support::EngineHost::new(&harness.runtime)),
     })
     .expect("dispatch Codex CLI backend");
     assert!(outcome.success, "dispatch failed: {:?}", outcome.message);

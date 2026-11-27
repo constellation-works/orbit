@@ -44,7 +44,7 @@ const UNRELATED: &str = "0123456789abcdef0123456789abcdef01234567";
 
 pub(super) fn engine_action(host: &OrbitRuntime, action: &str, input: &Value) -> Value {
     orbit_engine::execute_deterministic_action(
-        host,
+        &orbit_core::test_support::EngineHost::new(host),
         action,
         &json!({}),
         input,
@@ -472,8 +472,7 @@ fn a_candidateless_local_attempt_reports_distinct_requeue_routes() {
     owner_jobs(&pair)
         .finalize_job_run(&local, JobRunState::Cancelled, Utc::now(), None)
         .unwrap();
-    pair.wire
-        .owner
+    orbit_core::test_support::EngineHost::new(&pair.wire.owner)
         .apply_task_automation_update(
             &task,
             TaskAutomationUpdate {
@@ -517,8 +516,7 @@ fn a_candidateless_local_attempt_reports_distinct_requeue_routes() {
     owner_jobs(&pair)
         .finalize_job_run(&current, JobRunState::Cancelled, Utc::now(), None)
         .unwrap();
-    pair.wire
-        .owner
+    orbit_core::test_support::EngineHost::new(&pair.wire.owner)
         .apply_task_automation_update(
             &task,
             TaskAutomationUpdate {
@@ -689,7 +687,7 @@ fn owner_run_held_on_red_base(pair: &Pair, task: &str, base: &str) -> (String, S
             "dependency_delivery": "ignore",
         }),
     );
-    owner
+    orbit_core::test_support::EngineHost::new(owner)
         .apply_task_automation_update(
             task,
             TaskAutomationUpdate {

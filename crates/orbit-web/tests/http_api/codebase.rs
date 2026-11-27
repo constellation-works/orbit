@@ -247,8 +247,7 @@ analytics_test!(
                 json!({"id": leaver, "status": "archived"}),
             )
             .unwrap();
-        fixture
-            .runtime
+        orbit_core::test_support::EngineHost::new(&fixture.runtime)
             .run_deterministic(
                 "release_locks",
                 &json!({}),
