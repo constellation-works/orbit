@@ -9,14 +9,16 @@ use orbit_common::OrbitError;
 use super::super::branch_observation::BranchRetention;
 use super::super::cluster::FailureCluster;
 use super::super::dependency_fold;
-use super::super::dependency_fold::{IncompleteWaiter, sibling_cluster_for};
 use super::super::evidence::{
     deferral_is_bounded, deferred_errors, filing_audit, pending_audit, retryable_pipeline_error,
 };
-use super::super::fields::value_string;
 use super::file_clusters::{DependencyFold, FiledClusters};
 use super::snapshot::{FilingSnapshot, empty_snapshot_detail};
 use super::{OUTCOME_CURRENT_FAILURES, OUTCOME_DEFERRED, OUTCOME_NO_CURRENT_FAILURE};
+use crate::application::sweep_filing::ci_failure::dependency_fold::{
+    IncompleteWaiter, sibling_cluster_for,
+};
+use crate::application::sweep_filing::ci_failure::fields::value_string;
 
 /// No cluster is complete enough to file.
 pub(super) fn empty_clusters_outcome(
