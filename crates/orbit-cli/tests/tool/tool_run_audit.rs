@@ -494,3 +494,196 @@ fn audit_role_prefers_flag_then_envelope_over_self_reported_input_model() {
         "the flag outranks the envelope, and the envelope outranks tool-JSON `model`"
     );
 }
+
+#[test]
+fn tool_management_subcommands_persist_admin_audit_role_regardless_of_actor() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    git_repo::init(&work);
+    fixture_orbit(&work, &home)
+        .args(["workspace", "init", "--name", "tool-admin-audit"])
+        .assert()
+        .success();
+    let script = work.join("fixture_tool.sh");
+    std::fs::write(&script, "#!/bin/sh\nexit 0\n").expect("fixture tool script");
+    let script_arg = script.to_str().expect("utf8 script path");
+
+    let mut before_id: i64 = 0;
+    for (label, env_vars) in [
+        ("operator", vec![("ORBIT_OPERATOR", "1")]),
+        (
+            "agent",
+            vec![
+                ("ORBIT_AGENT_NAME", "codex"),
+                ("ORBIT_AGENT_MODEL", "codex"),
+            ],
+        ),
+    ] {
+        let tool_name = format!("qa.admin_audit_{label}");
+        let run_tool = |args: &[&str]| {
+            let mut command = fixture_orbit(&work, &home);
+            for (key, value) in &env_vars {
+                command.env(key, value);
+            }
+            command.args(args).assert().success();
+        };
+
+        run_tool(&["tool", "add", script_arg, "--name", &tool_name]);
+        run_tool(&["tool", "list"]);
+        run_tool(&["tool", "show", &tool_name]);
+        run_tool(&["tool", "disable", &tool_name]);
+        run_tool(&["tool", "enable", &tool_name]);
+        run_tool(&["tool", "doctor", &tool_name]);
+        run_tool(&["tool", "remove", &tool_name]);
+
+        let conn = rusqlite::Connection::open_with_flags(
+            home.join(".orbit/orbit.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .expect("audit reader");
+        let rows: Vec<(i64, String, String)> = conn
+            .prepare(
+                "SELECT id, subcommand, role FROM audit_events
+                 WHERE id > ?1 AND command = 'tool'
+                 ORDER BY id",
+            )
+            .expect("audit query")
+            .query_map([before_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .expect("audit rows")
+            .collect::<Result<_, _>>()
+            .expect("collected audit rows");
+        before_id = rows.last().map_or(before_id, |(id, _, _)| *id);
+        let rows: Vec<(String, String)> = rows
+            .into_iter()
+            .map(|(_, subcommand, role)| (subcommand, role))
+            .collect();
+
+        assert_eq!(
+            rows,
+            [
+                ("add".to_string(), "admin".to_string()),
+                ("list".to_string(), "admin".to_string()),
+                ("show".to_string(), "admin".to_string()),
+                ("disable".to_string(), "admin".to_string()),
+                ("enable".to_string(), "admin".to_string()),
+                ("doctor".to_string(), "admin".to_string()),
+                ("remove".to_string(), "admin".to_string()),
+            ],
+            "each tool management subcommand under {label} actor must persist one admin row"
+        );
+    }
+}
+
+#[test]
+fn dry_run_audit_role_matches_tool_run_actor_role_precedence() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    git_repo::init(&work);
+    fixture_orbit(&work, &home)
+        .args(["workspace", "init", "--name", "dry-run-audit-role"])
+        .assert()
+        .success();
+
+    let enveloped = || {
+        let mut command = fixture_orbit(&work, &home);
+        command
+            .env("ORBIT_AGENT_NAME", "codex")
+            .env("ORBIT_AGENT_MODEL", "codex");
+        command
+    };
+
+    // 1. Input `model` outranks `--model` flag and `ORBIT_AGENT_*` env.
+    enveloped()
+        .args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--dry-run",
+            "--model",
+            "gemini",
+            "--input",
+            r#"{"title":"Dry run","description":"Input model","complexity":"low","model":"grok"}"#,
+        ])
+        .assert()
+        .success();
+
+    // 2. Explicit `--model` flag outranks `ORBIT_AGENT_*` env when input has no `model`.
+    enveloped()
+        .args([
+            "tool",
+            "run",
+            "orbit.task.list",
+            "--dry-run",
+            "--model",
+            "gemini",
+        ])
+        .assert()
+        .success();
+
+    // 3. Explicit `--agent` flag outranks `ORBIT_AGENT_*` env when input has no `model`.
+    enveloped()
+        .args([
+            "tool",
+            "run",
+            "orbit.task.list",
+            "--dry-run",
+            "--agent",
+            "claude",
+        ])
+        .assert()
+        .success();
+
+    // 4. `ORBIT_AGENT_*` env applies when neither input `model` nor `--agent`/`--model` is set.
+    enveloped()
+        .args(["tool", "run", "orbit.task.list", "--dry-run"])
+        .assert()
+        .success();
+
+    // 5. Fallback is `"agent"` (not `"operator"`/`"human"`) when no identity is supplied.
+    fixture_orbit(&work, &home)
+        .env("ORBIT_OPERATOR", "1")
+        .args(["tool", "run", "orbit.task.list", "--dry-run"])
+        .assert()
+        .success();
+
+    let conn = rusqlite::Connection::open_with_flags(
+        home.join(".orbit/orbit.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .expect("audit reader");
+    let rows: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT tool_name, role FROM audit_events
+             WHERE command = 'tool' AND subcommand = 'run'
+             ORDER BY id",
+        )
+        .expect("audit query")
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .expect("audit rows")
+        .collect::<Result<_, _>>()
+        .expect("collected dry-run roles");
+
+    assert_eq!(
+        rows,
+        [
+            ("orbit.task.add".to_string(), "grok".to_string()),
+            ("orbit.task.list".to_string(), "gemini".to_string()),
+            ("orbit.task.list".to_string(), "claude".to_string()),
+            ("orbit.task.list".to_string(), "codex".to_string()),
+            ("orbit.task.list".to_string(), "agent".to_string()),
+        ],
+        "dry-run invocation rows must follow input > flags > ORBIT_AGENT_* > agent"
+    );
+}

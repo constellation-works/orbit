@@ -11,6 +11,7 @@ mod claimed;
 mod dry_run;
 mod execute;
 
+pub(crate) use audit::dry_run_audit_role_label;
 pub use audit::{audit_role_label, audit_role_label_for_entry_point, trusted_mcp_audit_context};
 #[cfg(unix)]
 pub(crate) use brokered::RunDispatch;
