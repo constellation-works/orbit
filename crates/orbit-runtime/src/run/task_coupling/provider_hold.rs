@@ -73,6 +73,15 @@ const MIN_LIMIT_HOLD: Duration = Duration::minutes(5);
 
 const MAX_LIMIT_HOLD: Duration = Duration::days(7);
 
+/// The failed run details from which a [`ProviderFailureHold`] is built.
+struct ProviderFailure<'a> {
+    run_id: &'a str,
+    run_crew: Option<&'a str>,
+    class: ProviderFailureClass,
+    error_message: Option<&'a str>,
+    machine: Option<&'a str>,
+}
+
 impl RuntimeKernel {
     /// The hold `task`'s latest status decision put it under, if it still
     /// stands at `now`.
@@ -156,11 +165,13 @@ impl RuntimeKernel {
             .flatten();
         let (hold, failure) = self.failure_hold(
             task,
-            &run.run_id,
-            run_crew,
-            class,
-            error_message,
-            machine,
+            ProviderFailure {
+                run_id: &run.run_id,
+                run_crew,
+                class,
+                error_message,
+                machine,
+            },
             now,
         )?;
         if class == ProviderFailureClass::Unavailable {
@@ -215,24 +226,36 @@ impl RuntimeKernel {
         error_message: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<ProviderFailureHold, OrbitError> {
-        self.failure_hold(task, run_id, run_crew, class, error_message, None, now)
-            .map(|(hold, _)| hold)
+        self.failure_hold(
+            task,
+            ProviderFailure {
+                run_id,
+                run_crew,
+                class,
+                error_message,
+                machine: None,
+            },
+            now,
+        )
+        .map(|(hold, _)| hold)
     }
 
     /// The hold a failure places, scoped to `machine` when one is given, and
     /// what this failure alone excluded, before an earlier standing hold was
     /// absorbed.
-    #[allow(clippy::too_many_arguments)]
     fn failure_hold(
         &self,
         task: &Task,
-        run_id: &str,
-        run_crew: Option<&str>,
-        class: ProviderFailureClass,
-        error_message: Option<&str>,
-        machine: Option<&str>,
+        failure: ProviderFailure<'_>,
         now: DateTime<Utc>,
     ) -> Result<(ProviderFailureHold, ProviderFailureHold), OrbitError> {
+        let ProviderFailure {
+            run_id,
+            run_crew,
+            class,
+            error_message,
+            machine,
+        } = failure;
         let run_crew = run_crew
             .and_then(non_empty)
             .map(ToOwned::to_owned)

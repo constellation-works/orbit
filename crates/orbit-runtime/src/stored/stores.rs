@@ -26,7 +26,6 @@ pub struct OrbitStores {
 }
 
 impl OrbitStores {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         tasks: WorkspaceTaskBackends,
         lexical_index: LexicalIndex,

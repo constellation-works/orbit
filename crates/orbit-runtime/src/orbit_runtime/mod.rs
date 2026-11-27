@@ -7,6 +7,7 @@ mod validation_warning;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+pub use self::build::RuntimeOpenOptions;
 pub use crate::base::RuntimeConfigLoader;
 pub use crate::host::admission::AdmissionCrewSettings;
 

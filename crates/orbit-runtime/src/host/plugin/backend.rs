@@ -20,6 +20,22 @@ use super::grants::recorded_program_paths;
 use super::paths::plugin_state_dir;
 use super::secrets::{PluginSecretStore, PluginSecretSwap, PluginSecretValue};
 
+/// Host context for building a plugin's shared [`PluginBackend`].
+///
+/// `secrets` is where the manifest's declared secrets are read from on each
+/// call: the host store for an installed plugin, a golden's fixtures for
+/// `orbit plugin test`, and `None` for a backend that never runs (validate),
+/// whose calls would carry no secrets.
+pub struct PluginBackendContext {
+    pub provenance: PluginProvenance,
+    pub state_dir: PathBuf,
+    pub global_root: PathBuf,
+    pub grants: PluginGrantSet,
+    pub config: PluginConfigSection,
+    pub program_paths: BTreeMap<String, PathBuf>,
+    pub secrets: Option<Arc<dyn PluginSecretSource>>,
+}
+
 /// The host's secret store as one installed plugin's secret source: the
 /// plugin's own file under the store and nothing else, read on every call and
 /// written back only through the store's compare-and-swap.
@@ -88,49 +104,45 @@ pub fn plugin_backend(
     let config = super::config::plugin_config_section(plugin, plugin_config);
     build_plugin_backend(
         plugin,
-        PluginProvenance {
-            name: installed.name.clone(),
-            version: installed.version.clone(),
-            manifest_digest: plugin.manifest_digest.clone(),
-            // The audit row carries the set as recorded, scopes included:
-            // "ran with `fs`" and "ran with `fs` narrowed to one directory"
-            // are different facts about the same call (design §4.4).
-            grants: grants.to_recorded(),
+        PluginBackendContext {
+            provenance: PluginProvenance {
+                name: installed.name.clone(),
+                version: installed.version.clone(),
+                manifest_digest: plugin.manifest_digest.clone(),
+                // The audit row carries the set as recorded, scopes included:
+                // "ran with `fs`" and "ran with `fs` narrowed to one directory"
+                // are different facts about the same call (design §4.4).
+                grants: grants.to_recorded(),
+            },
+            state_dir: plugin_state_dir(global_root, &installed.name),
+            global_root: global_root.to_path_buf(),
+            grants,
+            config,
+            // The paths the enabling command resolved, never this caller's
+            // `PATH`: which process spawns the backend must not change what it
+            // may execute (design §4.3).
+            program_paths: recorded_program_paths(global_root, &installed.name),
+            // The installed row's name keys the store, so a plugin reads its own
+            // file and no other plugin's, whatever its manifest declares.
+            secrets: Some(Arc::new(HostPluginSecrets {
+                store: PluginSecretStore::new(global_root),
+                plugin: installed.name.clone(),
+            })),
         },
-        &plugin_state_dir(global_root, &installed.name),
-        global_root,
-        grants,
-        config,
-        // The paths the enabling command resolved, never this caller's
-        // `PATH`: which process spawns the backend must not change what it
-        // may execute (design §4.3).
-        recorded_program_paths(global_root, &installed.name),
-        // The installed row's name keys the store, so a plugin reads its own
-        // file and no other plugin's, whatever its manifest declares.
-        Some(Arc::new(HostPluginSecrets {
-            store: PluginSecretStore::new(global_root),
-            plugin: installed.name.clone(),
-        })),
     )
 }
 
 /// Construct the backend shared by runtime registration and conformance.
-///
-/// `secrets` is where the manifest's declared secrets are read from on each
-/// call: the host store for an installed plugin, a golden's fixtures for
-/// `orbit plugin test`, and `None` for a backend that never runs (validate),
-/// whose calls would carry no secrets.
-#[allow(clippy::too_many_arguments)]
-pub fn build_plugin_backend(
-    plugin: &LoadedPlugin,
-    provenance: PluginProvenance,
-    state_dir: &Path,
-    global_root: &Path,
-    grants: PluginGrantSet,
-    config: PluginConfigSection,
-    program_paths: BTreeMap<String, PathBuf>,
-    secrets: Option<Arc<dyn PluginSecretSource>>,
-) -> PluginBackend {
+pub fn build_plugin_backend(plugin: &LoadedPlugin, context: PluginBackendContext) -> PluginBackend {
+    let PluginBackendContext {
+        provenance,
+        state_dir,
+        global_root,
+        grants,
+        config,
+        program_paths,
+        secrets,
+    } = context;
     let declared = plugin
         .manifest
         .spec
@@ -149,8 +161,8 @@ pub fn build_plugin_backend(
     let spec = Arc::new(PluginBackendSpec {
         provenance,
         plugin_root: plugin.root.clone(),
-        state_dir: state_dir.to_path_buf(),
-        global_root: global_root.to_path_buf(),
+        state_dir,
+        global_root,
         command: plugin.backend_command.clone(),
         args: plugin.manifest.spec.backend.args.clone(),
         timeout_ms: plugin.manifest.spec.backend.timeout_ms,

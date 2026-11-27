@@ -25,7 +25,10 @@ use orbit_types::policy::DEFAULT_POLICY_NAME;
 use orbit_types::workspace::WorkspacePaths;
 
 use crate::base::actor::ActorIdentity;
-use crate::base::config::OrbitRuntimeSettings;
+use crate::base::config::{
+    CrewRuntimeSettings, DeliveryRuntimeSettings, HostRuntimeSettings, OrbitRuntimeSettings,
+    PathPolicySettings, WorkflowRuntimeSettings,
+};
 use crate::base::policy::OrbitPolicyContext;
 use crate::host::OrbitExecutionAssets;
 use crate::host::context::OrbitContext;
@@ -297,75 +300,88 @@ pub(crate) fn build_context_from_roots(
             codex_execution_policy,
         ),
         OrbitRuntimeSettings::new(
-            persistence,
-            actor,
-            pr_config,
-            runtime_config.pr.clone(),
-            workflow_base_branch,
-            runtime_config.resource_throttle.clone(),
-            runtime_config.auto_concurrency.clone(),
-            workflow_required_validation_commands,
-            runtime_config.snapshot.review_baseline_commands.clone(),
-            validation_env,
-            workflow_distributed_completion,
-            runtime_config.snapshot.task_pilot_freshness(),
-            crews,
-            runtime_config.human_crews.clone(),
-            default_crew,
-            runtime_config.complexity_crews.clone(),
-            runtime_config.snapshot.final_recovery_crews().to_vec(),
-            runtime_config.snapshot.purpose_crews(),
-            runtime_config.snapshot.type_complexity_crews(),
-            runtime_config.snapshot.auto_effort(),
-            runtime_config.snapshot.provider_limit_policy(),
-            operation,
-            runtime_config.snapshot.worker_containment(),
-            runtime_config
-                .snapshot
-                .machine()
-                .task_prefix
-                .unwrap_or_else(|| "ORB".to_string()),
-            runtime_config.snapshot.worktree_reclaim.clone(),
-            runtime_config.snapshot.worktree_reclaim_below_free_mib,
-            runtime_config.snapshot.mid_run_steering(),
-            runtime_config.tag_instructions.clone(),
-            runtime_config.review_skip_tags.clone(),
-            runtime_config.snapshot.workflow_tag_requires_labels.clone(),
-            crate::base::config::unlocked::UnlockedContextPaths::new(
-                &runtime_config.snapshot.workflow_unlocked_context_paths,
-            )?,
-            footprint_lock_modes,
-            runtime_config
-                .snapshot
-                .workflow_unlocked_path_validation_commands
-                .clone(),
-            runtime_config.snapshot.workflow_generated_paths.clone(),
-            runtime_config.snapshot.workflow_activity_timeouts.clone(),
-            runtime_config
-                .snapshot
-                .workflow_light_delivery_paths
-                .clone(),
-            runtime_config.snapshot.completion_hold.clone(),
-            (
-                orbit_common::fs::path_filter::PathFilter::new(
+            HostRuntimeSettings {
+                persistence,
+                actor,
+                machine_task_prefix: runtime_config
+                    .snapshot
+                    .machine()
+                    .task_prefix
+                    .unwrap_or_else(|| "ORB".to_string()),
+                machine_labels: runtime_config.snapshot.machine_labels.clone(),
+                resource_throttle: runtime_config.resource_throttle.clone(),
+                auto_concurrency: runtime_config.auto_concurrency.clone(),
+                worker_containment: runtime_config.snapshot.worker_containment(),
+                worktree_reclaim: runtime_config.snapshot.worktree_reclaim.clone(),
+                worktree_reclaim_below_free_mib: runtime_config
+                    .snapshot
+                    .worktree_reclaim_below_free_mib,
+            },
+            CrewRuntimeSettings {
+                crews,
+                human_crews: runtime_config.human_crews.clone(),
+                default_crew,
+                complexity_crews: runtime_config.complexity_crews.clone(),
+                final_recovery_crews: runtime_config.snapshot.final_recovery_crews().to_vec(),
+                purpose_crews: runtime_config.snapshot.purpose_crews(),
+                type_complexity_crews: runtime_config.snapshot.type_complexity_crews(),
+                auto_effort: runtime_config.snapshot.auto_effort(),
+                provider_limit: runtime_config.snapshot.provider_limit_policy(),
+            },
+            WorkflowRuntimeSettings {
+                workflow_base_branch,
+                workflow_required_validation_commands,
+                review_baseline_commands: runtime_config.snapshot.review_baseline_commands.clone(),
+                validation_env,
+                workflow_distributed_completion,
+                task_pilot_freshness: runtime_config.snapshot.task_pilot_freshness(),
+                operation,
+                mid_run_steering: runtime_config.snapshot.mid_run_steering(),
+                tag_instructions: runtime_config.tag_instructions.clone(),
+                review_skip_tags: runtime_config.review_skip_tags.clone(),
+                tag_label_requirements: runtime_config
+                    .snapshot
+                    .workflow_tag_requires_labels
+                    .clone(),
+                activity_timeouts: runtime_config.snapshot.workflow_activity_timeouts.clone(),
+                task_types: runtime_config.snapshot.task_types().to_vec(),
+                regression_layers: runtime_config.snapshot.regression_layers().to_vec(),
+            },
+            DeliveryRuntimeSettings {
+                pr_config,
+                pr_settings: runtime_config.pr.clone(),
+                light_delivery_paths: runtime_config
+                    .snapshot
+                    .workflow_light_delivery_paths
+                    .clone(),
+                completion_hold: runtime_config.snapshot.completion_hold.clone(),
+                decision_channel_enabled: runtime_config.snapshot.decision_channel_enabled,
+                experiments: runtime_config.snapshot.experiments(),
+            },
+            PathPolicySettings {
+                unlocked_context_paths: crate::base::config::unlocked::UnlockedContextPaths::new(
+                    &runtime_config.snapshot.workflow_unlocked_context_paths,
+                )?,
+                footprint_lock_modes,
+                unlocked_path_validation_commands: runtime_config
+                    .snapshot
+                    .workflow_unlocked_path_validation_commands
+                    .clone(),
+                generated_paths: runtime_config.snapshot.workflow_generated_paths.clone(),
+                diff_test_paths: orbit_common::fs::path_filter::PathFilter::new(
                     "workflow.test_paths",
                     &runtime_config.snapshot.workflow_test_paths,
                 )?,
-                orbit_common::fs::path_filter::PathFilter::new(
+                diff_non_code_paths: orbit_common::fs::path_filter::PathFilter::new(
                     "workflow.non_code_paths",
                     &runtime_config.snapshot.workflow_non_code_paths,
                 )?,
-                orbit_common::fs::path_filter::PathFilter::new(
+                diff_non_reviewable_paths: orbit_common::fs::path_filter::PathFilter::new(
                     "workflow.non_reviewable_paths",
                     &runtime_config.snapshot.workflow_non_reviewable_paths,
                 )?,
-            ),
-            runtime_config.snapshot.task_types().to_vec(),
-            runtime_config.snapshot.regression_layers().to_vec(),
-            runtime_config.snapshot.decision_channel_enabled,
-            lease_policy,
-            runtime_config.snapshot.experiments(),
-            runtime_config.snapshot.machine_labels.clone(),
+                lease_policy,
+            },
         ),
     ))
 }

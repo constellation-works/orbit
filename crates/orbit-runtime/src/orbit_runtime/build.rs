@@ -19,64 +19,45 @@ use crate::run::Run;
 use crate::run::worker_coordination;
 use crate::stored::Stored;
 
+/// Composition options for opening a [`RuntimeKernel`] from a resolved config.
+pub struct RuntimeOpenOptions<'a> {
+    pub binding: Option<WorkspaceRuntimeBinding>,
+    pub layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
+    pub host_lifetime: HostLifetime,
+    pub read_only: bool,
+    pub config_loader: RuntimeConfigLoader,
+    pub task_prefix: Option<&'a str>,
+}
+
+/// The parts assembled for one runtime open before they are sorted into layers.
+struct RuntimeLayerParts {
+    context: OrbitContext,
+    config_loader: RuntimeConfigLoader,
+    binding: Option<Arc<WorkspaceRuntimeBinding>>,
+    temp_dir: Option<Arc<builder::TempDir>>,
+    layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
+    host_resources: Arc<HostResourceMonitor>,
+    host_signals: Arc<dyn HostSignalProbe>,
+    task_pr_forge: Arc<dyn TaskPrForge>,
+    browser_kit_home: Option<std::path::PathBuf>,
+    worker_invocation: Option<Arc<orbit_types::tool::WorkerInvocation>>,
+}
+
 impl RuntimeKernel {
-    /// Inject a caller's environment snapshot into a test fixture.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_test_env(mut self, env: orbit_common::Env) -> Self {
-        let base = self.base_mut();
-        base.policy.execution_env_policy = base
-            .policy
-            .execution_env_policy
-            .clone()
-            .with_parent_env(&env);
-        self
-    }
-
-    /// Set the observation clock for deterministic CI-failure filing.
-    /// Without an override, filing uses the current UTC time.
-    pub fn with_ci_failure_time(mut self, now: chrono::DateTime<chrono::Utc>) -> Self {
-        self.base_mut().ci_failure_time = Some(now);
-        self
-    }
-
-    /// Only the accepting transport's authenticated facts may label artifact bytes.
-    pub fn artifact_origin(
-        &self,
-        session: &orbit_types::tool::ToolSessionContext,
-    ) -> Option<orbit_types::task::ExecutionLocation> {
-        if let Some(binding) = &session.worker_invocation {
-            return Some(binding.execution.clone());
-        }
-        // Remote caller labels do not identify artifact authorship. Until trusted
-        // claim propagation supplies execution provenance, keep remote origin unknown.
-        if session
-            .transport
-            .is_some_and(|transport| transport != orbit_types::tool::McpTransport::Local)
-        {
-            return None;
-        }
-        session
-            .process_machine_id
-            .as_deref()
-            .or_else(|| self.automation_machine_identity())
-            .map(|machine_id| orbit_types::task::ExecutionLocation {
-                machine_id: machine_id.into(),
-                machine_name: session.process_machine_name.clone(),
-            })
-    }
-
-    #[allow(clippy::too_many_arguments)]
     pub fn build_from_resolved_config(
         roots: &OrbitRuntimeRoots,
-        binding: Option<WorkspaceRuntimeBinding>,
         runtime_config: &orbit_config::ResolvedConfig,
-        layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
-        host_lifetime: HostLifetime,
-        read_only: bool,
-        config_loader: RuntimeConfigLoader,
-        task_prefix: Option<&str>,
         store: orbit_store::Store,
+        options: RuntimeOpenOptions<'_>,
     ) -> Result<Self, OrbitError> {
+        let RuntimeOpenOptions {
+            binding,
+            layout_report,
+            host_lifetime,
+            read_only,
+            config_loader,
+            task_prefix,
+        } = options;
         let access = if read_only {
             builder::StateAccess::ReadOnly
         } else {
@@ -127,89 +108,6 @@ impl RuntimeKernel {
         Ok(runtime)
     }
 
-    /// Whether this runtime opened Orbit's state without write access, for
-    /// observational routine status or a live generation it cannot record into.
-    /// Reads work; operations that would repair or finalize stored state must
-    /// be skipped rather than attempted. Tool audit appends use a separate
-    /// connection without granting writes to these runtime state handles.
-    pub fn is_write_free(&self) -> bool {
-        self.stored().write_free
-    }
-
-    fn finish_from_context(
-        context: OrbitContext,
-        binding: Option<WorkspaceRuntimeBinding>,
-        global_root: &Path,
-        layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
-        config_loader: RuntimeConfigLoader,
-    ) -> Result<Self, OrbitError> {
-        let host_resources = Arc::new(
-            HostResourceMonitor::new(
-                default_host_resource_probe(),
-                context.settings.resource_throttle().clone(),
-            )
-            .with_shared_history(global_root)
-            .sampled_in_background(),
-        );
-        let env = context.policy.execution_env_policy.process_env();
-        let worker_invocation = worker_coordination::restore_process_binding(env, global_root)?;
-        let task_pr_forge = default_task_pr_forge(env);
-        Ok(Self::from_layers(
-            context,
-            config_loader,
-            binding.map(Arc::new),
-            None,
-            layout_report,
-            host_resources,
-            default_host_signal_probe(),
-            task_pr_forge,
-            None,
-            worker_invocation,
-        ))
-    }
-
-    /// Sort one open's parts into the four layers, bottom up.
-    #[allow(clippy::too_many_arguments)]
-    fn from_layers(
-        context: OrbitContext,
-        config_loader: RuntimeConfigLoader,
-        binding: Option<Arc<WorkspaceRuntimeBinding>>,
-        temp_dir: Option<Arc<builder::TempDir>>,
-        layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
-        host_resources: Arc<HostResourceMonitor>,
-        host_signals: Arc<dyn HostSignalProbe>,
-        task_pr_forge: Arc<dyn TaskPrForge>,
-        browser_kit_home: Option<std::path::PathBuf>,
-        worker_invocation: Option<Arc<orbit_types::tool::WorkerInvocation>>,
-    ) -> Self {
-        let base = Base::new(
-            context.paths,
-            context.policy,
-            context.settings,
-            config_loader,
-            binding,
-            worker_invocation,
-            temp_dir,
-        );
-        let stored = Stored::new(base, context.stores, layout_report);
-        let host = Host::new(
-            stored,
-            context.execution,
-            host_resources,
-            host_signals,
-            task_pr_forge,
-            browser_kit_home,
-        );
-        Self {
-            run: Run::new(host),
-            orphan_reconcile_hook: Arc::new(Mutex::new(None)),
-            #[cfg(any(test, feature = "test-support"))]
-            transition_read_hook: Arc::new(Mutex::new(None)),
-            #[cfg(any(test, feature = "test-support"))]
-            transition_run_hook: Arc::new(Mutex::new(None)),
-        }
-    }
-
     pub fn build_in_memory_from_resolved_config(
         data_root: &Path,
         workspace_root: &Path,
@@ -252,22 +150,157 @@ impl RuntimeKernel {
             .with_shared_history(data_root)
             .sampled_in_background(),
         );
-        Ok(Self::from_layers(
+        Ok(Self::from_layers(RuntimeLayerParts {
             context,
             config_loader,
-            Some(Arc::new(binding)),
-            Some(Arc::new(temp_dir)),
-            orbit_store::migrate::layout::LayoutUpgradeReport::default(),
+            binding: Some(Arc::new(binding)),
+            temp_dir: Some(Arc::new(temp_dir)),
+            layout_report: orbit_store::migrate::layout::LayoutUpgradeReport::default(),
             host_resources,
             // An in-memory runtime is not bound to a host lifecycle.
-            Arc::new(FixedHostSignals::none()),
+            host_signals: Arc::new(FixedHostSignals::none()),
             // Nor is it bound to a repository whose PRs it could close.
-            Arc::new(NoTaskPrForge),
+            task_pr_forge: Arc::new(NoTaskPrForge),
             // An in-memory runtime reads no user's browser kit: its data root
             // holds none.
-            Some(data_root.to_path_buf()),
-            None,
-        ))
+            browser_kit_home: Some(data_root.to_path_buf()),
+            worker_invocation: None,
+        }))
+    }
+
+    fn finish_from_context(
+        context: OrbitContext,
+        binding: Option<WorkspaceRuntimeBinding>,
+        global_root: &Path,
+        layout_report: orbit_store::migrate::layout::LayoutUpgradeReport,
+        config_loader: RuntimeConfigLoader,
+    ) -> Result<Self, OrbitError> {
+        let host_resources = Arc::new(
+            HostResourceMonitor::new(
+                default_host_resource_probe(),
+                context.settings.resource_throttle().clone(),
+            )
+            .with_shared_history(global_root)
+            .sampled_in_background(),
+        );
+        let env = context.policy.execution_env_policy.process_env();
+        let worker_invocation = worker_coordination::restore_process_binding(env, global_root)?;
+        let task_pr_forge = default_task_pr_forge(env);
+        Ok(Self::from_layers(RuntimeLayerParts {
+            context,
+            config_loader,
+            binding: binding.map(Arc::new),
+            temp_dir: None,
+            layout_report,
+            host_resources,
+            host_signals: default_host_signal_probe(),
+            task_pr_forge,
+            browser_kit_home: None,
+            worker_invocation,
+        }))
+    }
+
+    /// Sort one open's parts into the four layers, bottom up.
+    fn from_layers(parts: RuntimeLayerParts) -> Self {
+        let RuntimeLayerParts {
+            context,
+            config_loader,
+            binding,
+            temp_dir,
+            layout_report,
+            host_resources,
+            host_signals,
+            task_pr_forge,
+            browser_kit_home,
+            worker_invocation,
+        } = parts;
+        let base = Base::new(
+            context.paths,
+            context.policy,
+            context.settings,
+            config_loader,
+            binding,
+            worker_invocation,
+            temp_dir,
+        );
+        let stored = Stored::new(base, context.stores, layout_report);
+        let host = Host::new(
+            stored,
+            context.execution,
+            host_resources,
+            host_signals,
+            task_pr_forge,
+            browser_kit_home,
+        );
+        Self {
+            run: Run::new(host),
+            orphan_reconcile_hook: Arc::new(Mutex::new(None)),
+            #[cfg(any(test, feature = "test-support"))]
+            transition_read_hook: Arc::new(Mutex::new(None)),
+            #[cfg(any(test, feature = "test-support"))]
+            transition_run_hook: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Inject a caller's environment snapshot into a test fixture.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_test_env(mut self, env: orbit_common::Env) -> Self {
+        let base = self.base_mut();
+        base.policy.execution_env_policy = base
+            .policy
+            .execution_env_policy
+            .clone()
+            .with_parent_env(&env);
+        self
+    }
+
+    /// Set the observation clock for deterministic CI-failure filing.
+    /// Without an override, filing uses the current UTC time.
+    pub fn with_ci_failure_time(mut self, now: chrono::DateTime<chrono::Utc>) -> Self {
+        self.base_mut().ci_failure_time = Some(now);
+        self
+    }
+
+    /// Shorten the owner settlement budget in deterministic boundary fixtures.
+    #[cfg(feature = "test-support")]
+    pub fn with_claim_known_red_budget(mut self, budget: std::time::Duration) -> Self {
+        self.host_mut().claim_known_red_budget = budget;
+        self
+    }
+
+    /// Only the accepting transport's authenticated facts may label artifact bytes.
+    pub fn artifact_origin(
+        &self,
+        session: &orbit_types::tool::ToolSessionContext,
+    ) -> Option<orbit_types::task::ExecutionLocation> {
+        if let Some(binding) = &session.worker_invocation {
+            return Some(binding.execution.clone());
+        }
+        // Remote caller labels do not identify artifact authorship. Until trusted
+        // claim propagation supplies execution provenance, keep remote origin unknown.
+        if session
+            .transport
+            .is_some_and(|transport| transport != orbit_types::tool::McpTransport::Local)
+        {
+            return None;
+        }
+        session
+            .process_machine_id
+            .as_deref()
+            .or_else(|| self.automation_machine_identity())
+            .map(|machine_id| orbit_types::task::ExecutionLocation {
+                machine_id: machine_id.into(),
+                machine_name: session.process_machine_name.clone(),
+            })
+    }
+
+    /// Whether this runtime opened Orbit's state without write access, for
+    /// observational routine status or a live generation it cannot record into.
+    /// Reads work; operations that would repair or finalize stored state must
+    /// be skipped rather than attempted. Tool audit appends use a separate
+    /// connection without granting writes to these runtime state handles.
+    pub fn is_write_free(&self) -> bool {
+        self.stored().write_free
     }
 
     /// Install a one-shot hook run at the start of the next orphaned-leaf
@@ -291,13 +324,6 @@ impl RuntimeKernel {
         if let Some(hook) = hook {
             hook();
         }
-    }
-
-    /// Shorten the owner settlement budget in deterministic boundary fixtures.
-    #[cfg(feature = "test-support")]
-    pub fn with_claim_known_red_budget(mut self, budget: std::time::Duration) -> Self {
-        self.host_mut().claim_known_red_budget = budget;
-        self
     }
 
     /// Outcome of the workspace-layout pre-flight that ran when this runtime

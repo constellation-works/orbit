@@ -13,7 +13,7 @@ use orbit_types::plugin::{PluginGrantSet, PluginProvenance, PluginSandbox, plugi
 use super::profile::{PluginRenderedProfile, render_backend_profile};
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin::backend::build_plugin_backend;
+use crate::runtime::plugin::backend::{PluginBackendContext, build_plugin_backend};
 use crate::runtime::plugin::config::plugin_config_section;
 use crate::runtime::plugin::paths::plugin_state_dir;
 use crate::runtime::plugin::requirements::{host_api_deprecation, unmet_requirement};
@@ -65,26 +65,28 @@ pub fn validate_plugin_dir_for_workspace(
     let grants = PluginGrantSet::from_grants(plugin.manifest.required_grants());
     let backend = build_plugin_backend(
         &plugin,
-        PluginProvenance {
-            name: plugin.namespace().to_string(),
-            version: plugin.manifest.metadata.version.clone(),
-            manifest_digest: plugin.manifest_digest.clone(),
-            grants: grants.to_recorded(),
+        PluginBackendContext {
+            provenance: PluginProvenance {
+                name: plugin.namespace().to_string(),
+                version: plugin.manifest.metadata.version.clone(),
+                manifest_digest: plugin.manifest_digest.clone(),
+                grants: grants.to_recorded(),
+            },
+            state_dir: plugin_state_dir(&global_root, plugin.namespace()),
+            global_root,
+            grants,
+            config: plugin_config_section(&plugin, &config.plugins),
+            // No operator has consented yet, so the programs resolve against this
+            // process's `PATH`, exactly as `orbit plugin enable` from here would
+            // record them.
+            program_paths: resolve_declared_programs(
+                &plugin.manifest.spec.requires.programs,
+                runtime.execution_env_policy().process_env().path(),
+            )
+            .0,
+            // Validation never calls the backend, so nothing is read.
+            secrets: None,
         },
-        &plugin_state_dir(&global_root, plugin.namespace()),
-        &global_root,
-        grants,
-        plugin_config_section(&plugin, &config.plugins),
-        // No operator has consented yet, so the programs resolve against this
-        // process's `PATH`, exactly as `orbit plugin enable` from here would
-        // record them.
-        resolve_declared_programs(
-            &plugin.manifest.spec.requires.programs,
-            runtime.execution_env_policy().process_env().path(),
-        )
-        .0,
-        // Validation never calls the backend, so nothing is read.
-        None,
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
     let rendered = workspace

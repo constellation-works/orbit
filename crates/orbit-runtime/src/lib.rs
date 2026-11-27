@@ -106,6 +106,7 @@ pub use base::role::Role;
 pub use host::Host;
 pub use orbit_runtime::{
     AdmissionCrewSettings, HostLifetime, OrbitRuntimeRoots, RuntimeConfigLoader, RuntimeKernel,
+    RuntimeOpenOptions,
 };
 pub use run::Run;
 pub use run::transport::{
