@@ -8,12 +8,12 @@ use orbit_common::OrbitError;
 use orbit_types::task::{ReservationOwnerMetadata, Task, TaskStatus};
 
 use super::super::TaskCommitBoundary;
-use super::super::lifecycle::{codec, fresh_offer_history};
-use super::super::selection::{AdmissionSnapshot, DependencyReach, Screen};
 use super::{
     ADMISSION_RESERVATION_TTL_SECONDS, AdmissionCall, RECEIPT_KIND, StoredReceipt,
     admission_refusal, digest, receipt_key,
 };
+use crate::boundary::coordination::lifecycle::{codec, fresh_offer_history};
+use crate::boundary::coordination::selection::{AdmissionSnapshot, DependencyReach, Screen};
 use crate::boundary::v2::{task_comment_from_row, task_from_bundle, task_history_from_events};
 use crate::contract::*;
 
@@ -96,6 +96,40 @@ impl TaskCommitBoundary {
         }
         self.with_host_admission(|| admit(DependencyReach::Host))?
             .ok_or_else(|| OrbitError::Store("a host-wide admission refused a dependency".into()))
+    }
+
+    pub(in crate::boundary::coordination) fn admission_claim_id(
+        &self,
+        receipt_key: &str,
+    ) -> Result<String, OrbitError> {
+        Ok(format!(
+            "claim-{}",
+            digest(&(&self.workspace_id, receipt_key))?
+        ))
+    }
+
+    pub(in crate::boundary::coordination) fn admission_reservation_params(
+        &self,
+        orbit_dir: &Path,
+        task_id: &str,
+        footprint: &[String],
+        actor: &str,
+        claim_id: &str,
+    ) -> TaskReservationReserveParams {
+        TaskReservationReserveParams {
+            workspace_orbit_dir: orbit_dir.to_string_lossy().into_owned(),
+            workspace_id: Some(self.workspace_id.clone()),
+            task_ids: vec![task_id.to_string()],
+            requested_files: footprint.to_vec(),
+            stored_files: footprint.to_vec(),
+            actor: actor.to_string(),
+            ttl_seconds: ADMISSION_RESERVATION_TTL_SECONDS,
+            owner_run_id: None,
+            owner_metadata: Some(ReservationOwnerMetadata {
+                claim_id: Some(claim_id.to_string()),
+                ..Default::default()
+            }),
+        }
     }
 
     fn admit_locked(
@@ -360,56 +394,22 @@ impl TaskCommitBoundary {
         self.lookup_admission(identity, &request.request_id)
             .map(Some)
     }
-
-    pub(in super::super) fn admission_claim_id(
-        &self,
-        receipt_key: &str,
-    ) -> Result<String, OrbitError> {
-        Ok(format!(
-            "claim-{}",
-            digest(&(&self.workspace_id, receipt_key))?
-        ))
-    }
-
-    pub(in super::super) fn admission_reservation_params(
-        &self,
-        orbit_dir: &Path,
-        task_id: &str,
-        footprint: &[String],
-        actor: &str,
-        claim_id: &str,
-    ) -> TaskReservationReserveParams {
-        TaskReservationReserveParams {
-            workspace_orbit_dir: orbit_dir.to_string_lossy().into_owned(),
-            workspace_id: Some(self.workspace_id.clone()),
-            task_ids: vec![task_id.to_string()],
-            requested_files: footprint.to_vec(),
-            stored_files: footprint.to_vec(),
-            actor: actor.to_string(),
-            ttl_seconds: ADMISSION_RESERVATION_TTL_SECONDS,
-            owner_run_id: None,
-            owner_metadata: Some(ReservationOwnerMetadata {
-                claim_id: Some(claim_id.to_string()),
-                ..Default::default()
-            }),
-        }
-    }
 }
 
-pub(in super::super) struct ClaimReceiptRowsInput<'a> {
-    pub(in super::super) identity: &'a AdmissionIdentity,
-    pub(in super::super) request: &'a AdmissionRequest,
-    pub(in super::super) task: &'a Task,
-    pub(in super::super) footprint: &'a [String],
-    pub(in super::super) receipt: &'a AdmissionReceipt,
-    pub(in super::super) receipt_key: &'a str,
-    pub(in super::super) claim_id: &'a str,
-    pub(in super::super) repair: Option<&'a ClaimRepair>,
-    pub(in super::super) resume_candidate: Option<&'a ClaimCandidateRef>,
-    pub(in super::super) affinity: Option<AdmissionAffinity>,
+pub(in crate::boundary::coordination) struct ClaimReceiptRowsInput<'a> {
+    pub(in crate::boundary::coordination) identity: &'a AdmissionIdentity,
+    pub(in crate::boundary::coordination) request: &'a AdmissionRequest,
+    pub(in crate::boundary::coordination) task: &'a Task,
+    pub(in crate::boundary::coordination) footprint: &'a [String],
+    pub(in crate::boundary::coordination) receipt: &'a AdmissionReceipt,
+    pub(in crate::boundary::coordination) receipt_key: &'a str,
+    pub(in crate::boundary::coordination) claim_id: &'a str,
+    pub(in crate::boundary::coordination) repair: Option<&'a ClaimRepair>,
+    pub(in crate::boundary::coordination) resume_candidate: Option<&'a ClaimCandidateRef>,
+    pub(in crate::boundary::coordination) affinity: Option<AdmissionAffinity>,
 }
 
-pub(in super::super) fn admission_placeholder_rows(
+pub(in crate::boundary::coordination) fn admission_placeholder_rows(
     receipt_key: &str,
     claim_id: &str,
 ) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
@@ -419,7 +419,7 @@ pub(in super::super) fn admission_placeholder_rows(
     ])
 }
 
-pub(in super::super) fn build_claim_receipt_rows(
+pub(in crate::boundary::coordination) fn build_claim_receipt_rows(
     input: &ClaimReceiptRowsInput<'_>,
     reservation: Option<&TaskReservationReserveResult>,
 ) -> Result<Vec<TaskCoordinationRow>, OrbitError> {

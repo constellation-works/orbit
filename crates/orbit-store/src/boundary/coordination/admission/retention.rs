@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 
 use super::super::Section;
-use super::super::lifecycle::codec;
 use super::{RECEIPT_KIND, StoredReceipt, TaskCommitBoundary, digest};
+use crate::boundary::coordination::lifecycle::codec;
 use crate::contract::{AdmissionReceiptMaintenance, AdmissionReceiptStorage, ExecutionClaimPhase};
 use orbit_common::OrbitError;
 

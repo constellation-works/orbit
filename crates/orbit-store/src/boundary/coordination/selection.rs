@@ -235,7 +235,8 @@ impl Screen<'_> {
     }
 
     /// Screen `task` against executor OS, labels, browser kit, crew, and capacity.
-    /// Returns `true` if eligible; otherwise records the diagnostic on `receipt` and returns `false`.
+    /// Returns `true` if eligible; otherwise records the diagnostic on
+    /// `receipt` and returns `false`.
     pub(super) fn screen_executor_capability(
         &self,
         task: &Task,

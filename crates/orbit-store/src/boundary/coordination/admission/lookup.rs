@@ -3,8 +3,8 @@
 use orbit_common::OrbitError;
 
 use super::super::TaskCommitBoundary;
-use super::super::lifecycle::codec;
 use super::{RECEIPT_KIND, StoredReceipt, receipt_key};
+use crate::boundary::coordination::lifecycle::codec;
 use crate::contract::*;
 
 impl TaskCommitBoundary {
