@@ -28,6 +28,7 @@ use super::holds::{
 };
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
+use crate::application::task::pilot::promotion::{footprint_marker, warning_text};
 
 /// The trusted history events an operator decision on a hold records.
 const OPERATOR_VALIDATION_RESOLVED: &str = "operator_validation_resolved";
@@ -247,7 +248,7 @@ impl OrbitRuntime {
             // The host's footprint marker holds like a finding: the task's
             // selectors are not a verified footprint. An advisory warning
             // carries no marker, so it holds nothing here.
-            if let Some(finding) = super::super::promotion::footprint_marker(assessment) {
+            if let Some(finding) = footprint_marker(assessment) {
                 return Ok(Some(PilotAdmissionHold::FootprintUnresolved(
                     footprint_hold_detail(finding),
                 )));
@@ -941,8 +942,8 @@ fn operator_overrode(history: &[TaskHistoryEntry], operation_id: &str) -> bool {
 /// What an operator reads for a footprint hold: the finding's own text, then
 /// the ways to release it.
 fn footprint_hold_detail(finding: &Value) -> String {
-    let text = super::super::promotion::warning_text(finding)
-        .unwrap_or("The pilot could not establish the task's lock footprint.");
+    let text =
+        warning_text(finding).unwrap_or("The pilot could not establish the task's lock footprint.");
     format!(
         "{text} Dispatch is held until a new assessment establishes a bounded footprint, or an operator records `task-pilot-admission: approve-anyway` or `task-pilot-admission: clear` as a comment's first line. A later assessment supersedes that decision."
     )

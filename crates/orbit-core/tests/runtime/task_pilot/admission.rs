@@ -816,7 +816,9 @@ fn assess_unresolved_footprint(workspace: &Workspace, task: &Task) {
         "selectors",
         json!({
             "confidence": "medium",
-            "evidence_gaps": ["predecessor ledger artifact unreadable under the pilot's read authority"],
+            "evidence_gaps": [
+                "predecessor ledger artifact unreadable under the pilot's read authority"
+            ],
             "utility_warnings": [{
                 "text": "Footprint unresolved: the predecessor ledger was unread.",
                 "holds_promotion": true,
