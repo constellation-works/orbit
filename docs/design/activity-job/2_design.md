@@ -331,6 +331,10 @@ transport unavailability while every task being admitted is still in backlog.
 Those tasks remain there for a later admission. If a task is already in progress,
 ordinary run failure handling applies (or claim settlement for a claimed leaf)
 instead of an unresumable hold.
+`delivery_dependency_not_delivered` is raised at the same boundary, when a done
+dependency's commits are on other refs than the base and every task is still in
+backlog; backlog selection withholds such a task (`dependency_not_delivered`)
+until they reach the base.
 Authentication, permission and missing-ref failures keep their ordinary failure
 behavior. The named outcomes and exclusions are in
 [delivery refusals](../../CONFIG.md#delivery-refusals-are-held).

@@ -70,6 +70,7 @@ pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
         | DeliveryRefusal::LandingConflict
         | DeliveryRefusal::BaseChaseExhausted
         | DeliveryRefusal::OriginUnavailable
+        | DeliveryRefusal::DependencyNotDelivered
         | DeliveryRefusal::CheckRepairActivityAbsent
         | DeliveryRefusal::ReviewBudgetExhausted
         | DeliveryRefusal::VisualNotEstablished

@@ -50,13 +50,6 @@ pub mod test_support;
 pub use context::{Dispatch, HostEnvironment, Recovery, ReviewGate, RunLifecycle, RunSettings};
 pub use executor::automation::vcs::claim::CandidateCheckout;
 
-#[cfg(test)]
-#[path = "../tests/support/git.rs"]
-mod git_test_support;
-
-#[cfg(test)]
-mod tests;
-
 pub use activity_job::{
     DispatchError, DispatchInvocationTrace, DispatchOutcome, JobOutcome,
     LinuxRuntimeWriteAuthority, ResolvedCliExecutor, ResolvedSandbox, ResolvedShellExecutor,
@@ -104,8 +97,8 @@ pub use executor::automation::vcs::{
     compose_squash_merge_message, fetch_remote_base, judge_light_delivery,
     judge_light_delivery_with_key, recorded_baseline_hold_status, review_skip_decision,
     run_deferral_probe, run_review_skip_guard, run_worktree_has_reclaim_output, run_worktree_paths,
-    validate_claim_new_paths, verify_claimed_known_red, verify_claimed_known_red_base,
-    verify_refreshed_head_from_base,
+    undelivered_dependency_for_admission, validate_claim_new_paths, verify_claimed_known_red,
+    verify_claimed_known_red_base, verify_refreshed_head_from_base,
 };
 pub use executor::automation::vcs::{MergedBaseRefresh, verify_merged_base_refresh};
 pub use executor::automation::vcs::{PR_MERGE_ATTRIBUTION_FIELD, PRIVATE_VCS_PR_MERGE};
@@ -114,3 +107,10 @@ pub use orbit_agent::provider_supports_continuity;
 pub use executor::automation::vcs::completion_hold::{
     candidate_commit_completion_hold, candidate_completion_hold,
 };
+
+#[cfg(test)]
+#[path = "../tests/support/git.rs"]
+mod git_test_support;
+
+#[cfg(test)]
+mod tests;

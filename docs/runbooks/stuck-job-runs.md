@@ -189,6 +189,12 @@ backlog task through a new run; do not resume the held run. If a task is already
 ordinary run failure handling applies (or claim settlement for a claimed leaf) instead of
 leaving it in an unresumable hold.
 
+The same rule holds `worktree_setup` as `delivery_dependency_not_delivered` when a
+dependency is `done` but its commits exist only on other refs than the base, such as a
+forced `done` before its pull request merged. Backlog selection also withholds that task
+as `dependency_not_delivered`, so merge the dependency's pull request; the next admission
+runs the task. A task already in progress still fails.
+
 Completion and owner landing also end `held` on typed parked decisions: a
 reported head changed, a repair is already dispatched, the PR is draft or
 closed, the task refuses promotion, owner landing needs a validated conflict

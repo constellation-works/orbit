@@ -19,13 +19,14 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use orbit_common::{DependencyNotDelivered, OrbitError};
+use orbit_common::{DependencyNotDelivered, Env, OrbitError};
 use orbit_types::task::{TaskStatus, archived_task_completed_before_archive};
 use serde_json::Value;
 
 use crate::context::{RunLifecycle, RuntimeHostProcessEnvironment};
 
-use super::super::delivery_marker::commits_matching;
+use crate::executor::automation::vcs::delivery_marker::commits_matching;
+use crate::executor::automation::vcs::git::{BaseSyncMode, git_output, normalize_base_branch};
 
 /// How many delivery commits to name per undelivered dependency. Enough to
 /// identify the branch to land; the message stays readable.
@@ -151,6 +152,51 @@ pub(in crate::executor::automation) fn ensure_dependencies_delivered_into_base<
                 detail: undelivered_detail(base_ref, &undelivered),
             },
         ))),
+    }
+}
+
+/// The read-only form of `ensure_dependencies_delivered_into_base` for backlog
+/// selection: the first done dependency of `task_id` whose commits exist only
+/// on other refs than `base`, or `None` when every dependency is delivered.
+///
+/// `base` is a branch name, read as the local branch for [`BaseSyncMode::Local`]
+/// and as the remote-tracking ref otherwise. Nothing is fetched here: the
+/// caller decides whether to refresh a stale tracking ref and ask again. A base
+/// that does not resolve yields `None`, because selection must not guess and
+/// `worktree_setup` stays the gate that refuses.
+pub fn undelivered_dependency_for_admission<
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+>(
+    host: &H,
+    process_env: &Env,
+    repo_root: &Path,
+    task_id: &str,
+    base: &str,
+    sync_mode: BaseSyncMode,
+) -> Result<Option<DependencyNotDelivered>, OrbitError> {
+    let Ok(branch) = normalize_base_branch(base) else {
+        return Ok(None);
+    };
+    let base_ref = match sync_mode {
+        BaseSyncMode::Local => format!("refs/heads/{branch}"),
+        BaseSyncMode::Remote => format!("refs/remotes/origin/{branch}"),
+    };
+    let Ok(base_sha) = git_output(
+        process_env,
+        repo_root,
+        &["rev-parse", "--verify", &format!("{base_ref}^{{commit}}")],
+    ) else {
+        return Ok(None);
+    };
+    match ensure_dependencies_delivered_into_base(
+        host,
+        repo_root,
+        &[task_id.to_string()],
+        &base_ref,
+        &base_sha,
+    ) {
+        Err(OrbitError::DependencyNotDelivered(detail)) => Ok(Some(*detail)),
+        result => result.map(|()| None),
     }
 }
 

@@ -176,6 +176,12 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// admitted that has not started. It waits until that holder leaves the
     /// lane; `detail` names the holder.
     PerfLaneBusy,
+    /// A dependency of the task is `done`, but its commits exist only on other
+    /// refs than the base this delivery cuts from. Dispatching it would fail
+    /// `worktree_setup` on every pass; the task waits in `backlog` and the hold
+    /// lifts by itself once the dependency's commits reach the base. `detail`
+    /// names the dependency and the commits.
+    DependencyNotDelivered,
 }
 
 /// The overlap `orbit task eligible` reports, so a conflict means the same

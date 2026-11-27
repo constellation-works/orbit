@@ -45,6 +45,12 @@ pub enum DeliveryRefusal {
     /// after transport recovers. A task already in progress follows ordinary
     /// run failure handling, or claim settlement for a claimed leaf, instead.
     OriginUnavailable,
+    /// `worktree_setup` found a `done` dependency whose commits exist only on
+    /// other refs, not in the base the run is cut from, while every task being
+    /// admitted was still in backlog. They remain there; admission admits them
+    /// once the dependency's commits reach the base. A task already in
+    /// progress follows ordinary run failure handling instead.
+    DependencyNotDelivered,
     /// An in-budget `--auto-fix` check repair was admitted, and the job has
     /// no `step_failure_recovery` to run it. The run holds; the repair stays
     /// uncommitted. Spending the repair budget is still a failure.
@@ -96,6 +102,7 @@ impl DeliveryRefusal {
             Self::CheckEvidenceInconclusive => "delivery_check_evidence_inconclusive",
             Self::ForgeObservationUnavailable => "delivery_forge_observation_unavailable",
             Self::OriginUnavailable => "delivery_origin_unavailable",
+            Self::DependencyNotDelivered => "delivery_dependency_not_delivered",
             Self::VisualNotEstablished => "delivery_visual_not_established",
             Self::VisualReviewUnresolved => "delivery_visual_review_unresolved",
             Self::CheckRepairActivityAbsent => "delivery_check_repair_activity_absent",
@@ -125,6 +132,7 @@ impl DeliveryRefusal {
             "delivery_check_evidence_inconclusive" => Some(Self::CheckEvidenceInconclusive),
             "delivery_forge_observation_unavailable" => Some(Self::ForgeObservationUnavailable),
             "delivery_origin_unavailable" => Some(Self::OriginUnavailable),
+            "delivery_dependency_not_delivered" => Some(Self::DependencyNotDelivered),
             "delivery_visual_not_established" => Some(Self::VisualNotEstablished),
             "delivery_visual_review_unresolved" => Some(Self::VisualReviewUnresolved),
             "delivery_check_repair_activity_absent" => Some(Self::CheckRepairActivityAbsent),
@@ -184,6 +192,15 @@ impl DeliveryRefusal {
             ),
             Self::OriginUnavailable => {
                 "Wait for the origin to recover; a later normal admission retries the work. A task already in progress follows ordinary run failure handling instead.".into()
+            }
+            Self::DependencyNotDelivered => {
+                concat!(
+                    "Merge or land the dependency's pull request into the base; a later normal ",
+                    "admission then runs the task. Use `--ignore-dependency-delivery` only when ",
+                    "the dependency's work reached the base under another commit message. A task ",
+                    "already in progress follows ordinary run failure handling instead."
+                )
+                .into()
             }
             Self::CheckRepairActivityAbsent => {
                 "Configure step_failure_recovery and start a new authorized delivery run on the same head to admit another repair attempt while per-PR budget remains (this held run is terminal), or repair and publish a new head, then start a new delivery attempt. Exhausting the per-PR budget fails the run.".into()

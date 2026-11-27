@@ -11,6 +11,7 @@ mod registration;
 mod rescue;
 mod setup;
 
+pub use dependency_delivery::undelivered_dependency_for_admission;
 pub use identity::WORKTREE_IDENTITY_INPUT_KEYS;
 pub(in crate::executor::automation) use identity::WorktreeIdentity;
 use identity::require_run_id;

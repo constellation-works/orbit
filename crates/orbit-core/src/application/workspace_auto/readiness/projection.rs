@@ -167,6 +167,9 @@ pub(super) fn project_readiness_tasks(
                     | BacklogTaskExclusionReason::AwaitingFootprint
                     | BacklogTaskExclusionReason::AwaitingExclusiveSlot
                     | BacklogTaskExclusionReason::PerfLaneBusy
+                    // Lifts by itself once the dependency's commits reach the
+                    // base; the detail names the dependency and the commits.
+                    | BacklogTaskExclusionReason::DependencyNotDelivered
                     | BacklogTaskExclusionReason::DeliveryJobUnavailable
                     // The one exclusion no later drain clears by itself, so
                     // readiness repeats the repair the drain recorded rather
