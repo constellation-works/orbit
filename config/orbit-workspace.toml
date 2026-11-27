@@ -86,7 +86,7 @@ name = "config"
 prefixes = [
   "crates/orbit-config/",
   "crates/orbit-registry/",
-  "crates/orbit-core/src/application/config/",
+  "crates/orbit-core/src/app/config/",
 ]
 
 [[workflow.regression_layers]]
