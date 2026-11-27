@@ -17,10 +17,13 @@ use orbit_common::{Env, OrbitError};
 
 use orbit_common::env_vars::ORBIT_RELEASE_PUBLIC_KEY_FILE as PUBLIC_KEY_FILE_ENV;
 use orbit_common::env_vars::ORBIT_RELEASE_TRUSTED_KEYS_FILE as TRUSTED_KEYS_FILE_ENV;
-use orbit_common::env_vars::ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE as TRUSTED_KEYS_ACK_ENV;
+use orbit_common::env_vars::ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE;
+
+const TRUSTED_KEYS_ACK_ENV: &str = ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE;
 
 /// Same ceiling as other release metadata. A trust file is a handful of records.
 const MAX_TRUST_FILE_BYTES: u64 = 64 * 1024;
+
 const MAX_PEM_BYTES: u64 = 64 * 1024;
 
 /// Keys this process should accept for a release manifest.
@@ -28,7 +31,8 @@ const MAX_PEM_BYTES: u64 = 64 * 1024;
 /// The returned slice is `'static` because signature verification holds the
 /// trust set for the rest of the process. An override is leaked once per
 /// process; `orbit update` loads it a single time.
-pub(super) fn trusted_keys_from_env(env: &Env) -> Result<&'static [TrustedReleaseKey], OrbitError> {
+/// Resolve release trust from the captured environment.
+pub fn trusted_keys_from_env(env: &Env) -> Result<&'static [TrustedReleaseKey], OrbitError> {
     let public_override = env
         .orbit_release_public_key_file()
         .is_some_and(|value| !value.is_empty());

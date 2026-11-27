@@ -2098,7 +2098,6 @@ version = "0.54.0"
 dependencies = [
  "chrono",
  "flate2",
- "fs2",
  "libc",
  "orbit-common",
  "orbit-config",

@@ -21,6 +21,17 @@ pub const EXIT_NEEDS_RECOVERY: i32 = 4;
 /// Exit code for `--check` when a newer release is available.
 pub const EXIT_UPDATE_AVAILABLE: i32 = 3;
 
+const MIGRATE_STEP: &[&str] = &["migrate", "--confirm"];
+
+/// The host-wide step that keeps the OS clock unit naming the installed
+/// binary. Runs last, and as the replacement executable, so the unit it writes
+/// names the binary this update just installed.
+const CLOCK_STEP: &[&str] = &["clock", "repair"];
+
+/// Host preparation run by the replacement executable, which re-installs the
+/// bundled Bubblewrap when it is older than the one the new release pins.
+const BUNDLED_BWRAP_STEP: &[&str] = &["init", "--host-prerequisites-only", "--non-interactive"];
+
 /// How an update run ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,6 +111,17 @@ pub struct UpdateReport {
     pub recovery: Option<String>,
 }
 
+impl UpdateReport {
+    /// Process exit code for this outcome.
+    pub fn exit_code(&self) -> i32 {
+        match self.outcome {
+            UpdateOutcome::AlreadyCurrent | UpdateOutcome::Updated => 0,
+            UpdateOutcome::UpdateAvailable => EXIT_UPDATE_AVAILABLE,
+            UpdateOutcome::NeedsRecovery => EXIT_NEEDS_RECOVERY,
+        }
+    }
+}
+
 /// A live process that hands over to the installed candidate.
 #[derive(Debug, Clone, Serialize)]
 pub struct HandoverProcess {
@@ -136,17 +158,6 @@ impl std::fmt::Display for HandoverProcess {
     }
 }
 
-impl UpdateReport {
-    /// Process exit code for this outcome.
-    pub fn exit_code(&self) -> i32 {
-        match self.outcome {
-            UpdateOutcome::AlreadyCurrent | UpdateOutcome::Updated => 0,
-            UpdateOutcome::UpdateAvailable => EXIT_UPDATE_AVAILABLE,
-            UpdateOutcome::NeedsRecovery => EXIT_NEEDS_RECOVERY,
-        }
-    }
-}
-
 /// Run the convergence steps, holding `pins` through them, and settle the
 /// outcome.
 pub(super) fn finish(
@@ -179,15 +190,6 @@ pub(super) fn finish(
     ));
     report
 }
-
-/// The host-wide step that keeps the OS clock unit naming the installed
-/// binary. Runs last, and as the replacement executable, so the unit it writes
-/// names the binary this update just installed.
-const CLOCK_STEP: &[&str] = &["clock", "repair"];
-
-/// Host preparation run by the replacement executable, which re-installs the
-/// bundled Bubblewrap when it is older than the one the new release pins.
-const BUNDLED_BWRAP_STEP: &[&str] = &["init", "--host-prerequisites-only", "--non-interactive"];
 
 /// Migrate `.orbit/` state, reconcile managed assets, then repoint the host
 /// clock unit — in that order — and refresh the bundled Bubblewrap when this
@@ -276,8 +278,6 @@ fn workspace_steps(
     steps
 }
 
-const MIGRATE_STEP: &[&str] = &["migrate", "--confirm"];
-
 /// Run `migrate --confirm` with every pin its layout migration fences turned
 /// into that exclusive fence and lent to it, then pinned again (see
 /// [`CandidatePins::fence_for_layout_migration`]). The child runs under the
@@ -292,8 +292,8 @@ fn migrate_step(
     pins: &mut CandidatePins,
     report: &mut UpdateReport,
 ) -> ConvergenceStep {
-    let lent = match orbit_core::runtime::resolve_generation_root(
-        &orbit_core::composition::composition_env(),
+    let lent = match crate::runtime::resolve_generation_root(
+        &crate::composition::composition_env(),
         workspace.root_argument.as_deref(),
     ) {
         Ok(child_root) => pins.fence_for_layout_migration(&child_root, &workspace.root),

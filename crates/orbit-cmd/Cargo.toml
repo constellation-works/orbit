@@ -25,7 +25,6 @@ doctest = false
 [dependencies]
 chrono.workspace = true
 flate2.workspace = true
-fs2.workspace = true
 orbit-common = { path = "../orbit-common" }
 orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }

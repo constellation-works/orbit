@@ -10,6 +10,215 @@ use orbit_common::fs::generation::{
     authority_root,
 };
 
+/// An admission that can pin the installed candidate's generation.
+pub(super) trait Pinnable {
+    fn pin(
+        self,
+        digest: &str,
+        identity: Option<&CompatibilityIdentity>,
+    ) -> Result<GenerationGuard, OrbitError>;
+}
+
+impl Pinnable for GenerationUpdate {
+    fn pin(
+        self,
+        digest: &str,
+        identity: Option<&CompatibilityIdentity>,
+    ) -> Result<GenerationGuard, OrbitError> {
+        GenerationUpdate::pin(self, digest, identity)
+    }
+}
+
+impl Pinnable for CurrentAdmission {
+    fn pin(
+        self,
+        digest: &str,
+        identity: Option<&CompatibilityIdentity>,
+    ) -> Result<GenerationGuard, OrbitError> {
+        CurrentAdmission::pin(self, digest, identity)
+    }
+}
+
+impl Pinnable for CandidateAdmission {
+    fn pin(
+        self,
+        digest: &str,
+        identity: Option<&CompatibilityIdentity>,
+    ) -> Result<GenerationGuard, OrbitError> {
+        CandidateAdmission::pin(self, digest, identity)
+    }
+}
+
+/// The candidate generation pinned in each admitted authority, held through
+/// convergence so no older executable enters between the updater and the
+/// candidate's convergence children.
+pub(super) struct CandidatePins {
+    /// `None` only while that authority's pin is lent to the layout
+    /// migration as an exclusive fence, or after it was lost.
+    pins: Vec<(PathBuf, Option<GenerationGuard>)>,
+    digest: String,
+    identity: Option<CompatibilityIdentity>,
+}
+
+impl CandidatePins {
+    /// Before a `migrate --confirm` child, run under the generation authority
+    /// `child_root` resolves to, turn the pin on every authority its layout
+    /// migration of `shared_root` fences into that exclusive fence, held by
+    /// the updater and lent to the child.
+    ///
+    /// The migration holds admission exclusively on every other authority
+    /// that has used the workspace while it rewrites the layout, so no client
+    /// of theirs is live meanwhile. The updater's pin there is a shared hold
+    /// that registers no participant, which that fence cannot tell from an
+    /// unknown client. The updater therefore takes the fence itself under
+    /// exclusive admission, judging every other holder as the migration
+    /// would, and the child adopts it only once the kernel proves it holds
+    /// both locks. The authority is never unprotected: the pin, then the
+    /// fence, then (see [`Self::pin_after_layout_migration`]) the pin again.
+    /// The pin on the child's own authority, which it joins rather than
+    /// fences, stays, as does every pin when no layout migration is pending
+    /// or fences cannot be lent on this platform (the migration then refuses
+    /// against the pin, safely).
+    ///
+    /// An authority that refuses the fence (a client of it is live) refuses
+    /// the migration with that reason; its pin and every earlier one are
+    /// restored first.
+    pub(super) fn fence_for_layout_migration(
+        &mut self,
+        child_root: &Path,
+        shared_root: &Path,
+    ) -> Result<MigrationFences, String> {
+        let unfenced = MigrationFences::none();
+        let Some(layout_target) = self
+            .identity
+            .as_ref()
+            .map(|identity| identity.workspace_layout.version)
+        else {
+            return Ok(unfenced);
+        };
+        if !GenerationUpdate::can_lend_fences() {
+            return Ok(unfenced);
+        }
+        // Unknowable here means the migration's own fence refuses on the same
+        // fault; keeping every pin is the side that cannot weaken it.
+        let fenced = match crate::composition::layout_migration_fenced_authorities(
+            child_root,
+            shared_root,
+            layout_target,
+        ) {
+            Ok(fenced) => fenced,
+            Err(error) => {
+                tracing::warn!(
+                    target: "orbit.update",
+                    root = %shared_root.display(),
+                    error = %error,
+                    "kept every generation pin: the layout migration's fence is unknown"
+                );
+                return Ok(unfenced);
+            }
+        };
+        let targets = self
+            .pins
+            .iter()
+            .enumerate()
+            .filter(|(_, (root, pin))| {
+                pin.is_some() && authority_root(root).is_ok_and(|root| fenced.contains(&root))
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let mut lent = MigrationFences::none();
+        for index in targets {
+            let root = self.pins[index].0.clone();
+            let Some(held) = self.pins[index].1.take() else {
+                continue;
+            };
+            match GenerationUpdate::fence_pinned(
+                &crate::composition::composition_env(),
+                &root,
+                held,
+            ) {
+                Ok(fence) => lent.fences.push((root, fence)),
+                Err(refused) => {
+                    let FenceRefusal { restored, error } = *refused;
+                    let unpinned = if restored.is_none() {
+                        "; its candidate pin could not be taken again"
+                    } else {
+                        ""
+                    };
+                    self.pins[index].1 = restored;
+                    let refused = format!(
+                        "the layout migration could not fence generation authority '{}', which \
+                         has also used this workspace: {error}{unpinned}",
+                        root.display()
+                    );
+                    return Err(match self.pin_after_layout_migration(lent) {
+                        Ok(()) => refused,
+                        Err(lost) => format!("{refused}; {lost}"),
+                    });
+                }
+            }
+        }
+        Ok(lent)
+    }
+
+    /// Once the migration child exited, pin the candidate again on every
+    /// authority fenced for it, before releasing their admission: each fence
+    /// must still be held exclusively, which a child cannot undo by exiting.
+    /// An authority whose fence was lost keeps no pin, and the error names it.
+    pub(super) fn pin_after_layout_migration(
+        &mut self,
+        lent: MigrationFences,
+    ) -> Result<(), String> {
+        let mut lost = Vec::new();
+        for (root, fence) in lent.fences {
+            let pinned = fence
+                .ensure_still_exclusive()
+                .and_then(|()| fence.pin(&self.digest, self.identity.as_ref()));
+            match pinned {
+                Ok(guard) => {
+                    if let Some((_, pin)) = self.pins.iter_mut().find(|(pinned, _)| *pinned == root)
+                    {
+                        *pin = Some(guard);
+                    }
+                }
+                Err(error) => lost.push(format!("'{}': {error}", root.display())),
+            }
+        }
+        if lost.is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "the candidate generation could not be pinned again after the layout migration on {}",
+            lost.join(", ")
+        ))
+    }
+}
+
+/// Say which authority an admission failure came from.
+/// The pins [`CandidatePins::fence_for_layout_migration`] turned into
+/// exclusive fences for a `migrate --confirm` child to inherit.
+#[must_use]
+pub(super) struct MigrationFences {
+    fences: Vec<(PathBuf, GenerationUpdate)>,
+}
+
+impl MigrationFences {
+    /// Nothing fenced: every pin stays.
+    pub(super) fn none() -> Self {
+        Self { fences: Vec::new() }
+    }
+
+    /// The fenced authorities, as the updater named them.
+    pub(super) fn roots(&self) -> Vec<PathBuf> {
+        self.fences.iter().map(|(root, _)| root.clone()).collect()
+    }
+
+    /// The fences, for [`GenerationUpdate::lend_fences`].
+    pub(super) fn fences(&self) -> Vec<&GenerationUpdate> {
+        self.fences.iter().map(|(_, fence)| fence).collect()
+    }
+}
+
 /// Every generation authority that can hold a live pin on the host binary.
 ///
 /// The invocation's own resolution comes first — `--root`, then `ORBIT_ROOT`,
@@ -29,12 +238,11 @@ pub fn admission_authorities(
     root_override: Option<&Path>,
     workspace_root: Option<&Path>,
 ) -> Result<Vec<PathBuf>, OrbitError> {
-    let resolved = orbit_core::runtime::resolve_generation_root(
-        &orbit_core::composition::composition_env(),
+    let resolved = crate::runtime::resolve_generation_root(
+        &crate::composition::composition_env(),
         root_override,
     )?;
-    let host_global =
-        orbit_core::runtime::resolve_global_root(&orbit_core::composition::composition_env())?;
+    let host_global = crate::runtime::resolve_global_root(&crate::composition::composition_env())?;
     let mut roots = Vec::with_capacity(3);
     push_unique_authority(&mut roots, resolved)?;
     push_unique_authority(&mut roots, host_global)?;
@@ -72,8 +280,7 @@ fn push_unique_authority(roots: &mut Vec<PathBuf>, root: PathBuf) -> Result<(), 
 /// `--preflight`, which takes the same admissions, answer for the pin.
 pub fn acquire_admissions(roots: &[PathBuf]) -> Result<Vec<GenerationUpdate>, OrbitError> {
     admit_each(roots, |root| {
-        let admission =
-            GenerationUpdate::acquire(&orbit_core::composition::composition_env(), root)?;
+        let admission = GenerationUpdate::acquire(&crate::composition::composition_env(), root)?;
         admission.ensure_can_record()?;
         Ok(admission)
     })
@@ -95,7 +302,7 @@ pub(super) fn acquire_current_admissions(
     let installed = InstalledGeneration { digest, identity };
     admit_each(roots, |root| {
         let admission = GenerationUpdate::acquire_current(
-            &orbit_core::composition::composition_env(),
+            &crate::composition::composition_env(),
             root,
             &installed,
         )?;
@@ -126,7 +333,7 @@ pub(super) fn acquire_candidate_admissions(
 ) -> Result<Vec<CandidateAdmission>, OrbitError> {
     admit_each(roots, |root| {
         let admission = GenerationUpdate::acquire_for_candidate(
-            &orbit_core::composition::composition_env(),
+            &crate::composition::composition_env(),
             root,
             candidate,
         )?;
@@ -189,45 +396,6 @@ fn admit_each<T>(
         .collect()
 }
 
-/// An admission that can pin the installed candidate's generation.
-pub(super) trait Pinnable {
-    fn pin(
-        self,
-        digest: &str,
-        identity: Option<&CompatibilityIdentity>,
-    ) -> Result<GenerationGuard, OrbitError>;
-}
-
-impl Pinnable for GenerationUpdate {
-    fn pin(
-        self,
-        digest: &str,
-        identity: Option<&CompatibilityIdentity>,
-    ) -> Result<GenerationGuard, OrbitError> {
-        GenerationUpdate::pin(self, digest, identity)
-    }
-}
-
-impl Pinnable for CurrentAdmission {
-    fn pin(
-        self,
-        digest: &str,
-        identity: Option<&CompatibilityIdentity>,
-    ) -> Result<GenerationGuard, OrbitError> {
-        CurrentAdmission::pin(self, digest, identity)
-    }
-}
-
-impl Pinnable for CandidateAdmission {
-    fn pin(
-        self,
-        digest: &str,
-        identity: Option<&CompatibilityIdentity>,
-    ) -> Result<GenerationGuard, OrbitError> {
-        CandidateAdmission::pin(self, digest, identity)
-    }
-}
-
 /// Pin the candidate generation in every authority admission was taken on,
 /// once any process admitted to hand over has.
 ///
@@ -257,176 +425,6 @@ pub(super) fn pin_candidate(
     })
 }
 
-/// The candidate generation pinned in each admitted authority, held through
-/// convergence so no older executable enters between the updater and the
-/// candidate's convergence children.
-pub(super) struct CandidatePins {
-    /// `None` only while that authority's pin is lent to the layout
-    /// migration as an exclusive fence, or after it was lost.
-    pins: Vec<(PathBuf, Option<GenerationGuard>)>,
-    digest: String,
-    identity: Option<CompatibilityIdentity>,
-}
-
-/// The pins [`CandidatePins::fence_for_layout_migration`] turned into
-/// exclusive fences for a `migrate --confirm` child to inherit.
-#[must_use]
-pub(super) struct MigrationFences {
-    fences: Vec<(PathBuf, GenerationUpdate)>,
-}
-
-impl MigrationFences {
-    /// Nothing fenced: every pin stays.
-    pub(super) fn none() -> Self {
-        Self { fences: Vec::new() }
-    }
-
-    /// The fenced authorities, as the updater named them.
-    pub(super) fn roots(&self) -> Vec<PathBuf> {
-        self.fences.iter().map(|(root, _)| root.clone()).collect()
-    }
-
-    /// The fences, for [`GenerationUpdate::lend_fences`].
-    pub(super) fn fences(&self) -> Vec<&GenerationUpdate> {
-        self.fences.iter().map(|(_, fence)| fence).collect()
-    }
-}
-
-impl CandidatePins {
-    /// Before a `migrate --confirm` child, run under the generation authority
-    /// `child_root` resolves to, turn the pin on every authority its layout
-    /// migration of `shared_root` fences into that exclusive fence, held by
-    /// the updater and lent to the child.
-    ///
-    /// The migration holds admission exclusively on every other authority
-    /// that has used the workspace while it rewrites the layout, so no client
-    /// of theirs is live meanwhile. The updater's pin there is a shared hold
-    /// that registers no participant, which that fence cannot tell from an
-    /// unknown client. The updater therefore takes the fence itself under
-    /// exclusive admission, judging every other holder as the migration
-    /// would, and the child adopts it only once the kernel proves it holds
-    /// both locks. The authority is never unprotected: the pin, then the
-    /// fence, then (see [`Self::pin_after_layout_migration`]) the pin again.
-    /// The pin on the child's own authority, which it joins rather than
-    /// fences, stays, as does every pin when no layout migration is pending
-    /// or fences cannot be lent on this platform (the migration then refuses
-    /// against the pin, safely).
-    ///
-    /// An authority that refuses the fence (a client of it is live) refuses
-    /// the migration with that reason; its pin and every earlier one are
-    /// restored first.
-    pub(super) fn fence_for_layout_migration(
-        &mut self,
-        child_root: &Path,
-        shared_root: &Path,
-    ) -> Result<MigrationFences, String> {
-        let unfenced = MigrationFences::none();
-        let Some(layout_target) = self
-            .identity
-            .as_ref()
-            .map(|identity| identity.workspace_layout.version)
-        else {
-            return Ok(unfenced);
-        };
-        if !GenerationUpdate::can_lend_fences() {
-            return Ok(unfenced);
-        }
-        // Unknowable here means the migration's own fence refuses on the same
-        // fault; keeping every pin is the side that cannot weaken it.
-        let fenced = match orbit_core::composition::layout_migration_fenced_authorities(
-            child_root,
-            shared_root,
-            layout_target,
-        ) {
-            Ok(fenced) => fenced,
-            Err(error) => {
-                tracing::warn!(
-                    target: "orbit.update",
-                    root = %shared_root.display(),
-                    error = %error,
-                    "kept every generation pin: the layout migration's fence is unknown"
-                );
-                return Ok(unfenced);
-            }
-        };
-        let targets = self
-            .pins
-            .iter()
-            .enumerate()
-            .filter(|(_, (root, pin))| {
-                pin.is_some() && authority_root(root).is_ok_and(|root| fenced.contains(&root))
-            })
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        let mut lent = MigrationFences::none();
-        for index in targets {
-            let root = self.pins[index].0.clone();
-            let Some(held) = self.pins[index].1.take() else {
-                continue;
-            };
-            match GenerationUpdate::fence_pinned(
-                &orbit_core::composition::composition_env(),
-                &root,
-                held,
-            ) {
-                Ok(fence) => lent.fences.push((root, fence)),
-                Err(refused) => {
-                    let FenceRefusal { restored, error } = *refused;
-                    let unpinned = if restored.is_none() {
-                        "; its candidate pin could not be taken again"
-                    } else {
-                        ""
-                    };
-                    self.pins[index].1 = restored;
-                    let refused = format!(
-                        "the layout migration could not fence generation authority '{}', which \
-                         has also used this workspace: {error}{unpinned}",
-                        root.display()
-                    );
-                    return Err(match self.pin_after_layout_migration(lent) {
-                        Ok(()) => refused,
-                        Err(lost) => format!("{refused}; {lost}"),
-                    });
-                }
-            }
-        }
-        Ok(lent)
-    }
-
-    /// Once the migration child exited, pin the candidate again on every
-    /// authority fenced for it, before releasing their admission: each fence
-    /// must still be held exclusively, which a child cannot undo by exiting.
-    /// An authority whose fence was lost keeps no pin, and the error names it.
-    pub(super) fn pin_after_layout_migration(
-        &mut self,
-        lent: MigrationFences,
-    ) -> Result<(), String> {
-        let mut lost = Vec::new();
-        for (root, fence) in lent.fences {
-            let pinned = fence
-                .ensure_still_exclusive()
-                .and_then(|()| fence.pin(&self.digest, self.identity.as_ref()));
-            match pinned {
-                Ok(guard) => {
-                    if let Some((_, pin)) = self.pins.iter_mut().find(|(pinned, _)| *pinned == root)
-                    {
-                        *pin = Some(guard);
-                    }
-                }
-                Err(error) => lost.push(format!("'{}': {error}", root.display())),
-            }
-        }
-        if lost.is_empty() {
-            return Ok(());
-        }
-        Err(format!(
-            "the candidate generation could not be pinned again after the layout migration on {}",
-            lost.join(", ")
-        ))
-    }
-}
-
-/// Say which authority an admission failure came from.
 fn naming_authority(root: &Path, error: &OrbitError) -> OrbitError {
     OrbitError::Execution(format!(
         "{error}. The generation authority is '{}'",

@@ -2,13 +2,13 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use orbit_cmd::update::{
-    CandidateManifestRequest, LocalCandidateRequest, UpdateEnvironment, UpdateOutcome,
-    UpdateReport, UpdateRequest, run_local_candidate_update, run_update, write_candidate_manifest,
-};
 use orbit_common::Env;
 use orbit_common::fs::generation;
 use orbit_core::OrbitError;
+use orbit_core::app::update::{
+    CandidateManifestRequest, LocalCandidateRequest, UpdateOutcome, UpdateReport, UpdateRequest,
+    run_local_candidate_update, run_update, write_candidate_manifest,
+};
 
 use crate::command::{CommandOut, Payload};
 
@@ -141,15 +141,15 @@ impl UpdateCommand {
             // directory). `orbit update` itself keeps strict initialization
             // through `workspace_for_process`. This observation does not
             // reserve admission.
-            let workspace = UpdateEnvironment::workspace_for_preflight(root_override, env)?;
-            let roots = orbit_cmd::update::admission_authorities(
+            let workspace = orbit_cmd::update::workspace_for_preflight(root_override, env)?;
+            let roots = orbit_core::app::update::admission_authorities(
                 root_override,
                 workspace.as_ref().map(|workspace| workspace.root.as_path()),
             )?;
             let handover = match &self.candidate {
-                Some(path) => orbit_cmd::update::candidate_preflight(&roots, path)?,
+                Some(path) => orbit_core::app::update::candidate_preflight(&roots, path)?,
                 None => {
-                    let _admissions = orbit_cmd::update::acquire_admissions(&roots)?;
+                    let _admissions = orbit_core::app::update::acquire_admissions(&roots)?;
                     Vec::new()
                 }
             };
@@ -192,7 +192,7 @@ impl UpdateCommand {
                 env,
             );
         }
-        let environment = UpdateEnvironment::from_process(root_override, env)?;
+        let environment = orbit_cmd::update::from_process(root_override, env)?;
         let report = run_update(
             &environment,
             &UpdateRequest {
@@ -249,7 +249,7 @@ fn local_candidate(
                 .to_string(),
         ));
     };
-    let environment = UpdateEnvironment::for_install_target(root_override, &install_target, env)?;
+    let environment = orbit_cmd::update::for_install_target(root_override, &install_target, env)?;
     let report = run_local_candidate_update(
         &environment,
         &LocalCandidateRequest {
@@ -358,9 +358,9 @@ fn format_report(report: &UpdateReport, check: bool) -> String {
             text,
             "  {} orbit {}{}",
             match step.status {
-                orbit_cmd::update::converge::StepStatus::Succeeded => "ok",
-                orbit_cmd::update::converge::StepStatus::Skipped => "--",
-                orbit_cmd::update::converge::StepStatus::Failed => "!!",
+                orbit_core::app::update::converge::StepStatus::Succeeded => "ok",
+                orbit_core::app::update::converge::StepStatus::Skipped => "--",
+                orbit_core::app::update::converge::StepStatus::Failed => "!!",
             },
             step.command,
             step.detail

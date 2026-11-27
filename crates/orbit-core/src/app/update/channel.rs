@@ -31,6 +31,13 @@ pub const CANONICAL_HOMEBREW_FORMULA: &str = "constellation-works/tap/orbit";
 /// coexisting.
 pub const LEGACY_HOMEBREW_FORMULA: &str = "danieljhkim/tap/orbit";
 
+/// `brew list` reads the Cellar; one that takes longer is wedged, and the
+/// remediation text it feeds falls back to the canonical upgrade command.
+const BREW_LIST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// One line per installed formula.
+const BREW_LIST_OUTPUT_LIMIT: usize = 1024 * 1024;
+
 /// The installer that owns the current executable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallChannel {
@@ -60,18 +67,6 @@ pub enum InstallChannel {
 }
 
 impl InstallChannel {
-    /// Stable identifier for JSON output and audit rows.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Managed { .. } => "managed",
-            Self::Npm => "npm",
-            Self::Homebrew { .. } => "homebrew",
-            Self::Cargo => "cargo",
-            Self::LocalBuild => "local-build",
-            Self::Unknown => "unknown",
-        }
-    }
-
     /// Classify `executable` given the managed install directory this machine
     /// is configured for.
     ///
@@ -116,6 +111,18 @@ impl InstallChannel {
                 remediation: Some(homebrew_remediation(inventory.installed_full_names())),
             },
             other => other,
+        }
+    }
+
+    /// Stable identifier for JSON output and audit rows.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Managed { .. } => "managed",
+            Self::Npm => "npm",
+            Self::Homebrew { .. } => "homebrew",
+            Self::Cargo => "cargo",
+            Self::LocalBuild => "local-build",
+            Self::Unknown => "unknown",
         }
     }
 
@@ -167,23 +174,19 @@ pub trait HomebrewInventory {
     fn installed_full_names(&self) -> Result<Vec<String>, OrbitError>;
 }
 
-/// `brew list` reads the Cellar; one that takes longer is wedged, and the
-/// remediation text it feeds falls back to the canonical upgrade command.
-const BREW_LIST_TIMEOUT: Duration = Duration::from_secs(30);
-/// One line per installed formula.
-const BREW_LIST_OUTPUT_LIMIT: usize = 1024 * 1024;
-
 /// Asks the real `brew` on the caller's `PATH`.
 ///
 /// Tests construct this directly with `command` pointed at a fake `brew`
 /// fixture instead of touching the process's `PATH`.
-pub(crate) struct SystemHomebrewInventory {
+#[doc(hidden)]
+pub struct SystemHomebrewInventory {
     pub(crate) command: PathBuf,
 }
 
 impl SystemHomebrewInventory {
     /// Probe the real `brew` found on `PATH`.
-    pub(crate) fn system() -> Self {
+    #[doc(hidden)]
+    pub fn system() -> Self {
         Self {
             command: PathBuf::from("brew"),
         }
