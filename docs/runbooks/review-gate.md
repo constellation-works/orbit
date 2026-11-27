@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/job/resume/source_repair/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs", "crates/orbit-engine/src/executor/automation/vcs/failure/ownership.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849", "ORB-22808"]
-last_validated: 2026-11-22
+last_validated: 2026-11-27
 ---
 
 # Operate the Review Gate
@@ -501,6 +501,21 @@ hold in place; the pair queues review once. Do not edit manifests, copy a
 certificate, or force the task's status to substitute for receipt validation.
 Resubmission preserves the evidence bytes: ignored helpers and `DEFERRED`
 cleanup paths remain unverified, even when other checks in the log passed.
+
+Only `codeql` and Linux `host_sandbox_test` requirements are fulfilled
+automatically; the owner never processes a `hosted_ci` or `native_os`
+requirement, so the hold waits for an operator's attachment above. A reviewer
+therefore runs every command it can run itself and names a `hosted_ci` or
+`native_os` check only when the command truly needs that route.
+
+The reviewer's no-Git-write rule protects the real candidate: its index, refs,
+branches, remotes and Git metadata. A repository test or guard script that
+initialises and commits in its own throwaway Git repository under the
+reviewer's scratch directory (`.orbit/tmp/`), such as
+`scripts/test-check-source-style-diff.py`, is allowed, and the reviewer runs it
+rather than refusing it or naming it as `hosted_ci` evidence. A Git command
+aimed at the candidate itself stays refused, and a runner refusal is recorded
+`denied`.
 
 A hold whose every requirement is kind `codeql` or a `linux`
 `host_sandbox_test` is fulfilled by a Linux owner without an operator. The
