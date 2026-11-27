@@ -21,9 +21,9 @@ This doc describes the friction implementation and the revisions accepted on
 2026-10-12 for every noun that migrates after it. Each section says whether it
 is **Implemented** (true of the code today, on the migrated nouns) or
 **Planned** (accepted but not yet built). Kernel v2's structure, its richer
-parameter kinds and its input validation are implemented, the validation in
-warn mode for unknown fields except on every task operation and
-`orbit.workflow` action `auto`, which refuse them. Both follow the rules in
+parameter kinds and its input validation are implemented. Every task operation,
+search, and `orbit.workflow` action `auto` refuse unknown fields. Other migrated
+operations can warn (§4). Both modes follow the rules in
 [4_decisions.md](./4_decisions.md). As a phase lands, its sections move from
 Planned to Implemented. The order in which nouns migrate is in §9;
 forward-looking questions are in
@@ -311,14 +311,15 @@ enum order and `--help` order. The noun's `NounSpec` const sits beside it.
 
 ## 4. Input validation at the tool entry
 
-**Implemented (warn mode)** on friction, auto-task, drain, workspace claim,
-search and the workflow-run tools other than `orbit.workflow` action `auto`:
+**Implemented (warn mode)** on friction, auto-task, drain, workspace claim
+and the workflow-run tools other than `orbit.workflow` action `auto`:
 unknown fields are reported, not yet refused. Every task operation, including
-inactive operations, and `orbit.workflow` action `auto` declare
+inactive operations, search, and `orbit.workflow` action `auto` declare
 `unknown_fields: Refuse`. Task specs preserve the refusal previously enforced
-by a second validator in the generic tool registry; the refusal names the
-field and suggests a declared one. The registry carries no task-specific
-input validation.
+by a second validator in the generic tool registry. The shared refusal names
+each unknown field and suggests a close match when available. Otherwise it
+lists the declared schema fields when the schema provides them. The registry
+carries no task-specific input validation.
 
 `OperationSpec::parse_input(&self, input: Value) -> Result<OperationInput,
 OrbitError>` in `orbit-common` checks a call against its spec, reusing the
@@ -330,8 +331,8 @@ In order, it:
    both and naming both;
 3. refuses retired fields with their hint;
 4. collects unknown fields — anything that is not a parameter, an alias, a
-   retired field, a transport wrapper key (`_meta`, `workspace`) or an identity
-   key (`model`, `agent`, which session identity may also supply);
+   retired field, a transport wrapper key (`_meta`, `workspace`,
+   `task_list_compact`) or the unadvertised `model` attribution key;
 5. checks each present value against its `ParamType` (`StringList` keeps
    accepting a string, an array, or a comma-separated string) and drops `null`
    values, which mean "absent";
@@ -781,9 +782,9 @@ table moves them into one `cli_options` object: `add`'s `--parent`,
 `--plan`, `--ref`, `--status` and `--source-task`, and
 `update`'s `--approve`, `--force`, `--discard-candidate` and `--artifact`. The
 tool registry admits `cli_options` only from a caller without an MCP session,
-so an MCP call that sends it gets the same `unknown field 'cli_options'` as
-any other unknown field. A request carrying it is screened as the operator
-command was (`TaskWriteScreen::from_process`, bound to a reservation owner
+so an MCP call that sends it gets `unknown field 'cli_options'`. A request
+carrying it is screened as the operator command was
+(`TaskWriteScreen::from_process`, bound to a reservation owner
 when there is one) and keeps the CLI's update semantics: `--approve` takes
 the approval step, and other updates are lifecycle or forced writes without
 the guarded start and approval transitions. A claimed worker's `add` refuses
@@ -794,9 +795,8 @@ input to the owning host as `orbit.task.update`, refusing the flags with no
 tool field, as before. For ordinary `orbit.task.add` calls over MCP and
 `orbit tool run`, the registry admits declared retired fields so spec parsing
 can return their replacement-specific refusal (§2.1, §4). Ordinary unknown
-fields still get the registry's plain `unknown field` refusal, and other task
-operations keep their registry-level unknown-field handling. Guarded creation
-preempts ordinary parsing and keeps its separate field rules. The Step 0
+fields get the shared refusal (§4). Guarded creation preempts ordinary
+parsing and keeps its separate field rules. The Step 0
 baseline and its differences are in
 [Migrated CLI verbs execute through the tool path](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
 

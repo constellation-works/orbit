@@ -3,8 +3,7 @@ use serde_json::{Map, Value};
 
 use crate::OrbitError;
 use crate::protocol::tool_input::{
-    TOOL_INPUT_IDENTITY_KEYS, TOOL_INPUT_TRANSPORT_WRAPPER_KEYS, missing_tool_field,
-    reject_unknown_tool_fields,
+    self, TOOL_INPUT_IDENTITY_KEYS, TOOL_INPUT_TRANSPORT_WRAPPER_KEYS,
 };
 
 use super::input::non_negative_integer;
@@ -130,13 +129,14 @@ impl<V: 'static> OperationSpec<V> {
     /// [`UnknownFields::Refuse`].
     ///
     /// A suggestion is drawn from the MCP parameters first, in schema order,
-    /// then from the other wire parameters, so it names what the caller was
-    /// shown.
-    fn unknown_field_refusal(&self, object: &Map<String, Value>) -> OrbitError {
+    /// then from the other wire parameters. Without a suggestion, list the
+    /// schema parameters shown to callers.
+    fn unknown_field_refusal(&self, unknown: &[String]) -> OrbitError {
         let mut declared = self
             .mcp_params()
             .map(|(param, _)| param.name)
             .collect::<Vec<_>>();
+        let schema_field_count = declared.len();
         for param in self.wire_params() {
             // Unadvertised aliases were already canonicalized (or refused) before
             // reaching here; keep them out of `declared` so `did you mean`
@@ -147,13 +147,7 @@ impl<V: 'static> OperationSpec<V> {
         }
         declared.extend(TOOL_INPUT_IDENTITY_KEYS);
         declared.extend(self.retired_fields.iter().map(|retired| retired.name));
-        match reject_unknown_tool_fields(&Value::Object(object.clone()), &declared) {
-            Err(error) => error,
-            Ok(()) => OrbitError::InvalidInput(format!(
-                "{} input carries an undeclared field",
-                self.tool_name
-            )),
-        }
+        tool_input::unknown_tool_fields_error(unknown, &declared, &declared[..schema_field_count])
     }
 
     /// Whether canonical `input` sets none of [`Self::at_least_one_of`].
@@ -239,7 +233,7 @@ impl<V: 'static> OperationSpec<V> {
             .cloned()
             .collect();
         if self.unknown_fields == UnknownFields::Refuse && !unknown_fields.is_empty() {
-            return Err(self.unknown_field_refusal(&object));
+            return Err(self.unknown_field_refusal(&unknown_fields));
         }
 
         for param in self.wire_params() {
@@ -266,7 +260,7 @@ impl<V: 'static> OperationSpec<V> {
                 && !TOOL_INPUT_IDENTITY_KEYS.contains(&param.name)
                 && input.get(param.name).is_none()
         }) {
-            return Err(missing_tool_field(input, missing.name));
+            return Err(tool_input::missing_tool_field(input, missing.name));
         }
         if let Value::Object(object) = input
             && self.misses_at_least_one_of(object)
