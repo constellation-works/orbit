@@ -251,6 +251,30 @@
         "## Record and diff",
         "## Rules and command surfaces"
       ],
+      "digest": "24768f75634e54e91fe9d99563f418f52f3a14dabb0cd87b614cc83dbcd2f7b2",
+      "revision": "cb623c657107a0b92fbd15765b1e8989a9146dc6",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 9 1 * *"
+        },
+        "tags": [
+          "auto-task-yield-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Linkage gap",
+        "## Measure each enabled definition (last 30 days)",
+        "## Propose retuning (at most 3 tasks)",
+        "## Record and diff",
+        "## Rules and command surfaces"
+      ],
       "digest": "2d4d1087259537cb126b62745ba7a33fdb5f05cc638c7c750f8b28617cc6b106",
       "revision": "972939b6952d2c5da8e4421365f8c3d3ca33928c",
       "settings": {
@@ -6199,6 +6223,33 @@
       ],
       "digest": "1521d71fbc17499936ce91762b426e742047cba362e18c2ad3bdbeab2da8236a",
       "revision": "36d73f758189711ac019739fe73f3917646c6a83",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 7 * * 1"
+        },
+        "tags": [
+          "regression-label-audit",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "#!/usr/bin/env python3",
+        "## Agreement",
+        "## Definition fields",
+        "## Helper",
+        "## Persist",
+        "## Re-label",
+        "## Sample",
+        "## Stay blind"
+      ],
+      "digest": "43f21e1d2ba52dc35d1299ecf448e496a3715f01b504173b53981e7cfdcae3c1",
+      "revision": "48a01af62e10404b4ddcd036034dbc08fa469a32",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",

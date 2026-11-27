@@ -99,10 +99,18 @@ template:
        open in `proposed`, `backlog`, `in-progress`, `review` or
        `blocked`), delivered, and no-op. For each `done` chore read
        `orbit tool run orbit.task.show --input '{"id":"<chore>","field":"delivery","model":"<agent-family>"}'`
-       and use `delivery_status`: `landed` is delivered; a no-op has
-       `no_change` delivery and an empty incoming `spawned_from` map entry
-       (see Rules and step 3). An unreadable delivery or any other status
-       is `unknown`, never a no-op. Record unknown deliveries and make
+       and use `delivery_status`: `landed` is delivered. When that read is
+       not `landed`, read the chore's own full `orbit.task.show` history for
+       authoritative settlement evidence: an owner `landing_completed` event,
+       or the latest transition into `done` whose note records a full merge
+       commit (the ordinary owner pull-request completion or a settlement
+       from a pull request merged outside Orbit). Such a chore is delivered;
+       a chore with both run-level `landed` and settlement evidence is
+       counted once. Otherwise a no-op has `no_change` delivery and an empty
+       incoming `spawned_from` map entry (see Rules and step 3). A bare
+       `done` status or an unmerged pull-request reference alone is not
+       settlement evidence. An unreadable or otherwise unverified delivery
+       with no settlement evidence is `unknown`, never a no-op. Record unknown deliveries and make
        affected delivered and no-op counts and derived metrics `unknown`,
        never zero. When the population scan behind that map is incomplete,
        the no-op count is `unknown`, never zero, and no chore is classified
@@ -115,8 +123,9 @@ template:
        cost figure, report that run's cost as `unknown`, never as zero,
        and report the definition's cost per run as `unknown` when any
        counted run is unknown.
-    3. **Output.** Count each `done` chore whose own delivery read in
-       step 1 reports `landed` as a delivered chore. Report this separately
+    3. **Output.** Count each `done` chore classified delivered in
+       step 1 (run-level `landed` or authoritative settlement evidence,
+       counted once) as a delivered chore. Report this separately
        from filed tasks that landed. The tasks the chores filed: for each
        minted chore of this definition, the task IDs in its incoming
        `spawned_from` map entry — the referencing tasks whose own outgoing `spawned_from`
@@ -143,7 +152,9 @@ template:
        in the window (`unknown` when runs is zero). Cost per landed output
        is total known cost divided by that same sum (`unknown` when cost is
        unknown or the sum is zero). Never report a derived value as zero
-       when its inputs are unknown.
+       when its inputs are unknown. The artifact and the summary use the
+       same delivered-chore and landed-output counts, with missing evidence
+       reported as `unknown`.
 
     ## Linkage gap
 
