@@ -9,8 +9,8 @@ orbit_common::isolate_test_process!();
 use std::path::Path;
 
 use chrono::{Duration, Utc};
-use orbit_core::application::auto_tasks::state::{cursor_state_path, cursor_store};
-use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
+use orbit_core::app::auto_task::{SchedulerOptions, run_auto_task_scheduler_at};
+use orbit_core::app::auto_task::{cursor_state_path, cursor_store};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::OrbitRuntime;
 use orbit_types::task::{TaskArtifact, TaskStatus, TaskType};
@@ -277,8 +277,7 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
         })
         .unwrap_or_else(|error| panic!("file the roll-up: {error}"));
     assert_eq!(
-        runtime
-            .open_auto_task_instance(&definition)
+        orbit_core::app::auto_task::open_auto_task_instance(&runtime, &definition)
             .unwrap_or_else(|error| panic!("read open instances: {error}")),
         Some(task.id.to_string()),
         "an open roll-up is an open sweep, so skip_if_open mints no second set"
@@ -296,7 +295,8 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
 
     // Later completed coordinator and area chores have no cursor. If either
     // shadows the roll-up, the probe becomes unknown and would mint again.
-    let coordinator = runtime.auto_task_mint(&definition.name).unwrap();
+    let coordinator =
+        orbit_core::app::auto_task::auto_task_mint(&runtime, &definition.name).unwrap();
     complete(&runtime, &coordinator.id);
     let area = runtime
         .add_task(TaskAddParams {
@@ -389,8 +389,7 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
     assert_eq!(next_tick.reports.len(), 1, "{next_tick:?}");
     assert_eq!(next_tick.reports[0].action, "fired", "{next_tick:?}");
     assert!(
-        runtime
-            .open_auto_task_instance(&definition)
+        orbit_core::app::auto_task::open_auto_task_instance(&runtime, &definition)
             .unwrap()
             .is_some(),
         "an inconclusive symbolic cursor leaves the next sweep eligible to mint"
@@ -447,7 +446,7 @@ fn complete(runtime: &OrbitRuntime, id: &str) {
 fn scheduler_report(
     runtime: &OrbitRuntime,
     now: chrono::DateTime<Utc>,
-) -> orbit_core::application::auto_tasks::AutoTaskFireReport {
+) -> orbit_core::app::auto_task::AutoTaskFireReport {
     let mut outcome =
         run_auto_task_scheduler_at(runtime, now, SchedulerOptions { dry_run: true }).unwrap();
     assert!(outcome.errors.is_empty(), "{outcome:?}");

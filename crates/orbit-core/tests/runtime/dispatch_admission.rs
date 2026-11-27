@@ -413,7 +413,7 @@ fn doc_duties_mints_an_admissible_locking_context() {
         include_str!("../../assets/auto_tasks/doc-duties.yaml"),
     )
     .unwrap();
-    let minted = runtime.auto_task_mint("doc-duties").unwrap();
+    let minted = orbit_core::app::auto_task::auto_task_mint(&runtime, "doc-duties").unwrap();
     assert_eq!(
         minted.context_files,
         vec![
@@ -2105,10 +2105,12 @@ fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
             .unwrap_or_else(|error| panic!("{name}: {error}"));
     }
 
-    let qa_sweep = runtime.auto_task_mint("qa-sweep").unwrap();
-    let qa_full_sweep = runtime.auto_task_mint("qa-full-sweep").unwrap();
-    let code_review = runtime.auto_task_mint("code-review").unwrap();
-    let friction_curation = runtime.auto_task_mint("friction-curation").unwrap();
+    let qa_sweep = orbit_core::app::auto_task::auto_task_mint(&runtime, "qa-sweep").unwrap();
+    let qa_full_sweep =
+        orbit_core::app::auto_task::auto_task_mint(&runtime, "qa-full-sweep").unwrap();
+    let code_review = orbit_core::app::auto_task::auto_task_mint(&runtime, "code-review").unwrap();
+    let friction_curation =
+        orbit_core::app::auto_task::auto_task_mint(&runtime, "friction-curation").unwrap();
 
     let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
 

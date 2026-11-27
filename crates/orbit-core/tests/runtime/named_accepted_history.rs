@@ -9,7 +9,7 @@
 //! never "never accepted".
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::application::auto_tasks::AutoTaskAddParams;
+use orbit_core::app::auto_task::AutoTaskAddParams;
 use orbit_core::runtime::OrbitRuntime;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{
@@ -25,8 +25,9 @@ const GUARD: &str = "!has(auto_tasks['TARGET'].last_succeeded_at) || \
                      now - auto_tasks['TARGET'].last_succeeded_at > duration('24h')";
 
 fn add_auto_task(runtime: &OrbitRuntime, name: &str, contract: bool) {
-    runtime
-        .auto_task_add(AutoTaskAddParams {
+    orbit_core::app::auto_task::auto_task_add(
+        runtime,
+        AutoTaskAddParams {
             name: name.into(),
             description: "Prepare a release".into(),
             schedule: AutoTaskSchedule::every_minutes(60),
@@ -44,12 +45,15 @@ fn add_auto_task(runtime: &OrbitRuntime, name: &str, contract: bool) {
                 status: TaskStatus::Backlog,
             },
             dedupe: DedupePolicy::SkipIfOpen,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     if !contract {
         return;
     }
-    let mut definition = runtime.auto_task_show(name).unwrap().unwrap();
+    let mut definition = orbit_core::app::auto_task::auto_task_show(runtime, name)
+        .unwrap()
+        .unwrap();
     definition.completion = Some(AutoTaskCompletionContract {
         contract: "release-readiness/v1".into(),
         adapter: "accept-evidence".into(),

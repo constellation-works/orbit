@@ -399,12 +399,16 @@ impl OrbitRuntime {
                 }))
             }
             ConditionCarrier::AutoTask => {
-                let Some(path) = self.auto_task_discovery_path(name)? else {
+                let Some(path) =
+                    crate::app::port::AutomationAutoTask(self).auto_task_discovery_path(name)?
+                else {
                     return Ok(None);
                 };
-                let definition = self.validated_auto_task_definition(name)?.ok_or_else(|| {
-                    OrbitError::InvalidInput(format!("auto-task '{name}' is no longer defined"))
-                })?;
+                let definition = crate::app::port::AutomationAutoTask(self)
+                    .validated_auto_task_definition(name)?
+                    .ok_or_else(|| {
+                        OrbitError::InvalidInput(format!("auto-task '{name}' is no longer defined"))
+                    })?;
                 let has_condition =
                     matches!(definition.schedule, AutoTaskSchedule::Condition { .. });
                 Ok(Some(LoadedCarrier {

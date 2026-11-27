@@ -566,7 +566,7 @@ fn auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing() {
 
 fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor() {
     use orbit_common::security::release::sha256_hex;
-    use orbit_core::application::auto_tasks::{AutoTaskCursor, cursor_state_path, cursor_store};
+    use orbit_core::app::auto_task::{AutoTaskCursor, cursor_state_path, cursor_store};
     use orbit_core::application::automation::consumer_key;
     use orbit_types::workflow::AutoTaskPendingClaim;
 
@@ -971,10 +971,10 @@ pub(crate) fn baselined_delivery_consumer(
         .map(orbit_core::composition::Opening::into_runtime)
         .unwrap()
         .with_actor(ActorIdentity::human("fixture"));
-    let definition = runtime
-        .auto_task_show("fixture-delivery-consumer")
-        .unwrap()
-        .unwrap();
+    let definition =
+        orbit_core::app::auto_task::auto_task_show(&runtime, "fixture-delivery-consumer")
+            .unwrap()
+            .unwrap();
     // A configured origin is observed by fetching it. Publish the branch first
     // so the baseline is that remote head rather than a fetch failure.
     publish_origin_if_configured(fixture);

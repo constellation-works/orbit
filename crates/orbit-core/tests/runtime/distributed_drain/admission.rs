@@ -1178,8 +1178,9 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
             let file = format!("src/requirement{}.rs", held.len());
             let task = if automated {
                 std::fs::write(pair.owner_repo.join(&file), "fn work() {}\n").unwrap();
-                let definition = owner
-                    .auto_task_add(orbit_core::application::auto_tasks::AutoTaskAddParams {
+                let definition = orbit_core::app::auto_task::auto_task_add(
+                    owner,
+                    orbit_core::app::auto_task::AutoTaskAddParams {
                         name: format!("tool-routing-{}", held.len()),
                         description: "Preclaim requirement regression".into(),
                         schedule: orbit_types::workflow::AutoTaskSchedule::every_minutes(60),
@@ -1193,9 +1194,11 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
                         }))
                         .unwrap(),
                         dedupe: orbit_types::workflow::DedupePolicy::SkipIfOpen,
-                    })
-                    .unwrap();
-                let task = owner.auto_task_mint(&definition.name).unwrap();
+                    },
+                )
+                .unwrap();
+                let task =
+                    orbit_core::app::auto_task::auto_task_mint(owner, &definition.name).unwrap();
                 owner.run_tool("orbit.task.update", json!({
                     "id": task.id, "plan": "1. Implement the requirement.", "model": "codex",
                 })).unwrap();

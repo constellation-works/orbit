@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
-use orbit_core::application::auto_tasks::AutoTaskAddParams;
-use orbit_core::application::auto_tasks::{
+use orbit_core::app::auto_task::AutoTaskAddParams;
+use orbit_core::app::auto_task::{
     AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile, AutoTaskTemplatePatch,
     AutoTaskUpdateParams, cursor_state_path,
 };
@@ -23,8 +23,9 @@ fn waiting_template_edit_preserves_a_different_field_committed_under_the_lock() 
         return;
     }
     let runtime = Arc::new(OrbitRuntime::in_memory().unwrap());
-    let original = runtime
-        .auto_task_add(AutoTaskAddParams {
+    let original = orbit_core::app::auto_task::auto_task_add(
+        &runtime,
+        AutoTaskAddParams {
             name: "concurrent-template".into(),
             description: "Concurrent template edits".into(),
             schedule: AutoTaskSchedule::every_minutes(60),
@@ -42,8 +43,9 @@ fn waiting_template_edit_preserves_a_different_field_committed_under_the_lock() 
                 status: TaskStatus::Backlog,
             },
             dedupe: DedupePolicy::SkipIfOpen,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     // Prepare the title edit before another writer commits its priority edit.
     let title_edit = AutoTaskUpdateParams {
         template: Some(AutoTaskTemplatePatch {
@@ -62,7 +64,11 @@ fn waiting_template_edit_preserves_a_different_field_committed_under_the_lock() 
             let worker = std::thread::spawn(move || {
                 started_tx.send(()).unwrap();
                 done_tx
-                    .send(editor.auto_task_update("concurrent-template", title_edit))
+                    .send(orbit_core::app::auto_task::auto_task_update(
+                        &editor,
+                        "concurrent-template",
+                        title_edit,
+                    ))
                     .unwrap();
             });
             started_rx.recv_timeout(Duration::from_secs(30)).unwrap();
@@ -74,18 +80,18 @@ fn waiting_template_edit_preserves_a_different_field_committed_under_the_lock() 
                 "the title edit must wait for the cursor lock"
             );
             // Re-enter the held lock to commit while the title editor waits.
-            let priority_edit = runtime
-                .auto_task_update(
-                    "concurrent-template",
-                    AutoTaskUpdateParams {
-                        template: Some(AutoTaskTemplatePatch {
-                            priority: Some(TaskPriority::High),
-                            ..Default::default()
-                        }),
+            let priority_edit = orbit_core::app::auto_task::auto_task_update(
+                &runtime,
+                "concurrent-template",
+                AutoTaskUpdateParams {
+                    template: Some(AutoTaskTemplatePatch {
+                        priority: Some(TaskPriority::High),
                         ..Default::default()
-                    },
-                )
-                .unwrap();
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
             assert_eq!(priority_edit.template.priority, TaskPriority::High);
             Ok::<_, OrbitError>(worker)
         },
@@ -102,8 +108,7 @@ fn waiting_template_edit_preserves_a_different_field_committed_under_the_lock() 
     expected.priority = TaskPriority::High;
     assert_eq!(edited.template, expected);
     assert_eq!(
-        runtime
-            .auto_task_show("concurrent-template")
+        orbit_core::app::auto_task::auto_task_show(&runtime, "concurrent-template")
             .unwrap()
             .unwrap()
             .template,
@@ -114,8 +119,9 @@ fn waiting_template_edit_preserves_a_different_field_committed_under_the_lock() 
 
 fn schedule_fixture(name: &str) -> OrbitRuntime {
     let runtime = OrbitRuntime::in_memory().unwrap();
-    runtime
-        .auto_task_add(AutoTaskAddParams {
+    orbit_core::app::auto_task::auto_task_add(
+        &runtime,
+        AutoTaskAddParams {
             name: name.into(),
             description: "Schedule edits".into(),
             schedule: AutoTaskSchedule::every_minutes(60),
@@ -133,8 +139,9 @@ fn schedule_fixture(name: &str) -> OrbitRuntime {
                 status: TaskStatus::Backlog,
             },
             dedupe: DedupePolicy::SkipIfOpen,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     runtime
 }
 
@@ -152,8 +159,7 @@ fn schedule_command_profiles_compare_no_op_and_stamp_as_specified() {
         expected_schedule: Box::new(expected_schedule.clone()),
     };
     let stamp = |runtime: &OrbitRuntime| {
-        runtime
-            .auto_task_show("scheduled")
+        orbit_core::app::auto_task::auto_task_show(runtime, "scheduled")
             .unwrap()
             .unwrap()
             .updated_at
@@ -161,14 +167,22 @@ fn schedule_command_profiles_compare_no_op_and_stamp_as_specified() {
     let before = stamp(&runtime);
 
     assert!(matches!(
-        runtime
-            .auto_task_schedule_command("missing", next.clone(), observed(&current))
-            .unwrap(),
+        orbit_core::app::auto_task::auto_task_schedule_command(
+            &runtime,
+            "missing",
+            next.clone(),
+            observed(&current)
+        )
+        .unwrap(),
         AutoTaskScheduleOutcome::NotFound
     ));
-    match runtime
-        .auto_task_schedule_command("scheduled", next.clone(), observed(&next))
-        .unwrap()
+    match orbit_core::app::auto_task::auto_task_schedule_command(
+        &runtime,
+        "scheduled",
+        next.clone(),
+        observed(&next),
+    )
+    .unwrap()
     {
         AutoTaskScheduleOutcome::Stale { actual_schedule } => {
             assert_eq!(*actual_schedule, current);
@@ -176,9 +190,13 @@ fn schedule_command_profiles_compare_no_op_and_stamp_as_specified() {
         other => panic!("expected a stale outcome, got {other:?}"),
     }
     assert!(matches!(
-        runtime
-            .auto_task_schedule_command("scheduled", current.clone(), observed(&current))
-            .unwrap(),
+        orbit_core::app::auto_task::auto_task_schedule_command(
+            &runtime,
+            "scheduled",
+            current.clone(),
+            observed(&current)
+        )
+        .unwrap(),
         AutoTaskScheduleOutcome::AlreadySet(_)
     ));
     assert_eq!(stamp(&runtime), before, "refusals and no-ops never stamp");
@@ -195,18 +213,26 @@ fn schedule_command_profiles_compare_no_op_and_stamp_as_specified() {
         }
     }))
     .unwrap();
-    let refused = runtime
-        .auto_task_schedule_command("scheduled", retired, observed(&current))
-        .unwrap_err();
+    let refused = orbit_core::app::auto_task::auto_task_schedule_command(
+        &runtime,
+        "scheduled",
+        retired,
+        observed(&current),
+    )
+    .unwrap_err();
     assert!(
         matches!(&refused, AutoTaskScheduleError::Write(OrbitError::InvalidInput(message))
         if message.contains("integrated_qa_v1"))
     );
 
     assert!(matches!(
-        runtime
-            .auto_task_schedule_command("scheduled", next.clone(), observed(&current))
-            .unwrap(),
+        orbit_core::app::auto_task::auto_task_schedule_command(
+            &runtime,
+            "scheduled",
+            next.clone(),
+            observed(&current),
+        )
+        .unwrap(),
         AutoTaskScheduleOutcome::Written(written) if written.schedule == next
     ));
     let written_stamp = stamp(&runtime);
@@ -214,13 +240,13 @@ fn schedule_command_profiles_compare_no_op_and_stamp_as_specified() {
 
     // The ordinary profile writes and stamps even when nothing changes.
     assert!(matches!(
-        runtime
-            .auto_task_schedule_command(
-                "scheduled",
-                next.clone(),
-                AutoTaskScheduleProfile::Unconditional,
-            )
-            .unwrap(),
+        orbit_core::app::auto_task::auto_task_schedule_command(
+            &runtime,
+            "scheduled",
+            next.clone(),
+            AutoTaskScheduleProfile::Unconditional,
+        )
+        .unwrap(),
         AutoTaskScheduleOutcome::Written(_)
     ));
     assert_ne!(stamp(&runtime), written_stamp);
@@ -234,16 +260,16 @@ fn compound_update_writes_schedule_and_other_fields_in_one_edit() {
         return;
     }
     let runtime = schedule_fixture("compound");
-    let edited = runtime
-        .auto_task_update(
-            "compound",
-            AutoTaskUpdateParams {
-                description: Some("Edited together".into()),
-                schedule: Some(AutoTaskSchedule::every_minutes(15)),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+    let edited = orbit_core::app::auto_task::auto_task_update(
+        &runtime,
+        "compound",
+        AutoTaskUpdateParams {
+            description: Some("Edited together".into()),
+            schedule: Some(AutoTaskSchedule::every_minutes(15)),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(edited.description, "Edited together");
     assert_eq!(edited.schedule, AutoTaskSchedule::every_minutes(15));
 }

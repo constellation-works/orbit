@@ -21,9 +21,9 @@ use super::{
     AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
     workspaces,
 };
+use crate::app::auto_task::SchedulerOptions;
+use crate::app::auto_task::run_auto_task_scheduler_with_cache;
 use crate::app::routine::lease::sweep_owner_lease_lifetimes;
-use crate::application::auto_tasks::SchedulerOptions;
-use crate::application::auto_tasks::scheduler::run_auto_task_scheduler_with_cache;
 use crate::application::automation::SourceCache;
 use crate::application::store_opener::StoreOpener;
 use crate::runtime::host_signal::{HostSignalProbe, default_host_signal_probe};

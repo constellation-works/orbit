@@ -2,7 +2,7 @@
 //! control and the dashboard [ORB-18764].
 //!
 //! Each caller contract is an [`AutoTaskToggleProfile`] of
-//! [`OrbitRuntime::auto_task_toggle_command`]: the command owns the compare,
+//! [`auto_task_toggle_command`]: the command owns the compare,
 //! the effective-state no-op and the write, and its outcome says whether an
 //! operation was attempted, so a transport only renders it and records the
 //! audit row it already owns.
@@ -85,74 +85,71 @@ impl From<AutoTaskToggleError> for OrbitError {
     }
 }
 
-impl OrbitRuntime {
-    /// Enable or disable a definition (the kill-switch) under `profile`.
-    /// Disabling pauses an auto-task and preserves the definition;
-    /// `auto_task_delete` removes it.
-    pub fn auto_task_toggle_command(
-        &self,
-        name: &str,
-        enabled: bool,
-        profile: AutoTaskToggleProfile,
-    ) -> Result<AutoTaskToggleOutcome, AutoTaskToggleError> {
-        let expected = match profile {
-            AutoTaskToggleProfile::Unconditional => None,
-            AutoTaskToggleProfile::Checked { expected_enabled } => Some(expected_enabled),
-            AutoTaskToggleProfile::Observed { expected_enabled } => {
-                // Refuse an unpermitted write before any comparison, and
-                // compare against the checkout-local catalog the write edits.
-                self.ensure_coordination_task_write_permitted()
-                    .map_err(AutoTaskToggleError::Write)?;
-                let Some(current) = self
-                    .find_validated_auto_task(name)
-                    .map_err(AutoTaskToggleError::Read)?
-                else {
-                    return Ok(AutoTaskToggleOutcome::NotFound);
-                };
-                if current.enabled != expected_enabled {
-                    return Ok(AutoTaskToggleOutcome::Stale {
-                        actual_enabled: current.enabled,
-                    });
-                }
-                if self.auto_task_enabled(&current) == enabled {
-                    return Ok(AutoTaskToggleOutcome::AlreadySet(current));
-                }
-                Some(expected_enabled)
+/// Enable or disable a definition (the kill-switch) under `profile`.
+/// Disabling pauses an auto-task and preserves the definition;
+/// `auto_task_delete` removes it.
+pub fn auto_task_toggle_command(
+    rt: &OrbitRuntime,
+    name: &str,
+    enabled: bool,
+    profile: AutoTaskToggleProfile,
+) -> Result<AutoTaskToggleOutcome, AutoTaskToggleError> {
+    let expected = match profile {
+        AutoTaskToggleProfile::Unconditional => None,
+        AutoTaskToggleProfile::Checked { expected_enabled } => Some(expected_enabled),
+        AutoTaskToggleProfile::Observed { expected_enabled } => {
+            // Refuse an unpermitted write before any comparison, and
+            // compare against the checkout-local catalog the write edits.
+            rt.ensure_coordination_task_write_permitted()
+                .map_err(AutoTaskToggleError::Write)?;
+            let Some(current) = super::crud::find_validated_auto_task(rt, name)
+                .map_err(AutoTaskToggleError::Read)?
+            else {
+                return Ok(AutoTaskToggleOutcome::NotFound);
+            };
+            if current.enabled != expected_enabled {
+                return Ok(AutoTaskToggleOutcome::Stale {
+                    actual_enabled: current.enabled,
+                });
             }
-        };
-        self.write_auto_task_enabled(name, expected, enabled)
-            .map(AutoTaskToggleOutcome::Written)
-            .map_err(AutoTaskToggleError::Write)
-    }
-
-    /// [`Self::auto_task_toggle_command`] under
-    /// [`AutoTaskToggleProfile::Unconditional`].
-    pub fn auto_task_toggle(
-        &self,
-        name: &str,
-        enabled: bool,
-    ) -> Result<AutoTaskDefinition, OrbitError> {
-        self.auto_task_toggle_command(name, enabled, AutoTaskToggleProfile::Unconditional)?
-            .into_definition(name)
-    }
-
-    /// Set the enabled flag while holding the scheduler cursor lock, first
-    /// comparing the raw flag with `expected` when one is given.
-    fn write_auto_task_enabled(
-        &self,
-        name: &str,
-        expected: Option<bool>,
-        enabled: bool,
-    ) -> Result<AutoTaskDefinition, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        self.try_edit_auto_task(name, |definition| {
-            if expected.is_some_and(|expected| definition.enabled != expected) {
-                return Err(stale_auto_task_state());
+            if rt.auto_task_enabled(&current) == enabled {
+                return Ok(AutoTaskToggleOutcome::AlreadySet(current));
             }
-            definition.enabled = enabled;
-            Ok(())
-        })
-    }
+            Some(expected_enabled)
+        }
+    };
+    write_auto_task_enabled(rt, name, expected, enabled)
+        .map(AutoTaskToggleOutcome::Written)
+        .map_err(AutoTaskToggleError::Write)
+}
+
+/// [`auto_task_toggle_command`] under
+/// [`AutoTaskToggleProfile::Unconditional`].
+pub fn auto_task_toggle(
+    rt: &OrbitRuntime,
+    name: &str,
+    enabled: bool,
+) -> Result<AutoTaskDefinition, OrbitError> {
+    auto_task_toggle_command(rt, name, enabled, AutoTaskToggleProfile::Unconditional)?
+        .into_definition(name)
+}
+
+/// Set the enabled flag while holding the scheduler cursor lock, first
+/// comparing the raw flag with `expected` when one is given.
+fn write_auto_task_enabled(
+    rt: &OrbitRuntime,
+    name: &str,
+    expected: Option<bool>,
+    enabled: bool,
+) -> Result<AutoTaskDefinition, OrbitError> {
+    rt.ensure_coordination_task_write_permitted()?;
+    super::crud::try_edit_auto_task(rt, name, |definition| {
+        if expected.is_some_and(|expected| definition.enabled != expected) {
+            return Err(stale_auto_task_state());
+        }
+        definition.enabled = enabled;
+        Ok(())
+    })
 }
 
 fn stale_auto_task_state() -> OrbitError {

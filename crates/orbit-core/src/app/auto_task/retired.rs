@@ -21,7 +21,7 @@ use crate::application::managed_assets::{
     resolve_confined_asset_path,
 };
 
-use super::settings::{AUTO_TASK_ASSET_KIND, classify_bundled_file};
+use super::setting::{AUTO_TASK_ASSET_KIND, classify_bundled_file};
 
 /// Retiring a default: drop it from `DEFAULT_AUTO_TASK_FILES`, keep its
 /// last shipped template in place and list it here in the same change.

@@ -108,11 +108,11 @@ pub mod test_support {
     /// [`FixtureRuntime`], for fixtures that drive engine entry points or host
     /// traits directly.
     pub use crate::adapter::engine_host::EngineHost;
+    pub use crate::app::auto_task::completion_test_support::with_completion_adapter_run;
     pub use crate::app::notice::{with_notice_close_snapshot_hook, with_notice_post_time};
     pub use crate::app::resident::{
         with_resident_action_close_failure, with_resident_cycle_admission_checkpoint,
     };
-    pub use crate::application::auto_tasks::completion_test_support::with_completion_adapter_run;
     /// Freeze source budget time in an isolated test process and its CLI children.
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
     pub use crate::application::automation::source::test_support::with_delivery_source_clock;

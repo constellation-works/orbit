@@ -2,6 +2,8 @@ mod activity_tool_requirements;
 mod admission_port;
 mod agent;
 mod auto_concurrency_port;
+
+mod auto_task_port;
 mod automation_port;
 pub(crate) mod catalog;
 pub(crate) mod claimed;
@@ -31,9 +33,6 @@ mod task_port;
 mod triage_submit;
 mod upgrade_resume;
 
-#[cfg(test)]
-mod tests;
-
 #[cfg(feature = "test-support")]
 pub use run::with_run_root_cause_write_hook;
 pub(crate) use scripts::{attach as script_attach, outputs as script_outputs, step as script_step};
@@ -49,6 +48,7 @@ pub(in crate::application) use admission_port::JobAdmissionPort;
 pub(crate) use admission_port::OPERATOR_READINESS_OVERRIDE_INPUT;
 pub use agent::{AgentInvokeResult, agent_invoke_result};
 pub(in crate::application) use auto_concurrency_port::JobAutoConcurrencyPort;
+pub(crate) use auto_task_port::JobAutoTaskPort;
 pub(in crate::application) use automation_port::JobAutomationPort;
 pub use catalog::CatalogReferenceLayer;
 pub(crate) use catalog::{DEFAULT_JOB_FILES, seed_default_jobs};
@@ -121,3 +121,6 @@ pub(crate) fn log_best_effort<T>(
         );
     }
 }
+
+#[cfg(test)]
+mod tests;

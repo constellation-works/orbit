@@ -45,7 +45,9 @@ impl ContractFixture {
         let revision = commit(&runtime, "Fixture revision");
 
         super::add_auto_task(&runtime, TARGET);
-        let mut definition = runtime.auto_task_show(TARGET).unwrap().unwrap();
+        let mut definition = orbit_core::app::auto_task::auto_task_show(&runtime, TARGET)
+            .unwrap()
+            .unwrap();
         definition.completion = Some(AutoTaskCompletionContract {
             contract: "release-readiness/v1".into(),
             adapter: "accept-evidence".into(),

@@ -22,7 +22,7 @@ use crate::application::managed_assets::{
     load_managed_asset_manifest, record_managed_manifest_write, resolve_confined_asset_path,
 };
 
-use super::settings::AUTO_TASK_ASSET_KIND;
+use super::setting::AUTO_TASK_ASSET_KIND;
 
 /// What releasing the demoted defaults did in one auto-task directory.
 #[derive(Debug, Default)]

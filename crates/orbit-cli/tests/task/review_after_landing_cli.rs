@@ -202,7 +202,9 @@ pub(super) fn land_tasks_and_evaluate(
     content: &str,
     task_ids: &[String],
 ) -> Option<String> {
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     evaluate_auto_task(runtime, &definition, false, Utc::now()).unwrap();
     let consumer = consumer_key(runtime, "auto-task", CONSUMER).unwrap();
     let store = runtime.sqlite_store().unwrap();
@@ -572,7 +574,9 @@ fn doctor_fails_while_the_after_landing_consumer_cannot_review_landed_work() {
 
     // An admitted review task that closed without coverage wedges it.
     let runtime = open_runtime(&fixture);
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     let consumer = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
     let store = runtime.sqlite_store().unwrap();
@@ -693,7 +697,9 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
     retarget(&fixture, &trigger());
     toggle(&fixture, "on");
     let runtime = open_runtime(&fixture);
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     let consumer = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
     let store = runtime.sqlite_store().unwrap();
@@ -725,7 +731,9 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
     assert_eq!(adopted.baseline, baselined.baseline);
     assert_eq!(adopted.covered, baselined.covered);
 
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     let recoveries = store
         .read()
@@ -793,7 +801,9 @@ fn a_settings_only_edit_is_adopted_without_an_operator() {
     retarget(&fixture, &moved);
     assert_doctor_fails(&fixture, "not adopted automatically: branch_changed");
     let runtime = open_runtime(&fixture);
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     let held = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     assert_eq!(held.reason, "definition_changed");
     assert!(held.refusals.contains(&"branch_changed".to_string()));

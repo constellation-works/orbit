@@ -1458,7 +1458,9 @@ fn evaluate_named(
     runtime: &orbit_core::runtime::OrbitRuntime,
     name: &str,
 ) -> orbit_types::workflow::automation::AutomationDiagnostic {
-    let definition = runtime.auto_task_show(name).unwrap().expect(name);
+    let definition = orbit_core::app::auto_task::auto_task_show(runtime, name)
+        .unwrap()
+        .expect(name);
     evaluate_auto_task(runtime, &definition, false, Utc::now())
         .unwrap_or_else(|error| panic!("{name}: {error}"))
 }

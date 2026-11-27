@@ -7,9 +7,9 @@ use std::path::Path;
 
 use chrono::{DateTime, Duration, Timelike, Utc};
 use orbit_common::storage::blob_store::BlobStore;
+use orbit_core::app::auto_task::AutoTaskAddParams;
+use orbit_core::app::auto_task::cursor_state_path;
 use orbit_core::app::routine::pause_routine;
-use orbit_core::application::auto_tasks::AutoTaskAddParams;
-use orbit_core::application::auto_tasks::cursor_state_path;
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TaskAddParams,
     TaskUpdateParams,
@@ -398,16 +398,17 @@ fn seed_auto_task(
         crew: None,
         status: TaskStatus::Backlog,
     };
-    fixture
-        .runtime
-        .auto_task_add(AutoTaskAddParams {
+    orbit_core::app::auto_task::auto_task_add(
+        &fixture.runtime,
+        AutoTaskAddParams {
             name: name.into(),
             description: description.into(),
             schedule,
             template,
             dedupe: DedupePolicy::SkipIfOpen,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
 }
 fn seed_schedule_task(fixture: &Fixture, name: &str, schedule: AutoTaskSchedule) {
     let text = (
@@ -1005,7 +1006,7 @@ projections_test!(
         ] {
             seed_schedule_task(&fixture, name, schedule);
         }
-        fixture.runtime.auto_task_toggle("disabled", false).unwrap();
+        orbit_core::app::auto_task::auto_task_toggle(&fixture.runtime, "disabled", false).unwrap();
         let baseline = Utc::now()
             .with_second(0)
             .unwrap()

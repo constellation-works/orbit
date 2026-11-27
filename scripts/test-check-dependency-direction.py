@@ -778,64 +778,49 @@ class RelativeImportTests(unittest.TestCase):
                 "use crate::application::distributed::claim_receipt;\n",
         }, rejected=False, base=self.app.parent)
 
-    def test_automation_reaches_auto_tasks_only_through_its_port(self):
+    def test_automation_job_and_distributed_reach_auto_task_only_through_ports(self):
         # [ORB-23334] Automation read the catalog, accepted history, dedupe and
-        # template/mint parameters straight from auto_tasks, whose scheduler
-        # evaluates delivery and conditions through automation: a cycle.
-        owner = {
-            "auto_tasks/scheduler.rs":
-                "impl OrbitRuntime {\n"
-                "    pub fn fresh_listing_method(&self) {}\n}\n"
-                "pub(crate) fn fresh_mint_params(runtime: &OrbitRuntime) {}\n",
-        }
-        self.check_rows(
-            [("automation/condition/facts.rs",
-              "impl OrbitRuntime {\n    pub(crate) fn read_facts(&self) {\n"
-              f"        {call};\n    }}\n}}\n") for call in (
-                "self.fresh_listing_method()",
-                "OrbitRuntime::fresh_listing_method(self)",
-                "<crate::OrbitRuntime>::fresh_listing_method(self)",
-                "Self::fresh_listing_method(self)",
-            )],
-            rejected=True, shared=owner)
-        # One batch per detector, as in the forecast shim rows above.
+        # template/mint parameters straight from auto_task, whose scheduler
+        # evaluates delivery and conditions through automation: a cycle. Job
+        # and pull admission reach the job-step rules through their own ports.
         self.check_rows([
-            ("automation/task.rs",
-             "fn mint(runtime: &OrbitRuntime) {\n"
-             "    crate::application::auto_tasks::scheduler::fresh_mint_params(runtime);\n}\n"),
-            ("automation/task.rs", "use crate::application::auto_tasks::Probe;\n"),
-        ], rejected=True, shared=owner)
-        self.check_rows([
-            ("automation/task.rs", "use crate::application::{auto_tasks::Probe};\n"),
-            ("automation/task.rs", "use crate::application::{\n    task, auto_tasks::Probe,\n};\n"),
-        ], rejected=True, shared=owner)
-        self.check_rows([
-            ("automation/task.rs", "use super::super::auto_tasks::Probe;\n"),
-            ("automation/condition/host.rs", "use super::super::super::{auto_tasks::Probe};\n"),
-            ("automation/condition/host.rs",
-             "fn mint(runtime: &OrbitRuntime) {\n"
-             "    super::super::super::auto_tasks::scheduler::fresh_mint_params(runtime);\n}\n"),
-        ], rejected=True, shared=owner)
-        # A distinct port method name passes, and auto_tasks keeps its
-        # downward edges into automation.
+            row for module in ("automation", "job", "distributed") for row in (
+                (f"{module}/task.rs",
+                 "fn mint(runtime: &OrbitRuntime) {\n"
+                 "    crate::app::auto_task::fresh_mint_params(runtime);\n}\n"),
+                (f"{module}/probe.rs", "use crate::app::auto_task::Probe;\n"),
+                (f"{module}/grouped.rs", "use crate::app::{auto_task::Probe};\n"),
+                (f"{module}/multiline.rs", "use crate::app::{\n    task, auto_task::Probe,\n};\n"),
+                (f"{module}/relative.rs", "use super::super::super::app::auto_task::Probe;\n"),
+                (f"{module}/deep/relative.rs",
+                 "use super::super::super::super::{app::auto_task::Probe};\n"),
+            )
+        ], rejected=True)
+        # The port bound in app::port passes, and auto_task keeps its downward
+        # edges into automation.
         self.check_files({
-            **owner,
-            "automation/auto_task_port.rs":
-                "pub(in crate::application) trait AutomationAutoTaskPort {\n"
+            "application/automation/auto_task_port.rs":
+                "pub(crate) trait AutomationAutoTaskPort {\n"
                 "    fn listed_auto_task_definitions(&self);\n}\n",
-            "auto_tasks/port.rs":
+            "app/auto_task/automation_port.rs":
                 "use crate::application::automation::AutomationAutoTaskPort;\n"
-                "impl AutomationAutoTaskPort for OrbitRuntime {\n"
+                "impl AutomationAutoTaskPort for AutomationPort<'_> {\n"
                 "    fn listed_auto_task_definitions(&self) {\n"
-                "        self.fresh_listing_method();\n    }\n}\n",
-            "automation/inspect.rs":
+                "        super::scheduler::auto_task_listing(self.0);\n    }\n}\n",
+            "application/automation/inspect.rs":
                 "use crate::application::automation::AutomationAutoTaskPort;\n"
                 "fn inspect(runtime: &OrbitRuntime) {\n"
-                "    runtime.listed_auto_task_definitions();\n}\n",
-            "auto_tasks/projection.rs":
+                "    crate::app::port::AutomationAutoTask(runtime).listed_auto_task_definitions();\n}\n",
+            "application/job/pipeline/admission.rs":
+                "fn freeze(rt: &OrbitRuntime) {\n"
+                "    crate::app::port::JobAutoTask(rt).freeze_job_auto_task_run();\n}\n",
+            "application/distributed/serve/admission.rs":
+                "fn hold(rt: &OrbitRuntime) {\n"
+                "    crate::app::port::DistributedAutoTask(rt).step_bound_claim_hold();\n}\n",
+            "app/auto_task/projection.rs":
                 "fn project(runtime: &OrbitRuntime) {\n"
                 "    crate::application::automation::evaluate_auto_task(runtime);\n}\n",
-        }, rejected=False)
+        }, rejected=False, base=self.app.parent)
 
     def test_tag_instructions_reaches_experiment_only_through_its_port(self):
         # The experiment app can read tag-instruction helpers. Overlay
@@ -1046,8 +1031,8 @@ class RelativeImportTests(unittest.TestCase):
                              "review/handoff/console.rs")
         ], shared=method)
 
-    def test_automation_and_auto_tasks_cannot_reach_routines(self):
-        modules = ("automation", "auto_tasks")
+    def test_automation_and_auto_task_cannot_reach_routines(self):
+        modules = ("automation", "../app/auto_task")
         self.check_rows([
             row for module in modules for row in (
                 (f"{module}/probe.rs", "use crate::app::routine::Probe;\n"),
@@ -1065,10 +1050,10 @@ class RelativeImportTests(unittest.TestCase):
                 "fn cadence(root: &Path) { crate::application::contracts::load_clock_settings(root); }\n",
             "automation/pilot_presence.rs":
                 "use orbit_automation::routines::loader::declared_routine_names;\n",
-            "auto_tasks/listing.rs":
+            "../app/auto_task/listing.rs":
                 "use crate::application::contracts::ScheduleDisplayState;\n",
             "../app/routine/sweep.rs":
-                "use crate::application::auto_tasks::scheduler::run;\n"
+                "use crate::app::auto_task::run;\n"
                 "use crate::application::automation::SourceCache;\n"
                 "use crate::application::backlog_forecast::record;\n",
         }, rejected=False)
@@ -1095,29 +1080,26 @@ class RelativeImportTests(unittest.TestCase):
                 "impl ResidentRoutineStatusPort for ResidentRoutineStatus<'_> {}\n",
         }, rejected=False)
 
-    def test_contracts_cannot_reach_routines_or_auto_tasks(self):
+    def test_contracts_cannot_reach_routines_or_auto_task(self):
         # [ORB-22623] The moved leaves stay below the modules that read them.
         # Grouped relative imports escaped the guard; each super chain must
         # reach application from the fixture's actual module depth.
-        target = "auto_tasks::AutoTaskListingRow"
-        # Separate runs exercise direct, grouped and relative-path detectors.
+        target = "auto_task::AutoTaskListingRow"
+        # One batch: the named-path scan reports every form at its own line.
         self.check_rows([
-            ("contracts/clock_settings.rs", f"use crate::application::{target};\n")
-        ], rejected=True)
-        self.check_rows([
-            ("contracts/clock_settings.rs", f"use crate::application::{{{target}}};\n")
-        ], rejected=True)
-        self.check_rows([
-            ("contracts/clock_settings.rs", f"use super::super::{{{target}}};\n"),
+            ("contracts/clock_settings.rs", f"use crate::app::{target};\n"),
+            ("contracts/grouped.rs", f"use crate::app::{{{target}}};\n"),
+            ("contracts/crate_grouped.rs", f"use crate::{{app::{{{target}}}}};\n"),
+            ("contracts/relative.rs", f"use super::super::super::app::{target};\n"),
             ("contracts/clock_settings/nested.rs",
-             f"use super::{{super::{{super::{{\n    {target},\n}}}}}};\n"),
+             f"use super::{{super::{{super::{{super::{{\n    app::{target},\n}}}}}}}};\n"),
         ], rejected=True)
         self.check_rejected_exact_rows(self.app, [
             ("contracts/mod.rs", source, 1)
             for source in (
-                f"use super::{target};\n",
-                f"use super::{{{target}}};\n",
-                f"use super::{{\n    {target},\n}};\n",
+                f"use super::super::app::{target};\n",
+                f"use super::super::{{app::{target}}};\n",
+                f"use super::super::{{\n    app::{target},\n}};\n",
             )
         ])
         self.check_files({
@@ -1126,23 +1108,6 @@ class RelativeImportTests(unittest.TestCase):
             "contracts/clock_settings/nested.rs":
                 "use super::super::{ScheduleDisplayState};\n",
         }, rejected=False)
-        # [ORB-22674] A chain that climbs one step past application, to the crate
-        # root, and then descends `application::<higher>` names the same module
-        # as a chain that lands on application, so it is refused at each depth.
-        # The mod.rs rows keep their exact path for the module-depth check.
-        self.check_rows([
-            ("contracts/clock_settings.rs",
-             "use super::super::super::application::auto_tasks::Probe;\n"),
-            ("contracts/clock_settings/nested.rs",
-             "use super::super::super::super::{application::auto_tasks::Probe};\n"),
-        ], rejected=True)
-        self.check_rejected_exact_rows(self.app, [
-            ("contracts/mod.rs", source, 1) for source in (
-                "use super::super::application::auto_tasks::Probe;\n",
-                "use super::super::{application::auto_tasks::Probe};\n",
-                "use super::super::{\n    application::auto_tasks::Probe,\n};\n",
-            )
-        ])
         # The routine app edge is guardable through the same Rust path forms.
         self.check_rows([
             ("contracts/clock_settings.rs", "use crate::app::routine::set_clock_cadence;\n"),
@@ -1407,7 +1372,7 @@ class RelativeImportTests(unittest.TestCase):
         ("application/task/probe.rs", 2, "review"),
         ("application/job/worker.rs", 2, "distributed"),
         ("application/job/worker.rs", 2, "review"),
-        ("application/automation/probe.rs", 2, "auto_tasks"),
+        ("application/automation/probe.rs", 3, "app::auto_task"),
         ("application/automation/probe.rs", 2, "review"),
         ("application/distributed/probe.rs", 3, "app::experiment"),
         ("application/distributed/probe.rs", 2, "pull_drain"),

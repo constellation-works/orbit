@@ -15,7 +15,7 @@ impl OrbitRuntime {
         &self,
         name: &str,
     ) -> Result<ConditionEnablePreview, OrbitError> {
-        let definition = self
+        let definition = crate::app::port::AutomationAutoTask(self)
             .validated_auto_task_definition(name)?
             .ok_or_else(|| OrbitError::InvalidInput(format!("no such auto-task '{name}'")))?;
         let condition = ConditionDefinition::of_auto_task(&definition).ok_or_else(|| {

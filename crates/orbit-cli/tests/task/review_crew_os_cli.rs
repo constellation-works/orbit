@@ -117,7 +117,9 @@ pub(super) fn minted_crew(
     fixture: &Fixture,
     runtime: &orbit_core::runtime::OrbitRuntime,
 ) -> String {
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     let diagnostic = evaluate_auto_task(runtime, &definition, false, Utc::now())
         .expect("a resumed claim evaluates without an error");
     let task_id = diagnostic
@@ -136,7 +138,9 @@ pub(super) fn escalated_hold_body(
     fixture: &Fixture,
     runtime: &orbit_core::runtime::OrbitRuntime,
 ) -> String {
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     let later = Utc::now() + Duration::minutes(61);
     let held = evaluate_auto_task(runtime, &definition, false, later)
         .expect("a held batch does not fail the tick");
@@ -261,7 +265,9 @@ fn a_pool_no_host_can_run_holds_the_batch_until_configuration_admits_a_crew() {
         None,
         "no review task is minted with a crew no host can run"
     );
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     for _ in 0..2 {
         let held = evaluate_auto_task(&runtime, &definition, false, Utc::now())
             .expect("a held batch does not fail the tick");
@@ -368,7 +374,9 @@ fn a_pool_no_host_can_run_holds_the_batch_until_configuration_admits_a_crew() {
     );
     let runtime = open_runtime(&fixture);
     reclaim(&runtime, "automation:fixture-held:1");
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     let held = evaluate_auto_task(&runtime, &definition, false, Utc::now()).unwrap();
     assert_eq!(held.reason, "stalled: crew_os_ineligible");
     fixture.json(&[
@@ -439,7 +447,9 @@ fn parked_compatible_crews_hold_the_batch_until_a_positive_member_is_added() {
     ] {
         set_policy(&fixture, POOL_KEY, pool);
         let runtime = open_runtime(&fixture);
-        let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+        let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+            .unwrap()
+            .unwrap();
         let held = evaluate_auto_task(&runtime, &definition, false, Utc::now())
             .expect("parked crews neither fail a tick nor clear an existing OS hold");
         assert_eq!(held.reason, "stalled: crew_os_ineligible");

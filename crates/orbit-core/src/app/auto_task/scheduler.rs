@@ -19,7 +19,7 @@ use orbit_types::workflow::{
 use std::path::{Component, Path, PathBuf};
 
 use crate::app::plugin::InactivePlugin;
-use crate::application::automation::{AutomationAutoTaskPort, SourceCache};
+use crate::application::automation::SourceCache;
 
 struct CachedDispatch<'a> {
     runtime: &'a OrbitRuntime,
@@ -93,17 +93,15 @@ impl AutoTaskDispatch for CachedDispatch<'_> {
     }
 
     fn skip_reason(&self, definition: &AutoTaskDefinition) -> Option<InactivePluginSkip> {
-        self.runtime
-            .auto_task_inactive_plugin(definition)
-            .map(|inactive| {
-                let reason =
-                    inactive.reason(&self.runtime.auto_task_definition_path(definition), None);
-                InactivePluginSkip {
-                    plugin: inactive.namespace,
-                    version: inactive.version,
-                    reason,
-                }
-            })
+        auto_task_inactive_plugin(self.runtime, definition).map(|inactive| {
+            let reason =
+                inactive.reason(&auto_task_definition_path(self.runtime, definition), None);
+            InactivePluginSkip {
+                plugin: inactive.namespace,
+                version: inactive.version,
+                reason,
+            }
+        })
     }
 
     fn probe_change_since_last_sweep(
@@ -151,149 +149,81 @@ pub struct ListedAutoTask {
     pub skipped_reason: Option<String>,
 }
 
-impl OrbitRuntime {
-    /// The latest result `name`'s declared completion contract accepted. A task
-    /// that merely finished never appears here, including a successful probe
-    /// whose evidence the contract does not accept. No accepted result and an
-    /// unreadable history are different answers.
-    pub fn auto_task_accepted_history(&self, name: &str) -> AutoTaskAcceptedHistory {
-        super::completion::accepted_history(self, name)
-    }
+/// The latest result `name`'s declared completion contract accepted. A task
+/// that merely finished never appears here, including a successful probe
+/// whose evidence the contract does not accept. No accepted result and an
+/// unreadable history are different answers.
+pub fn auto_task_accepted_history(rt: &OrbitRuntime, name: &str) -> AutoTaskAcceptedHistory {
+    super::completion::accepted_history(rt, name)
+}
 
-    /// The plugin that makes `definition` inactive in this workspace, if any:
-    /// the one rule both the scheduler's skip and every listing's default
-    /// hiding read.
-    ///
-    /// A definition a plugin seeded fires only while that plugin is enabled,
-    /// on the host and in this workspace:
-    /// its template belongs to the plugin, and firing it after a disable would
-    /// mint chores nothing on this host can carry out (design §4.5). The file
-    /// is left exactly where it is, edits and all.
-    pub fn auto_task_inactive_plugin(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Option<InactivePlugin> {
-        crate::app::plugin::inactive_plugin(
-            &self.auto_task_inspection_dir(definition),
-            &self.auto_task_definition_path(definition),
-            self.plugin_load(),
-        )
-    }
+/// The plugin that makes `definition` inactive in this workspace, if any:
+/// the one rule both the scheduler's skip and every listing's default
+/// hiding read.
+///
+/// A definition a plugin seeded fires only while that plugin is enabled,
+/// on the host and in this workspace:
+/// its template belongs to the plugin, and firing it after a disable would
+/// mint chores nothing on this host can carry out (design §4.5). The file
+/// is left exactly where it is, edits and all.
+pub fn auto_task_inactive_plugin(
+    rt: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Option<InactivePlugin> {
+    crate::app::plugin::inactive_plugin(
+        &auto_task_inspection_dir(rt, definition),
+        &auto_task_definition_path(rt, definition),
+        rt.plugin_load(),
+    )
+}
 
-    /// Every auto-task definition a list surface shows, in load order.
-    ///
-    /// A definition whose seeding plugin is off in this workspace, or on the
-    /// host, is omitted unless `include_inactive_plugins` asks for it; then
-    /// it is listed with the plugin that parks it.
-    pub fn auto_task_listing(
-        &self,
-        include_inactive_plugins: bool,
-    ) -> Result<Vec<ListedAutoTask>, OrbitError> {
-        Ok(self
-            .auto_task_list()?
-            .into_iter()
-            .map(|definition| self.listed_auto_task(definition))
-            .filter(|listed| {
-                crate::app::plugin::is_listed(
-                    listed.inactive_plugin.is_some(),
-                    include_inactive_plugins,
-                )
-            })
-            .collect())
-    }
+/// Every auto-task definition a list surface shows, in load order.
+///
+/// A definition whose seeding plugin is off in this workspace, or on the
+/// host, is omitted unless `include_inactive_plugins` asks for it; then
+/// it is listed with the plugin that parks it.
+pub fn auto_task_listing(
+    rt: &OrbitRuntime,
+    include_inactive_plugins: bool,
+) -> Result<Vec<ListedAutoTask>, OrbitError> {
+    Ok(super::crud::auto_task_list(rt)?
+        .into_iter()
+        .map(|definition| listed_auto_task(rt, definition))
+        .filter(|listed| {
+            crate::app::plugin::is_listed(
+                listed.inactive_plugin.is_some(),
+                include_inactive_plugins,
+            )
+        })
+        .collect())
+}
 
-    /// Pair one definition with the plugin that makes it inactive, if any.
-    pub fn listed_auto_task(&self, definition: AutoTaskDefinition) -> ListedAutoTask {
-        let inactive_plugin = self.auto_task_inactive_plugin(&definition);
-        let skipped_reason = inactive_plugin
-            .as_ref()
-            .map(|inactive| inactive.reason(&self.auto_task_definition_path(&definition), None));
-        ListedAutoTask {
-            definition,
-            inactive_plugin,
-            skipped_reason,
-        }
-    }
-
-    fn auto_task_definition_path(&self, definition: &AutoTaskDefinition) -> PathBuf {
-        self.auto_task_read_source(&definition.name)
-            .ok()
-            .flatten()
-            .map(|(_, path)| path)
-            .unwrap_or_else(|| super::loader::definition_path(&self.local_root(), &definition.name))
-    }
-
-    fn auto_task_inspection_dir(&self, definition: &AutoTaskDefinition) -> PathBuf {
-        self.auto_task_definition_path(definition)
-            .parent()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| super::loader::auto_tasks_dir(&self.local_root()))
-    }
-
-    /// The id of a still-open instance of `definition`'s prior mints, if any.
-    /// Returns `None` if no prior mint is open, meaning `skip_if_open` dedupe
-    /// will permit minting and the dashboard reports no open duplicate [ORB-12158].
-    pub fn open_auto_task_instance(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Result<Option<String>, OrbitError> {
-        open_auto_task_instance(self, definition)
+/// Pair one definition with the plugin that makes it inactive, if any.
+pub fn listed_auto_task(rt: &OrbitRuntime, definition: AutoTaskDefinition) -> ListedAutoTask {
+    let inactive_plugin = auto_task_inactive_plugin(rt, &definition);
+    let skipped_reason = inactive_plugin
+        .as_ref()
+        .map(|inactive| inactive.reason(&auto_task_definition_path(rt, &definition), None));
+    ListedAutoTask {
+        definition,
+        inactive_plugin,
+        skipped_reason,
     }
 }
 
-/// The catalog reads automation makes, forwarded to this module's policy and
-/// discovery [ORB-23334]: `auto_tasks` sits above `automation`.
-impl AutomationAutoTaskPort for OrbitRuntime {
-    fn listed_auto_task_definitions(&self) -> Result<Vec<AutoTaskDefinition>, OrbitError> {
-        Ok(self
-            .auto_task_listing(false)?
-            .into_iter()
-            .map(|listed| listed.definition)
-            .collect())
-    }
+fn auto_task_definition_path(rt: &OrbitRuntime, definition: &AutoTaskDefinition) -> PathBuf {
+    super::read::auto_task_read_source(rt, &definition.name)
+        .ok()
+        .flatten()
+        .map(|(_, path)| path)
+        .unwrap_or_else(|| super::loader::definition_path(&rt.local_root(), &definition.name))
+}
 
-    fn validated_auto_task_definition(
-        &self,
-        name: &str,
-    ) -> Result<Option<AutoTaskDefinition>, OrbitError> {
-        self.auto_task_show(name)
-    }
-
-    fn auto_task_discovery_path(&self, name: &str) -> Result<Option<PathBuf>, OrbitError> {
-        Ok(self.auto_task_read_source(name)?.map(|(_, path)| path))
-    }
-
-    fn auto_task_completion_history(&self, name: &str) -> AutoTaskAcceptedHistory {
-        self.auto_task_accepted_history(name)
-    }
-
-    fn open_auto_task_instance_id(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Result<Option<String>, OrbitError> {
-        open_auto_task_instance(self, definition)
-    }
-
-    fn auto_task_template_task_params(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Result<TaskAddParams, OrbitError> {
-        template_params(self, definition)
-    }
-
-    fn auto_task_mint_task_params(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Result<TaskAddParams, OrbitError> {
-        mint_params(self, definition)
-    }
-
-    fn auto_task_stale_contract_hold(
-        &self,
-        definition: &AutoTaskDefinition,
-    ) -> Result<(), OrbitError> {
-        self.refuse_stale_auto_task_contract(definition)
-    }
+fn auto_task_inspection_dir(rt: &OrbitRuntime, definition: &AutoTaskDefinition) -> PathBuf {
+    auto_task_definition_path(rt, definition)
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| super::loader::auto_tasks_dir(&rt.local_root()))
 }
 
 /// The id of a still-open instance of `definition`'s prior mints, if any.
@@ -393,7 +323,7 @@ pub(crate) fn run_auto_task_scheduler_with_cache(
 /// Mint one task from a definition's template — the single template→task
 /// mapping in the system. Deliberately independent of due-math, cursors, and
 /// dedupe: it needs only the definition, so the manual
-/// [`OrbitRuntime::auto_task_mint`](crate::OrbitRuntime::auto_task_mint)
+/// [`auto_task_mint`](super::crud::auto_task_mint)
 /// path reuses it verbatim and a manually minted task is field-for-field identical to
 /// a fired one, provenance tag and `system_created` marker included.
 pub(super) fn mint_task(
@@ -426,12 +356,8 @@ pub(crate) fn mint_params(
     // A task minted from a plugin's seeded definition carries `plugin:<ns>`
     // beside `auto-task:<name>`, so its provenance survives in task history
     // even after the plugin is removed (design §4.4).
-    let definitions_dir =
-        crate::application::auto_tasks::auto_tasks_dir(&runtime.paths().local_dir);
-    let path = crate::application::auto_tasks::definition_path(
-        &runtime.paths().local_dir,
-        &definition.name,
-    );
+    let definitions_dir = super::auto_tasks_dir(&runtime.paths().local_dir);
+    let path = super::definition_path(&runtime.paths().local_dir, &definition.name);
     if let Some((namespace, _)) =
         crate::app::plugin::read_definition_provenance(&definitions_dir, &path)
     {
@@ -453,7 +379,7 @@ pub(crate) fn template_params(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
 ) -> Result<TaskAddParams, OrbitError> {
-    runtime.refuse_stale_auto_task_contract(definition)?;
+    super::setting::refuse_stale_auto_task_contract(runtime, definition)?;
     let template = &definition.template;
     let mut tags = orbit_types::task::normalize_task_tags(template.tags.clone());
     tags.push(auto_task_tag(&definition.name));

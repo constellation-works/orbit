@@ -10,7 +10,7 @@ doc_role: vision
 type: design
 summary: Alternatives, costs and open decisions for bounded shared trigger evaluation over the existing sweep machinery.
 tags: [automation-triggers, scheduling, architecture]
-paths: ["crates/orbit-core/src/app/routine/**", "crates/orbit-core/src/application/auto_tasks/**"]
+paths: ["crates/orbit-core/src/app/routine/**", "crates/orbit-core/src/app/auto_task/**"]
 related_features: [routines, auto-tasks, review-gate]
 related_artifacts: [ORB-11315, ORB-11314, ORB-11316]
 ---

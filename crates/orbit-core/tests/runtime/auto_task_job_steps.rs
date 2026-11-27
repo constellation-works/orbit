@@ -11,7 +11,7 @@ mod reuse;
 #[path = "auto_task_shared_completion.rs"]
 mod shared_completion;
 
-use orbit_core::application::auto_tasks::AutoTaskAddParams;
+use orbit_core::app::auto_task::AutoTaskAddParams;
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::test_support::impl_test_host;
@@ -83,8 +83,9 @@ fn runtime_with_job(name: &str, yaml: &str) -> OrbitRuntime {
 }
 
 fn add_auto_task(runtime: &OrbitRuntime, name: &str) {
-    runtime
-        .auto_task_add(AutoTaskAddParams {
+    orbit_core::app::auto_task::auto_task_add(
+        runtime,
+        AutoTaskAddParams {
             name: name.into(),
             description: "Full QA sweep".into(),
             schedule: AutoTaskSchedule::every_minutes(60),
@@ -102,8 +103,9 @@ fn add_auto_task(runtime: &OrbitRuntime, name: &str) {
                 status: TaskStatus::Backlog,
             },
             dedupe: DedupePolicy::SkipIfOpen,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
 }
 
 fn a_disabled_auto_task_job_loads_explains_and_is_not_submitted() {

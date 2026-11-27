@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: Current implementation of the auto-task record, due-math, host-local cursor, generic scheduler, CRUD surfaces, the on-demand manual mint, and the dashboard Operations surface.
 tags: [auto-tasks]
-paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations-auto-tasks.js"]
+paths: ["crates/orbit-core/src/app/auto_task/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations-auto-tasks.js"]
 related_features: [auto-tasks, routines]
 related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422, ORB-15327, ORB-20704]
 ---
@@ -273,7 +273,7 @@ skip_if_unchanged:
 ```
 
 Evaluated after dedupe, on `Fire` only. `orbit-core`'s
-`auto_tasks::change_probe` resolves the ref's tip, selects the sweep whose
+`auto_task::change_probe` resolves the ref's tip, selects the sweep whose
 cursor applies, reads that sweep's cursor, and answers `Unchanged`, `Changed`
 or `Unknown`:
 
@@ -567,7 +567,7 @@ recorded. It stays the active definition and reports `body: forked` against
 the bundled body, so the settings-only fork migration leaves it alone too.
 
 A default demoted for unproven yield (`orbit_config::DEMOTED_DEFAULT_AUTO_TASKS`)
-is not retired. Before reconciliation, `auto_tasks::demoted` drops each demoted
+is not retired. Before reconciliation, `auto_task::demoted` drops each demoted
 name from the manifest and reports one `migrated` action, so reconciliation sees
 no recorded digest and leaves the file in place; the settings-table entry, which
 the loader applies by name, keeps applying. Create-only seeding releases

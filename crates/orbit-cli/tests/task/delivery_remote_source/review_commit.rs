@@ -198,7 +198,9 @@ fn a_derived_summary_leaves_the_batch_owed() {
 
     // An open review may still write its own summary, so nothing settles.
     with_pull_lookup(&fixture, || {
-        let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+        let definition = orbit_core::app::auto_task::auto_task_show(&runtime, REVIEW_CONSUMER)
+            .unwrap()
+            .unwrap();
         evaluate_auto_task(&runtime, &definition, false, Utc::now())
     })
     .expect("evaluate the open review");
@@ -211,7 +213,9 @@ fn a_derived_summary_leaves_the_batch_owed() {
         "task", "update", &action_id, "--status", "done", "--force", "--json",
     ]);
     with_pull_lookup(&fixture, || {
-        let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+        let definition = orbit_core::app::auto_task::auto_task_show(&runtime, REVIEW_CONSUMER)
+            .unwrap()
+            .unwrap();
         evaluate_auto_task(&runtime, &definition, false, Utc::now())
     })
     .expect("evaluate the closed review");
@@ -278,7 +282,9 @@ fn an_agent_replacement_of_a_derived_summary_settles_the_batch() {
         "task", "update", &action_id, "--status", "done", "--force", "--json",
     ]);
     with_pull_lookup(&fixture, || {
-        let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+        let definition = orbit_core::app::auto_task::auto_task_show(&runtime, REVIEW_CONSUMER)
+            .unwrap()
+            .unwrap();
         evaluate_auto_task(&runtime, &definition, false, Utc::now())
     })
     .expect("evaluate the closed review");

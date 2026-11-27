@@ -341,8 +341,7 @@ done < "$dependency_listing"
 # `ReviewAdmissionHook`. Grouped `use crate::application::{…}` trees count too.
 app_src="$repo_root/crates/orbit-core/src/application"
 app_modules='task|task_bundle|automation|job|review|distributed|admission|workspace_auto|backlog_forecast|pull_drain|sweep_filing'
-# [ORB-22623] Schedule display state keeps contracts below auto_tasks.
-contracts_higher="${app_modules}|auto_tasks"
+contracts_higher="${app_modules}"
 
 # Print every `super::` path or use-tree in production code under application module
 # `$2` that climbs out of it to `application`, or past it to the crate root and back
@@ -1322,6 +1321,11 @@ if dependency_matches -n "crate::application::(${contracts_higher})\\b" \
   echo "orbit-core application contracts must not import the application modules"
   fail=1
 fi
+# [ORB-22623] Schedule display state keeps contracts below app::auto_task.
+if ! super_chains_into "$app_src" contracts 'crate::app::auto_task' named-path include-tests; then
+  echo "orbit-core application contracts must not name app::auto_task"
+  fail=1
+fi
 
 # Config path primitives are below alias and operation, which must not
 # depend on layered admission. The leaf may only use TOML and std.
@@ -1804,26 +1808,25 @@ guard_upper_layer admission 'workspace_auto|backlog_forecast|sweep_filing' 'read
 guard_upper_layer workspace_auto 'backlog_forecast|sweep_filing' ''
 guard_upper_layer backlog_forecast 'sweep_filing' ''
 
-# [ORB-23334] `auto_tasks` sits above `automation`: its scheduler evaluates
-# delivery and conditions through automation, its listing projection reads
-# automation inspection and its enable path uses automation's preview.
+# [ORB-23334] `app::auto_task` sits above `automation`: its scheduler
+# evaluates delivery and conditions through automation, its listing projection
+# reads automation inspection and its enable path uses automation's preview.
 # Automation reads the catalog, validated definitions, discovery paths,
 # accepted history, open-instance dedupe and template/mint parameters only
-# through `automation::AutomationAutoTaskPort`, which `auto_tasks` implements on
-# `OrbitRuntime` in `auto_tasks/scheduler.rs`. A path, a grouped tree, a
-# `super::` chain into `auto_tasks`, or a call to an inherent method it defines
-# (names derived, UFCS included, so the port methods keep distinct names) is a
-# reintroduced edge. The downward edges from `auto_tasks` stay legal.
-if dependency_matches -n 'crate::application::auto_tasks\b' \
-  "$app_src/automation" -g '*.rs' -g '!**/tests/**' ||
-  dependency_matches -n -U 'crate::application::\{[^}]*\bauto_tasks\b' \
-    "$app_src/automation" -g '*.rs' -g '!**/tests/**' ||
-  ! inherent_calls_into "$app_src" automation auto_tasks '' '' ||
-  ! super_chains_into "$app_src" automation auto_tasks; then
-  echo "orbit-core automation must reach auto_tasks through automation::AutomationAutoTaskPort and must not call its inherent methods"
-  fail=1
-fi
-
+# through `automation::AutomationAutoTaskPort`, implemented on
+# `app::auto_task::AutomationPort` and bound in `app::port`. Job admission and
+# pull admission reach the auto-task job-step rules only through
+# `job::JobAutoTaskPort` and `distributed::DistributedAutoTaskPort`, bound the
+# same way. A path or a grouped tree naming `app::auto_task`, however it is
+# reached, is a reintroduced edge. The downward edges from `app::auto_task`
+# stay legal.
+auto_task_path='crate::app::auto_task'
+for auto_task_consumer in automation job distributed; do
+  if ! super_chains_into "$app_src" "$auto_task_consumer" "$auto_task_path" named-path; then
+    echo "orbit-core ${auto_task_consumer} must reach app::auto_task through its auto-task port bound in app::port"
+    fail=1
+  fi
+done
 # app::experiment reads tasks, runs, claim receipts, tag instructions and agent
 # facts. Lower modules that need experiment operations use their own ports
 # bound in app::port. Agent facts have no dependency on experiment.
@@ -1867,7 +1870,7 @@ for lower_module in task job review distributed; do
   fi
 done
 
-# The routine app sits above automation and auto_tasks, and consumes clock
+# The routine app sits above automation and app::auto_task, and consumes clock
 # and schedule display contracts without a back-edge. The resident app reads
 # the selected-checkout cycle switch through its own status port.
 # Match the crate-qualified path so relative imports are checked at their
@@ -1876,7 +1879,7 @@ if [[ ! -d "$core_src/app/routine" ]]; then
   echo "dependency scan path missing: $core_src/app/routine" >&2
   fail=1
 fi
-for lower_module in automation auto_tasks contracts; do
+for lower_module in automation contracts; do
   routine_scan_tests=
   if [[ "$lower_module" == contracts ]]; then
     routine_scan_tests=include-tests
@@ -1886,6 +1889,10 @@ for lower_module in automation auto_tasks contracts; do
     fail=1
   fi
 done
+if ! super_chains_into "$core_src/app" auto_task 'crate::app::routine' named-path; then
+  echo "orbit-core app::auto_task must not name app::routine; use lower-owned contracts"
+  fail=1
+fi
 if ! super_chains_into "$core_src/app" resident 'crate::app::routine' named-path; then
   echo "orbit-core app::resident must not name app::routine; use resident::ResidentRoutineStatusPort"
   fail=1

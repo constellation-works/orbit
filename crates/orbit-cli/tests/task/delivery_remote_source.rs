@@ -192,7 +192,9 @@ fn baseline_named_consumer(
     }
     fixture.json(&["auto-task", "toggle", name, "on", "--json"]);
     let runtime = open_runtime(fixture);
-    let definition = runtime.auto_task_show(name).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, name)
+        .unwrap()
+        .unwrap();
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).expect("baseline");
     runtime
 }
@@ -300,7 +302,9 @@ fn remote_only_landing_mints_a_batch_without_moving_the_checkout() {
     let path = gh_path(&fixture);
     let _gh = orbit_common::test_env::scoped([("PATH", Some(path.as_str()))]);
 
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     let diagnostic =
         evaluate_auto_task(&runtime, &definition, false, Utc::now()).expect("remote observation");
     let state = diagnostic
@@ -358,7 +362,9 @@ fn fetch_failure_defers_without_falling_back_to_the_local_branch() {
     let local = local_branch(&fixture);
     assert_ne!(local, observed);
 
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     let error = evaluate_auto_task(&runtime, &definition, false, Utc::now())
         .expect_err("a failed fetch defers");
     assert!(error.to_string().contains("source_fetch_failed"), "{error}");
@@ -398,7 +404,9 @@ fn force_pushed_remote_history_defers_as_history_diverged() {
         ],
     );
 
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     match evaluate_auto_task(&runtime, &definition, false, Utc::now()) {
         Ok(diagnostic) => {
             assert!(
@@ -438,7 +446,9 @@ fn named_consumer_state(
 fn evaluate_consumer(
     runtime: &orbit_core::runtime::OrbitRuntime,
 ) -> Result<orbit_types::workflow::automation::AutomationDiagnostic, orbit_common::OrbitError> {
-    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(runtime, CONSUMER)
+        .unwrap()
+        .unwrap();
     evaluate_auto_task(runtime, &definition, false, Utc::now())
 }
 
@@ -624,7 +634,9 @@ fn stamp_coverage_is_refused_and_per_delivery_evidence_settles() {
     ] {
         put_coverage(&fixture, &runtime, &action_id, &run_id, &evidence);
         let diagnostic = with_pull_lookup(&fixture, || {
-            let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+            let definition = orbit_core::app::auto_task::auto_task_show(&runtime, REVIEW_CONSUMER)
+                .unwrap()
+                .unwrap();
             evaluate_auto_task(&runtime, &definition, false, Utc::now())
         })
         .expect("evaluate the refused evidence");
@@ -644,7 +656,9 @@ fn stamp_coverage_is_refused_and_per_delivery_evidence_settles() {
 
     put_coverage(&fixture, &runtime, &action_id, &run_id, &complete);
     with_pull_lookup(&fixture, || {
-        let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+        let definition = orbit_core::app::auto_task::auto_task_show(&runtime, REVIEW_CONSUMER)
+            .unwrap()
+            .unwrap();
         evaluate_auto_task(&runtime, &definition, false, Utc::now())
     })
     .expect("evaluate complete evidence");
@@ -684,7 +698,9 @@ fn admitted_action(
     );
     install_pull(fixture, &remote_sha, 42);
     with_pull_lookup(fixture, || {
-        let definition = runtime.auto_task_show(name).unwrap().unwrap();
+        let definition = orbit_core::app::auto_task::auto_task_show(&runtime, name)
+            .unwrap()
+            .unwrap();
         evaluate_auto_task(&runtime, &definition, false, Utc::now())
             .expect("admit the remote delivery");
     });
@@ -929,7 +945,9 @@ fn baseline_review_consumer(fixture: &Fixture, max_wait_minutes: u32) -> String 
         .assert()
         .success();
     let runtime = open_runtime(fixture);
-    let definition = runtime.auto_task_show(REVIEW_CONSUMER).unwrap().unwrap();
+    let definition = orbit_core::app::auto_task::auto_task_show(&runtime, REVIEW_CONSUMER)
+        .unwrap()
+        .unwrap();
     evaluate_auto_task(&runtime, &definition, false, Utc::now()).expect("baseline");
     local_branch(fixture)
 }

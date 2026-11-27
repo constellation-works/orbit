@@ -147,7 +147,7 @@ fn settings_and_crew_writes_survive_a_fully_malformed_auto_task_listing() {
     std::fs::create_dir_all(&definitions).unwrap();
     std::fs::write(definitions.join("broken.yaml"), "name: [\n").unwrap();
     assert!(
-        runtime.auto_task_listing(false).is_err(),
+        orbit_core::app::auto_task::auto_task_listing(&runtime, false).is_err(),
         "the fixture must trip the fail-closed auto-task listing"
     );
 

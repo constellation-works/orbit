@@ -12,13 +12,13 @@ use orbit_common::governance::authorization::{
 use orbit_types::workflow::auto_task_tag;
 use serde_json::{Value, json};
 
-use super::{DashboardWrite, DashboardWritten, Listing, operation};
-use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
-use crate::application::auto_tasks::projection::AutoTaskListingProfile;
-use crate::application::auto_tasks::{
+use super::projection::AutoTaskListingProfile;
+use super::{
     AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile, AutoTaskToggleError,
     AutoTaskToggleOutcome, AutoTaskToggleProfile,
 };
+use super::{DashboardWrite, DashboardWritten, Listing, operation};
+use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
 use crate::{Core, OrbitRuntime, Task};
 
 pub(super) fn listing(
@@ -26,7 +26,8 @@ pub(super) fn listing(
     include_inactive_plugins: bool,
 ) -> Result<Listing, OrbitError> {
     let now = Utc::now();
-    let listing = runtime.auto_task_listing_state_lenient(include_inactive_plugins, now);
+    let listing =
+        super::listing::auto_task_listing_state_lenient(runtime, include_inactive_plugins, now);
     // One freshness pass for the request, with no task-body hydration, that
     // reads only the tasks carrying a listed definition's tag: the rest of
     // the workspace never leaves the index [ORB-21824]. The metadata listing
@@ -53,7 +54,8 @@ pub(super) fn listing(
         .rows
         .iter()
         .map(|row| {
-            runtime.project_auto_task_listing_row(
+            super::projection::project_auto_task_listing_row(
+                runtime,
                 row,
                 AutoTaskListingProfile::Http {
                     minted: tasks.as_ref().map(|_| {
@@ -145,27 +147,29 @@ pub(super) fn write(core: &Core, write: DashboardWrite) -> Result<DashboardWritt
             name,
             expected_enabled,
             enabled,
-        } => DashboardWritten::Toggled(runtime.auto_task_toggle_command(
+        } => DashboardWritten::Toggled(super::toggle::auto_task_toggle_command(
+            runtime,
             &name,
             enabled,
             AutoTaskToggleProfile::Observed { expected_enabled },
         )),
         DashboardWrite::Mint { name } => {
-            DashboardWritten::Minted(runtime.auto_task_mint(&name).map(Box::new))
+            DashboardWritten::Minted(super::crud::auto_task_mint(runtime, &name).map(Box::new))
         }
         DashboardWrite::Schedule {
             name,
             expected_schedule,
             schedule,
-        } => DashboardWritten::Scheduled(runtime.auto_task_schedule_command(
+        } => DashboardWritten::Scheduled(super::schedule_edit::auto_task_schedule_command(
+            runtime,
             &name,
             *schedule,
             AutoTaskScheduleProfile::Observed { expected_schedule },
         )),
         DashboardWrite::UndecodedSchedule { .. } => DashboardWritten::ScheduleAdmitted,
-        DashboardWrite::Delete(params) => {
-            DashboardWritten::Deleted(runtime.auto_task_delete_command(params).map(Box::new))
-        }
+        DashboardWrite::Delete(params) => DashboardWritten::Deleted(
+            super::delete::auto_task_delete_command(runtime, params).map(Box::new),
+        ),
     })
 }
 

@@ -1,7 +1,9 @@
 use super::*;
 
 use crate::application::job::run::definition::run_definition_snapshot_path;
-use crate::application::job::{JobAutoConcurrencyPort, ReviewAdmissionHook, crew_pools, delivery};
+use crate::application::job::{
+    JobAutoConcurrencyPort, JobAutoTaskPort, ReviewAdmissionHook, crew_pools, delivery,
+};
 
 use crate::application::job::catalog::check_auto_task_job;
 
@@ -553,12 +555,7 @@ impl OrbitRuntime {
                 ));
             }
         };
-        crate::application::auto_tasks::job_step::freeze_auto_task_run(
-            self,
-            run_id,
-            &yaml,
-            submitted_at,
-        )
+        crate::app::port::JobAutoTask(self).freeze_job_auto_task_run(run_id, &yaml, submitted_at)
     }
 
     /// Refuse to start a task an auto-task job step minted while its step no
@@ -568,11 +565,9 @@ impl OrbitRuntime {
         let Ok(task) = self.get_task(task_id) else {
             return Ok(());
         };
-        match crate::application::auto_tasks::job_step::step_bound_admission_hold(
-            self,
-            &task,
-            &|| self.get_task_history(task_id),
-        ) {
+        match crate::app::port::JobAutoTask(self)
+            .step_bound_start_hold(&task, &|| self.get_task_history(task_id))
+        {
             Some(hold) => Err(OrbitError::InvalidInput(format!(
                 "{task_id} is held: {hold}; nothing was submitted"
             ))),

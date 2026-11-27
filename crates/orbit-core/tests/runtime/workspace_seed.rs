@@ -16,12 +16,12 @@ use orbit_common::fs::io::{
 };
 use orbit_common::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
 use orbit_common::security::release::sha256_hex;
+use orbit_core::app::auto_task::{AutoTaskBody, AutoTaskDeleteParams};
 use orbit_core::app::routine::RoutineSeedIdentity;
 use orbit_core::app::workspace::{
     ManagedArtifactOutcome, ManagedArtifactScope, reconcile_workspace_managed_artifacts,
     seed_absent_workspace_managed_artifacts,
 };
-use orbit_core::application::auto_tasks::{AutoTaskBody, AutoTaskDeleteParams};
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::runtime::OrbitRuntime;
 use orbit_core::test_support::with_auto_task_manifest_read_hook;
@@ -172,8 +172,7 @@ fn reconcile_during_lifecycle_change(create_only: bool, restoring: bool) {
         ..Default::default()
     };
     if restoring {
-        runtime
-            .auto_task_delete(delete_params())
+        orbit_core::app::auto_task::auto_task_delete(&runtime, delete_params())
             .expect("initial opt-out");
     }
     // Force a later manifest replacement; an otherwise unchanged catalog
@@ -245,12 +244,10 @@ fn reconcile_during_lifecycle_change(create_only: bool, restoring: bool) {
         let writer = scope.spawn(|| {
             started_tx.send(()).expect("writer admission rendezvous");
             let outcome = if restoring {
-                runtime
-                    .auto_task_restore(name)
+                orbit_core::app::auto_task::auto_task_restore(&runtime, name)
                     .map(|definition| assert!(!definition.enabled))
             } else {
-                runtime
-                    .auto_task_delete(delete_params())
+                orbit_core::app::auto_task::auto_task_delete(&runtime, delete_params())
                     .map(|report| assert!(report.opted_out))
             };
             done_tx.send(outcome).expect("lifecycle writer result");
@@ -320,8 +317,7 @@ fn reconcile_during_lifecycle_change(create_only: bool, restoring: bool) {
     .expect("forced workspace initialization");
     assert_lifecycle_manifest(&catalog, name, restoring, &shipped);
     assert_eq!(
-        runtime
-            .auto_task_show(name)
+        orbit_core::app::auto_task::auto_task_show(&runtime, name)
             .expect("definition lookup")
             .is_some(),
         restoring
@@ -651,8 +647,7 @@ fn settings_only_migration_waits_for_crud_and_preserves_concurrent_settings() {
     fork.enabled = true;
     let fork_body = serde_yaml::to_string(&fork).expect("settings-only fork");
     std::fs::write(&body_path, &fork_body).expect("persist legacy settings-only fork");
-    runtime
-        .auto_task_toggle(edited_name, true)
+    orbit_core::app::auto_task::auto_task_toggle(&runtime, edited_name, true)
         .expect("existing settings entry for another managed default");
 
     // Sync can reach the same workspace through an aliased ancestor; the lock
@@ -710,8 +705,7 @@ fn settings_only_migration_waits_for_crud_and_preserves_concurrent_settings() {
             // The public edit re-enters this thread's lock while sync is
             // waiting. Migration must load this committed table after release,
             // preventing an edit between its table load and replacement.
-            let edited = runtime
-                .auto_task_toggle(edited_name, false)
+            let edited = orbit_core::app::auto_task::auto_task_toggle(&runtime, edited_name, false)
                 .expect("concurrent CRUD edit commits");
             assert!(!edited.enabled);
             let settings = load_settings_table(&auto_tasks).expect("committed settings");
@@ -734,21 +728,21 @@ fn settings_only_migration_waits_for_crud_and_preserves_concurrent_settings() {
     assert_eq!(settings[edited_name], edited_settings);
     assert_eq!(std::fs::read_to_string(&body_path).unwrap(), bundled_body);
     assert!(
-        runtime
-            .auto_task_show(migrated_name)
+        orbit_core::app::auto_task::auto_task_show(&runtime, migrated_name)
             .unwrap()
             .unwrap()
             .enabled
     );
     assert!(
-        !runtime
-            .auto_task_show(edited_name)
+        !orbit_core::app::auto_task::auto_task_show(&runtime, edited_name)
             .unwrap()
             .unwrap()
             .enabled
     );
     assert_eq!(
-        runtime.auto_task_layering(migrated_name).unwrap().body,
+        orbit_core::app::auto_task::auto_task_layering(&runtime, migrated_name)
+            .unwrap()
+            .body,
         AutoTaskBody::Managed
     );
 }
@@ -1055,8 +1049,7 @@ fn reinit_workspace(global: &Path, workspace: &Path) {
 }
 
 fn listed_enabled(runtime: &OrbitRuntime, name: &str) -> bool {
-    runtime
-        .auto_task_list()
+    orbit_core::app::auto_task::auto_task_list(runtime)
         .expect("list auto-tasks")
         .into_iter()
         .find(|definition| definition.name == name)
@@ -1070,8 +1063,7 @@ fn fresh_workspace_seeds_no_default_enabled() {
         .expect("isolated roots");
     let (global, workspace) = seeded_host(dir.path());
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
-    let listed: BTreeMap<String, _> = runtime
-        .auto_task_list()
+    let listed: BTreeMap<String, _> = orbit_core::app::auto_task::auto_task_list(&runtime)
         .expect("list auto-tasks")
         .into_iter()
         .map(|definition| (definition.name.clone(), definition))
@@ -1162,8 +1154,7 @@ fn sync_moves_unconfigured_host_health_to_weekly_and_keeps_operator_schedule() {
     reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
         .expect("full sync");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
-    let definition = runtime
-        .auto_task_list()
+    let definition = orbit_core::app::auto_task::auto_task_list(&runtime)
         .expect("list auto-tasks")
         .into_iter()
         .find(|definition| definition.name == "host-health")
@@ -1178,15 +1169,13 @@ fn sync_moves_unconfigured_host_health_to_weekly_and_keeps_operator_schedule() {
     );
 
     // Once toggled, the operator's schedule and flag survive another sync.
-    runtime
-        .auto_task_toggle("host-health", false)
+    orbit_core::app::auto_task::auto_task_toggle(&runtime, "host-health", false)
         .expect("toggle host-health off");
     reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
         .expect("full sync");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("workspace runtime");
     assert!(!listed_enabled(&runtime, "host-health"));
-    let definition = runtime
-        .auto_task_list()
+    let definition = orbit_core::app::auto_task::auto_task_list(&runtime)
         .expect("list auto-tasks")
         .into_iter()
         .find(|definition| definition.name == "host-health")
@@ -1226,8 +1215,7 @@ fn sync_disables_an_unconfigured_earlier_host_health_copy_and_a_toggle_decides_a
     assert!(!listed_enabled(&runtime, "host-health"));
 
     // Once an operator sets the flag, that flag decides across sync and re-init.
-    runtime
-        .auto_task_toggle("host-health", true)
+    orbit_core::app::auto_task::auto_task_toggle(&runtime, "host-health", true)
         .expect("toggle host-health on");
     reconcile_workspace_managed_artifacts(&global, &workspace, Some(&identity()), "main", false)
         .expect("full sync");

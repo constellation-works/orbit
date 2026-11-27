@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::protocol::yaml::parse_routine_yaml;
+use orbit_core::app::auto_task::collect_auto_tasks;
 use orbit_core::app::routine::RoutineSeedIdentity;
-use orbit_core::application::auto_tasks::collect_auto_tasks;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 
 /// Read the leading code identifier of each top-level Markdown list item in

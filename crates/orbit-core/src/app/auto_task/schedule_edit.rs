@@ -2,7 +2,7 @@
 //! the dashboard schedule editor [ORB-21173].
 //!
 //! Each caller contract is an [`AutoTaskScheduleProfile`] of
-//! [`OrbitRuntime::auto_task_schedule_command`]: the command owns the
+//! [`auto_task_schedule_command`]: the command owns the
 //! compare-and-set, the equal-schedule no-op, retired-coverage rejection,
 //! validation and the write, and its outcome says whether an operation was
 //! attempted, so a transport only renders it and records the audit row it
@@ -83,57 +83,54 @@ impl From<AutoTaskScheduleError> for OrbitError {
     }
 }
 
-impl OrbitRuntime {
-    /// Replace a definition's schedule under `profile`.
-    pub fn auto_task_schedule_command(
-        &self,
-        name: &str,
-        schedule: AutoTaskSchedule,
-        profile: AutoTaskScheduleProfile,
-    ) -> Result<AutoTaskScheduleOutcome, AutoTaskScheduleError> {
-        let expected = match profile {
-            AutoTaskScheduleProfile::Unconditional => None,
-            AutoTaskScheduleProfile::Observed { expected_schedule } => {
-                // Refuse an unpermitted write before any comparison, and
-                // compare against the checkout-local catalog the write edits.
-                self.ensure_coordination_task_write_permitted()
-                    .map_err(AutoTaskScheduleError::Write)?;
-                let Some(current) = self
-                    .find_validated_auto_task(name)
-                    .map_err(AutoTaskScheduleError::Read)?
-                else {
-                    return Ok(AutoTaskScheduleOutcome::NotFound);
-                };
-                if current.schedule != *expected_schedule {
-                    return Ok(AutoTaskScheduleOutcome::Stale {
-                        actual_schedule: Box::new(current.schedule),
-                    });
-                }
-                if current.schedule == schedule {
-                    return Ok(AutoTaskScheduleOutcome::AlreadySet(current));
-                }
-                Some(expected_schedule)
+/// Replace a definition's schedule under `profile`.
+pub fn auto_task_schedule_command(
+    rt: &OrbitRuntime,
+    name: &str,
+    schedule: AutoTaskSchedule,
+    profile: AutoTaskScheduleProfile,
+) -> Result<AutoTaskScheduleOutcome, AutoTaskScheduleError> {
+    let expected = match profile {
+        AutoTaskScheduleProfile::Unconditional => None,
+        AutoTaskScheduleProfile::Observed { expected_schedule } => {
+            // Refuse an unpermitted write before any comparison, and
+            // compare against the checkout-local catalog the write edits.
+            rt.ensure_coordination_task_write_permitted()
+                .map_err(AutoTaskScheduleError::Write)?;
+            let Some(current) = super::crud::find_validated_auto_task(rt, name)
+                .map_err(AutoTaskScheduleError::Read)?
+            else {
+                return Ok(AutoTaskScheduleOutcome::NotFound);
+            };
+            if current.schedule != *expected_schedule {
+                return Ok(AutoTaskScheduleOutcome::Stale {
+                    actual_schedule: Box::new(current.schedule),
+                });
             }
-        };
-        self.write_auto_task_schedule(name, expected.as_deref(), schedule)
-            .map(AutoTaskScheduleOutcome::Written)
-            .map_err(AutoTaskScheduleError::Write)
-    }
+            if current.schedule == schedule {
+                return Ok(AutoTaskScheduleOutcome::AlreadySet(current));
+            }
+            Some(expected_schedule)
+        }
+    };
+    write_auto_task_schedule(rt, name, expected.as_deref(), schedule)
+        .map(AutoTaskScheduleOutcome::Written)
+        .map_err(AutoTaskScheduleError::Write)
+}
 
-    /// Replace the schedule while holding the scheduler cursor lock, first
-    /// comparing the stored schedule with `expected` when one is given.
-    fn write_auto_task_schedule(
-        &self,
-        name: &str,
-        expected: Option<&AutoTaskSchedule>,
-        schedule: AutoTaskSchedule,
-    ) -> Result<AutoTaskDefinition, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        admit_schedule(&schedule)?;
-        self.try_edit_auto_task(name, |definition| {
-            stage_schedule(definition, expected, schedule)
-        })
-    }
+/// Replace the schedule while holding the scheduler cursor lock, first
+/// comparing the stored schedule with `expected` when one is given.
+fn write_auto_task_schedule(
+    rt: &OrbitRuntime,
+    name: &str,
+    expected: Option<&AutoTaskSchedule>,
+    schedule: AutoTaskSchedule,
+) -> Result<AutoTaskDefinition, OrbitError> {
+    rt.ensure_coordination_task_write_permitted()?;
+    admit_schedule(&schedule)?;
+    super::crud::try_edit_auto_task(rt, name, |definition| {
+        stage_schedule(definition, expected, schedule)
+    })
 }
 
 /// New schedules cannot select the retired QA coverage. Loading a definition

@@ -4,8 +4,8 @@ use std::time::Instant;
 
 use chrono::{Duration, Utc};
 use orbit_common::test_env::FixtureProgress;
-use orbit_core::application::auto_tasks::AutoTaskAddParams;
-use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
+use orbit_core::app::auto_task::AutoTaskAddParams;
+use orbit_core::app::auto_task::{SchedulerOptions, run_auto_task_scheduler_at};
 use orbit_core::application::task::TaskAddParams;
 use orbit_types::task::Task;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
@@ -28,9 +28,9 @@ pub(super) fn seed_auto_task_with_schedule(
     name: &str,
     schedule: AutoTaskSchedule,
 ) {
-    fixture
-        .runtime
-        .auto_task_add(AutoTaskAddParams {
+    orbit_core::app::auto_task::auto_task_add(
+        &fixture.runtime,
+        AutoTaskAddParams {
             name: name.into(),
             description: "HTTP instance projection fixture".into(),
             schedule,
@@ -48,8 +48,9 @@ pub(super) fn seed_auto_task_with_schedule(
                 status: TaskStatus::Backlog,
             },
             dedupe: DedupePolicy::SkipIfOpen,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
 }
 
 fn instance(fixture: &Fixture, tags: Vec<String>, status: TaskStatus) -> Task {
@@ -243,9 +244,7 @@ fn instance_projection_preserves_status_order_cursor_and_scheduler_dedupe() {
             }
             cursors.get_mut("cursor-only").unwrap()["last_task_id"] = json!(cursor_id);
             write_json(
-                &orbit_core::application::auto_tasks::cursor_state_path(
-                    &fixture.runtime.paths().state_dir,
-                ),
+                &orbit_core::app::auto_task::cursor_state_path(&fixture.runtime.paths().state_dir),
                 json!({"definitions":cursors}),
             );
             expected.insert("empty".into(), (None, None, false));
@@ -260,13 +259,14 @@ fn instance_projection_preserves_status_order_cursor_and_scheduler_dedupe() {
                 assert_eq!(row["open_duplicate"], json!(open), "{name}");
                 assert_eq!(row["may_create_open_duplicate"], json!(open), "{name}");
                 assert_eq!(
-                    fixture
-                        .runtime
-                        .open_auto_task_instance(
-                            &fixture.runtime.auto_task_show(name).unwrap().unwrap()
-                        )
-                        .unwrap()
-                        .is_some(),
+                    orbit_core::app::auto_task::open_auto_task_instance(
+                        &fixture.runtime,
+                        &orbit_core::app::auto_task::auto_task_show(&fixture.runtime, name)
+                            .unwrap()
+                            .unwrap()
+                    )
+                    .unwrap()
+                    .is_some(),
                     *open,
                     "dashboard and scheduler must agree"
                 );
@@ -327,11 +327,14 @@ fn list_reports_effective_enabled_and_the_ownership_skip() {
                 .unwrap();
                 seed_auto_task_with_schedule(&fixture, name, schedule);
             }
-            fixture.runtime.auto_task_toggle("elsewhere", true).unwrap();
-            fixture
-                .runtime
-                .auto_task_toggle("delivery-code-review", true)
+            orbit_core::app::auto_task::auto_task_toggle(&fixture.runtime, "elsewhere", true)
                 .unwrap();
+            orbit_core::app::auto_task::auto_task_toggle(
+                &fixture.runtime,
+                "delivery-code-review",
+                true,
+            )
+            .unwrap();
 
             let server = fixture.server(false);
             let listed = json_ok(server.get(URL));
@@ -417,7 +420,8 @@ fn list_keeps_delivery_schedules_independent_of_corrupt_time_cursors() {
                 ("inactive", Some("hm_elsewhere"), true),
             ] {
                 seed_auto_task_with_schedule(&fixture, name, deliveries(owner));
-                fixture.runtime.auto_task_toggle(name, enabled).unwrap();
+                orbit_core::app::auto_task::auto_task_toggle(&fixture.runtime, name, enabled)
+                    .unwrap();
             }
             definition(&fixture, "interval");
             seed_auto_task_with_schedule(&fixture, "cron", AutoTaskSchedule::cron("* * * * *"));
@@ -429,9 +433,8 @@ fn list_keeps_delivery_schedules_independent_of_corrupt_time_cursors() {
                 format!("# provenance: plugin:fixture-missing@1.0.0\n{body}"),
             )
             .unwrap();
-            let cursor = orbit_core::application::auto_tasks::cursor_state_path(
-                &fixture.runtime.paths().state_dir,
-            );
+            let cursor =
+                orbit_core::app::auto_task::cursor_state_path(&fixture.runtime.paths().state_dir);
             fs::create_dir_all(cursor.parent().unwrap()).unwrap();
             fs::write(&cursor, "{broken").unwrap();
 
@@ -672,9 +675,7 @@ fn delete_audits_authorized_removal_open_task_refusal_and_operator_denial() {
                 );
                 assert_eq!(denied["operation"], json!("auto_task.delete"), "{denied}");
                 assert!(
-                    fixture
-                        .runtime
-                        .auto_task_show("retire-me")
+                    orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "retire-me")
                         .unwrap()
                         .is_some(),
                     "a denied delete must leave the definition"
@@ -713,9 +714,7 @@ fn delete_audits_authorized_removal_open_task_refusal_and_operator_denial() {
                 "{refused}"
             );
             assert!(
-                fixture
-                    .runtime
-                    .auto_task_show("held-open")
+                orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "held-open")
                     .unwrap()
                     .is_some()
             );
@@ -753,9 +752,7 @@ fn delete_audits_authorized_removal_open_task_refusal_and_operator_denial() {
                 "{forced}"
             );
             assert!(
-                fixture
-                    .runtime
-                    .auto_task_show("held-open")
+                orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "held-open")
                     .unwrap()
                     .is_none()
             );
@@ -777,9 +774,7 @@ fn delete_audits_authorized_removal_open_task_refusal_and_operator_denial() {
                 "{deleted}"
             );
             assert!(
-                fixture
-                    .runtime
-                    .auto_task_show("retire-me")
+                orbit_core::app::auto_task::auto_task_show(&fixture.runtime, "retire-me")
                     .unwrap()
                     .is_none()
             );
@@ -865,9 +860,7 @@ fn listing_profile_preserves_http_fields_and_condition_presence() {
                 ),
             ] {
                 definitions.push(
-                    fixture
-                        .runtime
-                        .auto_task_add(AutoTaskAddParams {
+                    orbit_core::app::auto_task::auto_task_add(&fixture.runtime, AutoTaskAddParams {
                             name: name.into(),
                             description: raw.clone(),
                             schedule,

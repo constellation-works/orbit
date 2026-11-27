@@ -170,8 +170,10 @@ impl ReviewedHandoff {
                 }),
             )
             .expect("consumer");
-        owner.auto_task_toggle(CONSUMER, true).unwrap();
-        let definition = owner.auto_task_show(CONSUMER).unwrap().unwrap();
+        orbit_core::app::auto_task::auto_task_toggle(&owner, CONSUMER, true).unwrap();
+        let definition = orbit_core::app::auto_task::auto_task_show(&owner, CONSUMER)
+            .unwrap()
+            .unwrap();
         publish_origin(&repo);
         evaluate_landing(&owner, &definition);
 

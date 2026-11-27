@@ -2,9 +2,7 @@
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
-use orbit_core::application::auto_tasks::scheduler::{
-    SchedulerOptions, run_auto_task_scheduler_at,
-};
+use orbit_core::app::auto_task::{SchedulerOptions, run_auto_task_scheduler_at};
 use orbit_core::runtime::OrbitRuntime;
 
 use super::interval_params;
@@ -36,9 +34,7 @@ fn catch_up_collapses_downtime_to_one_task() {
     }
 
     let runtime = runtime();
-    runtime
-        .auto_task_add(interval_params("chore", 60))
-        .expect("add");
+    orbit_core::app::auto_task::auto_task_add(&runtime, interval_params("chore", 60)).expect("add");
     let t0 = at(2026, 1, 1, 0, 0);
 
     fire(&runtime, t0); // baseline

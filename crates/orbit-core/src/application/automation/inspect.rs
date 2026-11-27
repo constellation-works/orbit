@@ -143,7 +143,9 @@ pub fn unresolvable_delivery_branches(
         runtime.execution_env_policy().process_env(),
     );
     let mut unresolvable = Vec::new();
-    for definition in runtime.listed_auto_task_definitions()? {
+    for definition in
+        crate::app::port::AutomationAutoTask(runtime).listed_auto_task_definitions()?
+    {
         let AutoTaskSchedule::Deliveries {
             deliveries_landed: declared,
             ..
@@ -206,7 +208,7 @@ pub(crate) fn delivery_ownership_refusal(
 pub fn unadmittable_delivery_definitions(
     runtime: &OrbitRuntime,
 ) -> Result<Vec<UnadmittableDefinition>, OrbitError> {
-    Ok(runtime
+    Ok(crate::app::port::AutomationAutoTask(runtime)
         .listed_auto_task_definitions()?
         .iter()
         .filter_map(|definition| delivery_ownership_refusal(runtime, definition))
@@ -224,7 +226,9 @@ pub fn wedged_delivery_consumers(
     }
     let store = runtime.sqlite_store()?;
     let mut wedged = Vec::new();
-    for definition in runtime.listed_auto_task_definitions()? {
+    for definition in
+        crate::app::port::AutomationAutoTask(runtime).listed_auto_task_definitions()?
+    {
         if !matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
             continue;
         }
