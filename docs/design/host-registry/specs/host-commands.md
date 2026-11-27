@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: operator-registered remote hosts — the host file, orbit host add/list/show/rename/remove, dashboard Observe › Fleet, live identity probe, retired destinations file recovery"
-last_validated: 2026-10-20
+last_validated: 2026-11-27
 title: Spec — Host commands
 owner: opus
 status: Draft
@@ -9,13 +9,13 @@ feature: host-registry
 tags: [host-registry, federated-mcp, distributed-drain, spec]
 related_features: [host-registry, federated-mcp, distributed-drain]
 related_artifacts: [ORB-14448, ORB-14449, ORB-14451, ORB-14447, ORB-14261, ORB-12725]
-last_updated: 2026-10-26
+last_updated: 2026-11-27
 ---
 
 # Spec: Host commands
 
 The operator registers each remote Orbit host once, with `orbit host add`. From then on the
-CLI-owned host file is the only record of remote membership. Federated MCP, pull drains,
+machine-global host file is the only record of remote membership. Federated MCP, pull drains,
 replica worktree GC and task-prefix routing ([host-routing](./host-routing.md)) all read it.
 An entry stores the operator's name for the host, its SSH target, and the host's stable
 `machine_id` and `task_prefix`. It may also store `host_os`, the operating system reported
@@ -25,6 +25,10 @@ The OS snapshot is not refreshed by probes; remove and add the host again to ref
 Operators manage entries from the CLI or from the dashboard's Observe › Fleet view. Status:
 the host file, `orbit host`, the envelope fields, the doctor row and retired-file recovery are
 implemented ([ORB-14448]), and so is the dashboard view ([ORB-14451]).
+
+`orbit-core::app::host` owns the shared operations. The CLI dispatches `orbit host` to its
+`run` entry, and the dashboard calls the same app operations. `orbit-cmd` supplies the app's
+federated probe, read-only pull-drain checkout inspection and registered-host routing adapters.
 
 ## Why This Exists
 
@@ -237,8 +241,9 @@ Status: implemented ([ORB-14451], on the [ORB-14448] operations).
 | `PATCH /api/hosts/:host` with `{name}` | `orbit host rename` |
 | `DELETE /api/hosts/:host[?force=true]` | `orbit host remove [--force]` |
 
-- Each route calls the orbit-cmd host operation the CLI calls. There is no second
-  implementation of validation or writes.
+- Each route calls the shared `orbit-core::app::host` operation used by the CLI. `orbit-cmd`
+  supplies its probe and pull-drain ports; there is no second implementation of validation or
+  writes.
 - Answers are the CLI's `--json` output, and so are the errors: `{error, code}` with the CLI's
   code. The HTTP status follows the code: `invalid_input` 400, `unknown_host` 404, a refusal
   about the file or its entries (`host_exists`, `host_name_conflict`, `task_prefix_conflict`,
