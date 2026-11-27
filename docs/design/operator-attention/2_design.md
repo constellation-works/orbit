@@ -3,7 +3,7 @@ title: Operator Attention — Design
 owner: claude
 created_date: 2026-11-01
 updated_date: 2026-11-14
-last_validated: 2026-11-04
+last_validated: 2026-11-27
 status: Draft
 feature: operator-attention
 doc_role: design
@@ -22,15 +22,18 @@ The task-level feed, local scopes, filters, cursor and shared configuration are 
 [attention-item](./specs/attention-item.md) (kinds, schema, severity),
 [attention-filters](./specs/attention-filters.md),
 [attention-cursor](./specs/attention-cursor.md) and
-[attention-federation](./specs/attention-federation.md). Acknowledge and snooze, the dashboard
-reading the same feed, notifications and plugin-contributed kinds are in
-[3_vision.md](./3_vision.md).
+[attention-federation](./specs/attention-federation.md). Later sources added
+`notice_open`, `resident_stalled`, `routine_tripped`, `drain_paused` and
+`drain_breaker_open`; §3 maps their modules. Acknowledge and snooze now have an
+accepted follow-up scope in [signal-acknowledgement](../signal-acknowledgement/1_scope.md),
+but its implementation is parked in `someday`; the dashboard reading the same
+feed, notifications and plugin-contributed kinds remain in [3_vision.md](./3_vision.md).
 
 ## 1. A derived view over existing state
 
 `orbit.attention` is a `read_only` tool. On each call it reads existing records and returns
-the list of conditions that currently hold. There is no inbox, no item table, no cursor store
-and no background job. Three properties follow and are tested as invariants:
+the list of conditions that currently hold. The implemented attention query has no inbox, item
+table, cursor store or background job. Three properties follow and are tested as invariants:
 
 - **Resolution is the source's.** An item disappears the moment its source condition stops
   holding: the task is re-piloted clean, the decision is answered, the run is superseded, the
@@ -82,7 +85,7 @@ needed, which the slice verifies before it merges.
 |---|---|
 | `AttentionItem`, `AttentionKind`, `AttentionSeverity`, `AttentionNext`, `AttentionEnvelope`, `AttentionCursorStatus` types | `crates/orbit-types/src/tool/attention.rs`, re-exported by the existing `tool` domain |
 | The operation spec: tool `orbit.attention`, CLI `orbit attention`, filter params, description | `crates/orbit-common/src/governance/attention/registry.rs` (operations-as-data; no clap or runtime types) |
-| Derivation, folding, severity, local multi-workspace aggregation and the candidate read | `crates/orbit-core/src/application/attention/` (`sources.rs` for task-level and friction kinds, `runtime_sources.rs` for runs and claims, `provider_sources.rs` for `ci_red`, `host.rs` for local `host_unhealthy`) |
+| Derivation, folding, severity, local multi-workspace aggregation and the candidate read | `crates/orbit-core/src/application/attention/` (`sources/` for task and shared item/subject reads; `runtime_sources.rs` for runs and claims; `provider_sources.rs` for CI; `notice_sources.rs` for notices, friction and residents; `routine_sources.rs` for breakers; `drain_keeper_sources.rs` for standing drain; `host.rs` for host health) |
 | Filters, cursor codec and fingerprint, and the public page (ordering, delta, limit, cursor minting) | `crates/orbit-common/src/governance/attention/` (`filter.rs`, `cursor.rs`, `page.rs`), beside the operation spec, so the local derivation and the federated aggregator apply one implementation |
 | Default `orbit doctor` workspace checks for `host_unhealthy` | `WorkspaceCatalog::attention_doctor_checks`, implemented by the registry catalog in `orbit-cmd` (Core cannot call the doctor directly) |
 | Tool registration, MCP read-only annotation, scope | the operation spec's `mcp_scope: WorkspaceRequired` for a bound session; `crates/orbit-tools/src/mcp/annotations.rs` lists `orbit.attention` as `READ_ONLY` |
@@ -96,14 +99,14 @@ dashboard reading "the same feed" a later, small step.
 
 ## 4. Surfaces
 
-- **Tool**: `orbit.attention`, `read_only`, input exactly the filters in
-  [attention-filters](./specs/attention-filters.md) in snake_case, output the envelope in
-  [attention-item](./specs/attention-item.md#response-envelope). Seeing an item never changes
-  it; every `next` is advice. The federated aggregator's destination hop adds one reserved
-  input, `candidate_read`, which is not a filter, has no CLI flag, and is refused for every
-  other caller ([attention-federation](./specs/attention-federation.md#candidate-read)).
-  The federation slice adds that input with the fan-out. It is not part of the public filter
-  surface the first slice ships.
+- **Tool**: `orbit.attention`, `read_only`, with the public item filters in
+  [attention-filters](./specs/attention-filters.md) in snake_case and the envelope in
+  [attention-item](./specs/attention-item.md#response-envelope). MCP also accepts `wait_grant`
+  for the shell-wait flow. Seeing an item never changes it; every `next` is advice. The
+  federated aggregator's destination hop adds the reserved `candidate_read` input, which is
+  not a filter, has no CLI flag, and is refused for every other caller
+  ([attention-federation](./specs/attention-federation.md#candidate-read)). Neither input is a
+  public item filter.
 - **CLI**: `orbit attention [filters]` in the *Observe* group beside `doctor` and `log`, with
   the global `--format` / `--json` modes. Help text and errors stand alone: no source paths,
   no task or friction ids in help, and the kind names are the user-visible vocabulary.
@@ -235,8 +238,10 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
 - **Pilot hold coverage follows the hold enum.** `pilot_hold` reflects the holds the pilot
   admission code knows. A new hold type that is not added to the adapter is invisible; the
   adapter matches the enum exhaustively so the compiler flags a new variant.
-- **Fan-out adds a mux behaviour.** The federated mux gains its first merging call. It is
-  confined to one named tool and fails visible, but it is new surface to keep honest.
+- **Fan-out adds a mux behaviour.** `orbit.notice.list` already has a separate workspace-less
+  per-owner fan-out. Attention adds its candidate-read aggregation in
+  `crates/orbit-mcp/src/federated/attention_aggregate.rs`; it is a distinct path. The notice
+  aggregator's module comment calls for a future merge into a shared implementation.
 - **Replica blindness.** A follower with its owner unreachable can show only its own runs
   plus a `host_unhealthy` item. That is intended: showing stale replica tasks as current would
   be worse.
