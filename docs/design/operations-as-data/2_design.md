@@ -2,7 +2,7 @@
 title: Operations as Data — Design
 owner: claude
 created_date: 2026-07-26
-updated_date: 2026-11-04
+updated_date: 2026-11-27
 last_validated: 2026-11-04
 status: Accepted
 feature: operations-as-data
