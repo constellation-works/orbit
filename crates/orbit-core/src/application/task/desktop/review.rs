@@ -292,7 +292,10 @@ impl OrbitRuntime {
         )
         .err()
         .map(|error| {
-            format!("{error}; a merged head with other changes needs a review reconciliation")
+            format!(
+                "{error}; for a stopped local delivery, an operator must verify the merged head, \
+                 review and validation evidence and use the explicit task completion transition"
+            )
         })
     }
 
