@@ -4,11 +4,11 @@ owner: claude
 created_date: 2026-11-27
 updated_date: 2026-11-27
 last_validated: 2026-11-27
-status: Draft
+status: Accepted
 feature: plugin-pages
 doc_role: design
 type: design
-summary: "Proposed design: the manifest key, the sandboxed frame and its policy, the postMessage bridge to a plugin's own tools, the Plugins sub-tabs and pages on other hosts"
+summary: "Approved design, not yet built: the manifest key, the sandboxed frame and its policy, the postMessage bridge to a plugin's own tools, the Plugins sub-tabs and pages on other hosts"
 tags: [plugin-pages, plugins, dashboard, orbit-web]
 related_features: [plugins, user-interface, remote-access]
 related_artifacts: [ORB-29504]
@@ -16,9 +16,9 @@ related_artifacts: [ORB-29504]
 
 # Plugin Pages — Design
 
-This doc is the proposed design, draft for the operator's approval ([ORB-29504]). Nothing in it
-is built, so it describes what the first build makes true. The problem, the goal and the
-questions open for approval are in the [overview](./1_overview.md). The plugin manifest,
+The operator approved this design on 2026-11-27 ([ORB-29504]). Nothing in it is built, so it
+describes what the builds make true. The problem, the goal and the build tasks are in the
+[overview](./1_overview.md). The plugin manifest,
 grants and tool dispatch it builds on are the [plugin standard](../plugins/1_scope.md)'s.
 
 ## 1. The manifest
