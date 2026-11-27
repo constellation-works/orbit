@@ -6,3 +6,4 @@ Version history of [STD-05](STD-05.md). Adopting repos pin the `version:` in its
 - **Editorial (2026-09-26, version unchanged):** split into a directory. `STD-05.md` keeps the rules, *Applies to* and *Deviations*; *Why*, *Machine checks*, *Exemplars* and this changelog moved to `why.md`, `checks.md`, `exemplars.md` and `CHANGELOG.md`. No rule changed.
 - **v1** (2026-09-26): first publication. R1 to R25 from tacit-extraction candidates T14, S1 to S7 and P5 (ORB-13088 disposition), plus R15 and R20 from Orbit's positioning non-negotiables. ORB-13129.
 - **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).
+- **Editorial (2026-11-27, version unchanged):** R9's state-directory exemplar points at `crates/orbit-core/src/app/doctor/permission.rs`, where the Doctor check and repair moved. No rule changed (ORB-29360).
