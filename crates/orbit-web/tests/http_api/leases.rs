@@ -226,6 +226,63 @@ fn lease_routes_share_runtime_state_and_gate_writes() {
                     "authorization_denied",
                 );
             }
+            // A session without the grant is refused before the selected
+            // workspace is opened: the answer is the same 403 for a workspace
+            // that does not exist, and the refusal writes no audit row.
+            let denied_rows = || {
+                runtime
+                    .list_audit_events_with_kind(None, None, None, None, None, 200)
+                    .unwrap()
+                    .len()
+            };
+            let rows_before = denied_rows();
+            let denial = error_code(
+                read_only.send("POST", "/api/leases", request.clone()),
+                403,
+                "authorization_denied",
+            );
+            let decided = orbit_core::app::dashboard_authorize(
+                &orbit_common::governance::authorization::DASHBOARD_LEASE_WRITE,
+                false,
+            )
+            .unwrap_err();
+            assert_eq!(
+                denial,
+                json!({
+                    "error": decided.to_string(),
+                    "code": "authorization_denied",
+                    "operation": "lease.write",
+                    "provenance": decided.provenance.to_string(),
+                })
+            );
+            for (method, path) in [
+                ("POST", "/api/leases?workspace=missing".to_string()),
+                ("POST", format!("/api/leases/{id}/renew?workspace=missing")),
+                ("POST", format!("/api/leases/{id}/expand?workspace=missing")),
+                ("DELETE", format!("/api/leases/{id}?workspace=missing")),
+            ] {
+                assert_eq!(
+                    error_code(
+                        read_only.send(method, &path, request.clone()),
+                        403,
+                        "authorization_denied",
+                    ),
+                    denial,
+                    "{method} {path}"
+                );
+            }
+            assert_eq!(
+                denied_rows(),
+                rows_before,
+                "an early refusal records no row"
+            );
+            assert_eq!(
+                operator
+                    .send("POST", "/api/leases?workspace=missing", request.clone())
+                    .status(),
+                404,
+                "an admitted write then selects its workspace"
+            );
             assert_eq!(
                 operator
                     .request("POST", "/api/leases")

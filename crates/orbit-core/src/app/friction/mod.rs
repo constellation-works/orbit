@@ -31,8 +31,8 @@ use serde_json::{Map, Value};
 
 use super::exec::{self, App, Operation};
 use crate::Core;
+use crate::app::exec::Caller;
 use crate::application::contracts::ToolInvocationPort;
-use crate::composition::Entry;
 
 // What the worker's owner-routed friction write shares with `add`.
 pub(crate) use self::add::add_params;
@@ -258,12 +258,12 @@ impl App for FrictionApp {
         let Some((verb, Input { fields, reporter })) = command.into_verb_input() else {
             return Ok(Outcome::TagTaxonomy(runtime.friction_tag_taxonomy()?));
         };
-        let value = match core.entry() {
+        let value = match core.caller() {
             // The handler table: exhaustive, so a new verb has no flow until
             // it is given one. The tool entry checked the fields against the
             // verb's spec, so the flows read canonical parameter names and
             // keep only content rules.
-            Entry::Tool => {
+            Caller::Tool => {
                 let model = match reporter {
                     Reporter::Session => None,
                     Reporter::Trusted(label) => Some(label),
@@ -284,7 +284,7 @@ impl App for FrictionApp {
                     FrictionVerb::Rehome => rehome::rehome(runtime, &input),
                 }?
             }
-            Entry::CommandLine | Entry::Service => {
+            Caller::CommandLine | Caller::Session(_) => {
                 // The trusted label lives in the tool context, never in the
                 // fields a caller controls.
                 let tool_context = ToolContext {

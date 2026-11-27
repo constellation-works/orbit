@@ -1,4 +1,4 @@
-use super::exec::{dashboard_authorize, dashboard_controls};
+use super::exec::require;
 use super::{Command, Operation};
 use crate::application::job::{
     AutoDrainSubmissionProfile, AutoDrainSubmissionReceipt, DrainAdmissionsStopResult,
@@ -7,75 +7,63 @@ use crate::{
     AutoDrainRequest, CompletionPolicy, DrainAdmissionsStopRequest, DrainEntryPoint, OrbitRuntime,
 };
 use orbit_common::governance::authorization::{
-    AuthorizationDenial, DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_AUTO_FIX,
+    DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_AUTO_FIX,
     DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_MODE, DASHBOARD_AUTO_DRAIN_STOP,
 };
 use serde_json::{Value, json};
 
-impl<'a> Command<'a, Result<AutoDrainSubmissionReceipt, AuthorizationDenial>> {
-    /// Admit each requested dashboard control and submit the local drain.
-    pub fn dashboard_auto(request: AutoDrainRequest<'a>, operator: bool) -> Self {
-        let admission = dashboard_controls(
-            operator,
-            [
-                (
-                    request.completion == CompletionPolicy::Done,
-                    &DASHBOARD_AUTO_DRAIN_COMPLETE,
-                ),
-                (
-                    request.approve_proposed,
-                    &DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
-                ),
-                (request.auto_fix, &DASHBOARD_AUTO_DRAIN_AUTO_FIX),
-                (
-                    request.auto_concurrency.is_some(),
-                    &DASHBOARD_AUTO_DRAIN_MODE,
-                ),
-            ],
-        );
-        Self::new(
-            Operation::command("run", "auto").target(Some("workflow"), Some("auto".into())),
-            move |core| {
-                if let Err(denial) = admission {
-                    return Ok(Err(denial));
-                }
-                let receipt = super::submission::submit_auto(
-                    core.runtime(),
-                    request,
-                    AutoDrainSubmissionProfile::Http,
-                )?;
-                Ok(Ok(receipt))
-            },
-        )
+impl<'a> Command<'a, AutoDrainSubmissionReceipt> {
+    /// Submit the local drain. Each control the request asks for is a
+    /// requirement, in this order, so the first refusal is the one reported.
+    pub fn dashboard_auto(request: AutoDrainRequest<'a>) -> Self {
+        let operation = Operation::command("run", "auto")
+            .target(Some("workflow"), Some("auto".into()))
+            .requires_if(
+                request.completion == CompletionPolicy::Done,
+                &DASHBOARD_AUTO_DRAIN_COMPLETE,
+            )
+            .requires_if(
+                request.approve_proposed,
+                &DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
+            )
+            .requires_if(request.auto_fix, &DASHBOARD_AUTO_DRAIN_AUTO_FIX)
+            .requires_if(
+                request.auto_concurrency.is_some(),
+                &DASHBOARD_AUTO_DRAIN_MODE,
+            );
+        Self::new(operation, move |core| {
+            super::submission::submit_auto(
+                core.runtime(),
+                request,
+                AutoDrainSubmissionProfile::Http,
+            )
+        })
     }
 }
 
-impl<'a, E: 'a> Command<'a, Result<Result<DrainAdmissionsStopResult, E>, AuthorizationDenial>> {
-    /// Report a malformed body only to a session admitted to stop the drain.
-    pub fn dashboard_stop(
-        operator: bool,
-        input: Result<(Option<String>, Option<String>), E>,
-    ) -> Self {
-        let admission = dashboard_authorize(&DASHBOARD_AUTO_DRAIN_STOP, operator);
-        Self::new(Operation::command("run", "auto"), move |core| {
-            if let Err(denial) = admission {
-                return Ok(Err(denial));
-            }
-            let (reason, claim) = match input {
-                Ok(fields) => fields,
-                Err(error) => return Ok(Ok(Err(error))),
-            };
-            let result =
-                core.runtime()
-                    .stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
-                        actor: "dashboard",
-                        source: "dashboard",
-                        reason: reason.as_deref(),
-                        claim_token: claim.as_deref(),
-                        force: false,
-                    })?;
-            Ok(Ok(Ok(result)))
-        })
+impl<'a, E: 'a> Command<'a, Result<DrainAdmissionsStopResult, E>> {
+    /// Stop the drain's admissions. A malformed body, the inner error, is
+    /// reported only to a session admitted to stop the drain.
+    pub fn dashboard_stop(input: Result<(Option<String>, Option<String>), E>) -> Self {
+        Self::new(
+            Operation::command("run", "auto").requires(&DASHBOARD_AUTO_DRAIN_STOP),
+            move |core| {
+                let (reason, claim) = match input {
+                    Ok(fields) => fields,
+                    Err(error) => return Ok(Err(error)),
+                };
+                let result =
+                    core.runtime()
+                        .stop_workspace_auto_admissions(DrainAdmissionsStopRequest {
+                            actor: "dashboard",
+                            source: "dashboard",
+                            reason: reason.as_deref(),
+                            claim_token: claim.as_deref(),
+                            force: false,
+                        })?;
+                Ok(Ok(result))
+            },
+        )
     }
 }
 
@@ -88,19 +76,7 @@ impl<'a> Command<'a, Value> {
         limit: usize,
         crews: &'a [String],
         hosts: Option<&'a orbit_registry::hosts::HostRegistry>,
-        operator: bool,
     ) -> Self {
-        let controls_authorized = dashboard_controls(
-            operator,
-            [
-                (true, &DASHBOARD_AUTO_DRAIN_COMPLETE),
-                (true, &DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED),
-                (true, &DASHBOARD_AUTO_DRAIN_AUTO_FIX),
-                (true, &DASHBOARD_AUTO_DRAIN_STOP),
-                (true, &DASHBOARD_AUTO_DRAIN_MODE),
-            ],
-        )
-        .is_ok();
         Self::new(
             Operation::command("run", "readiness")
                 .target(Some("workspace"), Some("auto_readiness".into())),
@@ -114,6 +90,17 @@ impl<'a> Command<'a, Value> {
                     crews,
                 )?;
                 payload["start_options"] = drain_start_options(runtime, hosts)?;
+                // Whether the caller holds every start control; a read, so
+                // nothing is refused.
+                let controls_authorized = [
+                    &DASHBOARD_AUTO_DRAIN_COMPLETE,
+                    &DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED,
+                    &DASHBOARD_AUTO_DRAIN_AUTO_FIX,
+                    &DASHBOARD_AUTO_DRAIN_STOP,
+                    &DASHBOARD_AUTO_DRAIN_MODE,
+                ]
+                .into_iter()
+                .all(|control| require(core, control).is_ok());
                 if let Some(object) = payload.as_object_mut() {
                     object.insert(
                         "controls_authorized".into(),

@@ -16,12 +16,11 @@ mod dashboard;
 mod toggle;
 
 use orbit_common::OrbitError;
-use orbit_common::governance::authorization::AuthorizationDenial;
 use orbit_types::workflow::RoutineTrigger;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::exec::{self, App, DashboardCaller, Operation};
+use super::exec::{self, App, DashboardOrigin, DashboardRow, Operation};
 use crate::Core;
 pub use crate::application::routines::{
     ClockStatus, RoutineEditOutcome, RoutineEditRefusal, RoutineStatusReport,
@@ -51,7 +50,7 @@ pub enum Command {
         statuses: Statuses,
     },
     /// One write from an authenticated dashboard session.
-    Dashboard(DashboardCaller, DashboardWrite),
+    Dashboard(DashboardOrigin, DashboardWrite),
 }
 
 /// The routine row a dashboard edit was sent from.
@@ -164,7 +163,7 @@ pub enum Outcome {
     /// What `enable`/`disable` changed.
     EnabledSet(RoutineEditOutcome),
     /// A dashboard write: what it did, or why the session was refused.
-    Dashboard(Result<DashboardWritten, AuthorizationDenial>),
+    Dashboard(DashboardWritten),
 }
 
 /// Why a routine command failed.
@@ -199,7 +198,7 @@ impl App for RoutineApp {
                     .target(Some("routine"), Some(name.clone()))
                     .arguments(&json!({ "enabled": enabled }))
             }
-            Command::Dashboard(..) => Operation::dashboard_read("routine", "dashboard"),
+            Command::Dashboard(origin, write) => dashboard::operation(origin, write),
         }
     }
 
@@ -215,19 +214,27 @@ impl App for RoutineApp {
                 enabled,
                 statuses,
             )?),
-            Command::Dashboard(caller, write) => {
-                Outcome::Dashboard(dashboard::write(core, caller, write)?)
+            Command::Dashboard(origin, write) => {
+                Outcome::Dashboard(dashboard::write(core, &origin.machine_name, write)?)
             }
         })
+    }
+
+    fn dashboard_row(
+        result: &Result<Outcome, crate::Error>,
+        _target: &str,
+        arguments: Value,
+    ) -> Option<DashboardRow> {
+        let written = match result {
+            Ok(Outcome::Dashboard(written)) => Ok(written),
+            Ok(_) => return None,
+            Err(error) => Err(error),
+        };
+        dashboard::row(written, arguments)
     }
 }
 
 /// Run one routine command: authorize it, audit it and return its outcome.
 pub fn exec(core: &Core, command: Command) -> Result<Outcome, crate::Error> {
-    match command {
-        Command::Dashboard(caller, write) => {
-            dashboard::write(core, caller, write).map(Outcome::Dashboard)
-        }
-        command => exec::run::<RoutineApp>(core, command),
-    }
+    exec::run::<RoutineApp>(core, command)
 }

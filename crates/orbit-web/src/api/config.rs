@@ -23,7 +23,7 @@ use serde_json::{Map, Value, json};
 use crate::api::helpers;
 use crate::state::{ConfigFileWs, DashboardState, WsCore};
 
-use super::routines::{action_capability, authorization_denied};
+use super::routines::action_capability;
 use super::{bad_request, blocking, map_runtime_error};
 
 #[derive(Debug, Deserialize, Default)]
@@ -240,7 +240,6 @@ async fn apply_dashboard_write(
 ) -> Response {
     let write = DashboardConfigWrite {
         kind,
-        operator_session: state.operator_session(),
         host: state
             .env()
             .hostname()
@@ -252,10 +251,10 @@ async fn apply_dashboard_write(
     })
     .await;
     match applied {
-        Ok(Ok(Outcome::DashboardWritten(Ok(DashboardConfigWriteResult::Applied {
+        Ok(Ok(Outcome::DashboardWritten(DashboardConfigWriteResult::Applied {
             target,
             outcome,
-        })))) => Json(json!({
+        }))) => Json(json!({
             "key": target,
             "scope": outcome.scope,
             "path": outcome.path.display().to_string(),
@@ -264,7 +263,7 @@ async fn apply_dashboard_write(
             "rows": outcome.rows,
         }))
         .into_response(),
-        Ok(Ok(Outcome::DashboardWritten(Ok(DashboardConfigWriteResult::Refused(refusal))))) => (
+        Ok(Ok(Outcome::DashboardWritten(DashboardConfigWriteResult::Refused(refusal)))) => (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": refusal.message,
@@ -272,7 +271,6 @@ async fn apply_dashboard_write(
             })),
         )
             .into_response(),
-        Ok(Ok(Outcome::DashboardWritten(Err(denial)))) => authorization_denied(denial),
         Ok(Ok(_)) => unreachable!("dashboard config write returned an unrelated outcome"),
         Ok(Err(error)) => map_runtime_error(error),
         Err(response) => *response,

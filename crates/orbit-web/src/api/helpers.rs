@@ -292,6 +292,9 @@ pub(super) fn non_empty_string(raw: &str) -> Option<String> {
 
 pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
     match e {
+        orbit_core::OrbitError::AuthorizationDenied(denial) => {
+            super::routines::authorization_denied(*denial)
+        }
         orbit_core::OrbitError::DecisionRefused { code, message } => {
             let status = if code == orbit_common::DecisionRefusalCode::RequestNotFound {
                 StatusCode::NOT_FOUND

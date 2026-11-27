@@ -20,12 +20,11 @@ mod dashboard;
 mod operation;
 
 use orbit_common::OrbitError;
-use orbit_common::governance::authorization::AuthorizationDenial;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_types::workflow::AutoTaskSchedule;
 use serde_json::Value;
 
-use super::exec::{self, App, DashboardCaller, Operation};
+use super::exec::{self, App, DashboardOrigin, DashboardRow, Operation};
 use super::tool_call;
 pub use super::tool_call::Input;
 use crate::application::auto_tasks::delete::AutoTaskDeleteReport;
@@ -49,8 +48,8 @@ pub enum Command {
         /// Also list definitions whose seeding plugin is off here.
         include_inactive_plugins: bool,
     },
-    /// One write from an authenticated dashboard session.
-    Dashboard(DashboardCaller, DashboardWrite),
+    /// One write from a dashboard session, and where the request came from.
+    Dashboard(DashboardOrigin, DashboardWrite),
 }
 
 /// One auto-task write the dashboard sends.
@@ -134,8 +133,8 @@ pub enum Outcome {
     Value(Value),
     /// The listing.
     Listing(Box<Listing>),
-    /// A dashboard write: what it did, or why the session was refused.
-    Dashboard(Box<Result<DashboardWritten, AuthorizationDenial>>),
+    /// What a dashboard write did.
+    Dashboard(Box<DashboardWritten>),
 }
 
 impl Outcome {
@@ -178,9 +177,8 @@ impl App for AutoTaskApp {
             Command::Operation(verb, input) => {
                 Operation::of(*verb, &input.fields).without_tool_row()
             }
-            Command::Listing { .. } | Command::Dashboard(..) => {
-                Operation::dashboard_read("auto-task", "listing")
-            }
+            Command::Listing { .. } => Operation::dashboard_read("auto-task", "listing"),
+            Command::Dashboard(origin, write) => dashboard::operation(origin, write),
         }
     }
 
@@ -198,18 +196,27 @@ impl App for AutoTaskApp {
                 core.runtime(),
                 include_inactive_plugins,
             )?)),
-            Command::Dashboard(caller, write) => {
-                Outcome::Dashboard(Box::new(dashboard::write(core, caller, write)?))
+            Command::Dashboard(_, write) => {
+                Outcome::Dashboard(Box::new(dashboard::write(core, write)?))
             }
         })
+    }
+
+    fn dashboard_row(
+        result: &Result<Outcome, crate::Error>,
+        _target: &str,
+        arguments: Value,
+    ) -> Option<DashboardRow> {
+        let written = match result {
+            Ok(Outcome::Dashboard(written)) => Ok(written.as_ref()),
+            Ok(_) => return None,
+            Err(error) => Err(error),
+        };
+        dashboard::row(written, arguments)
     }
 }
 
 /// Run one auto-task command: authorize it, audit it and return its outcome.
 pub fn exec(core: &Core, command: Command) -> Result<Outcome, crate::Error> {
-    match command {
-        Command::Dashboard(caller, write) => dashboard::write(core, caller, write)
-            .map(|written| Outcome::Dashboard(Box::new(written))),
-        command => exec::run::<AutoTaskApp>(core, command),
-    }
+    exec::run::<AutoTaskApp>(core, command)
 }

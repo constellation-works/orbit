@@ -90,6 +90,9 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             guidance: guidance.map(|guidance| redact(&guidance)),
         },
         OrbitError::CapabilityDenied(m) => OrbitError::CapabilityDenied(redact(&m)),
+        // A decision's fields are capability labels and a governed operation,
+        // never caller text, and the dashboard renders its 403 body from them.
+        denial @ OrbitError::AuthorizationDenied(_) => denial,
         OrbitError::UnknownSelector(m) => OrbitError::UnknownSelector(redact(&m)),
         OrbitError::AmbiguousDestination(m) => OrbitError::AmbiguousDestination(redact(&m)),
         OrbitError::UnreachableDestination(m) => OrbitError::UnreachableDestination(redact(&m)),

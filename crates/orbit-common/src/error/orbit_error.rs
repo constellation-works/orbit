@@ -1,6 +1,8 @@
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::governance::authorization::AuthorizationDenial;
+
 use super::{
     ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DecisionRefusalCode,
     DependencyNotDelivered, ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal,
@@ -46,6 +48,17 @@ pub enum OrbitError {
     /// `denied` audit status so refusals stay separable from failures.
     #[error("capability denied: {0}")]
     CapabilityDenied(String),
+    /// A dashboard session lacked the capability a governed operation
+    /// requires. It carries the decision itself, so the dashboard renders its
+    /// 403 body (operation id, provenance) and the audit row from the same
+    /// value. Its text is the denial's own; other callers keep
+    /// [`Self::CapabilityDenied`].
+    #[error("{0}")]
+    #[serde(
+        rename = "CapabilityDenied",
+        serialize_with = "serialize_authorization_denial"
+    )]
+    AuthorizationDenied(Box<AuthorizationDenial>),
     /// No registered workspace matched the federated selector.
     #[error("unknown federated workspace selector: {0}")]
     UnknownSelector(String),
@@ -733,6 +746,13 @@ fn task_delivery_unavailable_message(task_id: &str, remedy: &str) -> String {
     format!(
         "no task delivery run in this workspace was submitted with task '{task_id}'; delivery evidence exists only for tasks submitted by a delivery run in this workspace — use `{remedy}` instead"
     )
+}
+
+fn serialize_authorization_denial<S: serde::Serializer>(
+    denial: &AuthorizationDenial,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_str(denial)
 }
 
 fn serialize_task_delivery_unavailable<S: serde::Serializer>(

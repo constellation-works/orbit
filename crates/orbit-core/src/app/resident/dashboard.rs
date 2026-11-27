@@ -2,13 +2,13 @@
 //! or resident tool the dashboard's handler called before.
 
 use orbit_common::OrbitError;
-use orbit_common::governance::authorization::{AuthorizationDenial, DASHBOARD_RESIDENT_WRITE};
+use orbit_common::governance::authorization::DASHBOARD_RESIDENT_WRITE;
 use orbit_common::governance::resident::ResidentVerb;
 use orbit_types::task::TaskComplexity;
 use serde_json::{Map, Value, json};
 
 use super::{Cards, CycleRoutineScope, DashboardWrite, DashboardWritten};
-use crate::app::exec::{self, DashboardCaller, DashboardRow};
+use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
 use crate::app::tool_call::{self, Input};
 use crate::application::resident::{
     ResidentDashboardGrant, ResidentDashboardGrantOutcome, ResidentMandateCreateParams,
@@ -53,16 +53,9 @@ pub(super) fn card(core: &Core, task_id: String, operator: bool) -> Result<Value
     Ok(shown)
 }
 
-/// Authorize one resident write, run it and record its one audit row. Any
-/// failure is recorded as `refused`; a grant whose narrowing was refused is
-/// recorded as a failure naming which step applied.
-pub(super) fn write(
-    core: &Core,
-    caller: DashboardCaller,
-    write: DashboardWrite,
-) -> Result<Result<DashboardWritten, AuthorizationDenial>, OrbitError> {
-    let runtime = core.runtime();
-    let (recorded_as, target, arguments) = match &write {
+/// The governed operation one write requires and the audit row it declares.
+pub(super) fn operation(origin: &DashboardOrigin, write: &DashboardWrite) -> Operation {
+    let (recorded_as, target, arguments) = match write {
         DashboardWrite::Create { title, mandate, .. } => (
             "resident.create",
             "new".to_string(),
@@ -111,61 +104,70 @@ pub(super) fn write(
             Value::Object(fields.clone()),
         ),
     };
-    exec::run_dashboard_recorded(
-        core,
-        caller
-            .operation(&DASHBOARD_RESIDENT_WRITE, &target, arguments)
-            .recorded_as(recorded_as),
-        || match write {
-            DashboardWrite::Create {
-                title,
-                description,
-                complexity,
-                mandate,
-            } => {
-                if !mandate.is_object() {
-                    return Err(OrbitError::InvalidInput(
-                        "mandate must be a resident.mandate/v1 object".to_string(),
-                    ));
-                }
-                let complexity = complexity
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|complexity| !complexity.is_empty())
-                    .unwrap_or("medium")
-                    .parse::<TaskComplexity>()
-                    .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-                runtime
-                    .create_resident_mandate(ResidentMandateCreateParams {
-                        title,
-                        description,
-                        complexity,
-                        mandate,
-                    })
-                    .map(DashboardWritten::Value)
+    Operation::dashboard_read("resident", "dashboard")
+        .requires(&DASHBOARD_RESIDENT_WRITE)
+        .dashboard_row(&DASHBOARD_RESIDENT_WRITE, target, arguments, origin.clone())
+        .dashboard_row_recorded_as(recorded_as)
+}
+
+/// Run one admitted write.
+pub(super) fn write(core: &Core, write: DashboardWrite) -> Result<DashboardWritten, OrbitError> {
+    let runtime = core.runtime();
+    match write {
+        DashboardWrite::Create {
+            title,
+            description,
+            complexity,
+            mandate,
+        } => {
+            if !mandate.is_object() {
+                return Err(OrbitError::InvalidInput(
+                    "mandate must be a resident.mandate/v1 object".to_string(),
+                ));
             }
-            DashboardWrite::Grant(params) => runtime
-                .grant_resident_authority_as_dashboard_operator(params)
-                .map(|grant| DashboardWritten::Granted(Box::new(grant))),
-            DashboardWrite::Control(fields) => {
-                channel(core, ResidentVerb::Control, fields).map(DashboardWritten::Value)
-            }
-            DashboardWrite::Relay(fields) => {
-                channel(core, ResidentVerb::Relay, fields).map(DashboardWritten::Value)
-            }
+            let complexity = complexity
+                .as_deref()
+                .map(str::trim)
+                .filter(|complexity| !complexity.is_empty())
+                .unwrap_or("medium")
+                .parse::<TaskComplexity>()
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+            runtime
+                .create_resident_mandate(ResidentMandateCreateParams {
+                    title,
+                    description,
+                    complexity,
+                    mandate,
+                })
+                .map(DashboardWritten::Value)
+        }
+        DashboardWrite::Grant(params) => runtime
+            .grant_resident_authority_as_dashboard_operator(params)
+            .map(|grant| DashboardWritten::Granted(Box::new(grant))),
+        DashboardWrite::Control(fields) => {
+            channel(core, ResidentVerb::Control, fields).map(DashboardWritten::Value)
+        }
+        DashboardWrite::Relay(fields) => {
+            channel(core, ResidentVerb::Relay, fields).map(DashboardWritten::Value)
+        }
+    }
+}
+
+/// Any failure is recorded as `refused`; a grant whose narrowing was refused
+/// is recorded as a failure naming which step applied.
+pub(super) fn row(
+    result: Result<&DashboardWritten, &OrbitError>,
+    arguments: Value,
+) -> Option<DashboardRow> {
+    Some(DashboardRow {
+        failure: match result {
+            Err(_) => Some("refused".to_string()),
+            Ok(DashboardWritten::Granted(grant)) => grant_partial_failure(grant),
+            Ok(DashboardWritten::Value(_)) => None,
         },
-        |result, arguments| {
-            Some(DashboardRow {
-                failure: match result {
-                    Err(_) => Some("refused".to_string()),
-                    Ok(DashboardWritten::Granted(grant)) => grant_partial_failure(grant),
-                    Ok(DashboardWritten::Value(_)) => None,
-                },
-                target: None,
-                arguments,
-            })
-        },
-    )
+        target: None,
+        arguments,
+    })
 }
 
 /// The manager channel reaches its tool as the operator session the

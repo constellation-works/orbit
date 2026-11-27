@@ -205,7 +205,7 @@ fn open_workspaces(pinned: &Pinned, entries: &[&WsEntry]) -> Vec<Result<Source, 
             "failed to open workspace".to_string()
         })?;
         Ok(Source {
-            core: WsCore::over(&runtime).0,
+            core: WsCore::over(&runtime, pinned.session()).0,
             ws: Ws(runtime),
         })
     })

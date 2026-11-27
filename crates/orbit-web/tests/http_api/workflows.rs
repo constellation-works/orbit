@@ -732,6 +732,29 @@ wf_test!(
         ecode!(operator.send( "POST", &format!("/api/runs/{}/replay", source.run_id), json!({}), ) => 400, "workspace_required");
         let denial = ecode!(agent.send("POST", &path, json!({})) => 403, "authorization_denied");
         assert_eq!(denial["operation"], "job.run");
+        // The session is refused before the run id is read or the workspace
+        // that holds the run is discovered, with the same body.
+        for early in [
+            format!("/api/runs/not.a.run/replay?workspace={WS}"),
+            format!("/api/runs/{}/replay?workspace=ws_missing", source.run_id),
+        ] {
+            assert_eq!(
+                ecode!(agent.send("POST", &early, json!({})) => 403, "authorization_denied"),
+                denial,
+                "{early}"
+            );
+        }
+        assert_eq!(
+            operator
+                .send(
+                    "POST",
+                    &format!("/api/runs/not.a.run/replay?workspace={WS}"),
+                    json!({})
+                )
+                .status(),
+            400,
+            "an admitted replay then reads its run id"
+        );
         perr!(operator.send("POST", &path, json!({"claim_token": 1})) => "invalid type");
         let grant = fixture
             .runtime
@@ -844,6 +867,26 @@ wf_test!(
             }
             assert_no_new_runs(&fixture, &before, "a rejected body persists no run");
         }
+        // A start that asks for several authorities is refused for the first.
+        for (body, first) in [
+            (
+                json!({
+                    "for_duration": "1m",
+                    "complete": true,
+                    "approve_proposed": true,
+                    "auto_fix": true,
+                }),
+                "auto_drain.complete",
+            ),
+            (
+                json!({"for_duration":"1m","approve_proposed":true,"auto_fix":true}),
+                "auto_drain.approve_proposed",
+            ),
+        ] {
+            let denied = ecode!(agent.send("POST", &uri, body) => 403, "authorization_denied");
+            assert_eq!(denied["operation"], first);
+        }
+        assert_no_new_runs(&fixture, &before, "a denied start persists no run");
         for wrong in [
             json!(false),
             json!(true),

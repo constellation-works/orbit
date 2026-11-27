@@ -8,8 +8,8 @@ use orbit_tools::ToolContext;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Map, Value};
 
+use super::exec;
 use crate::application::contracts::ToolInvocationPort;
-use crate::composition::Entry;
 use crate::{Core, OrbitRuntime};
 
 /// One command's fields, named as its verb's registry spec declares them,
@@ -82,13 +82,15 @@ pub(crate) fn run<V: OperationVerb>(
     input: Input,
     flow: impl FnOnce(&OrbitRuntime, &OperationInput, &Caller) -> Result<Value, OrbitError>,
 ) -> Result<Value, OrbitError> {
-    match core.entry() {
-        Entry::Tool => {
+    match core.caller() {
+        exec::Caller::Tool => {
             let Input { fields, caller } = input;
             // Re-wraps the input the tool entry already parsed.
             flow(core.runtime(), &verb.spec().parse_input(fields)?, &caller)
         }
-        Entry::CommandLine | Entry::Service => through_tool_entry(core.runtime(), verb, input),
+        exec::Caller::CommandLine | exec::Caller::Session(_) => {
+            through_tool_entry(core.runtime(), verb, input)
+        }
     }
 }
 
@@ -119,11 +121,13 @@ pub(crate) fn run_unparsed<V: OperationVerb>(
     input: Input,
     flow: impl FnOnce(&OrbitRuntime, Value, &Caller) -> Result<Value, OrbitError>,
 ) -> Result<Value, OrbitError> {
-    match core.entry() {
-        Entry::Tool => {
+    match core.caller() {
+        exec::Caller::Tool => {
             let Input { fields, caller } = input;
             flow(core.runtime(), fields, &caller)
         }
-        Entry::CommandLine | Entry::Service => through_tool_entry(core.runtime(), verb, input),
+        exec::Caller::CommandLine | exec::Caller::Session(_) => {
+            through_tool_entry(core.runtime(), verb, input)
+        }
     }
 }

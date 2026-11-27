@@ -60,7 +60,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::blocking;
-use super::routines::{action_capability, authorization_denied, dashboard_caller, status_json};
+use super::routines::{action_capability, dashboard_caller, status_json};
 use super::tasks::human_comment_author;
 use crate::state::{DashboardState, WsCore};
 
@@ -278,11 +278,8 @@ async fn resident_write(
     })
     .await
     {
-        Ok(Outcome::Dashboard(Ok(DashboardWritten::Value(value)))) => Json(value).into_response(),
-        Ok(Outcome::Dashboard(Ok(DashboardWritten::Granted(grant)))) => {
-            Json(*grant).into_response()
-        }
-        Ok(Outcome::Dashboard(Err(denial))) => authorization_denied(denial),
+        Ok(Outcome::Dashboard(DashboardWritten::Value(value))) => Json(value).into_response(),
+        Ok(Outcome::Dashboard(DashboardWritten::Granted(grant))) => Json(*grant).into_response(),
         Ok(Outcome::Value(_) | Outcome::Cards(_)) => super::server_error(unexpected_outcome(label)),
         Err(response) => *response,
     }

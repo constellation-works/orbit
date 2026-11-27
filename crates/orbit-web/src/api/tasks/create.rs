@@ -138,7 +138,7 @@ pub(in crate::api) async fn create_proposal(
                 ));
             }
             let request_id = body.request_id.clone();
-            let WsCore(core) = WsCore::over(&runtime);
+            let WsCore(core) = WsCore::over(&runtime, state.session());
             let id = super::writes::run_audited_web_task_mutation(
                 &core,
                 meta,

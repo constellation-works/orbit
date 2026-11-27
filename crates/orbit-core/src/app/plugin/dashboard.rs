@@ -5,7 +5,8 @@ use orbit_common::governance::authorization::{DASHBOARD_PLUGIN_DISABLE, DASHBOAR
 use serde_json::Value;
 
 use super::Outcome;
-use crate::app::exec;
+use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
+use crate::application::plugin::PluginSummary;
 use crate::{Core, OrbitRuntime};
 
 /// The enablement record a dashboard write changes.
@@ -14,14 +15,35 @@ pub enum DashboardScope {
     Workspace,
 }
 
-/// One enable or disable request from an authenticated dashboard session.
+/// One enable or disable request from a dashboard session.
 pub struct DashboardToggle {
     pub namespace: String,
     pub scope: Result<DashboardScope, OrbitError>,
     pub enable: bool,
-    pub operator_session: bool,
     pub arguments: Value,
     pub host: Option<String>,
+}
+
+impl DashboardToggle {
+    /// The governed operation this toggle requires and its audit row names.
+    pub(super) fn operation(&self) -> Operation {
+        let governed = if self.enable {
+            &DASHBOARD_PLUGIN_ENABLE
+        } else {
+            &DASHBOARD_PLUGIN_DISABLE
+        };
+        Operation::dashboard_read("plugin", "dashboard-toggle")
+            .requires(governed)
+            .dashboard_row(
+                governed,
+                self.namespace.clone(),
+                self.arguments.clone(),
+                DashboardOrigin {
+                    host: self.host.clone(),
+                    ..Default::default()
+                },
+            )
+    }
 }
 
 /// A panel read bound to the loaded plugin and its cache window. The dashboard
@@ -56,63 +78,52 @@ impl PanelRead {
     }
 }
 
-pub(super) fn exec(core: &Core, toggle: DashboardToggle) -> Result<Outcome, OrbitError> {
+/// Change the enablement record, or answer `None` for an unknown plugin.
+pub(super) fn toggle(
+    core: &Core,
+    toggle: DashboardToggle,
+) -> Result<Option<PluginSummary>, OrbitError> {
+    let runtime = core.runtime();
     let DashboardToggle {
         namespace,
         scope,
         enable,
-        operator_session,
-        arguments,
-        host,
+        ..
     } = toggle;
-    let operation = if enable {
-        &DASHBOARD_PLUGIN_ENABLE
-    } else {
-        &DASHBOARD_PLUGIN_DISABLE
+    let scope = scope?;
+    if !runtime
+        .list_plugins()?
+        .iter()
+        .any(|plugin| plugin.name == namespace)
+    {
+        return Ok(None);
+    }
+    let summary = match (enable, scope) {
+        (true, DashboardScope::Host) => runtime.enable_plugin_from_dashboard(&namespace)?.summary,
+        (true, DashboardScope::Workspace) => {
+            runtime
+                .enable_plugin_in_workspace(&namespace, false)?
+                .summary
+        }
+        (false, DashboardScope::Host) => runtime.disable_plugin(&namespace)?,
+        (false, DashboardScope::Workspace) => runtime.disable_plugin_in_workspace(&namespace)?,
     };
-    let runtime = core.runtime();
-    exec::run_dashboard(
-        core,
-        exec::DashboardOperation {
-            operation,
-            target: &namespace,
+    Ok(Some(summary))
+}
+
+/// A toggle's audit row: a missing plugin carries the same message as the
+/// dashboard response.
+pub(super) fn row(
+    result: &Result<Outcome, OrbitError>,
+    target: &str,
+    arguments: Value,
+) -> DashboardRow {
+    match result {
+        Ok(Outcome::DashboardToggled(None)) => DashboardRow {
+            failure: Some(format!("plugin not found: {target}")),
+            target: None,
             arguments,
-            operator_session,
-            host,
-            workspace: None,
-            machine_name: String::new(),
-            recorded_as: None,
         },
-        || {
-            let scope = scope?;
-            if !runtime
-                .list_plugins()?
-                .iter()
-                .any(|plugin| plugin.name == namespace)
-            {
-                return Ok(None);
-            }
-            let summary = match (enable, scope) {
-                (true, DashboardScope::Host) => {
-                    runtime.enable_plugin_from_dashboard(&namespace)?.summary
-                }
-                (true, DashboardScope::Workspace) => {
-                    runtime
-                        .enable_plugin_in_workspace(&namespace, false)?
-                        .summary
-                }
-                (false, DashboardScope::Host) => runtime.disable_plugin(&namespace)?,
-                (false, DashboardScope::Workspace) => {
-                    runtime.disable_plugin_in_workspace(&namespace)?
-                }
-            };
-            Ok(Some(summary))
-        },
-        |summary| {
-            summary
-                .is_none()
-                .then(|| format!("plugin not found: {namespace}"))
-        },
-    )
-    .map(Outcome::DashboardToggled)
+        result => DashboardRow::of(result, arguments),
+    }
 }

@@ -98,7 +98,6 @@ async fn mutate_plugin(
         namespace: namespace.clone(),
         scope,
         enable,
-        operator_session: state.operator_session(),
         arguments: body,
         host: state
             .env()
@@ -109,15 +108,14 @@ async fn mutate_plugin(
     let result =
         tokio::task::spawn_blocking(move || exec(&core, Command::DashboardToggle(toggle))).await;
     match result {
-        Ok(Ok(Outcome::DashboardToggled(Ok(Some(summary))))) => {
+        Ok(Ok(Outcome::DashboardToggled(Some(summary)))) => {
             let home =
                 orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
             Json(json!({"plugin": plugin_to_json(&summary, home.as_deref())})).into_response()
         }
-        Ok(Ok(Outcome::DashboardToggled(Ok(None)))) => {
+        Ok(Ok(Outcome::DashboardToggled(None))) => {
             not_found(format!("plugin not found: {namespace}"))
         }
-        Ok(Ok(Outcome::DashboardToggled(Err(denial)))) => authorization_denied(denial),
         Ok(Ok(_)) => unreachable!("dashboard plugin write returned an unrelated outcome"),
         Ok(Err(error)) => plugin_write_error(error),
         Err(error) => plugin_write_error(OrbitError::Execution(format!(
@@ -128,6 +126,7 @@ async fn mutate_plugin(
 
 fn plugin_write_error(error: orbit_core::OrbitError) -> Response {
     match error {
+        orbit_core::OrbitError::AuthorizationDenied(denial) => authorization_denied(*denial),
         orbit_core::OrbitError::NotFound { id, .. } => not_found(format!("plugin not found: {id}")),
         orbit_core::OrbitError::PluginDisabledOnHost { plugin } => (
             StatusCode::CONFLICT,

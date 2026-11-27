@@ -21,7 +21,7 @@ use orbit_common::governance::authorization::{
     GovernedOperation,
 };
 use orbit_core::Core;
-use orbit_core::app::DashboardCaller;
+use orbit_core::app::DashboardOrigin;
 pub(super) use orbit_core::app::dashboard_authorize as authorized_caller;
 use orbit_core::app::routine::{
     self, ClockAction, ClockControl, ClockControlled, Command, DashboardWrite, DashboardWritten,
@@ -271,9 +271,8 @@ pub(super) fn dashboard_caller(
     state: &DashboardState,
     workspace: Option<&str>,
     machine_name: &str,
-) -> DashboardCaller {
-    DashboardCaller {
-        operator_session: state.operator_session(),
+) -> DashboardOrigin {
+    DashboardOrigin {
         host: state
             .env()
             .hostname()
@@ -315,7 +314,7 @@ fn clock_observation(state: &DashboardState) -> routine::ClockObservation {
 pub(super) async fn routine_write(
     label: &'static str,
     core: Arc<Core>,
-    caller: DashboardCaller,
+    caller: DashboardOrigin,
     write: DashboardWrite,
 ) -> Result<DashboardWritten, Box<Response>> {
     match blocking(label, move || {
@@ -323,8 +322,7 @@ pub(super) async fn routine_write(
     })
     .await?
     {
-        Outcome::Dashboard(Ok(written)) => Ok(written),
-        Outcome::Dashboard(Err(denial)) => Err(Box::new(authorization_denied(denial))),
+        Outcome::Dashboard(written) => Ok(written),
         Outcome::EnabledSet(_) => Err(Box::new(unexpected_outcome(label))),
     }
 }

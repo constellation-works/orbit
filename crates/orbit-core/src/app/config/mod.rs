@@ -7,10 +7,9 @@ mod read;
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
-use orbit_common::governance::authorization::AuthorizationDenial;
 use serde_json::Value;
 
-use super::exec::{self, App, Operation};
+use super::exec::{self, App, DashboardRow, Operation};
 use crate::Core;
 pub use crate::application::config::{
     ConfigScope, ConfigUnsetRefusal, ConfigWriteInit, ConfigWriteOutcome, GuardedConfigUnset,
@@ -88,7 +87,7 @@ pub enum Outcome {
     /// Projected dashboard configuration view.
     View(Value),
     /// Applied or refused dashboard configuration write.
-    DashboardWritten(Result<DashboardConfigWriteResult, AuthorizationDenial>),
+    DashboardWritten(DashboardConfigWriteResult),
 }
 
 /// Why a configuration command failed.
@@ -123,9 +122,7 @@ impl App for ConfigApp {
             Command::Path { .. } => "path",
             Command::EffectiveView => "effective-view",
             Command::FileView { .. } => "file-view",
-            Command::DashboardWrite(_) => {
-                unreachable!("dashboard config writes use dashboard admission")
-            }
+            Command::DashboardWrite(write) => return write.operation(),
         };
         Operation::command("config", subcommand).target(Some("config"), None)
     }
@@ -157,17 +154,22 @@ impl App for ConfigApp {
             Command::FileView { scope } => {
                 Outcome::View(crate::application::config::file_view(runtime, scope)?)
             }
-            Command::DashboardWrite(_) => {
-                unreachable!("dashboard config writes use dashboard admission")
+            Command::DashboardWrite(write) => {
+                Outcome::DashboardWritten(dashboard::write(core, write)?)
             }
         })
+    }
+
+    fn dashboard_row(
+        result: &Result<Outcome, crate::Error>,
+        _target: &str,
+        arguments: Value,
+    ) -> Option<DashboardRow> {
+        Some(dashboard::row(result, arguments))
     }
 }
 
 /// Authorize, audit and run one configuration command.
 pub fn exec(core: &Core, command: Command) -> Result<Outcome, crate::Error> {
-    match command {
-        Command::DashboardWrite(write) => dashboard::exec(core, write),
-        command => exec::run::<ConfigApp>(core, command),
-    }
+    exec::run::<ConfigApp>(core, command)
 }

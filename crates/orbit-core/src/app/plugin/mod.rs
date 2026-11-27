@@ -6,12 +6,12 @@ mod scaffold;
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
-use orbit_common::governance::authorization::AuthorizationDenial;
 use orbit_tools::ToolContext;
 use serde_json::Value;
 
-use super::exec::{self, App, Operation};
+use super::exec::{self, App, DashboardRow, Operation};
 use crate::Core;
+use crate::app::exec::Caller;
 use crate::application::contracts::ToolInvocationPort;
 use crate::application::plugin::{
     PluginAddOptions, PluginAddResult, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
@@ -19,7 +19,6 @@ use crate::application::plugin::{
     PluginSyncOutcome, PluginTestOptions, PluginTestReport, PluginUpgradeOptions,
     PluginUpgradeResult, PluginValidationReport, migrate_plugin_sidecars,
 };
-use crate::composition::Entry;
 use crate::runtime::plugin::secrets::PluginSecretValue;
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
@@ -136,7 +135,8 @@ pub enum Outcome {
     Scaffolded(Scaffold),
     Synced(Vec<PluginSyncOutcome>),
     Migrated(String, Option<PathBuf>),
-    DashboardToggled(Result<Option<PluginSummary>, AuthorizationDenial>),
+    /// The toggled plugin, or `None` when no plugin has that name.
+    DashboardToggled(Option<PluginSummary>),
     Panel(Box<PanelRead>),
     ToolOutput(Value),
     WorkspaceEnabled(bool),
@@ -187,9 +187,7 @@ impl<'a> App for PluginApp<'a> {
             Command::WorkspaceEnabled(_) => {
                 return Operation::dashboard_read("plugin", "workspace-enabled");
             }
-            Command::DashboardToggle(_) => {
-                unreachable!("dashboard toggles use dashboard admission")
-            }
+            Command::DashboardToggle(toggle) => return toggle.operation(),
         };
         Operation::command("plugin", verb)
             .target(Some("plugin"), target)
@@ -320,7 +318,7 @@ impl<'a> App for PluginApp<'a> {
                 Outcome::Panel(Box::new(PanelRead::new(core, namespace, panel)?))
             }
             Command::InvokeTool(call) => {
-                if core.entry() != Entry::Tool {
+                if core.caller() != Caller::Tool {
                     return Err(OrbitError::PolicyDenied(
                         "plugin tools must use the tool entry".into(),
                     )
@@ -338,11 +336,19 @@ impl<'a> App for PluginApp<'a> {
                     .ensure_plugin_enabled_in_workspace(&namespace)
                     .is_ok(),
             ),
-            Command::DashboardToggle(_) => {
-                unreachable!("dashboard toggles use dashboard admission")
+            Command::DashboardToggle(toggle) => {
+                Outcome::DashboardToggled(dashboard::toggle(core, toggle)?)
             }
         };
         Ok(outcome)
+    }
+
+    fn dashboard_row(
+        result: &Result<Outcome, crate::Error>,
+        target: &str,
+        arguments: Value,
+    ) -> Option<DashboardRow> {
+        Some(dashboard::row(result, target, arguments))
     }
 
     fn exit_code(outcome: &Outcome) -> i32 {
@@ -356,8 +362,5 @@ impl<'a> App for PluginApp<'a> {
 
 /// Authorize, audit and run one plugin command.
 pub fn exec(core: &Core, command: Command<'_>) -> Result<Outcome, crate::Error> {
-    match command {
-        Command::DashboardToggle(toggle) => dashboard::exec(core, toggle),
-        command => exec::run::<PluginApp<'_>>(core, command),
-    }
+    exec::run::<PluginApp<'_>>(core, command)
 }
