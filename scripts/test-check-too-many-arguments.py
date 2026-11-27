@@ -88,6 +88,77 @@ class TooManyArgumentsRatchetTests(unittest.TestCase):
         self.assertIn("alpha: 5", checked.stdout)
         self.assertIn("5 attributes across 1 crates match the baseline", checked.stdout)
 
+    def test_counts_lint_groups_that_cover_too_many_arguments(self):
+        self.write(
+            "crates/alpha/src/lib.rs",
+            """
+            #[allow(clippy::complexity)]
+            fn one() {}
+
+            #[expect(clippy::all, reason = "legacy")]
+            fn two() {}
+
+            #[allow(
+                warnings,
+                reason = "multi-line"
+            )]
+            fn three() {}
+
+            #[cfg_attr(not(test), allow(clippy::complexity))]
+            fn four() {}
+
+            #[allow(clippy::too_many_arguments, clippy::complexity)]
+            fn five() {}
+            """,
+        )
+        self.write("crates/beta/src/lib.rs", "pub fn clean() {}\n")
+
+        self.assertEqual(self.run_checker("--write-baseline").returncode, 0)
+        self.assertEqual(
+            json.loads(self.baseline.read_text(encoding="utf-8")),
+            {"schema_version": 1, "crates": {"alpha": 5}},
+        )
+        checked = self.run_checker("--list")
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        for directive in ("allow(clippy::complexity)", "expect(clippy::all)", "allow(warnings)"):
+            with self.subTest(directive=directive):
+                self.assertIn(directive, checked.stdout)
+
+        # A group allow in a crate with baseline 0 is a rise, named by its own lint.
+        self.write("crates/beta/src/lib.rs", "#[allow(clippy::complexity)]\nfn added() {}\n")
+        rise = self.run_checker()
+        self.assertEqual(rise.returncode, 1)
+        self.assertIn("beta has 1 allow/expect attribute(s)", rise.stderr)
+        self.assertIn("crates/beta/src/lib.rs:1 #[allow(clippy::complexity)]", rise.stderr)
+
+    def test_ignores_unrelated_lint_attributes_and_non_allowing_directives(self):
+        self.write(
+            "crates/alpha/src/lib.rs",
+            """
+            #[allow(dead_code)]
+            #[allow(clippy::style, clippy::pedantic, clippy::too_many_lines)]
+            #[allow(unused_variables, reason = "legacy")]
+            fn one() {}
+
+            #[warn(clippy::complexity)]
+            #[deny(clippy::all, warnings)]
+            #[forbid(clippy::complexity)]
+            fn two() {}
+
+            #[cfg_attr(test, deny(clippy::complexity))]
+            fn three() {}
+
+            // #[allow(clippy::complexity)]
+            /* outer /* #![allow(warnings)] */ */
+            const DOC: &str = "#[allow(clippy::all)]";
+            """,
+        )
+        self.write("crates/beta/src/lib.rs", "pub fn clean() {}\n")
+
+        self.assertEqual(self.run_checker("--write-baseline").returncode, 0)
+        self.assertEqual(json.loads(self.baseline.read_text(encoding="utf-8"))["crates"], {})
+        self.assertEqual(self.run_checker().returncode, 0)
+
     def test_fails_when_crate_count_rises_or_new_crate_adds_attribute(self):
         self.write("crates/alpha/src/lib.rs", "#[allow(clippy::too_many_arguments)]\nfn one() {}\n")
         self.write("crates/beta/src/lib.rs", "pub fn clean() {}\n")
@@ -158,6 +229,10 @@ class TooManyArgumentsRatchetTests(unittest.TestCase):
             "#![expect(clippy::too_many_arguments, reason = \"crate-wide\")]\n",
             "#![allow(\n    clippy::too_many_arguments,\n    reason = \"multi-line\"\n)]\n",
             "#![cfg_attr(test, allow(clippy::too_many_arguments))]\n",
+            "#![allow(clippy::complexity)]\n",
+            "#![expect(clippy::all, reason = \"crate-wide\")]\n",
+            "#![allow(warnings)]\n",
+            "#![cfg_attr(not(test), allow(clippy::complexity))]\n",
         ):
             with self.subTest(snippet=snippet):
                 self.write("crates/alpha/src/lib.rs", snippet)
@@ -167,8 +242,10 @@ class TooManyArgumentsRatchetTests(unittest.TestCase):
                 self.assertIn("crates/alpha/src/lib.rs:1", result.stderr)
                 self.assertEqual(self.run_checker("--write-baseline").returncode, 1)
 
-        # An inner deny/warn attribute is permitted.
+        # Inner deny/warn attributes, including group forms, are permitted.
         self.write("crates/alpha/src/lib.rs", "#![deny(clippy::too_many_arguments)]\n")
+        self.assertEqual(self.run_checker().returncode, 0)
+        self.write("crates/alpha/src/lib.rs", "#![deny(clippy::complexity, warnings)]\n#![warn(clippy::all)]\n")
         self.assertEqual(self.run_checker().returncode, 0)
 
     def test_fails_on_manifest_lint_allows(self):

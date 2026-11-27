@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Ratchet `allow`/`expect` attributes for `clippy::too_many_arguments` per crate.
+"""Ratchet `allow`/`expect` attributes that suppress `clippy::too_many_arguments` per crate.
 
 STD-02@10 §R51 forbids functions with more than seven parameters (receiver
 counted) and forbids `#[allow]` or `#[expect]` of `clippy::too_many_arguments`.
 `clippy.toml` sets `too-many-arguments-threshold = 7`, so `-D warnings`
-Clippy rejects any new unannotated offender. This guard closes the attribute
-gap by holding each crate's outer attribute count at or below
+Clippy rejects any new unannotated offender. Allowing a group that contains
+the lint (`clippy::complexity`, `clippy::all`) or the rustc `warnings` group
+suppresses it just the same, so those count as well. This guard closes the
+attribute gap by holding each crate's outer attribute count at or below
 `scripts/too-many-arguments-baseline.json`, failing on any inner attribute
 (`#![...]`) or Cargo manifest lint setting that allows the lint, and failing
 when a crate's count drops below its baseline until the baseline is lowered:
@@ -32,7 +34,10 @@ BASELINE = "scripts/too-many-arguments-baseline.json"
 DESKTOP_CRATE = "orbit-desktop"
 LINT_DIRECTIVES = frozenset(("allow", "expect", "warn", "deny", "forbid"))
 ALLOW_DIRECTIVES = frozenset(("allow", "expect"))
-MANIFEST_LINT_NAMES = frozenset(("too_many_arguments", "complexity", "all"))
+# Clippy lints and groups whose `allow` suppresses clippy::too_many_arguments.
+# `warnings` is the rustc group of every warn-level lint; it is matched only in
+# Rust attributes, since Cargo's `[lints.rust] warnings` does not reach Clippy.
+COVERING_LINT_NAMES = frozenset(("too_many_arguments", "complexity", "all"))
 
 TOKEN = re.compile(r"//|/\*|(?<!\w)[bc]?r(#*)\"|\"|'")
 CHAR_LITERAL = re.compile(r"'(?:\\(?:u\{[^}\n]*\}|x[0-9a-fA-F]{2}|.)|[^\\'\n])'")
@@ -40,7 +45,7 @@ STRING_CLOSE = re.compile(r"\\[\s\S]|\"")
 BLOCK_DELIMITER = re.compile(r"/\*|\*/")
 ATTR_TOKEN = re.compile(r"[A-Za-z_]\w*|::|[()\[\],=]|\S")
 
-AttributeHit = namedtuple("AttributeHit", "path line directive inner")
+AttributeHit = namedtuple("AttributeHit", "path line directive lint inner")
 ManifestViolation = namedtuple("ManifestViolation", "path table lint")
 
 
@@ -111,8 +116,18 @@ def _find_closing_bracket(text, open_index):
     return -1
 
 
+def _covered_lint(tokens, index):
+    """Return (token width, name) when a lint or group that covers the lint starts at index."""
+    if tokens[index] == "warnings":
+        return 1, "warnings"
+    if index + 2 < len(tokens) and tokens[index:index + 2] == ["clippy", "::"]:
+        if tokens[index + 2] in COVERING_LINT_NAMES:
+            return 3, f"clippy::{tokens[index + 2]}"
+    return 0, None
+
+
 def _attribute_directives(body):
-    """Yield each `allow`/`expect` directive enclosing `clippy::too_many_arguments`."""
+    """Yield (directive, lint) for each `allow`/`expect` that suppresses `clippy::too_many_arguments`."""
     tokens = ATTR_TOKEN.findall(body)
     paren_stack = []
     index = 0
@@ -129,20 +144,21 @@ def _attribute_directives(body):
                 paren_stack.pop()
             index += 1
             continue
-        if index + 2 < count and tokens[index:index + 3] == ["clippy", "::", "too_many_arguments"]:
+        width, lint = _covered_lint(tokens, index)
+        if width:
             directive = next(
                 (frame for frame in reversed(paren_stack) if frame in LINT_DIRECTIVES),
                 None,
             )
             if directive in ALLOW_DIRECTIVES:
-                yield directive
-            index += 3
+                yield directive, lint
+            index += width
             continue
         index += 1
 
 
 def scan_rust_file(text, relative_path):
-    """Return AttributeHit entries for `allow`/`expect` of `clippy::too_many_arguments`."""
+    """Return AttributeHit entries for `allow`/`expect` attributes that suppress `clippy::too_many_arguments`."""
     masked = mask_source(text)
     hits = []
     index = 0
@@ -168,8 +184,10 @@ def scan_rust_file(text, relative_path):
             break
         line = masked.count("\n", 0, hash_index) + 1
         body = masked[cursor + 1:close_index]
-        for directive in _attribute_directives(body):
-            hits.append(AttributeHit(relative_path, line, directive, inner))
+        # One hit per attribute, however many covering lints it names.
+        covering = next(_attribute_directives(body), None)
+        if covering is not None:
+            hits.append(AttributeHit(relative_path, line, *covering, inner))
         index = close_index + 1
     return hits
 
@@ -195,7 +213,7 @@ def scan_manifest(path, relative_path):
             continue
         for lint_name, spec in sorted(table.items()):
             normalized = lint_name.replace("-", "_")
-            if normalized in MANIFEST_LINT_NAMES and _lint_level(spec) == "allow":
+            if normalized in COVERING_LINT_NAMES and _lint_level(spec) == "allow":
                 violations.append(ManifestViolation(relative_path, table_name, lint_name))
     return violations
 
@@ -322,7 +340,7 @@ def format_policy_violations(inner_violations, manifest_violations):
     for hit in inner_violations:
         messages.append(
             f"too-many-arguments ratchet: {hit.path}:{hit.line}: forbidden inner "
-            f"#![{hit.directive}(clippy::too_many_arguments)] attribute (STD-02 §R51)"
+            f"#![{hit.directive}({hit.lint})] attribute (STD-02 §R51)"
         )
     for violation in manifest_violations:
         messages.append(
@@ -341,7 +359,7 @@ def format_rise_messages(rises, locations):
             "functions to take at most 7 parameters instead of adding an attribute:"
         )
         for hit in locations.get(crate, ()):
-            messages.append(f"  {hit.path}:{hit.line} #[{hit.directive}(clippy::too_many_arguments)]")
+            messages.append(f"  {hit.path}:{hit.line} #[{hit.directive}({hit.lint})]")
     return messages
 
 
@@ -417,7 +435,7 @@ def main(argv=None):
                 continue
             print(f"{crate}: {counts[crate]}")
             for hit in locations[crate]:
-                print(f"  {hit.path}:{hit.line} {hit.directive}")
+                print(f"  {hit.path}:{hit.line} {hit.directive}({hit.lint})")
 
     rises, falls = differences(counts, baseline)
     failures = policy_messages + format_rise_messages(rises, locations) + format_fall_messages(falls)
