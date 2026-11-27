@@ -569,44 +569,33 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=False, base=core_src)
 
     def test_task_reaches_resident_only_through_its_port(self):
-        # [ORB-22955] Task imported resident's comment redaction check and
-        # called its grant-answer and comment-admission inherent methods,
-        # closing a task <-> resident cycle. One detector per call: the
-        # guard's chains stop at the first hit.
-        for rows in (
-            [("task/update/fields.rs", "use crate::application::resident;\n")],
-            [("task/probe.rs", "use crate::application::{\n    resident::Probe,\n};\n")],
-            [("task/mod.rs", "use super::resident::Probe;\n"),
-             ("task/update/probe.rs", "use super::super::super::{resident::Probe};\n")],
-        ):
-            self.check_rows(rows, rejected=True)
+        # Task reaches resident policy through the task-owned port.
         self.check_rows([
+            ("task/update/fields.rs", "use crate::app::resident;\n"),
+            ("task/probe.rs", "use crate::{app::{resident::Probe}};\n"),
+            ("task/mod.rs", "use super::super::app::resident::Probe;\n"),
+            ("task/update/probe.rs", "use super::super::super::super::{app::resident::Probe};\n"),
             ("task/decision/answering.rs",
-             "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
-             "        self.apply_resident_grant_answer();\n    }\n}\n"),
+             "fn drive_task(rt: &OrbitRuntime) { crate::app::resident::apply_resident_grant_answer(rt); }\n"),
             ("task/update/locked.rs",
-             "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
-             "        self.validate_resident_comment_write();\n    }\n}\n"),
-        ], rejected=True, shared={
-            "resident/grant.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn apply_resident_grant_answer(&self) {}\n}\n",
-            "resident/comments.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn validate_resident_comment_write(&self) {}\n}\n"})
+             "use crate::app;\nfn drive_task(rt: &OrbitRuntime) { app::resident::validate_resident_comment_write(rt); }\n"),
+        ], rejected=True)
         self.check_files({
-            "task/resident_port.rs": "pub(in crate::application) trait TaskResidentPort {\n"
+            "task/resident_port.rs": "pub(crate) trait TaskResidentPort {\n"
                                      "    fn admit_locked_resident_comment(&self);\n}\n",
             "task/update/locked.rs":
+                "use crate::app::port::TaskResident;\n"
                 "use crate::application::task::TaskResidentPort;\n"
-                "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
-                "        self.admit_locked_resident_comment();\n    }\n}\n",
-            "resident/comments.rs":
+                "fn drive_task(rt: &OrbitRuntime) {\n"
+                "    TaskResident(rt).admit_locked_resident_comment();\n}\n",
+            "../app/resident/comment.rs":
                 "use crate::application::task::TaskUpdateParams;\n"
-                "impl OrbitRuntime {\n    pub(crate) fn validate_resident_comment_write(&self) {}\n}\n",
-            "resident/task_port.rs":
+                "pub(super) fn validate_resident_comment_write(rt: &OrbitRuntime) {}\n",
+            "../app/resident/task_port.rs":
                 "use crate::application::task::TaskResidentPort;\n"
-                "impl TaskResidentPort for OrbitRuntime {\n"
+                "impl TaskResidentPort for TaskPort<'_> {\n"
                 "    fn admit_locked_resident_comment(&self) {\n"
-                "        self.validate_resident_comment_write();\n    }\n}\n",
+                "        super::comment::validate_resident_comment_write(self.0);\n    }\n}\n",
         }, rejected=False)
 
     def test_task_reaches_notice_only_through_its_port(self):
@@ -1140,23 +1129,23 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_resident_reaches_routine_status_only_through_its_port(self):
         self.check_rows([
-            ("resident/probe.rs", "use crate::app::routine::Probe;\n"),
-            ("resident/deep/probe.rs",
+            ("../app/resident/probe.rs", "use crate::app::routine::Probe;\n"),
+            ("../app/resident/deep/probe.rs",
              "fn probe(rt: &OrbitRuntime) { crate::app::routine::checkout_routine_statuses(rt); }\n"),
-            ("resident/mod.rs", "use super::super::app::routine::Probe;\n"),
-            ("resident/grouped.rs", "use crate::{app::{routine::Probe}};\n"),
-            ("resident/deep/grouped.rs",
+            ("../app/resident/mod.rs", "use super::super::app::routine::Probe;\n"),
+            ("../app/resident/grouped.rs", "use crate::{app::{routine::Probe}};\n"),
+            ("../app/resident/deep/grouped.rs",
              "use super::super::super::super::{app::routine::Probe};\n"),
         ], rejected=True)
         self.check_files({
-            "resident/mandate_reads.rs":
+            "../app/resident/read.rs":
                 "use super::ResidentRoutineStatusPort;\n"
                 "use crate::app::port::ResidentRoutineStatus;\n"
-                "impl OrbitRuntime {\n    pub(crate) fn resident_cycle_routine_disabled(&self) {\n"
-                "        ResidentRoutineStatus(self).disabled_resident_cycle_routine_name();\n    }\n}\n",
+                "pub(crate) fn resident_cycle_routine_disabled(rt: &OrbitRuntime) {\n"
+                "    ResidentRoutineStatus(rt).disabled_resident_cycle_routine_name();\n}\n",
             "../app/port.rs":
                 "pub(crate) use super::routine::ResidentRoutineStatus;\n"
-                "use crate::application::resident::ResidentRoutineStatusPort;\n"
+                "use crate::app::resident::ResidentRoutineStatusPort;\n"
                 "impl ResidentRoutineStatusPort for ResidentRoutineStatus<'_> {}\n",
         }, rejected=False)
 
@@ -1511,7 +1500,7 @@ class RelativeImportTests(unittest.TestCase):
     )
     # Named-path callers already resolved inline depth; they stay in step.
     INLINE_DEPTH_CORE_CALLERS = (
-        ("application/resident/probe.rs", 3, "app::routine"),
+        ("app/resident/probe.rs", 3, "app::routine"),
     )
     INLINE_DEPTH_STORE_CALLERS = (
         ("contract/probe.rs", 2, "repository"),

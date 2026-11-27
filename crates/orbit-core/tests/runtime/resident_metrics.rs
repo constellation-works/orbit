@@ -8,8 +8,8 @@ use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::adapter::command::ToolEntryPoint;
-use orbit_core::application::resident::{
-    ResidentChannelCaller, ResidentControlAction, ResidentControlParams,
+use orbit_core::app::resident::{
+    self, ResidentChannelCaller, ResidentControlAction, ResidentControlParams,
 };
 use orbit_core::application::task::{AgentDecisionRaise, TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::OrbitRuntime;
@@ -132,12 +132,9 @@ fn human_write_undoes_checkpoint_action_once() {
         run_id: "jrun-live".into(),
         expires_at: Utc::now() + Duration::hours(1),
     };
-    runtime
-        .set_resident_live_cycle(&id, None, Some(&live))
-        .unwrap();
+    resident::set_resident_live_cycle(&runtime, &id, None, Some(&live)).unwrap();
     let key = format!("resident:{id}:rcy-live:1");
-    runtime
-        .append_resident_checkpoint(
+    resident::append_resident_checkpoint(&runtime,
             &id,
             json!({"kind": "resident.checkpoint", "schema": 1, "mandate": id,
                 "cycle": "rcy-live", "run_id": "jrun-live", "crew": "sol",
@@ -155,9 +152,7 @@ fn human_write_undoes_checkpoint_action_once() {
             None,
         )
         .unwrap();
-    runtime
-        .set_resident_live_cycle(&id, Some("rcy-live"), None)
-        .unwrap();
+    resident::set_resident_live_cycle(&runtime, &id, Some("rcy-live"), None).unwrap();
 
     let before = metrics(&runtime, json!({"mandate": id}));
     assert_eq!(before["mandates"][0]["reversals"]["total"], 2, "{before}");
@@ -1045,18 +1040,18 @@ fn interventions_and_escalations_outside_active_span_are_excluded() {
             "human:daniel".into(),
         )
         .unwrap();
-    runtime
-        .control_resident(
-            &ResidentChannelCaller::default(),
-            ResidentControlParams {
-                task_id: live_id.clone(),
-                action: ResidentControlAction::Stop,
-                reason: "done".into(),
-                status_request: false,
-                by_session: None,
-            },
-        )
-        .unwrap();
+    resident::control_resident(
+        &runtime,
+        &ResidentChannelCaller::default(),
+        ResidentControlParams {
+            task_id: live_id.clone(),
+            action: ResidentControlAction::Stop,
+            reason: "done".into(),
+            status_request: false,
+            by_session: None,
+        },
+    )
+    .unwrap();
     runtime
         .update_task_as_human(
             &live_watched,
@@ -1182,18 +1177,18 @@ fn custom_human_actor_control_counts_but_agent_and_system_controls_do_not() {
 }
 
 fn resident_control_write(runtime: &OrbitRuntime, task_id: &str, action: ResidentControlAction) {
-    runtime
-        .control_resident(
-            &ResidentChannelCaller::default(),
-            ResidentControlParams {
-                task_id: task_id.into(),
-                action,
-                reason: "manual check".into(),
-                status_request: false,
-                by_session: None,
-            },
-        )
-        .unwrap();
+    resident::control_resident(
+        runtime,
+        &ResidentChannelCaller::default(),
+        ResidentControlParams {
+            task_id: task_id.into(),
+            action,
+            reason: "manual check".into(),
+            status_request: false,
+            by_session: None,
+        },
+    )
+    .unwrap();
 }
 
 /// The entry the clock writes when a mandate deadline passes, inside the
@@ -1341,18 +1336,18 @@ fn escalation_buckets_sum_to_count_and_per_human_day_uses_window_days() {
         "Expired?",
     );
 
-    runtime
-        .control_resident(
-            &ResidentChannelCaller::default(),
-            ResidentControlParams {
-                task_id: mandate_id,
-                action: ResidentControlAction::Stop,
-                reason: "done".into(),
-                status_request: false,
-                by_session: None,
-            },
-        )
-        .unwrap();
+    resident::control_resident(
+        &runtime,
+        &ResidentChannelCaller::default(),
+        ResidentControlParams {
+            task_id: mandate_id,
+            action: ResidentControlAction::Stop,
+            reason: "done".into(),
+            status_request: false,
+            by_session: None,
+        },
+    )
+    .unwrap();
 
     let report = metrics(&runtime, json!({"since": "21d"}));
     let window_days = report["window"]["days"].as_f64().unwrap();

@@ -13,9 +13,9 @@ use serde_json::{Value, json};
 
 use crate::Core;
 use crate::app::attention;
+use crate::app::resident::{self, ResidentActionTicket, ResidentCallAdmission};
 use crate::app::task::{ToolCall, ToolCaller};
 use crate::app::tool_call;
-use crate::application::resident::{ResidentActionTicket, ResidentCallAdmission};
 use crate::application::task::{
     TaskMutationAudit, audit_status_for_task_mutation_error, with_task_write_provenance,
 };
@@ -97,7 +97,8 @@ pub(super) fn execute(
     let runtime = core.runtime();
     let (input, mut redaction_report) =
         super::artifact_redaction::sanitize_tool_input(action, input)?;
-    let ticket = match runtime.admit_resident_cycle_call(
+    let ticket = match resident::admit_resident_cycle_call(
+        runtime,
         task_scope.run_id.as_deref(),
         brokered_resident,
         super::resident_guard::resident_guard_tool_name(action),
@@ -118,7 +119,7 @@ pub(super) fn execute(
         &mut redaction_report,
     );
     if let Some(ticket) = ticket {
-        runtime.close_resident_action(ticket, &mut result)?;
+        resident::close_resident_action(runtime, ticket, &mut result)?;
     }
     result
 }
@@ -377,9 +378,7 @@ fn execute_admitted(
                     input
                         .get("comment")
                         .and_then(Value::as_str)
-                        .filter(|comment| {
-                            crate::application::resident::is_checkpoint_comment_json(comment)
-                        })
+                        .filter(|comment| crate::app::resident::is_checkpoint_comment_json(comment))
                         .map(ToOwned::to_owned)
                 })
                 .flatten();
@@ -406,12 +405,14 @@ fn execute_admitted(
             {
                 let parsed = serde_json::from_str::<Value>(comment).ok();
                 match &result {
-                    Ok(_) => runtime.clear_resident_checkpoint_refusal_on_accept(
+                    Ok(_) => resident::clear_resident_checkpoint_refusal_on_accept(
+                        runtime,
                         target_id,
                         task_scope.run_id.as_deref(),
                         parsed.as_ref(),
                     ),
-                    Err(error) => runtime.record_resident_checkpoint_refusal_if_live(
+                    Err(error) => resident::record_resident_checkpoint_refusal_if_live(
+                        runtime,
                         target_id,
                         task_scope.run_id.as_deref(),
                         parsed.as_ref(),

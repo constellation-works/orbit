@@ -1,4 +1,5 @@
 use chrono::Utc;
+use orbit_core::app::resident;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::OrbitRuntime;
 use orbit_types::task::TaskArtifact;
@@ -54,7 +55,7 @@ fn failed_resident_comment_cli_returns_the_recorded_action_key() {
     .unwrap();
     let runs = jobs.list_job_runs("resident_cycle_pipeline").unwrap();
     let run = &runs[0].run_id;
-    let brief = runtime.begin_resident_cycle(run, Utc::now()).unwrap();
+    let brief = resident::begin_resident_cycle(&runtime, run, Utc::now()).unwrap();
     assert_eq!(brief["cycle_count"], 1, "{brief}");
     let input =
         json!({"id":mandate, "comment":json!({"kind":"resident.request", "schema":1}).to_string()})

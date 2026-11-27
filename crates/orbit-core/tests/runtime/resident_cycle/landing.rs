@@ -2,6 +2,7 @@
 //! through one audited call, and cannot call a task done while its pull request
 //! is open: a cycle once marked a task done with its PR still open.
 
+use orbit_core::app::resident;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
@@ -174,7 +175,7 @@ fn live_cycle(fx: &mut Fixture, forge: &Arc<LandingForge>, rights: &[&str]) -> (
         fx.grant(&mandate, rights);
     }
     let run = fx.cycle_run(&mandate, "resident-cycle-landing");
-    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()).unwrap();
     (mandate, run)
 }
 

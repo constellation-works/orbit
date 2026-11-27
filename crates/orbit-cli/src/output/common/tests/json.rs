@@ -1,3 +1,4 @@
+use orbit_core::app::resident;
 use std::process::Command;
 
 use chrono::Utc;
@@ -147,9 +148,7 @@ fn failed_terminal_resident_ledger_append_keeps_started_action_key() {
         .list_job_runs("resident_cycle_pipeline")
         .expect("list job runs");
     let run = runs[0].run_id.clone();
-    let brief = runtime
-        .begin_resident_cycle(&run, Utc::now())
-        .expect("begin cycle");
+    let brief = resident::begin_resident_cycle(&runtime, &run, Utc::now()).expect("begin cycle");
     assert_eq!(brief["cycle_count"], 1, "{brief}");
 
     let _env = test_env::scoped([

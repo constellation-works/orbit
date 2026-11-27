@@ -1,6 +1,7 @@
 //! [`Dispatch`] for [`EngineHost`]: each method delegates to a sibling
 //! helper grouped by concern, or adapts a type on the way through.
 
+use crate::app::resident;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -155,8 +156,7 @@ impl Dispatch for EngineHost<'_> {
     }
 
     fn record_resident_continuity_rebuilt(&self, run_id: &str) -> Result<(), OrbitError> {
-        self.runtime
-            .record_resident_continuity_rebuilt_for_run(run_id)
+        resident::record_resident_continuity_rebuilt_for_run(self.runtime, run_id)
     }
 
     fn steering_gate(

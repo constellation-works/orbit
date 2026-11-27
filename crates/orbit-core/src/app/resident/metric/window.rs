@@ -6,16 +6,17 @@ use orbit_types::workflow::{
     ResidentMandate,
 };
 
-use super::super::control::{
+use crate::app::resident::control::{
     RESIDENT_CONTROL_EVENT, ResidentControlAction, ResidentControlEntry, ResidentControlState,
 };
-use super::super::due::started_cycles;
-use super::super::resident_mandate_ended;
+use crate::app::resident::due::started_cycles;
+use crate::app::resident::resident_mandate_ended;
 use crate::application::statistics;
 
 /// The reversal window of design §9: a human undo within 7 days of the
 /// resident decision or action it undoes.
 pub(super) const REVERSAL_WINDOW_DAYS: i64 = 7;
+
 /// Default metrics window when `--since` is absent.
 const DEFAULT_WINDOW_DAYS: i64 = 30;
 
@@ -56,7 +57,7 @@ pub(super) fn counted_control_action(entry: &TaskHistoryEntry) -> Option<Residen
     .then_some(note.action)
 }
 
-pub(in super::super) fn parse_window_start(
+pub(in crate::app::resident) fn parse_window_start(
     since: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<DateTime<Utc>, OrbitError> {

@@ -5,6 +5,7 @@
 //! under the prior review while refusing any other commit after the reviewed
 //! head (ORB-26834).
 
+use orbit_core::app::resident;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -360,7 +361,7 @@ fn live_cycle(fx: &mut Fixture, forge: &Arc<RefreshForge>, rights: &[&str]) -> (
         fx.grant(&mandate, rights);
     }
     let run = fx.cycle_run(&mandate, "resident-cycle-refresh");
-    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()).unwrap();
     (mandate, run)
 }
 
@@ -707,7 +708,7 @@ fn refresh_requires_the_right_and_covered_workspace_scope() {
     let mandate2 = fx2.mandate(&watched);
     fx2.grant(&mandate2, &["refresh"]);
     let run2 = fx2.cycle_run(&mandate2, "resident-cycle-refresh-scope");
-    fx2.runtime.begin_resident_cycle(&run2, Utc::now()).unwrap();
+    resident::begin_resident_cycle(&fx2.runtime, &run2, Utc::now()).unwrap();
     let foreign_task = other_rt
         .add_task(TaskAddParams {
             title: "Uncovered workspace leaf".into(),

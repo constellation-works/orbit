@@ -105,7 +105,8 @@ fn recovery_json(inputs: &MeasureInputs) -> Value {
             }),
             "samples": inputs.recovery_seconds,
         },
-        "median_time_to_next_good_checkpoint_seconds": window::median_seconds(&inputs.recovery_seconds),
+        "median_time_to_next_good_checkpoint_seconds":
+            window::median_seconds(&inputs.recovery_seconds),
         "recovery_slot_minutes": inputs.recovery_slot_minutes,
         "repeated_actions": inputs.repeated_actions,
         "human_interventions_needed": inputs.recovery_interventions,

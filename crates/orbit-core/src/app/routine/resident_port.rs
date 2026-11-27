@@ -2,7 +2,7 @@
 
 use super::status;
 use crate::OrbitRuntime;
-use crate::application::resident::RESIDENT_CYCLE_ROUTINE_TARGET;
+use crate::app::resident::RESIDENT_CYCLE_ROUTINE_TARGET;
 
 pub(crate) struct ResidentRoutineStatus<'a>(pub(crate) &'a OrbitRuntime);
 

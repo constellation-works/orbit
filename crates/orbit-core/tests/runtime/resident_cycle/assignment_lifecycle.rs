@@ -3,6 +3,7 @@
 //! the assignment was left in.
 
 use super::*;
+use orbit_core::app::resident;
 
 fn status(fx: &Fixture, id: &str) -> TaskStatus {
     fx.runtime.get_task(id).unwrap().status
@@ -108,7 +109,7 @@ fn a_handoff_checkpoint_moves_the_assignment_to_review_and_ends_the_cycles() {
     let watched = fx.task("Watched work");
     let mandate = fx.mandate(&watched);
     let run = fx.cycle_run(&mandate, "handoff-cycle");
-    let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    let brief = resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()).unwrap();
     assert_eq!(brief["cycle_count"], 1, "{brief}");
 
     // The agent cannot make the move itself, and the refusal names the route.
@@ -128,7 +129,7 @@ fn a_handoff_checkpoint_moves_the_assignment_to_review_and_ends_the_cycles() {
     );
 
     fx.checkpoint_with_outcome(&brief, &run, "handoff");
-    let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+    let finished = resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     assert_eq!(finished["handoff"], "review", "{finished}");
     fx.stop_run(&run, JobRunState::Success);
     let task = fx.runtime.get_task(&mandate).unwrap();
@@ -139,7 +140,7 @@ fn a_handoff_checkpoint_moves_the_assignment_to_review_and_ends_the_cycles() {
         task.execution_summary
     );
     assert_eq!(
-        fx.runtime.show_resident_mandate(&mandate).unwrap()["state"],
+        resident::show_resident_mandate(&fx.runtime, &mandate).unwrap()["state"],
         "handed_off"
     );
 
@@ -147,7 +148,7 @@ fn a_handoff_checkpoint_moves_the_assignment_to_review_and_ends_the_cycles() {
     let later = Utc::now() + Duration::hours(3);
     assert!(fx.due_mandates(later).is_empty());
     let next = fx.cycle_run(&mandate, "after-handoff");
-    let skipped = fx.runtime.begin_resident_cycle(&next, later).unwrap();
+    let skipped = resident::begin_resident_cycle(&fx.runtime, &next, later).unwrap();
     assert_eq!(skipped["cycle_count"], 0, "{skipped}");
     assert_eq!(skipped["skip_reason"], "mandate_not_active", "{skipped}");
     fx.stop_run(&next, JobRunState::Success);
@@ -164,7 +165,7 @@ fn a_handoff_checkpoint_moves_the_assignment_to_review_and_ends_the_cycles() {
         )
         .unwrap();
     let reopened = fx.cycle_run(&mandate, "after-reopen");
-    let resumed = fx.runtime.begin_resident_cycle(&reopened, later).unwrap();
+    let resumed = resident::begin_resident_cycle(&fx.runtime, &reopened, later).unwrap();
     assert_eq!(resumed["cycle_count"], 1, "{resumed}");
 }
 
@@ -179,19 +180,18 @@ fn a_handoff_whose_finalize_never_ran_settles_instead_of_starting_a_cycle() {
     let watched = fx.task("Watched work");
     let mandate = fx.mandate(&watched);
     let run = fx.cycle_run(&mandate, "handoff-then-killed");
-    let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    let brief = resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()).unwrap();
     fx.checkpoint_with_outcome(&brief, &run, "handoff");
     fx.stop_run(&run, JobRunState::Failed);
 
     let recovery = fx.cycle_run(&mandate, "handoff-recovery");
-    let settled = fx
-        .runtime
-        .begin_resident_cycle(&recovery, Utc::now() + Duration::minutes(11))
-        .unwrap();
+    let settled =
+        resident::begin_resident_cycle(&fx.runtime, &recovery, Utc::now() + Duration::minutes(11))
+            .unwrap();
     assert_eq!(settled["cycle_count"], 0, "{settled}");
     assert_eq!(settled["handoff"], "review", "{settled}");
     assert_eq!(status(&fx, &mandate), TaskStatus::Review);
-    let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
+    let shown = resident::show_resident_mandate(&fx.runtime, &mandate).unwrap();
     assert!(shown["live_cycle"].is_null(), "{shown}");
 }
 

@@ -6,20 +6,23 @@
 
 pub(crate) use super::evolution::TaskPort as TaskEvolution;
 pub(crate) use super::notice::TaskPort as TaskNotice;
+pub(crate) use super::resident::TaskPort as TaskResident;
 pub(crate) use super::routine::ResidentRoutineStatus;
+use crate::app::resident::ResidentRoutineStatusPort;
 use crate::app::{agent, codebase};
-use crate::application::resident::ResidentRoutineStatusPort;
 use crate::application::review::ReviewCandidateSizePort;
 use crate::application::task::{
-    TaskCodebasePort, TaskCorpusPort, TaskEvolutionPort, TaskNoticePort,
+    TaskCodebasePort, TaskCorpusPort, TaskEvolutionPort, TaskNoticePort, TaskResidentPort,
 };
 
 const _: () = {
     const fn binds_task_evolution<T: TaskEvolutionPort>() {}
     const fn binds_task_notice<T: TaskNoticePort>() {}
+    const fn binds_task_resident<T: TaskResidentPort>() {}
 
     binds_task_evolution::<TaskEvolution<'_>>();
     binds_task_notice::<TaskNotice<'_>>();
+    binds_task_resident::<TaskResident<'_>>();
 };
 
 // Compile-time proof that each bound implementor satisfies its port trait.

@@ -4,6 +4,7 @@
 //! and an ordinary agent session still get `capability` degraded entries, and
 //! the cycle's writes stay operator-only (ORB-25254).
 
+use orbit_core::app::resident;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
@@ -148,7 +149,7 @@ fn a_live_cycle_reads_runtime_attention_for_its_covered_workspace() {
     let mandate = fx.mandate(&watched);
     fx.grant(&mandate, &["dispatch"]);
     let run = fx.cycle_run(&mandate, "resident-cycle-attention");
-    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()).unwrap();
     failed_run(&fx, &watched);
     let input = json!({"kind": RUNTIME_KINDS});
 
@@ -193,7 +194,7 @@ fn a_live_cycle_attention_read_preserves_a_pending_task_commit() {
     let mandate = fx.mandate(&watched);
     fx.grant(&mandate, &["dispatch"]);
     let run = fx.cycle_run(&mandate, "resident-cycle-attention-pending");
-    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()).unwrap();
     failed_run(&fx, &watched);
     let workspace = fx.runtime.workspace_id().unwrap();
     let tasks_before = fx.runtime.observe_task_metadata().unwrap();
@@ -314,7 +315,7 @@ fn runtime_attention_stays_withheld_outside_the_mandate() {
     let mandate = fx.mandate(&watched);
     fx.grant(&mandate, &["dispatch"]);
     let run = fx.cycle_run(&mandate, "resident-cycle-attention-scope");
-    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()).unwrap();
     let home = fx.runtime.workspace_id().unwrap();
     let input = json!({"kind": ["run_failed", "run_stuck", "claim_stale"], "all": true});
 
@@ -355,7 +356,7 @@ fn the_attention_read_grants_a_cycle_no_write_capability() {
     let mandate = fx.mandate(&watched);
     fx.grant(&mandate, &["dispatch", "promote", "merge"]);
     let run = fx.cycle_run(&mandate, "resident-cycle-attention-writes");
-    fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()).unwrap();
     let workspace = fx.runtime.workspace_id().unwrap();
 
     fx.as_cycle_agent(&run, || {

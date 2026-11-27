@@ -2,6 +2,7 @@
 //! omits an ended mandate with its vetoes while keeping handed-off and active
 //! ones.
 
+use orbit_core::app::resident;
 use std::path::Path;
 
 use chrono::{Duration, Utc};
@@ -232,30 +233,26 @@ fn digest_and_list_agree_for_a_single_incomplete_checkpoint_and_long_silence() {
         run_id: "jrun-incomplete".into(),
         expires_at: Utc::now() + Duration::hours(1),
     };
-    runtime
-        .set_resident_live_cycle(&incomplete, None, Some(&live))
-        .unwrap();
-    runtime
-        .append_resident_checkpoint(
-            &incomplete,
-            json!({
-                "kind": "resident.checkpoint", "schema": 1,
-                "mandate": incomplete, "cycle": "rcy-incomplete",
-                "run_id": "jrun-incomplete", "crew": "sol", "recovery_of": null,
-                "wake": {"reasons": ["heartbeat"], "digest": format!("sha256:{}", "0".repeat(64))},
-                "authority": {"rights": [], "observe_only": true, "narrowed_by": null},
-                "actions": [], "decisions": [], "requests": [], "costs": [], "notes": "",
-                "next_wake": {"reason": "heartbeat", "not_before": "2030-01-01T00:00:00Z"},
-                "continuity": "off", "outcome": "incomplete", "probe": false,
-                "error": "the cycle did not finish"
-            }),
-            Some("codex".into()),
-            None,
-        )
-        .unwrap();
-    runtime
-        .set_resident_live_cycle(&incomplete, Some("rcy-incomplete"), None)
-        .unwrap();
+    resident::set_resident_live_cycle(&runtime, &incomplete, None, Some(&live)).unwrap();
+    resident::append_resident_checkpoint(
+        &runtime,
+        &incomplete,
+        json!({
+            "kind": "resident.checkpoint", "schema": 1,
+            "mandate": incomplete, "cycle": "rcy-incomplete",
+            "run_id": "jrun-incomplete", "crew": "sol", "recovery_of": null,
+            "wake": {"reasons": ["heartbeat"], "digest": format!("sha256:{}", "0".repeat(64))},
+            "authority": {"rights": [], "observe_only": true, "narrowed_by": null},
+            "actions": [], "decisions": [], "requests": [], "costs": [], "notes": "",
+            "next_wake": {"reason": "heartbeat", "not_before": "2030-01-01T00:00:00Z"},
+            "continuity": "off", "outcome": "incomplete", "probe": false,
+            "error": "the cycle did not finish"
+        }),
+        Some("codex".into()),
+        None,
+    )
+    .unwrap();
+    resident::set_resident_live_cycle(&runtime, &incomplete, Some("rcy-incomplete"), None).unwrap();
 
     let silent = mandate(&runtime, 5);
     set_task_creation_time(
@@ -289,34 +286,30 @@ fn checkpoint_with_one_veto(runtime: &OrbitRuntime, mandate: &str, decision: &st
         run_id: run_id.clone(),
         expires_at: Utc::now() + Duration::hours(1),
     };
-    runtime
-        .set_resident_live_cycle(mandate, None, Some(&live))
-        .unwrap();
-    runtime
-        .append_resident_checkpoint(
-            mandate,
-            json!({
-                "kind": "resident.checkpoint", "schema": 1,
-                "mandate": mandate, "cycle": cycle, "run_id": run_id,
-                "crew": "sol", "recovery_of": null,
-                "wake": {"reasons": ["heartbeat"], "digest": format!("sha256:{}", "0".repeat(64))},
-                "authority": {"rights": [], "observe_only": true, "narrowed_by": null},
-                "actions": [],
-                "decisions": [{
-                    "id": decision, "summary": format!("Take {decision}"), "class": "reversible",
-                    "reversible": true, "p_wrong": "low", "rework_units": 1, "precedent": null
-                }],
-                "requests": [], "costs": [], "notes": "",
-                "next_wake": {"reason": "heartbeat", "not_before": "2030-01-01T00:00:00Z"},
-                "continuity": "off", "outcome": "idle", "probe": false
-            }),
-            Some("codex".into()),
-            None,
-        )
-        .unwrap();
-    runtime
-        .set_resident_live_cycle(mandate, Some(&cycle), None)
-        .unwrap();
+    resident::set_resident_live_cycle(runtime, mandate, None, Some(&live)).unwrap();
+    resident::append_resident_checkpoint(
+        runtime,
+        mandate,
+        json!({
+            "kind": "resident.checkpoint", "schema": 1,
+            "mandate": mandate, "cycle": cycle, "run_id": run_id,
+            "crew": "sol", "recovery_of": null,
+            "wake": {"reasons": ["heartbeat"], "digest": format!("sha256:{}", "0".repeat(64))},
+            "authority": {"rights": [], "observe_only": true, "narrowed_by": null},
+            "actions": [],
+            "decisions": [{
+                "id": decision, "summary": format!("Take {decision}"), "class": "reversible",
+                "reversible": true, "p_wrong": "low", "rework_units": 1, "precedent": null
+            }],
+            "requests": [], "costs": [], "notes": "",
+            "next_wake": {"reason": "heartbeat", "not_before": "2030-01-01T00:00:00Z"},
+            "continuity": "off", "outcome": "idle", "probe": false
+        }),
+        Some("codex".into()),
+        None,
+    )
+    .unwrap();
+    resident::set_resident_live_cycle(runtime, mandate, Some(&cycle), None).unwrap();
 }
 
 fn digest_omits_an_ended_mandate_and_its_vetoes_but_keeps_handed_off_and_active_ones() {
@@ -364,11 +357,11 @@ fn digest_omits_an_ended_mandate_and_its_vetoes_but_keeps_handed_off_and_active_
         TaskStatus::Review
     );
     assert_eq!(
-        runtime.show_resident_mandate(&stopped).unwrap()["state"],
+        resident::show_resident_mandate(&runtime, &stopped).unwrap()["state"],
         "ended"
     );
     assert_eq!(
-        runtime.show_resident_mandate(&handed_off).unwrap()["state"],
+        resident::show_resident_mandate(&runtime, &handed_off).unwrap()["state"],
         "handed_off"
     );
 

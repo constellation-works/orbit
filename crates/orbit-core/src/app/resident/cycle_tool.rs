@@ -10,19 +10,22 @@ use crate::OrbitRuntime;
 const RESIDENT_CYCLE_ACTIVITY: &str = "resident_cycle";
 
 const WORKFLOW_TOOL: &str = "orbit.workflow";
+
 const RECOVER_TOOL: &str = "orbit.task.recover";
 
-impl OrbitRuntime {
-    /// Discover the families reached by this launch's own live cycle.
-    /// The provider's input and its task selectors carry no grant authority.
-    pub(crate) fn resident_cycle_granted_tools(&self, run_id: &str, activity: &str) -> Vec<String> {
-        if activity != RESIDENT_CYCLE_ACTIVITY {
-            return Vec::new();
-        }
-        self.live_cycle_home_grant_local(run_id)
-            .filter(|(_, grant)| !grant.observe_only)
-            .map_or_else(Vec::new, |(_, grant)| tools_of_rights(&grant.rights))
+/// Discover the families reached by this launch's own live cycle.
+/// The provider's input and its task selectors carry no grant authority.
+pub(crate) fn resident_cycle_granted_tools(
+    rt: &OrbitRuntime,
+    run_id: &str,
+    activity: &str,
+) -> Vec<String> {
+    if activity != RESIDENT_CYCLE_ACTIVITY {
+        return Vec::new();
     }
+    super::guard::live_cycle_home_grant_local(rt, run_id)
+        .filter(|(_, grant)| !grant.observe_only)
+        .map_or_else(Vec::new, |(_, grant)| tools_of_rights(&grant.rights))
 }
 
 /// The tool families a right reaches: `dispatch` ships, re-pilots and requeues,

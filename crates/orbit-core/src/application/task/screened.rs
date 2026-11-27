@@ -343,8 +343,9 @@ impl OrbitRuntime {
                 == Some(RESIDENT_MANDATE_ARTIFACT)
         });
         let attaches_mandate = mandate_artifact.is_some();
-        let mandate_crew = mandate_artifact
-            .and_then(|artifact| self.resident_crew_from_mandate(&artifact.content));
+        let mandate_crew = mandate_artifact.and_then(|artifact| {
+            crate::app::port::TaskResident(self).resident_crew_from_mandate(&artifact.content)
+        });
         let needs_prior_task = params.relations.is_some()
             || params.status == Some(TaskStatus::InProgress)
             || params.tags.is_some()
@@ -454,7 +455,8 @@ impl OrbitRuntime {
             ));
         }
         let resident_mandate_attachment = attaches_mandate.then(|| {
-            let (activated, attachment) = self.apply_task_mandate_attachment(&task.id);
+            let (activated, attachment) =
+                crate::app::port::TaskResident(self).apply_task_mandate_attachment(&task.id);
             if let Some(activated) = activated {
                 task = activated;
                 // A row captured before activation no longer represents the task.
@@ -562,7 +564,7 @@ impl OrbitRuntime {
         if !task.tags.iter().any(|tag| tag == RESIDENT_TAG) {
             return None;
         }
-        match self.resident_mandate_error(&task.id) {
+        match crate::app::port::TaskResident(self).resident_mandate_error(&task.id) {
             Ok(Some(reason)) => Some(format!(
                 "task '{}' has the `{RESIDENT_TAG}` tag without a valid `{RESIDENT_MANDATE_ARTIFACT}` \
                  ({reason}); it is not a resident until its mandate is attached",

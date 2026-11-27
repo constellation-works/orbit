@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: "Roles, mandate and authority, resident lifecycle and fires, the bounded cycle, the manager channel, notices, escalation, widening metrics, migration and pilot, and the evolution loop"
 tags: [resident-orchestrator]
-paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**", "crates/orbit-core/assets/activities/**", "crates/orbit-types/src/workflow/automation/members.rs", "crates/orbit-types/src/task/decision/request/**"]
+paths: ["crates/orbit-core/src/app/resident/**", "crates/orbit-core/assets/jobs/**", "crates/orbit-core/assets/activities/**", "crates/orbit-types/src/workflow/automation/members.rs", "crates/orbit-types/src/task/decision/request/**"]
 related_features: [routines, condition-triggers, activity-job, human-decision-channel, operator-attention, fleet-notices, mid-run-steering, decision-assistance, granted-tools]
 related_artifacts: [ORB-21229, ORB-21263, ORB-26833]
 ---
@@ -877,10 +877,10 @@ Proposals that the slices confirm:
 | Mandate, authority, checkpoint and evolution shapes | `crates/orbit-types/src/workflow/resident/` and `crates/orbit-types/src/record/evolution.rs` |
 | `resident_authority` gate | `DecisionGate` in `crates/orbit-types/src/task/decision/request/gates.rs` |
 | `resident_due` kind and observation | `StateTriggerKind` in `crates/orbit-types/src/workflow/automation/members.rs`; observation beside the existing rules in `crates/orbit-core/src/application/automation/members/member_host/observation.rs` |
-| Grants, control, relay, checkpoint, metrics, digest | `crates/orbit-core/src/application/resident/` |
+| Grants, control, relay, checkpoint, metrics, digest | `crates/orbit-core/src/app/resident/` |
 | Cycle job and activities | a new `resident_cycle_pipeline` job under `crates/orbit-core/assets/jobs/` and `resident_*` activities under `crates/orbit-core/assets/activities/` |
 | Seeded routines | `crates/orbit-core/assets/routines/` (disabled) |
-| Dashboard Residents view | `crates/orbit-web/src/api/residents.rs` and `crates/orbit-web/assets/dashboard/js/operations-residents.js`; one-action creation in `crates/orbit-core/src/application/resident/create.rs` |
+| Dashboard Residents view | `crates/orbit-web/src/api/residents.rs` and `crates/orbit-web/assets/dashboard/js/operations-residents.js`; one-action creation in `crates/orbit-core/src/app/resident/create.rs` |
 | `resident` toolset, `manager` and `resident` MCP roles | `crates/orbit-types/src/tool/mcp_toolset.rs` |
 | `resident_stalled` attention kind | the attention item kinds of [ORB-21168] |
 | Skill references | `crates/orbit-core/assets/skills/orbit/references/` |

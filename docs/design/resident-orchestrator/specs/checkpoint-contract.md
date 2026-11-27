@@ -166,7 +166,7 @@ outcome and notes. This `latest_checkpoint` is the latest persisted record, so i
 Recovery checkpoints may also list action keys from `recovery_of`, since retrying a dead cycle's
 action must reuse its original key. Other cycles' action keys are refused.
 
-The deterministic observer/finalizer integration is `OrbitRuntime::set_resident_live_cycle`.
+The deterministic observer/finalizer integration is `app::resident::set_resident_live_cycle`.
 After acquiring its cycle lease, observe publishes `{cycle, run_id, expires_at}` in a
 `resident_cycle_changed` history entry (`ResidentCycleChange::Started` / `Cleared`, typed in [ORB-28711]). It supplies the previous cycle id as a compare-and-set
 precondition (null when none). Finalize clears the state with its own id as that precondition;

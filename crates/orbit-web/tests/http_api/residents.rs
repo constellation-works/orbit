@@ -4,6 +4,7 @@
 //! wrapper. Each dashboard write leaves a dashboard audit row beside the history
 //! entry core writes.
 
+use orbit_core::app::resident;
 use orbit_core::test_support::fixture_store;
 use std::fs;
 
@@ -292,7 +293,7 @@ fn operator_sets_up_an_active_mandate_from_the_dashboard_alone() {
                 "a widening needs your words authorizing it; they are recorded verbatim on the grant request",
                 "{unquoted}"
             );
-            let untouched = fixture.runtime.show_resident_mandate(&id).unwrap();
+            let untouched = resident::show_resident_mandate(&fixture.runtime, &id).unwrap();
             assert_eq!(untouched["authority"]["revision"], 0, "{untouched}");
             assert_eq!(untouched["open_requests"], json!([]), "{untouched}");
             assert_eq!(
@@ -330,7 +331,7 @@ fn operator_sets_up_an_active_mandate_from_the_dashboard_alone() {
             assert_eq!(toggled["changed"], true, "{toggled}");
 
             // `orbit resident show` reads the same tool.
-            let shown = fixture.runtime.show_resident_mandate(&id).unwrap();
+            let shown = resident::show_resident_mandate(&fixture.runtime, &id).unwrap();
             assert_eq!(shown["state"], "active", "{shown}");
             assert_eq!(
                 shown["effective_authority"],
@@ -472,7 +473,7 @@ fn dashboard_grant_with_add_and_deadline_records_two_changes() {
             ));
             assert_eq!(granted["outcome"], "granted_and_narrowed", "{granted}");
 
-            let shown = fixture.runtime.show_resident_mandate(&id).unwrap();
+            let shown = resident::show_resident_mandate(&fixture.runtime, &id).unwrap();
             assert_eq!(
                 shown["effective_authority"],
                 json!({"rights": ["dispatch"], "workspaces": ["fixture"]}),
@@ -538,7 +539,7 @@ fn dashboard_mixed_grant_reports_applied_widening_when_deadline_is_refused() {
                     json!({"rights": ["dispatch"], "workspaces": ["fixture"]}),
                     "{result}"
                 );
-                let shown = fixture.runtime.show_resident_mandate(id).unwrap();
+                let shown = resident::show_resident_mandate(&fixture.runtime, id).unwrap();
                 assert_eq!(shown["effective_authority"], result["effective_authority"]);
                 assert_eq!(shown["mandate"]["deadline"], "2030-01-01T00:00:00Z");
                 assert_eq!(shown["authority"]["granted"].as_array().unwrap().len(), 1);
@@ -600,7 +601,7 @@ fn dashboard_mixed_grant_with_already_held_widening_reports_unchanged_when_deadl
                        "quote": "Dispatch in fixture."}),
             ));
             assert_eq!(granted["outcome"], "granted", "{granted}");
-            let before = fixture.runtime.show_resident_mandate(&id).unwrap();
+            let before = resident::show_resident_mandate(&fixture.runtime, &id).unwrap();
             assert_eq!(before["authority"]["revision"], 1, "{before}");
             assert_eq!(before["mandate"]["deadline"], "2030-01-01T00:00:00Z");
 
@@ -628,7 +629,7 @@ fn dashboard_mixed_grant_with_already_held_widening_reports_unchanged_when_deadl
                     json!({"rights": ["dispatch"], "workspaces": ["fixture"]}),
                     "{result}"
                 );
-                let shown = fixture.runtime.show_resident_mandate(&id).unwrap();
+                let shown = resident::show_resident_mandate(&fixture.runtime, &id).unwrap();
                 assert_eq!(shown["authority"], before["authority"], "{shown}");
                 assert_eq!(shown["mandate"]["deadline"], "2030-01-01T00:00:00Z");
             }
@@ -803,7 +804,7 @@ fn every_resident_action_is_audited_at_the_dashboard_boundary() {
             ));
             assert_eq!(control("stop", json!({}))["state"], "ended");
 
-            let shown = fixture.runtime.show_resident_mandate(&id).unwrap();
+            let shown = resident::show_resident_mandate(&fixture.runtime, &id).unwrap();
             assert_eq!(shown["state"], "ended", "{shown}");
             assert_eq!(shown["status"], "review", "{shown}");
             assert_eq!(

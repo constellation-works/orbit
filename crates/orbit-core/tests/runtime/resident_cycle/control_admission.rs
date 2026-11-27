@@ -1,6 +1,7 @@
 //! Manager control wins over a cycle that has only observed its mandate.
 
 use orbit_common::OrbitError;
+use orbit_core::app::resident;
 use orbit_core::test_support::with_resident_cycle_admission_checkpoint;
 use orbit_types::workflow::RESIDENT_CYCLE_GRANTED_EVENT;
 
@@ -52,13 +53,13 @@ fn control_fences_admission_but_allows_an_admitted_cycle_to_finish() {
                     assert_eq!(controlled["handoff"], "review");
                 }
             },
-            || fx.runtime.begin_resident_cycle(&run, Utc::now()),
+            || resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()),
         );
         assert!(
             matches!(admission, Err(OrbitError::PolicyDenied(_))),
             "{action}: a stale observe must not admit a cycle: {admission:?}"
         );
-        let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
+        let shown = resident::show_resident_mandate(&fx.runtime, &mandate).unwrap();
         assert_eq!(shown["control"]["last"]["action"], action, "{shown}");
         assert!(shown["live_cycle"].is_null(), "{action}: {shown}");
         assert!(
@@ -70,7 +71,7 @@ fn control_fences_admission_but_allows_an_admitted_cycle_to_finish() {
             "{action}: refused admission must not publish a frozen grant"
         );
         assert_eq!(
-            fx.runtime.finish_resident_cycle(&run).unwrap()["finalized"],
+            resident::finish_resident_cycle(&fx.runtime, &run).unwrap()["finalized"],
             false
         );
 
@@ -78,7 +79,7 @@ fn control_fences_admission_but_allows_an_admitted_cycle_to_finish() {
         // cycle checkpoint and finalize using its already frozen grant.
         let mandate = assignment();
         let run = fx.cycle_run(&mandate, "control-after-admission");
-        let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+        let brief = resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()).unwrap();
         assert_eq!(brief["cycle_count"], 1);
         let post_status = |at, title: &str| {
             orbit_core::test_support::with_notice_post_time(at, || {
@@ -116,7 +117,7 @@ fn control_fences_admission_but_allows_an_admitted_cycle_to_finish() {
             assert_eq!(controlled["handoff"], "cycle_live");
         }
         let final_status =
-            fx.runtime.show_resident_mandate(&mandate).unwrap()["status_line"].clone();
+            resident::show_resident_mandate(&fx.runtime, &mandate).unwrap()["status_line"].clone();
         assert_eq!(final_status["notice_id"], first["notice"]["id"]);
         let control_posted: DateTime<Utc> =
             serde_json::from_value(final_status["posted_at"].clone()).unwrap();
@@ -132,20 +133,17 @@ fn control_fences_admission_but_allows_an_admitted_cycle_to_finish() {
         );
         assert_eq!(posted["notice"]["expires_at"], final_status["expires_at"]);
         fx.checkpoint(&brief, &run);
-        let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+        let finished = resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
         assert_eq!(finished["finalized"], true, "{action}: {finished}");
         assert_eq!(finished["synthesized"], false, "{action}: {finished}");
         if action == "stop" {
             assert_eq!(finished["handoff"], "review");
         }
-        let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
+        let shown = resident::show_resident_mandate(&fx.runtime, &mandate).unwrap();
         assert!(shown["live_cycle"].is_null(), "{action}: {shown}");
         assert_eq!(shown["status_line"], final_status, "{action}: {shown}");
         let next_run = fx.cycle_run(&mandate, "control-holds-next-admission");
-        let next = fx
-            .runtime
-            .begin_resident_cycle(&next_run, Utc::now())
-            .unwrap();
+        let next = resident::begin_resident_cycle(&fx.runtime, &next_run, Utc::now()).unwrap();
         assert_eq!(next["cycle_count"], 0, "{action}: {next}");
         assert_eq!(
             next["skip_reason"], "mandate_not_active",
@@ -190,7 +188,7 @@ fn status_request_wake_between_observe_and_publication_reaches_the_admitted_cycl
             )
             .unwrap();
         },
-        || fx.runtime.begin_resident_cycle(&run, Utc::now()),
+        || resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()),
     )
     .unwrap();
     assert_eq!(brief["cycle_count"], 1, "{brief}");
@@ -204,7 +202,7 @@ fn status_request_wake_between_observe_and_publication_reaches_the_admitted_cycl
     assert!(reasons.contains(&"wake".to_string()), "{brief}");
     assert!(reasons.contains(&"status_request".to_string()), "{brief}");
     fx.checkpoint(&brief, &run);
-    let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+    let finished = resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     assert_eq!(finished["finalized"], true, "{finished}");
     assert_eq!(finished["synthesized"], false, "{finished}");
 }
@@ -227,7 +225,7 @@ fn invalid_mandate_refuses_control_except_stop_without_history() {
         .unwrap()
         .id
         .to_string();
-    let shown = fx.runtime.show_resident_mandate(&invalid).unwrap();
+    let shown = resident::show_resident_mandate(&fx.runtime, &invalid).unwrap();
     assert_eq!(shown["state"], "invalid", "{shown}");
 
     for action in ["pause", "resume", "wake", "takeover", "release"] {
@@ -293,7 +291,7 @@ fn admit_cycle(
         .unwrap();
     fx.grant(&mandate, &["merge"]);
     let run = fx.cycle_run(&mandate, key);
-    let brief = fx.runtime.begin_resident_cycle(&run, Utc::now()).unwrap();
+    let brief = resident::begin_resident_cycle(&fx.runtime, &run, Utc::now()).unwrap();
     assert_eq!(brief["cycle_count"], 1, "{key}: {brief}");
     let workspace = brief["workspace_path"]
         .as_str()
@@ -356,10 +354,7 @@ fn control_then_observe_keeps_a_live_worktree_and_still_drops_a_dead_one() {
         );
 
         let next_run = fx.cycle_run(&mandate, &format!("live-next-{action}"));
-        let next = fx
-            .runtime
-            .begin_resident_cycle(&next_run, Utc::now())
-            .unwrap();
+        let next = resident::begin_resident_cycle(&fx.runtime, &next_run, Utc::now()).unwrap();
         assert_eq!(next["cycle_count"], 0, "{action}: {next}");
         assert_eq!(
             next["skip_reason"], "mandate_not_active",
@@ -388,7 +383,7 @@ fn control_then_observe_keeps_a_live_worktree_and_still_drops_a_dead_one() {
             1,
             "{action}: a skipped observation must not grant a cycle"
         );
-        let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
+        let shown = resident::show_resident_mandate(&fx.runtime, &mandate).unwrap();
         assert_eq!(
             shown["live_cycle"]["run_id"],
             run.as_str(),
@@ -396,7 +391,7 @@ fn control_then_observe_keeps_a_live_worktree_and_still_drops_a_dead_one() {
         );
 
         fx.checkpoint(&brief, &run);
-        let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+        let finished = resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
         assert_eq!(finished["finalized"], true, "{action}: {finished}");
         assert!(
             !worktree.exists(),
@@ -415,9 +410,7 @@ fn control_then_observe_keeps_a_live_worktree_and_still_drops_a_dead_one() {
     );
     fx.set_run_state(&run, "not-a-state");
     let next_run = fx.cycle_run(&mandate, "lookup-error-after-pause-next");
-    let error = fx
-        .runtime
-        .begin_resident_cycle(&next_run, Utc::now())
+    let error = resident::begin_resident_cycle(&fx.runtime, &next_run, Utc::now())
         .expect_err("a liveness lookup error must not be treated as a dead cycle");
     assert!(
         worktree.join(".git").exists(),
@@ -440,10 +433,7 @@ fn control_then_observe_keeps_a_live_worktree_and_still_drops_a_dead_one() {
         "stopping the run must not remove the checkout early"
     );
     let next_run = fx.cycle_run(&mandate, "dead-after-pause-next");
-    let next = fx
-        .runtime
-        .begin_resident_cycle(&next_run, Utc::now())
-        .unwrap();
+    let next = resident::begin_resident_cycle(&fx.runtime, &next_run, Utc::now()).unwrap();
     assert_eq!(next["cycle_count"], 0, "{next}");
     assert_eq!(next["skip_reason"], "mandate_not_active", "{next}");
     assert!(
@@ -460,10 +450,7 @@ fn control_then_observe_keeps_a_live_worktree_and_still_drops_a_dead_one() {
     assert!(scratch.is_file(), "{controlled}");
     fx.stop_run(&run, orbit_types::workflow::JobRunState::Failed);
     let next_run = fx.cycle_run(&mandate, "dead-after-stop-next");
-    let next = fx
-        .runtime
-        .begin_resident_cycle(&next_run, Utc::now())
-        .unwrap();
+    let next = resident::begin_resident_cycle(&fx.runtime, &next_run, Utc::now()).unwrap();
     assert_eq!(next["cycle_count"], 0, "{next}");
     assert_eq!(next["skip_reason"], "mandate_not_active", "{next}");
     assert_eq!(next["handoff"], "review", "{next}");
@@ -472,7 +459,7 @@ fn control_then_observe_keeps_a_live_worktree_and_still_drops_a_dead_one() {
         "an observation after a stopped cycle dies must remove its worktree and scratch"
     );
     assert_eq!(granted_cycles(&fx, &mandate), 1, "{next}");
-    let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
+    let shown = resident::show_resident_mandate(&fx.runtime, &mandate).unwrap();
     assert!(
         shown["live_cycle"].is_null(),
         "a dead stopped cycle is closed: {shown}"

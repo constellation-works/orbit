@@ -531,7 +531,7 @@ service side regardless.
 - `orbit.task.resume_delivery` is exempt from the run-workspace check in that bullet. The broker
   passes no workspace to `checked_cwd` for it, so its `cwd` must still lie in the worktree. Its
   target is the call's input `workspace`, resolved by `resident_recovery_workspace`
-  (`crates/orbit-core/src/application/resident/guard.rs`). A call that names no workspace stays in
+  (`crates/orbit-core/src/app/resident/guard.rs`). A call that names no workspace stays in
   the run's own workspace. A named workspace needs the grant's `recover` right (`resident_right_refused`
   otherwise) and must resolve to one local owner workspace the grant covers on this host. One it
   does not cover is refused with a `resident_scope_refused` message. That message reaches the

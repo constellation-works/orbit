@@ -5,6 +5,7 @@
 //! update carrying `rehome_to` is refused as `resident_tool_refused` and leaves
 //! the record in its workspace (ORB-26833).
 
+use orbit_core::app::resident;
 use std::sync::{Arc, OnceLock};
 
 use orbit_common::OrbitError;
@@ -277,7 +278,7 @@ fn resident_cycle_updates_friction_in_covered_workspaces_including_observe_only(
     });
     assert_eq!(replayed["resident_action"], "already_done", "{replayed}");
     assert_eq!(replayed["key"], expected_key_1, "{replayed}");
-    fx.runtime.finish_resident_cycle(&recovery).unwrap();
+    resident::finish_resident_cycle(&fx.runtime, &recovery).unwrap();
 
     // 2. A cycle narrowed to observe-only by a maintenance notice still updates friction.
     let notice_fric = seed_friction(&fx.runtime, "Notice-window friction", "Initial body.");
@@ -483,7 +484,7 @@ fn friction_update_carrying_rehome_to_is_refused_as_resident_tool_refused() {
     );
 
     // After the cycle finishes, updates are refused as stale.
-    fx.runtime.finish_resident_cycle(&run).unwrap();
+    resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     fx.as_cycle_agent(&run, || {
         let error = update_friction(
             &fx.runtime,

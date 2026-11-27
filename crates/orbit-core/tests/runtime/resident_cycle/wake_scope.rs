@@ -5,6 +5,7 @@
 //! floor and the heartbeat, and a mandate without a floor gets its heartbeat.
 
 use super::*;
+use orbit_core::app::resident;
 
 /// A mandate with an empty watch list and the given cadence document.
 fn unwatched_mandate(fx: &Fixture, cadence: Value) -> String {
@@ -207,7 +208,7 @@ fn a_mandate_without_a_floor_gets_its_heartbeat_as_floor() {
     }
     let fx = fixture();
     let mandate = unwatched_mandate(&fx, json!({"heartbeat_minutes": 20}));
-    let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
+    let shown = resident::show_resident_mandate(&fx.runtime, &mandate).unwrap();
     assert_eq!(shown["state"], "active", "{shown}");
     assert_eq!(
         shown["mandate"]["cadence"],
@@ -287,7 +288,7 @@ fn heartbeat_skips_unchanged_but_runs_when_watched_state_changes() {
         .next_back()
         .unwrap();
     assert_eq!(checkpoint.outcome, "unchanged");
-    let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
+    let shown = resident::show_resident_mandate(&fx.runtime, &mandate).unwrap();
     assert_eq!(shown["stalled"], false, "{shown}");
     fx.stop_run(&skip, JobRunState::Success);
     let request = fx

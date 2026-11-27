@@ -6,8 +6,8 @@
 use std::path::Path;
 
 use orbit_core::adapter::command::ToolEntryPoint;
-use orbit_core::application::resident::{
-    ResidentDashboardGrantOutcome, ResidentDashboardGrantParams,
+use orbit_core::app::resident::{
+    self, ResidentDashboardGrantOutcome, ResidentDashboardGrantParams,
 };
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::OrbitRuntime;
@@ -227,9 +227,11 @@ fn dashboard_grant_splits_a_mixed_form_and_answers_its_request() {
     .expect_err("a tool call that widens and narrows is refused");
     assert!(error.contains("make two calls"), "{error}");
 
-    let error = runtime
-        .grant_resident_authority_as_dashboard_operator(form(&["dispatch"], None, Some(" ")))
-        .expect_err("a dashboard widening needs the operator's words");
+    let error = resident::grant_resident_authority_as_dashboard_operator(
+        &runtime,
+        form(&["dispatch"], None, Some(" ")),
+    )
+    .expect_err("a dashboard widening needs the operator's words");
     assert!(
         error.to_string().contains("a widening needs your words"),
         "{error}"
@@ -237,13 +239,11 @@ fn dashboard_grant_splits_a_mixed_form_and_answers_its_request() {
     assert_eq!(show(&runtime, &id)["authority"]["revision"], 0);
     assert_eq!(show(&runtime, &id)["open_requests"], json!([]));
 
-    let mixed = runtime
-        .grant_resident_authority_as_dashboard_operator(form(
-            &["dispatch"],
-            Some("2029-06-01T00:00:00Z"),
-            Some(QUOTE),
-        ))
-        .unwrap();
+    let mixed = resident::grant_resident_authority_as_dashboard_operator(
+        &runtime,
+        form(&["dispatch"], Some("2029-06-01T00:00:00Z"), Some(QUOTE)),
+    )
+    .unwrap();
     assert_eq!(
         mixed.outcome,
         ResidentDashboardGrantOutcome::GrantedAndNarrowed
@@ -276,13 +276,11 @@ fn dashboard_grant_splits_a_mixed_form_and_answers_its_request() {
 
     // An already-held widening raises nothing; its refused narrowing is
     // reported, not raised.
-    let refused = runtime
-        .grant_resident_authority_as_dashboard_operator(form(
-            &["dispatch"],
-            Some("2031-01-01T00:00:00Z"),
-            Some(QUOTE),
-        ))
-        .unwrap();
+    let refused = resident::grant_resident_authority_as_dashboard_operator(
+        &runtime,
+        form(&["dispatch"], Some("2031-01-01T00:00:00Z"), Some(QUOTE)),
+    )
+    .unwrap();
     assert_eq!(
         refused.outcome,
         ResidentDashboardGrantOutcome::UnchangedNarrowingRefused
@@ -310,9 +308,8 @@ fn dashboard_grant_splits_a_mixed_form_and_answers_its_request() {
 
     let mut narrowing = form(&[], None, None);
     narrowing.remove = vec!["dispatch".into()];
-    let narrowed = runtime
-        .grant_resident_authority_as_dashboard_operator(narrowing)
-        .unwrap();
+    let narrowed =
+        resident::grant_resident_authority_as_dashboard_operator(&runtime, narrowing).unwrap();
     assert_eq!(narrowed.outcome, ResidentDashboardGrantOutcome::Narrowed);
     let rendered = serde_json::to_value(&narrowed).unwrap();
     assert_eq!(keys(&rendered), ["outcome", "authority"]);
@@ -599,28 +596,20 @@ fn resident_stale_comment_is_refused_without_writes() {
         run_id: "jrun-dead".into(),
         expires_at: Utc::now() + Duration::hours(1),
     };
-    runtime
-        .set_resident_live_cycle(&id, None, Some(&dead))
-        .unwrap();
+    resident::set_resident_live_cycle(&runtime, &id, None, Some(&dead)).unwrap();
     let live = ResidentLiveCycle {
         cycle: "rcy-live".into(),
         run_id: "jrun-live".into(),
         ..dead
     };
-    runtime
-        .set_resident_live_cycle(&id, Some("rcy-dead"), Some(&live))
-        .unwrap();
+    resident::set_resident_live_cycle(&runtime, &id, Some("rcy-dead"), Some(&live)).unwrap();
     refuse(
         "orbit.resident.checkpoint",
         json!({"task_id": id, "record": record, "model": "codex"}),
         "resident_cycle_stale",
     );
     let before = snapshot();
-    assert!(
-        runtime
-            .set_resident_live_cycle(&id, Some("rcy-dead"), None)
-            .is_err()
-    );
+    assert!(resident::set_resident_live_cycle(&runtime, &id, Some("rcy-dead"), None).is_err());
     assert_eq!(
         snapshot(),
         before,
@@ -770,9 +759,7 @@ fn resident_stale_comment_is_refused_without_writes() {
         json!({"id": id, "comment": record.to_string(), "model": "codex"}),
         "resident_checkpoint_exists",
     );
-    runtime
-        .set_resident_live_cycle(&id, Some("rcy-live"), None)
-        .unwrap();
+    resident::set_resident_live_cycle(&runtime, &id, Some("rcy-live"), None).unwrap();
     refuse(
         "orbit.resident.checkpoint",
         json!({"task_id": id, "record": record, "model": "codex"}),
@@ -797,9 +784,7 @@ fn resident_sensitive_checkpoint_is_refused_without_writes() {
         run_id: "jrun-live".into(),
         expires_at: Utc::now() + Duration::hours(1),
     };
-    runtime
-        .set_resident_live_cycle(&id, None, Some(&live))
-        .unwrap();
+    resident::set_resident_live_cycle(&runtime, &id, None, Some(&live)).unwrap();
     let mut record = json!({"kind": "resident.checkpoint", "schema": 1, "mandate": id,
         "cycle": live.cycle, "run_id": live.run_id, "crew": "sol", "recovery_of": null,
         "wake": {"reasons": ["heartbeat"], "digest": format!("sha256:{}", "0".repeat(64))},
@@ -851,10 +836,15 @@ fn resident_sensitive_checkpoint_is_refused_without_writes() {
                     )
                     .map(|_| ())
                     .map_err(|error| error.to_string()),
-                "core-checkpoint" => runtime
-                    .append_resident_checkpoint(&id, record.clone(), None, Some("codex".into()))
-                    .map(|_| ())
-                    .map_err(|error| error.to_string()),
+                "core-checkpoint" => resident::append_resident_checkpoint(
+                    &runtime,
+                    &id,
+                    record.clone(),
+                    None,
+                    Some("codex".into()),
+                )
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
                 _ => unreachable!(),
             };
             let error = result.expect_err("sensitive resident record must be refused");
@@ -1043,8 +1033,7 @@ fn resident_tagged_feature_tasks_warn_without_mandate_and_stay_out_of_resident_l
         assert_eq!(listed["mandates"], json!([]));
     }
     assert!(
-        runtime
-            .list_resident_mandate_cards(true)
+        resident::list_resident_mandate_cards(&runtime, true)
             .unwrap()
             .is_empty(),
         "resident cards must exclude tagged tasks without a valid mandate"
@@ -1087,7 +1076,7 @@ fn resident_tagged_feature_tasks_warn_without_mandate_and_stay_out_of_resident_l
     assert_eq!(listed["mandates"][0]["task_id"], feature_id);
     assert_eq!(listed["mandates"][0]["state"], "active");
 
-    let cards = runtime.list_resident_mandate_cards(true).unwrap();
+    let cards = resident::list_resident_mandate_cards(&runtime, true).unwrap();
     assert_eq!(cards.len(), 1, "{cards:?}");
     assert_eq!(cards[0]["task_id"], feature_id);
     assert_eq!(cards[0]["state"], "active");

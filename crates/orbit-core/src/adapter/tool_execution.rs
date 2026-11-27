@@ -1,5 +1,6 @@
 //! Shared entry adapter for CLI, Web, tool-host, and engine-host tool calls.
 
+use crate::app::resident;
 use std::path::Path;
 
 use orbit_common::OrbitError;
@@ -178,7 +179,7 @@ impl OrbitRuntime {
                 RegisteredToolAdmission::Admitted => return Ok(()),
                 RegisteredToolAdmission::Capability {
                     resident_drain_status_run: Some(run_id),
-                } => self.resident_cycle_drain_status_allowed(&run_id, input)?,
+                } => resident::resident_cycle_drain_status_allowed(self, &run_id, input)?,
                 RegisteredToolAdmission::Capability {
                     resident_drain_status_run: None,
                 } => false,

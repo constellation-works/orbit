@@ -5,6 +5,7 @@
 //! same trust task filing extends), so the rights it unlocks are the ones a
 //! mistaken unmanaged session could use without lasting harm.
 
+use crate::app::resident;
 use chrono::Duration;
 use orbit_common::{NoticeRefusalCode, OrbitError};
 use orbit_types::record::{
@@ -160,11 +161,10 @@ impl NoticePoster {
 /// after twice the heartbeat, the same silence the stall check uses. A
 /// mandate that cannot be read falls back to the agent expiry.
 fn resident_notice_poster(rt: &OrbitRuntime, task_id: &str) -> ResidentNoticePoster {
-    let status_line_ttl =
-        match crate::application::resident::resident_mandate_from_artifact(rt, task_id) {
-            Ok(Ok(mandate)) => Duration::minutes(2 * i64::from(mandate.cadence.heartbeat_minutes)),
-            Ok(Err(_)) | Err(_) => Duration::hours(i64::from(limits::MAX_EXPIRY_HOURS_AGENT)),
-        };
+    let status_line_ttl = match crate::app::resident::resident_mandate_from_artifact(rt, task_id) {
+        Ok(Ok(mandate)) => Duration::minutes(2 * i64::from(mandate.cadence.heartbeat_minutes)),
+        Ok(Err(_)) | Err(_) => Duration::hours(i64::from(limits::MAX_EXPIRY_HOURS_AGENT)),
+    };
     ResidentNoticePoster { status_line_ttl }
 }
 
@@ -248,8 +248,7 @@ pub(super) fn resolve_notice_poster(
             (Some(task_id), Some(run_id)) => Some((task_id, Some(run_id), machine_id.clone())),
             // A resident cycle is bound by its run alone: the run names
             // its mandate.
-            (None, Some(run_id)) => rt
-                .resident_cycle_mandate_of_run(&run_id)
+            (None, Some(run_id)) => resident::resident_cycle_mandate_of_run(rt, &run_id)
                 .ok()
                 .map(|mandate| (mandate, Some(run_id), machine_id.clone())),
             _ => None,
@@ -266,7 +265,7 @@ pub(super) fn resolve_notice_poster(
             .as_deref()
             .filter(|_| task.tags.iter().any(|tag| tag == RESIDENT_TAG))
             .filter(|run_id| {
-                rt.resident_cycle_mandate_of_run(run_id)
+                resident::resident_cycle_mandate_of_run(rt, run_id)
                     .is_ok_and(|mandate| mandate == task_id)
             })
             .map(|_| resident_notice_poster(rt, &task_id));

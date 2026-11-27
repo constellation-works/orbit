@@ -6,8 +6,7 @@
 //! mandate and refused when its verbatim text would need redaction.
 //! `resident` owns that policy and also drives task writes, so a direct call
 //! from here would close a cycle. This port is the way in: `resident`
-//! implements it on [`OrbitRuntime`](crate::OrbitRuntime), so composing the
-//! runtime binds it.
+//! implements it on an adapter holding the runtime, bound in `app::port`.
 
 use std::fmt;
 
@@ -18,13 +17,13 @@ use serde_json::{Value, json};
 /// Cycle-routine status after a resident mandate was written.
 #[derive(Debug, Clone)]
 pub(crate) struct ResidentMandateAttachment {
-    pub(in crate::application) disabled_routine: Option<DisabledCycleRoutine>,
+    pub(crate) disabled_routine: Option<DisabledCycleRoutine>,
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::application) struct DisabledCycleRoutine {
-    pub(in crate::application) name: String,
-    pub(in crate::application) reason: String,
+pub(crate) struct DisabledCycleRoutine {
+    pub(crate) name: String,
+    pub(crate) reason: String,
 }
 
 impl ResidentMandateAttachment {
@@ -36,7 +35,7 @@ impl ResidentMandateAttachment {
         self.insert_cycle_routine_fields(response, format_args!("Mandate stored"));
     }
 
-    pub(in crate::application) fn insert_cycle_routine_fields(
+    pub(crate) fn insert_cycle_routine_fields(
         &self,
         response: &mut Value,
         action: fmt::Arguments<'_>,
@@ -65,7 +64,7 @@ impl ResidentMandateAttachment {
 }
 
 /// The resident-policy operations task code calls, implemented by `resident`.
-pub(in crate::application) trait TaskResidentPort {
+pub(crate) trait TaskResidentPort {
     /// Apply an allowed answer to a `resident_authority` decision `request`
     /// as the human `actor_label`. The caller holds the task's write lock
     /// and has refused stale and disallowed answers.

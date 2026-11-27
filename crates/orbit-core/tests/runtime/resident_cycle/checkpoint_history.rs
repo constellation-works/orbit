@@ -1,4 +1,5 @@
 use super::*;
+use orbit_core::app::resident;
 use orbit_types::workflow::{RESIDENT_CYCLE_CHANGED_EVENT, ResidentLiveCycle};
 
 /// Seeds one cycle-change row at `at` with its note taken verbatim, as an
@@ -68,33 +69,23 @@ fn live_cycle_history_keeps_its_encoding_and_reads_fail_closed_or_tolerant() {
 
     // The previous start is the live cycle: a stale expectation is refused and
     // the matching one clears it, leaving the clear as JSON `null`.
-    let stale = fx
-        .runtime
-        .set_resident_live_cycle(&mandate, None, None)
+    let stale = resident::set_resident_live_cycle(&fx.runtime, &mandate, None, None)
         .unwrap_err()
         .to_string();
     assert!(stale.contains("resident_cycle_stale"), "{stale}");
-    fx.runtime
-        .set_resident_live_cycle(&mandate, Some("cycle-old"), None)
-        .unwrap();
+    resident::set_resident_live_cycle(&fx.runtime, &mandate, Some("cycle-old"), None).unwrap();
     assert_eq!(latest_cycle_note(&fx, &mandate), "null");
 
     // A publication stores the lease object as its note; a reused id is refused
     // across the clear.
     let fresh = lease("cycle-fresh");
-    fx.runtime
-        .set_resident_live_cycle(&mandate, None, Some(&fresh))
-        .unwrap();
+    resident::set_resident_live_cycle(&fx.runtime, &mandate, None, Some(&fresh)).unwrap();
     assert_eq!(
         latest_cycle_note(&fx, &mandate),
         serde_json::to_string(&fresh).unwrap()
     );
-    fx.runtime
-        .set_resident_live_cycle(&mandate, Some("cycle-fresh"), None)
-        .unwrap();
-    let reused = fx
-        .runtime
-        .set_resident_live_cycle(&mandate, None, Some(&old))
+    resident::set_resident_live_cycle(&fx.runtime, &mandate, Some("cycle-fresh"), None).unwrap();
+    let reused = resident::set_resident_live_cycle(&fx.runtime, &mandate, None, Some(&old))
         .unwrap_err()
         .to_string();
     assert!(reused.contains("cannot be reused"), "{reused}");
@@ -103,9 +94,7 @@ fn live_cycle_history_keeps_its_encoding_and_reads_fail_closed_or_tolerant() {
     // nor a publication may proceed past it.
     seed_cycle_change(&fx, &mandate, now - Duration::hours(23), "{\"cycle\":");
     for next in [None, Some(&lease("cycle-blocked"))] {
-        let unreadable = fx
-            .runtime
-            .set_resident_live_cycle(&mandate, None, next)
+        let unreadable = resident::set_resident_live_cycle(&fx.runtime, &mandate, None, next)
             .unwrap_err()
             .to_string();
         assert!(
@@ -117,16 +106,12 @@ fn live_cycle_history_keeps_its_encoding_and_reads_fail_closed_or_tolerant() {
     // Behind a valid clear the malformed row is skipped: the reuse scan still
     // refuses the old id and admits a fresh one.
     seed_cycle_change(&fx, &mandate, now - Duration::hours(22), "null");
-    let reused = fx
-        .runtime
-        .set_resident_live_cycle(&mandate, None, Some(&old))
+    let reused = resident::set_resident_live_cycle(&fx.runtime, &mandate, None, Some(&old))
         .unwrap_err()
         .to_string();
     assert!(reused.contains("cannot be reused"), "{reused}");
     let next = lease("cycle-next");
-    fx.runtime
-        .set_resident_live_cycle(&mandate, None, Some(&next))
-        .unwrap();
+    resident::set_resident_live_cycle(&fx.runtime, &mandate, None, Some(&next)).unwrap();
     assert_eq!(
         latest_cycle_note(&fx, &mandate),
         serde_json::to_string(&next).unwrap()
@@ -134,13 +119,8 @@ fn live_cycle_history_keeps_its_encoding_and_reads_fail_closed_or_tolerant() {
 
     // Activation is the earliest readable start, so the mandate has been active
     // for 84 hours (4 whole days), not since the latest start.
-    fx.runtime
-        .set_resident_live_cycle(&mandate, Some("cycle-next"), None)
-        .unwrap();
-    let report = fx
-        .runtime
-        .resident_metrics(Some(&mandate), None, None)
-        .unwrap();
+    resident::set_resident_live_cycle(&fx.runtime, &mandate, Some("cycle-next"), None).unwrap();
+    let report = resident::resident_metrics(&fx.runtime, Some(&mandate), None, None).unwrap();
     let entry = report["mandates"]
         .as_array()
         .unwrap()
@@ -579,7 +559,7 @@ fn rejected_checkpoint_surfaces_cause_and_field_on_exited_and_unknown_cycles() {
             "outcome": "progress"
         }),
     );
-    let finished = fx.runtime.finish_resident_cycle(&recovery_run).unwrap();
+    let finished = resident::finish_resident_cycle(&fx.runtime, &recovery_run).unwrap();
     assert_eq!(finished["synthesized"], false, "{finished}");
     assert_eq!(
         checkpoints_for_cycle(recovery_brief["cycle"].as_str().unwrap()).len(),
@@ -634,7 +614,7 @@ fn rejected_checkpoint_surfaces_cause_and_field_on_exited_and_unknown_cycles() {
     )
     .unwrap_err();
     assert!(notes_refusal.contains("`notes`"), "{notes_refusal}");
-    let finalize_result = fx.runtime.finish_resident_cycle(&finalize_run).unwrap();
+    let finalize_result = resident::finish_resident_cycle(&fx.runtime, &finalize_run).unwrap();
     assert_eq!(finalize_result["synthesized"], true, "{finalize_result}");
     let finalize_checkpoints = checkpoints_for_cycle(&finalize_cycle);
     assert_eq!(finalize_checkpoints.len(), 1);
@@ -733,7 +713,7 @@ fn rejected_checkpoint_surfaces_cause_and_field_on_exited_and_unknown_cycles() {
         },
     )
     .unwrap();
-    let audit_finalize = fx.runtime.finish_resident_cycle(&audit_dead_run).unwrap();
+    let audit_finalize = resident::finish_resident_cycle(&fx.runtime, &audit_dead_run).unwrap();
     assert_eq!(audit_finalize["synthesized"], true, "{audit_finalize}");
     let audit_checkpoints = checkpoints_for_cycle(&audit_dead_cycle);
     assert_eq!(audit_checkpoints.len(), 1);
@@ -846,7 +826,7 @@ fn still_live_invalid_checkpoint_correction_preserves_prior_actions_once() {
         run_state.resident_checkpoint_refusal.is_none(),
         "accepted retry clears the pending refusal"
     );
-    let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+    let finished = resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     assert_eq!(finished["synthesized"], false, "{finished}");
 }
 

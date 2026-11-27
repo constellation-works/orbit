@@ -5,7 +5,7 @@
 //! `orbit task artifact put … --path resident/mandate.json`. An in-process
 //! surface (the dashboard) cannot hand a file to the artifact tool, so it
 //! comes here instead: the draft is judged first by
-//! [`OrbitRuntime::check_resident_mandate`], the rule every mandate read
+//! [`super::read::check_resident_mandate`], the rule every mandate read
 //! applies, and nothing is written when it fails. The authority starts
 //! empty; widening stays on `orbit.resident.grant`. The assignment leaves
 //! here `in-progress`, as an attached mandate leaves the terminal path.
@@ -31,37 +31,35 @@ pub struct ResidentMandateCreateParams {
     pub mandate: Value,
 }
 
-impl OrbitRuntime {
-    /// Create a mandate's assignment and attach its artifact. A draft the
-    /// mandate rules refuse fails with their message and writes nothing.
-    /// Returns `{task_id, status, mandate, cycle_routine_disabled,
-    /// cycle_routine_name}`, plus a `warning` naming the disabled cycle
-    /// routine when this workspace's routine is disabled.
-    pub fn create_resident_mandate(
-        &self,
-        params: ResidentMandateCreateParams,
-    ) -> Result<Value, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        let bytes = serde_json::to_vec(&params.mandate)
-            .map_err(|error| OrbitError::InvalidInput(format!("mandate: {error}")))?;
-        let mandate = self
-            .check_resident_mandate(&bytes)
-            .map_err(OrbitError::InvalidInput)?;
-        params.complexity.require_assessed()?;
-        let content = serde_json::to_vec_pretty(&mandate)
-            .map_err(|error| OrbitError::Execution(format!("serialize mandate: {error}")))?;
-        let task = self.add_task(TaskAddParams {
-            title: params.title,
-            description: params.description,
-            acceptance_criteria: mandate.exit_criteria.clone(),
-            tags: vec![RESIDENT_TAG.to_string()],
-            complexity: params.complexity,
-            crew: Some(mandate.crew.clone()),
-            origin: Some(TaskOrigin::OperatorRequest),
-            ..TaskAddParams::default()
-        })?;
-        let actor = self.actor().resolve_write_label(None, None)?;
-        self.stores()
+/// Create a mandate's assignment and attach its artifact. A draft the
+/// mandate rules refuse fails with their message and writes nothing.
+/// Returns `{task_id, status, mandate, cycle_routine_disabled,
+/// cycle_routine_name}`, plus a `warning` naming the disabled cycle
+/// routine when this workspace's routine is disabled.
+pub fn create_resident_mandate(
+    rt: &OrbitRuntime,
+    params: ResidentMandateCreateParams,
+) -> Result<Value, OrbitError> {
+    rt.ensure_coordination_task_write_permitted()?;
+    let bytes = serde_json::to_vec(&params.mandate)
+        .map_err(|error| OrbitError::InvalidInput(format!("mandate: {error}")))?;
+    let mandate =
+        super::read::check_resident_mandate(rt, &bytes).map_err(OrbitError::InvalidInput)?;
+    params.complexity.require_assessed()?;
+    let content = serde_json::to_vec_pretty(&mandate)
+        .map_err(|error| OrbitError::Execution(format!("serialize mandate: {error}")))?;
+    let task = rt.add_task(TaskAddParams {
+        title: params.title,
+        description: params.description,
+        acceptance_criteria: mandate.exit_criteria.clone(),
+        tags: vec![RESIDENT_TAG.to_string()],
+        complexity: params.complexity,
+        crew: Some(mandate.crew.clone()),
+        origin: Some(TaskOrigin::OperatorRequest),
+        ..TaskAddParams::default()
+    })?;
+    let actor = rt.actor().resolve_write_label(None, None)?;
+    rt.stores()
             .task_records()
             .update(
                 &task.id,
@@ -82,11 +80,11 @@ impl OrbitRuntime {
                     task.id
                 ))
             })?;
-        let (activated, attachment) = self.finish_resident_mandate_attachment(&task.id);
-        let status = activated.map_or(task.status, |task| task.status);
-        let mut result = json!({"task_id": task.id, "status": status, "mandate": mandate});
-        attachment
-            .insert_cycle_routine_fields(&mut result, format_args!("Created mandate {}", task.id));
-        Ok(result)
-    }
+    let (activated, attachment) =
+        super::assignment::finish_resident_mandate_attachment(rt, &task.id);
+    let status = activated.map_or(task.status, |task| task.status);
+    let mut result = json!({"task_id": task.id, "status": status, "mandate": mandate});
+    attachment
+        .insert_cycle_routine_fields(&mut result, format_args!("Created mandate {}", task.id));
+    Ok(result)
 }

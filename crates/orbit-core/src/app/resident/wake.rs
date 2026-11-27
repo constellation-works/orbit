@@ -68,20 +68,6 @@ pub(super) enum ResidentTaskWakeClass {
     Unknown(String),
 }
 
-impl From<TaskStatus> for ResidentTaskWakeClass {
-    fn from(status: TaskStatus) -> Self {
-        match status {
-            TaskStatus::Proposed | TaskStatus::Backlog | TaskStatus::InProgress => Self::Active,
-            TaskStatus::Blocked => Self::Blocked,
-            TaskStatus::Review => Self::Review,
-            TaskStatus::Someday => Self::Someday,
-            TaskStatus::Done => Self::Done,
-            TaskStatus::Archived => Self::Archived,
-            TaskStatus::Rejected => Self::Rejected,
-        }
-    }
-}
-
 impl ResidentTaskWakeClass {
     fn from_legacy(class: &str) -> Self {
         match class {
@@ -96,6 +82,10 @@ impl ResidentTaskWakeClass {
         }
     }
 
+    pub(super) fn is_closed(&self) -> bool {
+        matches!(self, Self::Done | Self::Archived | Self::Rejected)
+    }
+
     fn as_legacy(&self) -> &str {
         match self {
             Self::Active => "active",
@@ -108,9 +98,19 @@ impl ResidentTaskWakeClass {
             Self::Unknown(class) => class,
         }
     }
+}
 
-    pub(super) fn is_closed(&self) -> bool {
-        matches!(self, Self::Done | Self::Archived | Self::Rejected)
+impl From<TaskStatus> for ResidentTaskWakeClass {
+    fn from(status: TaskStatus) -> Self {
+        match status {
+            TaskStatus::Proposed | TaskStatus::Backlog | TaskStatus::InProgress => Self::Active,
+            TaskStatus::Blocked => Self::Blocked,
+            TaskStatus::Review => Self::Review,
+            TaskStatus::Someday => Self::Someday,
+            TaskStatus::Done => Self::Done,
+            TaskStatus::Archived => Self::Archived,
+            TaskStatus::Rejected => Self::Rejected,
+        }
     }
 }
 
@@ -201,19 +201,6 @@ impl ResidentWakeObservation {
             .collect()
     }
 
-    pub(super) fn insert(&mut self, key: ResidentWakeItemKey, value: String) {
-        self.0.insert(key, ResidentWakeItem::Opaque(value));
-    }
-
-    pub(super) fn insert_task(&mut self, id: OrbitId, task: ResidentTaskWakeItem) {
-        self.0
-            .insert(ResidentWakeItemKey::Task(id), ResidentWakeItem::Task(task));
-    }
-
-    pub(super) fn overlay(&mut self, settled: Self) {
-        self.0.extend(settled.0);
-    }
-
     pub(super) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -243,6 +230,19 @@ impl ResidentWakeObservation {
             .0
             .keys()
             .any(|key| !matches!(key, ResidentWakeItemKey::Task(_)) && !self.0.contains_key(key))
+    }
+
+    pub(super) fn insert(&mut self, key: ResidentWakeItemKey, value: String) {
+        self.0.insert(key, ResidentWakeItem::Opaque(value));
+    }
+
+    pub(super) fn insert_task(&mut self, id: OrbitId, task: ResidentTaskWakeItem) {
+        self.0
+            .insert(ResidentWakeItemKey::Task(id), ResidentWakeItem::Task(task));
+    }
+
+    pub(super) fn overlay(&mut self, settled: Self) {
+        self.0.extend(settled.0);
     }
 }
 

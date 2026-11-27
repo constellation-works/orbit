@@ -1,4 +1,5 @@
 use super::*;
+use orbit_core::app::resident;
 use orbit_engine::RunLifecycle;
 use orbit_store::contract::JobRunStepParams;
 use orbit_types::workflow::{DeliveryRefusal, JobRun, JobTargetType};
@@ -822,9 +823,7 @@ fn resident_recovery_cycle(
             None,
         )
         .unwrap();
-    f.runtime
-        .begin_resident_cycle(&run.run_id, Utc::now())
-        .unwrap();
+    resident::begin_resident_cycle(&f.runtime, &run.run_id, Utc::now()).unwrap();
     let broker = resident_test_broker(&f.runtime, &mandate, &run.run_id);
     (mandate, broker)
 }
