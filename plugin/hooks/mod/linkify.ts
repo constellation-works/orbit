@@ -77,7 +77,11 @@ function inlineBlocks(text: string): { blocks: Range[]; definitions: Set<string>
 
     const isItem = LIST_ITEM.exec(body)
     if (!open || isItem) {
-      while (lists.length > 0 && indent < lists[lists.length - 1]!) lists.pop()
+      while (true) {
+        const top = lists[lists.length - 1]
+        if (top === undefined || indent >= top) break
+        lists.pop()
+      }
     }
     const base = lists[lists.length - 1] ?? 0
 
@@ -88,9 +92,10 @@ function inlineBlocks(text: string): { blocks: Range[]; definitions: Set<string>
     const isRule = RULE.test(body)
     if (isItem && !isRule && indent < base + 4) {
       close()
-      const gap = isItem[2]!.length
-      lists.push(indent + isItem[1]!.length + (gap >= 1 && gap <= 4 ? gap : 1))
-      content = body.slice(isItem[0].length)
+      const [full, marker = '', whitespace = ''] = isItem
+      const gap = whitespace.length
+      lists.push(indent + marker.length + (gap >= 1 && gap <= 4 ? gap : 1))
+      content = body.slice(full.length)
       if (gap > 4) continue
     }
 
@@ -108,7 +113,8 @@ function inlineBlocks(text: string): { blocks: Range[]; definitions: Set<string>
     const from = end - content.length
     const definition = open ? null : DEFINITION.exec(content)
     if (definition) {
-      definitions.add(label(definition[1]!))
+      const [, name = ''] = definition
+      definitions.add(label(name))
       continue
     }
 
@@ -178,7 +184,7 @@ function destinationEnd(text: string, start: number): number {
   } else {
     let depth = 0
     for (; index < text.length; index++) {
-      const character = text[index]!
+      const character = text.charAt(index)
       if (/\s/.test(character) || (character === ')' && depth === 0)) break
       if (character === '\\' && /[!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~]/.test(text[index + 1] ?? '')) {
         index++
@@ -202,7 +208,7 @@ function protectedRanges(block: string, definitions: Set<string>): Range[] {
   }
 
   for (let index = 0; index < block.length; ) {
-    const character = block[index]!
+    const character = block.charAt(index)
     let end = -1
 
     if (character === '\\') {
@@ -278,8 +284,12 @@ function linkify(text: string, pattern: RegExp, origin: string): string {
     let rangeIndex = 0
     for (const match of ids) {
       const at = match.index
-      while (rangeIndex < skip.length && skip[rangeIndex]![1] <= at) rangeIndex++
-      if (rangeIndex < skip.length && skip[rangeIndex]![0] < at + match[0].length) continue
+      let range = skip[rangeIndex]
+      while (range && range[1] <= at) {
+        rangeIndex++
+        range = skip[rangeIndex]
+      }
+      if (range && range[0] < at + match[0].length) continue
 
       const id = match[0]
       const route = id.startsWith('jrun-') ? 'r' : 't'

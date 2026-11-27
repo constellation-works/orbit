@@ -690,7 +690,8 @@ fn attachment_changes_after_holder_observation() {
         let old_path = std::env::var_os("PATH").unwrap();
         let mut paths = vec![bin];
         paths.extend(std::env::split_paths(&old_path));
-        // This family runs in an isolated process.
+        // SAFETY: `local_base_freshness_contracts` runs in an isolated `--test-threads=1`
+        // child process, so no concurrent thread reads `PATH` while updating it.
         unsafe { std::env::set_var("PATH", std::env::join_paths(paths).unwrap()) };
         host.add_task("T-RACE", TaskStatus::Backlog);
         let output = action(
@@ -699,6 +700,8 @@ fn attachment_changes_after_holder_observation() {
             &setup_input(&["T-RACE"], "jrun-race"),
         )
         .unwrap();
+        // SAFETY: same isolated `--test-threads=1` child process after `action` returns;
+        // no concurrent thread reads `PATH` while restoring it.
         unsafe { std::env::set_var("PATH", old_path) };
         assert!(marker.exists(), "holder listing was intercepted");
         assert_eq!(output["base_sha"], origin);

@@ -58,12 +58,10 @@ fn count(store: &Store, sql: &str) -> i64 {
 #[cfg(unix)]
 fn thread_cpu_time() -> Duration {
     let mut time = std::mem::MaybeUninit::<libc::timespec>::zeroed();
-    // Safety: `clock_gettime` fills the `timespec` it is handed and reads nothing else.
-    assert_eq!(
-        unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr()) },
-        0
-    );
-    // Safety: a zero return means the kernel filled `time`.
+    // SAFETY: `clock_gettime` fills the `timespec` it is handed and reads nothing else.
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, time.as_mut_ptr()) };
+    assert_eq!(rc, 0);
+    // SAFETY: a zero return means the kernel filled `time`.
     let time = unsafe { time.assume_init() };
     Duration::new(time.tv_sec as u64, time.tv_nsec as u32)
 }
