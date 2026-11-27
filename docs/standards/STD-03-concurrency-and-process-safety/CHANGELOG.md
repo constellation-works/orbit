@@ -16,3 +16,4 @@ Version history of [STD-03](STD-03.md). Adopting repos pin the `version:` in its
 - **v1 (2026-09-26).** First publication: R1 to R22.
 - **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).
 - **Editorial (2026-11-27, version unchanged):** R29's orphan-store exemplar points at `crates/orbit-core/src/app/doctor/task.rs`, where the Doctor check moved. No rule changed (ORB-29360).
+- **Editorial (2026-11-27, version unchanged):** R26's convergence exemplar points at `crates/orbit-core/src/app/update/converge.rs`, where it moved. No rule changed (ORB-29383).

@@ -1,4 +1,4 @@
-696326a9dca71d05cbc693b735c3e5337d3fa84b7cb09aabeabad483ef673a77  README.md
+9855c0e8803e541bf50e9ee349154dfffc3806c7ec3a7dd1f73d45a49e90127e  README.md
 9e2efa588b0bc2e4959ba0b42662c13f1426826b302c633a50595895df6258ec  STD-01-cli-surface/CHANGELOG.md
 0c11694e53c2660512997f7746974b76c66431ba5232610f9d916ae6eb5f331e  STD-01-cli-surface/STD-01.md
 f1e509d6584f84b17e4208cc79278edcec29f995cce14ca7fa1fc12f2fadd187  STD-01-cli-surface/checks.md
@@ -9,10 +9,10 @@ f2ba8ab13f3dd8c0dd432759915ff287268765cca7b64912bca8395815e49d22  STD-02-rust-ar
 6af6caaf97ea6e22f996289f009b7c373c340d95ce47ac44ad7eb7447fe5167f  STD-02-rust-architecture-and-errors/checks.md
 4bfd9638959a48aa82c216429eade228f3cfd67d62489901f34fc39c5f125d19  STD-02-rust-architecture-and-errors/exemplars.md
 664a8a5399b760f8f45d63bf8f3def95a306b4ac87a78dde5a13c85c412f71ed  STD-02-rust-architecture-and-errors/why.md
-849ebb46ac49fa50664d8b56c191d5603cd9c41145cde490186af7d38692425a  STD-03-concurrency-and-process-safety/CHANGELOG.md
+ec3dab2020c5c14f0ee4c58c45b350155e80cccc30debe0546cd2d9e50393b4c  STD-03-concurrency-and-process-safety/CHANGELOG.md
 2afb3ce684111e8e9c4d59158a5ddc21bb02b6306af5f1f3b515de76f95de05b  STD-03-concurrency-and-process-safety/STD-03.md
 047ba3552f81e3b7bb8863650427540dbce1d2e0bf1dd500b6252b2bcad64b3b  STD-03-concurrency-and-process-safety/checks.md
-4abc3a70ef3b31af344c8d8eea848446951bf2dd4d153f0232afbd3efaa220aa  STD-03-concurrency-and-process-safety/exemplars.md
+5cc834ef9a5b49a1fc1b7c5729ca50c584d2b9ed56fa93553f7e9451d406ea5c  STD-03-concurrency-and-process-safety/exemplars.md
 f915a76d1bda404a09b7663db6ed5338817b481259659c900f1a06081b5e2619  STD-03-concurrency-and-process-safety/why.md
 16fa9e3bd63f52888378d6a8b48602f833bdef99d95da9dbeb96ec81139ee187  STD-04-testing-and-verification/CHANGELOG.md
 633d7baad36fbaaa2739733c428d5b155c9febc7e2f2f77a16b9a3c1fe2690b1  STD-04-testing-and-verification/STD-04.md
