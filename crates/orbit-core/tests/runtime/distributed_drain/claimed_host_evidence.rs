@@ -91,6 +91,17 @@ fn leaf_with_probe_target_at(
     before_landing: bool,
     target: &str,
 ) -> (ReviewedLeaf, String) {
+    leaf_with_candidate_files(probe, before_landing, target, &[])
+}
+
+/// [`leaf_with_probe_target_at`], committing `files` (path, text) beside the
+/// probe, so the candidate's tree can hold a workspace the review reads.
+fn leaf_with_candidate_files(
+    probe: &str,
+    before_landing: bool,
+    target: &str,
+    files: &[(&str, &str)],
+) -> (ReviewedLeaf, String) {
     let home = PathBuf::from(std::env::var("HOME").expect("the isolated child's HOME"));
     let bin = home.join("host-evidence-bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -117,7 +128,14 @@ fn leaf_with_probe_target_at(
     let repo = leaf.pair.follower_repo.clone();
     std::fs::create_dir_all(repo.join("tests/host")).unwrap();
     std::fs::write(repo.join(format!("tests/host/{target}.sh")), probe).unwrap();
-    git(&repo, &["add", "tests"]);
+    let mut added = vec!["add", "tests"];
+    for (relative, text) in files {
+        let path = repo.join(relative);
+        std::fs::create_dir_all(path.parent().expect("a file path")).unwrap();
+        std::fs::write(&path, text).unwrap();
+        added.push(*relative);
+    }
+    git(&repo, &added);
     git(&repo, &["commit", "-q", "-m", "Add the sandbox probe"]);
     if before_landing {
         leaf.gate_input["before_landing"] = json!(true);

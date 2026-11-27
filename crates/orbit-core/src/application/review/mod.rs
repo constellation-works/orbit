@@ -38,6 +38,8 @@ mod landing_dispatch_port;
 pub(crate) mod ledger;
 mod projection;
 pub(crate) mod reconciliation;
+
+mod scenario_row;
 mod switches;
 mod task_port;
 
