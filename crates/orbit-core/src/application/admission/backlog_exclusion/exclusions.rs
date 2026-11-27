@@ -282,6 +282,9 @@ pub(super) fn pilot_hold_exclusion(
                     runtime.automation_machine_identity(),
                 )?,
             ),
+            PilotAdmissionHold::FootprintUnresolved(detail) => {
+                (BacklogTaskExclusionReason::PilotFootprintUnresolved, detail)
+            }
             PilotAdmissionHold::Duplicate => (
                 BacklogTaskExclusionReason::PilotDuplicate,
                 pilot_decision_detail("duplicate_of"),

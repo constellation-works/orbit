@@ -159,6 +159,7 @@ pub(super) fn project_readiness_tasks(
                     BacklogTaskExclusionReason::ActivePilotPreparation
                     | BacklogTaskExclusionReason::PilotAssessmentStale
                     | BacklogTaskExclusionReason::PilotDuplicate
+                    | BacklogTaskExclusionReason::PilotFootprintUnresolved
                     | BacklogTaskExclusionReason::PilotAlreadyLanded
                     | BacklogTaskExclusionReason::OperatorValidationHandoff
                     | BacklogTaskExclusionReason::HostOperationalHandoff

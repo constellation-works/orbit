@@ -131,6 +131,9 @@ fn hold_description(hold: &PilotAdmissionHold) -> (&'static str, Option<String>)
             ("operator_validation", Some(hold.detail()))
         }
         PilotAdmissionHold::HostOperational(hold) => ("host_operational", Some(hold.detail())),
+        PilotAdmissionHold::FootprintUnresolved(detail) => {
+            ("pilot_footprint_unresolved", Some(detail.clone()))
+        }
         PilotAdmissionHold::NativeOs(_) => ("native_os", None),
     }
 }

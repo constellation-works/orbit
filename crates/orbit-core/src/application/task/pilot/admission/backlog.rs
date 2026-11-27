@@ -244,6 +244,14 @@ impl OrbitRuntime {
                     return Ok(Some(hold));
                 }
             }
+            // The host's footprint marker holds like a finding: the task's
+            // selectors are not a verified footprint. An advisory warning
+            // carries no marker, so it holds nothing here.
+            if let Some(finding) = super::super::promotion::footprint_marker(assessment) {
+                return Ok(Some(PilotAdmissionHold::FootprintUnresolved(
+                    footprint_hold_detail(finding),
+                )));
+            }
             // A clear latest assessment supersedes any older finding. Unrelated
             // comments and metadata edits do not release an existing hold.
             return Ok(native_os);
@@ -581,9 +589,11 @@ impl OrbitRuntime {
             Some(PilotAdmissionHold::HostOperational(hold)) => {
                 (HOST_OPERATIONAL_RESOLVED, Some(json!(hold)))
             }
-            Some(PilotAdmissionHold::Duplicate | PilotAdmissionHold::AlreadyLanded)
-                if stated.is_some_and(|(verdict, _)| verdict.overrides_findings()) =>
-            {
+            Some(
+                PilotAdmissionHold::Duplicate
+                | PilotAdmissionHold::AlreadyLanded
+                | PilotAdmissionHold::FootprintUnresolved(_),
+            ) if stated.is_some_and(|(verdict, _)| verdict.overrides_findings()) => {
                 (PILOT_ADMISSION_DECIDED_EVENT, None)
             }
             _ => return Ok(None),
@@ -926,6 +936,16 @@ fn operator_overrode(history: &[TaskHistoryEntry], operation_id: &str) -> bool {
                     if answered == operation_id && verdict.overrides_findings()
             )
     })
+}
+
+/// What an operator reads for a footprint hold: the finding's own text, then
+/// the ways to release it.
+fn footprint_hold_detail(finding: &Value) -> String {
+    let text = super::super::promotion::warning_text(finding)
+        .unwrap_or("The pilot could not establish the task's lock footprint.");
+    format!(
+        "{text} Dispatch is held until a new assessment establishes a bounded footprint, or an operator records `task-pilot-admission: approve-anyway` or `task-pilot-admission: clear` as a comment's first line. A later assessment supersedes that decision."
+    )
 }
 
 /// The verdict an operator's decision comment states on its first line, and

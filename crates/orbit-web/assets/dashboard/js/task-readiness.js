@@ -427,6 +427,7 @@ const PILOT_HOLD_REASONS = new Set([
   "pilot_assessment_stale",
   "pilot_duplicate",
   "pilot_already_landed",
+  "pilot_footprint_unresolved",
   "operator_validation_handoff",
   "native_os_required",
 ]);
