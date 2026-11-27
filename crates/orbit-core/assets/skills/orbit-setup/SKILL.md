@@ -78,7 +78,7 @@ Open a file only when its condition holds; each stands alone.
 | Manage a legacy external tool (`orbit tool add`, `list`, `show`, `run`, `enable`, `disable`, `remove`, `doctor`); migrate one to a plugin | [plugins-legacy-tools](references/plugins-legacy-tools.md) |
 | Host-local application acting on an operator's consent for exact tool calls: credentials, callbacks, rotation, revocation | [applications](references/applications.md) |
 | MCP clients, SSH federation, role and toolset selection, authority on the destination, TCP MCP | [remote-access-mcp](references/remote-access-mcp.md) |
-| Remote dashboard and switching hosts in the dashboard | [remote-access-dashboard](references/remote-access-dashboard.md) |
+| Remote dashboard over Tailscale Serve (trusted hosts and logins, public URL, identity boundary, restart and verification), and switching hosts in the dashboard | [remote-access-dashboard](references/remote-access-dashboard.md) |
 | Owner/replica roles, multiple machines, a breaking workspace-layout upgrade across hosts | [multi-host](references/multi-host.md) |
 | Task snapshots: bind a workspace, transfer the source repository, HTTPS credentials, the weekly routine | [publication-bind](references/publication-bind.md) |
 | Publish a task snapshot, inspect one, restore deliberately | [publication-snapshots](references/publication-snapshots.md) |
