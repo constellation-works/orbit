@@ -675,6 +675,7 @@
         "boundary/v2/tests/repair_gate.rs::removing_the_edge_through_a_supported_update_repairs_on_the_next_read",
         "boundary/v2/tests/repair_gate.rs::repeated_reads_while_degraded_attempt_one_rebuild_and_stay_correct",
         "boundary/v2/tests/repair_gate.rs::restoring_the_target_repairs_on_the_next_read",
+        "driver/file/task_bundle/bundle_io/tests/jsonl.rs::append_under_symlinked_bundle_dir_leaves_target_directory_untouched",
         "driver/file/task_bundle/bundle_io/tests/write.rs::interrupted_bundle_publish_never_exposes_partial_final_directory",
         "driver/sqlite/authority/schema/tests/schema.rs::newer_authority_schemas_keep_safe_writers_or_hold_reads_or_refuse",
         "driver/sqlite/authority/schema/tests/schema.rs::shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes",
