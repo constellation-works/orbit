@@ -6,7 +6,7 @@ updated_date: 2026-11-27
 last_validated: 2026-11-27
 status: Accepted
 stage: designing
-next: "Check the frame policy in three browser engines [ORB-29532]"
+next: "Record the engine measurements against the one-document contract [ORB-29532]"
 feature: plugin-pages
 doc_role: overview
 type: design
@@ -19,9 +19,10 @@ related_artifacts: [ORB-29504]
 # Plugin Pages — Overview
 
 A plugin page is a screen a plugin ships and the dashboard shows as a sub-tab under Plugins. The
-plugin supplies built static files. The dashboard serves them in a sandboxed frame, and the page
-gets data only by calling tools the plugin's manifest names. It exists so that a plugin such as
-Scribe or Formation can show the operator more than a table, without plugin code ever running
+plugin supplies built static files. The dashboard writes them into one document and shows it
+in a sandboxed frame, and the page gets data only by calling tools the plugin's manifest names.
+It exists so that a plugin such as Scribe or Formation can show the operator more than a table,
+without plugin code ever running
 with the dashboard's authority. The operator approved the design on 2026-11-27
 ([ORB-29504]). Nothing in it is built.
 
@@ -67,8 +68,8 @@ rest of the plugin standard are unchanged, and plugins still add no top-level de
 | Term | Meaning |
 |---|---|
 | Page | One entry under `spec.web.pages` in a plugin's manifest: an id, a title, a directory and the tools it may call |
-| Bundle | The page's directory of built static files, with `index.html` as its entry. Its digest is recorded at install |
-| Frame | The sandboxed frame the dashboard draws the bundle in. It has a unique origin and no network |
+| Bundle | The page's built static files: `index.html` for the markup, and the scripts and styles the manifest lists. Its digest is recorded at install |
+| Frame | The sandboxed frame the dashboard draws the page in. It has a unique origin and no network, and it fetches nothing after its own document |
 | Bridge | The `postMessage` exchange by which a page asks the dashboard to call one of its declared tools |
 | Kit | A script and a stylesheet Orbit serves, which wrap the bridge and carry the dashboard's look |
 
@@ -80,7 +81,7 @@ phase that delivers it.
 | Concern | Design section | Phase |
 |---|---|---|
 | What a plugin declares, and what validation refuses | [The manifest](./2_design.md#1-the-manifest) | 1 |
-| How the files are served, and what the frame cannot do | [Serving](./2_design.md#2-serving) | 1 |
+| How the page is served, and what the frame cannot do | [Serving](./2_design.md#2-serving) | 1 |
 | How a page gets data | [The bridge](./2_design.md#3-the-bridge) | 1 |
 | Where the operator finds a page | [Surfaces](./2_design.md#4-surfaces) | 1 |
 | Pages of a host reached through this dashboard | [Other hosts](./2_design.md#5-other-hosts) | 2 |
@@ -98,11 +99,17 @@ the draft and were approved with the recommendation. Both are recorded in the
    only through its plugin's tools.
 2. **Pages read first; actions come later, behind a confirmation the dashboard draws.**
 
+The page contract was then measured in browsers and did not hold ([ORB-29532]). The operator
+approved its replacement on 2026-11-27 ([ORB-29573]), recorded as a third decision:
+
+3. **A page is one document, and its frame fetches nothing.** Orbit writes it from the
+   plugin's files and admits each script by hash; the origin guard is unchanged.
+
 ## 5. Build
 
 | Phase | Task |
 |---|---|
-| 1. Local read-only pages | [ORB-29532] checks the frame policy in three browser engines; [ORB-29534] adds the manifest key, validation and the bundle digest; [ORB-29536] serves a page's files and runs its tool calls; [ORB-29537] adds the sub-tabs, the frame and the relay |
+| 1. Local read-only pages | [ORB-29532] measures the frame policy in browser engines; [ORB-29573] revised the page contract to one document after it; [ORB-29534] adds the manifest key, validation and the bundle digest; [ORB-29536] serves a page and runs its tool calls; [ORB-29537] adds the sub-tabs, the frame and the relay |
 | 2. Pages on other hosts | [ORB-29538] |
 | 3. Actions | [ORB-29539] |
 | 4. First pages | Designed in the Formation and Scribe repositories |
@@ -111,11 +118,12 @@ the draft and were approved with the recommendation. Both are recorded in the
 
 - [ORB-12738] — added the Plugins tab, the generic panel renderer and link tiles.
 - [ORB-29504] — this design.
-- [ORB-29532] — checks the frame policy in three browser engines and fixes the page contract.
+- [ORB-29532] — measures the frame policy in browser engines.
 - [ORB-29534] — adds `spec.web.pages`, validation, the bundle digest and the listings.
-- [ORB-29536] — serves a page's files under the frame policy and runs its tool calls.
+- [ORB-29536] — serves a page under the frame policy and runs its tool calls.
 - [ORB-29537] — adds the Plugins sub-tabs, the page frame and the bridge relay.
 - [ORB-29538] — shows another host's pages through the forwarder.
 - [ORB-29539] — adds actions behind a dashboard-drawn confirmation.
+- [ORB-29573] — revised the page contract to one document after the engine measurement.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

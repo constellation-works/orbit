@@ -16,8 +16,10 @@ related_artifacts: [ORB-29504]
 
 # Plugin Pages — Design
 
-The operator approved this design on 2026-11-27 ([ORB-29504]). Nothing in it is built, so it
-describes what the builds make true. The problem, the goal and the build tasks are in the
+The operator approved this design on 2026-11-27 ([ORB-29504]). The page contract in sections 1
+and 2 was revised after it was measured in two browser engines ([ORB-29532]), and the operator
+approved the revision the same day ([ORB-29573]).
+Nothing in it is built, so it describes what the builds make true. The problem, the goal and the build tasks are in the
 [overview](./1_overview.md). The plugin manifest,
 grants and tool dispatch it builds on are the [plugin standard](../plugins/1_scope.md)'s.
 
@@ -29,47 +31,71 @@ spec:
     pages:
       - id: overview              # route: #plugins/<ns>/overview
         title: Formation          # the sub-tab's label
-        root: web/overview        # a directory in the plugin root; index.html is the entry
+        root: web/overview        # a directory in the plugin root; index.html is the markup
+        scripts: [app.js]         # files under root, written into the page in this order
+        styles: [app.css]         # files under root, written into the page in this order
+        kit: 1                    # optional: Orbit's bridge script and stylesheet, by version
         tools: [status, mail_log, roster_show]   # this plugin's tools the page may call
 ```
 
-- **A page is a directory of built files.** HTML, script, styles, images and fonts, from a
-  fixed list of extensions. How the plugin produced them is its own business: a bundler, a
-  framework or three hand-written files. Orbit never runs a build for a page.
+- **A page is markup, scripts and styles, built ahead.** `index.html` holds the markup and no
+  `script` or `link` element. The scripts and styles are the files the manifest lists. How the
+  plugin produced them is its own business: a bundler, a framework or three hand-written
+  files. Orbit never runs a build for a page.
+- **A page is self-contained.** Its frame fetches nothing ([Serving](#2-serving)), so a script
+  imports no file at run time, and an image or a font is a `data:` URL inside the markup or a
+  style. A file whose name ends in `.mjs` is written as a module script; any other script is a
+  classic one.
 - **`tools` names only the plugin's own tools, and only `read_only` ones.** `orbit plugin
-  validate` refuses any other name, a mutating tool, a missing `index.html`, a file type off
-  the list, and a bundle over the size bound.
+  validate` refuses any other name and a mutating tool.
+- **`orbit plugin validate` refuses a page Orbit could not write out safely,** by name: a
+  missing `index.html` or listed file; markup that holds a `script` or `link` element, which
+  the browser would refuse anyway with nothing shown to the author; a script that contains
+  `</script` or `<!--`, or a style that contains `</style`, either of which would end its
+  element early; and a page over the size bound.
 - **The bundle is covered by consent.** Install records a digest of each page's files beside
   the manifest digest. A load whose files do not match registers the page inactive with a
   diagnostic naming both digests, as a changed manifest does today (STD-05 §R21).
 
 ## 2. Serving
 
-Orbit loads and hashes a page's files when the plugin loads and serves them from memory, so
-the bytes served are the bytes that were hashed.
+Orbit loads and hashes a page's files when the plugin loads and keeps them in memory, so the
+bytes served are the bytes that were hashed.
 
 | Route | Does |
 |---|---|
-| `GET /api/plugins/<ns>/pages/<page>/assets/<path>` | One file of the bundle, with the content type its extension fixes |
+| `GET /api/plugins/<ns>/pages/<page>/` | The page, as one document |
 | `POST /api/plugins/<ns>/pages/<page>/call` | Runs one tool the page declares, with input |
-| `GET /static/plugin-kit/v1/…` | Orbit's own bridge script and stylesheet (below) |
 
-Every asset response carries this policy, and the dashboard frames the page with the matching
+**Orbit writes the document.** In order: the kit's stylesheet and each style, each in a
+`style` element; the markup; the kit's script and each script, each in a `script` element.
+Nothing in a page file is parsed or rewritten. There is no route for a single file, because
+the frame never asks for one.
+
+The response carries this policy, and the dashboard frames the page with the matching
 `sandbox="allow-scripts"`:
 
 ```
-sandbox allow-scripts; default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline';
-img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; form-action 'none';
-base-uri 'none'; frame-ancestors 'self'
+sandbox allow-scripts; default-src 'none'; script-src 'sha256-<kit>' 'sha256-<script>' …;
+style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none';
+form-action 'none'; base-uri 'none'; frame-ancestors 'self'
 ```
+
+`script-src` lists one hash per script Orbit wrote, computed from the bytes it wrote. The
+policy is therefore fixed by the bundle and the kit version.
 
 What that gives:
 
-- **A unique origin.** The page cannot read the dashboard's document or storage, and a request
-  it made to `/api/*` would carry `Origin: null`, which the router's origin guard already
-  refuses.
-- **No network.** `connect-src 'none'` stops fetches, sockets and event streams. The page loads
-  its own files and Orbit's kit and nothing else.
+- **A unique origin.** The page cannot read the dashboard's document or storage.
+- **One request.** The frame's only request is its own navigation. The dashboard starts it,
+  so it is a same-origin request that carries the dashboard's session, and the router's origin
+  guard admits it as it stands. The frame asks for nothing afterwards, so the guard never
+  meets a request from the frame's unique origin.
+- **Only the listed scripts run.** A script that reached the page another way has no hash in
+  the policy: one written into the markup, one a tool's output smuggled in, or one a running
+  script adds. `eval` is refused as well.
+- **No network.** `connect-src 'none'` stops fetches, sockets and event streams, and no
+  directive admits a file from any server.
 - **No way out of the frame.** Without the other sandbox tokens it cannot open a window,
   navigate the dashboard, submit a form or start a download.
 
@@ -97,10 +123,11 @@ dashboard →  page      {v: 1, id, ok: true, output: …}   or   {v: 1, id, ok:
   (`#plugins/<ns>/<page>?…`) and receives it on load, since a sandboxed page has no storage of
   its own.
 
-**The kit** is two files Orbit serves: a script that wraps the messages as `orbit.call(tool,
-input)`, and a stylesheet with the dashboard's colours, type scale, spacing and table styles in
-both themes. Using them is optional. They make a plugin's page look like the rest of the
-dashboard without copying its CSS, and their path carries the bridge version.
+**The kit** is two parts Orbit writes into the document when the manifest names `kit`: a
+script that wraps the messages as `orbit.call(tool, input)`, and a stylesheet with the
+dashboard's colours, type scale, spacing and table styles in both themes. Using them is
+optional. They make a plugin's page look like the rest of the dashboard without copying its
+CSS. The manifest's `kit` number is the bridge version the page was written for.
 
 ## 4. Surfaces
 
@@ -116,11 +143,12 @@ dashboard without copying its CSS, and their path carries the bridge version.
 
 ## 5. Other hosts
 
-With another host selected, its pages are that host's plugins. Assets and calls travel through
-`/api/on/<host>/…` ([ORB-14679]) like every other read. The forwarder stamps its own policy on what it
-relays, whatever the remote sent. For the page asset route it stamps the page policy above and
-fixes the content type from the extension, so a remote page gets the same frame and no more.
-The kit is always this dashboard's own.
+With another host selected, its pages are that host's plugins, and calls travel through
+`/api/on/<host>/…` ([ORB-14679]) like every other read. The document does not travel whole.
+The forwarder stamps its own policy on what it relays, whatever the remote sent, and it cannot
+vouch for script hashes it did not compute. So the remote host gives the page's parts (markup,
+scripts, styles) as data, and this dashboard writes the document and its policy itself, with
+its own kit. A remote page gets the same frame as a local one and no more.
 
 ## 6. Why no server per plugin
 
@@ -145,12 +173,14 @@ whose manifest has pages lists them in the consent prompt.
 
 ## 8. Phasing
 
-1. **Local read-only pages.** The manifest key, validation, the bundle digest, the asset and
-   call routes, the frame, the bridge, the kit and the secondary tabs. Verified first against
-   the three browser engines. The plugin standard's dashboard section and its non-goal are
-   amended in the same change.
-2. **Pages on other hosts.** The forwarder's page policy, and the decision on a read-only call
-   from a dashboard without the operator session.
+1. **Local read-only pages.** The manifest key, validation, the bundle digest, the document
+   and call routes, the frame, the bridge, the kit and the secondary tabs. The contract is
+   measured in Chromium and WebKit; the phase does not close until Firefox is measured too
+   ([limitations](#10-concerns--honest-limitations)). The plugin standard's dashboard section
+   and its non-goal are amended in the same change.
+2. **Pages on other hosts.** The route that gives a page's parts, the forwarder writing the
+   document from them, and the decision on a read-only call from a dashboard without the
+   operator session.
 3. **Actions.** A page may name mutating tools under a separate `actions` list. Each call
    needs the operator session and a confirmation the dashboard draws outside the frame, naming
    the plugin, the tool and the input, and is audited with the web session. Enabling such a
@@ -161,30 +191,42 @@ whose manifest has pages lists them in the consent prompt.
 ## 9. Acceptance
 
 - Given a plugin whose manifest declares a page, the operator opens `#plugins/<ns>/<page>` and
-  sees the bundle's `index.html` drawn under the dashboard's strip, with no dashboard edit and
-  no process started.
+  sees the page drawn under the dashboard's strip, with no dashboard edit and no process
+  started.
+- Given a loaded page, the server sees one request from its frame, the document, and that
+  request passes the origin guard unchanged.
 - Given a page that calls a declared read-only tool with input, the result reaches the page
   and the call appears in the audit trail as a call to that tool.
 - Given a page that calls a tool its manifest does not list, a mutating tool, or another
   plugin's tool, the call is refused and nothing runs.
-- Given a page script that fetches `/api/tasks`, reads the parent document or opens a window,
-  each attempt fails in the browser.
+- Given a page script that fetches `/api/tasks`, reads the parent document, opens a window or
+  adds a script element, each attempt fails in the browser.
 - Given a bundle file changed on disk after install, the page is inactive with a diagnostic
   naming both digests, and the rest of the plugin still works.
-- Given a manifest whose page names a mutating tool, has no `index.html` or exceeds the size
-  bound, `orbit plugin validate` refuses it by name.
-- Given another host selected, that host's page loads through the tunnel under the same frame
-  policy.
+- Given a manifest whose page names a mutating tool, has no `index.html`, holds a `script`
+  element in its markup, lists a script containing `</script`, or exceeds the size bound,
+  `orbit plugin validate` refuses it by name.
+- Given another host selected, that host's page is written by this dashboard from the parts
+  the tunnel returns, under the same frame policy.
 - Given a plugin with panels and no pages, the Plugins tab behaves as it does today.
 
 ## 10. Concerns & Honest Limitations
 
-- **The browser rules are not yet verified.** Whether `script-src 'self'` admits the bundle's
-  own files in a frame with a unique origin, and whether module scripts and fonts load there
-  without a cross-origin grant, differs by engine and has not been tested for this design.
-  Phase 1 tests Chromium, Firefox and Safari before the manifest key is accepted. The fallback
-  is a narrower contract (classic scripts, no web fonts beyond the kit's), not a wider origin
-  guard.
+- **Measured in two engines, not three.** On 2026-11-27 the first contract, a directory of
+  files served under `script-src 'self'`, failed in both engines tried ([ORB-29532], Playwright
+  1.58.2 on macOS 27.2.1). WebKit 26.0 matched `'self'` to nothing in a frame with a unique
+  origin and loaded no file. Chromium 145 loaded classic scripts, but marked each request
+  `Sec-Fetch-Site: cross-site`, which the origin guard refuses, and module scripts and fonts
+  failed their cross-origin check. The contract above was then measured in the same two
+  engines with the same result in each: the listed inline scripts ran, classic and module; the
+  bridge round trip worked; `data:` images and fonts loaded; the frame made one request; and
+  every escape in [Serving](#2-serving) was refused. Firefox is not measured: Playwright's
+  Firefox does not launch on that macOS version. It is to be measured on Linux before phase 1
+  closes. Playwright's WebKit is the engine and not Safari itself.
+- **No file is fetched at run time.** A page that splits its code into chunks or loads an
+  image by URL has to bundle them into its listed scripts and styles. `data:` URLs cost about
+  a third more bytes than the files they carry, and the size bound counts the document as
+  written.
 - **A page can still mislead.** It draws anything inside its frame, including a form that asks
   for a secret it then shows on screen. It cannot send what is typed anywhere. The strip above
   the frame marks whose content it is.
@@ -196,12 +238,14 @@ whose manifest has pages lists them in the consent prompt.
   without the operator session, and the call route is a `POST`. Phase 2 decides whether a
   read-only call is exempt.
 - **Version skew.** A page written for bridge version 1 is served by whichever dashboard frames
-  it. The kit's path and the message's `v` are the contract, and a host that does not know a
-  version refuses the page with a diagnostic.
+  it. The manifest's `kit` number and the message's `v` are the contract, and a host that does
+  not know a version refuses the page with a diagnostic.
 
 ## Task References
 
 - [ORB-14679] — added `/api/on/<host>/…` forwarding to another host's dashboard API.
 - [ORB-29504] — this design.
+- [ORB-29532] — measured the frame policy in Chromium and WebKit.
+- [ORB-29573] — revised the page contract to one document after that measurement.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
