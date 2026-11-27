@@ -2,7 +2,7 @@
 title: Operations as Data — Overview
 owner: claude
 created_date: 2026-07-26
-updated_date: 2026-11-27
+updated_date: 2026-11-26
 last_validated: 2026-11-04
 status: Accepted
 stage: building
