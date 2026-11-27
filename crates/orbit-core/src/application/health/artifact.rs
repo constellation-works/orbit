@@ -63,6 +63,10 @@ use crate::OrbitRuntime;
 use crate::application::auto_tasks::auto_tasks_dir;
 
 use crate::app::routine::DEFAULT_ROUTINE_FILES;
+use crate::app::skill::{
+    DEFAULT_SKILL_FILES, dangling_client_skill_links, inject_skill_template_tokens,
+    skill_link_remediation, skill_link_roots,
+};
 use crate::application::auto_tasks::{
     DEFAULT_AUTO_TASK_FILES, REFERENCE_AUTO_TASK_FILES, render_default_auto_task,
 };
@@ -72,10 +76,6 @@ use crate::application::managed_assets::{
     load_managed_asset_manifest, preserve_modified_retired_asset, resolve_confined_asset_path,
 };
 use crate::application::seeding_policy::SeedingPolicyExclusions;
-use crate::application::skill::{
-    DEFAULT_SKILL_FILES, dangling_client_skill_links, inject_skill_template_tokens,
-    skill_link_remediation,
-};
 use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 use orbit_common::security::release::sha256_hex;
 
@@ -345,7 +345,7 @@ impl OrbitRuntime {
             if catalog.kind == ArtifactKind::Skill
                 && let Some(base) = self.global_root().parent()
             {
-                let roots = crate::application::skill::skill_link_roots(base);
+                let roots = skill_link_roots(base);
                 let links = match dangling_client_skill_links(&roots) {
                     Ok(links) => links,
                     Err(error) => {

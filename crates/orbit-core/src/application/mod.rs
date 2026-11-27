@@ -10,13 +10,11 @@
 //!   `sweep_filing`, `seeding_policy`.
 //! - Agents and runs: `agents`, `executor`, `agent_corpus`, `crew_memory`,
 //!   `evolution`, `experiment`, `resident`, `vision_probe`, `statistics`.
-//! - Plugins and skills: `plugin`, `skill`, `tool_name_migration`.
-//! - Workspace and host: `workspace`, `codebase`, `config`, `distributed`,
-//!   `pull_drain`, `host_labels`, `health`, `gc`, `change_watch`,
-//!   `managed_assets`.
-//! - Policy, search, and audit: `application_authority`, `audit_event`,
-//!   `contracts`, `admission`, `search`, `backlog_forecast`,
-//!   `tag_instructions`.
+//! - Plugins: `plugin`, `tool_name_migration`.
+//! - Workspace and host: `codebase`, `distributed`, `pull_drain`,
+//!   `host_labels`, `health`, `gc`, `change_watch`, `managed_assets`.
+//! - Policy and search: `application_authority`, `contracts`, `admission`,
+//!   `search`, `backlog_forecast`, `tag_instructions`.
 //! - `test_support` is compiled only for tests.
 
 pub(crate) mod admission;
@@ -24,13 +22,11 @@ pub(crate) mod agent_corpus;
 pub mod agents;
 mod application_authority;
 pub mod attention;
-pub mod audit_event;
 pub mod auto_tasks;
 pub mod automation;
 pub(crate) mod backlog_forecast;
 pub mod change_watch;
 pub mod codebase;
-pub mod config;
 pub mod contracts;
 pub mod crew_memory;
 pub mod distributed;
@@ -51,7 +47,6 @@ pub mod resident;
 pub mod review;
 pub(crate) mod search;
 pub mod seeding_policy;
-pub mod skill;
 pub(crate) mod statistics;
 pub mod store_opener;
 pub(crate) mod sweep_filing;
@@ -62,12 +57,8 @@ pub mod task_bundle;
 pub(crate) mod tool_name_migration;
 pub mod vision_probe;
 pub(crate) mod workflow;
-mod workspace;
 pub(crate) mod workspace_auto;
-pub(crate) use workspace::product_profile as workspace_product_profile;
-pub use workspace::{
-    live_runs as workspace_live_runs, preset as workspace_preset, sync as workspace_sync,
-};
+
 // The env variant's only caller is the Linux-only process-cleanup test, so
 // its re-export carries the same target gate.
 #[cfg(all(test, target_os = "linux"))]

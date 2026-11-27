@@ -839,10 +839,15 @@ fn web_status_updates_record_surface_caller_note_audit_and_preserve_legacy_event
             );
 
             // 3. Owning host recorded `task.mutation` audit rows for the web writes.
-            let audits = fixture
-                .runtime
-                .list_audit_events(None, Some("task.mutation".to_string()), None, None, 20)
-                .expect("list task.mutation audit rows");
+            let audits = orbit_core::app::audit::list_audit_events(
+                &fixture.runtime,
+                None,
+                Some("task.mutation".to_string()),
+                None,
+                None,
+                20,
+            )
+            .expect("list task.mutation audit rows");
             let task_audits = audits
                 .iter()
                 .filter(|event| event.target_id.as_deref() == Some(id.as_str()))

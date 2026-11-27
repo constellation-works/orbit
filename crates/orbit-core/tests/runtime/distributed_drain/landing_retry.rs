@@ -436,9 +436,8 @@ fn a_redacted_retry_reason_preserves_success_audit_and_replay() {
     assert_eq!(response["submitted"], true);
     assert_eq!(response["redactions_applied"], true);
 
-    let rows = runtime
-        .list_audit_events(None, None, None, None, 100)
-        .unwrap();
+    let rows =
+        orbit_core::app::audit::list_audit_events(runtime, None, None, None, None, 100).unwrap();
     let audit = rows
         .iter()
         .find(|row| {

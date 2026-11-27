@@ -7,7 +7,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use orbit_core::application::workspace_sync::reconcile_workspace_managed_artifacts;
+use orbit_core::app::workspace::reconcile_workspace_managed_artifacts;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;

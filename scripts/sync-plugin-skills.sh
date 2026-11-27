@@ -2,7 +2,7 @@
 # Materialize the agent plugin skill tree from Orbit's canonical embedded assets.
 # Every directory directly under assets/skills is mirrored unless its name starts
 # with `_`; the compiled binary separately embeds its explicit file list in
-# DEFAULT_SKILL_FILES (`crates/orbit-core/src/application/skill/catalog.rs`).
+# DEFAULT_SKILL_FILES (`crates/orbit-core/src/app/skill/catalog.rs`).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"

@@ -330,13 +330,18 @@ fn a_terminated_run_names_who_sent_the_signal() {
         "the run names the SIGTERM's sender: {diagnostic}"
     );
 
-    let exit = fixture
-        .runtime
-        .list_audit_events(None, Some("pipeline.worker.exited".into()), None, None, 20)
-        .unwrap()
-        .into_iter()
-        .find(|row| row.target_id.as_deref() == Some(run_id.as_str()))
-        .expect("the supervisor recorded the worker's exit");
+    let exit = orbit_core::app::audit::list_audit_events(
+        &fixture.runtime,
+        None,
+        Some("pipeline.worker.exited".into()),
+        None,
+        None,
+        20,
+    )
+    .unwrap()
+    .into_iter()
+    .find(|row| row.target_id.as_deref() == Some(run_id.as_str()))
+    .expect("the supervisor recorded the worker's exit");
     let exit: serde_json::Value =
         serde_json::from_str(exit.arguments_json.as_deref().unwrap()).unwrap();
     assert_eq!(exit["worker_pid"], pid, "{exit}");

@@ -13,9 +13,9 @@ use orbit_types::workspace::{
     WorkspaceRegistry,
 };
 
+use super::preset::applied_workspace_preset;
 use super::{Registered, RoleAssignment, Seeding, Shown};
 use crate::application::seeding_policy::{SeedingPolicyExclusions, workspace_seeding_policies};
-use crate::application::workspace_preset::applied_workspace_preset;
 use crate::{Core, ShipMode};
 
 pub(super) fn list(core: &Core) -> Result<WorkspaceRegistry, OrbitError> {

@@ -547,12 +547,12 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                     );
                 }
                 if key == "workflow.base_brunch" {
-                    let expected = orbit_core::application::config::set_key(
+                    let expected = orbit_core::app::config::set_key(
                         &fixture.runtime,
                         key,
                         &json!("main"),
-                        orbit_core::application::config::ConfigScope::Workspace,
-                        orbit_core::application::config::ConfigWriteInit::RequireExisting,
+                        orbit_core::app::config::ConfigScope::Workspace,
+                        orbit_core::app::config::ConfigWriteInit::RequireExisting,
                     )
                     .unwrap_err();
                     let message = match expected {
@@ -658,7 +658,7 @@ fn config_key_global_admission_and_dashboard_audit_stay_intact() {
     isolated(
         "guards::config_key_global_admission_and_dashboard_audit_stay_intact",
         || {
-            use orbit_core::application::config::{self, ConfigScope, ConfigWriteInit};
+            use orbit_core::app::config::{self, ConfigScope, ConfigWriteInit};
             let fixture = Fixture::new();
             let global_path = fixture.global.join("config.toml");
             let global = format!(
@@ -703,12 +703,11 @@ fn config_key_global_admission_and_dashboard_audit_stay_intact() {
                             && row["value"] == 60
                     )
             );
-            let events = fixture
-                .runtime
-                .list_audit_events_filtered(
-                    &orbit_core::test_support::fixture_store::AuditEventFilter::default(),
-                )
-                .unwrap();
+            let events = orbit_core::app::audit::list_audit_events_filtered(
+                &fixture.runtime,
+                &orbit_core::test_support::fixture_store::AuditEventFilter::default(),
+            )
+            .unwrap();
             assert!(
                 events.iter().any(|event| {
                     event.target_type.as_deref() == Some("config.set")

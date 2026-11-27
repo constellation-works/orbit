@@ -188,8 +188,9 @@ fn an_unobserved_worker_release_carries_available_scope_evidence() {
         mark_old(&pair, &leaf, pid, false);
         if scope {
             let unit = format!("orbit-worker-{leaf}-fixture.scope");
-            pair.follower
-                .record_audit_event(&orbit_store::contract::AuditEventInsertParams {
+            orbit_core::app::audit::record_audit_event(
+                &pair.follower,
+                &orbit_store::contract::AuditEventInsertParams {
                     execution_id: format!("claim-{leaf}"),
                     command: "pipeline".into(),
                     subcommand: None,
@@ -228,8 +229,9 @@ fn an_unobserved_worker_release_carries_available_scope_evidence() {
                     job_run_id: Some(leaf.clone()),
                     activity_id: None,
                     step_index: None,
-                })
-                .unwrap();
+                },
+            )
+            .unwrap();
         }
         let run = pair.follower.show_job_run(&leaf).unwrap();
         assert_eq!(run.state, JobRunState::Interrupted);

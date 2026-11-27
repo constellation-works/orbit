@@ -293,10 +293,11 @@ fn missing_failed_jobs_are_held_then_escalated_or_filed_when_available() {
         assert_eq!(filed["filed_count"], 0, "{filed:#}");
         assert!(open_sweep_tasks(&workspace.runtime).is_empty());
     }
-    let incidents = workspace
-        .runtime
-        .audit_failure_incidents(&orbit_types::telemetry::incident::FailureIncidentQuery::default())
-        .unwrap();
+    let incidents = orbit_core::app::audit::audit_failure_incidents(
+        &workspace.runtime,
+        &orbit_types::telemetry::incident::FailureIncidentQuery::default(),
+    )
+    .unwrap();
     assert_eq!(incidents.affected_runs_by_class.get("deferred"), Some(&2));
     assert_eq!(incidents.affected_runs_by_class.get("unexpected"), None);
     let (evidence, filed) = workspace.sweep();
@@ -580,10 +581,11 @@ fn ci_agent_main_red_for_three_sweeps_always_has_an_open_task() {
         );
         assert!(open_sweep_tasks(&workspace.runtime).is_empty());
     }
-    let incidents = workspace
-        .runtime
-        .audit_failure_incidents(&orbit_types::telemetry::incident::FailureIncidentQuery::default())
-        .unwrap();
+    let incidents = orbit_core::app::audit::audit_failure_incidents(
+        &workspace.runtime,
+        &orbit_types::telemetry::incident::FailureIncidentQuery::default(),
+    )
+    .unwrap();
     assert_eq!(
         incidents.affected_runs_by_class.get("deferred"),
         Some(&2),
@@ -692,10 +694,11 @@ fn ci_missing_checkout_sha_defers_then_escalates_on_landing_branch() {
             "{output:#}"
         );
     }
-    let incidents = workspace
-        .runtime
-        .audit_failure_incidents(&orbit_types::telemetry::incident::FailureIncidentQuery::default())
-        .unwrap();
+    let incidents = orbit_core::app::audit::audit_failure_incidents(
+        &workspace.runtime,
+        &orbit_types::telemetry::incident::FailureIncidentQuery::default(),
+    )
+    .unwrap();
     assert_eq!(
         incidents.affected_runs_by_class.get("deferred"),
         Some(&2),

@@ -344,10 +344,10 @@ fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
         std::fs::write(catalog.join(format!("{name}.yaml")), &old).expect("stale copy again");
         add_managed_manifest_entry(&catalog, name, &old);
     }
-    use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactProvenance};
-    use orbit_core::application::workspace_sync::{
+    use orbit_core::app::workspace::{
         ManagedArtifactOutcome, ManagedArtifactScope, reconcile_workspace_managed_artifacts,
     };
+    use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactProvenance};
     let activity_catalog = workspace.join("resources/activities");
     let retired_activity = format!(
         "# earlier release\n{}",

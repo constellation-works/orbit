@@ -12,7 +12,7 @@ use serde_json::{Map, Value as JsonValue, json};
 
 use crate::runtime::OrbitRuntime;
 
-use super::paths::path_cell;
+use super::path::path_cell;
 
 /// Fields a crew table carries, in the order a crew row renders them.
 pub(super) const CREW_FIELDS: &[&str] = &[

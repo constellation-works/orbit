@@ -19,37 +19,35 @@ pub struct SkillDoctorResult {
     pub message: String,
 }
 
-impl OrbitRuntime {
-    pub fn list_file_skills(&self) -> Result<Vec<LoadedSkill>, OrbitError> {
-        self.skill_catalog().read().skill().list()
-    }
+pub(super) fn list_file_skills(rt: &OrbitRuntime) -> Result<Vec<LoadedSkill>, OrbitError> {
+    rt.skill_catalog().read().skill().list()
+}
 
-    pub fn show_file_skill(&self, name: &str) -> Result<LoadedSkill, OrbitError> {
-        self.skill_catalog().read().skill().get(name)
-    }
+pub(super) fn show_file_skill(rt: &OrbitRuntime, name: &str) -> Result<LoadedSkill, OrbitError> {
+    rt.skill_catalog().read().skill().get(name)
+}
 
-    pub fn doctor_file_skills(&self) -> Result<Vec<SkillDoctorResult>, OrbitError> {
-        let rows = self.skill_catalog().read().skill().doctor()?;
-        let mut results: Vec<SkillDoctorResult> = rows
-            .into_iter()
-            .map(|row| SkillDoctorResult {
-                skill_name: row.skill_id,
-                status: match row.status {
-                    SkillCatalogDoctorStatus::Ok => SkillDoctorStatus::Ok,
-                    SkillCatalogDoctorStatus::Warning => SkillDoctorStatus::Warning,
-                    SkillCatalogDoctorStatus::Error => SkillDoctorStatus::Error,
-                },
-                message: row.message,
-            })
-            .collect();
-        let global_root = self.global_root();
-        if let Some(discovery_base) = global_root.parent() {
-            results.extend(doctor_client_skill_links(&skill_link_roots(
-                discovery_base,
-            ))?);
-        }
-        Ok(results)
+pub(super) fn doctor_file_skills(rt: &OrbitRuntime) -> Result<Vec<SkillDoctorResult>, OrbitError> {
+    let rows = rt.skill_catalog().read().skill().doctor()?;
+    let mut results: Vec<SkillDoctorResult> = rows
+        .into_iter()
+        .map(|row| SkillDoctorResult {
+            skill_name: row.skill_id,
+            status: match row.status {
+                SkillCatalogDoctorStatus::Ok => SkillDoctorStatus::Ok,
+                SkillCatalogDoctorStatus::Warning => SkillDoctorStatus::Warning,
+                SkillCatalogDoctorStatus::Error => SkillDoctorStatus::Error,
+            },
+            message: row.message,
+        })
+        .collect();
+    let global_root = rt.global_root();
+    if let Some(discovery_base) = global_root.parent() {
+        results.extend(doctor_client_skill_links(&skill_link_roots(
+            discovery_base,
+        ))?);
     }
+    Ok(results)
 }
 
 /// The client skill-discovery directories under `base_root`.

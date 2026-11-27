@@ -1595,7 +1595,7 @@ PY
 # adapter's blocks, so a new adapter method is covered without being listed.
 # Same-named methods on receivers that are not `OrbitRuntime`: the skill
 # repository `doctor`. Exact lines only.
-adapter_upcall_allowed='^health/artifact_diagnosis\.rs:[0-9]+:.*runtime\.skill_catalog\(\)\.read\(\)\.skill\(\)\.doctor\(|^skill/doctor\.rs:[0-9]+:.*self\.skill_catalog\(\)\.read\(\)\.skill\(\)\.doctor\('
+adapter_upcall_allowed='^health/artifact_diagnosis\.rs:[0-9]+:.*runtime\.skill_catalog\(\)\.read\(\)\.skill\(\)\.doctor\('
 if ! inherent_calls_into "$app_src" "" "" "$adapter_upcall_allowed" '' "$repo_root/crates/orbit-core/src/adapter"; then
   echo "orbit-core application must not call inherent OrbitRuntime methods defined under adapter; reach them through an application-owned port [ORB-22004]"
   fail=1

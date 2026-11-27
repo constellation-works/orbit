@@ -117,7 +117,7 @@ every workspace-only artifact below.
 ## Product identity
 
 Orbit is the only supported application profile. A `.orbit-product` marker, checked in
-[`application::workspace::product_profile`](crates/orbit-core/src/application/workspace/product_profile.rs),
+[`app::workspace::product_profile`](crates/orbit-core/src/app/workspace/product_profile.rs),
 stops another product from initializing or reconciling an Orbit root. A second profile would
 have to be fixed before state opens and carried through every entry point, not filtered in
 tool discovery.

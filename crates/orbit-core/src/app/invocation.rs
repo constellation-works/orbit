@@ -293,7 +293,7 @@ impl OwnRow {
         }
         let row = self.row();
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.runtime.record_audit_event(&row)
+            crate::app::audit::record_audit_event(&self.runtime, &row)
         })) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => Err(AuditWriteFailure::Failed(error)),

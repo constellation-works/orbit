@@ -460,10 +460,15 @@ fn the_running_reviewer_reads_its_manifest_and_attaches_its_report_through_the_b
         );
     }
 
-    let rows = fixture
-        .runtime
-        .list_audit_events(None, Some(PUT.to_string()), None, None, 10)
-        .unwrap();
+    let rows = crate::app::audit::list_audit_events(
+        &fixture.runtime,
+        None,
+        Some(PUT.to_string()),
+        None,
+        None,
+        10,
+    )
+    .unwrap();
     assert_eq!(
         rows.len(),
         4,
@@ -630,10 +635,8 @@ fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner()
     assert!(ended.contains("review_attempt_stale"), "{ended}");
     assert!(fixture.owner.puts().is_empty());
 
-    let rows = fixture
-        .runtime
-        .list_audit_events(None, None, None, None, 50)
-        .unwrap();
+    let rows =
+        crate::app::audit::list_audit_events(&fixture.runtime, None, None, None, None, 50).unwrap();
     let brokered: Vec<_> = rows.iter().filter(|row| row.brokered).collect();
     assert!(
         !brokered.is_empty()

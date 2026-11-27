@@ -140,7 +140,7 @@ pub(super) fn show(core: &Core, scope: ConfigReadScope) -> Result<ConfigShowData
             runtime.operation_policy(),
             chrono::Utc::now(),
         );
-        let crew_purposes = crate::application::config::crew_purposes_view(&values);
+        let crew_purposes = super::purpose::crew_purposes_view(&values);
         let review_skip_tags = runtime
             .review_skip_settings()
             .entries()
@@ -210,6 +210,6 @@ fn show_roots(core: &Core, config_path: Option<&Path>) -> ConfigShowRoots {
             }
         }),
         persistence: runtime.persistence_config_json(),
-        path_rows: crate::application::config::path_rows(runtime, config_path),
+        path_rows: super::path::path_rows(runtime, config_path),
     }
 }

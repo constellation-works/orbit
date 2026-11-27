@@ -1,13 +1,24 @@
 //! The skill app: file-skill listing, inspection, doctor diagnostics and
 //! client discovery-link management (`orbit skill`).
 
+mod catalog;
+
+mod doctor;
+
+mod materialize;
+
 use orbit_common::OrbitError;
 
 use super::exec::{self, App, Operation};
 use crate::Core;
-pub use crate::application::skill::{SkillDoctorResult, SkillDoctorStatus};
 pub use crate::bootstrap::init::{LinkResult, UnlinkResult};
 pub use crate::skill_catalog::LoadedSkill;
+pub(crate) use catalog::{DEFAULT_SKILL_FILES, default_skill_ids};
+pub use doctor::{SkillDoctorResult, SkillDoctorStatus};
+pub(crate) use doctor::{dangling_client_skill_links, skill_link_remediation, skill_link_roots};
+pub(crate) use materialize::{
+    inject_skill_template_tokens, is_default_skill_tree_for_root, seed_default_skills,
+};
 
 /// One skill command.
 pub enum Command {
@@ -78,10 +89,12 @@ impl App for SkillApp {
     fn run(core: &Core, command: Self::Command) -> Result<Outcome, Error> {
         let runtime = core.runtime();
         Ok(match command {
-            Command::List => Outcome::Listed(runtime.list_file_skills()?),
-            Command::Show(name) => Outcome::Shown(Box::new(runtime.show_file_skill(&name)?)),
+            Command::List => Outcome::Listed(doctor::list_file_skills(runtime)?),
+            Command::Show(name) => {
+                Outcome::Shown(Box::new(doctor::show_file_skill(runtime, &name)?))
+            }
             Command::Doctor { name } => {
-                let rows = runtime.doctor_file_skills()?;
+                let rows = doctor::doctor_file_skills(runtime)?;
                 if let Some(name) = name {
                     let selected = rows
                         .into_iter()

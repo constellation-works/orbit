@@ -119,7 +119,7 @@ impl DashboardAudit {
                 "dashboard.operations",
             )
         };
-        if let Err(error) = runtime.record_audit_event(&row) {
+        if let Err(error) = crate::app::audit::record_audit_event(runtime, &row) {
             tracing::error!(operation = recorded_as, target = requested_target, %error,
                 "failed to persist dashboard operation audit");
         }

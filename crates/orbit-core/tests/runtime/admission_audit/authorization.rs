@@ -97,9 +97,8 @@ fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
             context_with([McpCapability::Operator]),
         )
         .unwrap();
-    let events = runtime
-        .list_audit_events(None, None, None, None, 200)
-        .unwrap();
+    let events =
+        orbit_core::app::audit::list_audit_events(&runtime, None, None, None, None, 200).unwrap();
     assert!(
         events.iter().any(|event| event.command == "authorization"
             && event.target_id.as_deref() == Some("orbit.task.grant_tools")
@@ -119,16 +118,15 @@ fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
         )
         .expect_err("a mutating grant must remain denied live");
     assert!(error.to_string().contains("disallow list"), "{error}");
-    let events = runtime
-        .list_audit_events(None, None, None, None, 200)
-        .unwrap();
+    let events =
+        orbit_core::app::audit::list_audit_events(&runtime, None, None, None, None, 200).unwrap();
     assert!(
         events.iter().any(|event| event.command == "authorization"
             && event.target_id.as_deref() == Some("orbit.auto_task.update")
             && event.status == orbit_types::telemetry::AuditEventStatus::Denied),
         "{events:#?}"
     );
-    let denials = runtime.audit_denials_by_operation(None).unwrap();
+    let denials = orbit_core::app::audit::audit_denials_by_operation(&runtime, None).unwrap();
     assert_eq!(denials, vec![("orbit.auto_task.update".to_string(), 1)]);
     assert_eq!(
         runtime.get_task(&task.id).unwrap().granted_tools,

@@ -12,8 +12,8 @@ use serde_json::{Value as JsonValue, json};
 
 use crate::runtime::OrbitRuntime;
 
-use super::paths::{config_layer_file, config_roots, execution_not_inherited, path_rows_json};
-use super::rows::{
+use super::path::{config_layer_file, config_roots, execution_not_inherited, path_rows_json};
+use super::row::{
     CREW_FIELDS, FileRowContext, built_in_values, crew_rows, effective_sections, environment_hash,
     file_sections, fnv1a_hash, not_inherited_keys, section_catalog, workspace_binding_json,
 };
@@ -87,7 +87,7 @@ pub fn effective_view(runtime: &OrbitRuntime) -> Result<JsonValue, OrbitError> {
         "sections": sections,
         "crews": crew_rows(runtime, values),
         "crews_enumerated": true,
-        "crew_purposes": super::purposes::crew_purposes_view(values),
+        "crew_purposes": super::purpose::crew_purposes_view(values),
         "paths": path_rows_json(runtime, None),
         "crew_fields": CREW_FIELDS,
         "write_scope_default": ConfigScope::Workspace.label(),

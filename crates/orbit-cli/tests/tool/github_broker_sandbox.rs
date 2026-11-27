@@ -260,9 +260,15 @@ fn sandbox_fixture() {
         "the brokered call returns what the host call does"
     );
 
-    let rows = runtime
-        .list_audit_events(None, Some("github.run.list".to_string()), None, None, 10)
-        .expect("audit events");
+    let rows = orbit_core::app::audit::list_audit_events(
+        &runtime,
+        None,
+        Some("github.run.list".to_string()),
+        None,
+        None,
+        10,
+    )
+    .expect("audit events");
     assert_eq!(
         rows.len(),
         2,

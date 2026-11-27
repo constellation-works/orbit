@@ -1608,15 +1608,15 @@ fn sandbox_fixture() {
 
     // Each bridged call is one brokered row naming the reviewer's task and
     // activity on the follower, and one claim-scoped row on the owner.
-    let follower_rows = runner
-        .list_audit_events(
-            None,
-            Some("orbit.task.artifact.put".to_string()),
-            None,
-            None,
-            100,
-        )
-        .expect("follower audit");
+    let follower_rows = orbit_core::app::audit::list_audit_events(
+        &runner,
+        None,
+        Some("orbit.task.artifact.put".to_string()),
+        None,
+        None,
+        100,
+    )
+    .expect("follower audit");
     let brokered = follower_rows
         .iter()
         .filter(|row| row.brokered)
@@ -1638,15 +1638,15 @@ fn sandbox_fixture() {
                 && row.status != orbit_types::telemetry::AuditEventStatus::Success),
         "a put refused before the broker is audited where it was refused: {follower_rows:?}"
     );
-    let owner_rows = owner_runtime
-        .list_audit_events(
-            None,
-            Some("orbit.task.artifact.put".to_string()),
-            None,
-            None,
-            100,
-        )
-        .expect("owner audit");
+    let owner_rows = orbit_core::app::audit::list_audit_events(
+        &owner_runtime,
+        None,
+        Some("orbit.task.artifact.put".to_string()),
+        None,
+        None,
+        100,
+    )
+    .expect("owner audit");
     let from_follower = owner_rows
         .iter()
         .filter(|row| row.caller_machine_id.as_deref() == Some(follower_machine.as_str()))
@@ -1736,15 +1736,15 @@ fn sandbox_fixture() {
         &after["broker_gone_mcp"],
         "could not reach this run's coordinator",
     );
-    let unavailable_rows = runner
-        .list_audit_events(
-            None,
-            Some("orbit.task.artifact.get".to_string()),
-            None,
-            None,
-            100,
-        )
-        .expect("follower failure audit");
+    let unavailable_rows = orbit_core::app::audit::list_audit_events(
+        &runner,
+        None,
+        Some("orbit.task.artifact.get".to_string()),
+        None,
+        None,
+        100,
+    )
+    .expect("follower failure audit");
     let caller_failures = unavailable_rows
         .iter()
         .filter(|row| {

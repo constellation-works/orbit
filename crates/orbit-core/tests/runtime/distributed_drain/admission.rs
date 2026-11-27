@@ -2332,8 +2332,7 @@ fn a_held_backlog_task_reports_the_hold_at_dispatch_not_a_status_change() {
             .expect("gate dispatch")
     };
     let audit_reason = |command: &str| {
-        let events = owner
-            .list_audit_events(None, None, None, None, 1000)
+        let events = orbit_core::app::audit::list_audit_events(owner, None, None, None, None, 1000)
             .expect("audit events");
         let event = events
             .iter()

@@ -739,10 +739,15 @@ fn unknown_task_tools_preserve_audit_classification_and_suppress_disabled_hints(
         }
     }
     for name in ["orbit.task.get", "orbit.task.artifact.list"] {
-        let rows = fixture
-            .runtime
-            .list_audit_events(None, Some(name.into()), None, None, 100)
-            .unwrap();
+        let rows = orbit_core::app::audit::list_audit_events(
+            &fixture.runtime,
+            None,
+            Some(name.into()),
+            None,
+            None,
+            100,
+        )
+        .unwrap();
         assert_eq!(
             rows.len(),
             2,

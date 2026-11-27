@@ -357,9 +357,15 @@ impl Fixture {
     }
 
     fn rows(&self) -> Vec<AuditEvent> {
-        self.runtime
-            .list_audit_events(None, Some("review.gate".into()), None, None, 100)
-            .unwrap()
+        orbit_core::app::audit::list_audit_events(
+            &self.runtime,
+            None,
+            Some("review.gate".into()),
+            None,
+            None,
+            100,
+        )
+        .unwrap()
     }
 
     fn latest(&self, phase: &str) -> (AuditEvent, Value) {
@@ -578,10 +584,12 @@ fn settled_negative_verdicts_are_successful_calls_with_decision_detail() {
         malformed[0].message =
             "before-PR review settled attempt `legacy`: verdict **unknown**".into();
         assert!(orbit_types::task::recorded_review_settlements(&[], &malformed).is_empty());
-        let stats = fixture
-            .runtime
-            .audit_event_stats(None, Some("review.gate".into()))
-            .unwrap();
+        let stats = orbit_core::app::audit::audit_event_stats(
+            &fixture.runtime,
+            None,
+            Some("review.gate".into()),
+        )
+        .unwrap();
         assert_eq!(
             (stats.total, stats.success_count, stats.failure_count),
             (2, 2, 0)

@@ -53,9 +53,9 @@ use serde_json::{Map, Value as JsonValue, json};
 
 use crate::runtime::OrbitRuntime;
 
-use super::paths::{config_roots, global_config_path, workspace_config_path};
+use super::path::{config_roots, global_config_path, workspace_config_path};
 use super::provenance::fallback_preserves_effective;
-use super::rows::{CREW_FIELDS, CREW_REFERENCE_KEYS, crew_rows, effective_row};
+use super::row::{CREW_FIELDS, CREW_REFERENCE_KEYS, crew_rows, effective_row};
 use super::view::{crew_value, effective_value};
 
 /// How a write initializes a workspace `config.toml` that does not exist yet.

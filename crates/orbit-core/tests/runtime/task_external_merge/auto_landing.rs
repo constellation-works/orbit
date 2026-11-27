@@ -199,10 +199,16 @@ fn a_held_inconclusive_evidence_delivery_is_not_merged_without_a_passed_check_an
         "the delivery merges once a required check passed on its head"
     );
     fx.assert_done(&task, "the owner settles the merged task");
-    let rows = fx
-        .runtime
-        .list_audit_events_with_kind(None, None, Some("pull_request".into()), None, None, 50)
-        .unwrap();
+    let rows = orbit_core::app::audit::list_audit_events_with_kind(
+        &fx.runtime,
+        None,
+        None,
+        Some("pull_request".into()),
+        None,
+        None,
+        50,
+    )
+    .unwrap();
     let phases = rows
         .iter()
         .filter(|row| row.command == "pr_merge")
@@ -248,10 +254,16 @@ fn a_failed_merge_audit_stores_redacted_error_and_leaves_request_empty() {
         "a failed forge merge stays unmerged"
     );
     fx.assert_status(&task, TaskStatus::Review, "failed merge remains in review");
-    let rows = fx
-        .runtime
-        .list_audit_events_with_kind(None, None, Some("pull_request".into()), None, None, 50)
-        .unwrap();
+    let rows = orbit_core::app::audit::list_audit_events_with_kind(
+        &fx.runtime,
+        None,
+        None,
+        Some("pull_request".into()),
+        None,
+        None,
+        50,
+    )
+    .unwrap();
     let requested = rows
         .iter()
         .find(|row| row.command == "pr_merge" && row.subcommand.as_deref() == Some("requested"))

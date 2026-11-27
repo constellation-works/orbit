@@ -306,8 +306,9 @@ fn record_child_audit(
     } = audit;
     let arguments_json = serde_json::to_string(&payload)
         .map_err(|error| action_failed(action, format!("serialize {command} payload: {error}")))?;
-    runtime
-        .record_audit_event(&AuditEventInsertParams {
+    crate::app::audit::record_audit_event(
+        runtime,
+        &AuditEventInsertParams {
             execution_id: audit_execution_id("audit-child-dispatch"),
             command: command.to_string(),
             subcommand: None,
@@ -345,8 +346,9 @@ fn record_child_audit(
             job_run_id: parent_run_id.map(ToOwned::to_owned),
             activity_id: None,
             step_index: None,
-        })
-        .map_err(|error| action_failed(action, format!("record {command} audit: {error}")))
+        },
+    )
+    .map_err(|error| action_failed(action, format!("record {command} audit: {error}")))
 }
 
 /// Build the dispatch record for a child `orbit.pipeline.invoke` just returned.
