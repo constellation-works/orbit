@@ -432,8 +432,8 @@
   align-items: center;
   gap: var(--space-6);
 }
-/* Task controls keep one horizontal row at every pane width; tags stay below
-   it, and compact panes shorten control chrome before the values. */
+/* Task controls wrap as a group when the pane is narrow; tags stay below
+   them, and compact panes shorten control chrome before the values. */
 .task-levers-task {
   flex-direction: column;
   align-items: stretch;
@@ -441,13 +441,13 @@
 }
 .task-levers-controls {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-6);
   min-width: 0;
   max-width: 100%;
 }
-.task-levers-controls > * { flex: 0 1 auto; min-width: 0; }
+.task-levers-controls > * { flex: 0 0 auto; min-width: 0; }
 .task-levers-task > .task-levers-tags {
   flex: 0 0 auto;
   width: 100%;
@@ -465,7 +465,6 @@
   .task-levers-task .task-levers-controls .task-status-select { padding-inline: var(--space-4); background-position: right var(--space-4) center; }
   .task-levers-task .task-levers-controls .task-complexity-select { padding-inline: var(--space-4); background-position: right var(--space-4) center; }
   .task-levers-task .task-levers-controls .task-crew-select { background-position: right var(--space-4) center; }
-  .task-levers-controls .task-chip-risk .risk-label { display: none; }
 }
 .task-chip {
   display: inline-flex;
