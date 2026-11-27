@@ -1,12 +1,11 @@
 //! `/metrics/*` parity endpoints for the retired CLI metrics views.
 
-use crate::state::Ws;
+use crate::state::{Ws, WsCore};
 use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
-use orbit_core::application::job::JobRunListParams;
-use orbit_core::metrics::aggregate as aggregate_knowledge_stats;
+use orbit_core::app::run::{Command, exec};
 use orbit_core::{InvocationInsertParams, InvocationQuery};
 use serde::Deserialize;
 
@@ -67,16 +66,17 @@ impl MetricsInvocationsQuery {
 
 /// Aggregates the most recent runs. An omitted `limit` covers the widest
 /// window the history endpoints allow rather than every run ever recorded.
-pub(super) async fn knowledge_metrics(Ws(runtime): Ws, Query(q): Query<LimitQuery>) -> Response {
+pub(super) async fn knowledge_metrics(
+    WsCore(core): WsCore,
+    Query(q): Query<LimitQuery>,
+) -> Response {
+    let limit = bounded_limit(q.limit, HISTORY_MAX_LIMIT);
     match blocking("knowledge metrics", move || {
-        runtime.list_job_runs(JobRunListParams {
-            limit: Some(bounded_limit(q.limit, HISTORY_MAX_LIMIT)),
-            ..Default::default()
-        })
+        exec(&core, Command::knowledge_metrics(limit)).map(|outcome| outcome.value)
     })
     .await
     {
-        Ok(runs) => Json(aggregate_knowledge_stats(&runs)).into_response(),
+        Ok(summary) => Json(summary).into_response(),
         Err(response) => *response,
     }
 }

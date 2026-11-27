@@ -1,7 +1,7 @@
 //! Exhausted review admission is an operator hold, with no second reservation.
 
 use chrono::{Duration, Utc};
-use orbit_core::metrics::reliability::ReliabilityWindow;
+use orbit_core::app::run::ReliabilityWindow;
 use orbit_engine::{ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost};
 use orbit_store::contract::ReviewSettlement;
 use orbit_types::workflow::{

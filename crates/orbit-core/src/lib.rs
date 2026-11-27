@@ -54,16 +54,6 @@
     deny(clippy::disallowed_methods)
 )]
 
-#[cfg(test)]
-#[path = "../tests/support/admission.rs"]
-mod admission_test_support;
-#[cfg(test)]
-#[path = "../tests/support/git.rs"]
-mod git_test_support;
-#[cfg(test)]
-#[path = "../tests/support/task_params.rs"]
-mod task_params_test_support;
-
 // A bare `cargo test` from a managed-run shell must match one from a clean shell.
 #[cfg(test)]
 orbit_common::isolate_test_process!();
@@ -73,7 +63,10 @@ pub mod app;
 pub mod application;
 pub mod bootstrap;
 pub mod composition;
-pub mod metrics;
+
+#[path = "metrics/mod.rs"]
+pub(crate) mod metric;
+
 pub mod runtime;
 
 /// Hooks for tests in crates that depend on `orbit-core`, behind the
@@ -319,3 +312,15 @@ use orbit_runtime::paths;
 pub fn mark_process_as_pipeline_worker_binary() {
     application::job::pipeline::mark_process_as_pipeline_worker_binary();
 }
+
+#[cfg(test)]
+#[path = "../tests/support/admission.rs"]
+mod admission_test_support;
+
+#[cfg(test)]
+#[path = "../tests/support/git.rs"]
+mod git_test_support;
+
+#[cfg(test)]
+#[path = "../tests/support/task_params.rs"]
+mod task_params_test_support;
