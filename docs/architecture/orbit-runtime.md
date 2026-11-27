@@ -41,7 +41,7 @@ The kernel's state is four structs, each holding the one below it and its own fi
 
 Layer direction is enforced by `scripts/check-dependency-direction.sh`: `base/` names none of `stored`, `host` or `run`; `stored/` names only `base`; `host/` names only `base` and `stored`; `run/` may name any lower layer.
 
-Job runs, local pull admissions and drain intent are reached through `stores().jobs()`, a `JobRuns` handle (`crates/orbit-runtime/src/stored/job_runs/mod.rs`). It runs each admission, lifecycle, checkpoint-state and pull-occupancy rule inside one `Store::write`, over the store's job-run, local-pull, drain-intent and admission-load repositories.
+Job runs, local pull admissions and drain intent are reached through `stores().jobs()`, a `JobRuns` handle (`crates/orbit-runtime/src/stored/job_runs/mod.rs`). Read-only pull occupancy queries use `Store::read` snapshots. `allocate_pull_request` computes occupancy inside its `Store::write` transaction before reserving capacity.
 
 `RuntimeKernel` holds `Run`, the `application` callback and the three test hooks, and nothing else. Its methods are unchanged, and each reads its state through the layer that holds it. A field goes to the lowest layer in which every operation could use it. A field that is optional today stays optional.
 
