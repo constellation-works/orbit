@@ -679,6 +679,38 @@ fn a_reject_option_is_refused_while_a_live_run_owns_the_blocked_task() {
         refusal.kind,
         orbit_common::ForceOverridableKind::RunStillOwnsTask
     );
+    assert!(
+        refused.to_string().contains("--force"),
+        "the human decision refusal keeps --force guidance: {refused}"
+    );
+    // The same answer carried by an application consent refuses with
+    // wait-or-ask guidance: a consent scope names no force.
+    let consented = fx
+        .human()
+        .answer_decision_request_as_human(
+            &request_id,
+            "1",
+            Some("Superseded by another task.".to_string()),
+            "application:api-service".to_string(),
+            Some("application consent".to_string()),
+        )
+        .unwrap_err();
+    let refusal = consented
+        .force_overridable()
+        .expect("a live run refuses the application reject with a typed refusal");
+    assert_eq!(
+        refusal.kind,
+        orbit_common::ForceOverridableKind::RunStillOwnsTask
+    );
+    let message = consented.to_string();
+    assert!(
+        !message.contains("--force"),
+        "application decision refusal must not mention --force: {message}"
+    );
+    assert!(
+        message.contains("wait for the run to finish or ask the operator to stop it"),
+        "application decision refusal: {message}"
+    );
     assert_eq!(fx.status(&task), "blocked");
     assert_eq!(
         fx.runtime

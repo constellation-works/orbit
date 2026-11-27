@@ -64,11 +64,20 @@ pub(crate) enum RunOwnershipRecovery {
     WaitOrAskOperator,
 }
 
+/// Whether `label` is an application consent's actor (`application:<id>`).
+///
+/// A consent scope names no `force`, so its caller never gets `--force`
+/// guidance even though it writes as an operator-class decision.
+pub(crate) fn is_application_consent_actor(label: &str) -> bool {
+    label.trim().starts_with("application:")
+}
+
 /// Choose run-ownership refusal recovery for the current caller and surface.
 ///
 /// Only human CLI and dashboard (`TaskWriteSurface::Web`) callers without an
 /// agent identity or envelope can pass `--force`; MCP (`TaskWriteSurface::Mcp`),
-/// attributed agent callers, and agent envelopes cannot.
+/// attributed agent callers, agent envelopes, and application consent callers
+/// cannot.
 pub(crate) fn run_ownership_recovery_for_caller(
     actor_kind: ActorKind,
     operator_authority: bool,
@@ -96,17 +105,21 @@ pub(crate) fn run_ownership_recovery_for_caller(
 }
 
 /// Choose run-ownership refusal recovery for a caller whose identity was
-/// resolved by a guarded lifecycle write.
+/// resolved by a guarded lifecycle write. `application_consent` marks a
+/// decision answered through an application consent: it writes as the
+/// runtime's own human actor, so its label does not show the consent.
 pub(crate) fn run_ownership_recovery_for_identity(
     actor_kind: ActorKind,
     canonical_agent: Option<&str>,
     canonical_model: Option<&str>,
     effective_label: &str,
+    application_consent: bool,
 ) -> RunOwnershipRecovery {
     let operator_authority = canonical_agent.is_none()
         && canonical_model.is_none()
         && actor_kind == ActorKind::Human
-        && !super::helpers::is_automation_actor(effective_label);
+        && !super::helpers::is_automation_actor(effective_label)
+        && !application_consent;
     run_ownership_recovery_for_caller(
         actor_kind,
         operator_authority,

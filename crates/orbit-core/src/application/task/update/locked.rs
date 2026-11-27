@@ -20,7 +20,8 @@ use super::super::helpers::{
 use super::super::lifecycle::{
     FORCED_STATUS_EVENT, HUMAN_CREW_BYPASS_NOTE, ensure_completion_run_stopped,
     ensure_post_deploy_criteria_met, ensure_status_change_allowed,
-    ensure_status_change_not_run_owned, run_ownership_recovery_for_caller,
+    ensure_status_change_not_run_owned, is_application_consent_actor,
+    run_ownership_recovery_for_caller,
 };
 use super::super::params::TaskUpdateParams;
 use super::artifacts::admit_task_artifact;
@@ -197,7 +198,8 @@ impl OrbitRuntime {
         {
             let recovery = run_ownership_recovery_for_caller(
                 self.actor().kind,
-                writer == TaskFieldWriter::Operator,
+                writer == TaskFieldWriter::Operator
+                    && !is_application_consent_actor(&classification_label),
                 canonical_agent.as_deref(),
                 canonical_model.as_deref(),
             );

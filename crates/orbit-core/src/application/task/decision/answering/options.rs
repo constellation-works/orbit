@@ -10,6 +10,7 @@ use orbit_types::task::{
 use super::{CANDIDATE_DISCARDED_NOTE, DecisionAnswerEffects, TriageEdit, decision_comment};
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams;
+use crate::application::task::lifecycle::is_application_consent_actor;
 use crate::application::task::params::{TaskAddParams, TaskUpdateParams};
 use crate::application::task::{
     PilotAdmissionHold, TaskJobPort, TaskRecords, TriageTarget, pilot_assessable_status,
@@ -230,6 +231,7 @@ impl OrbitRuntime {
                         reason,
                         Some(comment),
                         resolution_history,
+                        is_application_consent_actor(actor_label),
                     )?;
                     return Ok(DecisionAnswerEffects {
                         deferred_approval: Some(effects),
@@ -261,6 +263,7 @@ impl OrbitRuntime {
                 task_id,
                 note.map(str::to_string),
                 None,
+                is_application_consent_actor(actor_label),
             )?;
             Some(effects)
         } else {

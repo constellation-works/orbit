@@ -11,6 +11,8 @@ struct RejectionRecord {
     model: Option<String>,
     allow_blocked: bool,
     append_history: Vec<TaskHistoryEntry>,
+    /// The triage decision was answered through an application consent.
+    application_consent: bool,
 }
 
 impl OrbitRuntime {
@@ -41,6 +43,7 @@ impl OrbitRuntime {
         note: String,
         comment: Option<String>,
         answered: Vec<TaskHistoryEntry>,
+        application_consent: bool,
     ) -> Result<DeferredApprovalEffects, OrbitError> {
         let (task, previous_status, reason) = self.reject_task_recording(
             id,
@@ -51,6 +54,7 @@ impl OrbitRuntime {
                 model: None,
                 allow_blocked: true,
                 append_history: answered,
+                application_consent,
             },
         )?;
         Ok(DeferredApprovalEffects::after_rejection(
@@ -89,6 +93,7 @@ impl OrbitRuntime {
                 model,
                 allow_blocked,
                 append_history: Vec::new(),
+                application_consent: false,
             },
         )?;
         self.close_task_prs_after_transition(previous_status, &result, Some(&reason));
@@ -111,6 +116,7 @@ impl OrbitRuntime {
             model,
             allow_blocked,
             append_history,
+            application_consent,
         } = record;
         self.ensure_coordination_task_write_permitted()?;
         let (canonical_agent, canonical_model) =
@@ -147,6 +153,7 @@ impl OrbitRuntime {
                     canonical_agent.as_deref(),
                     canonical_model.as_deref(),
                     effective_label.as_str(),
+                    application_consent,
                 );
                 ensure_status_change_not_run_owned(self, id, recovery)?;
             }
@@ -213,6 +220,7 @@ impl OrbitRuntime {
             None,
             None,
             self.actor().label.as_str(),
+            false,
         );
         ensure_status_change_not_run_owned(self, id, recovery)?;
         // The preflight can go stale while a local run starts owning the
