@@ -143,6 +143,8 @@ pub mod test_support {
         with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
     };
     pub use orbit_engine::test_support::with_cli_supervision_clock;
+    /// The store crate, for a fixture that seeds or inspects rows directly.
+    pub use orbit_store as fixture_store;
     /// The review ledger requests that admit an attempt and record its
     /// reviewer's start and end, as the before-PR gate writes them, for tests
     /// that drive a reviewer without running the whole delivery pipeline.
@@ -164,6 +166,21 @@ pub mod test_support {
     use crate::application::routines::{
         RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
     };
+
+    /// The workspace handle a fixture seeds and inspects directly, beneath
+    /// the `Core` its server is given.
+    pub type FixtureRuntime = crate::OrbitRuntime;
+
+    /// The `Core` a service opens over a fixture's workspace handle. It
+    /// shares the handle's stores, so the fixture sees what the server writes.
+    pub fn fixture_core(runtime: &FixtureRuntime) -> crate::Core {
+        crate::composition::core_for_service(runtime.clone())
+    }
+
+    /// The workspace handle beneath `core`, for a fixture's assertions.
+    pub fn fixture_runtime(core: &crate::Core) -> &FixtureRuntime {
+        core.runtime()
+    }
 
     /// Open a runtime over `global_root` and the workspace `.orbit` directory
     /// `workspace_root`, for a fixture outside `orbit-core`.

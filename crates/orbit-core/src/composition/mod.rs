@@ -7,7 +7,9 @@ mod store;
 
 pub use orbit_store::compose::compiled_compatibility;
 
-pub use self::core::{Core, core_for_command, core_for_service, core_for_session};
+pub use self::core::{
+    Core, core_for_command, core_for_request, core_for_service, core_for_session,
+};
 pub use self::runtime::{pin_executable_generation, pin_executable_generation_as};
 pub use self::services::host_resource_monitor;
 pub use self::store::store_opener;

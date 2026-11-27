@@ -12,6 +12,7 @@ pub use crew::{
     ConfiguredCrewProjection, ConfiguredCrewRegistryProjection, ResolvedCrewProjection,
     TaskCrewRead,
 };
+pub use first_edit::{FirstImplementEdit, FirstImplementEdits};
 pub use invocation::{
     AgentEffortUsageAccumulator, OrchestratorInvocationMetrics,
     OrchestratorInvocationMetricsBucket, OrchestratorMetricsBucketKind, agent_effort_usage,

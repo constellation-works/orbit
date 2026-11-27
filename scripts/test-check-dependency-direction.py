@@ -2252,28 +2252,24 @@ class RelativeImportTests(unittest.TestCase):
             ("lease/down.rs", "use crate::shutdown::shutdown_signal;\n"),
         ], rejected=False, base=web)
         self.check_rejected_exact_rows(web, [
-            ("why_stuck.rs", "use crate::api::failure_root_line;\n", 1),
             ("projections.rs", "use crate::api::tasks::reads;\n", 1),
             ("connect.rs", "use crate::serve::open_browser;\n", 1),
             ("host_tunnels.rs", "use crate::{serve::DEFAULT_DASHBOARD_PORT};\n", 1),
             ("health.rs", "fn probe() { crate::api::router(); }\n", 1),
             ("assets.rs", "use crate::serve::build_app;\n", 1),
-            ("run_failure.rs", "use crate::api::runs::detail;\n", 1),
             ("shutdown.rs", "use crate::serve::run_server;\n", 1),
             ("runtime_memo.rs", "use crate::api::routines::RoutineMemoKey;\n", 1),
             ("runtime_memo.rs", "use crate::serve::shutdown_signal;\n", 1),
         ])
         self.check_files({
-            "why_stuck.rs": "use crate::run_failure::failure_root_line;\n"
-                            "// use crate::api::failure_root_line;\n"
-                            'const NOTE: &str = "crate::serve::shutdown_signal";\n',
             "connect.rs": "pub(crate) const DEFAULT_DASHBOARD_PORT: u16 = 7878;\n",
             "shutdown.rs": "use orbit_core::OrbitError;\n",
-            "run_failure.rs": "use orbit_core::{JobRun, OrbitRuntime};\n",
             "assets.rs": "use crate::state::DashboardState;\n",
             "host_tunnels.rs": "use crate::connect::DEFAULT_DASHBOARD_PORT;\n"
                                "// api::forward is the HTTP side.\n",
-            "projections.rs": "use crate::why_stuck::attach_why_stuck;\n",
+            "projections.rs": "use crate::runtime_memo::TASK_RISKINESS_TTL;\n"
+                              "// use crate::api::tasks::reads;\n"
+                              'const NOTE: &str = "crate::serve::shutdown_signal";\n',
             "health.rs": "fn probe() {}\n",
             "runtime_memo.rs": "use orbit_core::OrbitError;\n",
         }, rejected=False, base=web)

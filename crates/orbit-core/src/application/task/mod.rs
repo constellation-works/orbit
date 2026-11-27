@@ -82,6 +82,7 @@ pub use proposed::ProposedTaskInput;
 pub(crate) use provider_hold::AdmissionProviderPass;
 pub(crate) use retained_candidate::RetainedCandidate;
 pub(crate) use schedule::schedule_hold_in;
+pub use terminal_dates::TerminalTaskDates;
 pub(in crate::application) use terminal_dates::latest_status_entry_at;
 
 /// The shared non-pruning footprint calculation. Task reads, projections,

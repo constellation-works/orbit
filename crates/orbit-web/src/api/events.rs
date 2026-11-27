@@ -26,6 +26,8 @@
 //!
 //! The connection cap and cooperative shutdown mirror `/api/log/stream`.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::pin::Pin;
@@ -42,8 +44,7 @@ use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use futures_core::Stream;
 use orbit_core::application::change_watch::{RunStateStamp, TaskChangeStamp};
-use orbit_core::application::task;
-use orbit_core::{OrbitRuntime, TaskStatus};
+use orbit_core::{Core, TaskStatus};
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
@@ -103,15 +104,43 @@ struct WorkspaceWatch {
 }
 
 impl WorkspaceWatch {
+    /// Notices a reconnect missed since `resume`, read after the first scan:
+    /// each task and run stamped since then, and `locks`. An unreadable or
+    /// future id, a failed read, or more than [`MAX_NOTICES_PER_SCAN`] notices
+    /// is one `resync`.
+    fn replay(&self, runtime: &Core, resume: Option<DateTime<Utc>>) -> Vec<Value> {
+        let Some(resume) = resume.filter(|at| *at <= self.scanned_at) else {
+            return vec![resync_notice("unknown_event_id")];
+        };
+        let since = resume - Duration::seconds(RESUME_SLACK_SECONDS);
+        let Some(tasks) = self.tasks.as_ref().map(|baseline| &baseline.by_id) else {
+            return vec![resync_notice("unavailable")];
+        };
+        let Ok(runs) = run_read(runtime, RunCommand::state_stamps(since)) else {
+            return vec![resync_notice("unavailable")];
+        };
+        let mut notices = tasks
+            .iter()
+            .filter(|(_, (_, updated_at))| *updated_at >= since)
+            .map(|(id, (status, updated_at))| task_notice(id, Some(*status), Some(*updated_at)))
+            .collect::<Vec<_>>();
+        notices.extend(runs.iter().map(run_notice));
+        notices.push(json!({"kind": "locks"}));
+        if notices.len() > MAX_NOTICES_PER_SCAN {
+            return vec![resync_notice("too_many_changes")];
+        }
+        notices
+    }
+
     /// Compare the store with the previous scan and name what changed. A read
     /// that fails keeps its previous baseline, so its changes surface on the
     /// next scan that reads it.
-    fn scan(&mut self, runtime: &OrbitRuntime, drain_recheck_every: StdDuration) -> Vec<Value> {
+    fn scan(&mut self, runtime: &Core, drain_recheck_every: StdDuration) -> Vec<Value> {
         let started = Utc::now();
         let mut notices = Vec::new();
         let mut locks = false;
 
-        match runtime.task_change_stamps() {
+        match run_read(runtime, RunCommand::task_change_stamps()) {
             Ok(snapshot) => {
                 // Same registry snapshot as the baseline: nothing committed,
                 // so the map and the diff would both be empty work.
@@ -150,7 +179,7 @@ impl WorkspaceWatch {
         // Recovery admission and its decision change a task's decoration
         // without changing either the task record or the delivery run state.
         // Emit task notices for those transitions as well as run transitions.
-        match task::active_task_triage_map(runtime) {
+        match run_read(runtime, RunCommand::active_task_triage()) {
             Ok(next) => {
                 if let Some(previous) = &self.active_triage {
                     let ids: BTreeSet<_> = previous.keys().chain(next.keys()).collect();
@@ -172,7 +201,7 @@ impl WorkspaceWatch {
 
         let mut runs_changed = false;
         let since = self.run_read_at - Duration::seconds(RUN_READ_OVERLAP_SECONDS);
-        match runtime.run_state_stamps(since) {
+        match run_read(runtime, RunCommand::state_stamps(since)) {
             Ok(stamps) => {
                 let mut next = stamps
                     .into_iter()
@@ -185,7 +214,7 @@ impl WorkspaceWatch {
                         if next.contains_key(id) || before.state.is_terminal() {
                             continue;
                         }
-                        if let Ok(Some(stamp)) = runtime.run_state_stamp(id) {
+                        if let Ok(Some(stamp)) = run_read(runtime, RunCommand::state_stamp(id)) {
                             next.insert(id.clone(), stamp);
                         }
                     }
@@ -205,7 +234,7 @@ impl WorkspaceWatch {
             Err(error) => tracing::debug!(%error, "change stream could not read run states"),
         }
 
-        match runtime.active_task_reservation_keys() {
+        match run_read(runtime, RunCommand::task_reservation_keys()) {
             Ok(keys) => {
                 locks |= self
                     .reservations
@@ -224,7 +253,7 @@ impl WorkspaceWatch {
                 .drain_read_at
                 .is_none_or(|at| at.elapsed() >= drain_recheck_every);
         if drain_due {
-            let executor_change = match runtime.executor_readiness_change_keys() {
+            let executor_change = match run_read(runtime, RunCommand::executor_readiness_keys()) {
                 Ok(keys) => {
                     let changed = self.executor_readiness.as_ref() != Some(&keys);
                     self.executor_readiness = Some(keys);
@@ -237,7 +266,7 @@ impl WorkspaceWatch {
                     self.executor_readiness.take().is_some()
                 }
             };
-            match runtime.workspace_drain_phase() {
+            match run_read(runtime, RunCommand::drain_phase()) {
                 Ok(phase) => {
                     if self.drain_phase != Some(phase) || executor_change {
                         notices.push(json!({"kind": "drain", "phase": phase}));
@@ -252,34 +281,6 @@ impl WorkspaceWatch {
         }
 
         self.scanned_at = started;
-        notices
-    }
-
-    /// Notices a reconnect missed since `resume`, read after the first scan:
-    /// each task and run stamped since then, and `locks`. An unreadable or
-    /// future id, a failed read, or more than [`MAX_NOTICES_PER_SCAN`] notices
-    /// is one `resync`.
-    fn replay(&self, runtime: &OrbitRuntime, resume: Option<DateTime<Utc>>) -> Vec<Value> {
-        let Some(resume) = resume.filter(|at| *at <= self.scanned_at) else {
-            return vec![resync_notice("unknown_event_id")];
-        };
-        let since = resume - Duration::seconds(RESUME_SLACK_SECONDS);
-        let Some(tasks) = self.tasks.as_ref().map(|baseline| &baseline.by_id) else {
-            return vec![resync_notice("unavailable")];
-        };
-        let Ok(runs) = runtime.run_state_stamps(since) else {
-            return vec![resync_notice("unavailable")];
-        };
-        let mut notices = tasks
-            .iter()
-            .filter(|(_, (_, updated_at))| *updated_at >= since)
-            .map(|(id, (status, updated_at))| task_notice(id, Some(*status), Some(*updated_at)))
-            .collect::<Vec<_>>();
-        notices.extend(runs.iter().map(run_notice));
-        notices.push(json!({"kind": "locks"}));
-        if notices.len() > MAX_NOTICES_PER_SCAN {
-            return vec![resync_notice("too_many_changes")];
-        }
         notices
     }
 }
@@ -439,7 +440,7 @@ fn event_id(at: DateTime<Utc>) -> String {
 /// a scan every [`SCAN_INTERVAL`] and a host sample every
 /// [`HOST_RESOURCES_INTERVAL`] until the client leaves or shutdown begins.
 fn stream_workspace_changes(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     state: &DashboardState,
     resume: Option<Option<DateTime<Utc>>>,
     tx: &mpsc::Sender<String>,

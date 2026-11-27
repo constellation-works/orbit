@@ -8,11 +8,13 @@
 //! so the chart can switch between totals and a per-task view without a
 //! refetch.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::collections::{BTreeMap, BTreeSet};
 
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::{LandedDiffStats, OrbitRuntime};
+use orbit_core::{Core, LandedDiffStats};
 use orbit_types::task::{UNSET_BUCKET, complexity_bucket, complexity_bucket_ord};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -216,11 +218,14 @@ fn measures(row: &LandedDiffStats) -> [i64; 7] {
 }
 
 fn diff_stats_trend(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     range: &DiagnosticsRange,
     complexities: Option<&BTreeSet<&'static str>>,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let rows = runtime.landed_diff_stats(TrendWindow::read_since_with_day_lead(range))?;
+    let rows = run_read(
+        runtime,
+        RunCommand::landed_diff_stats(TrendWindow::read_since_with_day_lead(range)),
+    )?;
     let window = TrendWindow::with_day_lead(range, rows.first().map(|row| row.landed_at));
     let bucket_count = window.bucket_count();
     let lead_count = window.lead_count();

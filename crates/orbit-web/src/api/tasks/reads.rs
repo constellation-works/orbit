@@ -3,7 +3,7 @@
 use crate::api::helpers;
 use crate::api::pagination::TaskPageQuery;
 use crate::api::{bad_request, blocking, server_error, validate_id};
-use crate::projections::{TaskListProjection, cached_riskiness_model, task_detail_json};
+use crate::projections::cached_riskiness_model;
 use crate::state::{DashboardState, Ws, WsCore, WsRejection};
 use axum::extract::{Path, RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
@@ -11,7 +11,7 @@ use orbit_core::app::Session;
 use orbit_core::app::task::{
     self, Command, Outcome, PageRead, PageSelect, PageSelection, Read, RowRead, TaskPages,
 };
-use orbit_core::application::task::{DashboardPageReads, TaskListQuery};
+use orbit_core::application::task::TaskListQuery;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -129,6 +129,8 @@ pub(in crate::api) async fn list_tasks(
         let read = Read::Pages {
             select: PageSelect::new(move |workspace_id| select_pages(select, workspace_id)),
             detail: query.detail_id().map(ToOwned::to_owned),
+            riskiness,
+            detail_candidate: query.detail_candidate,
         };
         let TaskPages {
             workspace_id,
@@ -141,9 +143,9 @@ pub(in crate::api) async fn list_tasks(
             .map_err(orbit_core::OrbitError::InvalidInput)?;
         Ok(pages.and_then(|pages| {
             if query.groups_by_status() {
-                status_sections_json((&ws, session), &query, &scope, riskiness, pages)
+                status_sections_json((&ws, session), &query, &scope, pages)
             } else {
-                task_list_page_json((&ws, session), &query, &scope, riskiness, pages)
+                task_list_page_json((&ws, session), &query, &scope, pages)
             }
         }))
     })
@@ -197,14 +199,13 @@ fn status_sections_json(
     ws: (&Ws, Session),
     query: &TaskPageQuery,
     scope: &str,
-    riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
     pages: Vec<PageRead>,
 ) -> Result<Value, orbit_core::OrbitError> {
     let mut result = json!({ "group": "status", "limit": query.limit() });
     let mut sections = Vec::new();
     let mut total = 0_u64;
     for ((status, section_query), page) in query.status_section_queries().into_iter().zip(pages) {
-        let mut section = task_page_json(ws, &section_query, scope, riskiness.clone(), page)?;
+        let mut section = task_page_json(ws, &section_query, scope, page)?;
         if let Value::Object(map) = &mut section {
             // The selected task's detail sits on whichever section holds it.
             for key in ["detail", "detail_runs", "detail_runs_error"] {
@@ -227,13 +228,12 @@ fn task_list_page_json(
     ws: (&Ws, Session),
     query: &TaskPageQuery,
     scope: &str,
-    riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
     pages: Vec<PageRead>,
 ) -> Result<Value, orbit_core::OrbitError> {
     let page = pages.into_iter().next().ok_or_else(|| {
         orbit_core::OrbitError::Execution("task list read answered no page".to_string())
     })?;
-    task_page_json(ws, query, scope, riskiness, page)
+    task_page_json(ws, query, scope, page)
 }
 
 /// Project one selected page of `query` into its response envelope.
@@ -241,29 +241,14 @@ fn task_page_json(
     (ws, session): (&Ws, Session),
     query: &TaskPageQuery,
     scope: &str,
-    riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
     read: PageRead,
 ) -> Result<Value, orbit_core::OrbitError> {
-    // The projections still read the workspace's runtime.
-    let runtime = &ws.0;
     let PageRead {
         page,
-        delivery_attention,
-        run_branches,
-        detail_dependency_statuses,
+        items,
+        detail,
     } = read;
     let total = page.total_without_cursor;
-    let status_by_id = page.status_by_id;
-    let detail_riskiness = riskiness.clone();
-    let projection = TaskListProjection::new(runtime)
-        .with_delivery_attention(delivery_attention)
-        .with_run_branches(run_branches)
-        .with_riskiness(riskiness);
-    let items = page
-        .items
-        .iter()
-        .map(|row| projection.row_to_json(runtime, row, &status_by_id))
-        .collect::<Result<Vec<_>, _>>()?;
     let offset = query.offset();
     let next_offset = offset.saturating_add(items.len());
     let next_cursor = if page.total > items.len() {
@@ -288,23 +273,9 @@ fn task_page_json(
         "next_cursor": next_cursor,
     });
     if let Some(detail_id) = query.detail_id()
-        && let Some(row) = page.items.iter().find(|row| row.task.id == detail_id)
-        && let Some(dependency_statuses) = detail_dependency_statuses
+        && let Some(detail) = detail
     {
-        // The page's rows already read the workspace-wide triage, pilot
-        // preparation, pull-request links and delivery attention this detail
-        // shows; it borrows them rather than reading each again [ORB-21825].
-        let page_reads = projection.detail_page_reads();
-        match dependency_statuses.and_then(|statuses| {
-            task_detail_json(
-                runtime,
-                row,
-                &statuses,
-                detail_riskiness.as_deref(),
-                &page_reads,
-                query.detail_candidate,
-            )
-        }) {
+        match detail {
             Ok(detail) => result["detail"] = detail,
             Err(error) => tracing::debug!(
                 task_id = %detail_id,
@@ -313,8 +284,7 @@ fn task_page_json(
             ),
         }
         if query.include_detail_runs() {
-            match crate::api::jobs::task_runs_page(&WsCore::over(runtime, session).0, detail_id, 20)
-            {
+            match crate::api::jobs::task_runs_page(&WsCore::over(&ws.0, session).0, detail_id, 20) {
                 Ok(runs) => result["detail_runs"] = runs,
                 Err(error) => {
                     tracing::debug!(task_id = %detail_id, %error, "task list Runs projection unavailable");
@@ -479,20 +449,18 @@ async fn task_detail_response(
     include_candidate: bool,
 ) -> Response {
     let riskiness = cached_riskiness_model(state, &ws.0).await;
+    let session = state.session();
     match blocking("task detail", move || {
-        let RowRead {
-            row,
-            dependency_statuses,
-        } = *read;
-        let statuses = dependency_statuses?;
-        let mut value = task_detail_json(
-            &ws.0,
-            &row,
-            &statuses,
-            riskiness.as_deref(),
-            &DashboardPageReads::default(),
-            include_candidate,
-        )?;
+        let WsCore(core) = WsCore::over(&ws.0, session);
+        let mut value = task::exec(
+            &core,
+            Command::Read(Read::Detail {
+                read,
+                riskiness,
+                include_candidate,
+            }),
+        )
+        .and_then(Outcome::into_answer)?;
         if let (Some((id, name, root)), Value::Object(map)) = (stamp, &mut value) {
             map.insert("workspace_id".to_string(), json!(id));
             map.insert("workspace_name".to_string(), json!(name));

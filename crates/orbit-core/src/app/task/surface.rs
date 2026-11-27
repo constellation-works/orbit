@@ -99,7 +99,8 @@ pub(super) fn operation(command: &Command<'_>) -> Operation {
         Command::Record(write) => unlisted(write.verb).target(None, write.target_id.clone()),
         Command::Read(read) => unlisted(match read {
             Read::Pages { .. } => "list",
-            Read::Row { .. } => "show",
+            Read::Row { .. } | Read::Detail { .. } => "show",
+            Read::Rows(_) => "list",
             Read::Locks => "locks-list",
             Read::CompletionByComplexity => "completion-by-complexity",
         }),

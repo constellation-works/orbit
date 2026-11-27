@@ -19,7 +19,7 @@
 //! attached, pre-existing one is never touched.
 //!
 //! Unlike [`crate::serve`], this command reads no local `.orbit/` state: the
-//! workspace lives on the remote, so it needs no [`orbit_core::OrbitRuntime`].
+//! workspace lives on the remote, so it needs no [`orbit_core::Core`].
 
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};

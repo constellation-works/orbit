@@ -8,19 +8,18 @@
 //!   bound to the digest the operator reviewed. It answers the open request
 //!   when one exists, so the grant and the decision record agree.
 
-use std::time::Instant;
-
+use crate::state::run_read;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_SCRIPT_GRANT;
+use orbit_core::app::run::{Command as RunCommand, DashboardScriptGrant};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::operation_audit::OperationAudit;
-use super::routines::{action_capability, authorization_denied, authorized_caller};
+use super::routines::{action_capability, dashboard_caller};
 use super::tasks::human_comment_author;
-use super::{bad_request, blocking, non_empty_string, workspace_label};
-use crate::state::{DashboardState, Ws};
+use super::{bad_request, blocking, map_runtime_error, non_empty_string};
+use crate::state::{DashboardState, Ws, WsCore};
 
 /// Body of `POST /api/scripts/:name/grant`.
 #[derive(Debug, Default, Deserialize)]
@@ -37,7 +36,11 @@ pub(super) struct ScriptGrantBody {
 /// `GET /api/scripts`.
 pub(super) async fn list_scripts(State(state): State<DashboardState>, Ws(runtime): Ws) -> Response {
     let operator = state.operator_session();
-    match blocking("script list", move || runtime.script_grant_overview()).await {
+    match blocking("script list", move || {
+        run_read(&runtime, RunCommand::script_grant_overview())
+    })
+    .await
+    {
         Ok(scripts) => Json(json!({
             "scripts": scripts,
             "capabilities": {"grant": action_capability(&DASHBOARD_SCRIPT_GRANT, operator)},
@@ -47,46 +50,33 @@ pub(super) async fn list_scripts(State(state): State<DashboardState>, Ws(runtime
     }
 }
 
-/// `POST /api/scripts/:name/grant` — operator session only.
+/// `POST /api/scripts/:name/grant` — operator session only. The run app
+/// authorizes the session, grants and writes the audit row.
 pub(super) async fn grant_script(
     State(state): State<DashboardState>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(name): Path<String>,
     Json(body): Json<ScriptGrantBody>,
 ) -> Response {
-    let started = Instant::now();
-    let workspace = workspace_label(&runtime).await;
-    let arguments = json!({"digest": body.digest});
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        &workspace,
-        DASHBOARD_SCRIPT_GRANT.id,
-        name.as_str(),
-        arguments.clone(),
-    );
-    let caller = match authorized_caller(&DASHBOARD_SCRIPT_GRANT, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, started).await;
-            return authorization_denied(denial);
-        }
-    };
-    let Some(digest) = body.digest.as_deref().and_then(non_empty_string) else {
-        return bad_request("digest must name the reviewed script digest".to_string());
-    };
+    let origin = dashboard_caller(&state, None, "");
+    let reviewed = body.digest.as_deref().and_then(non_empty_string);
     let grantor = human_comment_author(body.author.as_deref());
-    let writer = std::sync::Arc::clone(&runtime);
-    let target = name.clone();
     let result = blocking("script grant", move || {
-        writer.grant_script_from_dashboard(&target, &digest, grantor)
+        run_read(
+            &core,
+            RunCommand::dashboard_script_grant(origin, &name, body.digest, reviewed, grantor),
+        )
     })
     .await;
-    let failure = result.as_ref().err().map(|_| "script grant refused");
-    audit.settled(&caller, failure, started).await;
     match result {
-        Ok(grant) => Json(json!({"grant": serde_json::to_value(&grant).unwrap_or(Value::Null)}))
-            .into_response(),
+        Ok(DashboardScriptGrant::Granted(grant)) => {
+            Json(json!({"grant": serde_json::to_value(&grant).unwrap_or(Value::Null)}))
+                .into_response()
+        }
+        Ok(DashboardScriptGrant::DigestMissing) => {
+            bad_request("digest must name the reviewed script digest".to_string())
+        }
+        Ok(DashboardScriptGrant::Refused(error)) => map_runtime_error(error),
         Err(response) => *response,
     }
 }

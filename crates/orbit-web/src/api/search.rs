@@ -1,5 +1,7 @@
 //! Lexical search over the dashboard HTTP API.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::str::FromStr;
 
 use axum::extract::RawQuery;
@@ -16,7 +18,10 @@ pub(super) async fn search(Ws(runtime): Ws, RawQuery(raw): RawQuery) -> Response
         Err(message) => return bad_request(message),
     };
     match blocking("search", move || {
-        runtime.search_with_profile(SearchRequestProfile::Http, request)
+        run_read(
+            &runtime,
+            RunCommand::search(SearchRequestProfile::Http, request),
+        )
     })
     .await
     {

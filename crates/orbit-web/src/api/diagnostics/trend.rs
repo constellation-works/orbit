@@ -1,12 +1,14 @@
 //! Clock-aligned trend windows and cohort scaffolding shared by the
 //! Analytics › Metrics series.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError};
 use orbit_types::task::{TaskStatus, UNSET_BUCKET, complexity_bucket_ord};
 use serde_json::{Value, json};
 
@@ -403,7 +405,7 @@ pub(super) struct CohortWindowData {
 
 impl CohortWindowData {
     pub(super) fn load(
-        runtime: &OrbitRuntime,
+        runtime: &Core,
         range: &DiagnosticsRange,
         filters: &CohortFilters,
         day_lead: bool,
@@ -413,7 +415,7 @@ impl CohortWindowData {
         } else {
             TrendWindow::read_since(range)
         };
-        let dates = runtime.task_terminal_dates(read_since)?;
+        let dates = run_read(runtime, RunCommand::task_terminal_dates(read_since))?;
         let transitions: Vec<_> = dates
             .dated
             .iter()
@@ -614,7 +616,7 @@ pub(super) fn parse_complexities(
 /// endpoint.
 pub(super) async fn memoized_trend_response<F, KF, CF>(
     state: &DashboardState,
-    runtime: Arc<OrbitRuntime>,
+    runtime: Arc<Core>,
     endpoint: &'static str,
     span: (Option<String>, Option<String>),
     filters: F,
@@ -624,7 +626,7 @@ pub(super) async fn memoized_trend_response<F, KF, CF>(
 where
     F: Send + Sync + 'static,
     KF: FnOnce(&DiagnosticsRange, &F) -> Result<String, serde_json::Error>,
-    CF: FnOnce(&OrbitRuntime, &DiagnosticsRange, &F) -> Result<Value, OrbitError> + Send + 'static,
+    CF: FnOnce(&Core, &DiagnosticsRange, &F) -> Result<Value, OrbitError> + Send + 'static,
 {
     let range = match trend_range(&DiagnosticsQuery {
         outcome: None,

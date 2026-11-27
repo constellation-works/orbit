@@ -613,7 +613,7 @@ pub(super) async fn json_client_error(response: Response) -> Response {
 /// Run a blocking runtime call on the blocking pool instead of the async
 /// worker that is serving the request.
 ///
-/// Every `OrbitRuntime` task mutation descends into an exclusive `flock` with
+/// Every `Core` task mutation descends into an exclusive `flock` with
 /// no timeout. Calling one straight from a handler parks a tokio worker for
 /// the whole wait, so a burst of concurrent writes parks every worker and the
 /// server stops answering — the `ReadTimeout`-then-`ConnectError` shape of
@@ -642,20 +642,4 @@ where
             "{label} panicked: {join_err}"
         ))))
     })
-}
-
-/// Workspace identity for audit records, resolved on the blocking pool.
-///
-/// `OrbitRuntime::workspace_id` reads the identity from disk, so a handler must
-/// not call it inline. Falls back to the shared root when the identity cannot
-/// be read.
-pub(super) async fn workspace_label(runtime: &std::sync::Arc<orbit_core::OrbitRuntime>) -> String {
-    let runtime = std::sync::Arc::clone(runtime);
-    tokio::task::spawn_blocking(move || {
-        runtime
-            .workspace_id()
-            .unwrap_or_else(|_| runtime.shared_root().display().to_string())
-    })
-    .await
-    .unwrap_or_default()
 }

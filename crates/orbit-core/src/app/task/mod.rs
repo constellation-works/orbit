@@ -28,16 +28,21 @@ mod decision;
 mod lifecycle;
 mod listing;
 mod operation;
+
+mod projection;
 mod publication;
 mod read;
 mod show;
 mod surface;
 mod web;
+
+mod why_stuck;
 mod write;
 
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_common::governance::decision::DecisionVerb;
@@ -53,8 +58,11 @@ use orbit_types::workflow::JobRun;
 use orbit_types::workspace::WorkspacePublicationBinding;
 use serde_json::{Map, Value};
 
+pub use projection::stamp_human_crew;
+
 use super::exec::{self, App, Operation, SessionAudit};
 use crate::Core;
+use crate::application::codebase::TaskRiskinessModel;
 use crate::application::resident::ResidentActionTicket;
 use crate::application::task::InfraBlockedTask;
 use crate::application::task::{
@@ -432,14 +440,29 @@ pub enum Read {
         /// Names the pages. It receives the workspace's id, which a
         /// continuation cursor is bound to.
         select: PageSelect,
-        /// A task whose dependency statuses the page holding it answers.
+        /// A task whose detail the page holding it answers.
         detail: Option<String>,
+        /// The riskiness model the rows and the detail are estimated from.
+        riskiness: Option<Arc<TaskRiskinessModel>>,
+        /// Whether the detail reports a published candidate.
+        detail_candidate: bool,
     },
     /// One task's row, with the statuses of its dependencies.
     Row {
         /// The task.
         id: String,
     },
+    /// The dashboard's detail of a row this workspace answered.
+    Detail {
+        /// The row.
+        read: Box<RowRead>,
+        /// The riskiness model the detail is estimated from.
+        riskiness: Option<Arc<TaskRiskinessModel>>,
+        /// Whether the detail reports a published candidate.
+        include_candidate: bool,
+    },
+    /// The dashboard's summary rows of this workspace's tasks, in order.
+    Rows(Box<RowsRead>),
     /// The live lock and reservation snapshot.
     Locks,
     /// The status distribution of tasks per complexity.
@@ -526,6 +549,8 @@ pub enum Outcome {
     Pages(TaskPages),
     /// One task's row.
     Row(Box<RowRead>),
+    /// Rendered task rows.
+    Rows(Vec<Value>),
     /// Task counts per complexity.
     Completion(Vec<TaskCompletionByComplexity>),
 }
@@ -588,17 +613,28 @@ pub struct TaskPages {
     pub pages: Result<Vec<PageRead>, OrbitError>,
 }
 
-/// One task page, with what its rows show beside the task.
+/// One task page, rendered for the dashboard.
 pub struct PageRead {
     /// The page.
     pub page: TaskPage,
+    /// The summary row of each of the page's tasks, in page order.
+    pub items: Vec<Value>,
+    /// The detail of the read's `detail` task, when this page holds it.
+    pub detail: Option<Result<Value, OrbitError>>,
+}
+
+/// Rows of one workspace to render as dashboard summary rows.
+pub struct RowsRead {
+    /// The rows.
+    pub rows: Vec<TaskRow>,
+    /// The status of each dependency of the rows.
+    pub dependency_statuses: BTreeMap<String, TaskStatus>,
     /// Delivery attention per task id.
     pub delivery_attention: BTreeMap<String, Value>,
     /// The local run branch per task id.
     pub run_branches: BTreeMap<String, String>,
-    /// The status of each dependency of the read's `detail` task, when this
-    /// page holds it.
-    pub detail_dependency_statuses: Option<Result<BTreeMap<String, TaskStatus>, OrbitError>>,
+    /// The riskiness model the rows are estimated from.
+    pub riskiness: Option<Arc<TaskRiskinessModel>>,
 }
 
 /// One task's row.
@@ -658,6 +694,8 @@ outcome_accessors! {
     into_pages => Pages(TaskPages),
     /// The task row.
     into_row => Row(Box<RowRead>),
+    /// The rendered task rows.
+    into_rows => Rows(Vec<Value>),
     /// The task counts per complexity.
     into_completion => Completion(Vec<TaskCompletionByComplexity>),
 }

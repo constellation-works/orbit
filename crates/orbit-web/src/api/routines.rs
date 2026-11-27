@@ -390,11 +390,6 @@ pub(super) fn routine_edit_refused(refusal: &RoutineEditRefusal) -> Response {
     (status, Json(refusal.to_json())).into_response()
 }
 
-/// The audit failure reason of a refused routine definition edit.
-pub(super) fn routine_edit_refusal_reason(refusal: &RoutineEditRefusal) -> String {
-    format!("{}: {}", refusal.code(), refusal.message())
-}
-
 /// `POST /api/routines/clock` — typed native-service or cadence control.
 ///
 /// The routine app authorizes the control, checks it against the machine

@@ -58,3 +58,10 @@ pub fn core_for_session(runtime: OrbitRuntime, session: Session) -> Core {
         caller: Caller::Session(session),
     }
 }
+
+/// Derive the `Core` of one request from the `Core` a server keeps for the
+/// request's workspace: the same runtime handle, and the session the request
+/// arrived on. It opens nothing.
+pub fn core_for_request(workspace: &Core, session: Session) -> Core {
+    core_for_session(workspace.runtime.clone(), session)
+}

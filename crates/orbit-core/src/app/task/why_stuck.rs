@@ -5,21 +5,21 @@
 //! when that badge is emitted. Forge errors stay on the card as an explicit
 //! unavailable row; they do not fail the task page.
 
-use orbit_core::application::job::delivery_attention::{
-    LANDING_REVIEW_SETTLE_STEP, landing_review_gate_facts,
-};
-use orbit_core::application::job::run_display_steps;
-use orbit_core::application::task::TaskRow;
-use orbit_core::{JobRun, JobRunState, OrbitError, OrbitRuntime, Task, TaskStatus};
 use serde_json::{Map, Value, json};
 
-use crate::run_failure::failure_root_line;
+use crate::app::run::failure_root_line;
+use crate::application::job::delivery_attention::{
+    LANDING_REVIEW_SETTLE_STEP, landing_review_gate_facts,
+};
+use crate::application::job::run_display_steps;
+use crate::application::task::TaskRow;
+use crate::{JobRun, JobRunState, OrbitError, OrbitRuntime, Task, TaskStatus};
 
 /// Attach `why_stuck` when this task is blocked or its latest delivery run is held.
 ///
 /// Other tasks are left unchanged, including their forge: the pull-request
 /// read runs only for a card the page will show.
-pub(crate) fn attach_why_stuck(
+pub(super) fn attach_why_stuck(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     detail: &mut Map<String, Value>,

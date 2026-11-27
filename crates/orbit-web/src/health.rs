@@ -19,8 +19,8 @@ use std::time::Duration;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::OrbitRuntime;
-use orbit_core::app::doctor::DoctorCommands;
+use orbit_core::Core;
+use orbit_core::app::doctor;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -117,13 +117,16 @@ async fn detailed_response(state: &DashboardState, log_path: Result<PathBuf, Str
 }
 
 /// Store SQLite accepts writes: `BEGIN IMMEDIATE` + rollback, no mutation.
-async fn store_writable_check(workspace: String, runtime: Arc<OrbitRuntime>) -> CheckOutcome {
-    let outcome = run_blocking_check(move || {
-        runtime
-            .health_check_store_writable()
-            .map_err(|error| error.to_string())
-    })
-    .await;
+async fn store_writable_check(workspace: String, runtime: Arc<Core>) -> CheckOutcome {
+    let outcome =
+        run_blocking_check(
+            move || match doctor::exec(&runtime, doctor::Command::StoreWritable) {
+                Ok(doctor::Outcome::StoreWritable(detail)) => Ok(detail),
+                Ok(_) => Err("store write probe answered another outcome".to_string()),
+                Err(error) => Err(error.to_string()),
+            },
+        )
+        .await;
     match outcome {
         Ok(detail) => CheckOutcome {
             name: "sqlite_writable",

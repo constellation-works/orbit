@@ -4,9 +4,11 @@
 //! classified twice: by lineage (what its `regression_from` relations name as
 //! the cause) and by origin (the provenance tag of whatever filed it).
 
+use crate::state::run_read;
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::run::Command as RunCommand;
 use orbit_types::task::TaskType;
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
@@ -148,11 +150,11 @@ fn origin(tags: &[String]) -> &'static str {
     }
 }
 
-fn defect_trend(
-    runtime: &OrbitRuntime,
-    range: &DiagnosticsRange,
-) -> Result<Value, orbit_core::OrbitError> {
-    let filings = runtime.task_defect_filings(TrendWindow::read_since_with_day_lead(range))?;
+fn defect_trend(runtime: &Core, range: &DiagnosticsRange) -> Result<Value, orbit_core::OrbitError> {
+    let filings = run_read(
+        runtime,
+        RunCommand::task_defect_filings(TrendWindow::read_since_with_day_lead(range)),
+    )?;
     let window = TrendWindow::with_day_lead(range, filings.first().map(|filing| filing.filed_at));
     let mut buckets = vec![Counts::default(); window.bucket_count()];
     let mut lead = vec![Counts::default(); window.lead_count()];

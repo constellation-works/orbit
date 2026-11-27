@@ -7,7 +7,7 @@ const ISOLATED_TEST_ENV: &str = "ORBIT_TEST_WEB_FIXTURE_CHILD";
 
 /// Run the calling test's body in a child of this test binary.
 ///
-/// An explicit-root fixture (`OrbitRuntime::from_roots`, or a global
+/// An explicit-root fixture (`FixtureRuntime::from_roots`, or a global
 /// `DashboardState` that opens one lazily) reads ambient authority from the
 /// process environment. Inherited from a managed run, that authority can route
 /// writes to the live workspace or refuse runtime construction before the

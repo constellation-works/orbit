@@ -18,24 +18,62 @@ impl<'a> Command<'a, Option<RunFailureCause>> {
     /// Read the deepest recorded cause, falling back to the run's own evidence.
     pub fn failure_cause(run: &'a JobRun) -> Self {
         Self::new(Operation::command("run", "failure-root"), move |core| {
-            let rt = core.runtime();
-            let state = read_state(rt, &run.run_id);
-            let chain = failure_root(rt, run, state.as_ref()).filter(|cause| {
-                [cause.step.as_deref(), cause.message.as_deref()]
-                    .into_iter()
-                    .flatten()
-                    .any(|text| !text.trim().is_empty())
-            });
-            Ok(chain.or_else(|| {
-                rt.run_failure_cause(
-                    run,
-                    RunFailureContextProfile::DeepestObserved,
-                    &mut log_failure_warning,
-                )
-                .ok()
-            }))
+            Ok(failure_cause(core.runtime(), run))
         })
     }
+}
+
+/// The deepest recorded cause of `run`, falling back to its own evidence.
+fn failure_cause(rt: &OrbitRuntime, run: &JobRun) -> Option<RunFailureCause> {
+    let state = read_state(rt, &run.run_id);
+    let chain = failure_root(rt, run, state.as_ref()).filter(|cause| {
+        [cause.step.as_deref(), cause.message.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|text| !text.trim().is_empty())
+    });
+    chain.or_else(|| {
+        rt.run_failure_cause(
+            run,
+            RunFailureContextProfile::DeepestObserved,
+            &mut log_failure_warning,
+        )
+        .ok()
+    })
+}
+
+/// The diagnostic cause line the dashboard's task detail shows for `run`.
+pub(crate) fn failure_root_line(runtime: &OrbitRuntime, run: &JobRun) -> Option<String> {
+    let cause = failure_cause(runtime, run)?;
+    format_cause_line(
+        &cause.run_id,
+        &cause.state.to_string(),
+        cause.step.as_deref(),
+        cause.message.as_deref(),
+    )
+}
+
+fn format_cause_line(
+    run_id: &str,
+    state: &str,
+    step: Option<&str>,
+    message: Option<&str>,
+) -> Option<String> {
+    let step = step.map(str::trim).filter(|text| !text.is_empty());
+    let message = message.map(str::trim).filter(|text| !text.is_empty());
+    if step.is_none() && message.is_none() {
+        return None;
+    }
+    let mut line = format!("{run_id} {state}");
+    if let Some(step) = step {
+        line.push_str(" at ");
+        line.push_str(step);
+    }
+    if let Some(message) = message {
+        line.push_str(" - ");
+        line.push_str(message);
+    }
+    Some(line)
 }
 
 /// Attach `failure_root` and `cancellation` to the detail run object.

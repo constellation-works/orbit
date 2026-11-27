@@ -1,6 +1,6 @@
 //! Multi-workspace dashboard state (ORB-00030).
 //!
-//! The dashboard was originally coupled to a single `Arc<OrbitRuntime>` used
+//! The dashboard was originally coupled to a single `Arc<Core>` used
 //! directly as axum state. To let one server serve every registered workspace
 //! on the machine, state is generalized to a workspace-keyed, lazily-built
 //! runtime map ([`DashboardState`]) and handlers receive their runtime through
@@ -11,7 +11,7 @@
 //! one pre-built runtime, always selected, no lazy construction. `orbit web
 //! serve` no longer reaches it (it always serves in global mode as of
 //! ORB-10029); it is retained for [`crate::serve`] (callers embedding an
-//! already-built `OrbitRuntime`) and for every existing handler test, which
+//! already-built `Core`) and for every existing handler test, which
 //! builds an in-memory runtime and wants a trivial single-workspace harness.
 //!
 //! ## Concurrency model (ORB-10294)
@@ -59,8 +59,8 @@ use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_cmd::registry_runtime::workspace_runtime_binding;
+use orbit_core::OrbitError;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{WorkspaceCheckoutRole, WorkspaceStatus};
 use serde_json::json;
@@ -80,7 +80,7 @@ pub(crate) use remote_access::{
 };
 pub(crate) use request::{
     AgentsWs, AuditSummaryWs, CodebaseWs, ConfigFileWs, Pinned, PluginPanelWs, RefreshFailure, Ws,
-    WsCore, WsRejection,
+    WsCore, WsRejection, run_read,
 };
 pub(crate) use trusted_hosts::TrustedHosts;
 

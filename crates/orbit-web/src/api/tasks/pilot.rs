@@ -1,9 +1,11 @@
 //! `POST /tasks/:id/pilot`: the details panel's "Run pilot" action.
 
 use crate::api::helpers;
+use crate::state::run_read;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_JOB_RUN;
+use orbit_core::app::run::Command as RunCommand;
 
 use crate::api::routines::{authorization_denied, authorized_caller};
 use crate::api::{bad_request, map_runtime_error, validate_id};
@@ -31,16 +33,20 @@ pub(in crate::api) async fn pilot_task_action(
         Err(message) => return bad_request(message),
     };
     let submitted = helpers::blocking_join("task pilot submission", move || {
-        runtime.submit_explicit_task_pilot(
-            &id,
-            Some("dashboard"),
-            orbit_types::workflow::JobRunTrigger::dashboard(),
+        run_read(
+            &runtime,
+            RunCommand::submit_task_pilot(
+                &id,
+                Some("dashboard"),
+                orbit_types::workflow::JobRunTrigger::dashboard(),
+            ),
         )
+        .and_then(|submitted| submitted.map_err(Into::into))
     })
     .await;
     match submitted {
         Ok(Ok(submission)) => Json(submission.dashboard_view()).into_response(),
-        Ok(Err(error)) => map_runtime_error(error.into()),
+        Ok(Err(error)) => map_runtime_error(error),
         Err(response) => *response,
     }
 }

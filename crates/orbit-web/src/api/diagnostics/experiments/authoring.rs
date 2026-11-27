@@ -7,6 +7,8 @@
 //! core's validation, refusals and the event it records (actor `dashboard`,
 //! with the submitted reason) are the CLI's.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::sync::Arc;
 
 use axum::extract::rejection::JsonRejection;
@@ -17,7 +19,7 @@ use orbit_common::governance::authorization::{
     DASHBOARD_EXPERIMENT_CREATE, DASHBOARD_EXPERIMENT_PAUSE, DASHBOARD_EXPERIMENT_RESUME,
     DASHBOARD_EXPERIMENT_START, DASHBOARD_EXPERIMENT_UPDATE, GovernedOperation,
 };
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 use orbit_core::application::experiment::{
     EXPERIMENT_COMPLEXITIES, ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
     ExperimentView, experiment_metric_names, step_local_metric_names,
@@ -89,18 +91,20 @@ pub(in crate::api) struct ExperimentReasonBody {
 /// session may create, edit and start, the workspace's `[experiments]`
 /// settings, the metric and complexity names core accepts and the configured
 /// crews a crew pool may name.
-pub(super) fn experiment_authoring(runtime: &OrbitRuntime, operator_session: bool) -> Value {
+pub(super) fn experiment_authoring(
+    runtime: &Core,
+    operator_session: bool,
+) -> Result<Value, orbit_core::OrbitError> {
     let capability = |operation: &'static GovernedOperation| {
         crate::api::routines::action_capability(operation, operator_session)
     };
-    let settings = runtime.experiment_settings();
-    let crews = runtime
-        .configured_crew_registry_projection()
+    let (settings, registry) = run_read(runtime, RunCommand::experiment_authoring())?;
+    let crews = registry
         .crews
         .into_iter()
         .map(|crew| json!({ "name": crew.name, "enabled": crew.enabled }))
         .collect::<Vec<_>>();
-    json!({
+    Ok(json!({
         "create": capability(&DASHBOARD_EXPERIMENT_CREATE),
         "update": capability(&DASHBOARD_EXPERIMENT_UPDATE),
         "start": capability(&DASHBOARD_EXPERIMENT_START),
@@ -113,7 +117,7 @@ pub(super) fn experiment_authoring(runtime: &OrbitRuntime, operator_session: boo
         "step_local_metrics": step_local_metric_names().collect::<Vec<_>>(),
         "complexities": EXPERIMENT_COMPLEXITIES,
         "crews": crews,
-    })
+    }))
 }
 
 fn dashboard_actor(reason: Option<String>) -> ExperimentActor {
@@ -143,7 +147,7 @@ pub(in crate::api) async fn diagnostics_experiment_create(
     let name = body.name.take().unwrap_or_default();
     let (input, by) = body.into_input(None);
     experiment_write(runtime, "experiment create", move |runtime| {
-        runtime.create_experiment(&name, input, by)
+        run_read(runtime, RunCommand::create_experiment(&name, input, by))
     })
     .await
 }
@@ -166,7 +170,7 @@ pub(in crate::api) async fn diagnostics_experiment_update(
     let name = body.name.take();
     let (input, by) = body.into_input(name);
     experiment_write(runtime, "experiment update", move |runtime| {
-        runtime.update_experiment(&id, input, by)
+        run_read(runtime, RunCommand::update_experiment(&id, input, by))
     })
     .await
 }
@@ -236,7 +240,7 @@ pub(in crate::api) async fn diagnostics_experiment_resume(
 /// reason. The body may be empty.
 async fn experiment_lifecycle(
     state: &DashboardState,
-    runtime: Arc<OrbitRuntime>,
+    runtime: Arc<Core>,
     id: String,
     body: Result<OptionalJson<ExperimentReasonBody>, Response>,
     operation: &'static GovernedOperation,
@@ -252,7 +256,7 @@ async fn experiment_lifecycle(
     };
     let by = dashboard_actor(body.reason);
     experiment_write(runtime, label, move |runtime| {
-        runtime.change_experiment(&id, change, by)
+        run_read(runtime, RunCommand::change_experiment(&id, change, by))
     })
     .await
 }
@@ -270,9 +274,9 @@ fn refuse_unauthorized(
 /// (`experiments.enabled` false, three experiments already running) is a 409
 /// carrying core's message; every other refusal maps as elsewhere, keeping
 /// core's text.
-async fn experiment_write<F>(runtime: Arc<OrbitRuntime>, label: &'static str, write: F) -> Response
+async fn experiment_write<F>(runtime: Arc<Core>, label: &'static str, write: F) -> Response
 where
-    F: FnOnce(&OrbitRuntime) -> Result<ExperimentView, orbit_core::OrbitError> + Send + 'static,
+    F: FnOnce(&Core) -> Result<ExperimentView, orbit_core::OrbitError> + Send + 'static,
 {
     match crate::api::blocking(label, move || Ok(write(&runtime))).await {
         Ok(Ok(view)) => Json(view).into_response(),

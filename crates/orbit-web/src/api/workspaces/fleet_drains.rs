@@ -1,5 +1,7 @@
 //! `GET /api/fleet/drains`: one readiness row per registered workspace.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::collections::{BTreeMap, HashSet};
 
 use axum::extract::State;
@@ -24,7 +26,7 @@ pub(in crate::api) async fn list_fleet_drains(State(state): State<DashboardState
             .iter()
             .filter(|entry| entry.active)
             .find_map(|entry| pinned.runtime_for(&entry.id).ok())
-            .map(|runtime| runtime.fleet_readiness_facts())
+            .and_then(|runtime| run_read(&runtime, RunCommand::fleet_readiness_facts()).ok())
             .unwrap_or_default();
         // One readiness snapshot per workspace, computed concurrently: the
         // row order stays the pinned entries' order.
@@ -66,8 +68,10 @@ fn fleet_drain_row(
             .runtime_for(&entry.id)
             .map_err(|error| orbit_core::OrbitError::Execution(format!("{error:?}")))
             .and_then(|runtime| {
-                let mut payload = runtime.workspace_fleet_readiness(facts)?;
-                payload["owner_machine_id"] = json!(runtime.replica_owner_machine());
+                let (payload, owner_machine) =
+                    run_read(&runtime, RunCommand::fleet_readiness(facts))?;
+                let mut payload = payload?;
+                payload["owner_machine_id"] = json!(owner_machine);
                 Ok(payload)
             })
     } else {

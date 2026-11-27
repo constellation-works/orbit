@@ -82,7 +82,7 @@ pub struct FirstImplementEdit {
 #[derive(Debug, Default)]
 pub struct FirstImplementEdits {
     pub by_task: HashMap<String, FirstImplementEdit>,
-    /// An implement activity reached [`MAX_RECORDS`], so an older task's
+    /// An implement activity reached `MAX_RECORDS`, so an older task's
     /// first invocation may be missing from `by_task`.
     pub truncated: bool,
 }

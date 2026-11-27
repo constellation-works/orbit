@@ -147,6 +147,7 @@ impl SubmittedJob {
         Ok(Outcome {
             value: Self { invoke, waited },
             exit_code,
+            row: super::RowDue::Declared,
         })
     }
 }
@@ -201,7 +202,11 @@ impl<'a> Command<'a, V2JobRunResult> {
             flow: Box::new(move |core| {
                 let value = core.runtime().replay_job_run_with_claim(id, claim_token)?;
                 let exit_code = i32::from(!value.success);
-                Ok(Outcome { value, exit_code })
+                Ok(Outcome {
+                    value,
+                    exit_code,
+                    row: super::RowDue::Declared,
+                })
             }),
         }
     }
@@ -226,6 +231,7 @@ impl Command<'static, Vec<WorkflowDispatchResult>> {
                 Ok(Outcome {
                     value: runs,
                     exit_code,
+                    row: super::RowDue::Declared,
                 })
             }),
         }

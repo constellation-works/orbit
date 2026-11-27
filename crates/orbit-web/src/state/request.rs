@@ -1,6 +1,7 @@
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_core::Core;
 use orbit_core::app::Session;
+use orbit_core::app::run;
 use orbit_core::application::agents::AgentFacts;
 use orbit_core::application::codebase::CodebaseFacts;
 
@@ -39,7 +40,7 @@ impl Pinned {
     }
 
     /// Resolve the runtime for `id` against the pinned snapshot's exact binding.
-    pub(crate) fn runtime_for(&self, id: &str) -> Result<Arc<OrbitRuntime>, WsRejection> {
+    pub(crate) fn runtime_for(&self, id: &str) -> Result<Arc<Core>, WsRejection> {
         self.inner.resolve_runtime(&self.snapshot, id)
     }
 
@@ -56,17 +57,14 @@ impl Pinned {
 
     /// Stale-tolerant resolve for `GET /api/config/file` only; see
     /// [`crate::state::dashboard`] for why aggregates stay strict.
-    pub(crate) fn runtime_for_config_file(
-        &self,
-        id: &str,
-    ) -> Result<Arc<OrbitRuntime>, WsRejection> {
+    pub(crate) fn runtime_for_config_file(&self, id: &str) -> Result<Arc<Core>, WsRejection> {
         self.inner
             .resolve_runtime_for_config_file(&self.snapshot, id)
     }
 
     /// Open runtimes whose binding matches the pinned snapshot, in snapshot
     /// order — the coherent open set for this request's generation.
-    pub(crate) fn open_runtimes(&self) -> Vec<(String, Arc<OrbitRuntime>)> {
+    pub(crate) fn open_runtimes(&self) -> Vec<(String, Arc<Core>)> {
         self.inner.open_runtimes_for(&self.snapshot)
     }
 }
@@ -161,12 +159,12 @@ impl IntoResponse for WsRejection {
     }
 }
 
-/// Extractor yielding the `Arc<OrbitRuntime>` for the request's workspace.
+/// Extractor yielding the `Arc<Core>` for the request's workspace.
 ///
 /// Selection order: the `?workspace=<id>` query parameter, else the state's
 /// configured default. Handlers destructure it as `Ws(runtime)` — a drop-in
-/// replacement for the former `State(runtime): State<Arc<OrbitRuntime>>`.
-pub(crate) struct Ws(pub(crate) Arc<OrbitRuntime>);
+/// replacement for the former `State(runtime): State<Arc<Core>>`.
+pub(crate) struct Ws(pub(crate) Arc<Core>);
 
 impl FromRequestParts<DashboardState> for Ws {
     type Rejection = WsRejection;
@@ -221,10 +219,9 @@ impl WsCore {
     /// Each request derives its `Core` from the workspace's cached runtime
     /// and the session it arrived on: one clone of the runtime handle, and
     /// nothing opened or read.
-    pub(crate) fn over(runtime: &Arc<OrbitRuntime>, session: Session) -> Self {
-        Self(Arc::new(RegisteredRuntimeFactory::core_for_session(
-            runtime.as_ref().clone(),
-            session,
+    pub(crate) fn over(runtime: &Arc<Core>, session: Session) -> Self {
+        Self(Arc::new(RegisteredRuntimeFactory::core_for_request(
+            runtime, session,
         )))
     }
 }
@@ -244,7 +241,7 @@ impl FromRequestParts<DashboardState> for WsCore {
 /// A panel request's opaque Core and the cache identity of its selected runtime.
 pub(crate) struct PluginPanelWs {
     pub(crate) core: Arc<Core>,
-    runtime: Arc<OrbitRuntime>,
+    runtime: Arc<Core>,
 }
 
 impl PluginPanelWs {
@@ -280,7 +277,7 @@ impl FromRequestParts<DashboardState> for PluginPanelWs {
 /// selected runtime.
 pub(crate) struct AgentsWs {
     pub(crate) core: Arc<Core>,
-    runtime: Arc<OrbitRuntime>,
+    runtime: Arc<Core>,
 }
 
 impl AgentsWs {
@@ -321,7 +318,7 @@ impl FromRequestParts<DashboardState> for AgentsWs {
 /// its selected runtime.
 pub(crate) struct CodebaseWs {
     pub(crate) core: Arc<Core>,
-    runtime: Arc<OrbitRuntime>,
+    runtime: Arc<Core>,
 }
 
 impl CodebaseWs {
@@ -380,7 +377,7 @@ impl FromRequestParts<DashboardState> for CodebaseWs {
 /// selected runtime.
 pub(crate) struct AuditSummaryWs {
     pub(crate) core: Arc<Core>,
-    runtime: Arc<OrbitRuntime>,
+    runtime: Arc<Core>,
 }
 
 impl AuditSummaryWs {
@@ -464,4 +461,12 @@ fn workspace_from_query(query: &str) -> Option<String> {
         .find(|(k, _)| k == "workspace")
         .map(|(_, v)| v.into_owned())
         .filter(|v| !v.is_empty())
+}
+
+/// Run one run-app command over `core` and answer its model.
+pub(crate) fn run_read<'a, T: 'a>(
+    core: &Core,
+    command: run::Command<'a, T>,
+) -> Result<T, OrbitError> {
+    run::exec(core, command).map(|outcome| outcome.value)
 }

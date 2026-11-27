@@ -1,24 +1,37 @@
 //! The dashboard's task writes and read models. Each calls the runtime
 //! method the dashboard's handler called before.
 
+use std::sync::Arc;
+
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskWriteProvenance, TaskWriteSurface};
 use serde_json::Value;
 
+use super::projection::{TaskListProjection, task_detail_json};
 use super::{
-    DashboardAction, DashboardWrite, Outcome, PageRead, PageSelection, Read, RowRead,
+    DashboardAction, DashboardWrite, Outcome, PageRead, PageSelection, Read, RowRead, RowsRead,
     ScreenedWrite, TaskPages,
 };
 use crate::OrbitRuntime;
+use crate::application::codebase::TaskRiskinessModel;
 use crate::application::task::{
-    ScreenedTaskWrite, TaskUpdateIdentity, TaskUpdateParams, TaskWriteResponsePolicy,
-    TaskWriteScreen, screened_task_write_response_json, with_task_write_provenance,
+    DashboardPageReads, ScreenedTaskWrite, TaskUpdateIdentity, TaskUpdateParams,
+    TaskWriteResponsePolicy, TaskWriteScreen, screened_task_write_response_json,
+    with_task_write_provenance,
 };
 
 /// What one dashboard write produced, before its answer is rendered.
 enum Applied {
     Screened(Box<ScreenedTaskWrite>),
     Outcome(Outcome),
+}
+
+/// How one read's pages are rendered.
+struct PageRender<'a> {
+    /// The task whose detail the page holding it answers.
+    detail: Option<&'a str>,
+    riskiness: Option<Arc<TaskRiskinessModel>>,
+    detail_candidate: bool,
 }
 
 /// Apply one dashboard write as the dashboard's own, attributed to the
@@ -158,12 +171,22 @@ fn apply(
 /// One read model of the dashboard.
 pub(super) fn read(runtime: &OrbitRuntime, read: Read) -> Result<Outcome, OrbitError> {
     match read {
-        Read::Pages { select, detail } => {
+        Read::Pages {
+            select,
+            detail,
+            riskiness,
+            detail_candidate,
+        } => {
             let workspace_id = runtime.workspace_id()?;
             let selection = (select.0)(&workspace_id)?;
+            let render = PageRender {
+                detail: detail.as_deref(),
+                riskiness,
+                detail_candidate,
+            };
             Ok(Outcome::Pages(TaskPages {
                 workspace_id,
-                pages: pages(runtime, selection, detail.as_deref()),
+                pages: pages(runtime, selection, &render),
             }))
         }
         Read::Row { id } => {
@@ -178,6 +201,42 @@ pub(super) fn read(runtime: &OrbitRuntime, read: Read) -> Result<Outcome, OrbitE
                 dependency_statuses,
             })))
         }
+        Read::Detail {
+            read,
+            riskiness,
+            include_candidate,
+        } => {
+            let RowRead {
+                row,
+                dependency_statuses,
+            } = *read;
+            task_detail_json(
+                runtime,
+                &row,
+                &dependency_statuses?,
+                riskiness.as_deref(),
+                &DashboardPageReads::default(),
+                include_candidate,
+            )
+            .map(Outcome::Answer)
+        }
+        Read::Rows(read) => {
+            let RowsRead {
+                rows,
+                dependency_statuses,
+                delivery_attention,
+                run_branches,
+                riskiness,
+            } = *read;
+            let projection = TaskListProjection::new(runtime)
+                .with_delivery_attention(delivery_attention)
+                .with_run_branches(run_branches)
+                .with_riskiness(riskiness);
+            rows.iter()
+                .map(|row| projection.row_to_json(runtime, row, &dependency_statuses))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Outcome::Rows)
+        }
         Read::Locks => runtime.task_locks_snapshot().map(Outcome::Answer),
         Read::CompletionByComplexity => runtime
             .task_completion_by_complexity()
@@ -185,11 +244,11 @@ pub(super) fn read(runtime: &OrbitRuntime, read: Read) -> Result<Outcome, OrbitE
     }
 }
 
-/// The selected pages, each with what its rows show beside the task.
+/// The selected pages, each rendered with what its rows show beside the task.
 fn pages(
     runtime: &OrbitRuntime,
     selection: PageSelection,
-    detail: Option<&str>,
+    render: &PageRender<'_>,
 ) -> Result<Vec<PageRead>, OrbitError> {
     let pages = match selection {
         PageSelection::One(query) => vec![runtime.query_task_rows(&query)?],
@@ -202,14 +261,39 @@ fn pages(
         .map(|page| {
             let delivery_attention = runtime.delivery_attention_map(page.items.iter())?;
             let run_branches = runtime.local_run_branches(page.items.iter());
-            let detail_dependency_statuses = detail
-                .and_then(|id| page.items.iter().find(|row| row.task.id == id))
-                .map(|row| runtime.dependency_status_index([&row.task]));
+            let detail_row = render
+                .detail
+                .and_then(|id| page.items.iter().find(|row| row.task.id == id));
+            let detail_statuses =
+                detail_row.map(|row| runtime.dependency_status_index([&row.task]));
+            let projection = TaskListProjection::new(runtime)
+                .with_delivery_attention(delivery_attention)
+                .with_run_branches(run_branches)
+                .with_riskiness(render.riskiness.clone());
+            let items = page
+                .items
+                .iter()
+                .map(|row| projection.row_to_json(runtime, row, &page.status_by_id))
+                .collect::<Result<Vec<_>, _>>()?;
+            // The page's rows already read the workspace-wide triage, pilot
+            // preparation, pull-request links and delivery attention this
+            // detail shows; it borrows them rather than reading each again
+            // [ORB-21825].
+            let detail = detail_row.zip(detail_statuses).map(|(row, statuses)| {
+                task_detail_json(
+                    runtime,
+                    row,
+                    &statuses?,
+                    render.riskiness.as_deref(),
+                    &projection.detail_page_reads(),
+                    render.detail_candidate,
+                )
+            });
+            drop(projection);
             Ok(PageRead {
                 page,
-                delivery_attention,
-                run_branches,
-                detail_dependency_statuses,
+                items,
+                detail,
             })
         })
         .collect()

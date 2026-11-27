@@ -2302,8 +2302,8 @@ fi
 # closed. Tests are skipped inside module_paths_into.
 web_src="$repo_root/crates/orbit-web/src"
 for module in \
-  state why_stuck.rs projections.rs connect.rs host_tunnels.rs health.rs \
-  assets.rs run_failure.rs shutdown.rs runtime_memo.rs; do
+  state projections.rs connect.rs host_tunnels.rs health.rs \
+  assets.rs shutdown.rs runtime_memo.rs; do
   if ! module_paths_into "$web_src" "$module" 'api|serve'; then
     echo "orbit-web ${module} must not name api or serve"
     fail=1

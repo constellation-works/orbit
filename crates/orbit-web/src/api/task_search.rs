@@ -1,7 +1,9 @@
 //! Compact all-status task matches for the shared dashboard search.
 
+use crate::state::run_read;
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
+use orbit_core::app::run::Command as RunCommand;
 use orbit_core::application::task::TaskListFilter;
 use serde_json::json;
 
@@ -58,7 +60,10 @@ pub(super) async fn search_dashboard_tasks(
                     continue;
                 }
             };
-            let mut candidates = match runtime.observe_task_candidates(&filter, usize::MAX) {
+            let mut candidates = match run_read(
+                &runtime,
+                RunCommand::task_candidates(&filter, usize::MAX),
+            ) {
                 Ok(page) => page.items,
                 Err(error) => {
                     tracing::warn!(workspace = %entry.id, %error, "dashboard search skipped a workspace");

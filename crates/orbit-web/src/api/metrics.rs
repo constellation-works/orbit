@@ -1,5 +1,6 @@
 //! `/metrics/*` parity endpoints for the retired CLI metrics views.
 
+use crate::state::run_read;
 use crate::state::{Ws, WsCore};
 use axum::extract::{Path, Query};
 use axum::http::StatusCode;
@@ -83,7 +84,7 @@ pub(super) async fn knowledge_metrics(
 
 pub(super) async fn activity_metrics(Ws(runtime): Ws) -> Response {
     match blocking("activity metrics", move || {
-        runtime.activity_invocation_metrics()
+        run_read(&runtime, Command::activity_metrics())
     })
     .await
     {
@@ -93,14 +94,22 @@ pub(super) async fn activity_metrics(Ws(runtime): Ws) -> Response {
 }
 
 pub(super) async fn tool_metrics(Ws(runtime): Ws) -> Response {
-    match blocking("tool metrics", move || runtime.tool_invocation_metrics()).await {
+    match blocking("tool metrics", move || {
+        run_read(&runtime, Command::tool_metrics())
+    })
+    .await
+    {
         Ok(rows) => Json(rows).into_response(),
         Err(response) => *response,
     }
 }
 
 pub(super) async fn task_metrics(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
-    match blocking("task metrics", move || runtime.task_invocation_metrics(&id)).await {
+    match blocking("task metrics", move || {
+        run_read(&runtime, Command::task_metrics(&id))
+    })
+    .await
+    {
         Ok(row) => Json(row).into_response(),
         Err(response) => *response,
     }
@@ -122,7 +131,7 @@ pub(super) async fn orchestrator_metrics(
         Err(error) => return map_runtime_error(error),
     };
     match blocking("orchestrator metrics", move || {
-        runtime.orchestrator_invocation_metrics(since, until)
+        run_read(&runtime, Command::orchestrator_metrics(since, until))
     })
     .await
     {
@@ -140,7 +149,7 @@ pub(super) async fn invocation_metrics(
         Err(e) => return map_runtime_error(e),
     };
     match blocking("invocation metrics", move || {
-        runtime.workspace_invocation_records(query)
+        run_read(&runtime, Command::invocations(query))
     })
     .await
     {
@@ -154,7 +163,7 @@ pub(super) async fn ingest_invocation(
     Json(params): Json<InvocationInsertParams>,
 ) -> Response {
     match blocking("ingest invocation", move || {
-        runtime.insert_invocation_trace_record(&params)
+        run_read(&runtime, Command::ingest_invocation(&params))
     })
     .await
     {

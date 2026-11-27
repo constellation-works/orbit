@@ -28,6 +28,7 @@ pub use definition::{
 };
 pub use lifecycle::{ExperimentActor, ExperimentChange, ExperimentDefinitionInput};
 pub(crate) use memory_arms::memory_arm_names;
+pub use progress::ExperimentProgress;
 pub use readout::ExperimentReadout;
 pub use records::{ExperimentAssignmentDecision, assign_experiments, write_experiment};
 pub use view::{ExperimentArmView, ExperimentEventView, ExperimentView};

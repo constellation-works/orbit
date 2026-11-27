@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use axum::http::{HeaderName, header};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError};
 use serde_json::Value;
 
 /// Freshness bound for the dashboard memos the 30 s poll reads: audit summary,
@@ -139,7 +139,7 @@ struct Slot<V> {
 }
 
 struct Cached<V> {
-    runtime: Option<Weak<OrbitRuntime>>,
+    runtime: Option<Weak<Core>>,
     computed_at: Instant,
     ttl: Duration,
     /// How long past `ttl` the entry may still be served stale.
@@ -163,7 +163,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
     /// compute is not stored, so the next waiter retries.
     pub(crate) async fn get_or_compute<F>(
         &self,
-        runtime: &Arc<OrbitRuntime>,
+        runtime: &Arc<Core>,
         key: K,
         ttl: Duration,
         compute: F,
@@ -245,7 +245,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
     /// read retries.
     pub(crate) async fn get_or_refresh<F>(
         &self,
-        runtime: &Arc<OrbitRuntime>,
+        runtime: &Arc<Core>,
         key: K,
         ttl: Duration,
         stale_for: Duration,
@@ -289,7 +289,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
 
     async fn compute<F>(
         &self,
-        runtime: Option<&Arc<OrbitRuntime>>,
+        runtime: Option<&Arc<Core>>,
         key: K,
         ttl: Duration,
         compute: F,
@@ -313,7 +313,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
     async fn compute_in<F>(
         &self,
         slot: &Slot<V>,
-        runtime: Option<&Arc<OrbitRuntime>>,
+        runtime: Option<&Arc<Core>>,
         ttl: Duration,
         stale_for: Duration,
         churn: Option<u64>,
@@ -368,7 +368,7 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
 }
 
 impl<V> Slot<V> {
-    fn hit(&self, runtime: Option<&Arc<OrbitRuntime>>) -> Option<Served<V>> {
+    fn hit(&self, runtime: Option<&Arc<Core>>) -> Option<Served<V>> {
         self.served(runtime, Cached::is_fresh)
     }
 
@@ -388,13 +388,13 @@ impl<V> Slot<V> {
     }
 
     /// An entry past its freshness bound that may still be served stale.
-    fn stale(&self, runtime: &Arc<OrbitRuntime>) -> Option<Served<V>> {
+    fn stale(&self, runtime: &Arc<Core>) -> Option<Served<V>> {
         self.served(Some(runtime), Cached::is_servable)
     }
 
     fn served(
         &self,
-        runtime: Option<&Arc<OrbitRuntime>>,
+        runtime: Option<&Arc<Core>>,
         usable: fn(&Cached<V>) -> bool,
     ) -> Option<Served<V>> {
         let guard = self.value.lock().unwrap_or_else(PoisonError::into_inner);
@@ -414,7 +414,7 @@ impl<V> Slot<V> {
 
     fn store(
         &self,
-        runtime: Option<Weak<OrbitRuntime>>,
+        runtime: Option<Weak<Core>>,
         ttl: Duration,
         stale_for: Duration,
         churn: Option<u64>,

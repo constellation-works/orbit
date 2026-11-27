@@ -149,6 +149,19 @@ pub enum Command<'a> {
         /// The workspace-relative path.
         path: String,
     },
+    /// One probe of the read-only report, for a surface that bounds each
+    /// probe's time itself. It never scans every database page.
+    Probe {
+        /// The probe to run.
+        probe: DoctorProbe,
+        /// The caller's environment, which the check judges.
+        env: Env,
+        /// The host reads above this crate.
+        host: Arc<dyn Host>,
+    },
+    /// Whether the store database accepts writes: a health probe that
+    /// mutates nothing.
+    StoreWritable,
 }
 
 /// The repairs `orbit doctor` can run before its checks, in the order they run.
@@ -221,6 +234,10 @@ pub enum Outcome {
         /// The modify verdict.
         modify: FsCheckResult,
     },
+    /// One probe's rows.
+    Probed(Vec<WorkspaceDoctorResult>),
+    /// What the store database answered the write probe.
+    StoreWritable(String),
 }
 
 /// Each executor definition, the launcher dispatch finds for it, and the
@@ -273,6 +290,10 @@ impl<'a> App for DoctorApp<'a> {
             }
             Command::FsAccess { profile, .. } => Operation::command("doctor", "fs-access")
                 .target(Some("policy"), Some(profile.clone())),
+            Command::Probe { .. } => return Operation::dashboard_read("doctor", "probe"),
+            Command::StoreWritable => {
+                return Operation::dashboard_read("doctor", "store-writable");
+            }
         };
         operation.audit_role("admin").without_command_row()
     }
@@ -300,6 +321,12 @@ impl<'a> App for DoctorApp<'a> {
             Command::AdmissionReceipts { compact } => run::admission_receipts(core, compact)?,
             Command::Providers => Outcome::Providers(run::providers(core)?),
             Command::FsAccess { profile, path } => run::fs_access(core, &profile, &path)?,
+            Command::Probe { probe, env, host } => {
+                Outcome::Probed(probe.run(core.runtime(), &env, false, host.as_ref()))
+            }
+            Command::StoreWritable => {
+                Outcome::StoreWritable(core.runtime().health_check_store_writable()?)
+            }
         })
     }
 }

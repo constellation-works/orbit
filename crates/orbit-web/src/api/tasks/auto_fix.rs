@@ -1,12 +1,14 @@
 //! `/tasks/:id/auto-fix`: the details panel's "Fix PR" action.
 
 use crate::api::helpers;
+use crate::state::run_read;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_DRAIN_AUTO_FIX, DASHBOARD_AUTO_DRAIN_COMPLETE,
 };
+use orbit_core::app::run::Command as RunCommand;
 use orbit_core::application::job::TaskAutoFixError;
 use serde_json::json;
 
@@ -46,7 +48,10 @@ pub(in crate::api) async fn task_auto_fix_readiness(
     let completion_done =
         authorized_caller(&DASHBOARD_AUTO_DRAIN_COMPLETE, operator_session).is_ok();
     match blocking("task auto-fix readiness", move || {
-        runtime.task_pr_auto_fix_readiness(&id, completion_done)
+        run_read(
+            &runtime,
+            RunCommand::task_pr_auto_fix_readiness(&id, completion_done),
+        )
     })
     .await
     {
@@ -83,7 +88,11 @@ pub(in crate::api) async fn start_task_auto_fix(
         Err(message) => return bad_request(message),
     };
     let started = helpers::blocking_join("task auto-fix start", move || {
-        runtime.start_task_pr_auto_fix(&id, completion_done, Some("dashboard"))
+        run_read(
+            &runtime,
+            RunCommand::start_task_pr_auto_fix(&id, completion_done, Some("dashboard")),
+        )
+        .unwrap_or_else(|error| Err(TaskAutoFixError::Runtime(error)))
     })
     .await;
     match started {

@@ -4,8 +4,9 @@ use crate::state::DashboardState;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
 use orbit_common::governance::authorization::{DASHBOARD_CLOCK_SERVICE, OPERATOR_OVERRIDE_ENV};
+use orbit_core::OrbitError;
 use orbit_core::application::routines::ClockStatus;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::test_support::{FixtureRuntime, fixture_core};
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::json;
 use std::sync::Arc;
@@ -25,7 +26,7 @@ async fn successful_clock_change_with_failed_follow_up_read_is_audited_and_unkno
         ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
         ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
     ]);
-    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    let runtime = Arc::new(FixtureRuntime::in_memory().expect("build runtime"));
     orbit_registry::ensure_machine_identity(&runtime.global_root(), || {
         Ok(orbit_registry::NewMachineIdentity {
             name: "clock-fixture".to_string(),
@@ -33,7 +34,7 @@ async fn successful_clock_change_with_failed_follow_up_read_is_audited_and_unkno
         })
     })
     .expect("ensure machine identity");
-    let state = DashboardState::single(runtime.clone());
+    let state = DashboardState::single(Arc::new(fixture_core(&runtime)));
     state.set_operator_session(true);
     let status_reads = Arc::new(AtomicUsize::new(0));
     let reads = status_reads.clone();
@@ -118,7 +119,7 @@ async fn routine_health_clock_token_for_each_status_combination() {
     ) {
         return;
     }
-    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+    let runtime = Arc::new(FixtureRuntime::in_memory().expect("build runtime"));
     orbit_registry::ensure_machine_identity(&runtime.global_root(), || {
         Ok(orbit_registry::NewMachineIdentity {
             name: "clock-fixture".to_string(),
@@ -170,7 +171,7 @@ async fn routine_health_clock_token_for_each_status_combination() {
         };
         let case = format!("{status:?}");
         // A fresh state per case: the routine read is memoized per server.
-        let state = DashboardState::single(runtime.clone());
+        let state = DashboardState::single(Arc::new(fixture_core(&runtime)));
         state.set_clock_status_hook(Arc::new(move || Ok(status.clone())));
         let request = Request::builder()
             .uri("/routines?workspace=default")
@@ -191,8 +192,8 @@ async fn routine_health_clock_token_for_each_status_combination() {
 /// Build the in-memory runtime, machine identity and stubbed clock a governed
 /// `POST /routines/clock` needs, served with `--operator` as given.
 #[cfg(unix)]
-fn clock_fixture(operator: bool) -> (Arc<OrbitRuntime>, DashboardState, String) {
-    let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+fn clock_fixture(operator: bool) -> (Arc<FixtureRuntime>, DashboardState, String) {
+    let runtime = Arc::new(FixtureRuntime::in_memory().expect("build runtime"));
     orbit_registry::ensure_machine_identity(&runtime.global_root(), || {
         Ok(orbit_registry::NewMachineIdentity {
             name: "clock-fixture".to_string(),
@@ -200,7 +201,7 @@ fn clock_fixture(operator: bool) -> (Arc<OrbitRuntime>, DashboardState, String) 
         })
     })
     .expect("ensure machine identity");
-    let state = DashboardState::single(runtime.clone());
+    let state = DashboardState::single(Arc::new(fixture_core(&runtime)));
     state.set_operator_session(operator);
     state.set_clock_status_hook(Arc::new(|| {
         Ok(ClockStatus {
@@ -246,7 +247,7 @@ fn forged_clock_disable(machine_name: &str) -> Request<Body> {
 }
 
 #[cfg(unix)]
-fn clock_audit_rows(runtime: &OrbitRuntime) -> Vec<orbit_types::telemetry::AuditEvent> {
+fn clock_audit_rows(runtime: &FixtureRuntime) -> Vec<orbit_types::telemetry::AuditEvent> {
     runtime
         .list_audit_events(None, None, None, None, 20)
         .expect("list audit events")

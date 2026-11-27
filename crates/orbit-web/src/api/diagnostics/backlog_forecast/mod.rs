@@ -1,7 +1,9 @@
 //! HTTP adapter for the shared backlog forecast and calibration service.
 
+use crate::state::run_read;
 use axum::extract::Query;
 use axum::response::{IntoResponse, Json, Response};
+use orbit_core::app::run::Command as RunCommand;
 use serde::Deserialize;
 
 use crate::state::Ws;
@@ -44,14 +46,17 @@ pub(in crate::api) async fn diagnostics_backlog_forecast(
                 )));
             }
         };
-        runtime.serve_backlog_forecast(
-            BacklogForecastHistory {
-                lookback_days: q.lookback_days,
-                history_tasks: q.history_tasks,
-            },
-            q.concurrency,
-            q.arrivals.as_deref(),
-            refresh,
+        run_read(
+            &runtime,
+            RunCommand::backlog_forecast(
+                BacklogForecastHistory {
+                    lookback_days: q.lookback_days,
+                    history_tasks: q.history_tasks,
+                },
+                q.concurrency,
+                q.arrivals.as_deref(),
+                refresh,
+            ),
         )
     })
     .await

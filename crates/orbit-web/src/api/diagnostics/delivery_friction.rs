@@ -42,12 +42,14 @@
 //! read start: every history append updates the task, so an older task holds
 //! no entry inside the window.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
-use orbit_core::{OrbitRuntime, V2AuditEventFilter};
+use orbit_core::{Core, V2AuditEventFilter};
 use orbit_types::task::{Task, TaskStatus, complexity_bucket, complexity_bucket_ord};
 use orbit_types::workflow::{PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker};
 use serde::Deserialize;
@@ -384,12 +386,12 @@ fn amount(family: Family, value: f64) -> Value {
 }
 
 fn delivery_friction_trend(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     range: &DiagnosticsRange,
     filters: &Filters,
 ) -> Result<Value, orbit_core::OrbitError> {
     let read_since = TrendWindow::read_since(range);
-    let dates = runtime.task_terminal_dates(read_since)?;
+    let dates = run_read(runtime, RunCommand::task_terminal_dates(read_since))?;
     let done: Vec<_> = dates
         .dated
         .iter()
@@ -406,14 +408,14 @@ fn delivery_friction_trend(
     // listing is narrowed to those ids unless a filter or history scan needs
     // the whole listing.
     let metadata = if needs_tasks {
-        runtime.list_task_metadata()?
+        run_read(runtime, RunCommand::task_metadata())?
     } else {
         let ids: BTreeSet<String> = done
             .iter()
             .map(|row| row.task.task_id.clone())
             .chain(undated_done.iter().map(|task| task.task_id.clone()))
             .collect();
-        runtime.list_task_metadata_for_ids(&ids)?
+        run_read(runtime, RunCommand::task_metadata_for_ids(&ids))?
     };
     let tasks: HashMap<String, Task> = metadata
         .into_iter()
@@ -438,7 +440,7 @@ fn delivery_friction_trend(
         .iter()
         .any(|family| family.reads_invocations())
     {
-        for spend in runtime.invocation_spend(read_since)? {
+        for spend in run_read(runtime, RunCommand::invocation_spend(read_since))? {
             for family in [Family::Cost, Family::Tokens] {
                 if !filters.families.contains(&family) {
                     continue;
@@ -634,7 +636,7 @@ fn delivery_friction_trend(
 
 /// The recovery and conflict families from v2 audit envelope events.
 fn audit_occurrences(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     since: Option<DateTime<Utc>>,
     families: &[Family],
 ) -> Result<Vec<Occurrence>, orbit_core::OrbitError> {
@@ -649,9 +651,9 @@ fn audit_occurrences(
     let mut occurrences = Vec::new();
     let mut offset = 0;
     loop {
-        let page = OrbitRuntime::list_v2_audit_events(
+        let page = run_read(
             runtime,
-            V2AuditEventFilter {
+            RunCommand::audit_events(V2AuditEventFilter {
                 workspace_id: String::new(),
                 since,
                 source: Some("v2_envelope".to_string()),
@@ -660,7 +662,7 @@ fn audit_occurrences(
                 offset: Some(offset),
                 oldest_first: true,
                 ..Default::default()
-            },
+            }),
         )?;
         let fetched = page.len();
         offset += fetched;
@@ -725,7 +727,7 @@ fn audit_occurrences(
 
 /// The auto-fix and failed-CI families from task history and sweep filings.
 fn history_occurrences(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     since: Option<DateTime<Utc>>,
     tasks: &HashMap<String, Task>,
     families: &[Family],
@@ -741,7 +743,7 @@ fn history_occurrences(
         .collect();
     ids.sort();
     for id in ids {
-        let history = match runtime.get_task_history(id) {
+        let history = match run_read(runtime, RunCommand::task_history(id)) {
             Ok(history) => history,
             Err(error) => {
                 tracing::warn!(task_id = %id, %error, "delivery friction: task history unreadable");

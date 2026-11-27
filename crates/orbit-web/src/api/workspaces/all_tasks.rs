@@ -7,6 +7,7 @@ use std::sync::Arc;
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::Core;
+use orbit_core::app::task;
 use orbit_core::app::workspace::{
     self, AggregateTaskPage, AggregateTaskPages, AggregateTaskRequest, AggregateTaskRow,
     AggregateTaskSection, AggregateWorkspace, AggregateWorkspaceSource, Command, Outcome,
@@ -19,7 +20,7 @@ use super::fan_out::fan_out;
 use super::list::{abbreviate_home, entry_is_owned};
 use crate::api::pagination::TaskPageQuery;
 use crate::api::{bad_request, blocking, server_error};
-use crate::projections::{TaskListProjection, cached_riskiness_model};
+use crate::projections::cached_riskiness_model;
 use crate::state::{DashboardState, Pinned, Ws, WsCore, WsEntry};
 
 /// One workspace an aggregate page opened: its app entry, and the runtime its
@@ -377,54 +378,61 @@ fn render_task_page(
 
 fn project_rows(
     context: &RenderContext<'_>,
-    page: AggregateTaskPage,
+    mut page: AggregateTaskPage,
 ) -> Result<Vec<Value>, orbit_core::OrbitError> {
-    let mut projections: BTreeMap<usize, TaskListProjection> = BTreeMap::new();
-    let mut values = Vec::with_capacity(page.rows.len());
-    for AggregateTaskRow {
-        workspace_index,
-        row,
-    } in page.rows
-    {
+    // Rows are rendered a workspace at a time, each by its own task app, and
+    // set back in page order.
+    let mut by_workspace: BTreeMap<usize, (Vec<usize>, Vec<_>)> = BTreeMap::new();
+    for (position, row) in page.rows.into_iter().enumerate() {
+        let AggregateTaskRow {
+            workspace_index,
+            row,
+        } = row;
+        let (positions, rows) = by_workspace.entry(workspace_index).or_default();
+        positions.push(position);
+        rows.push(row);
+    }
+    let mut values = Vec::new();
+    for (workspace_index, (positions, rows)) in by_workspace {
         let entry = context.entries[workspace_index];
         let source = context.opened[workspace_index].as_ref().map_err(|error| {
             orbit_core::OrbitError::Execution(format!(
                 "missing opened workspace for hydrated row: {error}"
             ))
         })?;
-        // The row projections still read the workspace's runtime.
-        let runtime = &source.ws.0;
-        let projection = projections.entry(workspace_index).or_insert_with(|| {
-            TaskListProjection::new(runtime)
-                .with_delivery_attention(
-                    page.delivery_attention
-                        .get(&workspace_index)
-                        .cloned()
-                        .unwrap_or_default(),
-                )
-                .with_run_branches(
-                    page.run_branches
-                        .get(&workspace_index)
-                        .cloned()
-                        .unwrap_or_default(),
-                )
-                .with_riskiness(
-                    // On the blocking pool: wait for this workspace's model
-                    // as the per-workspace list does.
-                    tokio::runtime::Handle::current()
-                        .block_on(cached_riskiness_model(context.state, runtime)),
-                )
-        });
-        let mut value = projection.row_to_json(runtime, &row, &page.dependency_statuses)?;
-        if let Value::Object(map) = &mut value {
-            map.insert("workspace_id".to_string(), json!(entry.id));
-            map.insert("workspace_name".to_string(), json!(entry.name));
-            map.insert(
-                "workspace_root".to_string(),
-                json!(abbreviate_home(&entry.repo_root, context.home.as_deref())),
-            );
+        // On the blocking pool: wait for this workspace's model as the
+        // per-workspace list does.
+        let riskiness = tokio::runtime::Handle::current()
+            .block_on(cached_riskiness_model(context.state, &source.ws.0));
+        let rendered = task::exec(
+            &source.core,
+            task::Command::Read(task::Read::Rows(Box::new(task::RowsRead {
+                rows,
+                dependency_statuses: page.dependency_statuses.clone(),
+                delivery_attention: page
+                    .delivery_attention
+                    .remove(&workspace_index)
+                    .unwrap_or_default(),
+                run_branches: page
+                    .run_branches
+                    .remove(&workspace_index)
+                    .unwrap_or_default(),
+                riskiness,
+            }))),
+        )
+        .and_then(task::Outcome::into_rows)?;
+        for (position, mut value) in positions.into_iter().zip(rendered) {
+            if let Value::Object(map) = &mut value {
+                map.insert("workspace_id".to_string(), json!(entry.id));
+                map.insert("workspace_name".to_string(), json!(entry.name));
+                map.insert(
+                    "workspace_root".to_string(),
+                    json!(abbreviate_home(&entry.repo_root, context.home.as_deref())),
+                );
+            }
+            values.push((position, value));
         }
-        values.push(value);
     }
-    Ok(values)
+    values.sort_by_key(|(position, _)| *position);
+    Ok(values.into_iter().map(|(_, value)| value).collect())
 }

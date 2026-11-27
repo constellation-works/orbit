@@ -5,6 +5,8 @@ mod auto;
 
 mod catalog;
 
+mod dashboard;
+
 mod dashboard_drain;
 
 mod detail;
@@ -49,12 +51,13 @@ mod task_labels;
 
 mod workflow;
 
-use super::exec::{self, App, Operation};
+use super::exec::{self, App, DashboardRow, Operation};
 use crate::{Core, OrbitError};
 use std::marker::PhantomData;
 
 pub use catalog::{JobCatalog, JobRunsPage};
 pub(crate) use drain::prepare_input;
+pub(crate) use failure::failure_root_line;
 pub use history::{FailureRow, RunHistory};
 pub use job::{JobEntry, PilotRequest, SubmittedJob, WorkflowDispatchResult, wait_timeout};
 pub use leaves::{DrainLeafSummary, WaitingBacklog, WaitingTask, waiting_backlog};
@@ -69,6 +72,7 @@ pub use metrics::{
     TaskTokenTotals, TokenInputSummary,
 };
 pub use read::RunRead;
+pub use script::DashboardScriptGrant;
 pub use show::{RunDetail, ShownRun, WaitingTasks};
 
 /// A run operation whose result has type `T`.
@@ -85,6 +89,7 @@ impl<'a, T> Command<'a, T> {
                 flow(core).map(|value| Outcome {
                     value,
                     exit_code: 0,
+                    row: RowDue::Declared,
                 })
             }),
         }
@@ -98,6 +103,17 @@ pub struct Outcome<T> {
     /// The value the surface renders.
     pub value: T,
     exit_code: i32,
+    row: RowDue,
+}
+
+/// What the dashboard row a command declared records of an admitted outcome.
+enum RowDue {
+    /// A success.
+    Declared,
+    /// Nothing: the command wrote nothing.
+    Nothing,
+    /// A failure with this text.
+    Failure(&'static str),
 }
 
 /// A run flow's error, preserved for surface-specific error rendering.
@@ -120,6 +136,22 @@ impl<'a, T: 'a> App for RunApp<'a, T> {
 
     fn exit_code(outcome: &Self::Outcome) -> i32 {
         outcome.exit_code
+    }
+
+    fn dashboard_row(
+        result: &Result<Self::Outcome, Error>,
+        _target: &str,
+        arguments: serde_json::Value,
+    ) -> Option<DashboardRow> {
+        match result.as_ref().map(|outcome| &outcome.row) {
+            Ok(RowDue::Nothing) => None,
+            Ok(RowDue::Failure(failure)) => Some(DashboardRow {
+                failure: Some((*failure).to_string()),
+                target: None,
+                arguments,
+            }),
+            Ok(RowDue::Declared) | Err(_) => Some(DashboardRow::of(result, arguments)),
+        }
     }
 }
 

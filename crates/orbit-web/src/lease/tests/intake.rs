@@ -5,9 +5,9 @@ use chrono::Utc;
 use orbit_auth::scope::{
     HardLeasePermission, LeasePriorityCeiling, LeaseTokenScope, LeaseTokenVerb, PrincipalClass,
 };
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::stored::locks::lease;
+use orbit_core::test_support::{FixtureRuntime, fixture_core};
 use orbit_types::task::TaskStatus;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 use serde_json::{Value, json};
@@ -21,7 +21,7 @@ use crate::lease_intake::{
 use crate::state::{DashboardState, RegistrySource, SINGLE_WORKSPACE_ID};
 
 struct FrameLimitFixture {
-    runtime: Arc<OrbitRuntime>,
+    runtime: Arc<FixtureRuntime>,
     socket_path: std::path::PathBuf,
     _socket: LeaseIntakeSocket,
     _tokio: tokio::runtime::Runtime,
@@ -60,7 +60,7 @@ impl FrameLimitFixture {
         let global_root = tmp.path().join("global");
         let repo = tmp.path().join("ws_frame_limit");
         let runtime = Arc::new(
-            OrbitRuntime::from_roots(&global_root, &repo.join(".orbit")).expect("runtime"),
+            FixtureRuntime::from_roots(&global_root, &repo.join(".orbit")).expect("runtime"),
         );
         let socket_path = tmp.path().join(socket_name);
         let listener = std::os::unix::net::UnixListener::bind(&socket_path).expect("bind");
@@ -76,7 +76,10 @@ impl FrameLimitFixture {
         let accept = {
             let _entered = tokio.enter();
             socket
-                .serve(DashboardState::single(Arc::clone(&runtime)), limits)
+                .serve(
+                    DashboardState::single(Arc::new(fixture_core(&runtime))),
+                    limits,
+                )
                 .expect("serve")
         };
         tokio.spawn(accept);
@@ -267,14 +270,14 @@ fn oversized_read_responses_are_bounded_errors_and_other_connections_still_work(
 }
 
 /// Every notice in the workspace, oldest first.
-fn all_notices(runtime: &OrbitRuntime) -> Vec<Value> {
+fn all_notices(runtime: &FixtureRuntime) -> Vec<Value> {
     let page = lease::notices(runtime, json!({"after": 0, "limit": 500})).expect("notices");
     let notices = page["notices"].as_array().expect("notices").clone();
     assert!(notices.len() < 500, "the fixture must read every notice");
     notices
 }
 
-fn active_lease_ids(runtime: &OrbitRuntime) -> Vec<String> {
+fn active_lease_ids(runtime: &FixtureRuntime) -> Vec<String> {
     lease::list(runtime).expect("list")["leases"]
         .as_array()
         .expect("leases")
@@ -1085,7 +1088,7 @@ fn token_active_leases_are_bounded_per_principal_across_restart_and_tokens() {
         assert_eq!(granted["granted"], true, "{granted}");
         first.get_or_insert_with(|| granted["lease"]["lease_id"].clone());
     }
-    let refused_unchanged = |runtime: &OrbitRuntime, refused: Value| {
+    let refused_unchanged = |runtime: &FixtureRuntime, refused: Value| {
         assert_eq!(refused["granted"], false, "{refused}");
         assert_eq!(refused["reason"], "active_lease_limit", "{refused}");
         assert_eq!(refused["limit"], LIMIT, "{refused}");
@@ -1208,7 +1211,8 @@ fn token_renewal_obeys_current_scope_and_workspace_policy() {
             ..lease::LeasePolicy::FIXED
         },
     );
-    let restricted = Arc::new(OrbitRuntime::from_roots(&root.join("global"), &workspace).unwrap());
+    let restricted =
+        Arc::new(FixtureRuntime::from_roots(&root.join("global"), &workspace).unwrap());
     let path = root.join("restricted.sock");
     let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
     // SAFETY: geteuid has no preconditions.
@@ -1218,7 +1222,7 @@ fn token_renewal_obeys_current_scope_and_workspace_policy() {
         let _entered = fixture._tokio.enter();
         socket
             .serve(
-                DashboardState::single(Arc::clone(&restricted)),
+                DashboardState::single(Arc::new(fixture_core(&restricted))),
                 IntakeLimits::default(),
             )
             .unwrap()
@@ -1295,8 +1299,8 @@ fn token_renews_and_releases_only_its_own_principals_leases() {
     std::fs::write(repo_root.join("src/x.rs"), "pub fn x() {}\n").unwrap();
     super::lease::enable_leases(&workspace_root);
     let runtime =
-        Arc::new(OrbitRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
-    let state = DashboardState::single(runtime);
+        Arc::new(FixtureRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
+    let state = DashboardState::single(Arc::new(fixture_core(&runtime)));
 
     let socket_path = tmp.path().join("intake.sock");
     let listener = std::os::unix::net::UnixListener::bind(&socket_path).expect("bind");
@@ -1673,7 +1677,7 @@ fn a_listener_of_another_protocol_version_is_refused_naming_both_versions() {
     }
 }
 
-fn lease_record(runtime: &OrbitRuntime, lease_id: &str) -> Value {
+fn lease_record(runtime: &FixtureRuntime, lease_id: &str) -> Value {
     lease::show(runtime, json!({"lease_id": lease_id})).expect("show lease")["lease"].clone()
 }
 

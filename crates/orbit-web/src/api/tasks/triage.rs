@@ -1,10 +1,12 @@
 //! `POST /tasks/:id/triage`: the details panel's "Triage" action.
 
 use crate::api::helpers;
+use crate::state::run_read;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_JOB_RUN;
+use orbit_core::app::run::Command as RunCommand;
 use orbit_core::application::job::EscalationTriageSubmitError;
 use serde_json::json;
 
@@ -39,11 +41,15 @@ pub(in crate::api) async fn triage_task_action(
     };
     let task_id = id.clone();
     let submitted = helpers::blocking_join("task triage submission", move || {
-        runtime.submit_explicit_escalation_triage(
-            &id,
-            Some("dashboard"),
-            orbit_types::workflow::JobRunTrigger::dashboard(),
+        run_read(
+            &runtime,
+            RunCommand::submit_escalation_triage(
+                &id,
+                Some("dashboard"),
+                orbit_types::workflow::JobRunTrigger::dashboard(),
+            ),
         )
+        .unwrap_or_else(|error| Err(EscalationTriageSubmitError::Runtime(error)))
     })
     .await;
     match submitted {

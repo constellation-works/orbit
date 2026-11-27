@@ -6,11 +6,13 @@
 //! every bucket and total, and `undated` / `previous_undated` count it instead
 //! when its last write leaves that window possible.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::collections::HashMap;
 
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -84,10 +86,13 @@ pub(in crate::api) async fn diagnostics_completions(
 }
 
 fn completion_trend(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     range: &DiagnosticsRange,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let dates = runtime.task_terminal_dates(TrendWindow::read_since_with_day_lead(range))?;
+    let dates = run_read(
+        runtime,
+        RunCommand::task_terminal_dates(TrendWindow::read_since_with_day_lead(range)),
+    )?;
     let window = TrendWindow::with_day_lead(range, dates.dated.first().map(|row| row.terminal_at));
     let mut buckets = vec![Counts::default(); window.bucket_count()];
     let mut lead = vec![Counts::default(); window.lead_count()];

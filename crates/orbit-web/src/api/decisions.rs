@@ -8,12 +8,13 @@
 //! reading `answered`. A stale answer is refused by core and changes
 //! nothing.
 
+use crate::state::run_read;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{DASHBOARD_RESIDENT_WRITE, DASHBOARD_SCRIPT_GRANT};
 use orbit_core::OrbitError;
+use orbit_core::app::run::Command as RunCommand;
 use orbit_core::app::task::{DashboardAction, Outcome};
-use orbit_core::application::task::DecisionListProfile;
 use orbit_types::task::DecisionGate;
 use serde::Deserialize;
 use serde_json::json;
@@ -60,12 +61,9 @@ pub(super) async fn list_decisions(
     let task_id = query.task_id;
     let include_closed = query.include_closed;
     match blocking("decision list", move || {
-        runtime.list_decision_requests_projected(
-            gate.as_deref(),
-            task_id.as_deref(),
-            None,
-            include_closed,
-            DecisionListProfile::Dashboard,
+        run_read(
+            &runtime,
+            RunCommand::decision_requests(gate.as_deref(), task_id.as_deref(), include_closed),
         )
     })
     .await
@@ -94,8 +92,7 @@ pub(super) async fn answer_decision(
     let reader = std::sync::Arc::clone(&runtime);
     let lookup = id.clone();
     let (gate, existing_task_id) = match blocking("decision lookup", move || {
-        Ok(reader
-            .get_decision_request(&lookup)?
+        Ok(run_read(&reader, RunCommand::decision_request(&lookup))?
             .map(|request| (Some(request.gate), Some(request.task_id)))
             .unwrap_or((None, None)))
     })

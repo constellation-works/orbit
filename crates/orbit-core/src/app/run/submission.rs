@@ -52,6 +52,7 @@ impl<'a> Command<'a, JobRunCancelResult> {
                 Ok(super::Outcome {
                     value: result,
                     exit_code,
+                    row: super::RowDue::Declared,
                 })
             }),
         }

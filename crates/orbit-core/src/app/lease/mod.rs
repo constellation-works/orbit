@@ -7,8 +7,13 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::DASHBOARD_LEASE_WRITE;
 use serde_json::Value;
 
+use orbit_types::telemetry::AuditEventStatus;
+
 use super::exec::{self, App, Operation, Session};
 use crate::Core;
+pub use crate::runtime::stored::locks::lease::{
+    LeasePrincipalClass, LeasePriority, LeaseTokenGrant,
+};
 pub use flow::LeaseNoticeFeed;
 
 /// What the lease app can be asked to do: one variant per lease verb, plus
@@ -32,6 +37,40 @@ pub enum Command {
     Notices(Value),
     /// Open a live notice feed and read its first page before sending SSE headers.
     NoticeFeed(Value),
+    /// One operation of the intake socket, which a lease token authorized.
+    Intake(Intake),
+}
+
+/// One operation of the lease intake socket. The socket authenticated the
+/// token that authorizes it, so the session is asked for nothing.
+pub enum Intake {
+    /// Request a path lease within the token's grant.
+    Request(Value, LeaseTokenGrant),
+    /// Renew a lease the token covers.
+    Renew(Value, LeaseTokenGrant),
+    /// Expand a lease within the token's grant.
+    Expand(Value, LeaseTokenGrant),
+    /// Release a path lease.
+    Release(Value),
+    /// Show one path lease.
+    Show(Value),
+    /// List active path leases.
+    List,
+    /// Check paths against active leases.
+    Check(Value),
+    /// Read one page of lease notices.
+    Notices(Value),
+    /// Record one intake operation's audit event.
+    Audit {
+        /// The intake operation's name.
+        operation: String,
+        /// The lease the operation named or granted.
+        lease_id: Option<String>,
+        /// How the operation ended.
+        status: AuditEventStatus,
+        /// The event's payload.
+        payload: Value,
+    },
 }
 
 /// What a lease command produced.
@@ -102,6 +141,7 @@ impl App for LeaseApp {
             Command::List => "list",
             Command::Check(_) => "check",
             Command::Notices(_) | Command::NoticeFeed(_) => "notices",
+            Command::Intake(_) => return Operation::dashboard_read("lease", "intake"),
         };
         let operation = Operation::command("lease", subcommand);
         match command {
@@ -112,7 +152,8 @@ impl App for LeaseApp {
             | Command::List
             | Command::Check(_)
             | Command::Notices(_)
-            | Command::NoticeFeed(_) => operation,
+            | Command::NoticeFeed(_)
+            | Command::Intake(_) => operation,
         }
     }
 
@@ -126,6 +167,7 @@ impl App for LeaseApp {
             Command::List => flow::list(core).map(Outcome::Value),
             Command::Check(input) => flow::check(core, input).map(Outcome::Value),
             Command::Notices(input) => flow::notices(core, input).map(Outcome::Value),
+            Command::Intake(intake) => flow::intake(core, intake).map(Outcome::Value),
             Command::NoticeFeed(input) => {
                 flow::notice_feed(core, input).map(|(first, feed)| Outcome::NoticeFeed {
                     first,

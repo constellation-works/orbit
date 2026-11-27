@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use orbit_common::Env;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 use orbit_core::app::doctor::{
-    DoctorProbe, WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_report_probes,
+    self, DoctorProbe, WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_report_probes,
     doctor_row_json,
 };
 use serde_json::{Value, json};
@@ -59,7 +59,7 @@ struct Slot {
 }
 
 struct Cached {
-    runtime: Weak<OrbitRuntime>,
+    runtime: Weak<Core>,
     started: Instant,
     finished: Instant,
     report: Arc<Report>,
@@ -83,7 +83,7 @@ impl DoctorReports {
     /// with nothing cached.
     pub(crate) async fn read(
         &self,
-        runtime: &Arc<OrbitRuntime>,
+        runtime: &Arc<Core>,
         env: &Env,
         read: DoctorRead,
     ) -> Option<(Arc<Report>, Instant)> {
@@ -117,7 +117,7 @@ impl DoctorReports {
         Some((report, finished))
     }
 
-    fn slot(&self, runtime: &Arc<OrbitRuntime>) -> Arc<Slot> {
+    fn slot(&self, runtime: &Arc<Core>) -> Arc<Slot> {
         let mut slots = self.slots.lock().unwrap_or_else(PoisonError::into_inner);
         // A report for a runtime that has since been rebuilt or evicted can
         // never be served again; drop it unless a caller still holds the slot.
@@ -138,7 +138,7 @@ impl DoctorReports {
 impl Slot {
     fn hit(
         &self,
-        runtime: &Arc<OrbitRuntime>,
+        runtime: &Arc<Core>,
         usable: impl Fn(&Cached) -> bool,
     ) -> Option<(Arc<Report>, Instant)> {
         let guard = self.report.lock().unwrap_or_else(PoisonError::into_inner);
@@ -174,7 +174,7 @@ impl Report {
 
 /// Run every report probe in order, each under [`CHECK_TIMEOUT`] and all
 /// under [`RUN_BUDGET`]. Always `deep = false`.
-async fn run_bounded(runtime: Arc<OrbitRuntime>, env: Env) -> Report {
+async fn run_bounded(runtime: Arc<Core>, env: Env) -> Report {
     let ran_at = Utc::now();
     let started = Instant::now();
     let host = orbit_cmd::doctor_host();
@@ -191,10 +191,29 @@ async fn run_bounded(runtime: Arc<OrbitRuntime>, env: Env) -> Report {
         let probe_host = Arc::clone(&host);
         let probe_copy = *probe;
         let run = tokio::task::spawn_blocking(move || {
-            probe_copy.run(&probe_runtime, &probe_env, false, probe_host.as_ref())
+            doctor::exec(
+                &probe_runtime,
+                doctor::Command::Probe {
+                    probe: probe_copy,
+                    env: probe_env,
+                    host: probe_host,
+                },
+            )
         });
         match tokio::time::timeout(bound, run).await {
-            Ok(Ok(probe_rows)) => rows.extend(probe_rows),
+            Ok(Ok(Ok(doctor::Outcome::Probed(probe_rows)))) => rows.extend(probe_rows),
+            Ok(Ok(Ok(_))) => rows.push(unfinished_row(
+                probe,
+                WorkspaceDoctorStatus::Error,
+                "the check answered another outcome".to_string(),
+                bound,
+            )),
+            Ok(Ok(Err(error))) => rows.push(unfinished_row(
+                probe,
+                WorkspaceDoctorStatus::Error,
+                format!("the check could not run: {error}"),
+                bound,
+            )),
             Ok(Err(join_error)) => rows.push(unfinished_row(
                 probe,
                 WorkspaceDoctorStatus::Error,
