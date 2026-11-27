@@ -81,14 +81,22 @@ fn git(repo: &std::path::Path, args: &[&str]) {
 /// An owner landing review whose `cargo` is a stand-in for `--lib`, and whose
 /// candidate commits the probe that stand-in runs.
 fn fixture() -> (Fixture, tempfile::TempDir) {
+    fixture_requiring(&[])
+}
+
+/// [`fixture`] whose admitted host contract captures `required`.
+fn fixture_requiring(required: &[&str]) -> (Fixture, tempfile::TempDir) {
     let bin = tempfile::TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let cargo = bin.path().join("cargo");
     std::fs::write(&cargo, CARGO_STUB).unwrap();
     std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let mut fixture = Fixture::before_landing_with_config(&format!(
-        "[workflow.validation_env]\npath = [\"{}\"]\n",
-        bin.path().display()
-    ));
+    let mut fixture = Fixture::before_landing_with_required_commands(
+        required,
+        &format!(
+            "[workflow.validation_env]\npath = [\"{}\"]\n",
+            bin.path().display()
+        ),
+    );
     std::fs::create_dir_all(fixture.repo.join("tests/host")).unwrap();
     std::fs::write(fixture.repo.join("tests/host/lib.sh"), LIB_PROBE).unwrap();
     git(&fixture.repo, &["add", "tests"]);
@@ -870,7 +878,12 @@ fn opaque_affected_test_record_names_all_uncovered_deferrals() {
                 .to_string();
             let cert = certificate(&fixture);
             let escalation = cert.escalation.as_deref().unwrap();
-            for text in ["`V8`", make, "focused evidence alone", "fresh review"] {
+            for text in [
+                "`V8`",
+                make,
+                "focused evidence alone",
+                "supported Cargo records",
+            ] {
                 assert!(
                     escalation.contains(text) && stop.contains(text),
                     "{text}: {stop}"
@@ -890,6 +903,53 @@ fn opaque_affected_test_record_names_all_uncovered_deferrals() {
             assert!(broad_record(&cert, broad).deferred.is_empty());
         }
     }
+}
+
+/// A captured host-required opaque command must itself be established, so
+/// its escalation gives the native rerun and never the fresh Cargo-record route.
+fn host_required_opaque_deferral_offers_only_the_native_rerun() {
+    let make = "CI_TEST_BASE=be2bcfec0caa9e97cec61461bfe4a076bf5721d9 make ci-test-affected";
+    let notice = "DEFERRED: bubblewrap unavailable: sandbox_test_1: namespace unavailable";
+    let (fixture, _bin) = fixture_requiring(&[make]);
+    let requirement = lib_requirement("sandbox_test_1");
+    fixture.put_report(
+        &json!({"schema_version":1, "attempt_id":fixture.input["admission"]["attempt_id"],
+        "verdict":"incomplete", "summary":"Sandbox evidence needed", "findings":[],
+        "validation":[
+            {"id":"V1", "command":"fixture check", "outcome":"passed", "role":"required"},
+            {"id":"V8", "command":make, "outcome":"passed", "role":"required",
+             "deferred":[notice]},
+            {"id":"V9", "command":requirement, "outcome":"not_run", "role":"required"},
+        ],
+        "external_evidence":[{"kind":"host_sandbox_test", "name":"sandbox_test_1",
+            "command":requirement, "artifact":"evidence/sandbox-0.json", "os":"linux"}],
+        "escalation":"Attach the focused result."}),
+    );
+    let stop = fixture
+        .settle()
+        .expect_err("a host-required opaque command blocks")
+        .to_string();
+    let cert = certificate(&fixture);
+    let escalation = cert.escalation.as_deref().unwrap();
+    for text in [
+        "`V8`",
+        make,
+        "admitted host contract",
+        "natively",
+        "fresh review",
+    ] {
+        assert!(
+            escalation.contains(text) && stop.contains(text),
+            "{text}: {stop}"
+        );
+    }
+    for text in ["supported Cargo records", "matching host evidence"] {
+        assert!(
+            !escalation.contains(text) && !stop.contains(text),
+            "{text}: {stop}"
+        );
+    }
+    assert!(!cert.verdict.passed());
 }
 
 fn integration_deferral_with_lib_requirement_skips_library_diagnostic() {
@@ -1035,5 +1095,6 @@ crate::scenario_table!(
     budgeted_library_v9_v12_pair_holds_and_settles_with_authenticated_linux_evidence,
     unreconciled_v9_v12_library_pairs_refuse_and_name_v9_with_runnable_route,
     opaque_affected_test_record_names_all_uncovered_deferrals,
+    host_required_opaque_deferral_offers_only_the_native_rerun,
     integration_deferral_with_lib_requirement_skips_library_diagnostic,
 );

@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_automation::review::{
-    ValidationContext, combined_task_meaning_digest, task_meaning_digest, validation_evidence,
+    ValidationContext, combined_task_meaning_digest, same_host_command, task_meaning_digest,
+    validation_evidence,
 };
 use orbit_common::OrbitError;
 use orbit_types::record::OrbitEvent;
@@ -417,9 +418,13 @@ pub(super) fn unreconciled_library_deferrals(
 
 /// Explain deferrals in opaque required commands, whose test scope cannot be
 /// established from the command. Focused receipts cannot establish that scope.
+/// A command the admitted host contract (`host_required`) names must itself
+/// be established, so its advice offers only the native rerun; fresh Cargo
+/// records are offered for a reviewer-selected command alone.
 pub(super) fn unreconciled_opaque_deferrals(
     records: &[ReviewValidation],
     owners: &CargoOwners,
+    host_required: Option<&[String]>,
 ) -> Vec<String> {
     records
         .iter()
@@ -445,12 +450,24 @@ pub(super) fn unreconciled_opaque_deferrals(
                 || format!("`{}`", record.command),
                 |id| format!("`{id}` (`{}`)", record.command),
             );
+            let host_contract = host_required.is_some_and(|commands| {
+                commands
+                    .iter()
+                    .any(|command| same_host_command(record, command))
+            });
+            let route = if host_contract {
+                "the admitted host contract requires that command itself, so fresh Cargo \
+                 records cannot stand in for it; run it natively outside the sandbox \
+                 without deferral and admit a fresh review with that result"
+            } else {
+                "run it natively outside the sandbox without deferral and admit a fresh \
+                 review with that result, or admit a fresh review with supported Cargo \
+                 records and matching host evidence"
+            };
             Some(format!(
                 "unreconciled_opaque_deferral: required record {label} has uncovered deferrals: \
                  {}; its command has no supported Cargo scope, so focused evidence alone \
-                 cannot establish its coverage. Run `{}` natively outside the sandbox without \
-                 deferral and admit a fresh review with that result, or admit a fresh review \
-                 with supported Cargo records and matching host evidence",
+                 cannot establish its coverage. For `{}`, {route}",
                 notices.join(", "),
                 record.command
             ))
