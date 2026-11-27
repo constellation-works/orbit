@@ -29,7 +29,7 @@ The `task-pilot` routine ships enabled and pilots eligible new tasks on the
 [host scheduler clock](/how-to/recurring-work/). To pilot now:
 
 - **Agent:** ask your agent to pilot the proposed tasks.
-- **Dashboard:** in **Automation → Jobs**, click **Run ▸** on
+- **Dashboard:** in **Jobs › Catalogue**, click **Run ▸** on
   `task_pilot_pipeline`.
 - **CLI:**
 
@@ -331,7 +331,7 @@ admitted under. Other workspaces and jobs are untouched, and stopping twice
 does nothing. `--stop` cannot be combined with the flags that start a drain.
 
 **Cancel work in flight.** Cancel each child you want to abandon: open it in
-**Jobs** and click **cancel**, or:
+**Jobs** and click **Cancel**, or:
 
 ```bash
 orbit run trace "$AUTO_RUN_ID"                  # find the child run IDs

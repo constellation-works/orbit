@@ -42,8 +42,9 @@ orbit task list
 orbit doctor
 ```
 
-`orbit task list` creates the databases that `orbit doctor` only observes;
-without it, `orbit doctor` prints a single `runtime` error row on a new machine.
+`orbit init` creates the machine database, `orbit workspace init` registers the
+repository, and `orbit task list` initializes the workspace's empty search index
+before `orbit doctor` checks the setup.
 
 [Set up by hand](/getting-started/install/#set-up-by-hand) explains each step.
 
