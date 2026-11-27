@@ -257,8 +257,6 @@ impl Releases {
     }
 }
 
-/// Download URL of a release asset. The tag comes from a parsed version, so
-/// the listing's own URLs are never followed.
 /// Pick the newest stable release above `current` that carries every desktop
 /// asset this platform needs. `releases` is GitHub's release-list JSON.
 pub(crate) fn newest_update(releases: &Value, current: Version, bundle: &str) -> Option<Version> {
@@ -285,6 +283,8 @@ pub(crate) fn newest_update(releases: &Value, current: Version, bundle: &str) ->
         .max()
 }
 
+/// Download URL of a release asset. The tag comes from a parsed version, so
+/// the listing's own URLs are never followed.
 fn asset_url(version: Version, asset: &str) -> String {
     format!("https://github.com/{REPOSITORY}/releases/download/v{version}/{asset}")
 }
