@@ -87,7 +87,9 @@ after final recovery escalated:
   - When final recovery left its own fix uncommitted in the publisher's
     checkout, inspect with `"adopt_retained_edits": true`. The binding gains a
     `retained_patch` (digest, size, base and paths) and the reply carries the
-    exact patch to review. Submit that binding unchanged; the successor
+    exact patch to review as `retained_patch` text, or as `retained_patch_base64`
+    when the patch holds non-UTF-8 bytes; decode it and check its size and
+    SHA-256 against the binding before submitting. Submit that binding unchanged; the successor
     applies those bytes over the same candidate, then commits, validates and
     reviews them on the same PR. Changed, untracked, unmerged, Git-link (submodule) or unreadable
     edits refuse before any reservation; the original checkout stays as it was.

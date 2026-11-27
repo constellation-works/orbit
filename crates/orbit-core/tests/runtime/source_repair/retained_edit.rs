@@ -61,6 +61,7 @@ fn retained_final_recovery_edits_reach_a_fresh_same_pr_repair() {
     let bound = &inspection["binding"]["retained_patch"];
     let patch = inspection["retained_patch"].as_str().unwrap();
     assert!(patch.contains(LINT_FIX) && patch.contains("final recovery edit"));
+    assert!(inspection.get("retained_patch_base64").is_none());
     assert_eq!(
         bound["sha256"],
         orbit_common::security::release::sha256_hex(patch.as_bytes())
@@ -207,6 +208,33 @@ fn adoption_refuses_a_clean_checkout() {
     f.inspect();
 }
 
+/// A Latin-1 edit makes `git diff --binary` emit a literal non-UTF-8 byte; the
+/// reply then carries the patch as base64, and decoding it reproduces the bound
+/// size and digest exactly.
+fn non_utf8_patch_is_reconstructable_from_the_inspection() {
+    use base64::Engine as _;
+
+    let (f, checkout, edited) = incident();
+    let mut body = std::fs::read(checkout.join(&edited)).unwrap();
+    body.extend_from_slice(b"caf\xe9\n");
+    std::fs::write(checkout.join(&edited), body).unwrap();
+
+    let inspection = adopting_inspection(&f).unwrap();
+    let bound = &inspection["binding"]["retained_patch"];
+    assert!(inspection.get("retained_patch").is_none(), "{inspection}");
+    let encoded = inspection["retained_patch_base64"].as_str().unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .unwrap();
+    assert!(std::str::from_utf8(&bytes).is_err());
+    assert!(bytes.windows(4).any(|w| w == b"caf\xe9"));
+    assert_eq!(bound["bytes"], bytes.len());
+    assert_eq!(
+        bound["sha256"],
+        orbit_common::security::release::sha256_hex(&bytes)
+    );
+}
+
 /// A staged Git link is omitted from a patch read without entering nested
 /// repositories, so adoption refuses rather than bind a path whose change the
 /// bytes lack, and leaves the retained checkout as it found it.
@@ -236,6 +264,7 @@ fn adoption_refuses_a_staged_git_link() {
 crate::scenario_table!(
     retained_edit_scenarios,
     retained_final_recovery_edits_reach_a_fresh_same_pr_repair,
+    non_utf8_patch_is_reconstructable_from_the_inspection,
     adoption_refuses_a_clean_checkout,
     adoption_refuses_a_staged_git_link
 );

@@ -1337,9 +1337,12 @@ Inspection stays read-only: it reads the checkout's status and its
 `git diff --binary --full-index HEAD` with optional locks off and writes
 nothing. Every check above still applies. In addition, the reply's
 `binding.retained_patch` records the patch's `sha256`, size in `bytes`, its
-`base_sha` (the checkout's `HEAD`) and the changed `paths`, and the reply's
-top-level `retained_patch` carries the exact patch text. Review it before
-submitting. Inspection refuses when:
+`base_sha` (the checkout's `HEAD`) and the changed `paths`. The reply's
+top-level `retained_patch` carries the exact patch text when the patch is valid
+UTF-8. A patch with other bytes (for example a Latin-1 edit) arrives instead as
+`retained_patch_base64`: decode it and confirm the byte count and SHA-256 equal
+`binding.retained_patch.bytes` and `.sha256` (`base64 -d | sha256sum`), then
+review the decoded bytes before submitting. Inspection refuses when:
 
 - the source is not a failed kept inline publication whose final recovery
   settled (escalated or requeued) or applied its `resume` in place;

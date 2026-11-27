@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::Utc;
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::security::release::sha256_hex;
@@ -337,7 +339,6 @@ impl OrbitRuntime {
                     self.observe_source_repair(&source_id, &request.task_id, false, adopt)?;
                 let retained = if adopt {
                     self.retained_patch_unchanged(&binding)?
-                        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
                 } else {
                     None
                 };
@@ -371,9 +372,16 @@ impl OrbitRuntime {
                     "reservation_digests":self.source_repair_reservation_digests(&request.task_id)?,
                 });
                 // The exact bytes the binding's digest names, for the operator
-                // to review before submitting.
+                // to review before submitting: text when they are valid UTF-8,
+                // else base64 so no byte is replaced.
                 if let Some(patch) = retained {
-                    inspection["retained_patch"] = json!(patch);
+                    match String::from_utf8(patch) {
+                        Ok(text) => inspection["retained_patch"] = json!(text),
+                        Err(error) => {
+                            inspection["retained_patch_base64"] =
+                                json!(BASE64_STANDARD.encode(error.into_bytes()));
+                        }
+                    }
                 }
                 Ok(inspection)
             }
