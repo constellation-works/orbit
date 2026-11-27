@@ -155,6 +155,9 @@ class ProductionPathsTests(unittest.TestCase):
         # The shared guard invokes the vendored integrity checker against these real inputs.
         shutil.copytree(ROOT / "docs/standards", self.root / "docs/standards")
         shutil.copy2(ROOT / "AGENTS.md", self.root / "AGENTS.md")
+        # The Node guard runs this module directly, so the fixture needs an
+        # empty one for `node` to load and pass.
+        self.write("plugin/hooks/mod/tests/linkify.mjs", "")
         cargo = self.write("bin/cargo", "#!/bin/sh\nexit 0\n")
         cargo.chmod(0o755)
         env = dict(clean_env(), PATH=f"{cargo.parent}:{os.environ['PATH']}",
