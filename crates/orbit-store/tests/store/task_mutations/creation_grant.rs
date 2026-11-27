@@ -13,9 +13,79 @@ use orbit_store::contract::{
     TaskDocumentUpdateParams,
 };
 
+use chrono::{DateTime, Utc};
+use orbit_types::identity::OrbitId;
+use orbit_types::task::{CrewSource, ExternalRef, TaskPriority, TaskType};
+use serde::{Deserialize, Serialize};
+
 const EXISTING: &str = "file:README.md";
 const NEW: &str = "file:src/new.rs";
 const OTHER_NEW: &str = "file:src/other.rs";
+
+// Frozen from TaskEnvelopeV2 at 98e987b9eb^; unknown fields are rejected.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct PriorTaskEnvelopeV2 {
+    pub schema_version: u32,
+    pub id: OrbitId,
+    pub title: String,
+    pub status: TaskStatus,
+    #[serde(rename = "type")]
+    pub task_type: TaskType,
+    pub priority: TaskPriority,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complexity: Option<TaskComplexity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_run_id: Option<String>,
+    #[serde(
+        default,
+        alias = "job_run_host",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub job_run_machine: Option<orbit_types::task::ExecutionLocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_source: Option<CrewSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator_model_source: Option<orbit_types::task::OrchestratorModelSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<orbit_types::task::TaskOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relations: Vec<TaskRelation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub granted_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_refs: Vec<ExternalRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planned_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub implemented_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
 
 fn scope(selectors: &[&str]) -> Vec<String> {
     selectors
@@ -127,6 +197,65 @@ fn pilot_write(
             },
         )
         .expect("atomic mutation")
+}
+
+#[test]
+fn prior_writer_rejects_sealed_envelopes_and_lost_seals_fail_closed() {
+    if !support::isolated(
+        "creation_grant::prior_writer_rejects_sealed_envelopes_and_lost_seals_fail_closed",
+    ) {
+        return;
+    }
+    let temp = TempDir::new().expect("tempdir");
+    let store = store(&temp);
+    let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
+    let path = bundle_path(&id).join(TASK_ENVELOPE_FILE_NAME);
+
+    // Persist a prior-format revision-bound grant through the frozen codec.
+    let mut initial = snapshot(&id).envelope;
+    initial.context_creation_sealed_at = None;
+    let prior: PriorTaskEnvelopeV2 =
+        serde_yaml::from_str(&serde_yaml::to_string(&initial).unwrap()).unwrap();
+    std::fs::write(&path, serde_yaml::to_string(&prior).unwrap()).unwrap();
+    let ContextCreationState::Current(grant) = state(&store, &id) else {
+        panic!("prior revision-bound grant must be current");
+    };
+    assert_eq!(grant.selectors, scope(&[NEW]));
+    store
+        .document
+        .update_task_document(
+            &id,
+            TaskDocumentUpdateParams {
+                actor: "operator".to_string(),
+                tags: Some(vec!["maintained".to_string()]),
+                ..Default::default()
+            },
+        )
+        .expect("maintained update");
+    let sealed = snapshot(&id);
+    assert_eq!(creation_state(&sealed).selectors(), &[NEW]);
+    assert_ne!(grant.updated_at, Some(sealed.envelope.updated_at));
+    let yaml = std::fs::read_to_string(&path).unwrap();
+    let error = serde_yaml::from_str::<PriorTaskEnvelopeV2>(&yaml).unwrap_err();
+    assert!(
+        error.to_string().contains("context_creation_sealed_at"),
+        "{error}"
+    );
+
+    // The old reader cannot itself drop the seal: deny_unknown_fields rejects
+    // it. Model independent seal loss, then exercise the old codec and its
+    // revision-bound resolver on that altered disposable bundle.
+    let mut unsealed = sealed.envelope;
+    unsealed.context_creation_sealed_at = None;
+    std::fs::write(&path, serde_yaml::to_string(&unsealed).unwrap()).unwrap();
+    assert_eq!(state(&store, &id), ContextCreationState::Void);
+    let mut prior: PriorTaskEnvelopeV2 =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    prior.updated_at += chrono::Duration::seconds(1);
+    std::fs::write(&path, serde_yaml::to_string(&prior).unwrap()).unwrap();
+    assert_eq!(state(&store, &id), ContextCreationState::Void);
+    rescope(&store, &id, &[EXISTING, NEW], &[]).expect("maintained write after seal loss");
+    assert!(state(&store, &id).selectors().is_empty());
 }
 
 /// Fault injection: the write fails after the grant row was appended, on a

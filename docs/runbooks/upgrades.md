@@ -1527,6 +1527,26 @@ task, admission run, and bound leaf run). Task writes and footprint checks use
 them. The migration is index-only, so older binaries keep reading and writing
 and it waits for nothing.
 
+## Context creation grants across upgrades and rollback
+
+A task may authorize creation of specific missing context files. A revision-bound
+bundle written before the envelope seal was introduced remains readable by a newer
+writer; a maintained update carries its grant forward and seals the new revision.
+
+Stop older writers and upgrade all Orbit processes together. The older task envelope
+codec rejects the new `context_creation_sealed_at` field as unknown, so an older
+binary cannot read or rewrite a sealed bundle through that codec. Rolling back the
+binary alone can therefore make affected tasks unreadable. Restore a consistent backup
+from before the upgrade if rollback is required; do not remove the seal to force an
+older binary to open a task. If a seal is lost independently after a maintained write,
+the carried history grant no longer matches the envelope revision and resolves as
+void. A newer writer will not reuse it. After restoring the newer binary, inspect the
+task's context and explicitly reauthorize any missing selectors that still need to be
+created using `orbit task update` with `--allow-missing-context` and `--context`
+for the complete intended selector list. The list replaces the previous scope, so
+include selectors that should remain. Do not edit the bundle or history to restore
+authorization; review the scope before granting it again.
+
 ## Verify the upgrade
 
 `orbit update` performs steps 1–3 below for the workspace it runs in. Do the same by hand when
