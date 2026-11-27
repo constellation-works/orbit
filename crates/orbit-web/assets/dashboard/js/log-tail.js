@@ -373,7 +373,9 @@ function placeTaskFilterBar() {
 
   const compact = required > filter.getBoundingClientRect().width;
   filter.toggleAttribute("data-compact", compact);
-  for (const chip of filter.querySelectorAll(".chip[data-status]")) {
+  // Only the primary row hides its labels (tasks.css), so only its chips need
+  // the title that names them; More's chips keep visible labels.
+  for (const chip of primary.querySelectorAll(".chip[data-status]")) {
     if (compact) chip.title = chip.querySelector(".chip-label").textContent;
     else chip.removeAttribute("title");
   }

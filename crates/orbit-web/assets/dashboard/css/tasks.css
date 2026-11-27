@@ -87,18 +87,20 @@ main.tasks-layout > .controls {
   max-width: 100%;
 }
 .task-filter-primary > .chip { flex: none; max-width: none; }
-#task-filter[data-compact] .chip[data-status] .chip-label { display: none; }
-#task-filter[data-compact] .chip[data-status] { flex: 0 1 auto; }
-#task-filter[data-compact] .chip[data-status] .chip-count {
+/* Only the primary row compacts. Statuses opened from More sit on their own
+   row below it, so they keep their labels and counts. */
+#task-filter[data-compact] .task-filter-primary .chip[data-status] .chip-label { display: none; }
+#task-filter[data-compact] .task-filter-primary .chip[data-status] { flex: 0 1 auto; }
+#task-filter[data-compact] .task-filter-primary .chip[data-status] .chip-count {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 /* An unselected or still-loading status has no count from the server. */
-#task-filter[data-compact] .chip[data-status] .chip-count:empty::before { content: "–"; }
+#task-filter[data-compact] .task-filter-primary .chip[data-status] .chip-count:empty::before { content: "–"; }
 /* Native titles handle hover. Keyboard focus and touch press also reveal
    the full name, within the width of the filter bar. */
-#task-filter[data-compact] .chip[data-status]:is(:focus-visible, :active)::after {
+#task-filter[data-compact] .task-filter-primary .chip[data-status]:is(:focus-visible, :active)::after {
   content: attr(title);
   position: absolute;
   inset: 100% auto auto 0;
