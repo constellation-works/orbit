@@ -165,9 +165,12 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
     assert!(runtime.get_task(&id).unwrap().job_run_id.is_none());
     let before = fixture.json(&["task", "show", &id, "--json"]);
     let input = json!({"id": id, "status": "someday", "comment": "must not persist"}).to_string();
-    for args in [
-        vec!["task", "update", &id, "--status", "someday"],
-        vec!["tool", "run", "orbit.task.update", "--input", &input],
+    for (args, expect_force) in [
+        (vec!["task", "update", &id, "--status", "someday"], true),
+        (
+            vec!["tool", "run", "orbit.task.update", "--input", &input],
+            false,
+        ),
     ] {
         let refused = fixture
             .command(&args)
@@ -179,6 +182,18 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
             !refused.status.success() && stderr.contains(&run.run_id),
             "a live local run must refuse operator CLI/tool status changes and name its run: {stderr}"
         );
+        if expect_force {
+            assert!(
+                stderr.contains("--force"),
+                "human CLI `orbit task update` refusal must still name --force: {stderr}"
+            );
+        } else {
+            assert!(
+                !stderr.contains("--force")
+                    && stderr.contains("wait for the run to finish or ask the operator to stop it"),
+                "tool refusal must not name --force and must name caller recovery: {stderr}"
+            );
+        }
         assert_eq!(fixture.json(&["task", "show", &id, "--json"]), before);
     }
     // Same-status and metadata writes remain usable during execution.

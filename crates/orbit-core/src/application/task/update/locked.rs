@@ -20,7 +20,7 @@ use super::super::helpers::{
 use super::super::lifecycle::{
     FORCED_STATUS_EVENT, HUMAN_CREW_BYPASS_NOTE, ensure_completion_run_stopped,
     ensure_post_deploy_criteria_met, ensure_status_change_allowed,
-    ensure_status_change_not_run_owned,
+    ensure_status_change_not_run_owned, run_ownership_recovery_for_caller,
 };
 use super::super::params::TaskUpdateParams;
 use super::artifacts::admit_task_artifact;
@@ -174,13 +174,6 @@ impl OrbitRuntime {
                 task.status
             )));
         }
-        let requested_status = params.status.filter(|status| *status != task.status);
-        if requested_status.is_some()
-            && status_authority == StatusAuthority::Lifecycle
-            && !system_writer
-        {
-            ensure_status_change_not_run_owned(self, id)?;
-        }
         // The label matches the one `operator_write` derives below. An agent
         // identity does not consult it, and resolving it would repeat work
         // the canonical pair already settled.
@@ -197,6 +190,19 @@ impl OrbitRuntime {
             canonical_model.as_deref(),
             &classification_label,
         );
+        let requested_status = params.status.filter(|status| *status != task.status);
+        if requested_status.is_some()
+            && status_authority == StatusAuthority::Lifecycle
+            && !system_writer
+        {
+            let recovery = run_ownership_recovery_for_caller(
+                self,
+                writer == TaskFieldWriter::Operator,
+                canonical_agent.as_deref(),
+                canonical_model.as_deref(),
+            );
+            ensure_status_change_not_run_owned(self, id, recovery)?;
+        }
         // An operator moving a human crew's task is not held to the lifecycle
         // table or its plan, review, evidence and verdict gates: the operator
         // does that work outside any pipeline. Only an attributed operator

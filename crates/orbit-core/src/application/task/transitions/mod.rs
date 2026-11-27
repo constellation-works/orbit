@@ -10,8 +10,8 @@ use super::helpers::{
     crew_assigned_history, effective_actor_label, implementation_label,
 };
 use super::lifecycle::{
-    ensure_status_change_not_run_owned, ensure_task_has_execution_plan,
-    in_progress_transition_requires_plan,
+    RunOwnershipRecovery, ensure_status_change_not_run_owned, ensure_task_has_execution_plan,
+    in_progress_transition_requires_plan, run_ownership_recovery_for_identity,
 };
 use super::params::TaskUpdateParams;
 use super::update::admit_task_artifact;

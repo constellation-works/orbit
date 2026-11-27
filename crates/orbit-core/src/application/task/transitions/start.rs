@@ -125,7 +125,11 @@ impl OrbitRuntime {
         self.with_task_write_locked(id, || {
             let task = self.get_task(id)?;
             if actor_label_override.is_none() && task.status != TaskStatus::InProgress {
-                ensure_status_change_not_run_owned(self, id)?;
+                ensure_status_change_not_run_owned(
+                    self,
+                    id,
+                    RunOwnershipRecovery::WaitOrAskOperator,
+                )?;
             }
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;

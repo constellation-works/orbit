@@ -53,6 +53,67 @@ const CLAIM_RECOVERY_STATUSES: [TaskStatus; 7] = [
     TaskStatus::Someday,
 ];
 
+/// Recovery guidance shown when a status change is refused because a local run
+/// still owns the task.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RunOwnershipRecovery {
+    /// Human CLI / dashboard surfaces that accept `--force` / `force: true`.
+    ForceAvailable,
+    /// Agent, MCP, and tool surfaces (`orbit.task.update` has no `force`).
+    WaitOrAskOperator,
+}
+
+/// Choose run-ownership refusal recovery for the current caller and surface.
+///
+/// Only human CLI and dashboard (`TaskWriteSurface::Web`) callers without an
+/// agent identity or envelope can pass `--force`; MCP (`TaskWriteSurface::Mcp`),
+/// attributed agent callers, and agent envelopes cannot.
+pub(crate) fn run_ownership_recovery_for_caller(
+    runtime: &OrbitRuntime,
+    operator_authority: bool,
+    canonical_agent: Option<&str>,
+    canonical_model: Option<&str>,
+) -> RunOwnershipRecovery {
+    let surface = super::current_task_write_provenance().and_then(|provenance| provenance.surface);
+    if surface == Some(orbit_types::task::TaskWriteSurface::Mcp) {
+        return RunOwnershipRecovery::WaitOrAskOperator;
+    }
+    let agent_declared = canonical_agent.is_some()
+        || canonical_model.is_some()
+        || runtime.actor().kind == crate::runtime::context::ActorKind::Agent
+        || orbit_common::governance::authorization::agent_context_declared(
+            &orbit_common::Env::capture(),
+        );
+    if agent_declared {
+        return RunOwnershipRecovery::WaitOrAskOperator;
+    }
+    if operator_authority || surface == Some(orbit_types::task::TaskWriteSurface::Web) {
+        RunOwnershipRecovery::ForceAvailable
+    } else {
+        RunOwnershipRecovery::WaitOrAskOperator
+    }
+}
+
+/// Choose run-ownership refusal recovery for a caller whose identity was
+/// resolved by a guarded lifecycle write.
+pub(crate) fn run_ownership_recovery_for_identity(
+    runtime: &OrbitRuntime,
+    canonical_agent: Option<&str>,
+    canonical_model: Option<&str>,
+    effective_label: &str,
+) -> RunOwnershipRecovery {
+    let operator_authority = canonical_agent.is_none()
+        && canonical_model.is_none()
+        && runtime.actor().kind == crate::runtime::context::ActorKind::Human
+        && !super::helpers::is_automation_actor(effective_label);
+    run_ownership_recovery_for_caller(
+        runtime,
+        operator_authority,
+        canonical_agent,
+        canonical_model,
+    )
+}
+
 /// Refuse an ordinary surface's status change while a local run owns the
 /// task. Call under the task write lock, before recording any field edits.
 /// The run's submitted selection is authoritative even when admission has
@@ -60,13 +121,20 @@ const CLAIM_RECOVERY_STATUSES: [TaskStatus; 7] = [
 pub(crate) fn ensure_status_change_not_run_owned(
     runtime: &OrbitRuntime,
     id: &str,
+    recovery: RunOwnershipRecovery,
 ) -> Result<(), OrbitError> {
     if let Some((run_id, state)) = live_local_run_owning(runtime, id)? {
+        let guidance = match recovery {
+            RunOwnershipRecovery::ForceAvailable => "stop the run first or use --force to override",
+            RunOwnershipRecovery::WaitOrAskOperator => {
+                "wait for the run to finish or ask the operator to stop it"
+            }
+        };
         return Err(OrbitError::force_overridable_run_owned(
             run_id.clone(),
             state.to_string(),
             format!(
-                "status change refused: local run '{run_id}' still owns this task ({state}); stop the run first or use --force to override"
+                "status change refused: local run '{run_id}' still owns this task ({state}); {guidance}"
             ),
         ));
     }
