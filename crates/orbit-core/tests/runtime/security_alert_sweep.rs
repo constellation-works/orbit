@@ -9,14 +9,22 @@
 use std::path::Path;
 
 use orbit_core::adapter::command::ToolEntryPoint;
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{EXTERNAL_MERGE_SETTLED_EVENT, TaskAddParams};
 use orbit_core::runtime::OrbitRuntime;
-use orbit_engine::Dispatch;
+use orbit_engine::{Dispatch, RunLifecycle};
 use orbit_tools::ToolContext;
 use orbit_types::task::{CodeScanningAlertEvidence, TaskDecision, TaskRelation, TaskRelationType};
-use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::task::{TaskComplexity, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
+
+struct CodeScanningHistory {
+    pre_fix_sha: String,
+    landed_shas: [String; 3],
+    post_fix_sha: String,
+    diverged_sha: String,
+}
 
 fn fixture() -> (tempfile::TempDir, OrbitRuntime) {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
@@ -1364,6 +1372,925 @@ fn code_scanning_without_installed_bundle_waits_on_a_prerequisite() {
     assert_eq!(drift_frictions(&runtime).len(), 1);
 }
 
+fn git(repo: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_string()
+}
+
+fn init_code_scanning_git_history(root: &Path) -> CodeScanningHistory {
+    let repo = root.join("repo");
+    git(&repo, &["init", "-b", "agent-main"]);
+    git(&repo, &["config", "user.name", "Fixture"]);
+    git(&repo, &["config", "user.email", "fixture@example.invalid"]);
+    git(&repo, &["config", "commit.gpgsign", "false"]);
+
+    std::fs::write(repo.join("lib.rs"), "pub fn base() {}\n").unwrap();
+    git(&repo, &["add", "lib.rs"]);
+    git(&repo, &["commit", "-qm", "pre-fix base"]);
+    let pre_fix_sha = git(&repo, &["rev-parse", "HEAD"]);
+
+    git(&repo, &["checkout", "-qb", "diverged"]);
+    std::fs::write(repo.join("diverged.rs"), "pub fn other() {}\n").unwrap();
+    git(&repo, &["add", "diverged.rs"]);
+    git(&repo, &["commit", "-qm", "diverged commit"]);
+    let diverged_sha = git(&repo, &["rev-parse", "HEAD"]);
+
+    git(&repo, &["checkout", "-q", "agent-main"]);
+    let mut landed = Vec::new();
+    for index in 1..=3 {
+        std::fs::write(repo.join(format!("fix_{index}.rs")), "pub fn fix() {}\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-qm", &format!("landed fix {index}")]);
+        landed.push(git(&repo, &["rev-parse", "HEAD"]));
+    }
+    std::fs::write(repo.join("later.rs"), "pub fn later() {}\n").unwrap();
+    git(&repo, &["add", "later.rs"]);
+    git(&repo, &["commit", "-qm", "post-fix descendant"]);
+    let post_fix_sha = git(&repo, &["rev-parse", "HEAD"]);
+
+    CodeScanningHistory {
+        pre_fix_sha,
+        landed_shas: landed.try_into().unwrap(),
+        post_fix_sha,
+        diverged_sha,
+    }
+}
+
+fn code_alert_at(
+    number: u64,
+    rule: &str,
+    path: &str,
+    line: u64,
+    git_ref: &str,
+    commit_sha: &str,
+) -> Value {
+    let mut alert = code_alert(number, rule, path, line);
+    alert["ref"] = json!(git_ref);
+    alert["commit_sha"] = json!(commit_sha);
+    alert["message"] = json!(format!("Finding for {rule}"));
+    alert
+}
+
+fn orbit_code_snapshot(repository: &str, alerts: Vec<Value>) -> Value {
+    let mut snapshot = code_alerts_snapshot(alerts);
+    snapshot["repository"] = json!({"full_name": repository});
+    snapshot
+}
+
+fn settle_task_external_merge(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    pr_number: u64,
+    branch: &str,
+    merge_commit: &str,
+    execution_summary: &str,
+) {
+    orbit_core::test_support::EngineHost::new(runtime)
+        .apply_task_automation_update(
+            task_id,
+            orbit_engine::TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                execution_summary: Some(execution_summary.to_string()),
+                status_event: Some(EXTERNAL_MERGE_SETTLED_EVENT.to_string()),
+                status_note: Some(format!(
+                    "settled from pull request #{pr_number}, merged into {branch} at 2026-11-27T00:33:03Z as {merge_commit} outside Orbit"
+                )),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+fn install_pr_delivery_run(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    base_branch: &str,
+    landed_commit: &str,
+    no_change: bool,
+) {
+    let resources = runtime.paths().global_dir.join("resources");
+    std::fs::create_dir_all(resources.join("activities")).unwrap();
+    std::fs::create_dir_all(resources.join("jobs")).unwrap();
+    for activity in ["git_commit", "pr_complete"] {
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("assets/activities/{activity}.yaml")),
+            resources.join(format!("activities/{activity}.yaml")),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        resources.join("jobs/fixture_delivery.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: fixture_delivery\nspec:\n  \
+         state: enabled\n  task_delivery: {}\n  steps:\n    - id: commit\n      \
+         target: activity:git_commit\n    - id: complete_pr\n      target: activity:pr_complete\n",
+    )
+    .unwrap();
+    let mut run = orbit_core::test_support::EngineHost::new(runtime)
+        .insert_job_run(
+            "fixture_delivery",
+            1,
+            chrono::Utc::now(),
+            Some(json!({"task_ids": [task_id]})),
+            None,
+        )
+        .unwrap();
+    run.state = JobRunState::Success;
+    runtime
+        .sqlite_store()
+        .unwrap()
+        .write(|tx| {
+            tx.job_run()
+                .put(&runtime.workspace_id().unwrap(), &run, None)
+        })
+        .unwrap();
+    let commit_output = if no_change {
+        json!({
+            "phase": "commit",
+            "decision": "verified_no_diff",
+            "committed": false,
+            "job_run_id": run.run_id,
+            "task_id": task_id,
+        })
+    } else {
+        json!({
+            "phase": "commit",
+            "decision": "performed",
+            "committed": true,
+            "commit_sha": landed_commit,
+            "base_sha": "a".repeat(40),
+            "job_run_id": run.run_id,
+            "task_id": task_id,
+        })
+    };
+    let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+    for (index, step_id, output) in [
+        (0u32, "commit", commit_output),
+        (
+            1,
+            "complete_pr",
+            json!({
+                "phase": "complete",
+                "merge": {"merged": true, "pr_number": "11490", "landed_commit": landed_commit},
+                "delivery_evidence": {
+                    "pr_number": "11490",
+                    "base_ref": base_branch,
+                    "merge_commit": landed_commit,
+                },
+            }),
+        ),
+    ] {
+        state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+        state.record_pipeline_output(step_id, output);
+    }
+    runtime.write_run_state(&run.run_id, &state).unwrap();
+}
+
+/// ORB-29223: Replay of the 18 pre-fix alert instances across 3 landed repairs
+/// files no duplicate tasks and reports every alert as awaiting a post-fix scan.
+/// Also verifies run-delivery (`pr_complete`) and `landing_completed` evidence.
+fn pre_fix_code_scanning_replay_defers_all_18_alerts_until_post_fix_scan() {
+    let (root, runtime) = fixture();
+    let history = init_code_scanning_git_history(root.path());
+    let repo_name = "constellation-works/orbit";
+    let git_ref = "refs/heads/agent-main";
+
+    let mut group_1 = Vec::new();
+    for (idx, number) in (507..=508).enumerate() {
+        group_1.push(code_alert_at(
+            number,
+            "rust/cleartext-logging",
+            "crates/orbit-types/src/task.rs",
+            417 + idx as u64 * 17,
+            git_ref,
+            &history.pre_fix_sha,
+        ));
+    }
+    let mut group_2 = Vec::new();
+    for (idx, number) in (509..=516).enumerate() {
+        group_2.push(code_alert_at(
+            number,
+            "rust/path-injection",
+            &format!("crates/orbit-store/src/file_{}.rs", idx / 3),
+            70 + idx as u64 * 10,
+            git_ref,
+            &history.pre_fix_sha,
+        ));
+    }
+    let mut group_3 = Vec::new();
+    for (idx, number) in (517..=524).enumerate() {
+        group_3.push(code_alert_at(
+            number,
+            "rust/example",
+            &format!("crates/orbit-common/src/lock_{}.rs", idx / 2),
+            210 + idx as u64 * 12,
+            git_ref,
+            &history.pre_fix_sha,
+        ));
+    }
+    let mut all_18 = Vec::new();
+    all_18.extend(group_1);
+    all_18.extend(group_2);
+    all_18.extend(group_3);
+
+    let initial = file(
+        &runtime,
+        orbit_code_snapshot(repo_name, all_18.clone()),
+        None,
+    );
+    assert_eq!(initial["filed_count"], 3, "{initial}");
+    let task_ids: Vec<String> = initial["filed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["task_id"].as_str().unwrap().to_string())
+        .collect();
+
+    // Settle the three grouped tasks with the three real summary disposition formats.
+    settle_task_external_merge(
+        &runtime,
+        &task_ids[0],
+        11408,
+        "agent-main",
+        &history.landed_shas[0],
+        "## Alert dispositions\n\n\
+         - #507 (line 417): fixed (source side). Hosted alert NOT closed.\n\
+         - #508 (line 434): fixed (source side). Same caveat.\n\
+         - Not already-covered and not not-reproducible-in-source.",
+    );
+    let summary_2 = (509..=516)
+        .map(|number| {
+            format!("- Alert #{number} (`bundle.rs:{number}`, `read`): `fixed` — validated path.")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    settle_task_external_merge(
+        &runtime,
+        &task_ids[1],
+        11410,
+        "agent-main",
+        &history.landed_shas[1],
+        &format!(
+            "Outcome: success\n\nPer-alert disposition (source-side coverage; hosted alerts remain open):\n{summary_2}\n\nValidation:\n- passed"
+        ),
+    );
+    let summary_3 = (517..=524)
+        .map(|number| {
+            format!(
+                "- Alert `#{number}` (`crates/orbit-common/src/lock.rs:{number}`): `fixed` (source-side)."
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    settle_task_external_merge(
+        &runtime,
+        &task_ids[2],
+        11411,
+        "agent-main",
+        &history.landed_shas[2],
+        &format!(
+            "Outcome: success\n\nPer-alert disposition (requires hosted rescan):\n{summary_3}"
+        ),
+    );
+
+    // Seed an archived duplicate carrying the same exact tags (like ORB-29173).
+    let archived = runtime
+        .add_task(TaskAddParams {
+            title: "Archived duplicate".to_string(),
+            tags: runtime.get_task(&task_ids[0]).unwrap().tags,
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+    orbit_core::test_support::EngineHost::new(&runtime)
+        .apply_task_automation_update(
+            &archived.id,
+            orbit_engine::TaskAutomationUpdate {
+                status: Some(TaskStatus::Archived),
+                status_note: Some("duplicate archived".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let replay = file(&runtime, orbit_code_snapshot(repo_name, all_18), None);
+    assert_eq!(replay["filed_count"], 0, "{replay}");
+    assert_eq!(replay["filed"], json!([]));
+    assert_eq!(replay["skipped_existing"], json!([]));
+    assert_eq!(replay["clusters"], 18, "{replay}");
+    let awaiting = replay["awaiting_post_fix_scan"].as_array().unwrap();
+    assert_eq!(awaiting.len(), 18, "{replay}");
+    for (idx, number) in (507_u64..=524).enumerate() {
+        let entry = &awaiting[idx];
+        let expected_idx = match number {
+            507..=508 => 0,
+            509..=516 => 1,
+            _ => 2,
+        };
+        assert_eq!(entry["family"], "code_scanning");
+        assert_eq!(entry["alert_number"], number);
+        assert_eq!(entry["repository"], repo_name);
+        assert_eq!(entry["ref"], git_ref);
+        assert_eq!(entry["analyzed_sha"], history.pre_fix_sha);
+        assert_eq!(entry["covering_task_id"], task_ids[expected_idx]);
+        assert_eq!(entry["landed_sha"], history.landed_shas[expected_idx]);
+        assert_eq!(entry["disposition"], "fixed");
+        assert_eq!(entry["status"], "awaiting_post_fix_scan");
+    }
+
+    // Verify single-alert typed tasks also defer under pr_complete run delivery
+    // and landing_completed history notes.
+    let single_alerts = vec![
+        code_alert_at(
+            601,
+            "rust/cleartext-logging",
+            "crates/a.rs",
+            10,
+            git_ref,
+            &history.pre_fix_sha,
+        ),
+        code_alert_at(
+            602,
+            "rust/path-injection",
+            "crates/b.rs",
+            20,
+            git_ref,
+            &history.pre_fix_sha,
+        ),
+    ];
+    let single_filed = file(
+        &runtime,
+        orbit_code_snapshot(repo_name, single_alerts.clone()),
+        None,
+    );
+    assert_eq!(single_filed["filed_count"], 2, "{single_filed}");
+    let single_a = single_filed["filed"][0]["task_id"].as_str().unwrap();
+    let single_b = single_filed["filed"][1]["task_id"].as_str().unwrap();
+
+    orbit_core::test_support::EngineHost::new(&runtime)
+        .apply_task_automation_update(
+            single_a,
+            orbit_engine::TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                execution_summary: Some("## Per-alert disposition\n- #601: `fixed`".to_string()),
+                status_note: Some("completed".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    install_pr_delivery_run(
+        &runtime,
+        single_a,
+        "agent-main",
+        &history.landed_shas[0],
+        false,
+    );
+
+    orbit_core::test_support::EngineHost::new(&runtime)
+        .apply_task_automation_update(
+            single_b,
+            orbit_engine::TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                execution_summary: Some(
+                    "## Per-alert disposition\n- #602: `already-covered`".to_string(),
+                ),
+                status_note: Some("completed".to_string()),
+                append_history: vec![TaskHistoryEntry {
+                    at: chrono::Utc::now(),
+                    by: "system".to_string(),
+                    event: "landing_completed".to_string(),
+                    note: Some(
+                        json!({
+                            "reconciled": "local_target_contains_candidate",
+                            "landing_ref": "refs/heads/agent-main",
+                            "candidate": history.landed_shas[1],
+                        })
+                        .to_string(),
+                    ),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                    surface: None,
+                    caller: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let single_replay = file(
+        &runtime,
+        orbit_code_snapshot(repo_name, single_alerts),
+        None,
+    );
+    assert_eq!(single_replay["filed_count"], 0, "{single_replay}");
+    let single_awaiting = single_replay["awaiting_post_fix_scan"].as_array().unwrap();
+    assert_eq!(single_awaiting.len(), 2, "{single_replay}");
+    assert_eq!(single_awaiting[0]["covering_task_id"], single_a);
+    assert_eq!(single_awaiting[1]["covering_task_id"], single_b);
+    assert_eq!(single_awaiting[1]["disposition"], "already-covered");
+}
+
+/// A later scan containing the landed fix (either at landed_sha or a descendant)
+/// and any new alert on the pre-fix scan are eligible for remediation.
+fn post_fix_code_scanning_scan_and_new_alerts_remain_eligible() {
+    let (root, runtime) = fixture();
+    let history = init_code_scanning_git_history(root.path());
+    let repo_name = "constellation-works/orbit";
+    let git_ref = "refs/heads/agent-main";
+
+    let initial = file(
+        &runtime,
+        orbit_code_snapshot(
+            repo_name,
+            vec![
+                code_alert_at(
+                    507,
+                    "rust/cleartext-logging",
+                    "crates/a.rs",
+                    12,
+                    git_ref,
+                    &history.pre_fix_sha,
+                ),
+                code_alert_at(
+                    508,
+                    "rust/cleartext-logging",
+                    "crates/b.rs",
+                    24,
+                    git_ref,
+                    &history.pre_fix_sha,
+                ),
+            ],
+        ),
+        None,
+    );
+    assert_eq!(initial["filed_count"], 1, "{initial}");
+    let owner = initial["filed"][0]["task_id"].as_str().unwrap().to_string();
+    settle_task_external_merge(
+        &runtime,
+        &owner,
+        11408,
+        "agent-main",
+        &history.landed_shas[0],
+        "## Per-alert disposition\n- #507: `fixed`\n- #508: `fixed`",
+    );
+
+    // 1. Scan at landed_sha (#507) and descendant (#508): both are re-filed!
+    let post_fix = file(
+        &runtime,
+        orbit_code_snapshot(
+            repo_name,
+            vec![
+                code_alert_at(
+                    507,
+                    "rust/cleartext-logging",
+                    "crates/a.rs",
+                    12,
+                    git_ref,
+                    &history.landed_shas[0],
+                ),
+                code_alert_at(
+                    508,
+                    "rust/cleartext-logging",
+                    "crates/b.rs",
+                    24,
+                    git_ref,
+                    &history.post_fix_sha,
+                ),
+            ],
+        ),
+        None,
+    );
+    assert_eq!(post_fix["filed_count"], 1, "{post_fix}");
+    assert_eq!(post_fix["awaiting_post_fix_scan"], json!([]));
+    assert_eq!(post_fix["filed"][0]["alert_numbers"], json!([507, 508]));
+
+    // 2. New alert #599 on pre_fix_sha is filed while #507 on pre_fix_sha is
+    // deferred under `done_owner` (and #599 is not told open work covers #507).
+    let (root, runtime) = fixture();
+    let history = init_code_scanning_git_history(root.path());
+    let first = file(
+        &runtime,
+        orbit_code_snapshot(
+            repo_name,
+            vec![code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                &history.pre_fix_sha,
+            )],
+        ),
+        None,
+    );
+    let done_owner = first["filed"][0]["task_id"].as_str().unwrap();
+    settle_task_external_merge(
+        &runtime,
+        done_owner,
+        11408,
+        "agent-main",
+        &history.landed_shas[0],
+        "## Per-alert disposition\n- #507: `fixed`",
+    );
+    let mixed = file(
+        &runtime,
+        orbit_code_snapshot(
+            repo_name,
+            vec![
+                code_alert_at(
+                    507,
+                    "rust/cleartext-logging",
+                    "crates/a.rs",
+                    12,
+                    git_ref,
+                    &history.pre_fix_sha,
+                ),
+                code_alert_at(
+                    599,
+                    "rust/cleartext-logging",
+                    "crates/c.rs",
+                    99,
+                    git_ref,
+                    &history.pre_fix_sha,
+                ),
+            ],
+        ),
+        None,
+    );
+    assert_eq!(mixed["filed_count"], 1, "{mixed}");
+    assert_eq!(mixed["filed"][0]["alert_numbers"], json!([599]));
+    assert_eq!(mixed["awaiting_post_fix_scan"].as_array().unwrap().len(), 1);
+    assert_eq!(mixed["awaiting_post_fix_scan"][0]["alert_number"], 507);
+    assert_eq!(mixed["filed"][0]["delta_covered_by"], json!([]));
+}
+
+/// Unmatched branches/refs, missing/non-fix/contradictory delivery evidence,
+/// missing/refused dispositions, and diverged SHAs remain eligible.
+fn unmatched_branch_or_missing_and_contradictory_evidence_remain_eligible() {
+    let repo_name = "constellation-works/orbit";
+    let git_ref = "refs/heads/agent-main";
+
+    // Helper that creates one completed single-alert task and runs a replay.
+    let run_case = |setup: &dyn Fn(&OrbitRuntime, &str, &CodeScanningHistory),
+                    alert_fn: &dyn Fn(&CodeScanningHistory) -> Value| {
+        let (root, runtime) = fixture();
+        let history = init_code_scanning_git_history(root.path());
+        let first = file(
+            &runtime,
+            orbit_code_snapshot(
+                repo_name,
+                vec![code_alert_at(
+                    507,
+                    "rust/cleartext-logging",
+                    "crates/a.rs",
+                    12,
+                    git_ref,
+                    &history.pre_fix_sha,
+                )],
+            ),
+            None,
+        );
+        let owner = first["filed"][0]["task_id"].as_str().unwrap().to_string();
+        setup(&runtime, &owner, &history);
+        let replay = file(
+            &runtime,
+            orbit_code_snapshot(repo_name, vec![alert_fn(&history)]),
+            None,
+        );
+        assert_eq!(
+            replay["awaiting_post_fix_scan"],
+            json!([]),
+            "must not defer: {replay}"
+        );
+        assert_eq!(replay["filed_count"], 1, "must file afresh: {replay}");
+    };
+
+    // 1. Unmatched alert ref (refs/heads/main vs completed refs/heads/agent-main).
+    run_case(
+        &|runtime, id, history| {
+            settle_task_external_merge(
+                runtime,
+                id,
+                1,
+                "agent-main",
+                &history.landed_shas[0],
+                "## Per-alert disposition\n- #507: `fixed`",
+            );
+        },
+        &|history| {
+            code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                "refs/heads/main",
+                &history.pre_fix_sha,
+            )
+        },
+    );
+
+    // 2. Unmatched delivery target branch (merged into `main` vs alert `refs/heads/agent-main`).
+    run_case(
+        &|runtime, id, history| {
+            settle_task_external_merge(
+                runtime,
+                id,
+                2,
+                "main",
+                &history.landed_shas[0],
+                "## Per-alert disposition\n- #507: `fixed`",
+            );
+        },
+        &|history| {
+            code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                &history.pre_fix_sha,
+            )
+        },
+    );
+
+    // 3. Non-branch alert ref (refs/pull/42/merge).
+    run_case(
+        &|runtime, id, history| {
+            settle_task_external_merge(
+                runtime,
+                id,
+                3,
+                "agent-main",
+                &history.landed_shas[0],
+                "## Per-alert disposition\n- #507: `fixed`",
+            );
+        },
+        &|history| {
+            code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                "refs/pull/42/merge",
+                &history.pre_fix_sha,
+            )
+        },
+    );
+
+    // 4. Missing delivery evidence (plain `Done` transition without landing proof).
+    run_case(
+        &|runtime, id, _history| {
+            orbit_core::test_support::EngineHost::new(runtime)
+                .apply_task_automation_update(
+                    id,
+                    orbit_engine::TaskAutomationUpdate {
+                        status: Some(TaskStatus::Done),
+                        execution_summary: Some("## Per-alert disposition\n- #507: `fixed`".into()),
+                        status_note: Some("manually closed".into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        },
+        &|history| {
+            code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                &history.pre_fix_sha,
+            )
+        },
+    );
+
+    // 5. VerifiedNoDiff delivery (no fix commit landed by this task).
+    run_case(
+        &|runtime, id, history| {
+            orbit_core::test_support::EngineHost::new(runtime)
+                .apply_task_automation_update(
+                    id,
+                    orbit_engine::TaskAutomationUpdate {
+                        status: Some(TaskStatus::Done),
+                        execution_summary: Some("## Per-alert disposition\n- #507: `fixed`".into()),
+                        status_note: Some("no diff".into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            install_pr_delivery_run(runtime, id, "agent-main", &history.landed_shas[0], true);
+        },
+        &|history| {
+            code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                &history.pre_fix_sha,
+            )
+        },
+    );
+
+    // 6. Contradictory delivery evidence (run delivery vs external_merge_settled disagree).
+    run_case(
+        &|runtime, id, history| {
+            settle_task_external_merge(
+                runtime,
+                id,
+                6,
+                "agent-main",
+                &history.landed_shas[0],
+                "## Per-alert disposition\n- #507: `fixed`",
+            );
+            install_pr_delivery_run(runtime, id, "agent-main", &history.landed_shas[1], false);
+        },
+        &|history| {
+            code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                &history.pre_fix_sha,
+            )
+        },
+    );
+
+    // 7. Diverged analysis SHA (not an ancestor of landed_sha).
+    run_case(
+        &|runtime, id, history| {
+            settle_task_external_merge(
+                runtime,
+                id,
+                7,
+                "agent-main",
+                &history.landed_shas[0],
+                "## Per-alert disposition\n- #507: `fixed`",
+            );
+        },
+        &|history| {
+            code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                &history.diverged_sha,
+            )
+        },
+    );
+
+    // 8. Missing or non-full analysis SHA.
+    run_case(
+        &|runtime, id, history| {
+            settle_task_external_merge(
+                runtime,
+                id,
+                8,
+                "agent-main",
+                &history.landed_shas[0],
+                "## Per-alert disposition\n- #507: `fixed`",
+            );
+        },
+        &|_history| {
+            code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                "not-a-full-sha",
+            )
+        },
+    );
+
+    // 9. `not-reproducible-in-source` disposition does not defer.
+    run_case(
+        &|runtime, id, history| {
+            settle_task_external_merge(
+                runtime,
+                id,
+                9,
+                "agent-main",
+                &history.landed_shas[0],
+                "## Per-alert disposition\n- #507: `not-reproducible-in-source` — stale line",
+            );
+        },
+        &|history| {
+            code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                &history.pre_fix_sha,
+            )
+        },
+    );
+
+    // 10. Missing per-alert disposition for #507 does not defer.
+    run_case(
+        &|runtime, id, history| {
+            settle_task_external_merge(
+                runtime,
+                id,
+                10,
+                "agent-main",
+                &history.landed_shas[0],
+                "Outcome: success\nNo per-alert disposition recorded.",
+            );
+        },
+        &|history| {
+            code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                &history.pre_fix_sha,
+            )
+        },
+    );
+
+    // 11. Contradictory repository on run delivery (origin remote is another GitHub repo).
+    let (root, runtime) = fixture();
+    let history = init_code_scanning_git_history(root.path());
+    git(
+        &root.path().join("repo"),
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/other.git",
+        ],
+    );
+    let first = file(
+        &runtime,
+        orbit_code_snapshot(
+            repo_name,
+            vec![code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                &history.pre_fix_sha,
+            )],
+        ),
+        None,
+    );
+    let owner = first["filed"][0]["task_id"].as_str().unwrap();
+    orbit_core::test_support::EngineHost::new(&runtime)
+        .apply_task_automation_update(
+            owner,
+            orbit_engine::TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                execution_summary: Some("## Per-alert disposition\n- #507: `fixed`".into()),
+                status_note: Some("completed".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    install_pr_delivery_run(
+        &runtime,
+        owner,
+        "agent-main",
+        &history.landed_shas[0],
+        false,
+    );
+    let replay = file(
+        &runtime,
+        orbit_code_snapshot(
+            repo_name,
+            vec![code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                &history.pre_fix_sha,
+            )],
+        ),
+        None,
+    );
+    assert_eq!(replay["awaiting_post_fix_scan"], json!([]), "{replay}");
+    assert_eq!(replay["filed_count"], 1, "{replay}");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     consolidation_retires_every_duplicate_alert_owner_once_scenarios,
@@ -1380,5 +2307,8 @@ crate::scenario_table!(
     sweep_tasks_seed_file_selectors_from_alert_locations,
     sweep_tasks_drop_missing_and_git_orbit_paths,
     code_scanning_rule_missing_from_installed_bundle_waits_on_one_prerequisite,
-    code_scanning_without_installed_bundle_waits_on_a_prerequisite
+    code_scanning_without_installed_bundle_waits_on_a_prerequisite,
+    pre_fix_code_scanning_replay_defers_all_18_alerts_until_post_fix_scan,
+    post_fix_code_scanning_scan_and_new_alerts_remain_eligible,
+    unmatched_branch_or_missing_and_contradictory_evidence_remain_eligible
 );

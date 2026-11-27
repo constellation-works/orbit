@@ -24,7 +24,13 @@ spec:
     still match what that task recorded, the sweep reports a `rejected_owner`
     skip naming the rejected task instead of re-filing it, and files it again
     once the rule or location changes. A rejection that names a covering task
-    is a duplicate verdict and does not suppress. A CodeQL alert whose rule
+    is a duplicate verdict and does not suppress. An uncovered Code scanning
+    alert whose exact repository, ref and alert number match a `fixed` or
+    `already-covered` per-alert disposition on a completed (`done`) repair, and
+    whose authoritative delivery evidence proves a landed fix on the same branch
+    that the reported analysis commit predates, is deferred in
+    `awaiting_post_fix_scan` (naming the alert, analyzed SHA, covering task and
+    landed SHA) until a later scan arrives. A CodeQL alert whose rule
     the CodeQL bundle installed on this (owner) host does not offer, or any
     CodeQL alert when no bundle answers on the owner's validation PATH, still
     files its repair task, but that task depends on one proposed prerequisite
@@ -92,6 +98,38 @@ spec:
         type: array
       excluded_below_min_severity:
         type: array
+      awaiting_post_fix_scan:
+        type: array
+        description: >
+          Pre-fix Code scanning alerts deferred because exact repository, ref
+          and alert identity matched a remediated per-alert disposition on a
+          completed repair whose verified delivery landed on the same branch
+          after the alert's analyzed SHA.
+        items:
+          type: object
+          required: [family, key, alert_number, repository, ref, analyzed_sha, covering_task_id, landed_sha, disposition, status]
+          properties:
+            family:
+              type: string
+            key:
+              type: string
+            alert_number:
+              type: number
+            repository:
+              type: string
+            ref:
+              type: string
+            analyzed_sha:
+              type: string
+            covering_task_id:
+              type: string
+            landed_sha:
+              type: string
+            disposition:
+              type: string
+            status:
+              type: string
+              enum: [awaiting_post_fix_scan]
       min_severity:
         type: string
         enum: [low, moderate, high, critical]

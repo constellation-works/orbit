@@ -4,18 +4,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_types::OrbitId;
-use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{TaskComplexity, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType};
+use orbit_types::workflow::{PipelineState, RunDeliveryObservation};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::DEPENDABOT_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
-    DuplicateMatchKind, DuplicateTaskLookup, DuplicateTaskMatch, find_covering_task,
+    DuplicateMatchKind, DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
+    find_covering_task,
 };
 use crate::application::sweep_filing::{
     bounded_u64, digest, display, seeded_file_selectors, truncate_chars,
 };
-use crate::application::task::TaskAddParams;
+use crate::application::task::{SourceGit, TaskAddParams, TaskAutomationPort};
 
 use super::code_groups;
 use super::code_groups::{
@@ -27,8 +29,8 @@ use super::codeql_bundle::{
     report_bundle_drift,
 };
 use super::duplicates::{
-    code_duplicate_candidate, dependabot_duplicate_candidate, duplicate_lookup_error,
-    secret_duplicate_candidate,
+    CodeScanningDeferralChecker, CompletedRepairEnv, code_duplicate_candidate,
+    dependabot_duplicate_candidate, duplicate_lookup_error, secret_duplicate_candidate,
 };
 
 const SUPPORTED_SCHEMA_VERSION: u64 = 2;
@@ -62,6 +64,32 @@ struct PlannedBundleHold {
     hold: BundleHold,
     rules: BTreeSet<String>,
     existing: Option<OrbitId>,
+}
+
+struct RuntimeRepairEnv<'a> {
+    runtime: &'a OrbitRuntime,
+    source: Box<dyn SourceGit + 'a>,
+}
+
+impl CompletedRepairEnv for RuntimeRepairEnv<'_> {
+    fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+        self.runtime.get_task_history(task_id)
+    }
+
+    fn find_task_delivery(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<RunDeliveryObservation>, OrbitError> {
+        self.runtime.find_task_delivery(task_id)
+    }
+
+    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
+        self.runtime.read_run_state(run_id)
+    }
+
+    fn is_ancestor(&self, older: &str, newer: &str) -> bool {
+        matches!(self.source.is_ancestor(older, newer), Ok(true))
+    }
 }
 
 pub(crate) fn file_dependabot_alert_tasks(
@@ -112,11 +140,13 @@ where
         .and_then(Value::as_bool)
         .unwrap_or(true);
 
+    let lookup = SnapshotDuplicateLookup::new(lookup);
     let mut pending_tasks = Vec::new();
     let mut skipped_existing = Vec::new();
     let mut skipped_dependabot_pr = Vec::new();
     let mut skipped_over_cap = Vec::new();
     let mut excluded_below_min_severity = Vec::new();
+    let mut awaiting_post_fix_scan = Vec::new();
     let mut candidate_count = 0usize;
 
     if snapshot.get("collected").and_then(Value::as_bool) == Some(true) {
@@ -166,7 +196,7 @@ where
                 match_kind,
                 evidence,
             }) = find_covering_task(
-                lookup,
+                &lookup,
                 &dependabot_duplicate_candidate(&key, &package, &manifest_path),
             )
             .map_err(|error| duplicate_lookup_error("dependabot", &key, &error))?
@@ -264,6 +294,11 @@ where
     let mut uncovered_code_alerts = Vec::new();
     let mut covered_by_cause: BTreeMap<String, Vec<CoveredAlert>> = BTreeMap::new();
     let mut suppressed_code_alerts = 0usize;
+    let repair_env = RuntimeRepairEnv {
+        runtime,
+        source: TaskAutomationPort::bounded_source(runtime),
+    };
+    let mut completed_deferrals = CodeScanningDeferralChecker::new(&repair_env);
     for alert in code_alerts {
         let number = alert_number(&alert);
         if number == 0 {
@@ -291,7 +326,7 @@ where
             task_id,
             match_kind,
             evidence,
-        }) = find_covering_task(lookup, &code_duplicate_candidate(&key, &alert))
+        }) = find_covering_task(&lookup, &code_duplicate_candidate(&key, &alert))
             .map_err(|error| duplicate_lookup_error("code_scanning", &key, &error))?
         {
             // A rejected owner suppresses re-filing but owns nothing: the
@@ -314,15 +349,24 @@ where
             }));
             continue;
         }
+        if let Some(deferred) = completed_deferrals
+            .defer_if_awaiting_post_fix_scan(&lookup, repository, &alert)
+            .map_err(|error| duplicate_lookup_error("code_scanning", &key, &error))?
+        {
+            awaiting_post_fix_scan.push(deferred.to_json());
+            continue;
+        }
         uncovered_code_alerts.push(alert);
     }
 
     let code_groups = group_code_alerts(repository, uncovered_code_alerts);
     // A Code scanning candidate is one unit of work the sweep judged: a group
-    // it can file, or an alert it found an owner for.
+    // it can file, an alert it found an owner for, or an alert awaiting a
+    // post-fix scan.
     candidate_count += code_groups.len()
         + covered_by_cause.values().map(Vec::len).sum::<usize>()
-        + suppressed_code_alerts;
+        + suppressed_code_alerts
+        + awaiting_post_fix_scan.len();
     let no_siblings: Vec<CoveredAlert> = Vec::new();
     // Probed once, and only when a CodeQL group is about to be filed.
     let mut local_bundle: Option<LocalCodeqlBundle> = None;
@@ -407,7 +451,7 @@ where
             task_id,
             match_kind,
             evidence,
-        }) = find_covering_task(lookup, &secret_duplicate_candidate(&key, &alert))
+        }) = find_covering_task(&lookup, &secret_duplicate_candidate(&key, &alert))
             .map_err(|error| duplicate_lookup_error("secret_scanning", &key, &error))?
         {
             skipped_existing.push(json!({
@@ -535,6 +579,7 @@ where
         "skipped_dependabot_pr": skipped_dependabot_pr,
         "skipped_over_cap": skipped_over_cap,
         "excluded_below_min_severity": excluded_below_min_severity,
+        "awaiting_post_fix_scan": awaiting_post_fix_scan,
         "min_severity": floor_name,
         "min_severity_source": floor_source,
         "skip_when_dependabot_pr_open": skip_pr,
