@@ -298,6 +298,8 @@ struct ForgeState {
     observations: VecDeque<Value>,
     policies: VecDeque<Value>,
     gates: VecDeque<Value>,
+    /// Scripted transient `pr.required_checks` read failures remaining [ORB-29163].
+    required_check_transients: u32,
 }
 
 /// PR #42 fake forge with one `CI / clippy` check per commit and real Git updates.
@@ -579,6 +581,17 @@ impl NullRuntimeHost for FakeForge {
                 Ok(json!({"pull_request": pr}))
             }
             "pr.required_checks" => {
+                if s.required_check_transients > 0 {
+                    s.required_check_transients -= 1;
+                    return Err(OrbitError::PrivateVcs(Box::new(
+                        orbit_common::PrivateVcsFailure {
+                            operation: "pr.required_checks".into(),
+                            class: orbit_common::PrivateVcsFailureClass::TransientObservation,
+                            message: "gh: Something went wrong while executing your query".into(),
+                            read_throttle: None,
+                        },
+                    )));
+                }
                 if !s.policies.is_empty() {
                     return pop_or_auth(&mut s.policies);
                 }

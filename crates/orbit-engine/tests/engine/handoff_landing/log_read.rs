@@ -35,6 +35,95 @@ fn a_timed_out_job_log_is_read_again_and_classified() {
 }
 
 #[test]
+fn exhausted_transient_required_check_reads_hold_for_forge_recovery() {
+    // [ORB-29163] Every transport pass loses the required-checks read
+    // before any external write: the run holds instead of failing.
+    let (_sandbox, forge, head, _) = forge_fixture(false, false);
+    forge.job(&head, passed(1, 11));
+    forge.with_state(|s| s.required_check_transients = 100);
+    let (result, waits) = counted_land(&forge, json!({"max_wait_seconds": 300}));
+    let error = result.expect_err("exhausted transient reads hold the landing");
+    assert!(
+        matches!(
+            error,
+            OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::ForgeObservationUnavailable,
+                ..
+            }
+        ),
+        "the held run remains resumable: {error}"
+    );
+    assert!(
+        error.to_string().contains("after 3 tries")
+            && error
+                .to_string()
+                .contains("no merge or other external write was sent")
+            && error.to_string().contains("the candidate stays in review"),
+        "the hold names its exhaustion and its clean stop: {error}"
+    );
+    assert_eq!(
+        waits,
+        vec![20, 60],
+        "the two transport backoffs run between the three passes"
+    );
+    assert_eq!(
+        forge.sent("pr.required_checks").len(),
+        3,
+        "one required-checks read per transport pass"
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "held before any write",
+    );
+    assert_eq!(
+        forge.steps(),
+        vec![STOP],
+        "the held attempt records its stop"
+    );
+    let LandingStopEvidence::OwnerRefusal(refusal) =
+        LandingStopEvidence::parse(&forge.last_evidence())
+    else {
+        panic!("the held landing must retain a typed refusal");
+    };
+    assert!(
+        refusal
+            .reason
+            .value
+            .contains("the candidate stays in review"),
+        "the stored refusal keeps the hold disposition"
+    );
+    // The forge recovers: the next attempt re-reads the checks and lands.
+    forge.with_state(|s| s.required_check_transients = 0);
+    let (resumed, resume_waits) = counted_land(&forge, json!({"max_wait_seconds": 300}));
+    assert_landed(resumed, "a readable forge lets the resumed landing merge");
+    assert!(resume_waits.is_empty());
+    assert_eq!(forge.sent("pr.merge").len(), 1);
+}
+
+#[test]
+fn non_transient_required_check_reads_keep_their_failure() {
+    let (_sandbox, forge, head, _) = forge_fixture(false, false);
+    forge.job(&head, passed(1, 11));
+    forge.with_state(|s| s.policies = vec![json!("auth")].into());
+    let (result, waits) = counted_land(&forge, json!({"max_wait_seconds": 300}));
+    let error = result.expect_err("a non-transient read keeps its failure");
+    assert!(
+        matches!(error, OrbitError::Execution(_))
+            && error
+                .to_string()
+                .contains("required-check evidence is unavailable"),
+        "a non-transient read keeps its failure: {error}"
+    );
+    assert!(
+        forge.sent("pr.required_checks").len() == 1 && waits.is_empty(),
+        "no transport retry on a non-transient failure"
+    );
+    assert_not_sent(&forge, &["pr.merge"], "failed before any write");
+    assert_eq!(forge.steps(), vec![STOP]);
+}
+
+#[test]
 fn exhausted_log_reads_keep_a_waiting_gate_that_clears_while_ci_is_red() {
     for max_wait_seconds in [0, 6, 300] {
         let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
