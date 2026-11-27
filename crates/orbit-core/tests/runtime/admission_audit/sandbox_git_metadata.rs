@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_types::workflow::ExecutorSandboxKind;
 
 use super::engine_support::{runtime_with_workspace_layout, seed_executor};
