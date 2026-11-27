@@ -2,6 +2,7 @@
 //! the runtime-backed dispatch that resolves identity, policy and capability.
 
 #[cfg(unix)]
+use crate::app::resident;
 use std::path::Path;
 
 use orbit_common::observability::audit_id::audit_execution_id;
@@ -252,7 +253,9 @@ impl OrbitRuntime {
                 || (name
                     == crate::runtime::plugin::broker::BROKERED_RESIDENT_RESUME_DELIVERY_TOOL
                     && crate::runtime::run_input::managed_run_context_run_id_from_env(env)
-                        .is_some_and(|run_id| self.is_live_resident_cycle_run(&run_id))));
+                        .is_some_and(|run_id| {
+                            resident::is_live_resident_cycle_run(self, &run_id)
+                        })));
         #[cfg(unix)]
         if let Some(socket) = env.orbit_plugin_broker()
             && session_context.application.is_none()

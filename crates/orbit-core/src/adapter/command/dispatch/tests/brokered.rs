@@ -3,6 +3,7 @@
 //! the audit rows and secret store read back. The client is this test
 //! process, anchored by ancestry so no agent sandbox is needed.
 
+use crate::app::resident;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -782,8 +783,7 @@ fn resident_cycle_run(
     else {
         panic!("a fresh run key admits its run");
     };
-    runtime
-        .begin_resident_cycle(&job_run.run_id, chrono::Utc::now())
+    resident::begin_resident_cycle(runtime, &job_run.run_id, chrono::Utc::now())
         .expect("begin cycle");
     let mut run = fixture.run(&[BROKERED_RESIDENT_SHIP_TOOL]);
     run.job_run_id = Some(job_run.run_id);

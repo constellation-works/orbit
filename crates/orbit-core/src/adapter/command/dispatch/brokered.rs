@@ -14,6 +14,7 @@
 //! within the run's worktree; this process's environment describes the host,
 //! not the agent, and is never read for the call.
 
+use crate::app::resident;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -277,7 +278,7 @@ impl BrokerDispatch for RunDispatch {
             EntryPoint::Cli => ToolEntryPoint::Cli,
             EntryPoint::Mcp => ToolEntryPoint::Mcp,
         };
-        crate::application::resident::clear_failed_resident_action_key();
+        crate::app::resident::clear_failed_resident_action_key();
         let result = self
             .runtime
             .execute_brokered_dispatch(
@@ -325,7 +326,7 @@ impl BrokerDispatch for RunDispatch {
                         }
                         let run_id = self.resident_run_id(&tool)?;
                         let target = if recovery {
-                            self.runtime.resident_recovery_workspace(run_id, &input)?
+                            resident::resident_recovery_workspace(&self.runtime, run_id, &input)?
                         } else {
                             self.runtime.clone()
                         };
@@ -350,7 +351,7 @@ impl BrokerDispatch for RunDispatch {
                         // The broker serves the launch's workspace. The nested
                         // client still reads other covered workspaces there.
                         if let Some(selector) = input.get("workspace").and_then(Value::as_str)
-                            && !self.runtime.resident_workspace_is_local(selector)
+                            && !resident::resident_workspace_is_local(&self.runtime, selector)
                         {
                             return Err(OrbitError::PolicyDenied(format!(
                                 "resident_scope_refused: workspace '{selector}' is outside this broker's workspace"
@@ -404,9 +405,9 @@ impl BrokerDispatch for RunDispatch {
             )
             .map(|outcome| outcome.value);
         let action_key = if result.is_err() {
-            crate::application::resident::take_failed_resident_action_key()
+            crate::app::resident::take_failed_resident_action_key()
         } else {
-            crate::application::resident::clear_failed_resident_action_key();
+            crate::app::resident::clear_failed_resident_action_key();
             None
         };
         (result, action_key)

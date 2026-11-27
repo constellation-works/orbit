@@ -5,6 +5,7 @@
 //! that admits a cycle's ship also decides these actions and the separate
 //! `recover` right's `resume_delivery` action.
 
+use orbit_core::app::resident;
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
 
@@ -254,7 +255,7 @@ fn repilot_and_requeue_need_a_live_cycle_holding_dispatch() {
     fx.grant(&dispatcher, &["dispatch"]);
     let run = fx.cycle_run(&dispatcher, "resident-cycle-stale");
     fx.begin_cycle(&run, Utc::now());
-    fx.runtime.finish_resident_cycle(&run).unwrap();
+    resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     fx.as_brokered_cycle(&dispatcher, &run, || both("resident_cycle_stale"));
 
     // A managed run that is no cycle, and a session with no run binding, stay

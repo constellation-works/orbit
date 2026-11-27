@@ -109,6 +109,9 @@ pub mod test_support {
     /// traits directly.
     pub use crate::adapter::engine_host::EngineHost;
     pub use crate::app::notice::{with_notice_close_snapshot_hook, with_notice_post_time};
+    pub use crate::app::resident::{
+        with_resident_action_close_failure, with_resident_cycle_admission_checkpoint,
+    };
     pub use crate::application::auto_tasks::completion_test_support::with_completion_adapter_run;
     /// Freeze source budget time in an isolated test process and its CLI children.
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
@@ -144,9 +147,6 @@ pub mod test_support {
     pub use crate::application::job::with_run_root_cause_write_hook;
     pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
-    pub use crate::application::resident::{
-        with_resident_action_close_failure, with_resident_cycle_admission_checkpoint,
-    };
     pub use crate::application::review::fulfilment_test_support::with_review_evidence_completion;
     pub use crate::application::task::candidate_checkpoint::install_candidate_selection_checkpoint;
     pub use crate::application::task::{

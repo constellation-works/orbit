@@ -1659,18 +1659,18 @@ fi
 # landing's diff stats through `TaskCodebasePort`, which `app::codebase`
 # implements on `TaskPort` and binds in `app::port`; `app::codebase` reads
 # `distributed` itself.
-# `resident` sits outside the order but above `task` [ORB-22955]: it drives
+# `app::resident` sits outside the order but above `task` [ORB-22955]: it drives
 # task writes, so a decision answer applies a resident grant, and a task
 # comment write admits a resident record and refuses one needing redaction,
-# only through `TaskResidentPort`, which `resident` implements on
-# `OrbitRuntime`. `app::experiment` sits outside the order but above `task`
+# only through `TaskResidentPort`, implemented by `app::resident::TaskPort`
+# and bound in `app::port`. `app::experiment` sits outside the order but above `task`
 # [ORB-23015]: it reads tasks and their crew source back, so task show's
 # assignment readout and the provider-limit gate's experiment-pool check go
 # only through `TaskExperimentPort`, bound in `app::port`. `app::agent` reads
 # decision rules, task history, tasks and blobs through `task::base_revision`.
 # Task reaches it only through
 # `TaskCorpusPort`, implemented on `app::agent::TaskPort` and bound in `app::port`.
-task_upper_modules='job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|resident'
+task_upper_modules='job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
@@ -1683,7 +1683,7 @@ if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, and resident through its task ports, and must not name tag_instructions or backlog_forecast"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing and workspace_auto through its task ports, and must not name tag_instructions or backlog_forecast"
   fail=1
 fi
 
@@ -1692,12 +1692,17 @@ if ! super_chains_into "$app_src" task 'crate::app::agent|crate::app::codebase' 
   fail=1
 fi
 
+if ! super_chains_into "$app_src" task 'crate::app::resident|app::resident' named-path; then
+  echo "orbit-core task must reach app::resident only through task::TaskResidentPort bound in app::port"
+  fail=1
+fi
+
 # [ORB-28427] `notice`, `search`, `evolution` and `crew_memory` live in `app/`,
 # above `task`. `task` reaches `notice` and `evolution` only through
 # `TaskNoticePort` and `TaskEvolutionPort`, bound in `app/port.rs`, and must
-# never name any of those four apps directly. Those apps must not import
-# `adapter` or `bootstrap`.
-for moved_app in notice search evolution crew_memory; do
+# never name any of those four apps directly. Like `resident`, those apps
+# must not import `adapter` or `bootstrap`.
+for moved_app in notice search evolution crew_memory resident; do
   if [[ ! -d "$core_src/app/$moved_app" ]]; then
     echo "dependency scan path missing: $core_src/app/$moved_app" >&2
     exit 1
@@ -1862,25 +1867,29 @@ for lower_module in task job review distributed; do
   fi
 done
 
-# The routine app sits above automation, auto_tasks and resident, and
-# consumes clock and schedule display contracts without a back-edge. Resident
-# reads the selected-checkout cycle switch through its own status port.
+# The routine app sits above automation and auto_tasks, and consumes clock
+# and schedule display contracts without a back-edge. The resident app reads
+# the selected-checkout cycle switch through its own status port.
 # Match the crate-qualified path so relative imports are checked at their
 # lexical depth, where `app::routine` can name a different module.
 if [[ ! -d "$core_src/app/routine" ]]; then
   echo "dependency scan path missing: $core_src/app/routine" >&2
   fail=1
 fi
-for lower_module in automation auto_tasks contracts resident; do
+for lower_module in automation auto_tasks contracts; do
   routine_scan_tests=
   if [[ "$lower_module" == contracts ]]; then
     routine_scan_tests=include-tests
   fi
   if ! super_chains_into "$app_src" "$lower_module" 'crate::app::routine' named-path "$routine_scan_tests"; then
-    echo "orbit-core ${lower_module} must not name app::routine; use lower-owned contracts or resident::ResidentRoutineStatusPort"
+    echo "orbit-core ${lower_module} must not name app::routine; use lower-owned contracts"
     fail=1
   fi
 done
+if ! super_chains_into "$core_src/app" resident 'crate::app::routine' named-path; then
+  echo "orbit-core app::resident must not name app::routine; use resident::ResidentRoutineStatusPort"
+  fail=1
+fi
 
 # [ORB-22287] The forecast has no ports, so nothing below it may call its
 # inherent methods (names derived); `task` and `job` are covered above, through

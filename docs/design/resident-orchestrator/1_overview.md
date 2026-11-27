@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: "One manager session is the human's front door; each mandate gets a resident orchestrator that runs as bounded, checkpointed Orbit activity cycles on the existing clock, coordination only"
 tags: [resident-orchestrator, operator-attention, human-decision-channel, routines, fleet-notices]
-paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**", "crates/orbit-core/assets/activities/**", "crates/orbit-types/src/workflow/automation/members.rs"]
+paths: ["crates/orbit-core/src/app/resident/**", "crates/orbit-core/assets/jobs/**", "crates/orbit-core/assets/activities/**", "crates/orbit-types/src/workflow/automation/members.rs"]
 related_features: [routines, condition-triggers, activity-job, human-decision-channel, operator-attention, fleet-notices, mid-run-steering, decision-assistance]
 related_artifacts: [ORB-21229, ORB-12488, ORB-21164, ORB-21207, ORB-21178]
 ---

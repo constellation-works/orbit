@@ -10,23 +10,27 @@ pub(crate) use super::experiment::{
     TagInstructionPort as TagInstructionExperiment, TaskPort as TaskExperiment,
 };
 pub(crate) use super::notice::TaskPort as TaskNotice;
+pub(crate) use super::resident::TaskPort as TaskResident;
 pub(crate) use super::routine::ResidentRoutineStatus;
+use crate::app::resident::ResidentRoutineStatusPort;
 use crate::app::{agent, codebase};
 use crate::application::distributed::DistributedExperimentPort;
 use crate::application::job::JobExperimentPort;
-use crate::application::resident::ResidentRoutineStatusPort;
 use crate::application::review::ReviewCandidateSizePort;
 use crate::application::tag_instructions::TagInstructionExperimentPort;
 use crate::application::task::{
     TaskCodebasePort, TaskCorpusPort, TaskEvolutionPort, TaskExperimentPort, TaskNoticePort,
+    TaskResidentPort,
 };
 
 const _: () = {
     const fn binds_task_evolution<T: TaskEvolutionPort>() {}
     const fn binds_task_notice<T: TaskNoticePort>() {}
+    const fn binds_task_resident<T: TaskResidentPort>() {}
 
     binds_task_evolution::<TaskEvolution<'_>>();
     binds_task_notice::<TaskNotice<'_>>();
+    binds_task_resident::<TaskResident<'_>>();
 };
 
 const _: () = {

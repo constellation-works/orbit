@@ -21,7 +21,7 @@ use orbit_tools::OrbitBuiltinAction;
 use orbit_types::workflow::ResidentRight;
 use serde_json::Value;
 
-use crate::application::resident::ResidentCallClass;
+use crate::app::resident::ResidentCallClass;
 
 /// The tool's canonical name, as the action ledger records it.
 pub(super) fn resident_guard_tool_name(action: OrbitBuiltinAction) -> &'static str {

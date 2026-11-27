@@ -141,7 +141,7 @@ impl OrbitRuntime {
             None => self.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?,
         };
         let task = self.get_task(id)?;
-        self.admit_locked_resident_comment(
+        crate::app::port::TaskResident(self).admit_locked_resident_comment(
             &task,
             params.comment.as_deref(),
             operator_decision_authority

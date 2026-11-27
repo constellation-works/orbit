@@ -2,6 +2,7 @@
 //! agent-launch integrity guard, with a local provider substitute.
 
 use super::*;
+use orbit_core::app::resident;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
 use orbit_engine::{
     V2AuditWriter, execute_job_with_resume, load_activity_asset,
@@ -275,7 +276,7 @@ print(json.dumps({{"schemaVersion": 1, "status": "success", "result": {{"outcome
                 );
             }
         }
-        fx.runtime.finish_resident_cycle(&run).unwrap();
+        resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     }
 }
 

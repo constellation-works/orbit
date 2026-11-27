@@ -1,5 +1,6 @@
 //! Task-level adapters over the existing authoritative predicates.
 use crate::OrbitRuntime;
+use crate::app::resident;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::attention::cursor;
@@ -226,7 +227,7 @@ pub(super) fn resident_stalled_items(
     now: DateTime<Utc>,
     open_tasks: &SharedOpenTasks,
 ) -> Result<Vec<AttentionItem>, OrbitError> {
-    let cycle_routine_disabled = runtime.resident_cycle_routine_disabled();
+    let cycle_routine_disabled = resident::resident_cycle_routine_disabled(runtime);
     let mut items = Vec::new();
     for metadata in open_tasks.get(runtime)? {
         if metadata.status.is_terminal()
@@ -239,9 +240,9 @@ pub(super) fn resident_stalled_items(
         }
         let task = runtime.get_task(&metadata.id)?;
         let history = runtime.get_task_history(&task.id)?;
-        let view = runtime.resident_view(task.clone(), &history)?;
+        let view = resident::resident_view(runtime, task.clone(), &history)?;
         let Some(stall) =
-            runtime.resident_stall_of(&view, now, cycle_routine_disabled.as_deref())?
+            resident::resident_stall_of(runtime, &view, now, cycle_routine_disabled.as_deref())?
         else {
             continue;
         };
@@ -279,14 +280,14 @@ pub(super) fn resident_stalled_items(
                 "name": routine_name,
                 "expected_enabled": false,
                 "enabled": true,
-                "target": crate::application::resident::RESIDENT_CYCLE_ROUTINE_TARGET,
+                "target": crate::app::resident::RESIDENT_CYCLE_ROUTINE_TARGET,
             }));
             enable.needs = Vec::new();
             enable.command = format!(
                 "orbit tool run orbit.routine.control --input '{{\"workspace\":\"{}\",\"action\":\"toggle\",\"name\":\"{}\",\"expected_enabled\":false,\"enabled\":true,\"target\":\"{}\"}}'",
                 workspace.id,
                 routine_name,
-                crate::application::resident::RESIDENT_CYCLE_ROUTINE_TARGET,
+                crate::app::resident::RESIDENT_CYCLE_ROUTINE_TARGET,
             );
             enable
         } else {

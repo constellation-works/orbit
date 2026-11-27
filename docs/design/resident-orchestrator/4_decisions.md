@@ -10,7 +10,7 @@ doc_role: decisions
 type: design
 summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, lets `dispatch` re-pilot and requeue, lets live cycles read drain status, lets cycles update friction without a right or re-homing, lets `refresh` merge base into a delivery PR without re-review, and bounds review-only recovery under `recover`"
 tags: [resident-orchestrator]
-paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**"]
+paths: ["crates/orbit-core/src/app/resident/**", "crates/orbit-core/assets/jobs/**"]
 related_features: [distributed-drain, routines, activity-job, human-decision-channel, fleet-notices]
 related_artifacts: [ORB-21229, ORB-12488, ORB-10815, ORB-10776, ORB-26832, ORB-26833, ORB-26834]
 ---
@@ -314,7 +314,7 @@ the ability to discard a candidate through requeue.
 
 **Code anchors:** `crates/orbit-runtime/src/tool_exec.rs` `RuntimeKernel::authorize_registered_tool`;
 `crates/orbit-tools/src/builtin/orbit/workflow.rs` `WorkflowVerb::preempt`;
-`crates/orbit-core/src/application/resident/guard.rs` `OrbitRuntime::resident_cycle_drain_status_allowed`;
+`crates/orbit-core/src/app/resident/guard.rs` `resident_cycle_drain_status_allowed`;
 `crates/orbit-core/src/adapter/tool_host/resident_guard.rs` `resident_guard_class`
 
 ### Context
@@ -365,7 +365,7 @@ chief (2026-11-22)
 
 **Code anchors:** `crates/orbit-core/assets/activities/resident_cycle.yaml` `tool_disallow_list`;
 `crates/orbit-core/src/adapter/tool_host/resident_guard.rs` `resident_guard_class`;
-`crates/orbit-core/src/application/resident/guard.rs` `OrbitRuntime::check_resident_cycle_grant_for`
+`crates/orbit-core/src/app/resident/guard.rs` `check_resident_cycle_grant_for`
 
 ### Context
 
@@ -502,7 +502,7 @@ Proposals with stale or warning assessments wait for a fresh pilot or
 human approval.
 
 **Code anchors:** `crates/orbit-core/src/application/task/pilot/promotion.rs::resident_promotion_assessment`,
-`crates/orbit-core/src/application/resident/guard.rs::resident_task_update_audit`.
+`crates/orbit-core/src/app/resident/guard.rs::resident_task_update_audit`.
 
 ## Residents may start review-only delivery recovery under recover
 

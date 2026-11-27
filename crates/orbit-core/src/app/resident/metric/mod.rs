@@ -31,7 +31,14 @@
 //! one foreign or dangling id never fails the whole report [ORB-21642].
 
 mod measure;
+
 mod report;
+
 mod window;
+
+#[cfg(not(feature = "test-support"))]
+pub(super) use measure::resident_metrics;
+#[cfg(feature = "test-support")]
+pub use measure::resident_metrics;
 
 pub(super) use window::parse_window_start;

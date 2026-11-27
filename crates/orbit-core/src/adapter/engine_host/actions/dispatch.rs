@@ -1,3 +1,4 @@
+use crate::app::resident;
 use std::time::{Duration, Instant};
 
 use orbit_engine::DispatchError;
@@ -284,16 +285,14 @@ pub(crate) fn run_deterministic(
             let run_id = owner_run_id(&tool_context).ok_or_else(|| {
                 DispatchError::action_failed(action, "resident_observe needs its owning run")
             })?;
-            runtime
-                .begin_resident_cycle(run_id, chrono::Utc::now())
+            resident::begin_resident_cycle(runtime, run_id, chrono::Utc::now())
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         CoreDeterministicAction::ResidentFinalize => {
             let run_id = owner_run_id(&tool_context).ok_or_else(|| {
                 DispatchError::action_failed(action, "resident_finalize needs its owning run")
             })?;
-            runtime
-                .finish_resident_cycle(run_id)
+            resident::finish_resident_cycle(runtime, run_id)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         // Re-check one blocked task's episode and open a detached base

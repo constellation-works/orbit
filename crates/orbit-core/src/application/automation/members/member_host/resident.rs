@@ -14,7 +14,7 @@ use orbit_types::workflow::automation::members::{
 use serde_json::json;
 
 use super::super::Host;
-use crate::application::resident::{ResidentDue, ResidentMandateState};
+use crate::app::resident::{self, ResidentDue, ResidentMandateState};
 
 /// Why a mandate is not a member now, or its due state.
 enum MandateDue {
@@ -25,7 +25,7 @@ enum MandateDue {
 impl Host<'_> {
     fn mandate_due(&self, task: Task, now: DateTime<Utc>) -> Result<MandateDue, OrbitError> {
         let history = self.runtime.get_task_history(&task.id)?;
-        let view = self.runtime.resident_view(task.clone(), &history)?;
+        let view = resident::resident_view(self.runtime, task.clone(), &history)?;
         let (state, reason) = view.state();
         if state != ResidentMandateState::Active {
             // A stopped mandate is never a cycle member, but on a real
@@ -33,7 +33,7 @@ impl Host<'_> {
             // died before finalizing, so it reaches review without
             // waiting for a cycle that will never be admitted.
             if state == ResidentMandateState::Ended && !self.dry_run {
-                self.runtime.hand_off_stopped_resident_at(&task.id, now)?;
+                resident::hand_off_stopped_resident_at(self.runtime, &task.id, now)?;
             }
             return Ok(MandateDue::NotMember(reason.unwrap_or_else(|| {
                 format!(
@@ -46,9 +46,13 @@ impl Host<'_> {
         let Ok(mandate) = view.mandate else {
             return Ok(MandateDue::NotMember("mandate_invalid".into()));
         };
-        Ok(MandateDue::Due(Box::new(
-            self.runtime.resident_due(&task, mandate, &history, now)?,
-        )))
+        Ok(MandateDue::Due(Box::new(resident::resident_due(
+            self.runtime,
+            &task,
+            mandate,
+            &history,
+            now,
+        )?)))
     }
 
     /// Every active mandate that is due, or due and held by its floor or a
@@ -146,7 +150,7 @@ impl Host<'_> {
         let mut applied = Vec::new();
         let mut failed = BTreeMap::new();
         let mut superseded = BTreeMap::new();
-        let cycle = crate::application::resident::resident_cycle_id(action_id);
+        let cycle = crate::app::resident::resident_cycle_id(action_id);
         for member in attempt.members() {
             let history = match self.runtime.get_task_history(&member.key) {
                 Ok(history) => history,
