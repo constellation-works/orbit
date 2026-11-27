@@ -26,10 +26,17 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams;
 use crate::application::task::TaskRecords;
 
+/// Repository-owned scheduling wrapper prefixes that execute their trailing
+/// command verbatim after `--` without altering Cargo targets or build flags.
+const BUILD_BUDGET_WRAPPERS: [&str; 2] = ["scripts/build-budget.py", "./scripts/build-budget.py"];
+
 /// A required `cargo test` record whose deferrals a host requirement can cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RecordedCargoScope<'a> {
     /// One package and one `--test` target, with at most one positional filter.
     Integration { package: &'a str, target: &'a str },
+    /// One package and an explicit `--lib` target, with at most one positional filter.
+    Library { package: &'a str },
     /// One package and no target selector, with at most one positional filter.
     Package { package: &'a str },
 }
@@ -162,18 +169,22 @@ pub(super) fn with_external_checks_passed(
 /// [ORB-17043] Whether `required`, a `host_sandbox_test`, runs exactly the
 /// test that the deferral `notice` of `record` names, so a passing host run
 /// of it executed that deferred path. `notice` must be a Bubblewrap, Seatbelt
-/// or ps-denied deferral, `<prefix> <test>: <detail>`. Two record shapes match:
+/// or ps-denied deferral, `<prefix> <test>: <detail>`. Three record shapes
+/// match (optionally prefixed with the repository-owned
+/// `scripts/build-budget.py --` scheduling wrapper):
 ///
 /// - a required `cargo test` naming one package (`-p`) and one integration
 ///   target (`--test`), covered by `cargo test -p <package> --test <target> <test>`;
+/// - a required `cargo test -p <package> --lib` naming one package and the
+///   library target, covered by `cargo test -p <package> --lib <test>`;
 /// - a required `cargo test -p <package>` with no target selector, covered by
 ///   `cargo test -p <package> --lib <test>` [ORB-24325].
 ///
 /// Anything else covers nothing: a requirement without a filter, a filter
 /// naming only the test's module, an unadmitted command, a failed record, a
-/// `--test` requirement against a package-wide record, a `--lib` requirement
-/// against a `--test` record, a different package, or a record that itself
-/// carries `--lib` or another target selector.
+/// `--test` requirement against a library or package-wide record, a `--lib`
+/// requirement against a `--test` record, a different package, an unknown
+/// wrapper, build-changing flags, or a record carrying other target selectors.
 pub(super) fn covers_deferral(
     required: &ReviewEvidenceRequirement,
     record: &ReviewValidation,
@@ -201,7 +212,7 @@ pub(super) fn covers_deferral(
             }),
         ) if covered_package == package && covered_target == target && filter == test => true,
         (
-            Some(RecordedCargoScope::Package { package }),
+            Some(RecordedCargoScope::Library { package } | RecordedCargoScope::Package { package }),
             Ok(HostSandboxCommand::CargoLibTest {
                 package: covered_package,
                 filter: Some(filter),
@@ -226,25 +237,48 @@ pub(super) fn deferred_test(notice: &str) -> Option<&str> {
     (!test.is_empty() && !test.contains(char::is_whitespace)).then_some(test)
 }
 
-/// The package, and the integration target when the record names one, of a
-/// `cargo test` command before `--`. `None` when it names none or several of
-/// either, or a target selector other than one `--test`. Flags that neither
-/// select a target nor change the build (`--locked`, `--frozen`, `--offline`,
-/// `--no-fail-fast`, ...) are skipped. Every other option fails closed:
-/// `--lib`, `--bins`, `--all-targets` and the other target selectors may add
+/// The package, and the target selector when the record names one, of a
+/// `cargo test` command before `--` (optionally prefixed with one
+/// `scripts/build-budget.py --` or `./scripts/build-budget.py --` scheduling
+/// wrapper). `None` when it names none or several packages, combines `--lib`
+/// with `--test`, repeats `--lib`, uses another target selector, carries shell
+/// metacharacters, or uses an unknown wrapper. Flags that neither select a
+/// target nor change the build (`--locked`, `--frozen`, `--offline`,
+/// `--no-fail-fast`, `-q`, `--quiet`) are skipped. Every other option fails
+/// closed: `--bins`, `--all-targets` and the other target selectors may add
 /// targets, and `--release`, `--features`, `--profile` and `--target` change
 /// the build that a host replay does not reproduce, so a record carrying them
 /// stays uncovered.
 pub(super) fn recorded_cargo_scope(command: &str) -> Option<RecordedCargoScope<'_>> {
-    let mut words = command.split_whitespace();
+    if command.chars().any(|ch| !plain_scope_char(ch)) {
+        return None;
+    }
+    let mut words = command.split_whitespace().peekable();
+    if words
+        .peek()
+        .is_some_and(|word| BUILD_BUDGET_WRAPPERS.contains(word))
+    {
+        words.next();
+        if words.next()? != "--" {
+            return None;
+        }
+    }
     if words.next()? != "cargo" || words.next()? != "test" {
         return None;
     }
     let (mut package, mut target, mut filters) = (Vec::new(), Vec::new(), Vec::new());
+    let mut lib = false;
     while let Some(word) = words.next() {
         let (slot, inline) = match word {
             "--" => break,
             "--locked" | "--frozen" | "--offline" | "--no-fail-fast" | "-q" | "--quiet" => continue,
+            "--lib" => {
+                if lib {
+                    return None;
+                }
+                lib = true;
+                continue;
+            }
             "-p" | "--package" => (&mut package, None),
             "--test" => (&mut target, None),
             _ => match word.split_once('=') {
@@ -257,15 +291,182 @@ pub(super) fn recorded_cargo_scope(command: &str) -> Option<RecordedCargoScope<'
                 }
             },
         };
-        slot.push(inline.or_else(|| words.next())?);
+        let value = inline.or_else(|| words.next())?;
+        if value.is_empty() || value.starts_with('-') {
+            return None;
+        }
+        slot.push(value);
     }
-    match (package.as_slice(), target.as_slice(), filters.as_slice()) {
-        ([package], [target], []) | ([package], [target], [_]) => {
+    match (
+        package.as_slice(),
+        target.as_slice(),
+        lib,
+        filters.as_slice(),
+    ) {
+        ([package], [target], false, []) | ([package], [target], false, [_]) => {
             Some(RecordedCargoScope::Integration { package, target })
         }
-        ([package], [], []) | ([package], [], [_]) => Some(RecordedCargoScope::Package { package }),
+        ([package], [], true, []) | ([package], [], true, [_]) => {
+            Some(RecordedCargoScope::Library { package })
+        }
+        ([package], [], false, []) | ([package], [], false, [_]) => {
+            Some(RecordedCargoScope::Package { package })
+        }
         _ => None,
     }
+}
+
+/// Operator diagnostics for required Cargo library records whose deferrals
+/// cannot be reconciled with `requirements`, naming the unresolved record and
+/// giving a runnable native or fresh-review route. Non-Cargo records (such as
+/// Make wrappers) stay out of this diagnostic.
+pub(super) fn unreconciled_library_deferrals(
+    records: &[ReviewValidation],
+    requirements: &[ReviewEvidenceRequirement],
+) -> Vec<String> {
+    let eligible: Vec<ReviewEvidenceRequirement> = canonical_requirements(requirements)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|required| requirement_eligible(required, records))
+        .collect();
+    let has_lib_requirement = requirements.iter().any(|required| {
+        required.kind == ReviewEvidenceKind::HostSandboxTest
+            && matches!(
+                HostSandboxCommand::admit(&required.command, &[]),
+                Ok(HostSandboxCommand::CargoLibTest { .. })
+            )
+    });
+    let mut diagnostics = Vec::new();
+    for record in records {
+        if record.role != ValidationRole::Required
+            || record.outcome != ValidationOutcome::Passed
+            || record.deferral().is_none()
+        {
+            continue;
+        }
+        let scope = recorded_cargo_scope(&record.command);
+        let library_pair = matches!(
+            scope,
+            Some(RecordedCargoScope::Library { .. } | RecordedCargoScope::Package { .. })
+        ) || (contains_cargo_test(&record.command)
+            && (has_lib_flag(&record.command) || has_lib_requirement));
+        if !library_pair {
+            continue;
+        }
+        let uncovered: Vec<&str> = record
+            .deferred
+            .iter()
+            .map(String::as_str)
+            .filter(|notice| {
+                !notice.trim().is_empty()
+                    && !eligible.iter().any(|required| {
+                        required.command == record.command
+                            || covers_deferral(required, record, notice)
+                    })
+            })
+            .collect();
+        if uncovered.is_empty() {
+            continue;
+        }
+        diagnostics.push(format_unreconciled_library_deferral(
+            record, scope, &uncovered,
+        ));
+    }
+    diagnostics
+}
+
+fn plain_scope_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric()
+        || matches!(
+            ch,
+            ' ' | '\t' | '.' | '_' | '/' | ':' | '@' | '+' | '=' | '-'
+        )
+}
+
+fn requirement_eligible(
+    required: &ReviewEvidenceRequirement,
+    records: &[ReviewValidation],
+) -> bool {
+    let mut matched = false;
+    for record in records {
+        if record.command == required.command && record.role == ValidationRole::Required {
+            if !matches!(
+                record.executed_outcome(),
+                ValidationOutcome::NotRun | ValidationOutcome::Denied
+            ) {
+                return false;
+            }
+            matched = true;
+        }
+    }
+    matched
+}
+
+fn contains_cargo_test(command: &str) -> bool {
+    let mut words = command.split_whitespace();
+    while let Some(word) = words.next() {
+        if word == "cargo" && words.clone().next() == Some("test") {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_lib_flag(command: &str) -> bool {
+    command.split_whitespace().any(|word| word == "--lib")
+}
+
+fn format_unreconciled_library_deferral(
+    record: &ReviewValidation,
+    scope: Option<RecordedCargoScope<'_>>,
+    uncovered: &[&str],
+) -> String {
+    let label = match record.record_id() {
+        Some(id) => format!("`{id}` (`{}`)", record.command),
+        None => format!("`{}`", record.command),
+    };
+    let parsed_tests: Option<Vec<&str>> = uncovered
+        .iter()
+        .map(|notice| deferred_test(notice))
+        .collect();
+    if let (
+        Some(RecordedCargoScope::Library { package } | RecordedCargoScope::Package { package }),
+        Some(tests),
+    ) = (scope, parsed_tests)
+    {
+        let test_list = tests
+            .iter()
+            .map(|test| format!("`{test}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let native_commands = tests
+            .iter()
+            .map(|test| format!("`cargo test -p {package} --lib {test} -- --nocapture`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!(
+            "unreconciled_library_deferral: required record {label} still defers {test_list}, so \
+             named external_evidence alone cannot settle it; run {native_commands} natively \
+             outside the sandbox (or rerun `{}` without deferral) and admit a fresh review with \
+             matching required and host_sandbox_test records",
+            record.command,
+        );
+    }
+    let deferred_desc = uncovered
+        .iter()
+        .map(|notice| deferred_test(notice).unwrap_or_else(|| notice.trim()))
+        .map(|item| format!("`{item}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "unreconciled_library_deferral: required record {label} cannot be safely reconciled with \
+         named external_evidence for {deferred_desc} (only plain or `scripts/build-budget.py --` \
+         single-package `cargo test -p <crate> [--lib]` without build-changing flags is \
+         reconcilable), so supplying named evidence alone cannot settle it; run `{}` natively \
+         outside the sandbox without deferral or admit a fresh review with supported \
+         single-package Cargo library records",
+        record.command,
+    )
 }
 
 /// Use the store's key for every evidence locator guard. Keep the review

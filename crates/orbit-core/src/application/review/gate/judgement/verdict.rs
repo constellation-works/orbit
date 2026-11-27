@@ -13,8 +13,7 @@ use orbit_types::workflow::{
 };
 
 use crate::OrbitRuntime;
-
-use super::super::super::evidence::covers_deferral;
+use crate::application::review::evidence::{covers_deferral, unreconciled_library_deferrals};
 
 use super::{Judgement, SettlementInputs};
 
@@ -44,12 +43,18 @@ impl Judgement {
             return Ok(());
         }
         let Some(requirements) =
-            super::super::super::evidence::canonical_requirements(&self.external_evidence)
+            crate::application::review::evidence::canonical_requirements(&self.external_evidence)
         else {
+            if self.verdict == ReviewVerdict::Incomplete {
+                self.record_unreconciled_library_deferrals();
+            }
             return Ok(());
         };
         self.external_evidence = requirements;
         if !self.evidence_would_complete(&self.external_evidence, scope) {
+            if self.verdict == ReviewVerdict::Incomplete {
+                self.record_unreconciled_library_deferrals();
+            }
             return Ok(());
         }
         let mut satisfied = super::super::super::evidence::satisfied_external_evidence(
@@ -279,7 +284,19 @@ impl Judgement {
         if self.verdict.passed() {
             match self.validation_defect(scope) {
                 None => self.validation_complete = true,
-                Some(defect) => self.downgrade(&defect.reason()),
+                Some(defect) => {
+                    let library_diagnostics =
+                        matches!(defect, ValidationDefect::RequiredDeferred { .. })
+                            .then(|| {
+                                unreconciled_library_deferrals(
+                                    &self.validation,
+                                    &self.external_evidence,
+                                )
+                            })
+                            .unwrap_or_default();
+                    self.downgrade(&defect.reason());
+                    self.append_unique_escalations(library_diagnostics);
+                }
             }
         }
     }
@@ -346,6 +363,23 @@ impl Judgement {
             Some(existing) if !existing.is_empty() => format!("{existing}; {reason}"),
             _ => reason.to_string(),
         });
+    }
+
+    fn record_unreconciled_library_deferrals(&mut self) {
+        let diagnostics = unreconciled_library_deferrals(&self.validation, &self.external_evidence);
+        self.append_unique_escalations(diagnostics);
+    }
+
+    fn append_unique_escalations(&mut self, diagnostics: Vec<String>) {
+        for diagnostic in diagnostics {
+            if self
+                .escalation
+                .as_deref()
+                .is_none_or(|existing| !existing.contains(&diagnostic))
+            {
+                self.escalate(&diagnostic);
+            }
+        }
     }
 }
 
