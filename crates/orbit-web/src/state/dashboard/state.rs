@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_cmd::registry_runtime::ConfigLayerStamp;
 use orbit_common::Env;
+use orbit_core::app::run;
 use orbit_core::application::routines::ClockStatus;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{OrbitError, OrbitRuntime, ShipMode};
+use orbit_core::{Core, OrbitError, ShipMode};
 
 #[cfg(test)]
 use super::super::PrePublishHook;
@@ -16,7 +17,7 @@ use super::super::{
     RegistryFingerprint, RegistrySource, SINGLE_WORKSPACE_ID, Snapshot, SnapshotData, WsEntry,
     WsRejection, checkout_fingerprints,
 };
-use super::super::{HostTunnels, TunnelConfig};
+use super::super::{HostTunnels, TunnelConfig, run_read};
 use super::cache::CachedRuntime;
 use crate::doctor_report::DoctorReports;
 use crate::runtime_memo::RuntimeMemo;
@@ -131,11 +132,11 @@ impl DashboardState {
     /// used by [`crate::serve`] and by every handler test (which builds an
     /// in-memory runtime and wants a trivial single-workspace harness).
     #[cfg(test)]
-    pub(crate) fn single(runtime: Arc<OrbitRuntime>) -> Self {
+    pub(crate) fn single(runtime: Arc<Core>) -> Self {
         Self::single_with_env(runtime, Env::default())
     }
 
-    pub(crate) fn single_with_env(runtime: Arc<OrbitRuntime>, env: Env) -> Self {
+    pub(crate) fn single_with_env(runtime: Arc<Core>, env: Env) -> Self {
         let entry = WsEntry {
             id: SINGLE_WORKSPACE_ID.to_string(),
             name: SINGLE_WORKSPACE_ID.to_string(),
@@ -154,8 +155,9 @@ impl DashboardState {
             checkout_role: None,
             owner_machine_id: None,
         };
-        let monitor = runtime.host_resource_monitor();
-        let global_root = runtime.global_root();
+        // Nothing refuses a dashboard read, so both answer.
+        let monitor = run_read(&runtime, run::Command::host_resource_monitor()).ok();
+        let global_root = run_read(&runtime, run::Command::global_root()).unwrap_or_default();
         let mut runtimes = HashMap::new();
         runtimes.insert(
             SINGLE_WORKSPACE_ID.to_string(),
@@ -190,7 +192,7 @@ impl DashboardState {
             .inner
             .host_resources
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(monitor);
+            .unwrap_or_else(PoisonError::into_inner) = monitor;
         state
     }
 
@@ -230,12 +232,8 @@ impl DashboardState {
     ) -> Self {
         let host_disk_paths = runtimes
             .values()
-            .flat_map(|cached| {
-                [
-                    cached.runtime.paths().repo_root.clone(),
-                    cached.runtime.shared_root().join("state/worktrees"),
-                ]
-            })
+            .filter_map(|cached| run_read(&cached.runtime, run::Command::host_disk_paths()).ok())
+            .flatten()
             .collect();
         let checkout_fingerprints = checkout_fingerprints(&snapshot.entries);
         let initial = Snapshot {
@@ -346,18 +344,13 @@ impl DashboardState {
     /// snapshot. May read files and must be called through `blocking`.
     pub(crate) fn host_provider_limits_pinned(&self, pinned: &Pinned) -> Option<serde_json::Value> {
         let runtime = pinned.runtime_for(pinned.default_workspace()?).ok()?;
-        let view = runtime.provider_limits_view(chrono::Utc::now());
-        if let Some(error) = &view.error {
-            tracing::warn!("top bar shows no provider usage: {error}");
-            return None;
+        match run_read(&runtime, run::Command::provider_limits(chrono::Utc::now())).ok()? {
+            Ok(limits) => Some(limits),
+            Err(error) => {
+                tracing::warn!("top bar shows no provider usage: {error}");
+                None
+            }
         }
-        Some(serde_json::json!({
-            "provider_limits": view.readings,
-            // The bar list, not readiness's `providers`: it adds the
-            // default-login pressure the merged per-model row shows.
-            "provider_pressures": view.bar_pressures,
-            "crew_pressures": view.crew_pressures,
-        }))
     }
 
     /// The serving host's host file: its last valid snapshot, reloaded when
@@ -527,7 +520,7 @@ impl DashboardState {
     /// the *live* snapshot. Test-only convenience: production resolves through
     /// [`Pinned::runtime_for`] so metadata and runtime share one generation.
     #[cfg(test)]
-    pub(crate) fn runtime_for(&self, id: &str) -> Result<Arc<OrbitRuntime>, WsRejection> {
+    pub(crate) fn runtime_for(&self, id: &str) -> Result<Arc<Core>, WsRejection> {
         let snapshot = self.inner.snapshot();
         self.inner.resolve_runtime(&snapshot, id)
     }
@@ -537,7 +530,7 @@ impl DashboardState {
     /// Test-only convenience: production health reads the pinned open set via
     /// [`Pinned::open_runtimes`].
     #[cfg(test)]
-    pub(crate) fn open_runtimes(&self) -> Vec<(String, Arc<OrbitRuntime>)> {
+    pub(crate) fn open_runtimes(&self) -> Vec<(String, Arc<Core>)> {
         let snapshot = self.inner.snapshot();
         self.inner.open_runtimes_for(&snapshot)
     }
@@ -572,7 +565,7 @@ impl DashboardState {
     pub(crate) fn try_resolve_cached(
         &self,
         requested: Option<&str>,
-    ) -> Option<Result<Arc<OrbitRuntime>, WsRejection>> {
+    ) -> Option<Result<Arc<Core>, WsRejection>> {
         if let Some(source) = self.inner.source.as_ref()
             && !self.registry_is_current(source)
         {

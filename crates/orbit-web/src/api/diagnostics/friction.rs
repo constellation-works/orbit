@@ -3,7 +3,7 @@
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::storage::blob_store::BlobStore;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 use orbit_core::runtime::audit::run_logs::HTTP_PREVIEW_MAX_BYTES;
 use serde::Deserialize;
 use serde::de::{self, Deserializer, IgnoredAny, Visitor};
@@ -131,7 +131,7 @@ impl EnvelopeLinks for ScanLinks<'_> {
 }
 
 fn diagnostics_friction_from_v2_audit(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     month: &str,
     limit: usize,
 ) -> Result<Vec<Value>, orbit_core::OrbitError> {
@@ -151,7 +151,7 @@ fn diagnostics_friction_from_v2_audit(
         .filter(|payload| payload.trim_start().starts_with('{'))
         .filter_map(|payload| Some((payload.as_str(), serde_json::from_str(payload).ok()?)))
         .collect();
-    let blob_store = audit_blob_store(runtime);
+    let blob_store = audit_blob_store(runtime)?;
     let by_id: HashMap<&str, &ScanLinks<'_>> = events
         .iter()
         .filter_map(|(_, links)| links.event_id.as_deref().map(|id| (id, links)))

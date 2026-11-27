@@ -40,11 +40,9 @@ Design intent: [docs/design/user-interface/](../../docs/design/user-interface/) 
 - `lease`: Lease listener and operator-owned Unix-socket intake transport; imports `api::leases`, `shutdown`, `state`, `orbit-auth`, `orbit-common`, `orbit-core`, and `orbit-types` (never `serve`).
 - `log_format`: Web log scanning and HTML rendering for `/api/log` and `/api/diagnostics`; imports `parse`, `orbit-cmd`, `orbit-common`, and `orbit-core` (never `api` or `serve`).
 - `parse`: Dashboard query duration and timestamp parsers; imports `orbit-common` and `orbit-core` (never `api` or `serve`).
-- `projections`: Dashboard `*_to_json` detail projections built on shared Core show records; imports `runtime_memo`, `state`, `why_stuck`, `orbit-core`, and `orbit-types` (never `api` or `serve`).
-- `run_failure`: The diagnostic line for a held or failed run, rendered from `app::run` evidence; imports `orbit-core` and `orbit-cmd` (never `api` or `serve`).
+- `projections`: The audit event JSON the API serves and the cached task riskiness model lent to the task app; imports `runtime_memo`, `state`, `orbit-core`, and `orbit-types` (never `api` or `serve`).
 - `runtime_memo`: Process-local single-flight TTL cache keyed by runtime identity or host inputs; imports `axum`, `orbit-core`, and `serde_json` only (never `api` or `serve`).
 - `serve`: Axum HTTP server bootstrap, loopback bind enforcement, middleware, and graceful shutdown; imports `api`, `assets`, `connect`, `health`, `heap`, `lease`, `shutdown`, `state`, and composition/core crates.
 - `shutdown`: SIGINT and SIGTERM future shared by the dashboard server and lease listener; imports `orbit-core` only (never `api` or `serve`).
 - `ssh_tunnel`: Client-side SSH local-forward tunnel implementation for `orbit web connect`; imports `host_tunnels`, `orbit-common`, and `orbit-core` (never `api` or `serve`).
 - `state`: Multi-workspace dashboard state and registry reconciliation; imports `doctor_report`, `host_tunnels`, `runtime_memo`, and lower workspace crates (never `api` or `serve`).
-- `why_stuck`: Read-only "Why stuck" diagnostic facts for blocked tasks and held delivery runs; imports `run_failure` and `orbit-core` (never `api` or `serve`).

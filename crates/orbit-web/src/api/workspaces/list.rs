@@ -1,6 +1,8 @@
 //! `GET /api/workspaces` and the workspace ownership and path helpers the
 //! aggregate endpoints share.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::path::Path;
 
 use axum::extract::State;
@@ -48,7 +50,7 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
             return None;
         }
         let runtime = pinned.runtime_for(&entry.id).ok()?;
-        Some(runtime.leases_enabled())
+        run_read(&runtime, RunCommand::leases_enabled()).ok()
     });
     entries
         .iter()

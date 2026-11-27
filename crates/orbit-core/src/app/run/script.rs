@@ -1,7 +1,9 @@
-use super::{Command, Operation};
+use super::{Command, Operation, Outcome, RowDue};
 use crate::OrbitError;
+use crate::app::DashboardOrigin;
 use crate::runtime::audit::run::RunScriptExecution;
 use crate::runtime::scripts::{ScriptGrantOptions, ScriptStatus};
+use orbit_common::governance::authorization::DASHBOARD_SCRIPT_GRANT;
 use orbit_types::workflow::activity_job::ScriptGrant;
 
 /// A new grant with the previous digest and current asset for the consent receipt.
@@ -82,5 +84,65 @@ impl<'a> Command<'a, Vec<RunScriptExecution>> {
             Operation::command("script", "history").target(Some("script"), Some(name.into())),
             move |core| core.runtime().script_execution_history(name, limit),
         )
+    }
+}
+
+/// What the dashboard's script grant did for an admitted operator.
+pub enum DashboardScriptGrant {
+    /// The request named no reviewed digest; nothing was granted.
+    DigestMissing,
+    /// The grant, bound to the reviewed digest.
+    Granted(Box<ScriptGrant>),
+    /// The grant was refused.
+    Refused(OrbitError),
+}
+
+impl<'a> Command<'a, DashboardScriptGrant> {
+    /// Grant `name` at the digest the operator reviewed, answering its open
+    /// request when one exists. `digest` is the digest as the request sent
+    /// it, which the audit row records; `reviewed` is the digest to grant.
+    pub fn dashboard_script_grant(
+        origin: DashboardOrigin,
+        name: &'a str,
+        digest: Option<String>,
+        reviewed: Option<String>,
+        grantor: String,
+    ) -> Self {
+        let operation = Operation::dashboard_read("script", "dashboard-grant")
+            .requires(&DASHBOARD_SCRIPT_GRANT)
+            .dashboard_row(
+                &DASHBOARD_SCRIPT_GRANT,
+                name,
+                serde_json::json!({ "digest": digest }),
+                origin,
+            );
+        Self {
+            operation,
+            flow: Box::new(move |core| {
+                let (value, row) = match reviewed {
+                    None => (DashboardScriptGrant::DigestMissing, RowDue::Nothing),
+                    Some(reviewed) => {
+                        match core
+                            .runtime()
+                            .grant_script_from_dashboard(name, &reviewed, grantor)
+                        {
+                            Ok(grant) => (
+                                DashboardScriptGrant::Granted(Box::new(grant)),
+                                RowDue::Declared,
+                            ),
+                            Err(error) => (
+                                DashboardScriptGrant::Refused(error),
+                                RowDue::Failure("script grant refused"),
+                            ),
+                        }
+                    }
+                };
+                Ok(Outcome {
+                    value,
+                    exit_code: 0,
+                    row,
+                })
+            }),
+        }
     }
 }

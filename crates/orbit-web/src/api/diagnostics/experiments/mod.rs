@@ -15,10 +15,12 @@ pub(in crate::api) use authoring::{
     diagnostics_experiment_start, diagnostics_experiment_update,
 };
 
+use crate::state::run_read;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_EXPERIMENT_CONCLUDE;
+use orbit_core::app::run::Command as RunCommand;
 use orbit_core::application::experiment::{ExperimentActor, ExperimentChange};
 use serde::Deserialize;
 use serde_json::json;
@@ -45,8 +47,8 @@ pub(in crate::api) async fn diagnostics_experiments(
 ) -> Response {
     let operator_session = state.operator_session();
     match super::super::blocking("experiment list", move || {
-        let experiments = runtime.experiment_progress()?;
-        let authoring = authoring::experiment_authoring(&runtime, operator_session);
+        let experiments = run_read(&runtime, RunCommand::experiment_progress())?;
+        let authoring = authoring::experiment_authoring(&runtime, operator_session)?;
         Ok(json!({ "experiments": experiments, "authoring": authoring }))
     })
     .await
@@ -68,12 +70,12 @@ pub(in crate::api) async fn diagnostics_experiment(
     .is_ok();
     let operator_session = state.operator_session();
     match super::super::blocking("experiment show", move || {
-        let view = runtime.experiment_view(&id)?;
+        let view = run_read(&runtime, RunCommand::experiment_view(&id))?;
         let mut body = serde_json::to_value(&view).map_err(|error| {
             orbit_core::OrbitError::Execution(format!("experiment view is not JSON: {error}"))
         })?;
         body["conclude_authorized"] = json!(conclude_authorized);
-        body["authoring"] = authoring::experiment_authoring(&runtime, operator_session);
+        body["authoring"] = authoring::experiment_authoring(&runtime, operator_session)?;
         Ok(body)
     })
     .await
@@ -113,13 +115,16 @@ pub(in crate::api) async fn diagnostics_experiment_conclude(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     match super::super::blocking("experiment conclude", move || {
-        runtime.change_experiment(
-            &id,
-            ExperimentChange::Conclude { arm },
-            ExperimentActor {
-                actor: "dashboard".into(),
-                reason: Some(reason),
-            },
+        run_read(
+            &runtime,
+            RunCommand::change_experiment(
+                &id,
+                ExperimentChange::Conclude { arm },
+                ExperimentActor {
+                    actor: "dashboard".into(),
+                    reason: Some(reason),
+                },
+            ),
         )
     })
     .await
@@ -135,7 +140,10 @@ pub(in crate::api) async fn diagnostics_experiment_readout(
     Query(q): Query<ExperimentReadoutQuery>,
 ) -> Response {
     match super::super::blocking("experiment readout", move || {
-        let readout = runtime.experiment_readout(&id, q.metric.as_deref())?;
+        let readout = run_read(
+            &runtime,
+            RunCommand::experiment_readout(&id, q.metric.as_deref()),
+        )?;
         let cumulative = cumulative::primary_cumulative(&readout);
         let mut body = serde_json::to_value(&readout).map_err(|error| {
             orbit_core::OrbitError::Execution(format!("experiment readout is not JSON: {error}"))

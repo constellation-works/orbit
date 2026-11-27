@@ -2,7 +2,8 @@ use super::test_support::{assert_isolated_child, enter_isolated_child};
 use crate::state::{DashboardState, RegistrySource};
 use chrono::Utc;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{ActorIdentity, OrbitRuntime, TaskStatus};
+use orbit_core::test_support::{FixtureRuntime, fixture_runtime};
+use orbit_core::{ActorIdentity, TaskStatus};
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,7 +23,7 @@ fn seed_workspace(global_root: &Path, base: &Path, name: &str) -> (PathBuf, Path
         format!("schema_version: 1\nworkspace_id: ws_{name}\n"),
     )
     .expect("write workspace identity");
-    let runtime = OrbitRuntime::from_roots(global_root, &orbit_dir)
+    let runtime = FixtureRuntime::from_roots(global_root, &orbit_dir)
         .expect("build runtime")
         .with_actor(ActorIdentity::human("human"));
     runtime
@@ -87,7 +88,7 @@ fn registry_state(global_root: &Path) -> DashboardState {
 }
 
 /// Metadata selection used by the aggregate exposes a runtime's binding.
-fn runtime_task_titles(runtime: &OrbitRuntime) -> Vec<String> {
+fn runtime_task_titles(runtime: &FixtureRuntime) -> Vec<String> {
     runtime
         .task_candidates(&Default::default(), orbit_core::DEFAULT_TASK_LIST_LIMIT)
         .expect("list candidates")
@@ -173,11 +174,11 @@ fn stale_build_during_rebind_never_republishes_as_current() {
         );
         // The old build serves the old checkout; current serves the new one.
         assert!(
-            runtime_task_titles(&old_runtime).contains(&"alpha task".to_string()),
+            runtime_task_titles(fixture_runtime(&old_runtime)).contains(&"alpha task".to_string()),
             "old build binds the original checkout"
         );
         assert!(
-            runtime_task_titles(&current).contains(&"alpha_v2 task".to_string()),
+            runtime_task_titles(fixture_runtime(&current)).contains(&"alpha_v2 task".to_string()),
             "current binds the rebound checkout"
         );
         new_runtime
@@ -193,7 +194,8 @@ fn stale_build_during_rebind_never_republishes_as_current() {
         "open_runtimes surfaces only the current-binding runtime"
     );
     assert!(
-        runtime_task_titles(&alpha_open[0].1).contains(&"alpha_v2 task".to_string()),
+        runtime_task_titles(fixture_runtime(&alpha_open[0].1))
+            .contains(&"alpha_v2 task".to_string()),
         "the open runtime is never tagged as the wrong (old) checkout"
     );
 }

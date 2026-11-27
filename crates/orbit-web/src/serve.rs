@@ -16,7 +16,7 @@ use orbit_cmd::registry_runtime;
 use orbit_common::Env;
 /// Set on a dashboard exec'd to take over from a replaced image.
 use orbit_common::env_vars::ORBIT_DASHBOARD_HANDOVER as HANDOVER_ENV;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError};
 use orbit_registry::workspace_registry;
 use tokio::sync::Notify;
 use tower_http::compression::CompressionLayer;
@@ -95,13 +95,13 @@ pub struct ServeArgs {
 /// shutdown (ctrl-c or SIGTERM). Admits loopback Hosts only: the
 /// `machine.web.trusted_*` keys apply to [`serve_from_env`]. Single-workspace mode is no longer reachable
 /// from `orbit web serve` (see [`serve_from_env`], ORB-10029); this stays for
-/// callers that already hold an `OrbitRuntime` and want it embedded directly.
-/// The supplied runtime is retained for the server's lifetime. Config writes
-/// still update its files, but config and plugin changes do not reconstruct
-/// the runtime; the caller controls when to build and serve a new one.
-pub fn serve(runtime: &OrbitRuntime, args: ServeArgs, env: &Env) -> Result<(), OrbitError> {
+/// callers that already hold a [`Core`] and want it embedded directly.
+/// The supplied workspace is retained for the server's lifetime. Config writes
+/// still update its files, but config and plugin changes do not reopen
+/// it; the caller controls when to open and serve a new one.
+pub fn serve(core: Core, args: ServeArgs, env: &Env) -> Result<(), OrbitError> {
     heap::configure();
-    let state = state::DashboardState::single_with_env(Arc::new(runtime.clone()), env.clone());
+    let state = state::DashboardState::single_with_env(Arc::new(core), env.clone());
     state.set_operator_session(args.operator);
     run_server(&args, state, env)
 }

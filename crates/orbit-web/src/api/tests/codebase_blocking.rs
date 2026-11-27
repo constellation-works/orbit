@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
-use orbit_core::OrbitRuntime;
+use orbit_core::test_support::{FixtureRuntime, fixture_core};
 use tokio::sync::oneshot;
 use tower::ServiceExt;
 
@@ -71,8 +71,8 @@ fn codebase_file_rollup_rank_runs_on_blocking_pool_on_memo_hit() {
         .expect("constrained runtime");
     runtime.block_on(async {
         tokio::time::timeout(Duration::from_secs(30), async {
-            let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
-            let state = DashboardState::single(Arc::clone(&runtime));
+            let runtime = Arc::new(FixtureRuntime::in_memory().expect("build runtime"));
+            let state = DashboardState::single(Arc::new(fixture_core(&runtime)));
 
             // Cold file-rollup analytics: a scan miss that also locks the miss
             // payload. The memo holds the scan afterwards, so the requests

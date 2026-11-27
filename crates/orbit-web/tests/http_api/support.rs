@@ -10,7 +10,8 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, TimeZone, Utc};
 use orbit_core::test_support::V2AuditEventInsertParams;
-use orbit_core::{JobRun, JobRunState, JobRunStep, JobTargetType, OrbitRuntime};
+use orbit_core::test_support::{FixtureRuntime, fixture_core, fixture_store};
+use orbit_core::{JobRun, JobRunState, JobRunStep, JobTargetType};
 use orbit_types::workflow::{ChildDispatch, PipelineState};
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
@@ -108,7 +109,7 @@ pub(super) struct Fixture {
     temp: tempfile::TempDir,
     pub(super) global: PathBuf,
     pub(super) work: PathBuf,
-    pub(super) runtime: OrbitRuntime,
+    pub(super) runtime: FixtureRuntime,
 }
 
 impl Fixture {
@@ -893,10 +894,10 @@ pub(super) fn serve_fixture() {
                 }
             }
         }
-        let runtime = OrbitRuntime::in_memory()
+        let runtime = FixtureRuntime::in_memory()
             .unwrap()
             .with_host_resource_probe(Arc::new(Probe(AtomicUsize::new(0))));
-        orbit_web::serve(&runtime, args, &orbit_common::Env::capture()).unwrap();
+        orbit_web::serve(fixture_core(&runtime), args, &orbit_common::Env::capture()).unwrap();
     } else if std::env::var("ORBIT_HTTP_EMBEDDED").as_deref() == Ok("1") {
         let global = root.join("global");
         let registry = orbit_registry::workspace_registry::load_registry_from(
@@ -916,7 +917,7 @@ pub(super) fn serve_fixture() {
             root.canonicalize().unwrap()
         );
         assert_ne!(runtime.workspace_id().unwrap(), "default");
-        orbit_web::serve(&runtime, args, &orbit_common::Env::capture()).unwrap();
+        orbit_web::serve(fixture_core(&runtime), args, &orbit_common::Env::capture()).unwrap();
     } else {
         orbit_web::serve_from_env(
             args,
@@ -1046,7 +1047,7 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
 
 /// Run pending store migrations through the production open boundary.
 pub(super) fn upgrade_retention_analytics(fixture: &Fixture) {
-    orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+    fixture_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
 }
 
 // --- Shared run-scenario fixture helpers ---
@@ -1078,7 +1079,7 @@ pub(super) fn ws_id(fixture: &Fixture) -> String {
     fixture.runtime.workspace_id().unwrap()
 }
 
-pub(super) fn store(fixture: &Fixture) -> orbit_store::Store {
+pub(super) fn store(fixture: &Fixture) -> fixture_store::Store {
     fixture.runtime.sqlite_store().unwrap()
 }
 
@@ -1254,7 +1255,7 @@ pub(super) fn insert_test_event(
     );
 }
 
-pub(super) fn add_workspace(fixture: &Fixture, id: &str, name: &str) -> OrbitRuntime {
+pub(super) fn add_workspace(fixture: &Fixture, id: &str, name: &str) -> FixtureRuntime {
     let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
     let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
     let mut workspace = registry.workspaces[0].clone();
@@ -1283,7 +1284,7 @@ pub(super) fn add_workspace(fixture: &Fixture, id: &str, name: &str) -> OrbitRun
 /// A successful `task_pr_pipeline` run for `ORB-2` in another workspace,
 /// `offset_ms` after `created` (the cross-workspace list cases).
 pub(super) fn seed_other_run(
-    runtime: &OrbitRuntime,
+    runtime: &FixtureRuntime,
     id: &str,
     offset_ms: i64,
     created: DateTime<Utc>,
@@ -1379,8 +1380,8 @@ pub(super) fn insert_cancel_audit(fixture: &Fixture, run_id: &str, ts: DateTime<
     );
 }
 
-pub(super) fn pull_destination() -> orbit_store::contract::PullDestination {
-    orbit_store::contract::PullDestination {
+pub(super) fn pull_destination() -> fixture_store::contract::PullDestination {
+    fixture_store::contract::PullDestination {
         owner_machine_id: "hm_owner".into(),
         owner_workspace_id: "ws_owner".into(),
         selector: "owner/workspace".into(),
@@ -1391,7 +1392,7 @@ pub(super) fn pull_destination() -> orbit_store::contract::PullDestination {
 pub(super) fn pull_request(
     run: &JobRun,
     request_id: &str,
-) -> orbit_store::contract::AdmissionRequest {
+) -> fixture_store::contract::AdmissionRequest {
     serde_json::from_value(json!({
         "request_id": request_id, "caller_version": env!("CARGO_PKG_VERSION"), "caller_schema": 1,
         "run_context": { "run_id": run.run_id, "job_name": run.job_id, "machine_name": "follower" },
@@ -1401,10 +1402,10 @@ pub(super) fn pull_request(
 
 /// Bind `task_id`'s run to another host in the task document store.
 pub(super) fn bind_task_run_to_host(fixture: &Fixture, task_id: &str, run_id: &str) {
-    use orbit_store::contract::TaskDocumentUpdateParams;
-    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    use fixture_store::contract::TaskDocumentUpdateParams;
+    use fixture_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 
-    let documents = orbit_store::compose::workspace_coordinated_backends(
+    let documents = fixture_store::compose::workspace_coordinated_backends(
         TaskRegistryStore::open(&task_registry_path(&fixture.global)).unwrap(),
         ws_id(fixture),
         store(fixture),
@@ -1429,10 +1430,10 @@ pub(super) fn bind_task_run_to_host(fixture: &Fixture, task_id: &str, run_id: &s
 }
 
 pub(super) fn persist_admission(
-    store: &orbit_store::Store,
+    store: &fixture_store::Store,
     workspace: &str,
     request_id: &str,
-    admission: &orbit_store::contract::LocalPullAdmission,
+    admission: &fixture_store::contract::LocalPullAdmission,
 ) {
     store.connection().lock().unwrap().execute(
         "UPDATE local_pull_admissions SET leaf_run_id=?1, record_json=?2 WHERE workspace_id=?3 AND request_id=?4",

@@ -1,12 +1,14 @@
 //! Process-log and agent-stderr error rows with coverage.
 
+use crate::state::run_read;
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
+use orbit_core::app::run::Command as RunCommand;
 use orbit_core::runtime::audit::run::{AuditStepOutcome, RunAuditStep};
-use orbit_core::{JobRunState, OrbitRuntime, V2AuditEventFilter};
+use orbit_core::{Core, JobRunState, V2AuditEventFilter};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -131,7 +133,7 @@ pub(in crate::api) async fn list_diagnostics_errors(
 /// Each item's `message` is a bounded excerpt; `truncated` says it was cut,
 /// and the owning run keeps the full text.
 fn diagnostics_errors(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     env: &orbit_common::Env,
     range: &DiagnosticsRange,
     limit: usize,
@@ -156,7 +158,7 @@ fn diagnostics_errors(
 }
 
 fn diagnostics_error_rows(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     env: &orbit_common::Env,
     range: &DiagnosticsRange,
     limit: usize,
@@ -175,7 +177,8 @@ fn diagnostics_error_rows(
     // steps, and a foreign row would keep the generic `step <id> finished
     // error` text; rows for runs this workspace does not own are dropped.
     // Filtering precedes the cap so foreign rows cannot crowd out local ones.
-    let workspace_id = runtime.workspace_id()?;
+    // An unreadable workspace identity fails the read, as it always has.
+    run_read(runtime, RunCommand::workspace_id())?;
     let mut runs = HashMap::new();
     let mut scoped = Vec::new();
     for mut row in rows {
@@ -187,19 +190,14 @@ fn diagnostics_error_rows(
             continue;
         };
         let (owned, steps, succeeded_at) = runs.entry(run.clone()).or_insert_with(|| {
-            let steps = runtime
-                .collect_run_audit_step_attempts(&run)
-                .unwrap_or_else(|error| {
+            let steps =
+                run_read(runtime, RunCommand::audit_step_attempts(&run)).unwrap_or_else(|error| {
                     tracing::warn!(%run, %error, "diagnostics step join unavailable");
                     Vec::new()
                 });
-            let record = runtime.sqlite_store().ok().and_then(|store| {
-                store
-                    .read()
-                    .and_then(|snapshot| snapshot.job_run().get(&workspace_id, &run))
-                    .ok()
-                    .flatten()
-            });
+            let record = run_read(runtime, RunCommand::stored_run(&run))
+                .ok()
+                .flatten();
             let owned = !steps.is_empty() || record.is_some();
             let succeeded_at = record
                 .filter(|record| record.state == JobRunState::Success)
@@ -366,7 +364,7 @@ fn optional_log_field<'a>(fields: &'a Value, keys: &[&str]) -> Option<&'a str> {
 /// read when the blob cap stopped the scan before the window start, combined
 /// with the raw audit-event scan's coverage boundary.
 fn agent_stderr_error_rows(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     range: &DiagnosticsRange,
     limit: usize,
 ) -> Result<(Vec<Value>, Option<DateTime<Utc>>), orbit_core::OrbitError> {
@@ -378,7 +376,7 @@ fn agent_stderr_error_rows(
         .filter_map(|event| event.event_id.as_deref().map(|id| (id, event)))
         .collect();
     let step_index_by_id = step_index_by_id(&events);
-    let blob_store = audit_blob_store(runtime);
+    let blob_store = audit_blob_store(runtime)?;
     let mut rows = Vec::new();
     let mut blobs_read = 0usize;
     let mut oldest_read = None;
@@ -536,7 +534,7 @@ fn string_field<'de, D: serde::Deserializer<'de>>(
 /// Pages through the store so one page of rows is alive at a time. One-row
 /// lookahead distinguishes an exactly-full exhausted source from truncation.
 fn stderr_scan_events(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     until: DateTime<Utc>,
 ) -> Result<(Vec<StderrScanEvent>, Option<DateTime<Utc>>), orbit_core::OrbitError> {
     let mut events = Vec::new();
@@ -546,16 +544,16 @@ fn stderr_scan_events(
     while scanned < STDERR_SCAN_EVENTS {
         let requested = STDERR_SCAN_PAGE.min(STDERR_SCAN_EVENTS - scanned);
         let final_page = scanned + requested == STDERR_SCAN_EVENTS;
-        let page = OrbitRuntime::list_v2_audit_events(
+        let page = run_read(
             runtime,
-            V2AuditEventFilter {
+            RunCommand::audit_events(V2AuditEventFilter {
                 workspace_id: String::new(),
                 until: Some(until),
                 source: Some("v2_envelope".to_string()),
                 limit: Some(requested + usize::from(final_page)),
                 offset: Some(scanned),
                 ..Default::default()
-            },
+            }),
         )?;
         let fetched = page.len();
         truncated = fetched > requested;

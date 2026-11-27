@@ -6,10 +6,12 @@
 //! maximum, without changing admission's set. `delivery_limit` discloses the
 //! effective per-key bound and `max_last` the maximum explicit selection.
 
+use crate::state::run_read;
 use axum::extract::Query;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
+use orbit_core::app::run::Command as RunCommand;
 use orbit_core::runtime::host_resource::forecast::HostCapacity;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -73,18 +75,15 @@ pub(super) async fn resource_profiles(
     };
     let selected = window.and(query.last.as_deref().map(|last| last.trim().to_string()));
     match blocking("resource profiles", move || {
-        let workspace_id = runtime.workspace_id()?;
-        let set = match window {
-            Some(window) => runtime.resource_profiles_over(window)?,
-            None => runtime.resource_profiles()?,
-        };
+        let workspace_id = run_read(&runtime, RunCommand::workspace_id())?;
+        let set = run_read(&runtime, RunCommand::resource_profiles(window))?;
         // Encoded once per cached set and workspace, not on every read.
         let profiles = set.workspace_profiles_json(&workspace_id)?;
-        let settings = runtime.auto_concurrency_settings();
+        let settings = run_read(&runtime, RunCommand::auto_concurrency_settings())?;
         serde_json::to_vec(&ResourceProfilesBody {
             workspace_id: &workspace_id,
             built_at: set.built_at,
-            host: runtime.host_capacity(),
+            host: run_read(&runtime, RunCommand::host_capacity())?,
             admit_cpu_percent: settings.admit_cpu_percent,
             admit_memory_percent: orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT,
             profile_window: orbit_config::AUTO_CONCURRENCY_PROFILE_WINDOW,

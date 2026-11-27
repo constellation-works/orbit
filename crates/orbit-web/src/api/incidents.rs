@@ -14,10 +14,12 @@
 //! the grouped population or its denominators.
 
 use crate::api::helpers;
+use crate::state::run_read;
 use axum::extract::{Path, Query};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::security::redaction::redact_all;
+use orbit_core::app::run::Command as RunCommand;
 use orbit_core::{
     FailureClass, FailureIncident, FailureIncidentQuery, FailureIncidentReport, IncidentEventRef,
     JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, OrbitError, PropagationLink,
@@ -110,8 +112,11 @@ pub(super) async fn list_failure_incidents(
     // denominator: `audit_event_stats` would also sort every duration in the
     // window to compute a percentile this payload does not return.
     let bundle = match helpers::blocking_join("failure incident aggregation", move || {
-        let report = runtime_clone.audit_failure_incidents(&incident_query)?;
-        let total_events = runtime_clone.audit_event_count(since)?;
+        let report = run_read(
+            &runtime_clone,
+            RunCommand::failure_incidents(&incident_query),
+        )?;
+        let total_events = run_read(&runtime_clone, RunCommand::audit_event_count(since))?;
         Ok::<_, OrbitError>((report, total_events))
     })
     .await
@@ -144,7 +149,7 @@ pub(super) async fn incident_event_message(Ws(runtime): Ws, Path(id): Path<i64>)
         return bad_request("id must be a positive audit row ID".to_string());
     }
     match blocking("audit event message", move || {
-        runtime.list_audit_events_by_ids(&[id], None)
+        run_read(&runtime, RunCommand::audit_events_by_ids(&[id]))
     })
     .await
     {

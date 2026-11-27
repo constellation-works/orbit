@@ -4,8 +4,9 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError};
 
 use orbit_cmd::registry_runtime::{ConfigLayerStamp, RegisteredRuntimeFactory};
+use orbit_core::app::run;
 use orbit_core::runtime::{HostLifetime, WorkspaceRuntimeBinding};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError};
 
 use super::super::{Snapshot, SnapshotData, WsRejection};
 use super::StateInner;
@@ -26,7 +27,7 @@ pub(super) struct CachedRuntime {
     /// caller, and its synthetic dashboard binding must never be used to
     /// reconstruct it (including after config or plugin changes).
     pub(super) config_stamp: Option<ConfigLayerStamp>,
-    pub(super) runtime: Arc<OrbitRuntime>,
+    pub(super) runtime: Arc<Core>,
 }
 
 impl StateInner {
@@ -92,7 +93,7 @@ impl StateInner {
         &self,
         snapshot: &Snapshot,
         id: &str,
-    ) -> Result<Arc<OrbitRuntime>, WsRejection> {
+    ) -> Result<Arc<Core>, WsRejection> {
         let (binding, orbit_dir) = Self::snapshot_binding(snapshot, id)?;
         let generation = snapshot.generation;
         // Sample before the build, as the registry fingerprint is: an edit
@@ -112,7 +113,7 @@ impl StateInner {
         // (`resolve_runtime_for_config_file`) so a broken layer stays
         // repairable there with its 400 + path.
         let runtime = Arc::new(
-            RegisteredRuntimeFactory::open_resolved_checkout_for(
+            RegisteredRuntimeFactory::open_resolved_checkout_core_for(
                 &self.global_root,
                 &orbit_dir,
                 &orbit_dir,
@@ -143,14 +144,14 @@ impl StateInner {
         &self,
         snapshot: &Snapshot,
         id: &str,
-    ) -> Result<Arc<OrbitRuntime>, WsRejection> {
+    ) -> Result<Arc<Core>, WsRejection> {
         let (binding, orbit_dir) = Self::snapshot_binding(snapshot, id)?;
         let generation = snapshot.generation;
         let config_stamp = ConfigLayerStamp::read(&self.global_root, &orbit_dir);
         if let Some(runtime) = self.cached_matching(id, &binding, &orbit_dir, &config_stamp)? {
             return Ok(runtime);
         }
-        match RegisteredRuntimeFactory::open_resolved_checkout_for(
+        match RegisteredRuntimeFactory::open_resolved_checkout_core_for(
             &self.global_root,
             &orbit_dir,
             &orbit_dir,
@@ -194,8 +195,8 @@ impl StateInner {
         orbit_dir: PathBuf,
         generation: u64,
         config_stamp: ConfigLayerStamp,
-        runtime: Arc<OrbitRuntime>,
-    ) -> Arc<OrbitRuntime> {
+        runtime: Arc<Core>,
+    ) -> Arc<Core> {
         let mut cache = self.lock_runtimes();
         if let Some(existing) = cache.get(id) {
             // Same binding and config: a concurrent build already won; it is
@@ -239,7 +240,7 @@ impl StateInner {
         binding: &WorkspaceRuntimeBinding,
         orbit_dir: &Path,
         config_stamp: &ConfigLayerStamp,
-    ) -> Result<Option<Arc<OrbitRuntime>>, WsRejection> {
+    ) -> Result<Option<Arc<Core>>, WsRejection> {
         let (runtime, config_current) = {
             let cache = self.lock_runtimes();
             match cache.get(id) {
@@ -270,8 +271,8 @@ impl StateInner {
         // The stamp equality above covers the workspace plugin toggles,
         // which live in the stamped workspace config file; only the host
         // plugin rows still need comparing here.
-        if !runtime
-            .plugin_installed_changed()
+        if !run::exec(&runtime, run::Command::plugin_installed_changed())
+            .map(|outcome| outcome.value)
             .map_err(|error| WsRejection::build_failed(id, &error))?
         {
             return Ok(Some(runtime));
@@ -296,7 +297,7 @@ impl StateInner {
     pub(in crate::state) fn open_runtimes_for(
         &self,
         snapshot: &Snapshot,
-    ) -> Vec<(String, Arc<OrbitRuntime>)> {
+    ) -> Vec<(String, Arc<Core>)> {
         // Sample config stamps before the cache lock, so the steady state
         // stays a set of `stat` calls and no file I/O happens under it. A
         // stale entry is not surfaced as current; the next per-workspace

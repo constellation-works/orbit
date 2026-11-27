@@ -1,8 +1,10 @@
 //! Metrics ranges and invocation row projection.
 
+use crate::state::run_read;
 use axum::extract::Query;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
+use orbit_core::app::run::Command as RunCommand;
 use orbit_core::{InvocationQuery, InvocationRecord};
 use serde_json::{Value, json};
 
@@ -80,12 +82,15 @@ pub(in crate::api) async fn list_diagnostics_metrics(
             return Ok(json!([]));
         }
         // Limit within this workspace before projecting invocation rows.
-        let records = runtime.workspace_invocation_records(InvocationQuery {
-            since: range.since,
-            until: Some(range.until),
-            limit,
-            ..InvocationQuery::default()
-        })?;
+        let records = run_read(
+            &runtime,
+            RunCommand::invocations(InvocationQuery {
+                since: range.since,
+                until: Some(range.until),
+                limit,
+                ..InvocationQuery::default()
+            }),
+        )?;
         Ok(Value::Array(diagnostics_metrics_values(records)))
     })
     .await

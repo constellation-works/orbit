@@ -2,10 +2,12 @@
 
 use crate::api::{bad_request, blocking, validate_id};
 use crate::state::Ws;
+use crate::state::run_read;
 use axum::body::Body;
 use axum::extract::Path;
 use axum::http::{HeaderName, HeaderValue, header};
 use axum::response::Response;
+use orbit_core::app::run::Command as RunCommand;
 use orbit_types::task::{inline_safe_artifact_media_type, validate_relative_artifact_path};
 
 struct ArtifactResponsePolicy {
@@ -29,7 +31,7 @@ pub(in crate::api) async fn get_task_artifact(
     let path_owned = path.to_string();
     let missing = format!("artifact not found: {id}/{path_owned}");
     match blocking("task artifact", move || {
-        runtime.get_task_artifact(&id, &path_owned)
+        run_read(&runtime, RunCommand::task_artifact(&id, &path_owned))
     })
     .await
     {

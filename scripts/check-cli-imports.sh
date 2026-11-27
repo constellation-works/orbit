@@ -64,3 +64,20 @@ exit $failed;
 ' "$repo_root" "${forbidden[@]}"
 
 echo "orbit-cli import guard passed"
+
+# The dashboard holds a `Core` and reaches a workspace only through an app's
+# `exec`: no orbit-web source, and not the HTTP fixture its tests share, names
+# the runtime or the store. Unlike the scan above this one reads comments and
+# strings too, so a stale reference in prose fails as well.
+web_names='OrbitRuntime|orbit_runtime|orbit_store'
+web_scope=(
+  "$repo_root/crates/orbit-web/src"
+  "$repo_root/crates/orbit-web/tests/http_api/support.rs"
+)
+if web_matches="$(grep -rnE --include='*.rs' "$web_names" "${web_scope[@]}")"; then
+  echo "forbidden name found in orbit-web: the dashboard reaches a workspace through an app's exec" >&2
+  printf '%s\n' "${web_matches//"$repo_root/"/}" >&2
+  exit 1
+fi
+
+echo "orbit-web import guard passed"

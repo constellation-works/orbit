@@ -116,7 +116,7 @@ pub(super) async fn task_mutation_response(
         // The client reads human-crew identity off the task itself, so a
         // write response keeps it as the list and detail reads do.
         if let Some(object) = value.as_object_mut() {
-            crate::projections::stamp_human_crew(object, written.human_crew.as_ref());
+            orbit_core::app::task::stamp_human_crew(object, written.human_crew.as_ref());
         }
         Ok(value)
     })

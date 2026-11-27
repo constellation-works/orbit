@@ -1,5 +1,6 @@
 //! Strict proposed-task capture. Legacy task creation remains independent.
 
+use crate::state::run_read;
 use axum::{
     extract::{RawQuery, State, rejection::JsonRejection},
     response::{IntoResponse, Json, Response},
@@ -11,6 +12,7 @@ use orbit_common::{
     },
     security::release::sha256_hex,
 };
+use orbit_core::app::run::Command as RunCommand;
 use orbit_core::app::task::{DashboardAction, Outcome};
 use orbit_core::application::task::ProposedTaskInput;
 use orbit_types::{
@@ -116,12 +118,12 @@ pub(in crate::api) async fn create_proposal(
                 .binding
                 .as_ref()
                 .ok_or_else(|| OrbitError::PolicyDenied("workspace binding unavailable".into()))?;
-            runtime.ensure_coordination_task_write_permitted()?;
+            let automation_machine = run_read(&runtime, RunCommand::task_write_identity())?;
             let machine =
                 orbit_registry::machine_identity::load_machine_identity(state.global_root())?;
             if binding.checkout_role != Some(WorkspaceCheckoutRole::Owner)
                 || binding.owner_machine_id.is_none()
-                || binding.owner_machine_id.as_deref() != runtime.automation_machine_identity()
+                || binding.owner_machine_id.as_deref() != automation_machine.as_deref()
                 || binding.owner_machine_id.as_deref() != Some(machine.id.as_str())
             {
                 return Err(OrbitError::CapabilityRefused(

@@ -2,6 +2,7 @@
 
 use serde_json::Value;
 
+use super::Intake;
 use crate::runtime::stored::locks::lease;
 use crate::{Core, OrbitError, OrbitRuntime};
 
@@ -51,6 +52,33 @@ pub(super) fn check(core: &Core, input: Value) -> Result<Value, OrbitError> {
 
 pub(super) fn notices(core: &Core, input: Value) -> Result<Value, OrbitError> {
     lease::notices(core.runtime(), input)
+}
+
+pub(super) fn intake(core: &Core, intake: Intake) -> Result<Value, OrbitError> {
+    let runtime = core.runtime();
+    match intake {
+        Intake::Request(input, grant) => runtime.request_lease_with_token(input, &grant),
+        Intake::Renew(input, grant) => lease::renew_with_token(runtime, input, &grant),
+        Intake::Expand(input, grant) => runtime.expand_lease_with_token(input, &grant),
+        Intake::Release(input) => lease::release(runtime, input, None, None),
+        Intake::Show(input) => lease::show(runtime, input),
+        Intake::List => lease::list(runtime),
+        Intake::Check(input) => lease::check(runtime, input),
+        Intake::Notices(input) => lease::notices(runtime, input),
+        Intake::Audit {
+            operation,
+            lease_id,
+            status,
+            payload,
+        } => lease::record_lease_intake_audit(
+            runtime,
+            &operation,
+            lease_id.as_deref(),
+            status,
+            payload,
+        )
+        .map(|()| Value::Null),
+    }
 }
 
 pub(super) fn notice_feed(

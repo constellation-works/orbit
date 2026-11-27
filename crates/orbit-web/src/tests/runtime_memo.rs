@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 use std::time::Duration;
 
-use orbit_core::OrbitRuntime;
+use orbit_core::test_support::{FixtureRuntime, fixture_core};
 use serde_json::json;
 use tokio::sync::oneshot;
 
@@ -21,7 +21,9 @@ async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
 #[tokio::test]
 async fn expired_entry_keeps_in_flight_refresh_single_flight() {
     tokio::time::timeout(Duration::from_secs(10), async {
-        let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+        let runtime = Arc::new(fixture_core(
+            &FixtureRuntime::in_memory().expect("build runtime"),
+        ));
         let memo = RuntimeMemo::new("single-flight regression");
         let refreshes = Arc::new(AtomicUsize::new(0));
         let ttl = Duration::from_secs(60);
@@ -61,7 +63,7 @@ async fn expired_entry_keeps_in_flight_refresh_single_flight() {
 
         // While this refresh holds its gate, another workspace runtime and
         // another window must compute independently instead of waiting on it.
-        let other_runtime = Arc::new(OrbitRuntime::in_memory().unwrap());
+        let other_runtime = Arc::new(fixture_core(&FixtureRuntime::in_memory().unwrap()));
         let other_workspace = memo
             .get_or_compute(&other_runtime, "key", ttl, || {
                 Ok(json!({"generation": "other workspace"}))
@@ -117,7 +119,9 @@ async fn expired_entry_keeps_in_flight_refresh_single_flight() {
 #[tokio::test]
 async fn stale_entry_is_served_while_one_refresh_replaces_it() {
     tokio::time::timeout(Duration::from_secs(10), async {
-        let runtime = Arc::new(OrbitRuntime::in_memory().expect("build runtime"));
+        let runtime = Arc::new(fixture_core(
+            &FixtureRuntime::in_memory().expect("build runtime"),
+        ));
         let memo = RuntimeMemo::new("stale-while-revalidate regression");
         let stale_for = Duration::from_secs(3600);
         let ttl = Duration::from_secs(60);

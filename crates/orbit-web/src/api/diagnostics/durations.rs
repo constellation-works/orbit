@@ -1,12 +1,14 @@
 //! implement_one durations for Analytics › Metrics: the windowed trend by
 //! complexity and actor, and the 30-day actor table per complexity.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::collections::{BTreeMap, HashMap};
 
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::{InvocationQuery, OrbitRuntime};
+use orbit_core::{Core, InvocationQuery};
 use orbit_types::task::{UNSET_BUCKET, complexity_bucket_ord};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -75,7 +77,7 @@ pub(in crate::api) async fn diagnostics_implement_one(
 }
 
 fn implement_one_trend(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     range: &DiagnosticsRange,
     succeeded_only: bool,
 ) -> Result<Value, orbit_core::OrbitError> {
@@ -83,16 +85,19 @@ fn implement_one_trend(
     // The task complexity map is independent of the invocation rows, so it
     // is read alongside them rather than after.
     let (records, complexity_by_task) = std::thread::scope(|scope| {
-        let complexity = scope.spawn(|| runtime.task_complexity_by_id());
-        let records = runtime.workspace_invocation_records(InvocationQuery {
-            succeeded_candidate_only: succeeded_only,
-            since: TrendWindow::read_since(range).map(|since| since.min(complexity_since)),
-            activity_id: Some(ACTIVITY.to_string()),
-            limit: RECORD_LIMIT,
-            // The trend reads durations, actors and task links only.
-            skip_tool_calls: true,
-            ..Default::default()
-        });
+        let complexity = scope.spawn(|| run_read(runtime, RunCommand::task_complexity_by_id()));
+        let records = run_read(
+            runtime,
+            RunCommand::invocations(InvocationQuery {
+                succeeded_candidate_only: succeeded_only,
+                since: TrendWindow::read_since(range).map(|since| since.min(complexity_since)),
+                activity_id: Some(ACTIVITY.to_string()),
+                limit: RECORD_LIMIT,
+                // The trend reads durations, actors and task links only.
+                skip_tool_calls: true,
+                ..Default::default()
+            }),
+        );
         let complexity = complexity
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic));

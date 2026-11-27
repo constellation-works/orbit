@@ -102,9 +102,8 @@ CONFIG_DIRECTORIES = ("crew", "operation", "provider_limit", "layering", "regist
 # The orbit-web module-direction scan [ORB-25492].
 WEB_DIRECTORIES = ("state", "lease")
 WEB_FILES = (
-    "why_stuck.rs", "projections.rs", "connect.rs", "host_tunnels.rs",
-    "health.rs", "assets.rs", "run_failure.rs", "shutdown.rs",
-    "runtime_memo.rs",
+    "projections.rs", "connect.rs", "host_tunnels.rs", "health.rs",
+    "assets.rs", "shutdown.rs", "runtime_memo.rs",
 )
 
 # The orbit-tools guard enumerates consumers of builtin and checks mcp and

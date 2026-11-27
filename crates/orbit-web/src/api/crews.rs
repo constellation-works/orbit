@@ -1,12 +1,17 @@
 //! Crew registry handlers.
 
+use crate::state::run_read;
 use crate::state::{DashboardState, Ws};
 use axum::extract::{RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
+use orbit_core::app::run::Command as RunCommand;
 use serde_json::json;
 
 pub(super) async fn list_crews(Ws(runtime): Ws) -> Response {
-    Json(runtime.configured_crew_registry_projection()).into_response()
+    match run_read(&runtime, RunCommand::crew_registry()) {
+        Ok(registry) => Json(registry).into_response(),
+        Err(error) => super::helpers::server_error(error),
+    }
 }
 
 /// Read crew registries from the same pinned workspace generation.
@@ -30,7 +35,7 @@ pub(super) async fn list_all_crews(
             let runtime = pinned.runtime_for(&entry.id).ok()?;
             Some((
                 entry.id.clone(),
-                runtime.configured_crew_registry_projection(),
+                run_read(&runtime, RunCommand::crew_registry()).ok()?,
             ))
         })
         .into_iter()

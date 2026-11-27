@@ -32,13 +32,11 @@ mod lease;
 mod log_format;
 mod parse;
 mod projections;
-mod run_failure;
 mod runtime_memo;
 mod serve;
 mod shutdown;
 mod ssh_tunnel;
 mod state;
-mod why_stuck;
 
 pub use api::leases::{
     LeaseBackend, LeaseBackendResult, LeaseCaller, LeaseCallerToken, LeaseNoticePages, lease_router,

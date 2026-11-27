@@ -9,10 +9,10 @@ use std::time::Duration;
 
 use orbit_auth::scope::{HardLeasePermission, LeasePriorityCeiling, PrincipalClass};
 use orbit_common::security::redaction::{redact_all, redact_all_json};
-use orbit_core::runtime::stored::locks::lease::{
-    self, LeasePrincipalClass, LeasePriority, LeaseTokenGrant,
+use orbit_core::app::lease::{
+    self, Command, Intake, LeasePrincipalClass, LeasePriority, LeaseTokenGrant,
 };
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError};
 use orbit_types::telemetry::AuditEventStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -206,7 +206,7 @@ impl IntakeServer {
     async fn dispatch_blocking(
         &self,
         request: LeaseIntakeRequest,
-    ) -> (LeaseIntakeResponse, Option<Arc<OrbitRuntime>>) {
+    ) -> (LeaseIntakeResponse, Option<Arc<Core>>) {
         let state = self.state.clone();
         let max_frame_bytes = self.limits.max_frame_bytes;
         tokio::task::spawn_blocking(move || dispatch(&state, request, max_frame_bytes))
@@ -347,7 +347,7 @@ fn dispatch(
     state: &DashboardState,
     request: LeaseIntakeRequest,
     max_frame_bytes: u32,
-) -> (LeaseIntakeResponse, Option<Arc<OrbitRuntime>>) {
+) -> (LeaseIntakeResponse, Option<Arc<Core>>) {
     let LeaseIntakeRequest {
         operation,
         workspace,
@@ -408,12 +408,14 @@ fn dispatch(
     }
     match &runtime {
         Some(runtime) => {
-            if let Err(error) = lease::record_lease_intake_audit(
+            if let Err(error) = intake(
                 runtime,
-                operation.as_str(),
-                lease_id.as_deref(),
-                status,
-                payload,
+                Intake::Audit {
+                    operation: operation.as_str().to_string(),
+                    lease_id,
+                    status,
+                    payload,
+                },
             ) {
                 tracing::error!(%error, "lease intake could not write its audit row");
             }
@@ -431,7 +433,7 @@ fn dispatch(
 /// oversized new grant here is only a backstop: it must still happen before
 /// its caller can observe the size failure.
 fn bounded_operation_response(
-    runtime: Option<&OrbitRuntime>,
+    runtime: Option<&Core>,
     operation: LeaseIntakeOperation,
     response: LeaseIntakeResponse,
     max_frame_bytes: u32,
@@ -464,7 +466,7 @@ fn bounded_operation_response(
         && result.get("granted") == Some(&Value::Bool(true))
         && let Some(lease_id) = result.pointer("/lease/lease_id").and_then(Value::as_str)
         && let Some(runtime) = runtime
-        && let Err(error) = lease::release(runtime, json!({"lease_id": lease_id}), None, None)
+        && let Err(error) = intake(runtime, Intake::Release(json!({"lease_id": lease_id})))
     {
         tracing::error!(%error, lease_id, "lease intake could not release an oversized grant");
         return LeaseIntakeResponse::Error(LeaseIntakeError::new(
@@ -485,11 +487,11 @@ fn bounded_operation_response(
 /// A later page of an `events` stream, unaudited: the stream was audited
 /// when it opened.
 async fn read_notice_page(
-    runtime: Arc<OrbitRuntime>,
+    runtime: Arc<Core>,
     input: Value,
     max_frame_bytes: u32,
 ) -> Result<Value, LeaseIntakeError> {
-    let page = tokio::task::spawn_blocking(move || lease::notices(&runtime, input))
+    let page = tokio::task::spawn_blocking(move || intake(&runtime, Intake::Notices(input)))
         .await
         .map_err(|error| {
             LeaseIntakeError::new(
@@ -551,7 +553,7 @@ fn operation_error(error: OrbitError) -> LeaseIntakeError {
 
 /// The runtime for the unique registered workspace whose id or name is
 /// `selector`; ambiguous selectors are refused.
-fn workspace_runtime(state: &DashboardState, selector: &str) -> Option<Arc<OrbitRuntime>> {
+fn workspace_runtime(state: &DashboardState, selector: &str) -> Option<Arc<Core>> {
     let pinned = state.pin();
     let entries = pinned.entries();
     let mut matches = entries
@@ -572,7 +574,7 @@ fn workspace_runtime(state: &DashboardState, selector: &str) -> Option<Arc<Orbit
 }
 
 fn run_operation(
-    runtime: Option<&Arc<OrbitRuntime>>,
+    runtime: Option<&Arc<Core>>,
     operation: LeaseIntakeOperation,
     workspace: &str,
     authority: &LeaseIntakeAuthority,
@@ -643,27 +645,32 @@ fn run_operation(
         max_response_bytes: max_frame_bytes as usize,
     };
     let result = match operation {
-        LeaseIntakeOperation::Request => runtime.request_lease_with_token(input, &grant),
+        LeaseIntakeOperation::Request => intake(runtime, Intake::Request(input, grant)),
         LeaseIntakeOperation::Renew => {
             ensure_principal_holds(runtime, &input, &scope.principal)?;
-            lease::renew_with_token(runtime, input, &grant)
+            intake(runtime, Intake::Renew(input, grant))
         }
         LeaseIntakeOperation::Expand => {
             ensure_principal_holds(runtime, &input, &scope.principal)?;
-            runtime.expand_lease_with_token(input, &grant)
+            intake(runtime, Intake::Expand(input, grant))
         }
         LeaseIntakeOperation::Release => {
             ensure_principal_holds(runtime, &input, &scope.principal)?;
-            lease::release(runtime, input, None, None)
+            intake(runtime, Intake::Release(input))
         }
-        LeaseIntakeOperation::Show => lease::show(runtime, input),
-        LeaseIntakeOperation::List => lease::list(runtime),
-        LeaseIntakeOperation::Check => lease::check(runtime, input),
+        LeaseIntakeOperation::Show => intake(runtime, Intake::Show(input)),
+        LeaseIntakeOperation::List => intake(runtime, Intake::List),
+        LeaseIntakeOperation::Check => intake(runtime, Intake::Check(input)),
         LeaseIntakeOperation::Notices | LeaseIntakeOperation::Events => {
-            lease::notices(runtime, input)
+            intake(runtime, Intake::Notices(input))
         }
     };
     result.map_err(operation_error)
+}
+
+/// Run one intake operation through the lease app.
+fn intake(core: &Core, operation: Intake) -> Result<Value, OrbitError> {
+    lease::exec(core, Command::Intake(operation)).and_then(lease::Outcome::into_value)
 }
 
 /// A token renews and releases only leases its own principal holds (design
@@ -673,7 +680,7 @@ fn run_operation(
 /// about who holds it. Principals never change on a lease, so checking before
 /// the write cannot race it.
 fn ensure_principal_holds(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     input: &Value,
     principal: &str,
 ) -> Result<(), LeaseIntakeError> {
@@ -683,7 +690,7 @@ fn ensure_principal_holds(
             "no such lease is held by this token's principal in this workspace",
         )
     };
-    match lease::show(runtime, input.clone()) {
+    match intake(runtime, Intake::Show(input.clone())) {
         Ok(found)
             if found.pointer("/lease/principal").and_then(Value::as_str) == Some(principal) =>
         {

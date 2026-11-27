@@ -13,11 +13,13 @@
 //! suffix of the invocation's calls, so it has no first-edit score either: it
 //! is counted as an incomplete trace, never as a measurement.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::collections::{BTreeMap, HashMap};
 
 use axum::extract::{Query, State};
 use axum::response::Response;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -200,7 +202,7 @@ pub(in crate::api) async fn diagnostics_turns_to_edit(
 }
 
 fn turns_to_edit_trend(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     range: &DiagnosticsRange,
     filters: &Filters,
 ) -> Result<Value, orbit_core::OrbitError> {
@@ -208,7 +210,10 @@ fn turns_to_edit_trend(
     let (first_by_task, truncated) = if cohort_window.in_window.is_empty() {
         (HashMap::new(), false)
     } else {
-        let edits = runtime.first_implement_edits(cohort_window.invocation_read_since())?;
+        let edits = run_read(
+            runtime,
+            RunCommand::first_implement_edits(cohort_window.invocation_read_since()),
+        )?;
         (edits.by_task, edits.truncated)
     };
 

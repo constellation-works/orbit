@@ -23,8 +23,10 @@ use serde_json::{Value, json};
 use super::exec::{self, App, DashboardOrigin, DashboardRow, Operation};
 use crate::Core;
 pub use crate::application::routines::{
-    ClockStatus, RoutineEditOutcome, RoutineEditRefusal, RoutineStatusReport,
+    ClockStatus, RoutineBreakerAction, RoutineBreakerOutcome, RoutineEditOutcome,
+    RoutineEditRefusal, RoutineStatusReport,
 };
+pub use crate::application::store_opener::StoreOpener;
 
 /// Reads the host's routine status report.
 pub type Statuses = Box<dyn FnOnce() -> Result<RoutineStatusReport, OrbitError> + Send>;
@@ -127,6 +129,21 @@ pub enum DashboardWrite {
     },
     /// Control the native sweep service or its cadence.
     Clock(ClockControl),
+    /// Reset or bypass a tripped routine's circuit breaker on this host.
+    Breaker {
+        /// The routine's name.
+        name: String,
+        /// The workspace the row was listed under.
+        source: String,
+        /// What to do with the breaker.
+        action: RoutineBreakerAction,
+        /// The global root whose breakers these are.
+        global_root: std::path::PathBuf,
+        /// Opens the host's routine store.
+        opener: StoreOpener,
+        /// The host's routine status read.
+        statuses: Statuses,
+    },
 }
 
 /// What an admitted dashboard write did.
@@ -138,6 +155,9 @@ pub enum DashboardWritten {
     TriggerAdmitted,
     /// What a clock control did.
     Clock(ClockControlled),
+    /// What a breaker control did, why it was refused without writing, or
+    /// the error it failed with.
+    Breaker(Result<Result<RoutineBreakerOutcome, RoutineEditRefusal>, OrbitError>),
 }
 
 /// What an admitted clock control did.
@@ -222,7 +242,7 @@ impl App for RoutineApp {
 
     fn dashboard_row(
         result: &Result<Outcome, crate::Error>,
-        _target: &str,
+        target: &str,
         arguments: Value,
     ) -> Option<DashboardRow> {
         let written = match result {
@@ -230,7 +250,7 @@ impl App for RoutineApp {
             Ok(_) => return None,
             Err(error) => Err(error),
         };
-        dashboard::row(written, arguments)
+        dashboard::row(written, target, arguments)
     }
 }
 

@@ -8,11 +8,13 @@
 //! managed invocation linked to it, whenever that invocation ran, so spend
 //! recorded while the task was in flight never lands in an earlier bucket.
 
+use crate::state::run_read;
+use orbit_core::app::run::Command as RunCommand;
 use std::collections::BTreeMap;
 
 use axum::extract::{Query, State};
 use axum::response::Response;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 use orbit_core::app::run::{TaskTokenSpend, TaskTokenTotals};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -177,7 +179,7 @@ pub(in crate::api) async fn diagnostics_task_tokens(
 }
 
 fn task_token_trend(
-    runtime: &OrbitRuntime,
+    runtime: &Core,
     range: &DiagnosticsRange,
     filters: &Filters,
 ) -> Result<Value, orbit_core::OrbitError> {
@@ -186,7 +188,10 @@ fn task_token_trend(
         if cohort_window.in_window.is_empty() && cohort_window.lead_rows.is_empty() {
             BTreeMap::new()
         } else {
-            runtime.task_token_totals(cohort_window.invocation_read_since())?
+            run_read(
+                runtime,
+                RunCommand::task_token_totals(cohort_window.invocation_read_since()),
+            )?
         };
 
     let mut series = CohortSeriesMap::<Cell>::new(&filters.cohort, &cohort_window.window);

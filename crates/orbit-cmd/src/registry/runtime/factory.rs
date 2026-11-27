@@ -178,14 +178,14 @@ impl RegisteredRuntimeFactory {
         orbit_core::composition::core_for_service(runtime)
     }
 
-    /// The handle a server passes to an app's `exec` for one request: the
-    /// runtime this factory opened for the request's workspace, and the
-    /// session the request arrived on. Opens nothing.
-    pub fn core_for_session(
-        runtime: OrbitRuntime,
+    /// The handle a server passes to an app's `exec` for one request, derived
+    /// from the `Core` it keeps for the request's workspace and the session
+    /// the request arrived on. Opens nothing.
+    pub fn core_for_request(
+        workspace: &orbit_core::Core,
         session: orbit_core::app::Session,
     ) -> orbit_core::Core {
-        orbit_core::composition::core_for_session(runtime, session)
+        orbit_core::composition::core_for_request(workspace, session)
     }
 
     /// Bootstrap the hidden detached worker with lock-only bounded recovery.
@@ -870,6 +870,25 @@ impl RegisteredRuntimeFactory {
                 registry,
             )
         })
+    }
+
+    /// Open a resolved checkout as the [`orbit_core::Core`] a long-lived
+    /// server keeps for it.
+    pub fn open_resolved_checkout_core_for(
+        global_root: &Path,
+        shared_root: &Path,
+        local_root: &Path,
+        binding: WorkspaceRuntimeBinding,
+        host_lifetime: HostLifetime,
+    ) -> Result<orbit_core::Core, OrbitError> {
+        Self::open_resolved_checkout_for(
+            global_root,
+            shared_root,
+            local_root,
+            binding,
+            host_lifetime,
+        )
+        .map(Self::core_for_service)
     }
 
     pub fn open_resolved_checkout_for(

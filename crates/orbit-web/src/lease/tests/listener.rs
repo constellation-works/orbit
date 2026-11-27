@@ -21,7 +21,7 @@ use orbit_auth::scope::{
     HardLeasePermission, LeasePriorityCeiling, LeaseTokenScope, LeaseTokenVerb, PrincipalClass,
 };
 use orbit_auth::store::LeaseTokenStore;
-use orbit_core::OrbitRuntime;
+use orbit_core::test_support::{FixtureRuntime, fixture_core};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -199,7 +199,7 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
     std::fs::write(repo_root.join("src/z.rs"), "pub fn z() {}\n").unwrap();
     super::lease::enable_leases(&workspace_root);
     let runtime =
-        Arc::new(OrbitRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
+        Arc::new(FixtureRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
 
     let home = tmp.path().join("orbit-lease");
     let mut store = provisioned_store(&home);
@@ -256,7 +256,7 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
         let _entered = tokio.enter();
         socket
             .serve(
-                DashboardState::single(Arc::clone(&runtime)),
+                DashboardState::single(Arc::new(fixture_core(&runtime))),
                 IntakeLimits::default(),
             )
             .unwrap()
@@ -606,7 +606,7 @@ fn listener_notices_and_events_match_orbit_web_and_stay_in_the_tokens_workspaces
     }
     super::lease::enable_leases(&workspace_root);
     let runtime =
-        Arc::new(OrbitRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
+        Arc::new(FixtureRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
 
     let home = tmp.path().join("orbit-lease");
     let mut store = provisioned_store(&home);
@@ -661,7 +661,7 @@ fn listener_notices_and_events_match_orbit_web_and_stay_in_the_tokens_workspaces
         let _entered = tokio.enter();
         socket
             .serve(
-                DashboardState::single(Arc::clone(&runtime)),
+                DashboardState::single(Arc::new(fixture_core(&runtime))),
                 IntakeLimits::default(),
             )
             .unwrap()
@@ -671,7 +671,8 @@ fn listener_notices_and_events_match_orbit_web_and_stay_in_the_tokens_workspaces
         &config(socket_path.clone(), LeaseClientAddressPolicy::Direct),
         store,
     );
-    let web = crate::serve::build_app(DashboardState::single(Arc::clone(&runtime))).unwrap();
+    let web =
+        crate::serve::build_app(DashboardState::single(Arc::new(fixture_core(&runtime)))).unwrap();
 
     tokio.block_on(async {
         let web_notices = |query: String| {

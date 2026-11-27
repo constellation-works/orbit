@@ -10,8 +10,10 @@
 //! Read-only; profiles come from `/api/resource-profiles` and the live pass
 //! from drain readiness.
 
+use crate::state::run_read;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
+use orbit_core::app::run::Command as RunCommand;
 use orbit_core::runtime::host_resource::accuracy::{
     AccuracySelection, DrainLimiters, DrainShadowDecisions, OffsetAccuracy,
 };
@@ -48,13 +50,16 @@ struct AccuracyBody<'a> {
 
 pub(in crate::api) async fn diagnostics_resource_forecast(Ws(runtime): Ws) -> Response {
     match super::super::blocking("resource forecast", move || {
-        let workspace_id = runtime.workspace_id()?;
-        let settings = runtime.auto_concurrency_settings();
-        let report = runtime.forecast_accuracy_selected(AccuracySelection::latest(), Utc::now())?;
+        let workspace_id = run_read(&runtime, RunCommand::workspace_id())?;
+        let settings = run_read(&runtime, RunCommand::auto_concurrency_settings())?;
+        let report = run_read(
+            &runtime,
+            RunCommand::forecast_accuracy(AccuracySelection::latest(), Utc::now()),
+        )?;
         serde_json::to_value(ResourceForecastBody {
             workspace_id: &workspace_id,
             configured_mode: &settings.mode,
-            host: runtime.host_capacity(),
+            host: run_read(&runtime, RunCommand::host_capacity())?,
             admit_cpu_percent: settings.admit_cpu_percent,
             admit_memory_percent: orbit_config::AUTO_CONCURRENCY_ADMIT_MEMORY_PERCENT,
             min_profile_deliveries: settings.min_profile_deliveries,
