@@ -18,13 +18,12 @@
 # tagged with a re-review date — drop it once an upstream fix lands.
 yanked = "deny"
 ignore = [
-    # rsa Marvin timing sidechannel. `rsa` is a direct dependency of
-    # orbit-common for release signature verification, of orbit-core for
-    # decision-channel DKIM verification, and a dev-dependency of
-    # orbit-cmd for signing test fixtures. Production Orbit only verifies
-    # PKCS#1 v1.5 signatures with public keys; it does not decrypt or sign with
-    # private keys. Re-review by 2027-01-04.
-    { id = "RUSTSEC-2023-0071", reason = "rsa is used by orbit-common::security::release and by orbit-core decision-channel DKIM verification for PKCS#1 v1.5 public-key verification, and by orbit-cmd update tests and orbit-core decision-channel tests only to sign fixtures; production does not perform private-key decryption/signing, so Marvin timing concerns do not apply. Re-review 2027-01-04." },
+    # rsa Marvin timing sidechannel. Production Orbit uses `rsa` for
+    # public-key verification in orbit-common and orbit-desktop (releases)
+    # and orbit-core (decision-channel DKIM). Signing is confined to orbit-core's
+    # update and decision-channel fixtures and orbit-cli's update process fixtures.
+    # Re-review by 2027-01-04.
+    { id = "RUSTSEC-2023-0071", reason = "orbit-common and orbit-desktop release verification and orbit-core decision-channel DKIM verification use rsa for PKCS#1 v1.5 public-key verification. Private-key signing is confined to orbit-core update and decision-channel fixtures and orbit-cli update process fixtures. Production never decrypts or signs with private keys, so the Marvin timing concern does not apply to Orbit's use. Re-review 2027-01-04." },
     # Desktop-only maintenance dispositions, reviewed 2026-10-19 against the
     # committed desktop graph and published upstream manifests. No exploit or
     # patched standalone release is reported by these advisories. The ignore
