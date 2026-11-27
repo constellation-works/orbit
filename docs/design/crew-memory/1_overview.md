@@ -2,7 +2,7 @@
 title: Crew Memory — Overview
 owner: claude
 created_date: 2026-11-08
-updated_date: 2026-11-25
+updated_date: 2026-11-27
 last_validated: 2026-11-10
 status: Accepted
 stage: parked
@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: "Parked: the memory-on vs memory-off experiment found no difference (2026-11-21), so the operator surface was removed and the storage, delivery and dreaming machinery kept dormant, switched on only by an experiment with a memory arm."
 tags: [crew-memory, experiments, agent-scorecards]
-paths: ["crates/orbit-core/src/application/crew_memory/**", "crates/orbit-core/src/app/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
+paths: ["crates/orbit-core/src/app/crew_memory/**", "crates/orbit-core/src/app/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
 related_features: [agent-scorecards, experiments, auto-tasks, project-learnings]
 related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23115, ORB-23116, ORB-10736, ORB-26494, ORB-26501]
 ---
