@@ -30,4 +30,4 @@ pub use config::{LeaseListenerConfig, LeaseListenerSettings, LeaseListenerTlsSet
 pub use limits::LeaseListenerLimits;
 pub(crate) use limits::retain_response_allowance;
 pub use router::lease_listener_router;
-pub use startup::{run_lease_listener, serve_lease_listener, serve_lease_listener_on};
+pub use startup::serve_lease_listener_on;
