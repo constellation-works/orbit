@@ -835,8 +835,10 @@ fn backfill_skips_a_latest_run_cancelled_before_implementation() {
 /// The ordering that made the test above fail under load: the substitute
 /// worker exits unclaimed and its startup observer interrupts the run before the
 /// cancel arrives. The cancel then finds a terminal run and the backfill, which
-/// skips only a `cancelled` run, copies the crew that run drew. The reap hook
-/// pins that ordering, which a loaded host only hits sometimes.
+/// skips only a `cancelled` run, copies the crew that run drew. This test waits
+/// until `show_job_run_observed` reports a terminal state before cancelling;
+/// the separate cancel-first case above is the one that uses the reap hook to
+/// pin its ordering, which a loaded host only hits sometimes.
 #[test]
 fn backfill_copies_from_a_latest_run_its_worker_abandoned_before_the_cancel() {
     if !isolated(
