@@ -1,6 +1,6 @@
 use orbit_common::OrbitError;
 use orbit_engine::TaskAutomationUpdate;
-use orbit_engine::{HostEnvironment, RunLifecycle};
+use orbit_engine::{RunLifecycle, RuntimeHostRunSettings};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus, push_external_ref_if_missing,
@@ -105,8 +105,9 @@ fn apply_task_automation_update_under_lock(
         update.model.as_deref(),
     );
     let runtime_model_identity =
-        <super::EngineHost<'_> as HostEnvironment>::run_settings(&super::EngineHost::new(runtime))
-            .actor_model_identity;
+        RuntimeHostRunSettings::run_settings(&super::EngineHost::new(runtime))
+            .actor_model_identity
+            .clone();
     let attribution = assemble_task_attribution(
         &existing_task,
         TaskAttributionInput {

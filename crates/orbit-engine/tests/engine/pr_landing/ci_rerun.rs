@@ -11,7 +11,7 @@ mod unreadable_log;
 
 use super::*;
 use orbit_engine::test_support::impl_test_host;
-use orbit_engine::{HostEnvironment, ReviewGate};
+use orbit_engine::{HostEnvironment, ReviewGate, RuntimeHostRunSettings};
 use orbit_types::workflow::{CI_RERUN_RESERVED_EVENT, CiRerunPlan, CiRerunRoot};
 
 // Each case is refused under both the step-grouped and the raw
@@ -85,15 +85,6 @@ impl_test_host! { impl Dispatch for ClaimedRetry<'_> {} }
 
 impl_test_host! {
     impl HostEnvironment for ClaimedRetry<'_> {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
-                repo_root: Some(self.inner.repo.to_string_lossy().into_owned()),
-                data_root: self.data_root.clone(),
-                pr_config: HostEnvironment::run_settings(self.inner).pr_config,
-                ..orbit_engine::RunSettings::default()
-            }
-        }
-
         fn run_private_vcs_operation(&self, operation: &str, input: Value) -> Res<Value> {
             if operation == "pr.merge" {
                 assert_eq!(
@@ -108,6 +99,19 @@ impl_test_host! {
                 return Ok(json!({"landed_commit":self.context.candidate.candidate.commit}));
             }
             HostEnvironment::run_private_vcs_operation(self.inner, operation, input)
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for ClaimedRetry<'_> {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
+                repo_root: Some(self.inner.repo.to_string_lossy().into_owned()),
+                data_root: self.data_root.clone(),
+                pr_config: RuntimeHostRunSettings::run_settings(self.inner).pr_config.clone(),
+                ..orbit_engine::RunSettings::default()
+            })
         }
     }
 }

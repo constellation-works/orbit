@@ -145,6 +145,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for TestHost {} }
+
 impl_test_host! { impl RunLifecycle for TestHost {} }
 
 impl_test_host! {

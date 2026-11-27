@@ -161,7 +161,7 @@ fn local_completion_hold<
     if input.get("completion").and_then(Value::as_str) != Some("done") {
         return Ok(None);
     }
-    let rules = host.run_settings().completion_hold_rules;
+    let rules = &host.run_settings().completion_hold_rules;
     if rules.is_empty() {
         return Ok(None);
     }
@@ -185,7 +185,7 @@ fn local_completion_hold<
         input_string_field(input, "base_sync").as_deref() == Some("local"),
         Some(head.trim()),
     );
-    let Some(hold) = evaluate_completion_hold(&rules, &completable, &changed, batch_id)? else {
+    let Some(hold) = evaluate_completion_hold(rules, &completable, &changed, batch_id)? else {
         return Ok(None);
     };
     let task_ids = completable

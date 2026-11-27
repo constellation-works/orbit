@@ -180,6 +180,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for GraphHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for GraphHost {} }
+
 impl_test_host! { impl RunLifecycle for GraphHost {} }
 
 impl_test_host! {
@@ -239,6 +241,10 @@ impl_test_host! {
         <F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync>
     ] HostEnvironment for StubHost<F> {}
 }
+
+impl_test_host! { impl[
+    <F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync>
+] RuntimeHostRunSettings for StubHost<F> {} }
 
 impl_test_host! {
     impl [
@@ -321,6 +327,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for ScriptedHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for ScriptedHost {} }
+
 impl_test_host! { impl RunLifecycle for ScriptedHost {} }
 
 impl_test_host! { impl Recovery for ScriptedHost {} }
@@ -402,6 +410,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for ReviewerHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for ReviewerHost {} }
+
 impl_test_host! { impl RunLifecycle for ReviewerHost {} }
 
 impl_test_host! {
@@ -456,6 +466,8 @@ fn a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_ar
     }
 
     impl_test_host! { impl HostEnvironment for BindingHost {} }
+
+    impl_test_host! { impl RuntimeHostRunSettings for BindingHost {} }
 
     impl_test_host! { impl RunLifecycle for BindingHost {} }
 
@@ -1124,6 +1136,8 @@ fn incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpo
     }
 
     impl_test_host! { impl HostEnvironment for DiagnosticHost {} }
+
+    impl_test_host! { impl RuntimeHostRunSettings for DiagnosticHost {} }
 
     impl_test_host! { impl RunLifecycle for DiagnosticHost {} }
 
@@ -1906,6 +1920,8 @@ fn leaf_completion_records_file_and_store_waits_without_leaking_between_steps() 
 
     impl_test_host! { impl HostEnvironment for WaitHost {} }
 
+    impl_test_host! { impl RuntimeHostRunSettings for WaitHost {} }
+
     impl_test_host! { impl RunLifecycle for WaitHost {} }
 
     impl_test_host! { impl Recovery for WaitHost {} }
@@ -1982,7 +1998,7 @@ runtime_contracts!(runtime_contracts_5: exhausted_review_preflight_stops_the_shi
 
 #[test]
 fn null_runtime_host_forwards_capability_overrides() {
-    use orbit_engine::{Dispatch, HostEnvironment, Recovery};
+    use orbit_engine::{Dispatch, Recovery, RuntimeHostRunSettings};
     struct OverrideHost;
 
     impl_test_host! {
@@ -1999,11 +2015,16 @@ fn null_runtime_host_forwards_capability_overrides() {
 
     impl_test_host! {
         impl HostEnvironment for OverrideHost {
-            fn run_settings(&self) -> orbit_engine::RunSettings {
-                orbit_engine::RunSettings {
+        }
+    }
+
+    impl_test_host! {
+        impl RuntimeHostRunSettings for OverrideHost {
+            fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+                std::sync::Arc::new(orbit_engine::RunSettings {
                     validation_build_output_env: vec!["override".into()],
                     ..orbit_engine::RunSettings::default()
-                }
+                })
             }
         }
     }
@@ -2042,7 +2063,7 @@ fn null_runtime_host_forwards_capability_overrides() {
     }
     let host = OverrideHost;
     assert_eq!(
-        HostEnvironment::run_settings(&host).validation_build_output_env,
+        RuntimeHostRunSettings::run_settings(&host).validation_build_output_env,
         ["override"]
     );
     assert!(Dispatch::mid_run_steering_enabled(&host));
@@ -2145,6 +2166,8 @@ fn step_recovery_footprint_unavailable_bypasses_final_recovery_and_failure_hando
     }
 
     impl_test_host! { impl HostEnvironment for RecoveryHost {} }
+
+    impl_test_host! { impl RuntimeHostRunSettings for RecoveryHost {} }
 
     impl_test_host! { impl RunLifecycle for RecoveryHost {} }
 

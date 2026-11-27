@@ -157,7 +157,7 @@ pub(crate) fn execute_engine_action<H: RuntimeHost + ?Sized>(
                     older_than,
                     estimate_bytes: false,
                     target_only: false,
-                    reclaim_patterns: Some(run_settings.worktree_reclaim_patterns),
+                    reclaim_patterns: Some(run_settings.worktree_reclaim_patterns.clone()),
                     reclaim_kept: true,
                     // [ORB-15613] A settled run's dirty worktree goes once its
                     // candidate is recoverable; it no longer leaks for good.

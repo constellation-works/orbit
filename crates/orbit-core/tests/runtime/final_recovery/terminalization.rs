@@ -100,6 +100,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for FailingPipeline<'_> {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for FailingPipeline<'_> {} }
+
 impl_test_host! {
     impl RunLifecycle for FailingPipeline<'_> {
         fn apply_task_automation_update(

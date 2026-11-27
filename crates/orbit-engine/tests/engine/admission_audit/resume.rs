@@ -83,6 +83,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for CheckpointHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for CheckpointHost {} }
+
 impl_test_host! { impl RunLifecycle for CheckpointHost {} }
 
 impl_test_host! {
@@ -208,6 +210,8 @@ impl_test_host! {
 }
 
 impl_test_host! { impl HostEnvironment for CompoundReplayHost {} }
+
+impl_test_host! { impl RuntimeHostRunSettings for CompoundReplayHost {} }
 
 impl_test_host! { impl RunLifecycle for CompoundReplayHost {} }
 
@@ -393,6 +397,8 @@ impl_test_host! {
 }
 
 impl_test_host! { impl HostEnvironment for StateHost {} }
+
+impl_test_host! { impl RuntimeHostRunSettings for StateHost {} }
 
 impl_test_host! { impl RunLifecycle for StateHost {} }
 

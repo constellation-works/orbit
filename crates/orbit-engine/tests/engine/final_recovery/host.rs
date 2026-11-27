@@ -192,6 +192,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for RecoveryHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for RecoveryHost {} }
+
 impl_test_host! {
     impl RunLifecycle for RecoveryHost {
         fn apply_task_automation_update(

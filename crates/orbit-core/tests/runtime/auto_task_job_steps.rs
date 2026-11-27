@@ -309,6 +309,8 @@ fn receipts_respect_step_expiry_after_downtime() {
 
     impl_test_host! { impl HostEnvironment for ReceiptHost<'_> {} }
 
+    impl_test_host! { impl RuntimeHostRunSettings for ReceiptHost<'_> {} }
+
     impl_test_host! { impl RunLifecycle for ReceiptHost<'_> {} }
 
     impl_test_host! {

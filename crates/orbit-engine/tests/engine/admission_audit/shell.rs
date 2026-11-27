@@ -27,11 +27,16 @@ impl_test_host! {
 
 impl_test_host! {
     impl HostEnvironment for ShellHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for ShellHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
                 repo_root: Some(self.root.to_string_lossy().into_owned()),
                 ..orbit_engine::RunSettings::default()
-            }
+            })
         }
     }
 }

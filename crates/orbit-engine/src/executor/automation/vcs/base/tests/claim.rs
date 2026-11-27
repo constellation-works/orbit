@@ -43,6 +43,8 @@ struct Host;
 #[cfg(unix)]
 impl_test_host! { impl HostEnvironment for Host {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for Host {} }
+
 #[cfg(unix)]
 impl_test_host! {
     impl RuntimeHostProcessEnvironment for Host {}

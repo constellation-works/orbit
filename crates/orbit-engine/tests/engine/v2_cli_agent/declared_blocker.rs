@@ -80,6 +80,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for DeclaredBlockerHost {} }
+
 impl_test_host! { impl RunLifecycle for DeclaredBlockerHost {} }
 
 impl_test_host! {

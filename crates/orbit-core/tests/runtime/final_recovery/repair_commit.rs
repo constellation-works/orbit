@@ -13,7 +13,7 @@ use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied, V2AuditWriter, execute_job_with_resume,
 };
-use orbit_engine::{HostEnvironment, Recovery, RunLifecycle};
+use orbit_engine::{HostEnvironment, Recovery, RunLifecycle, RuntimeHostRunSettings};
 use orbit_tools::ToolContext;
 use orbit_types::workflow::activity_job::JobV2;
 use orbit_types::workflow::{
@@ -462,9 +462,13 @@ impl_test_host! {
             orbit_core::test_support::EngineHost::new(&self.fixture.runtime)
                 .required_validation_commands()
         }
+    }
+}
 
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            HostEnvironment::run_settings(&orbit_core::test_support::EngineHost::new(
+impl_test_host! {
+    impl RuntimeHostRunSettings for RepairPipeline<'_> {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            RuntimeHostRunSettings::run_settings(&orbit_core::test_support::EngineHost::new(
                 &self.fixture.runtime,
             ))
         }

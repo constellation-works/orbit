@@ -24,6 +24,7 @@ pub use orbit_store;
 pub use orbit_tools;
 pub use orbit_types;
 pub use serde_json::Value;
+pub use std::sync::Arc;
 
 pub use error::{unsupported_dispatch_capability, unsupported_runtime_capability};
 pub use execution::{
@@ -90,6 +91,11 @@ macro_rules! impl_test_host {
     (impl $([$($generics:tt)*])? HostEnvironment $($rest:tt)*) => {
         $crate::__orbit_test_host_environment! {
             impl $([$($generics)*])? HostEnvironment $($rest)*
+        }
+    };
+    (impl $([$($generics:tt)*])? RuntimeHostRunSettings $($rest:tt)*) => {
+        $crate::__orbit_test_host_run_settings! {
+            impl $([$($generics)*])? RuntimeHostRunSettings $($rest)*
         }
     };
     (impl $([$($generics:tt)*])? Recovery $($rest:tt)*) => {

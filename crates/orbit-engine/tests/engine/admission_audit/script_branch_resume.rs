@@ -141,6 +141,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for ScriptBranchHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for ScriptBranchHost {} }
+
 impl_test_host! { impl RunLifecycle for ScriptBranchHost {} }
 
 impl_test_host! {

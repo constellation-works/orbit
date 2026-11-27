@@ -205,6 +205,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for BrokerHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for BrokerHost {} }
+
 impl_test_host! {
     impl RunLifecycle for BrokerHost {
         fn start_plugin_broker(

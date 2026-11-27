@@ -265,6 +265,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for ForgeHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for ForgeHost {} }
+
 impl_test_host! { impl RunLifecycle for ForgeHost {} }
 
 impl_test_host! {

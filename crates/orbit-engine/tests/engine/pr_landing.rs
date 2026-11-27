@@ -1672,20 +1672,6 @@ impl_test_host! {
 
 impl_test_host! {
     impl HostEnvironment for DeliveryHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
-                completion_hold_rules: locked(&self.completion_hold_rules).clone(),
-                host_os: *locked(&self.os),
-                validation_build_output_env: HostEnvironment::validation_subprocess_environment(
-                    self,
-                )
-                .build_output_env,
-                repo_root: Some(self.repo.to_string_lossy().into_owned()),
-                pr_config: locked(&self.pr_config).clone(),
-                ..orbit_engine::RunSettings::default()
-            }
-        }
-
         fn required_validation_commands(&self) -> Vec<String> {
             locked(&self.required_commands).clone()
         }
@@ -1748,6 +1734,24 @@ impl_test_host! {
                     self,
                     &[],
                 ))
+            })
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for DeliveryHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
+                completion_hold_rules: locked(&self.completion_hold_rules).clone(),
+                host_os: *locked(&self.os),
+                validation_build_output_env: HostEnvironment::validation_subprocess_environment(
+                    self,
+                )
+                .build_output_env,
+                repo_root: Some(self.repo.to_string_lossy().into_owned()),
+                pr_config: locked(&self.pr_config).clone(),
+                ..orbit_engine::RunSettings::default()
             })
         }
     }

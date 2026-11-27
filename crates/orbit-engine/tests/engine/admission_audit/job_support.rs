@@ -84,6 +84,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for ScriptedHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for ScriptedHost {} }
+
 impl_test_host! { impl RunLifecycle for ScriptedHost {} }
 
 impl_test_host! { impl Recovery for ScriptedHost {} }

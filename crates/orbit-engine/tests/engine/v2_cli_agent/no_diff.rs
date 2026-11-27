@@ -43,6 +43,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for NoDiffHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for NoDiffHost {} }
+
 impl_test_host! {
     impl RunLifecycle for NoDiffHost {
         fn get_task(&self, _: &str) -> Result<Task, OrbitError> {
@@ -102,6 +104,8 @@ impl_test_host! {
 }
 
 impl_test_host! { impl HostEnvironment for SummaryDeliveryHost {} }
+
+impl_test_host! { impl RuntimeHostRunSettings for SummaryDeliveryHost {} }
 
 impl_test_host! {
     impl RunLifecycle for SummaryDeliveryHost {

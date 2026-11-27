@@ -34,11 +34,11 @@ pub(crate) fn conflicted_generated_paths(
     let configured = host
         .run_settings()
         .generated_paths
-        .into_iter()
+        .iter()
         .filter_map(|generated| {
             RelativePathGlob::new(&generated.path)
                 .ok()
-                .map(|glob| (glob, generated.command))
+                .map(|glob| (glob, generated.command.clone()))
         })
         .collect::<Vec<_>>();
     conflicting_paths

@@ -65,6 +65,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for Host {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for Host {} }
+
 impl_test_host! {
     impl RunLifecycle for Host {
         fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {

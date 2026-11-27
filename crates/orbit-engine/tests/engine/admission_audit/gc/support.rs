@@ -48,6 +48,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for FakeTaskHost {} }
+
 impl_test_host! {
     impl RuntimeHostProcessEnvironment for FakeTaskHost {}
 }

@@ -837,6 +837,8 @@ fn infrastructure_deadline_refusal_keeps_type_and_unreadable_forge_holds() {
         }
     }
 
+    impl_test_host! { impl RuntimeHostRunSettings for CompletionDeadlineHost {} }
+
     impl_test_host! {
         impl RunLifecycle for CompletionDeadlineHost {
             fn get_task(

@@ -148,7 +148,7 @@ fn open_or_reuse_pr<
     }
 
     let run_settings = host.run_settings();
-    let mut pr_config = run_settings.pr_config;
+    let mut pr_config = run_settings.pr_config.clone();
     // A continuation has already authenticated this exact target. A new PR
     // has no number yet, and historical references cannot supply its URL.
     if pr_config.task_url_template.is_none()
@@ -160,7 +160,7 @@ fn open_or_reuse_pr<
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| pr_title(&context.tasks, &pr_config));
     let title = forge_text::neutralize_mentions(&title);
-    let pr_opener_model = run_settings.actor_model_identity;
+    let pr_opener_model = run_settings.actor_model_identity.clone();
     let (body, missing_required) =
         match input_string_field(input, "body").filter(|value| !value.trim().is_empty()) {
             Some(body) => (body, Vec::new()),

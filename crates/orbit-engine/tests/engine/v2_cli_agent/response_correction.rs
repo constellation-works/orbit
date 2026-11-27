@@ -78,6 +78,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for RecordingHost {} }
+
 impl_test_host! { impl RunLifecycle for RecordingHost {} }
 
 impl_test_host! {

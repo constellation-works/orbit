@@ -1,8 +1,10 @@
 //! [`HostEnvironment`] for [`EngineHost`]: each method delegates to a sibling
 //! helper grouped by concern, or adapts a type on the way through.
 
+use std::sync::Arc;
+
 use orbit_common::OrbitError;
-use orbit_engine::{HostEnvironment, RunSettings};
+use orbit_engine::{HostEnvironment, RunSettings, RuntimeHostRunSettings};
 use orbit_store::contract::{InvocationQuery, InvocationRecord};
 use orbit_tools::ToolContext;
 use orbit_types::identity::AgentModelPair;
@@ -18,77 +20,13 @@ use crate::adapter::engine_host::runtime_host::{
 
 use super::{EngineHost, private_vcs};
 
-impl HostEnvironment for EngineHost<'_> {
-    fn run_settings(&self) -> RunSettings {
-        let settings = self.runtime.settings();
-        RunSettings {
-            completion_hold_rules: crate::runtime::RuntimeKernel::completion_hold_rules(
-                self.runtime,
-            )
-            .to_vec(),
-            workspace_base_branch: crate::runtime::RuntimeKernel::workspace_base_branch(
-                self.runtime,
-            )
-            .to_string(),
-            unlocked_path_validation: orbit_engine::UnlockedPathValidation {
-                paths: settings.unlocked_context_paths().patterns().to_vec(),
-                commands: settings.unlocked_path_validation_commands().to_vec(),
-            },
-            generated_paths: settings
-                .generated_paths()
-                .iter()
-                .map(|(path, command)| orbit_engine::GeneratedPath {
-                    path: path.clone(),
-                    command: command.clone(),
-                })
-                .collect(),
-            host_os: orbit_types::workflow::EvidenceHostOs::current(),
-            agent_stall_window: Some(std::time::Duration::from_secs(
-                orbit_engine::AGENT_STALL_MINUTES * 60,
-            )),
-            activity_wall_clock_timeouts: settings.activity_wall_clock_timeouts().clone(),
-            requires_claude_worker_credential: cfg!(target_os = "macos"),
-            validation_build_output_env: self
-                .runtime
-                .validation_env_policy()
-                .build_output_env
-                .clone(),
-            orbit_registry_root: Some(
-                self.runtime
-                    .paths()
-                    .global_dir
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-            orbit_workspace_selector: self
-                .runtime
-                .workspace_runtime_binding()
-                .map(|binding| binding.logical_workspace_id.trim())
-                .filter(|selector| !selector.is_empty())
-                .map(ToOwned::to_owned),
-            repo_root: Some(
-                self.runtime
-                    .paths()
-                    .repo_root
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-            worktree_reclaim_patterns: settings.worktree_reclaim().to_vec(),
-            worktree_parked_reclaim_after_hours: Some(
-                settings.worktree_parked_reclaim_after_hours(),
-            ),
-            data_root: self.runtime.data_root_path().to_path_buf(),
-            actor_model_identity: matches!(
-                self.runtime.actor().kind,
-                crate::runtime::context::ActorKind::Agent
-            )
-            .then(|| self.runtime.actor_label().trim())
-            .filter(|label| !label.is_empty())
-            .map(ToOwned::to_owned),
-            pr_config: crate::runtime::RuntimeKernel::pr_config(self.runtime).clone(),
-        }
+impl RuntimeHostRunSettings for EngineHost<'_> {
+    fn run_settings(&self) -> Arc<RunSettings> {
+        Arc::clone(&self.run_settings)
     }
+}
 
+impl HostEnvironment for EngineHost<'_> {
     fn admit_owed_criteria(
         &self,
         task_id: &str,

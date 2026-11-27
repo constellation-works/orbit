@@ -96,11 +96,16 @@ impl LandingHost {
 
 impl_test_host! {
     impl HostEnvironment for LandingHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for LandingHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
                 repo_root: Some(self.repo.to_string_lossy().into_owned()),
                 ..orbit_engine::RunSettings::default()
-            }
+            })
         }
     }
 }
@@ -143,6 +148,8 @@ struct StaleEvidenceHost {
 }
 
 impl_test_host! { impl HostEnvironment for StaleEvidenceHost {} }
+
+impl_test_host! { impl RuntimeHostRunSettings for StaleEvidenceHost {} }
 
 impl_test_host! { impl RunLifecycle for StaleEvidenceHost {} }
 
@@ -192,6 +199,8 @@ impl_test_host! {
         }
     }
 }
+
+impl_test_host! { impl RuntimeHostRunSettings for ReconciliationHost {} }
 
 impl_test_host! { impl RunLifecycle for ReconciliationHost {} }
 
@@ -304,6 +313,8 @@ impl_test_host! {
         }
     }
 }
+
+impl_test_host! { impl RuntimeHostRunSettings for OpenPullRequestHost {} }
 
 impl_test_host! { impl Dispatch for OpenPullRequestHost {} }
 
@@ -508,16 +519,6 @@ impl FakeForge {
 
 impl_test_host! {
     impl HostEnvironment for FakeForge {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
-                pr_config: PrConfig {
-                    ci_infrastructure_retry: self.ci_retry_policy,
-                    ..Default::default()
-                },
-                ..orbit_engine::RunSettings::default()
-            }
-        }
-
         fn run_private_vcs_operation(&self, op: &str, input: Value) -> Result<Value, OrbitError> {
             self.ops
                 .lock()
@@ -834,6 +835,20 @@ impl_test_host! {
                 }
                 other => panic!("the landing sent an unexpected {other}"),
             }
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for FakeForge {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
+                pr_config: PrConfig {
+                    ci_infrastructure_retry: self.ci_retry_policy,
+                    ..Default::default()
+                },
+                ..orbit_engine::RunSettings::default()
+            })
         }
     }
 }

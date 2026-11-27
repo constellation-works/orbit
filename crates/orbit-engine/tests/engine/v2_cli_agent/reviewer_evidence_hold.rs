@@ -126,6 +126,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for DeniedCheckHost {} }
+
 impl_test_host! { impl RunLifecycle for DeniedCheckHost {} }
 
 impl_test_host! {

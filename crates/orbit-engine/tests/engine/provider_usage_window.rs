@@ -93,6 +93,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for UsageHost {} }
+
 impl_test_host! { impl RunLifecycle for UsageHost {} }
 
 impl_test_host! { impl Recovery for UsageHost {} }

@@ -16,6 +16,8 @@
 //!   [`Dispatch`] and [`Recovery`]
 //! - [`RuntimeHostProcessEnvironment`] — the required process environment
 //!   capability inherited by [`RuntimeHost`]
+//! - [`RuntimeHostRunSettings`] — the [`RunSettings`] a host resolved once
+//!   when it was built, a supertrait of [`HostEnvironment`]
 //! - [`execute_deterministic_action`] — the built-in automation actions
 //!   (git/PR/worktree/task-update) v2 job steps invoke
 //! - [`ci_log_signature`] — the normalized CI error signature, shared by
@@ -67,7 +69,7 @@ pub use context::{
     PluginBrokerRun, PrAutoFixAdmission, PrAutoFixRequest, PrConfig,
     PublishedCompletionObservation, RebaseRecoveryAttemptScope, ResolvedActivityTools,
     ReviewLandingRequest, ReviewReleaseRequest, ReviewReportCorrectionRequest,
-    ReviewerInvocationRequest, RuntimeHost, RuntimeHostProcessEnvironment,
+    ReviewerInvocationRequest, RuntimeHost, RuntimeHostProcessEnvironment, RuntimeHostRunSettings,
     STEP_RECOVERY_DECISION_SCHEMA_VERSION, ScratchGcEntry, ScratchGcReport, ScriptStepEnd,
     ScriptStepOutputs, ScriptStepRan, ScriptStepRequest, ScriptStepRun, SteeringGateReading,
     SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,

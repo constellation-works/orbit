@@ -72,6 +72,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for ContinuationHost {} }
+
 impl_test_host! { impl RunLifecycle for ContinuationHost {} }
 
 impl_test_host! {

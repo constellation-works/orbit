@@ -95,9 +95,9 @@ pub(in crate::executor::automation) fn complete_tasks<
     let mut held_task_ids = Vec::new();
     let mut completion_hold = None;
     if !planned.is_empty() {
-        let rules = host.run_settings().completion_hold_rules;
+        let rules = &host.run_settings().completion_hold_rules;
         if let Some(hold) =
-            evaluate_completion_hold(&rules, &planned, &ChangedPaths::NoDiff, run_id)?
+            evaluate_completion_hold(rules, &planned, &ChangedPaths::NoDiff, run_id)?
         {
             held_task_ids = planned.iter().map(|task| task.id.clone()).collect();
             record_completion_hold(host, &held_task_ids, &hold)?;

@@ -73,6 +73,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for TagHost {} }
+
 impl_test_host! { impl RunLifecycle for TagHost {} }
 
 impl_test_host! {

@@ -207,13 +207,13 @@ fn completion_hold(
     {
         return None;
     }
-    let rules = ctx.host.run_settings().completion_hold_rules;
+    let rules = &ctx.host.run_settings().completion_hold_rules;
     if rules.is_empty() {
         return None;
     }
     let evaluated = ctx.host.get_task(&application.task_id).and_then(|task| {
         crate::executor::automation::vcs::completion_hold::evaluate_completion_hold(
-            &rules,
+            rules,
             std::slice::from_ref(&task),
             &crate::executor::automation::vcs::completion_hold::ChangedPaths::NoDiff,
             &ctx.run_id,
