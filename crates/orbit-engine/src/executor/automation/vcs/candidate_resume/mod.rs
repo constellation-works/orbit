@@ -112,6 +112,8 @@
 mod adopt;
 mod apply;
 mod lookup;
+
+mod retained_patch;
 pub(super) mod source_repair;
 
 pub(in crate::executor::automation) use lookup::candidate_resume;

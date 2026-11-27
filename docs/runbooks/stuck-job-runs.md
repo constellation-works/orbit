@@ -1205,7 +1205,8 @@ to T and T still contains the last chase's target base. The binding records T
 as `candidate_head_sha`; publication uses a lease on P. Any other local branch
 movement is refused. Missing, contradictory or
 ambiguous evidence refuses before any source effect; no replacement PR is
-created. A dirty retained checkout also needs explicit reconciliation.
+created. A dirty retained checkout also needs explicit reconciliation: adopt
+its edits (below) or discard them.
 
 The lineage check is separate from the publication checks above, and it runs
 first. Every newer execution of the task must be an acknowledged replacement: a
@@ -1295,6 +1296,62 @@ and submit the repair with fresh policy and the red help-entrypoint evidence.
 Then observe the same-PR repair's native validation, configured review and
 hosted checks; make any subsequent landing decision separately. The offline
 fixtures require no live owner credentials and do not perform that recovery.
+
+#### Adopt final-recovery edits left in the publisher's checkout
+
+Final recovery can fix a candidate-specific failure (a lint error, say) and
+then escalate while the base is red, leaving that fix uncommitted in the
+original publishing run's checkout. Plain inspection refuses with `inline
+publication left uncommitted work`, and green requeue cannot accept the old
+red head. Do not copy the patch, archive the worktree or edit it by hand.
+Inspect the same original publishing run with explicit adoption:
+
+```json
+{
+  "action": "resume",
+  "id": "<original-publishing-run>",
+  "source_repair": {"action": "inspect", "task_id": "<task>", "adopt_retained_edits": true}
+}
+```
+
+Inspection stays read-only: it reads the checkout's status and its
+`git diff --binary --full-index HEAD` with optional locks off and writes
+nothing. Every check above still applies. In addition, the reply's
+`binding.retained_patch` records the patch's `sha256`, size in `bytes`, its
+`base_sha` (the checkout's `HEAD`) and the changed `paths`, and the reply's
+top-level `retained_patch` carries the exact patch text. Review it before
+submitting. Inspection refuses when:
+
+- the source is not a failed kept inline publication whose final recovery
+  settled (escalated or requeued) or applied its `resume` in place;
+- the checkout is missing, clean, holds an untracked or unmerged path, has a
+  truncated listing, or its patch exceeds 8 MiB;
+- the checkout's `HEAD` is not the binding's candidate head.
+
+Submit the inspected binding unchanged with the usual `request_key`,
+`diagnosis`, `unmet_acceptance` and `policy_digest`. Leave
+`adopt_retained_edits` out of the submit: the binding carries the choice.
+Submit reads the checkout again and compares the whole binding, so any of
+these refuses before a reservation, push or task lifecycle change: a stale
+or unreadable patch, a changed PR head or remote lease, an unsettled claim, a
+live owner, or a foreign or rebound scope. Replaying the identical payload
+returns the original successor and spends no second repair attempt. The
+attempt counts against the PR's shared repair budget like any other.
+
+The successor is the same review-only repair as above, on the same branch and
+PR under the lease on the published head. Its `candidate_resume` squash-merges
+the candidate, asks the host for the bound bytes (reread from the original
+checkout and checked against `sha256`), checks the digest again and applies
+them with `git apply --3way`. The implementer then starts from the candidate
+plus those edits, as uncommitted changes. It is told the source run, digest
+and paths, and the delivery commit, validation and configured review cover
+them. A patch that no longer applies refuses the run, and so does a candidate
+that conflicts with the moved base: the bytes never land over conflict
+markers. A three-way conflict inside the patch goes to the implementer as a
+`conflict` repair. The task history entry
+`source_repair_retained_patch_applied` names the request key, source run,
+patch digest and successor run. The original checkout and its edits stay
+intact. Leave it for worktree GC after the successor publishes.
 
 ### A task blocked on transient infrastructure
 

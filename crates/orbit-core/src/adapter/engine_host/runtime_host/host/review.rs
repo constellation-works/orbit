@@ -213,6 +213,10 @@ impl ReviewGate for EngineHost<'_> {
         recovery::validate_source_repair(self.runtime, run_id)
     }
 
+    fn source_repair_retained_patch(&self, run_id: &str) -> Result<Option<Vec<u8>>, OrbitError> {
+        self.runtime.source_repair_retained_patch(run_id)
+    }
+
     fn admit_pr_auto_fix(
         &self,
         request: &orbit_engine::PrAutoFixRequest,

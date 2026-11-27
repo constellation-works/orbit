@@ -15,6 +15,10 @@ pub const SOURCE_REPAIR_RESERVED: &str = "source_repair_reserved";
 /// Append-only link to the one admitted repair run.
 pub const SOURCE_REPAIR_LINKED: &str = "source_repair_linked";
 
+/// Evidence that an admitted repair applied its bound retained edits: names
+/// the request, the source run, the patch digest and the successor run.
+pub const SOURCE_REPAIR_RETAINED_PATCH_APPLIED: &str = "source_repair_retained_patch_applied";
+
 /// Fresh authorization of an unbound reservation after correcting its plan.
 /// The original reservation and its budget charge remain immutable.
 pub const SOURCE_REPAIR_RECONCILED: &str = "source_repair_reconciled";
@@ -60,6 +64,12 @@ pub struct SourceRepairBinding {
     /// where `candidate_head_sha` is preserved when it is not on `origin/<branch>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate_ref: Option<String>,
+    /// Uncommitted edits the stopped source's final recovery left in its
+    /// retained checkout, which the operator adopts explicitly. The successor
+    /// applies these exact bytes over the candidate head. Absent unless the
+    /// operator asked inspection to bind them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retained_patch: Option<SourceRepairRetainedPatch>,
 }
 
 impl SourceRepairBinding {
@@ -68,6 +78,21 @@ impl SourceRepairBinding {
     pub fn candidate_head(&self) -> &str {
         self.candidate_head_sha.as_deref().unwrap_or(&self.head_sha)
     }
+}
+
+/// Retained final-recovery edits, read from the source's own checkout.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRepairRetainedPatch {
+    /// SHA-256 of the exact binary patch bytes.
+    pub sha256: String,
+    /// Patch length in bytes.
+    pub bytes: u64,
+    /// The retained checkout's `HEAD`, which the patch applies to; always the
+    /// binding's candidate head.
+    pub base_sha: String,
+    /// Changed tracked paths, in `git status` order.
+    pub paths: Vec<String>,
 }
 
 /// Exact original checkpoint owner of a resumed source, bound immutably.

@@ -1,7 +1,7 @@
 //! Fresh operator authority over a kept inline publication, never completion reuse.
 use super::observation::authenticated_checkpoint;
 use super::*;
-use orbit_types::workflow::SourceRepairSuccessor;
+use orbit_types::workflow::{SourceRepairRetainedPatch, SourceRepairSuccessor};
 
 const LINEAGE_WINDOW: usize = 64;
 
@@ -10,11 +10,15 @@ impl OrbitRuntime {
     /// retries that reused its checkpoints without rebinding the task. Older
     /// retry ancestors are also retained. Only the admitted repair itself is
     /// excluded when rechecking this evidence before source effects.
+    /// `adopt_retained` accepts uncommitted edits in the publisher's own
+    /// checkout because the binding adopts them explicitly as its
+    /// `retained_patch`, which is read and checked separately.
     pub(super) fn observe_inline_repair_lineage(
         &self,
         source: &JobRun,
         task: &Task,
         admitted: Option<&str>,
+        adopt_retained: bool,
     ) -> Result<SourceRepairSuccessor, OrbitError> {
         let bound = task
             .job_run_id
@@ -61,18 +65,21 @@ impl OrbitRuntime {
             }
         }
         // A failed completion may have left uncommitted repairs even without
-        // a later retry. They must not be dropped when adopting the PR head.
-        let clean = match self.retained_candidate(task, Some(&source.run_id), Some(source)) {
-            crate::application::task::RetainedCandidate::Absent { .. } => true,
-            crate::application::task::RetainedCandidate::Present {
-                changed_paths: Ok(paths),
-                ..
-            } => paths.is_empty(),
-            _ => false,
-        };
+        // a later retry. They must not be dropped when adopting the PR head:
+        // the operator either adopts them explicitly or reconciles them.
+        let clean = adopt_retained
+            || match self.retained_candidate(task, Some(&source.run_id), Some(source)) {
+                crate::application::task::RetainedCandidate::Absent { .. } => true,
+                crate::application::task::RetainedCandidate::Present {
+                    changed_paths: Ok(paths),
+                    ..
+                } => paths.is_empty(),
+                _ => false,
+            };
         if !clean {
             return Err(refuse(
-                "inline publication left uncommitted work; reconcile its candidate explicitly",
+                "inline publication left uncommitted work; reconcile its candidate explicitly, \
+                 or inspect with adopt_retained_edits to carry those edits into the repair",
             ));
         }
         let mut evidence = Vec::new();
@@ -477,6 +484,95 @@ impl OrbitRuntime {
             ));
         }
         Ok(json!({"record":record,"origin":origin,"marker":marker}))
+    }
+}
+
+/// Explicit adoption of the edits a kept inline publication's final recovery
+/// left uncommitted in its retained checkout. Inspection reads them without
+/// writing; the binding records their digest, and every recheck reads the same
+/// checkout again, so a changed, missing or unreadable patch refuses before any
+/// reservation or source effect. The successor applies the exact bound bytes
+/// over the candidate head; the original checkout stays untouched.
+impl OrbitRuntime {
+    /// Read and bind the source's retained final-recovery edits over the
+    /// binding's candidate head. Returns the bound record and the exact bytes.
+    pub(super) fn observe_retained_patch(
+        &self,
+        source: &JobRun,
+        binding: &SourceRepairBinding,
+    ) -> Result<(SourceRepairRetainedPatch, Vec<u8>), OrbitError> {
+        let state = self
+            .read_run_state(&source.run_id)?
+            .ok_or_else(|| refuse("source checkpoints missing"))?;
+        // Final recovery settled on the task (escalated or requeued), or
+        // applied its `resume` in place and the run failed again.
+        if source.state != JobRunState::Failed
+            || !kept_inline_publication(&state)
+            || !self.repairable_published_source(source, &binding.task_id)?
+        {
+            return Err(refuse(
+                "retained edits can be adopted only from a failed kept inline publication with settled final recovery",
+            ));
+        }
+        let patch = self
+            .retained_patch(source)
+            .map_err(|error| refuse(format!("retained edits unreadable: {error}")))?
+            .ok_or_else(|| refuse("the retained checkout has no uncommitted edits to adopt"))?;
+        if patch.head != binding.candidate_head() {
+            return Err(refuse(format!(
+                "the retained checkout is at {}, not the bound candidate head {}",
+                patch.head,
+                binding.candidate_head()
+            )));
+        }
+        let bound = SourceRepairRetainedPatch {
+            sha256: sha256_hex(&patch.bytes),
+            bytes: patch.bytes.len() as u64,
+            base_sha: patch.head,
+            paths: patch.paths,
+        };
+        Ok((bound, patch.bytes))
+    }
+
+    /// Recheck the bound edits against the source's retained checkout.
+    pub(super) fn retained_patch_unchanged(
+        &self,
+        binding: &SourceRepairBinding,
+    ) -> Result<Option<Vec<u8>>, OrbitError> {
+        let Some(expected) = &binding.retained_patch else {
+            return Ok(None);
+        };
+        let source = self
+            .get_job_run_backend(&binding.source_run_id)?
+            .ok_or_else(|| refuse("source disappeared"))?;
+        let (observed, bytes) = self.observe_retained_patch(&source, binding)?;
+        if observed != *expected {
+            return Err(refuse(
+                "retained final-recovery edits changed after binding; inspect again",
+            ));
+        }
+        Ok(Some(bytes))
+    }
+
+    /// The exact bound retained edits for an admitted repair run, after
+    /// revalidating its admission. `None` when the admission binds none.
+    pub(crate) fn source_repair_retained_patch(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<Vec<u8>>, OrbitError> {
+        self.validate_source_repair_admission(run_id)?;
+        let run = self
+            .get_job_run_backend(run_id)?
+            .ok_or_else(|| refuse("repair run missing"))?;
+        let record: SourceRepairAdmission = serde_json::from_value(
+            run.input
+                .as_ref()
+                .and_then(|input| input.get(SOURCE_REPAIR_KEY))
+                .cloned()
+                .ok_or_else(|| refuse("admission missing"))?,
+        )
+        .map_err(|error| refuse(error.to_string()))?;
+        self.retained_patch_unchanged(&record.binding)
     }
 }
 

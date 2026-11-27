@@ -34,6 +34,10 @@ struct Request {
     unmet_acceptance: Option<String>,
     policy_digest: Option<String>,
     reservation_digest: Option<String>,
+    /// Inspect only: bind the uncommitted edits the stopped source's final
+    /// recovery left in its retained checkout. Submit reads the choice from
+    /// the binding's `retained_patch`.
+    adopt_retained_edits: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -62,7 +66,8 @@ impl OrbitRuntime {
             .tasks()
             .with_task_write_lock(task_id, &mut || {
                 self.check_resident_delivery_recovery(task_id, action_key)?;
-                let (source, _, binding) = self.observe_source_repair(source_id, task_id, false)?;
+                let (source, _, binding) =
+                    self.observe_source_repair(source_id, task_id, false, false)?;
                 if !matches!(source.state, JobRunState::Failed | JobRunState::Held) {
                     return Err(refuse(
                         "resident recovery requires a failed or held delivery run",
@@ -79,6 +84,7 @@ impl OrbitRuntime {
                     unmet_acceptance: None,
                     policy_digest: None,
                     reservation_digest: None,
+                    adopt_retained_edits: None,
                 };
                 response = Some(self.submit_source_repair(
                     source_id,
@@ -176,6 +182,7 @@ impl OrbitRuntime {
                 SourceRepairAuthorityRefusal::InlineLineageMissing,
             ));
         }
+        self.retained_patch_unchanged(binding)?;
         if !self.source_successor_unchanged(binding, run_id)? {
             return Err(refuse_authority(
                 SourceRepairAuthorityRefusal::SuccessorChanged,
@@ -261,8 +268,15 @@ impl OrbitRuntime {
         )?;
         match request.action.as_str() {
             "inspect" => {
+                let adopt = request.adopt_retained_edits == Some(true);
                 let (source, _, binding) =
-                    self.observe_source_repair(&source_id, &request.task_id, false)?;
+                    self.observe_source_repair(&source_id, &request.task_id, false, adopt)?;
+                let retained = if adopt {
+                    self.retained_patch_unchanged(&binding)?
+                        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                } else {
+                    None
+                };
                 let mut fresh = json!({"task_ids":[request.task_id]});
                 self.install_review_admission(
                     workflow::TASK_PR_PIPELINE_JOB,
@@ -270,16 +284,34 @@ impl OrbitRuntime {
                     None,
                     false,
                 )?;
-                Ok(
-                    json!({"binding":binding, "review":fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY],
-                    "policy_digest":if super::inline_publication::requires_fresh_rework_authority(
-                        &source, &self.read_run_state(&source_id)?.ok_or_else(|| refuse("source checkpoints missing"))?) {
-                        Some(self.source_rework_policy(&actor, &authority.provenance.to_string())?)
-                    } else { None },
-                    "reservations":orbit_types::workflow::source_repair_reservations(&self.get_task_history(&request.task_id)?)
-                        .map_err(|e| refuse(e.to_string()))?,
-                    "reservation_digests":self.source_repair_reservation_digests(&request.task_id)?}),
+                let source_state = self
+                    .read_run_state(&source_id)?
+                    .ok_or_else(|| refuse("source checkpoints missing"))?;
+                let policy_digest = if super::inline_publication::requires_fresh_rework_authority(
+                    &source,
+                    &source_state,
+                ) {
+                    Some(self.source_rework_policy(&actor, &authority.provenance.to_string())?)
+                } else {
+                    None
+                };
+                let reservations = orbit_types::workflow::source_repair_reservations(
+                    &self.get_task_history(&request.task_id)?,
                 )
+                .map_err(|e| refuse(e.to_string()))?;
+                let mut inspection = json!({
+                    "binding":binding,
+                    "review":fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY],
+                    "policy_digest":policy_digest,
+                    "reservations":reservations,
+                    "reservation_digests":self.source_repair_reservation_digests(&request.task_id)?,
+                });
+                // The exact bytes the binding's digest names, for the operator
+                // to review before submitting.
+                if let Some(patch) = retained {
+                    inspection["retained_patch"] = json!(patch);
+                }
+                Ok(inspection)
             }
             "submit" | "reconcile" => {
                 self.ensure_coordination_task_write_permitted()?;
@@ -328,6 +360,11 @@ impl OrbitRuntime {
             .binding
             .as_ref()
             .ok_or_else(|| refuse("inspect and supply the exact binding"))?;
+        if request.adopt_retained_edits.is_some() {
+            return Err(refuse(
+                "adopt_retained_edits applies to inspect; submit the inspected binding with its retained_patch",
+            ));
+        }
         if binding.source_run_id != source_id || binding.task_id != request.task_id {
             return Err(refuse(
                 "request and binding identify different source or task",
@@ -434,8 +471,12 @@ impl OrbitRuntime {
                 json!({"run_id":run.run_id,"retry_source_run_id":source_id,"state":run.state,"replayed":true}),
             );
         }
-        let (source, task, observed) =
-            self.observe_source_repair(source_id, &request.task_id, prior.is_some())?;
+        let (source, task, observed) = self.observe_source_repair(
+            source_id,
+            &request.task_id,
+            prior.is_some(),
+            binding.retained_patch.is_some(),
+        )?;
         if observed != *binding {
             return Err(refuse(
                 "binding is stale; inspect the exact source, scope and lease again",
@@ -654,6 +695,7 @@ impl OrbitRuntime {
         source_id: &str,
         task_id: &str,
         reserved: bool,
+        adopt_retained: bool,
     ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
         let source = self
             .get_job_run_backend(source_id)?
@@ -731,7 +773,7 @@ impl OrbitRuntime {
         let inline = source.state == JobRunState::Failed
             && super::inline_publication::kept_inline_publication(&state);
         let superseded = if inline {
-            Some(self.observe_inline_repair_lineage(&source, &task, None)?)
+            Some(self.observe_inline_repair_lineage(&source, &task, None, adopt_retained)?)
         } else if resumed_owner.is_none()
             && held_retry_lineage.is_none()
             && task.job_run_id.as_deref() != Some(source_id)
@@ -764,6 +806,9 @@ impl OrbitRuntime {
             None => self.observe_published_source(source, task, true)?,
         };
         binding.superseded = superseded;
+        if adopt_retained {
+            binding.retained_patch = Some(self.observe_retained_patch(&source, &binding)?.0);
+        }
         Ok((source, task, binding))
     }
 }

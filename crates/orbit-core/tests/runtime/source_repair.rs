@@ -55,6 +55,9 @@ mod replay;
 mod resumed_in_place;
 #[path = "source_repair/resumed_recovery.rs"]
 mod resumed_recovery;
+
+#[path = "source_repair/retained_edit.rs"]
+mod retained_edit;
 #[path = "source_repair/review_requeue.rs"]
 mod review_requeue;
 #[path = "source_repair/reviewer_push.rs"]

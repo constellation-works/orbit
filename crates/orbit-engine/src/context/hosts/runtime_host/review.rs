@@ -69,6 +69,10 @@ pub trait ReviewGate: Send + Sync {
     /// Recheck the durable operator admission and exact source/scope before
     /// applying a cancelled owner's published candidate. Other hosts refuse.
     fn validate_source_repair(&self, run_id: &str) -> Result<(), OrbitError>;
+    /// The exact retained final-recovery edits the run's admission binds,
+    /// reread from the source's checkout and checked against the bound
+    /// digest after revalidating the admission. `None` when it binds none.
+    fn source_repair_retained_patch(&self, run_id: &str) -> Result<Option<Vec<u8>>, OrbitError>;
     /// Admit one `--auto-fix` repair of a pull request's failed required
     /// checks or merge conflict before any agent runs. The host draws the
     /// run's repair crew from `workflow.purpose_crews.auto_fix` (the low
