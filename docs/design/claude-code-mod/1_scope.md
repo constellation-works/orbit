@@ -2,11 +2,11 @@
 title: "Scope: the Claude Code mod links task and run ids and draws nothing else"
 owner: claude
 created_date: 2026-11-26
-updated_date: 2026-11-26
-last_validated: 2026-11-26
+updated_date: 2026-11-27
+last_validated: 2026-11-27
 status: Accepted
-stage: designing
-next: "ORB-28914 (address key) and ORB-28915 (permalinks) wait for approval to build"
+stage: building
+next: "Trial peer-message links in Claude Code [ORB-28918]"
 feature: claude-code-mod
 doc_role: scope
 type: design
@@ -16,10 +16,9 @@ tags: [claude-code-mod, plugin, dashboard, host-registry]
 
 # Scope: the Claude Code mod links task and run ids and draws nothing else
 
-Status: design approved by Daniel on 2026-11-26, in the Orbit captain's chat ("yes, I
-approve the revised design"). Phase 1, the Codex Desktop trial, passed ([ORB-28913]). No
-code is built: the tasks for phases 2 to 5 are filed and wait for approval, so the stage
-stays `designing`.
+Status: design approved by Daniel on 2026-11-26. Phases 1 to 4 have landed ([ORB-28913],
+[ORB-28914], [ORB-28915], [ORB-28916], [ORB-28917]); phase 5 remains, so the stage is
+`building`.
 Bearing: the Orbit plugin's hooks module ([`plugin/hooks/mod`](../../../plugin/hooks/mod/README.md),
 built by [ORB-13862]) draws a band, a status line, toasts and a Board / Ship pane in Claude
 Code, adds a task card to prompts and a trailer to commits. The
@@ -266,15 +265,14 @@ The plugin has no setting of its own.
 ## Phasing
 
 1. **Codex Desktop trial** ([ORB-28913], done). No code. The trial passed.
-   Phase 4 can proceed once the address setting and permalinks land.
-2. **Dashboard permalinks and the address key.** `machine.web.public_url` ([ORB-28914], proposed);
+2. **Dashboard permalinks and the address key.** `machine.web.public_url` ([ORB-28914], done in #11527);
    `GET /t/<id>`, both forms of `GET /r/<id>` and every redirect naming the host
-   ([ORB-28915], proposed).
-3. **Replace the mod** ([ORB-28916], proposed, blocked by phase 2). Move the linking function and its cases into
+   ([ORB-28915], done in #11536).
+3. **Replace the mod** ([ORB-28916], done in #11546). Move the linking function and its cases into
    `plugin/hooks/mod`, add the run pattern, read the prefixes and the address at session
    start, delete the rest, update the docs.
-4. **A result's `url` and the skill line** ([ORB-28917], proposed, blocked by the trial and phase 2).
-5. **Messages from other sessions in Claude Code, a trial first** ([ORB-28918], proposed, blocked by phase 3). A
+4. **A result's `url` and the skill line** ([ORB-28917], done in #11558).
+5. **Messages from other sessions in Claude Code, a trial first** ([ORB-28918], proposed; phase 3 has landed). A
    peer's message, a task notification and hook feedback arrive as user rows, and their
    ids stay plain. The engine documents an assistant message's text as markdown and a
    user row's as printable text. The trial: rewrite a user row's text with a markdown
