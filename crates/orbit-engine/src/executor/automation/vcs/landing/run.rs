@@ -5,8 +5,9 @@ use std::ops::Deref;
 use std::time::Duration;
 
 use orbit_common::{OrbitError, PrivateVcsFailureClass};
+use orbit_types::workflow::DeliveryRefusal;
 use orbit_types::workflow::handoff::HandoffDelivery;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::context::{
     HandoffLandingContext, HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
@@ -18,7 +19,7 @@ use super::super::remote_probe::fixed_wait as sleep;
 use super::intent::{LandingView, reconcile_intent};
 use super::local::{land_already_landed, land_local_candidate, land_no_diff};
 use super::pull_request::land_pull_request;
-use super::record::{record_stop, stop};
+use super::record::{hold_pr, record_stop, stop};
 
 /// Budget for waiting out required checks on a pull request before the attempt
 /// stops. The same shape `pr_complete` uses, so operators tune one thing.
@@ -205,6 +206,55 @@ fn settle_failure<H: ReviewGate + ?Sized>(
 ) -> OrbitError {
     if pass.intent_open.get() {
         return error;
+    }
+    // [ORB-29163] A transport failure before any external write is
+    // inconclusive evidence, not a verdict on the candidate: the forge never
+    // answered, so hold the run instead of failing it. Resuming the held run
+    // reads the forge again. A write (or an open intent above) keeps the
+    // existing failure and intent-reconciliation behavior, as does every
+    // non-transient error.
+    if !pass.wrote.get() && transport_failure(&error) {
+        let tries = if passes > 1 {
+            format!(" after {passes} tries")
+        } else {
+            String::new()
+        };
+        let detail = error.to_string();
+        let detail = detail.strip_prefix("handoff_land: ").unwrap_or(&detail);
+        let target = match &pass.candidate.delivery {
+            HandoffDelivery::PullRequest { number } => format!("pull request #{number}"),
+            HandoffDelivery::LocalCandidate => "the local candidate".to_string(),
+            HandoffDelivery::NoDiff { .. } => "the no-diff candidate".to_string(),
+            HandoffDelivery::AlreadyLanded { .. } => "the already-landed candidate".to_string(),
+        };
+        let reason = format!(
+            "{target} could not be observed{tries}: {detail}; no merge or other external write \
+             was sent, so the candidate stays in review and resuming the held run reads the \
+             forge again"
+        );
+        let observation = json!({
+            "transport_retry_exhausted": true,
+            "passes": passes,
+        });
+        match hold_pr(
+            host,
+            pass,
+            &observation,
+            false,
+            DeliveryRefusal::ForgeObservationUnavailable,
+            &reason,
+        ) {
+            Ok(held) => return held,
+            Err(refused) => {
+                tracing::warn!(
+                    %refused,
+                    %error,
+                    handoff_id = %pass.handoff_id,
+                    "handoff_land: the held run's stop could not be recorded"
+                );
+                return error;
+            }
+        }
     }
     let message = error.to_string();
     let message = message.strip_prefix("handoff_land: ").unwrap_or(&message);
