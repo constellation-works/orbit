@@ -747,7 +747,7 @@ fn resident_stale_comment_is_refused_without_writes() {
         2,
         "every checkpoint cost, including unsigned costs, is retained"
     );
-    runtime.reconcile_evolution_checkpoint(&id).unwrap();
+    orbit_core::app::evolution::reconcile_evolution_checkpoint(&runtime, &id).unwrap();
     let ledger_again = call(&runtime, "orbit.evolution.list", json!({}), &operator()).unwrap();
     assert_eq!(
         ledger_again, ledger,
@@ -1160,7 +1160,7 @@ fn evolution_corroboration_and_suppression(
         denied.contains("is inactive on the agent tool surface"),
         "only the operator may suppress proposals: {denied}"
     );
-    runtime.decline_evolution_record(id, 30).unwrap();
+    orbit_core::app::evolution::decline_evolution_record(runtime, id, 30).unwrap();
     let in_state = |state: &str| {
         call(
             runtime,

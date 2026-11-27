@@ -14,7 +14,7 @@ use orbit_types::record::{
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::RESIDENT_TAG;
 
-use super::limits;
+use super::limit as limits;
 use crate::OrbitRuntime;
 use crate::runtime::authorization::resolved_caller_capabilities;
 
@@ -156,164 +156,157 @@ impl NoticePoster {
     }
 }
 
-impl OrbitRuntime {
-    /// The notice terms of the mandate on `task_id`: its status line lapses
-    /// after twice the heartbeat, the same silence the stall check uses. A
-    /// mandate that cannot be read falls back to the agent expiry.
-    fn resident_notice_poster(&self, task_id: &str) -> ResidentNoticePoster {
-        let status_line_ttl =
-            match crate::application::resident::resident_mandate_from_artifact(self, task_id) {
-                Ok(Ok(mandate)) => {
-                    Duration::minutes(2 * i64::from(mandate.cadence.heartbeat_minutes))
-                }
-                Ok(Err(_)) | Err(_) => Duration::hours(i64::from(limits::MAX_EXPIRY_HOURS_AGENT)),
-            };
-        ResidentNoticePoster { status_line_ttl }
-    }
-
-    /// The poster Orbit writes a mandate's control line as: the mandate's
-    /// own assignment, so the next cycle's status line replaces it in place.
-    ///
-    /// A line for a mandate that stays quiet (`lasting`: paused, taken over,
-    /// stopped) outlives the heartbeat; one for a mandate that should cycle
-    /// again lapses like a cycle's own line, so a mandate that never does
-    /// reads as silent.
-    pub(crate) fn resident_control_line_poster(
-        &self,
-        task_id: &str,
-        lasting: bool,
-    ) -> Result<NoticePoster, OrbitError> {
-        let task = self.get_task(task_id)?;
-        let resident = if lasting {
-            ResidentNoticePoster {
-                status_line_ttl: Duration::hours(i64::from(
-                    limits::RESIDENT_CONTROL_LINE_EXPIRY_HOURS,
-                )),
-            }
-        } else {
-            self.resident_notice_poster(task_id)
+/// The notice terms of the mandate on `task_id`: its status line lapses
+/// after twice the heartbeat, the same silence the stall check uses. A
+/// mandate that cannot be read falls back to the agent expiry.
+fn resident_notice_poster(rt: &OrbitRuntime, task_id: &str) -> ResidentNoticePoster {
+    let status_line_ttl =
+        match crate::application::resident::resident_mandate_from_artifact(rt, task_id) {
+            Ok(Ok(mandate)) => Duration::minutes(2 * i64::from(mandate.cadence.heartbeat_minutes)),
+            Ok(Err(_)) | Err(_) => Duration::hours(i64::from(limits::MAX_EXPIRY_HOURS_AGENT)),
         };
-        Ok(NoticePoster {
-            class: AuthorClass::Agent,
-            crew: task.crew.clone(),
-            model: None,
-            task_id: Some(task.id.to_string()),
-            run_id: None,
-            machine_id: self.automation_machine_identity().map(ToOwned::to_owned),
-            resident: Some(resident),
-        })
-    }
+    ResidentNoticePoster { status_line_ttl }
+}
 
-    /// Resolve the poster class of `caller`: operator capability first, then
-    /// a managed-run binding, then orchestrator attribution naming a
-    /// configured crew. Anything else is refused.
-    pub(crate) fn resolve_notice_poster(
-        &self,
-        caller: &NoticeCaller,
-    ) -> Result<NoticePoster, OrbitError> {
-        let capabilities = resolved_caller_capabilities(self.env(), &caller.session);
-        let machine_id = self.automation_machine_identity().map(ToOwned::to_owned);
-        let model = non_empty(caller.model.as_deref());
-        if capabilities.contains(&McpCapability::Operator)
-            && caller.session.worker_invocation.is_none()
-        {
-            return Ok(NoticePoster {
-                class: AuthorClass::Operator,
-                crew: None,
-                model,
-                task_id: None,
-                run_id: None,
-                machine_id,
-                resident: None,
-            });
+/// The poster Orbit writes a mandate's control line as: the mandate's
+/// own assignment, so the next cycle's status line replaces it in place.
+///
+/// A line for a mandate that stays quiet (`lasting`: paused, taken over,
+/// stopped) outlives the heartbeat; one for a mandate that should cycle
+/// again lapses like a cycle's own line, so a mandate that never does
+/// reads as silent.
+pub(super) fn resident_control_line_poster(
+    rt: &OrbitRuntime,
+    task_id: &str,
+    lasting: bool,
+) -> Result<NoticePoster, OrbitError> {
+    let task = rt.get_task(task_id)?;
+    let resident = if lasting {
+        ResidentNoticePoster {
+            status_line_ttl: Duration::hours(i64::from(limits::RESIDENT_CONTROL_LINE_EXPIRY_HOURS)),
         }
-        let bound = match &caller.session.worker_invocation {
-            Some(binding) => {
-                binding.validate().map_err(|error| {
-                    OrbitError::notice_refused(
-                        NoticeRefusalCode::PosterUnidentified,
-                        format!("the worker binding is invalid: {error}"),
-                    )
-                })?;
-                if binding.owner_workspace_id != self.workspace_id()? {
-                    return Err(OrbitError::notice_refused(
-                        NoticeRefusalCode::ScopeRefused,
-                        "a managed agent posts only in its bound task's workspace",
-                    ));
-                }
-                Some((
-                    binding.task_id.clone(),
-                    Some(binding.bound_run_id.clone()),
-                    Some(binding.execution.machine_id.clone()),
-                ))
-            }
-            None => match (
-                non_empty(caller.scope_task_id.as_deref()),
-                non_empty(caller.scope_run_id.as_deref()),
-            ) {
-                (Some(task_id), Some(run_id)) => Some((task_id, Some(run_id), machine_id.clone())),
-                // A resident cycle is bound by its run alone: the run names
-                // its mandate.
-                (None, Some(run_id)) => self
-                    .resident_cycle_mandate_of_run(&run_id)
-                    .ok()
-                    .map(|mandate| (mandate, Some(run_id), machine_id.clone())),
-                _ => None,
-            },
-        };
-        if let Some((task_id, run_id, machine_id)) = bound {
-            let task = self.get_task(&task_id).map_err(|_| {
+    } else {
+        resident_notice_poster(rt, task_id)
+    };
+    Ok(NoticePoster {
+        class: AuthorClass::Agent,
+        crew: task.crew.clone(),
+        model: None,
+        task_id: Some(task.id.to_string()),
+        run_id: None,
+        machine_id: rt.automation_machine_identity().map(ToOwned::to_owned),
+        resident: Some(resident),
+    })
+}
+
+/// Resolve the poster class of `caller`: operator capability first, then
+/// a managed-run binding, then orchestrator attribution naming a
+/// configured crew. Anything else is refused.
+pub(super) fn resolve_notice_poster(
+    rt: &OrbitRuntime,
+    caller: &NoticeCaller,
+) -> Result<NoticePoster, OrbitError> {
+    let capabilities = resolved_caller_capabilities(rt.env(), &caller.session);
+    let machine_id = rt.automation_machine_identity().map(ToOwned::to_owned);
+    let model = non_empty(caller.model.as_deref());
+    if capabilities.contains(&McpCapability::Operator) && caller.session.worker_invocation.is_none()
+    {
+        return Ok(NoticePoster {
+            class: AuthorClass::Operator,
+            crew: None,
+            model,
+            task_id: None,
+            run_id: None,
+            machine_id,
+            resident: None,
+        });
+    }
+    let bound = match &caller.session.worker_invocation {
+        Some(binding) => {
+            binding.validate().map_err(|error| {
                 OrbitError::notice_refused(
                     NoticeRefusalCode::PosterUnidentified,
-                    "the bound task is not in this workspace",
+                    format!("the worker binding is invalid: {error}"),
                 )
             })?;
-            let resident = run_id
-                .as_deref()
-                .filter(|_| task.tags.iter().any(|tag| tag == RESIDENT_TAG))
-                .filter(|run_id| {
-                    self.resident_cycle_mandate_of_run(run_id)
-                        .is_ok_and(|mandate| mandate == task_id)
-                })
-                .map(|_| self.resident_notice_poster(&task_id));
-            return Ok(NoticePoster {
-                class: AuthorClass::Agent,
-                crew: task.crew.clone(),
-                model,
-                task_id: Some(task_id),
-                run_id,
-                machine_id,
-                resident,
-            });
+            if binding.owner_workspace_id != rt.workspace_id()? {
+                return Err(OrbitError::notice_refused(
+                    NoticeRefusalCode::ScopeRefused,
+                    "a managed agent posts only in its bound task's workspace",
+                ));
+            }
+            Some((
+                binding.task_id.clone(),
+                Some(binding.bound_run_id.clone()),
+                Some(binding.execution.machine_id.clone()),
+            ))
         }
-        if capabilities.contains(&McpCapability::Agent)
-            && let Some(orchestrator) = non_empty(caller.orchestrator.as_deref())
-        {
-            let crew = self
-                .canonical_crew_name(Some(&orchestrator))
+        None => match (
+            non_empty(caller.scope_task_id.as_deref()),
+            non_empty(caller.scope_run_id.as_deref()),
+        ) {
+            (Some(task_id), Some(run_id)) => Some((task_id, Some(run_id), machine_id.clone())),
+            // A resident cycle is bound by its run alone: the run names
+            // its mandate.
+            (None, Some(run_id)) => rt
+                .resident_cycle_mandate_of_run(&run_id)
                 .ok()
-                .flatten()
-                .ok_or_else(|| {
-                    OrbitError::notice_refused(
-                        NoticeRefusalCode::PosterUnidentified,
-                        format!("orchestrator `{orchestrator}` is not a configured crew"),
-                    )
-                })?;
-            return Ok(NoticePoster {
-                class: AuthorClass::Orchestrator,
-                crew: Some(crew),
-                model,
-                task_id: None,
-                run_id: None,
-                machine_id,
-                resident: None,
-            });
-        }
-        Err(OrbitError::notice_refused(
-            NoticeRefusalCode::PosterUnidentified,
-            "only the operator, an orchestrator session or a managed agent run may write notices",
-        ))
+                .map(|mandate| (mandate, Some(run_id), machine_id.clone())),
+            _ => None,
+        },
+    };
+    if let Some((task_id, run_id, machine_id)) = bound {
+        let task = rt.get_task(&task_id).map_err(|_| {
+            OrbitError::notice_refused(
+                NoticeRefusalCode::PosterUnidentified,
+                "the bound task is not in this workspace",
+            )
+        })?;
+        let resident = run_id
+            .as_deref()
+            .filter(|_| task.tags.iter().any(|tag| tag == RESIDENT_TAG))
+            .filter(|run_id| {
+                rt.resident_cycle_mandate_of_run(run_id)
+                    .is_ok_and(|mandate| mandate == task_id)
+            })
+            .map(|_| resident_notice_poster(rt, &task_id));
+        return Ok(NoticePoster {
+            class: AuthorClass::Agent,
+            crew: task.crew.clone(),
+            model,
+            task_id: Some(task_id),
+            run_id,
+            machine_id,
+            resident,
+        });
     }
+    if capabilities.contains(&McpCapability::Agent)
+        && let Some(orchestrator) = non_empty(caller.orchestrator.as_deref())
+    {
+        let crew = rt
+            .canonical_crew_name(Some(&orchestrator))
+            .ok()
+            .flatten()
+            .ok_or_else(|| {
+                OrbitError::notice_refused(
+                    NoticeRefusalCode::PosterUnidentified,
+                    format!("orchestrator `{orchestrator}` is not a configured crew"),
+                )
+            })?;
+        return Ok(NoticePoster {
+            class: AuthorClass::Orchestrator,
+            crew: Some(crew),
+            model,
+            task_id: None,
+            run_id: None,
+            machine_id,
+            resident: None,
+        });
+    }
+    Err(OrbitError::notice_refused(
+        NoticeRefusalCode::PosterUnidentified,
+        "only the operator, an orchestrator session or a managed agent run may write notices",
+    ))
 }
 
 fn non_empty(value: Option<&str>) -> Option<String> {

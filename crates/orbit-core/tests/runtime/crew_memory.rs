@@ -4,7 +4,7 @@
 //! the memory arms reads no space.
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::application::crew_memory::{MemoryFile, MemoryToolCaller, MemoryWrite};
+use orbit_core::app::crew_memory::{MemoryFile, MemoryToolCaller, MemoryWrite};
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
@@ -68,7 +68,7 @@ fn open_proposal(
 ) {
     let outcome = store
         .write(|tx| {
-            orbit_core::application::crew_memory::open_proposal(
+            orbit_core::app::crew_memory::open_proposal(
                 tx,
                 &CrewMemoryProposalRow {
                     workspace_id: workspace_id.to_string(),
@@ -158,7 +158,7 @@ fn seed_lapsed_and_acceptance(store: &orbit_store::Store, workspace_id: &str) {
     open_proposal(store, workspace_id, "accepted-mid", decided_at);
     store
         .write(|tx| {
-            orbit_core::application::crew_memory::decide_proposal(
+            orbit_core::app::crew_memory::decide_proposal(
                 tx,
                 &CrewMemoryProposalDecision {
                     workspace_id: workspace_id.to_string(),
@@ -213,9 +213,8 @@ fn recent_decision_stays_ahead_of_older_expiries() {
     assert_eq!(before.closed[0].proposal.id, "accepted-mid");
     assert_eq!(before.closed[0].proposal.status, "accepted");
 
-    let board = runtime
-        .crew_memory_proposal_board()
-        .expect("proposal board");
+    let board =
+        orbit_core::app::crew_memory::crew_memory_proposal_board(&runtime).expect("proposal board");
     let after = stored_memory(&store, &workspace_id);
     assert_eq!(
         after.open, before.open,
@@ -283,19 +282,19 @@ crate::scenario_table!(
 /// `orbit.memory.show`, and its run reads no other model's space.
 fn memory_read_grant_is_refused() {
     let (_root, runtime) = runtime();
-    runtime
-        .crew_memory_write(
-            "model-b",
-            MemoryWrite {
-                files: vec![MemoryFile {
-                    path: "notes.md".to_string(),
-                    text: "Check the lockfile before changing a dependency.\n".to_string(),
-                }],
-                evidence: Vec::new(),
-            },
-            None,
-        )
-        .expect("operator seeds model-b's space");
+    orbit_core::app::crew_memory::crew_memory_write(
+        &runtime,
+        "model-b",
+        MemoryWrite {
+            files: vec![MemoryFile {
+                path: "notes.md".to_string(),
+                text: "Check the lockfile before changing a dependency.\n".to_string(),
+            }],
+            evidence: Vec::new(),
+        },
+        None,
+    )
+    .expect("operator seeds model-b's space");
     let refused = runtime
         .add_task(TaskAddParams {
             title: "Consolidate crew memory".into(),
@@ -320,8 +319,7 @@ fn memory_read_grant_is_refused() {
         ..Default::default()
     };
 
-    runtime
-        .crew_memory_tool_show(&run, Some("model-b"), None)
+    orbit_core::app::crew_memory::crew_memory_tool_show(&runtime, &run, Some("model-b"), None)
         .expect_err("a run outside dreaming and the memory arms reads no space");
 }
 

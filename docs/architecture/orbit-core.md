@@ -22,7 +22,7 @@ Composes the runtime. `OrbitRuntime` owns a `RuntimeKernel` and derefs to it. In
 
 ## Main modules and types
 
-`application` (task, job, review, landing, distributed, pull_drain, admission, search, notice), `app` (`agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`, `config`, `crew_memory`, `doctor`, `evolution`, `experiment`, `friction`, `gc`, `host`, `lease`, `notice`, `plugin`, `remote_command`, `resident`, `review`, `routine`, `run`, `search`, `skill`, `task`, `tool`, `update`, `workspace`), `adapter`, `composition` (`Core` in `crates/orbit-core/src/composition/core.rs`), `bootstrap`, `runtime` (`OrbitRuntime` in `crates/orbit-core/src/runtime/mod.rs`). See ``crates/orbit-core/src/lib.rs``.
+`application` (task, job, review, landing, distributed, pull_drain, admission), `app` (`agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`, `config`, `crew_memory`, `doctor`, `evolution`, `experiment`, `friction`, `gc`, `host`, `lease`, `notice`, `plugin`, `remote_command`, `resident`, `review`, `routine`, `run`, `search`, `skill`, `task`, `tool`, `update`, `workspace`), `adapter`, `composition` (`Core` in `crates/orbit-core/src/composition/core.rs`), `bootstrap`, `runtime` (`OrbitRuntime` in `crates/orbit-core/src/runtime/mod.rs`). See ``crates/orbit-core/src/lib.rs``.
 
 ## Public face
 
@@ -102,9 +102,7 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `change_watch.rs` | `unit::change_watch` | leaf |
 | `codebase` | `app::codebase` | above task |
 | `contracts` | dissolved: each shape goes to the app that owns it | — |
-| `crew_memory` | `app::crew_memory` | above task |
 | `distributed` | `unit::distributed` | 5 |
-| `evolution` | `app::evolution` | above task |
 | `executor.rs` | `unit::executor` | leaf |
 | `experiment` | `app::experiment` | above task |
 | `gc` | `app::gc` | above task |
@@ -112,13 +110,11 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `job` | `app::run`; its `crew_pools` module goes to `unit::crew_pool` (between task and run) | 2 |
 | `landing` | `unit::landing` | above task |
 | `managed_assets` | `unit::managed_assets` | leaf |
-| `notice` | `app::notice` | above task |
 | `operator_input.rs` | `app::review` | 4 |
 | `plugin` | `app::plugin` | above task |
 | `pull_drain` | `unit::pull_drain` | 6 |
 | `resident` | `app::resident` | above task |
 | `review` | `app::review` | 4 |
-| `search` | `app::search` | above task |
 | `seeding_policy.rs` | `unit::seeding_policy` | above task |
 | `statistics.rs` | `unit::statistics` | leaf |
 | `store_opener.rs` | `unit::store_opener` | leaf |

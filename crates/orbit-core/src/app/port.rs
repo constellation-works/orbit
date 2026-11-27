@@ -1,12 +1,23 @@
-//! Bind ports owned by lower modules to the apps that supply their answers.
+//! Port bindings between apps and lower modules.
 //!
-//! This is the one file that names both a lower module's port trait and the
-//! higher module's implementor.
+//! This is the one file that names both the lower module owning a port trait
+//! and the higher app implementing it. Each binding exposes the implementor
+//! under its port name and asserts at compile time that it satisfies the trait.
 
+pub(crate) use super::evolution::TaskPort as TaskEvolution;
+pub(crate) use super::notice::TaskPort as TaskNotice;
 pub(crate) use super::routine::ResidentRoutineStatus;
 use crate::app::agent;
 use crate::application::resident::ResidentRoutineStatusPort;
-use crate::application::task::TaskCorpusPort;
+use crate::application::task::{TaskCorpusPort, TaskEvolutionPort, TaskNoticePort};
+
+const _: () = {
+    const fn binds_task_evolution<T: TaskEvolutionPort>() {}
+    const fn binds_task_notice<T: TaskNoticePort>() {}
+
+    binds_task_evolution::<TaskEvolution<'_>>();
+    binds_task_notice::<TaskNotice<'_>>();
+};
 
 // Compile-time proof that the bound implementor satisfies the port trait.
 const _: for<'a> fn(&'a TaskCorpus<'a>) -> &'a dyn TaskCorpusPort = |port| port;

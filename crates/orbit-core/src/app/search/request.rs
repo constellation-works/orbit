@@ -110,14 +110,12 @@ impl SearchRequestProfile {
     }
 }
 
-impl OrbitRuntime {
-    /// The shared search operation every surface reaches: apply the
-    /// profile's request policy, then run the existing search engine.
-    pub fn search_with_profile(
-        &self,
-        profile: SearchRequestProfile,
-        request: SearchRequest,
-    ) -> Result<GlobalSearchResponse, OrbitError> {
-        self.global_search(profile.search_params(request)?)
-    }
+/// The shared search operation every surface reaches: apply the
+/// profile's request policy, then run the existing search engine.
+pub(crate) fn search_with_profile(
+    rt: &OrbitRuntime,
+    profile: SearchRequestProfile,
+    request: SearchRequest,
+) -> Result<GlobalSearchResponse, OrbitError> {
+    super::runtime::global_search(rt, profile.search_params(request)?)
 }

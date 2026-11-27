@@ -1262,7 +1262,7 @@ fn cross_workspace_linked_task_closes_on_read_and_in_the_closure_tick() {
         "{shown}"
     );
 
-    home.run_notice_closure_tick().unwrap();
+    orbit_core::app::notice::run_notice_closure_tick(&home).unwrap();
     let shown = call(&home, "orbit.notice.show", json!({"id": id}), &operator).unwrap();
     assert_eq!(
         shown["history"].as_array().unwrap().last().unwrap()["action"],

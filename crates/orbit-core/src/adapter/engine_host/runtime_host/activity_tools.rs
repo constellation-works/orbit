@@ -185,11 +185,11 @@ fn crew_memory_suppressions(
     tasks: &[Task],
     activity: Option<&str>,
 ) -> Result<Vec<String>, DispatchError> {
-    runtime
-        .crew_memory_tool_suppressions(tasks, activity)
-        .map_err(|error| {
+    crate::app::crew_memory::crew_memory_tool_suppressions(runtime, tasks, activity).map_err(
+        |error| {
             DispatchError::CliInvocationFailed(format!("resolve crew memory tool scope: {error}"))
-        })
+        },
+    )
 }
 
 fn load_tasks(runtime: &OrbitRuntime, task_ids: &[String]) -> Result<Vec<Task>, DispatchError> {

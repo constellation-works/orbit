@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_types::record::FrictionStatus;
 use orbit_types::task::TaskStatus;
 
-use super::types::GlobalSearchParams;
+use super::model::GlobalSearchParams;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct SearchStatusFilters {

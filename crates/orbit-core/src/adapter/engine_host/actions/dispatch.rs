@@ -167,9 +167,10 @@ pub(crate) fn run_deterministic(
         }
         // The weekly crew memory dreaming mint: a no-op that names its gate
         // while no memory experiment is running.
-        CoreDeterministicAction::CrewMemoryDream => runtime
-            .crew_memory_dream()
-            .map_err(|error| DispatchError::action_failed(action, error.to_string())),
+        CoreDeterministicAction::CrewMemoryDream => {
+            crate::app::crew_memory::crew_memory_dream(runtime)
+                .map_err(|error| DispatchError::action_failed(action, error.to_string()))
+        }
         // Publish only this workspace, with an explicit successful skip when unbound.
         CoreDeterministicAction::TaskPublication => runtime
             .run_task_publication()

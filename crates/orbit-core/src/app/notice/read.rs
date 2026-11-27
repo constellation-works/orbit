@@ -1,0 +1,364 @@
+//! Notice listing, history and linked-task projection.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use chrono::{DateTime, Duration, Utc};
+use orbit_common::governance::notice::NOTICE_LIST_MAX_LIMIT;
+use orbit_common::{NoticeRefusalCode, OrbitError};
+use orbit_store::contract::{NoticeRow, NoticeScopeFilter};
+use orbit_types::record::{EffectiveStatus, Notice, NoticeKind};
+use orbit_types::task::TaskStatus;
+
+use crate::OrbitRuntime;
+
+use super::{
+    LinkedDone, NoticeHistoryEntry, NoticeListFilter, NoticeListing, NoticeView, linked_done_at,
+    parse_notice_row, refuse,
+};
+
+/// One listing's linked-task resolutions, by task id: each distinct id is
+/// read through its registered owner at most once, however many notices
+/// link to it and whether auto-close or linked status asks first. `None`
+/// keeps the unknown case (no workspace on this host holds the task).
+#[derive(Default)]
+struct LinkedTaskCache {
+    resolved: BTreeMap<String, Option<(TaskStatus, DateTime<Utc>)>>,
+}
+
+impl LinkedTaskCache {
+    fn resolve(&mut self, runtime: &OrbitRuntime, id: &str) -> Option<(TaskStatus, DateTime<Utc>)> {
+        *self.resolved.entry(id.to_string()).or_insert_with(|| {
+            notice_linked_task(runtime, id).map(|task| (task.status, task.updated_at))
+        })
+    }
+}
+
+/// The registered name of this workspace, or its checkout label when the
+/// registry cannot be read.
+pub(super) fn notice_workspace_name(rt: &OrbitRuntime, workspace_id: &str) -> String {
+    let path = orbit_registry::workspace_registry::registry_path_for(&rt.global_root());
+    orbit_registry::workspace_registry::load_registry_from_read_only(&path)
+        .ok()
+        .and_then(|load| {
+            orbit_registry::workspace_registry::find_workspace_by_id(&load.registry, workspace_id)
+                .map(|workspace| workspace.name.clone())
+        })
+        .unwrap_or_else(|| rt.workspace_label())
+}
+
+/// The linked tasks of `rows` that are done, with when they last
+/// changed, resolved through this owner's registered workspaces: a link
+/// may name a task in another workspace the same host owns, never one
+/// on another host.
+pub(super) fn linked_done_tasks(rt: &OrbitRuntime, rows: &[NoticeRow]) -> LinkedDone {
+    let mut cache = LinkedTaskCache::default();
+    linked_done_tasks_cached(rt, rows.iter(), &mut cache)
+}
+
+fn linked_done_tasks_cached<'a>(
+    rt: &OrbitRuntime,
+    rows: impl IntoIterator<Item = &'a NoticeRow>,
+    cache: &mut LinkedTaskCache,
+) -> LinkedDone {
+    rows.into_iter()
+        .filter(|row| row.closed_at.is_none() && row.close_on_linked_done)
+        .filter_map(|row| row.linked_task_id.as_deref())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|id| {
+            let (status, updated_at) = cache.resolve(rt, id)?;
+            (status == TaskStatus::Done).then(|| (id.to_string(), updated_at))
+        })
+        .collect()
+}
+
+/// A notice's linked task as this owner holds it, in whichever of its
+/// workspaces owns the task. `None` when no workspace on this host
+/// holds it (deleted, or held by another host): the notice then stays
+/// open and reports the link's status as unknown.
+pub(crate) fn notice_linked_task(rt: &OrbitRuntime, id: &str) -> Option<orbit_types::task::Task> {
+    use orbit_store::RegisteredTaskResolution;
+    match rt.resolve_dependency_task(id) {
+        Ok(RegisteredTaskResolution::Resolved(task)) => Some(*task),
+        Ok(_) => None,
+        Err(error) => {
+            tracing::warn!(task = id, %error, "failed to resolve a notice's linked task");
+            None
+        }
+    }
+}
+
+/// The notices of this workspace (and global ones) matching `filter`,
+/// in listing order.
+pub(crate) fn list_notices(
+    rt: &OrbitRuntime,
+    filter: &NoticeListFilter,
+) -> Result<NoticeListing, OrbitError> {
+    let workspace_id = rt.workspace_id()?;
+    let store = rt.sqlite_store()?;
+    let scope = if filter.all_workspaces {
+        NoticeScopeFilter::AllWorkspaces
+    } else if filter.include_global {
+        NoticeScopeFilter::WorkspaceAndGlobal(&workspace_id)
+    } else {
+        NoticeScopeFilter::Workspace(&workspace_id)
+    };
+    let rows = store.read()?.notice().list(scope)?;
+    let now = Utc::now();
+    let retention_cutoff = now - Duration::days(i64::from(super::limit::RETENTION_DAYS));
+    // Decide from stored columns what can be decided there, before
+    // parsing a row or resolving its linked task: scope, kind, link and
+    // author are columns, and a stored-closed or plainly expired row
+    // already knows its effective state and when it ended. Only an
+    // unclosed `close_on_linked_done` row needs a linked resolution to
+    // know its state, so only those rows reach the resolver below.
+    let candidates: Vec<&NoticeRow> = rows
+        .iter()
+        .filter(|row| {
+            if filter
+                .scope
+                .is_some_and(|scope| scope.as_str() != row.scope)
+                || (!filter.kinds.is_empty()
+                    && !filter.kinds.iter().any(|kind| kind.as_str() == row.kind))
+                || filter.linked_task.as_deref().is_some_and(|task| {
+                    row.linked_task_id
+                        .as_deref()
+                        .is_none_or(|linked| !linked.eq_ignore_ascii_case(task))
+                })
+                || filter.author_class.is_some_and(|class| {
+                    orbit_types::record::AuthorClass::parse(&row.author_class) != Some(class)
+                })
+                || (filter.host.is_some() && row.kind != NoticeKind::Maintenance.as_str())
+            {
+                return false;
+            }
+            if let Some(closed_at) = row.closed_at {
+                return closed_at >= retention_cutoff
+                    && filter.status.admits(EffectiveStatus::Closed)
+                    && filter.ended_since.is_none_or(|since| closed_at >= since);
+            }
+            if !row.close_on_linked_done || row.linked_task_id.is_none() {
+                let status = if now >= row.expires_at {
+                    EffectiveStatus::Expired
+                } else {
+                    EffectiveStatus::Open
+                };
+                if status == EffectiveStatus::Expired
+                    && (row.expires_at < retention_cutoff
+                        || filter
+                            .ended_since
+                            .is_some_and(|since| row.expires_at < since))
+                {
+                    return false;
+                }
+                return filter.status.admits(status);
+            }
+            true
+        })
+        .collect();
+    let mut linked_cache = LinkedTaskCache::default();
+    let done = linked_done_tasks_cached(rt, candidates.iter().copied(), &mut linked_cache);
+    let mut notices = Vec::new();
+    for row in &candidates {
+        // A linked task can close even an expired notice. Once its
+        // status is known, discard old effective endings before parsing.
+        let linked_at = row
+            .close_on_linked_done
+            .then(|| linked_done_at(row, &done))
+            .flatten();
+        let ended_at = row
+            .closed_at
+            .or(linked_at)
+            .or_else(|| (now >= row.expires_at).then_some(row.expires_at));
+        if ended_at.is_some_and(|at| {
+            at < retention_cutoff || filter.ended_since.is_some_and(|since| at < since)
+        }) {
+            continue;
+        }
+        let mut notice = parse_notice_row(row)?;
+        notice.resolve_effective_status(now, linked_at);
+        let inactive_since = match notice.status {
+            EffectiveStatus::Open => None,
+            EffectiveStatus::Closed => notice.closed.as_ref().map(|closed| closed.at),
+            EffectiveStatus::Expired => Some(notice.expires_at),
+        };
+        if inactive_since.is_some_and(|at| at < retention_cutoff)
+            || !filter.status.admits(notice.status)
+            || filter.scope.is_some_and(|scope| scope != notice.scope)
+            || (!filter.kinds.is_empty() && !filter.kinds.contains(&notice.kind))
+            || filter.linked_task.as_deref().is_some_and(|task| {
+                notice
+                    .linked_task
+                    .as_ref()
+                    .is_none_or(|linked| !linked.id.eq_ignore_ascii_case(task))
+            })
+            || filter
+                .author_class
+                .is_some_and(|class| class != notice.author.class)
+            || filter.host.as_deref().is_some_and(|host| {
+                notice.kind != NoticeKind::Maintenance
+                    || !notice.hosts.iter().any(|named| named == host)
+            })
+            || (notice.status != EffectiveStatus::Open
+                && filter
+                    .ended_since
+                    .is_some_and(|since| inactive_since.is_none_or(|at| at < since)))
+        {
+            continue;
+        }
+        notices.push(notice);
+    }
+    notices.sort_by(Notice::cmp_list_order);
+    if let Some(limit) = filter.limit {
+        notices.truncate(limit.clamp(1, NOTICE_LIST_MAX_LIMIT));
+    }
+    // Linked status is display data: resolve it only for rows that
+    // survive every filter and the limit, once per distinct task.
+    for notice in &mut notices {
+        fill_linked_status(rt, notice, &mut linked_cache);
+    }
+    Ok(NoticeListing {
+        notices,
+        degraded: Vec::new(),
+    })
+}
+
+/// One notice in any effective state; the history is included for the
+/// operator capability.
+pub(super) fn show_notice(
+    rt: &OrbitRuntime,
+    id: &str,
+    with_history: bool,
+) -> Result<NoticeView, OrbitError> {
+    let store = rt.sqlite_store()?;
+    let workspace_id = rt.workspace_id()?;
+    let (row, events) = {
+        let snapshot = store.read()?;
+        let notices = snapshot.notice();
+        let row = notices
+            .get(id)?
+            .ok_or_else(|| refuse(NoticeRefusalCode::NotFound, "no such notice"))?;
+        if row.workspace_id != workspace_id && row.scope != "global" {
+            return Err(refuse(NoticeRefusalCode::NotFound, "no such notice"));
+        }
+        let events = if with_history {
+            Some(notices.events(&row.id)?)
+        } else {
+            None
+        };
+        (row, events)
+    };
+    let now = Utc::now();
+    let mut notice = parse_notice_row(&row)?;
+    let mut linked_cache = LinkedTaskCache::default();
+    let done = linked_done_tasks_cached(rt, std::iter::once(&row), &mut linked_cache);
+    notice.resolve_effective_status(now, linked_done_at(&row, &done));
+    fill_linked_status(rt, &mut notice, &mut linked_cache);
+    let history = events.map(|events| {
+        events
+            .into_iter()
+            .map(|event| NoticeHistoryEntry {
+                at: event.at,
+                action: event.action,
+                poster_class: event.poster_class,
+                poster_crew: event.poster_crew,
+                poster_task_id: event.poster_task_id,
+                detail: serde_json::from_str(&event.detail_json).unwrap_or(serde_json::Value::Null),
+            })
+            .collect()
+    });
+    Ok(NoticeView { notice, history })
+}
+
+/// The status line of the resident mandate on `mandate_task_id`: the
+/// newest notice under its status key in this workspace, in whatever
+/// state it is in. An expired one is the mandate's last word before it
+/// went silent.
+pub(crate) fn resident_status_line(
+    rt: &OrbitRuntime,
+    mandate_task_id: &str,
+) -> Result<Option<Notice>, OrbitError> {
+    let key = orbit_types::record::resident_status_notice_key(mandate_task_id);
+    let workspace_id = rt.workspace_id()?;
+    let store = rt.sqlite_store()?;
+    let now = Utc::now();
+    let mut newest: Option<Notice> = None;
+    for row in store
+        .read()?
+        .notice()
+        .list(NoticeScopeFilter::Workspace(&workspace_id))?
+        .iter()
+        .filter(|row| row.dedupe_key == key)
+    {
+        let mut notice = parse_notice_row(row)?;
+        notice.resolve_effective_status(now, None);
+        if newest
+            .as_ref()
+            .is_none_or(|kept| notice.updated_at > kept.updated_at)
+        {
+            newest = Some(notice);
+        }
+    }
+    Ok(newest)
+}
+
+/// Status lines for many mandates in one notice scan.
+pub(crate) fn resident_status_lines(
+    rt: &OrbitRuntime,
+    mandate_task_ids: &[String],
+) -> Result<std::collections::BTreeMap<String, Notice>, OrbitError> {
+    let workspace_id = rt.workspace_id()?;
+    let store = rt.sqlite_store()?;
+    let now = Utc::now();
+    let keys: std::collections::BTreeMap<String, String> = mandate_task_ids
+        .iter()
+        .map(|id| {
+            (
+                orbit_types::record::resident_status_notice_key(id),
+                id.clone(),
+            )
+        })
+        .collect();
+    let mut newest: std::collections::BTreeMap<String, Notice> = Default::default();
+    for row in store
+        .read()?
+        .notice()
+        .list(NoticeScopeFilter::Workspace(&workspace_id))?
+        .iter()
+        .filter(|row| keys.contains_key(&row.dedupe_key))
+    {
+        let mut notice = match parse_notice_row(row) {
+            Ok(notice) => notice,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    notice = %row.id,
+                    "resident card skipped an unreadable status line"
+                );
+                continue;
+            }
+        };
+        notice.resolve_effective_status(now, None);
+        let Some(task_id) = keys.get(&row.dedupe_key) else {
+            continue;
+        };
+        let replace = newest
+            .get(task_id)
+            .is_none_or(|kept| notice.updated_at > kept.updated_at);
+        if replace {
+            newest.insert(task_id.clone(), notice);
+        }
+    }
+    Ok(newest)
+}
+
+fn fill_linked_status(rt: &OrbitRuntime, notice: &mut Notice, cache: &mut LinkedTaskCache) {
+    if let Some(linked) = notice.linked_task.as_mut() {
+        linked.status = Some(
+            cache
+                .resolve(rt, &linked.id)
+                .map(|(status, _)| status.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
+    }
+}

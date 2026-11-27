@@ -661,7 +661,7 @@ impl OrbitRuntime {
         let mut updated = row.task.clone();
         let mut row = Some(row);
 
-        self.project_task_checkpoint_costs(&append_comments)?;
+        crate::app::port::TaskEvolution(self).project_task_checkpoint_costs(&append_comments)?;
 
         if evidence_attached {
             // Evidence resume can change the task after the write. The

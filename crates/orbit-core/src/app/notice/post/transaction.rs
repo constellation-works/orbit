@@ -5,9 +5,9 @@ use orbit_types::record::{
     AuthorClass, EffectiveStatus, Notice, NoticeReports, NoticeScope, NoticeWorkspace, PostOutcome,
 };
 
-use super::super::authority::NoticePoster;
-use super::super::{LinkedDone, limits, notice_row, parse_notice_row, refuse};
 use super::request::{self, ValidatedPost};
+use crate::app::notice::authority::NoticePoster;
+use crate::app::notice::{LinkedDone, limit as limits, notice_row, parse_notice_row, refuse};
 
 /// What a post's decision reads inside the posting transaction.
 #[derive(Debug, Clone, Default)]

@@ -131,7 +131,7 @@ fleet-wide one: it re-posts the same key with `scope: global`, which updates the
 
 ## Limits
 
-All values are fixed (`application/notice/limits.rs`); exceeding one refuses the post with
+All values are fixed (`app/notice/limit.rs`); exceeding one refuses the post with
 `notice_limit_exceeded` naming the limit, and writes nothing.
 
 | Limit | Value | Applies to |

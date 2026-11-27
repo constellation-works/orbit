@@ -25,6 +25,7 @@ use orbit_types::task::{DecisionRequest, Task, TaskArtifact, TaskHistoryEntry};
 use orbit_types::workflow::JobRunTrigger;
 
 use super::{Command, Operation};
+use crate::app::search::GlobalSearchResponse;
 use crate::application::change_watch::RunStateStamp;
 use crate::application::codebase::TaskRiskinessModel;
 use crate::application::experiment::{
@@ -35,7 +36,6 @@ use crate::application::job::scripts::grant_request::ScriptGrantOverview;
 use crate::application::job::{
     EscalationTriageSubmitError, TaskAutoFixError, TaskPilotSubmission, TaskPilotSubmitError,
 };
-use crate::application::search::GlobalSearchResponse;
 use crate::application::task::{DecisionListProfile, TerminalTaskDates};
 use crate::runtime::audit::run::RunAuditStep;
 use crate::runtime::engine::ConfiguredCrewRegistryProjection;
@@ -243,7 +243,7 @@ dashboard_reads! {
     /// A global search in one request profile.
     search(profile: SearchRequestProfile, request: SearchRequest) -> GlobalSearchResponse
         = "search",
-        |rt| rt.search_with_profile(profile, request);
+        |rt| crate::app::search::search_with_profile(rt, profile, request);
     /// Each workspace script's grant state.
     script_grant_overview() -> Vec<ScriptGrantOverview> = "script-grant-overview",
         |rt| rt.script_grant_overview();

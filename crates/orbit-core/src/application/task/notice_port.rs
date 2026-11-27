@@ -10,8 +10,8 @@
 //! fencing and closure timing stay in `notice`.
 
 /// The notice closure task code calls when a task becomes done, implemented
-/// by `notice`.
-pub(in crate::application) trait TaskNoticePort {
+/// by `app::notice`.
+pub(crate) trait TaskNoticePort {
     /// Store the closure of every open notice linked to `task_id` now that
     /// the task is done. Returns nothing: a failure is logged, never raised
     /// into the task update. The closure tick still repairs a missed write.

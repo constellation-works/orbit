@@ -1605,10 +1605,10 @@ fi
 # operations live in `application::task_bundle`, which the adapter calls
 # directly [ORB-24534].
 # The names are derived from the `impl OrbitRuntime` blocks under `composition/`
-# and under `bootstrap/`. Exact lines allowed: the lexical index store's own
-# `reindex_tasks`, and the `#[cfg(test)]` fixture that opens a runtime.
+# and under `bootstrap/`. Exact lines allowed: the `#[cfg(test)]` fixture that
+# opens a runtime.
 core_src="$repo_root/crates/orbit-core/src"
-joiner_upcall_allowed='^search/runtime\.rs:[0-9]+:.*lexical_index\(\)\.store\(\)\?\.reindex_tasks\(|^test_support\.rs:[0-9]+:.*OrbitRuntime::from_roots\('
+joiner_upcall_allowed='^test_support\.rs:[0-9]+:.*OrbitRuntime::from_roots\('
 for layer in application adapter; do
   if ! super_chains_into "$core_src/$layer" "" 'bootstrap|composition' crate-root ||
     ! inherent_calls_into "$core_src/$layer" "" 'composition|bootstrap' \
@@ -1666,24 +1666,10 @@ fi
 # [ORB-23015]: it reads tasks and their crew source back, so task show's
 # assignment readout and the provider-limit gate's experiment-pool check go
 # only through `TaskExperimentPort`, which `experiment` implements on
-# `OrbitRuntime`. `search` sits above `task` [ORB-23016]: it reads task
-# candidates and re-exports task-owned selector matching; task must never
-# reach search for that pure helper. `notice` sits outside the order but
-# above `task` [ORB-23017]: it reads tasks for poster authority and
-# linked-task status, so a transition into done closes linked notices only
-# through `TaskNoticePort`, which `notice` implements on `OrbitRuntime` in
-# `notice/close.rs` by delegating to the existing materializer. Tick repair,
-# dedupe, revision checks and owner fencing stay in notice. `evolution` sits
-# above `task` [ORB-23018]: it reads tasks and replays their comments, so task
-# projects committed checkpoint comments only through `TaskEvolutionPort`,
-# implemented in `evolution/operations.rs`. Ingestion and source-keyed replay
-# stay in evolution, including post-commit error propagation. `app::agent`
-# (which owns the agent corpus [ORB-23421]) sits above `task`: it reads decision
-# rules, task history and tasks back, and reads blobs through
-# `task::base_revision`, so task's decision-answer append, precedent digest
-# and final-recovery appends go only through `TaskCorpusPort`, which
-# `app::agent` implements on `TaskPort` and binds in `app::port`.
-task_upper_modules='search|experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident|notice|evolution'
+# `OrbitRuntime`. `app::agent` reads decision rules, task history and tasks back,
+# and reads blobs through `task::base_revision`. Task reaches it only through
+# `TaskCorpusPort`, implemented on `app::agent::TaskPort` and bound in `app::port`.
+task_upper_modules='experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
@@ -1696,11 +1682,34 @@ if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident, experiment, notice and evolution through its task ports, and must not name tag_instructions, search or backlog_forecast"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident and experiment through its task ports, and must not name tag_instructions or backlog_forecast"
   fail=1
 fi
+
 if ! super_chains_into "$app_src" task 'crate::app::agent' named-path; then
   echo "orbit-core task must reach app::agent only through task::TaskCorpusPort bound in app::port"
+  fail=1
+fi
+
+# [ORB-28427] `notice`, `search`, `evolution` and `crew_memory` live in `app/`,
+# above `task`. `task` reaches `notice` and `evolution` only through
+# `TaskNoticePort` and `TaskEvolutionPort`, bound in `app/port.rs`, and must
+# never name any of those four apps directly. Those four apps must not import
+# `adapter` or `bootstrap`.
+for moved_app in notice search evolution crew_memory; do
+  if [[ ! -d "$core_src/app/$moved_app" ]]; then
+    echo "dependency scan path missing: $core_src/app/$moved_app" >&2
+    exit 1
+  fi
+  if ! super_chains_into "$core_src/app" "$moved_app" 'crate::adapter|crate::bootstrap' named-path; then
+    echo "orbit-core app::${moved_app} must not import adapter or bootstrap"
+    fail=1
+  fi
+done
+if ! super_chains_into "$app_src" task \
+  'crate::app::notice|crate::app::search|crate::app::evolution|crate::app::crew_memory|app::notice|app::search|app::evolution|app::crew_memory' \
+  named-path; then
+  echo "orbit-core task must reach app::notice and app::evolution through app::port, and must not name app::notice, app::search, app::evolution or app::crew_memory"
   fail=1
 fi
 

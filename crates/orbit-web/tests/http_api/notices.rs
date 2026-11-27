@@ -2,7 +2,7 @@
 
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_core::application::notice::{NoticeCaller, NoticePostRequest, NoticeSelector};
+use orbit_core::app::notice::{NoticeCaller, NoticePostRequest, NoticeSelector};
 use orbit_core::runtime::OrbitRuntime;
 use orbit_types::record::NoticeKind;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
@@ -28,26 +28,26 @@ fn operator_caller() -> NoticeCaller {
 }
 
 fn post(runtime: &OrbitRuntime, kind: NoticeKind, title: &str, dedupe_key: &str) -> String {
-    runtime
-        .post_notice(
-            &operator_caller(),
-            NoticePostRequest {
-                kind,
-                title: title.to_string(),
-                body: None,
-                scope: None,
-                dedupe_key: Some(dedupe_key.to_string()),
-                linked_task: None,
-                close_on_linked_done: None,
-                evidence: Vec::new(),
-                hosts: Vec::new(),
-                expires_in_hours: None,
-                expires_at: None,
-            },
-        )
-        .unwrap()
-        .notice
-        .id
+    orbit_core::app::notice::post_notice(
+        runtime,
+        &operator_caller(),
+        NoticePostRequest {
+            kind,
+            title: title.to_string(),
+            body: None,
+            scope: None,
+            dedupe_key: Some(dedupe_key.to_string()),
+            linked_task: None,
+            close_on_linked_done: None,
+            evidence: Vec::new(),
+            hosts: Vec::new(),
+            expires_in_hours: None,
+            expires_at: None,
+        },
+    )
+    .unwrap()
+    .notice
+    .id
 }
 
 /// Seed at least 200 retained closed incidents, then one open maintenance.
@@ -59,10 +59,13 @@ fn seed_saturated_history(fixture: &Fixture) -> String {
             &format!("saturated incident {index}"),
             &format!("saturated-incident-{index}"),
         );
-        fixture
-            .runtime
-            .close_notice(&operator_caller(), NoticeSelector::Id(id), "resolved")
-            .unwrap();
+        orbit_core::app::notice::close_notice(
+            &fixture.runtime,
+            &operator_caller(),
+            NoticeSelector::Id(id),
+            "resolved",
+        )
+        .unwrap();
     }
     post(
         &fixture.runtime,
@@ -338,14 +341,13 @@ fn aggregate_notices_resolve_cold_registered_workspaces() {
                 "resolved info",
                 "closed",
             );
-            fixture
-                .runtime
-                .close_notice(
-                    &operator_caller(),
-                    NoticeSelector::Id(closed.clone()),
-                    "resolved",
-                )
-                .unwrap();
+            orbit_core::app::notice::close_notice(
+                &fixture.runtime,
+                &operator_caller(),
+                NoticeSelector::Id(closed.clone()),
+                "resolved",
+            )
+            .unwrap();
             let (_, second) = seed_second_workspace(&fixture);
             let server = fixture.server(false);
             // /healthz is the harness readiness probe; no workspace route

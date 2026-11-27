@@ -48,6 +48,7 @@ pub fn open_proposal(
 /// appends its global revision. The tuple's number is the expected current
 /// global revision (0 if empty); a stale read is refused rather than
 /// overwriting intervening operator work.
+#[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 pub fn decide_proposal(
     tx: &Tx<'_>,
     decision: &CrewMemoryProposalDecision,

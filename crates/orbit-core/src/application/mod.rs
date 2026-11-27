@@ -5,16 +5,15 @@
 //! and root bootstrap live outside this module.
 //!
 //! - Tasks, jobs, and delivery: `task`, `task_bundle`, `job`, `workflow`,
-//!   `landing`, `review`, `notice`, `operator_input`.
+//!   `landing`, `review`, `operator_input`.
 //! - Automation: `auto_tasks`, `automation`, `workspace_auto`,
 //!   `sweep_filing`, `seeding_policy`.
-//! - Agents and runs: `executor`, `crew_memory`,
-//!   `evolution`, `experiment`, `resident`, `vision_probe`, `statistics`.
+//! - Agents and runs: `executor`, `experiment`, `resident`, `vision_probe`, `statistics`.
 //! - Plugins: `plugin`, `tool_name_migration`.
 //! - Workspace and host: `codebase`, `distributed`, `pull_drain`,
 //!   `host_labels`, `gc`, `change_watch`, `managed_assets`.
-//! - Policy and search: `application_authority`, `contracts`, `admission`,
-//!   `search`, `backlog_forecast`, `tag_instructions`.
+//! - Policy: `application_authority`, `contracts`, `admission`,
+//!   `backlog_forecast`, `tag_instructions`.
 //! - `test_support` is compiled only for tests.
 
 pub(crate) mod admission;
@@ -25,9 +24,7 @@ pub(crate) mod backlog_forecast;
 pub mod change_watch;
 pub mod codebase;
 pub mod contracts;
-pub mod crew_memory;
 pub mod distributed;
-pub mod evolution;
 pub(crate) mod executor;
 pub mod experiment;
 pub mod gc;
@@ -35,13 +32,11 @@ pub(crate) mod host_labels;
 pub mod job;
 pub mod landing;
 pub(crate) mod managed_assets;
-pub mod notice;
 pub mod operator_input;
 pub mod plugin;
 pub(crate) mod pull_drain;
 pub mod resident;
 pub mod review;
-pub(crate) mod search;
 pub mod seeding_policy;
 pub(crate) mod statistics;
 pub mod store_opener;

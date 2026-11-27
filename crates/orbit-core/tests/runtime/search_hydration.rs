@@ -86,14 +86,16 @@ fn friction_search_and_listing_bound_store_reads() {
     );
     for query in [None, Some(TERM.to_string())] {
         let listing = query.is_none();
-        let response = runtime
-            .global_search(GlobalSearchParams {
+        let response = orbit_core::app::search::global_search(
+            &runtime,
+            GlobalSearchParams {
                 query: query.clone(),
                 kind: GlobalSearchKind::Friction,
                 limit: 2,
                 ..Default::default()
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         let found: Vec<_> = response
             .results
             .iter()
@@ -113,14 +115,16 @@ fn friction_search_and_listing_bound_store_reads() {
             assert_eq!(hit.record.is_some(), listing);
         }
         assert!(
-            runtime
-                .global_search(GlobalSearchParams {
+            orbit_core::app::search::global_search(
+                &runtime,
+                GlobalSearchParams {
                     query,
                     kind: GlobalSearchKind::Friction,
                     limit: 3,
                     ..Default::default()
-                })
-                .is_err(),
+                },
+            )
+            .is_err(),
             "widening the page reaches the corrupt lookahead"
         );
     }
@@ -139,12 +143,15 @@ fn friction_tag_pages_fill_limit_and_check_matching_lookahead() {
     }
     let (store, ids) = seed_frictions(&runtime, &tags);
     let search = |limit, tags| {
-        runtime.global_search(GlobalSearchParams {
-            kind: GlobalSearchKind::Friction,
-            tags,
-            limit,
-            ..Default::default()
-        })
+        orbit_core::app::search::global_search(
+            &runtime,
+            GlobalSearchParams {
+                kind: GlobalSearchKind::Friction,
+                tags,
+                limit,
+                ..Default::default()
+            },
+        )
     };
     let both_tags = vec!["TOOLING".into(), "OTHER".into()];
     for limit in [2, 3, 4] {
@@ -253,14 +260,16 @@ fn cold_search_hits_skip_artifact_payloads() {
 
     progress.phase("search", 1);
     let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
-    let response = runtime
-        .global_search(GlobalSearchParams {
+    let response = orbit_core::app::search::global_search(
+        &runtime,
+        GlobalSearchParams {
             query: Some(TERM.into()),
             kind: GlobalSearchKind::Task,
             limit: 10,
             ..Default::default()
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
     progress.advance();
     progress.finish();
     let titles: Vec<_> = response
@@ -329,22 +338,24 @@ fn covered_search_preserves_unicode_and_raw_whitespace_substrings() {
         })
         .unwrap();
     let found = |query: &str| {
-        runtime
-            .global_search(GlobalSearchParams {
+        orbit_core::app::search::global_search(
+            &runtime,
+            GlobalSearchParams {
                 query: Some(query.into()),
                 kind: GlobalSearchKind::Task,
                 limit: 10,
                 ..Default::default()
-            })
-            .unwrap()
-            .results
-            .iter()
-            .filter_map(|hit| hit.id.clone())
-            .collect::<Vec<_>>()
+            },
+        )
+        .unwrap()
+        .results
+        .iter()
+        .filter_map(|hit| hit.id.clone())
+        .collect::<Vec<_>>()
     };
     for phase in ["indexed", "reindexed"] {
         if phase == "reindexed" {
-            runtime.search_reindex().unwrap();
+            orbit_core::app::search::search_reindex(&runtime).unwrap();
         }
         assert!(
             found("ÉN").contains(&unicode.id),
@@ -398,14 +409,16 @@ fn full_search_page_skips_any_term_scan() {
     let queries = Arc::new(AtomicU64::new(0));
     let subscriber = tracing_subscriber::registry().with(Queries(Arc::clone(&queries)));
     tracing::subscriber::with_default(subscriber, || {
-        let response = runtime
-            .global_search(GlobalSearchParams {
+        let response = orbit_core::app::search::global_search(
+            &runtime,
+            GlobalSearchParams {
                 query: Some("generation participant mcp serve pinned deploy".into()),
                 kind: GlobalSearchKind::Task,
                 limit: 1,
                 ..Default::default()
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert_eq!(response.results.len(), 1);
         assert!(response.results[0].matched_by.is_none());
         assert_eq!(
@@ -414,14 +427,16 @@ fn full_search_page_skips_any_term_scan() {
             "a full page executes exactly one FTS query"
         );
 
-        let response = runtime
-            .global_search(GlobalSearchParams {
+        let response = orbit_core::app::search::global_search(
+            &runtime,
+            GlobalSearchParams {
                 query: Some("generation participant mcp serve pinned deploy".into()),
                 kind: GlobalSearchKind::Task,
                 limit: 2,
                 ..Default::default()
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert_eq!(response.results.len(), 2);
         assert_eq!(
             response.results[1].matched_by.as_ref().unwrap(),
@@ -468,15 +483,17 @@ fn rejecting_filter_does_not_page_the_any_term_match_set() {
     let subscriber = tracing_subscriber::registry().with(Queries(Arc::clone(&queries)));
     tracing::subscriber::with_default(subscriber, || {
         let search = |statuses: Vec<String>| {
-            runtime
-                .global_search(GlobalSearchParams {
+            orbit_core::app::search::global_search(
+                &runtime,
+                GlobalSearchParams {
                     query: Some("alphaterm betaterm".into()),
                     kind: GlobalSearchKind::Task,
                     status: statuses,
                     limit: 1,
                     ..Default::default()
-                })
-                .unwrap()
+                },
+            )
+            .unwrap()
         };
         let rejected = search(vec!["task:done".into()]);
         assert!(rejected.results.is_empty(), "no task is done");
@@ -554,14 +571,16 @@ fn one_search_takes_the_task_commit_lock_once() {
     let subscriber =
         tracing_subscriber::registry().with(CommitLockAcquisitions(Arc::clone(&acquisitions)));
     let response = tracing::subscriber::with_default(subscriber, || {
-        runtime
-            .global_search(GlobalSearchParams {
+        orbit_core::app::search::global_search(
+            &runtime,
+            GlobalSearchParams {
                 query: Some(TERM.into()),
                 kind: GlobalSearchKind::Task,
                 limit: 10,
                 ..Default::default()
-            })
-            .unwrap()
+            },
+        )
+        .unwrap()
     });
     assert_eq!(
         response.results.len(),

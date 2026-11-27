@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::claimed_review::ToOwner;
-use orbit_core::application::crew_memory::{MemoryFile, MemoryWrite};
+use orbit_core::app::crew_memory::{MemoryFile, MemoryWrite};
 use orbit_engine::{V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, Provider};
 
@@ -317,19 +317,19 @@ impl OwnerCoordinator for DropMemoryPolicy {
 }
 
 fn write_note(runtime: &OrbitRuntime, text: &str) {
-    runtime
-        .crew_memory_write(
-            SOL_MODEL,
-            MemoryWrite {
-                files: vec![MemoryFile {
-                    path: "notes.md".into(),
-                    text: text.into(),
-                }],
-                evidence: Vec::new(),
-            },
-            Some("fixture note".into()),
-        )
-        .unwrap();
+    orbit_core::app::crew_memory::crew_memory_write(
+        runtime,
+        SOL_MODEL,
+        MemoryWrite {
+            files: vec![MemoryFile {
+                path: "notes.md".into(),
+                text: text.into(),
+            }],
+            evidence: Vec::new(),
+        },
+        Some("fixture note".into()),
+    )
+    .unwrap();
 }
 
 fn bind_leaf(pair: &Pair, leaf: &str, coordinator: Arc<dyn OwnerCoordinator>) -> OrbitRuntime {

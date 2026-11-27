@@ -131,8 +131,8 @@ source scan, enforces the runtime direction.
 | Host sweep clock (settings, unit install, pause, cadence, convergence, health), outside Core | `crates/orbit-clock/src/`, re-exported as `routines::clock` | [ORB-22688] |
 | Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task/port.rs` | [ORB-17924], [ORB-17943] |
 | Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
-| Task-owned notice closure on done | `crates/orbit-core/src/application/task/notice_port.rs` (`TaskNoticePort`), implemented in `notice/close.rs` | [ORB-23017] |
-| Task-owned checkpoint cost projection | `crates/orbit-core/src/application/task/evolution_port.rs` (`TaskEvolutionPort`), implemented in `evolution/operations.rs` | [ORB-23018] |
+| Task-owned notice closure on done | `crates/orbit-core/src/application/task/notice_port.rs` (`TaskNoticePort`), implemented in `app/notice/close.rs` and bound in `app/port.rs` | [ORB-23017] |
+| Task-owned checkpoint cost projection | `crates/orbit-core/src/application/task/evolution_port.rs` (`TaskEvolutionPort`), implemented in `app/evolution/ledger.rs` and bound in `app/port.rs` | [ORB-23018] |
 | Task-owned corpus appends and digest | `crates/orbit-core/src/application/task/corpus_port.rs` (`TaskCorpusPort`), implemented in `agent_corpus.rs` | [ORB-23421] |
 | Task-owned commit-pinned readers and executor `host_os` limits | `crates/orbit-core/src/application/task/{base_revision,executor_host_os}.rs`; the declared hosts and per-crew limits are read in `crates/orbit-runtime/src/run/engine/crew/host_os.rs`; the host-OS wait is `job/crew_pools/host_os_wait.rs` | [ORB-22289], [ORB-28395] |
 | Backlog forecast, above `workspace_auto` | `crates/orbit-core/src/application/backlog_forecast/`; `BacklogForecastHistory` at the crate root and the budget override in `test_support`, both directly from `backlog_forecast` | [ORB-22287], [ORB-24548] |
@@ -558,26 +558,23 @@ resident-defined inherent method from `task` is refused.
 `notice` (fleet notices) sits outside the order but above `task` [ORB-23017].
 It reads tasks for poster authority and linked-task status, so a transition
 into done closes linked notices only through `task::TaskNoticePort`, which
-`notice` implements on `OrbitRuntime` in `notice/close.rs`. The hook delegates
+`app/notice` implements in `app/notice/close.rs` and `app/port.rs` binds. The hook delegates
 to `materialize_notice_closures_for_done_task`, keeping the unit return and
 the best-effort warn-on-failure log. The closure tick, dedupe keys, revision
-checks, owner fencing and closure timing stay in notice. The guard's `task`
-upper-module list names `notice`, so a path, grouped tree, `super::` chain
-or call to a notice-defined inherent method from `task` is refused.
+checks, owner fencing and closure timing stay in notice. The guard refuses
+`application/task` paths referencing `app::notice`.
 
 `evolution` (the capability-gap ledger) sits outside the order but above
 `task` [ORB-23018]. It reads tasks for cost validation and proposal state and
 replays task comments for recovery. Task writes project checkpoint costs only
 through `task::TaskEvolutionPort::project_task_checkpoint_costs`, implemented
-on `OrbitRuntime` in `evolution/operations.rs` by forwarding to the existing
+in `app/evolution/ledger.rs` and bound in `app/port.rs`, forwarding to the existing
 `ingest_checkpoint_costs`. The call stays immediately after the durable task
 mutation under the task lock: ingestion errors still propagate after the
 comment commits. Proposal refresh, coordination authority checks, source-key
-deduplication and persisted occurrences stay unchanged, as does the public
+deduplication and persisted occurrences stay unchanged, as does the
 `reconcile_evolution_checkpoint` replay path for interrupted ingestion. The
-guard's `task` upper-module list names `evolution`, refusing task paths,
-grouped trees, `super::` chains and evolution-owned inherent calls. All public
-evolution APIs remain available.
+guard refuses `application/task` paths referencing `app::evolution`.
 
 `agent_corpus` (the workspace agent corpus) sits outside the order but above
 `task` [ORB-23421]. It reads decision rules, task history and tasks back, and

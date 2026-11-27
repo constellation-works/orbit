@@ -40,7 +40,8 @@ pub(super) fn dispatch(
                     .unwrap_or_default(),
                 all_workspaces: input.optional_bool("all_workspaces")?.unwrap_or(false),
             };
-            let result = runtime.search_with_profile(SearchRequestProfile::Tool, request)?;
+            let result =
+                super::request::search_with_profile(runtime, SearchRequestProfile::Tool, request)?;
             serde_json::to_value(result)
                 .map_err(|error| OrbitError::Execution(format!("serialize search result: {error}")))
         }

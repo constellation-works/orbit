@@ -404,7 +404,7 @@ fn run_pre_admission_maintenance(
         Some("sweep.notice_closure_failed"),
         |_, runtime| {
             if !runtime.role().is_replica() {
-                runtime.run_notice_closure_tick()?;
+                crate::app::notice::run_notice_closure_tick(runtime)?;
             }
             Ok(())
         },

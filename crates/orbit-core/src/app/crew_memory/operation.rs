@@ -8,9 +8,9 @@ use orbit_common::governance::memory::MemoryVerb;
 use orbit_common::governance::operation::OperationInput;
 use serde_json::Value;
 
+use super::{MemoryFile, MemoryToolCaller, MemoryWrite, agent};
 use crate::OrbitRuntime;
 use crate::app::tool_call::Caller;
-use crate::application::crew_memory::{MemoryFile, MemoryToolCaller, MemoryWrite};
 use crate::runtime::run_input::managed_run_context_task_id_from_env;
 
 /// Who is calling, from the session's run binding: a claimed leaf's worker
@@ -53,7 +53,8 @@ pub(super) fn dispatch(
                     })
                 })
                 .transpose()?;
-            runtime.crew_memory_tool_show(
+            agent::crew_memory_tool_show(
+                runtime,
                 &memory_caller(),
                 input.optional_string("key")?.as_deref(),
                 revision,
@@ -74,14 +75,16 @@ pub(super) fn dispatch(
                 files,
                 evidence: input.optional_string_list("evidence")?.unwrap_or_default(),
             };
-            runtime.crew_memory_tool_write(
+            agent::crew_memory_tool_write(
+                runtime,
                 &memory_caller(),
                 &input.required_string("key")?,
                 write,
                 reason()?,
             )
         }
-        MemoryVerb::Propose => runtime.crew_memory_tool_propose(
+        MemoryVerb::Propose => agent::crew_memory_tool_propose(
+            runtime,
             &memory_caller(),
             input.optional_raw_string("text")?.unwrap_or_default(),
             input.optional_string_list("evidence")?.unwrap_or_default(),

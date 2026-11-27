@@ -7,5 +7,6 @@ mod posting;
 mod request;
 mod transaction;
 
-pub use posting::NoticePostResult;
+pub(crate) use posting::post_resident_control_line;
+pub use posting::{NoticePostResult, post_notice};
 pub use request::{NoticePostRawFields, NoticePostRequest};

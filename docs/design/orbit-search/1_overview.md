@@ -83,9 +83,9 @@ All rows describe landed behavior at the current integration checkout.
 | Concern | Current source | Task |
 |---------|----------------|------|
 | Lexical index, transactional replacement/rebuild, chunking and legacy-schema migration | [lexical/](../../../crates/orbit-search/src/lexical/) | [ORB-12742] removed the semantic stack and retained lexical search; [ORB-24482] kept search current after claim-transaction evidence writes; [ORB-24636] recorded sidecar coverage on unchanged-text writes |
-| Ranked task candidates, bundle supplementation and partial-match labels | [search/candidates.rs](../../../crates/orbit-core/src/application/search/candidates.rs) | [ORB-14596] added partial matches; [ORB-14790] bounded their scan |
-| Workspace-scoped fan-out and interleaving | [search/federated.rs](../../../crates/orbit-core/src/application/search/federated.rs) | [ORB-11027] delivered federated search |
-| Reindex and unified task/friction search entry points | [search/runtime.rs](../../../crates/orbit-core/src/application/search/runtime.rs) | [ORB-12742] retained the lexical query and rebuild surfaces |
+| Ranked task candidates, bundle supplementation and partial-match labels | [search/candidate.rs](../../../crates/orbit-core/src/app/search/candidate.rs) | [ORB-14596] added partial matches; [ORB-14790] bounded their scan |
+| Workspace-scoped fan-out and interleaving | [search/federated.rs](../../../crates/orbit-core/src/app/search/federated.rs) | [ORB-11027] delivered federated search |
+| Reindex and unified task/friction search entry points | [search/runtime.rs](../../../crates/orbit-core/src/app/search/runtime.rs) | [ORB-12742] retained the lexical query and rebuild surfaces |
 | CLI/MCP operation declaration | [governance/search.rs](../../../crates/orbit-common/src/governance/search.rs) | [ORB-15942] migrated search to the operation registry |
 
 ## Task References
