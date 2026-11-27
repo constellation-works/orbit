@@ -181,22 +181,12 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
         .filter(|job| !job_is_aggregate_waiter(job))
         .count();
     let remaining_reads = bounds.max_job_log_reads.saturating_sub(*job_log_reads);
-    let selected = if remaining_reads == 1 {
-        // Runs reserve a single slot for integration priority. Within a run,
-        // equally relevant failed jobs must rotate even with only one read.
-        let rotation = if leaf_count == 0 {
-            actionable.len()
-        } else {
-            leaf_count
-        };
-        std::collections::BTreeSet::from([(bounds.investigation_cursor % rotation as u64) as usize])
-    } else {
-        investigation_slots(
-            actionable.len(),
-            remaining_reads,
-            bounds.investigation_cursor,
-        )
-    };
+    let selected = leaf_first_slots(
+        actionable.len(),
+        leaf_count,
+        remaining_reads,
+        bounds.investigation_cursor,
+    );
     for (index, job) in actionable.into_iter().enumerate() {
         let mut finding = failure.clone();
         finding["job_id"] = job.get("job_id").cloned().unwrap_or(Value::Null);
@@ -543,4 +533,38 @@ pub(super) fn bound_diagnostic(
     unit["job_id"] = json!(job_id);
     unit["step"] = json!(step);
     Some(unit)
+}
+
+/// Read slots for a failed run whose leaf jobs occupy `0..leaf_count` and
+/// aggregate waiters `leaf_count..candidates`. Leaf jobs take every read first,
+/// rotating strictly among themselves when they outnumber the budget; waiters
+/// only share the reads left over once every leaf job is covered.
+fn leaf_first_slots(
+    candidates: usize,
+    leaf_count: usize,
+    reads: usize,
+    cursor: u64,
+) -> std::collections::BTreeSet<usize> {
+    if leaf_count == 0 || reads == 0 {
+        return pool_slots(candidates, reads, cursor);
+    }
+    if reads <= leaf_count {
+        return pool_slots(leaf_count, reads, cursor);
+    }
+    let mut slots: std::collections::BTreeSet<usize> = (0..leaf_count).collect();
+    slots.extend(
+        pool_slots(candidates - leaf_count, reads - leaf_count, cursor)
+            .into_iter()
+            .map(|index| leaf_count + index),
+    );
+    slots
+}
+
+/// Slots within one pool of equally relevant jobs. Runs reserve a single slot
+/// for integration priority, so with one read the jobs must still rotate.
+fn pool_slots(pool: usize, reads: usize, cursor: u64) -> std::collections::BTreeSet<usize> {
+    if reads == 1 && pool > 0 {
+        return std::collections::BTreeSet::from([(cursor % pool as u64) as usize]);
+    }
+    investigation_slots(pool, reads, cursor)
 }

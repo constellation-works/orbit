@@ -795,3 +795,93 @@ fn bounded_job_log_reads_go_to_the_leaf_job_before_its_aggregate_waiter() {
     assert_eq!(budget.len(), 1, "{evidence:#}");
     assert_eq!(budget[0]["job_id"], json!(WAITER_JOB), "{evidence:#}");
 }
+
+#[test]
+fn bounded_job_log_reads_prefer_leaf_jobs_over_waiters_for_every_cursor() {
+    const RUN: u64 = 202;
+    const LEAVES: [u64; 3] = [9_311, 9_312, 9_313];
+    const WAITER_JOB: u64 = 9_320;
+    let build = || {
+        let mut jobs: Vec<_> = LEAVES
+            .iter()
+            .map(|id| {
+                json!({
+                    "job_id": id,
+                    "name": format!("Test partition {id}"),
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "failed_steps": [{"name": "Run nextest", "conclusion": "failure"}],
+                })
+            })
+            .collect();
+        jobs.push(json!({
+            "job_id": WAITER_JOB,
+            "name": "Check / Clippy / Test",
+            "status": "completed",
+            "conclusion": "failure",
+            "failed_steps": [{
+                "name": "Await the test build and nextest shards",
+                "conclusion": "failure",
+            }],
+        }));
+        let mut queries = FakeQueries::authenticated()
+            .with_head("topic", HEAD)
+            .with_runs(vec![vec![run(
+                RUN,
+                "ci",
+                HEAD,
+                "completed",
+                Some("failure"),
+                "2026-10-07T02:30:00Z",
+            )]])
+            .with_failed_jobs(RUN, json!(jobs));
+        for id in LEAVES.iter().copied().chain([WAITER_JOB]) {
+            queries = queries.with_log(id, &checkout_log());
+        }
+        queries
+    };
+    let deferred = |evidence: &Value| -> Vec<u64> {
+        let mut ids: Vec<u64> = evidence["retryable_errors"]
+            .as_array()
+            .expect("retryable errors")
+            .iter()
+            .filter(|error| error["operation"] == json!("job_log_budget"))
+            .filter_map(|error| error["job_id"].as_u64())
+            .collect();
+        ids.sort_unstable();
+        ids
+    };
+
+    // Reads outnumbered by leaf jobs: the waiter is never read, the first leaf
+    // keeps its slot and the rotating slot cycles strictly across the others.
+    for cursor in 0..6u64 {
+        let mut bounds = input();
+        bounds["max_job_log_reads"] = json!(2);
+        bounds["investigation_cursor"] = json!(cursor);
+        let evidence =
+            collect(&build(), &bounds, &mut RetryableHistory::default()).expect("collect");
+        let ids = deferred(&evidence);
+        assert!(ids.contains(&WAITER_JOB), "cursor {cursor}: {evidence:#}");
+        assert_eq!(ids.len(), 2, "cursor {cursor}: {evidence:#}");
+        let skipped_leaf = ids.iter().find(|id| **id != WAITER_JOB).copied();
+        assert_eq!(
+            skipped_leaf,
+            Some(LEAVES[2 - (cursor % 2) as usize]),
+            "cursor {cursor}: {evidence:#}"
+        );
+    }
+
+    // Reads cover every leaf: the waiter is the only job deferred.
+    for cursor in 0..6u64 {
+        let mut bounds = input();
+        bounds["max_job_log_reads"] = json!(3);
+        bounds["investigation_cursor"] = json!(cursor);
+        let evidence =
+            collect(&build(), &bounds, &mut RetryableHistory::default()).expect("collect");
+        assert_eq!(
+            deferred(&evidence),
+            [WAITER_JOB],
+            "cursor {cursor}: {evidence:#}"
+        );
+    }
+}
