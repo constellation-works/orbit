@@ -5,8 +5,8 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::app::crew_memory::{MemoryFile, MemoryToolCaller, MemoryWrite};
-use orbit_core::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+use orbit_core::app::experiment::{
+    self, ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::OrbitRuntime;
@@ -35,8 +35,7 @@ fn runtime() -> (tempfile::TempDir, OrbitRuntime) {
         actor: "crew-memory-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
+    let experiment = experiment::create_experiment(&runtime,
             "crew-memory-fixture",
             ExperimentDefinitionInput {
                 mode: Some("shadow".into()),
@@ -50,11 +49,10 @@ fn runtime() -> (tempfile::TempDir, OrbitRuntime) {
             actor.clone(),
         )
         .expect("memory experiment");
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
         .expect("start memory experiment");
     assert!(
-        runtime.crew_memory_experiment_running(),
+        experiment::crew_memory_experiment_running(&runtime),
         "the board is empty unless a running experiment has a memory arm"
     );
     (root, runtime)

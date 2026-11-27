@@ -8,8 +8,8 @@
 use std::path::PathBuf;
 use std::process::Output;
 
-use orbit_core::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+use orbit_core::app::experiment::{
+    self, ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::OrbitRuntime;
@@ -65,29 +65,33 @@ impl Fixture {
             actor: "readout-caption".into(),
             reason: None,
         };
-        let created = runtime
-            .create_experiment(
-                "caption-check",
-                ExperimentDefinitionInput {
-                    arms: Some(json!([
-                        {"name": "control", "control": true, "weight": 1},
-                        {
-                            "name": "treatment",
-                            "weight": 1,
-                            "overlay": {"instructions": {"implement": false}}
-                        }
-                    ])),
-                    primary_metric: Some("delivery_done_rate".into()),
-                    min_sample: Some(1),
-                    max_days: Some(30),
-                    ..ExperimentDefinitionInput::default()
-                },
-                actor.clone(),
-            )
-            .expect("create experiment");
-        let started = runtime
-            .change_experiment("caption-check", ExperimentChange::Start, actor)
-            .expect("start experiment");
+        let created = experiment::create_experiment(
+            &runtime,
+            "caption-check",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    {"name": "control", "control": true, "weight": 1},
+                    {
+                        "name": "treatment",
+                        "weight": 1,
+                        "overlay": {"instructions": {"implement": false}}
+                    }
+                ])),
+                primary_metric: Some("delivery_done_rate".into()),
+                min_sample: Some(1),
+                max_days: Some(30),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .expect("create experiment");
+        let started = experiment::change_experiment(
+            &runtime,
+            "caption-check",
+            ExperimentChange::Start,
+            actor,
+        )
+        .expect("start experiment");
         assert_eq!(started.status, "running");
         let task = runtime
             .add_task(TaskAddParams {
@@ -231,8 +235,7 @@ fn shadow_memory_readout_labels_captures_not_delivered() {
             actor: "readout-caption".into(),
             reason: None,
         };
-        let created = runtime
-            .create_experiment(
+        let created = experiment::create_experiment(&runtime,
                 "shadow-capture",
                 ExperimentDefinitionInput {
                     mode: Some("shadow".into()),
@@ -246,9 +249,13 @@ fn shadow_memory_readout_labels_captures_not_delivered() {
                 actor.clone(),
             )
             .expect("create shadow experiment");
-        let started = runtime
-            .change_experiment("shadow-capture", ExperimentChange::Start, actor)
-            .expect("start shadow experiment");
+        let started = experiment::change_experiment(
+            &runtime,
+            "shadow-capture",
+            ExperimentChange::Start,
+            actor,
+        )
+        .expect("start shadow experiment");
         let task = runtime
             .add_task(TaskAddParams {
                 title: "Shadow memory sample".into(),

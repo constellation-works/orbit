@@ -59,7 +59,7 @@ Both jobs copy the task and run the copy.
 
 > A **candidate task** is a new task whose title, description, acceptance criteria, selectors, tags, type and tier are copied from a source (a snapshot of a closed task, or a new task), whose `crew` is set to one arm, and which an ordinary Orbit run implements.
 
-A copy inherits everything a task already has: a lifecycle of its own, drain admission and priority, host pinning by tag, one worktree, one branch, one optional PR, review, artifacts, cost records and GC. The source task is read once and never written. An explicit crew also keeps the candidate out of any crew-bearing live experiment (`crates/orbit-core/src/application/experiment/assignment.rs:63-66`).
+A copy inherits everything a task already has: a lifecycle of its own, drain admission and priority, host pinning by tag, one worktree, one branch, one optional PR, review, artifacts, cost records and GC. The source task is read once and never written. An explicit crew also keeps the candidate out of any crew-bearing live experiment (`crates/orbit-core/src/app/experiment/assignment.rs:63-66`).
 
 **The OS rule.** `os:` tags are any-of (§9): a task runs on any host in its set. A candidate that carried a second `os:` tag beside its source's would therefore run on hosts the source excluded, so construction is restricted:
 
@@ -248,7 +248,7 @@ A set is a directory in the plugin's state (`~/.orbit/state/plugins/eval/sets/<n
 One run per task and arm is not enough: the same crew on the same task does not always produce the same result. The unit of analysis is the task, and the statistics follow from that:
 
 - **Repeats: 3 per task and arm** by default. Each task's score for an arm is its pass fraction over the repeats. More than three adds little, because the spread between tasks is larger than the spread between repeats.
-- **Comparison: paired by task.** Every arm runs every task, so the difference between two arms is the mean of per-task differences, with a bootstrap interval that resamples tasks, not runs. This is the method the experiment readout uses for its intervals (percentile bootstrap, 2,000 resamples, fixed seed: `crates/orbit-core/src/application/experiment/readout/stats.rs`).
+- **Comparison: paired by task.** Every arm runs every task, so the difference between two arms is the mean of per-task differences, with a bootstrap interval that resamples tasks, not runs. This is the method the experiment readout uses for its intervals (percentile bootstrap, 2,000 resamples, fixed seed: `crates/orbit-core/src/app/experiment/readout/stats.rs`).
 - **What 25 tasks can show.** A rough estimate, not a measurement: with 25 tasks and 3 repeats, a difference in pass rate between two arms has to be around 15 to 20 points before its interval excludes zero. A single arm's pass rate carries an interval of about ±19 points at 25 tasks. Smaller differences need more tasks, not more repeats.
 - **Cost of a replay.** 25 tasks × 3 repeats × n arms: 225 candidate runs for three arms. A first replay with one repeat measures the cost per run before the full one is paid for.
 
@@ -381,7 +381,7 @@ They answer different questions and are meant to be used in sequence: replay scr
 **What they share:**
 
 - *Records.* Cost, tokens, duration and tool calls come from the same invocation rows; price from the same table; landed size and the test-path classification from `landed_diff_stats`. The plugin reads them through read-only tools and adds no second accounting.
-- *Metric names.* The readout uses the experiment metric names where the meaning is the same (`cost_usd`, `total_tokens`, `lines_changed`: `METRIC_SPECS`, `crates/orbit-core/src/application/experiment/definition.rs`).
+- *Metric names.* The readout uses the experiment metric names where the meaning is the same (`cost_usd`, `total_tokens`, `lines_changed`: `METRIC_SPECS`, `crates/orbit-core/src/app/experiment/definition.rs`).
 - *Method.* Paired bootstrap intervals and "never call a winner inside the interval", as in the experiment readout. The code is not shared: a plugin is a separate executable and cannot link `orbit-core`. The plugin reimplements the bootstrap with the same resample count and a recorded seed.
 - *Treatments.* Experiments can overlay instructions, skills and tools as well as crews. Replay arms are crews only in the first version. Prompt and skill arms are the natural next step and should reuse the experiment overlay definition and its capture format, not a second one; §14 Q6.
 

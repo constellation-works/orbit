@@ -6,8 +6,8 @@ mod per_line;
 mod shadow_memory;
 
 use chrono::{Duration, Utc};
-use orbit_core::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput, ExperimentReadout,
+use orbit_core::app::experiment::{
+    self, ExperimentActor, ExperimentChange, ExperimentDefinitionInput, ExperimentReadout,
 };
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::OrbitRuntime;
@@ -43,24 +43,24 @@ fn large_valid_arm_weights_produce_the_expected_sample_ratio() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
-            "sample-ratio-overflow",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true, "weight": 3_000_000_000_u64 },
-                    { "name": "treatment", "weight": 3_000_000_000_u64 }
-                ])),
-                primary_metric: Some("total_tokens".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "sample-ratio-overflow",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true, "weight": 3_000_000_000_u64 },
+                { "name": "treatment", "weight": 3_000_000_000_u64 }
+            ])),
+            primary_metric: Some("total_tokens".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
     let experiment_id = experiment.id;
-    let started = runtime
-        .change_experiment(&experiment_id, ExperimentChange::Start, actor)
-        .unwrap();
+    let started =
+        experiment::change_experiment(&runtime, &experiment_id, ExperimentChange::Start, actor)
+            .unwrap();
     assert_eq!(started.segment, 1);
 
     let workspace_id = runtime.workspace_id().unwrap();
@@ -79,7 +79,7 @@ fn large_valid_arm_weights_produce_the_expected_sample_ratio() {
         let arm_name = if index < 100 { "control" } else { "treatment" };
         let assignments = store
             .write(|tx| {
-                orbit_core::application::experiment::assign_experiments(
+                orbit_core::app::experiment::assign_experiments(
                     tx,
                     &workspace_id,
                     &task_id,
@@ -112,7 +112,7 @@ fn large_valid_arm_weights_produce_the_expected_sample_ratio() {
         assert_eq!(assignments.len(), 1);
     }
 
-    let readout = runtime.experiment_readout(&experiment_id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment_id, None).unwrap();
     assert_eq!(readout.enrollment.analysed, 200);
     let sample_ratio = &readout.sample_ratio;
     let segment = sample_ratio.segments.first().unwrap();
@@ -208,22 +208,22 @@ fn expired_readout_requires_a_primary_comparison_interval() {
             actor: "readout-test".into(),
             reason: None,
         };
-        let experiment = runtime
-            .create_experiment(
-                case.name,
-                ExperimentDefinitionInput {
-                    arms: Some(json!([
-                        { "name": "control", "control": true },
-                        { "name": "treatment" }
-                    ])),
-                    primary_metric: Some("total_tokens".into()),
-                    min_sample: Some(100),
-                    max_days: Some(1),
-                    ..ExperimentDefinitionInput::default()
-                },
-                actor.clone(),
-            )
-            .unwrap();
+        let experiment = experiment::create_experiment(
+            &runtime,
+            case.name,
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("total_tokens".into()),
+                min_sample: Some(100),
+                max_days: Some(1),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
         let workspace_id = runtime.workspace_id().unwrap();
         let store = runtime.sqlite_store().unwrap();
         let mut record = store
@@ -242,7 +242,7 @@ fn expired_readout_requires_a_primary_comparison_interval() {
         // exercising expiry without sleeping or replacing the readout's clock.
         assert_eq!(
             store
-                .write(|tx| orbit_core::application::experiment::write_experiment(
+                .write(|tx| orbit_core::app::experiment::write_experiment(
                     tx,
                     &ExperimentWrite {
                         event: ExperimentEventRow {
@@ -287,7 +287,7 @@ fn expired_readout_requires_a_primary_comparison_interval() {
                 }
             }
         }
-        let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+        let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
         assert!(readout.verdict.horizon_reached, "{}", case.name);
         assert!(!readout.sample_ratio.mismatch, "{}", case.name);
         let primary = readout
@@ -361,19 +361,18 @@ fn readout_leaves_interactive_assignments_out_of_the_treated_population() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
-            "interactive-excluded",
-            ExperimentDefinitionInput {
-                arms: Some(json!([{"name":"control","control":true},{"name":"treatment"}])),
-                primary_metric: Some("first_pass_acceptance".into()),
-                ..Default::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "interactive-excluded",
+        ExperimentDefinitionInput {
+            arms: Some(json!([{"name":"control","control":true},{"name":"treatment"}])),
+            primary_metric: Some("first_pass_acceptance".into()),
+            ..Default::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
         .unwrap();
     for arm in ["control", "treatment"] {
         enroll_arm_task(&runtime, &experiment.id, arm, TaskComplexity::Low);
@@ -393,7 +392,7 @@ fn readout_leaves_interactive_assignments_out_of_the_treated_population() {
             .unwrap();
     }
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     assert_eq!(
         readout.enrollment.analysed, 2,
         "unrun assignments stay analysed"
@@ -425,7 +424,7 @@ fn enroll_arm_task(
     let store = runtime.sqlite_store().unwrap();
     store
         .write(|tx| {
-            orbit_core::application::experiment::assign_experiments(
+            orbit_core::app::experiment::assign_experiments(
                 tx,
                 &workspace_id,
                 &task.id,
@@ -676,22 +675,21 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
             actor: "readout-test".into(),
             reason: None,
         };
-        let experiment = runtime
-            .create_experiment(
-                case.name,
-                ExperimentDefinitionInput {
-                    arms: Some(json!([
-                        { "name": "control", "control": true },
-                        { "name": "treatment" }
-                    ])),
-                    primary_metric: Some("total_tokens".into()),
-                    ..ExperimentDefinitionInput::default()
-                },
-                actor.clone(),
-            )
-            .unwrap();
-        runtime
-            .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        let experiment = experiment::create_experiment(
+            &runtime,
+            case.name,
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("total_tokens".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+        experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
             .unwrap();
         runtime
             .sqlite_store()
@@ -712,7 +710,7 @@ fn first_edit_readout_scores_the_first_implement_invocation() {
             case.terminal,
         );
 
-        let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+        let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
         // (n, mean, unmeasured, open) of the treatment arm for one metric.
         let treatment = |metric_name: &str| {
             let metric = readout
@@ -789,22 +787,21 @@ fn readout_counts_tasks_with_a_recorded_explorer_call() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
-            "explorer-uptake",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true },
-                    { "name": "treatment" }
-                ])),
-                primary_metric: Some("total_tokens".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "explorer-uptake",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true },
+                { "name": "treatment" }
+            ])),
+            primary_metric: Some("total_tokens".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
         .unwrap();
 
     let seed = |arm: &str, activity: &str, calls: &[(&str, u64)], suffix: &str| {
@@ -911,7 +908,7 @@ fn readout_counts_tasks_with_a_recorded_explorer_call() {
     );
     seed("control", "agent_implement", &[], "control-no");
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     let arm = |name: &str| {
         readout
             .arms
@@ -974,22 +971,21 @@ fn readout_does_not_measure_or_rule_out_calls_from_a_truncated_tool_trace() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
-            "truncated-tool-trace",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true },
-                    { "name": "treatment" }
-                ])),
-                primary_metric: Some("total_tokens".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "truncated-tool-trace",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true },
+                { "name": "treatment" }
+            ])),
+            primary_metric: Some("total_tokens".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
         .unwrap();
 
     let seed = |arm: &str, calls: &[&str], tool_calls_incomplete: bool| {
@@ -1009,7 +1005,7 @@ fn readout_does_not_measure_or_rule_out_calls_from_a_truncated_tool_trace() {
     seed("treatment", &["orbit.agent.invoke", "hashline_edit"], true);
     seed("control", &["read_file", "hashline_edit"], false);
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     let arm = |name: &str| readout.arms.iter().find(|arm| arm.name == name).unwrap();
     assert_eq!(arm("treatment").tasks_with_explorer_call, 1);
     assert_eq!(
@@ -1072,22 +1068,21 @@ fn readout_keeps_a_complete_first_edit_when_a_later_invocation_is_truncated() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
-            "complete-first-then-truncated-retry",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true },
-                    { "name": "treatment" }
-                ])),
-                primary_metric: Some("total_tokens".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "complete-first-then-truncated-retry",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true },
+                { "name": "treatment" }
+            ])),
+            primary_metric: Some("total_tokens".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
         .unwrap();
 
     let first_edit = |readout: &ExperimentReadout, arm_name: &str| {
@@ -1122,7 +1117,7 @@ fn readout_keeps_a_complete_first_edit_when_a_later_invocation_is_truncated() {
     );
     runtime.archive_task_as_operator(&control, false).unwrap();
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     let arm = |name: &str| readout.arms.iter().find(|arm| arm.name == name).unwrap();
     assert_eq!(
         first_edit(&readout, "treatment"),
@@ -1164,7 +1159,7 @@ fn readout_keeps_a_complete_first_edit_when_a_later_invocation_is_truncated() {
         true,
     );
     runtime.archive_task_as_operator(&truncated, false).unwrap();
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     assert_eq!(
         first_edit(&readout, "treatment"),
         (1, Some(1.0), 1),
@@ -1205,22 +1200,21 @@ fn readout_counts_explorer_call_beyond_workspace_invocation_scan_limit() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
-            "explorer-uptake-beyond-scan-limit",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true },
-                    { "name": "treatment" }
-                ])),
-                primary_metric: Some("total_tokens".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "explorer-uptake-beyond-scan-limit",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true },
+                { "name": "treatment" }
+            ])),
+            primary_metric: Some("total_tokens".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
         .unwrap();
 
     let seed = |activity: &str, tool_name: &str, suffix: &str| {
@@ -1324,7 +1318,7 @@ fn readout_counts_explorer_call_beyond_workspace_invocation_scan_limit() {
         tx.commit().unwrap();
     }
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     assert_eq!(readout.enrollment.analysed, 4);
     let treatment = readout
         .arms
@@ -1362,24 +1356,23 @@ fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
-            "first-edit-incomplete",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true },
-                    { "name": "treatment" }
-                ])),
-                primary_metric: Some("total_tokens".into()),
-                guardrails: Some(json!({ "result_bytes_before_first_edit": "+0" })),
-                min_sample: Some(1),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "first-edit-incomplete",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true },
+                { "name": "treatment" }
+            ])),
+            primary_metric: Some("total_tokens".into()),
+            guardrails: Some(json!({ "result_bytes_before_first_edit": "+0" })),
+            min_sample: Some(1),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
         .unwrap();
     runtime
         .sqlite_store()
@@ -1416,7 +1409,7 @@ fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
         .execute("UPDATE invocations SET ts = ?1", [older.to_rfc3339()])
         .unwrap();
 
-    let complete = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let complete = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     for (name, means) in [
         ("turns_before_first_edit", [2.0, 1.0]),
         ("result_bytes_before_first_edit", [200.0, 100.0]),
@@ -1485,7 +1478,7 @@ fn first_edit_readout_excludes_a_retry_when_same_timestamp_paging_stalls() {
     );
     assert_eq!(collected.by_task[&task_id].score, Some((0, 0)));
 
-    let incomplete = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let incomplete = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     for name in ["turns_before_first_edit", "result_bytes_before_first_edit"] {
         let metric = incomplete
             .metrics
@@ -1545,22 +1538,21 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
-            "cost-coverage",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true },
-                    { "name": "treatment" }
-                ])),
-                primary_metric: Some("cost_usd".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "cost-coverage",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true },
+                { "name": "treatment" }
+            ])),
+            primary_metric: Some("cost_usd".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
         .unwrap();
 
     // Below the 272K prompt tier, so the totals alone fix the derived cost.
@@ -1647,7 +1639,7 @@ fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
         }
     }
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     for arm in &readout.arms {
         let efforts: std::collections::BTreeSet<_> = arm
             .effort_breakdown
@@ -1725,23 +1717,23 @@ fn readout_warns_when_primary_is_unmeasured_on_every_settled_task() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
-            "primary-all-unmeasured",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true },
-                    { "name": "treatment" }
-                ])),
-                primary_metric: Some("first_pass_acceptance".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    let started = runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
-        .unwrap();
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "primary-all-unmeasured",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true },
+                { "name": "treatment" }
+            ])),
+            primary_metric: Some("first_pass_acceptance".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    let started =
+        experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
+            .unwrap();
     assert_eq!(started.status, "running");
     let start_event = started
         .events
@@ -1767,7 +1759,7 @@ fn readout_warns_when_primary_is_unmeasured_on_every_settled_task() {
     // A still-open task must not suppress the warning.
     enroll_arm_task(&runtime, &experiment.id, "control", TaskComplexity::Low);
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     let warning = readout
         .warnings
         .iter()
@@ -1820,7 +1812,7 @@ fn readout_warns_when_primary_is_unmeasured_on_every_settled_task() {
         )
         .unwrap();
     runtime.archive_task_as_operator(&settled, false).unwrap();
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     assert!(
         !readout
             .warnings

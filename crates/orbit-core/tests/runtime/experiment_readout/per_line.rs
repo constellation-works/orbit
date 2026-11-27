@@ -4,8 +4,8 @@
 use std::path::Path;
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use orbit_core::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+use orbit_core::app::experiment::{
+    self, ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::OrbitRuntime;
@@ -64,7 +64,7 @@ fn enroll(runtime: &OrbitRuntime, experiment_id: &str, arm_name: &str, done: boo
     let store = runtime.sqlite_store().unwrap();
     store
         .write(|tx| {
-            orbit_core::application::experiment::assign_experiments(
+            orbit_core::app::experiment::assign_experiments(
                 tx,
                 &workspace_id,
                 &task.id,
@@ -266,21 +266,20 @@ fn ratio_of_sums_excludes_zero_and_unavailable_lines() {
     }
     let (root, runtime) = open_runtime();
     let global = root.path().join("home/.orbit");
-    let experiment = runtime
-        .create_experiment(
-            "per-line-ratio",
-            ExperimentDefinitionInput {
-                arms: Some(arms()),
-                primary_metric: Some("cost_per_line".into()),
-                guardrails: Some(json!({"lines_changed": "+0"})),
-                min_sample: Some(2),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor(),
-        )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor())
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "per-line-ratio",
+        ExperimentDefinitionInput {
+            arms: Some(arms()),
+            primary_metric: Some("cost_per_line".into()),
+            guardrails: Some(json!({"lines_changed": "+0"})),
+            min_sample: Some(2),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor(),
+    )
+    .unwrap();
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor())
         .unwrap();
 
     // Control: 10/100 and 30/50. Ratio of sums is 40/150, mean of ratios is 0.35.
@@ -348,7 +347,7 @@ fn ratio_of_sums_excludes_zero_and_unavailable_lines() {
     lines(&runtime, &historical, 6, 5, None);
     let _open = enroll(&runtime, &experiment.id, "control", false);
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     let metric = |name: &str| {
         readout
             .metrics
@@ -447,21 +446,20 @@ fn lead_time_per_line_primary_observations_carry_the_pair() {
     }
     let (root, runtime) = open_runtime();
     let global = root.path().join("home/.orbit");
-    let experiment = runtime
-        .create_experiment(
-            "per-line-lead-primary",
-            ExperimentDefinitionInput {
-                arms: Some(arms()),
-                primary_metric: Some("lead_time_per_line".into()),
-                guardrails: Some(json!({"lines_changed": "+0"})),
-                min_sample: Some(2),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor(),
-        )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor())
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "per-line-lead-primary",
+        ExperimentDefinitionInput {
+            arms: Some(arms()),
+            primary_metric: Some("lead_time_per_line".into()),
+            guardrails: Some(json!({"lines_changed": "+0"})),
+            min_sample: Some(2),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor(),
+    )
+    .unwrap();
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor())
         .unwrap();
     // Control leads 10h/100 and 20h/50 (ratio of sums 0.2); treatment
     // 4h/10 and 6h/30 (ratio of sums 0.25, mean of ratios 0.3).
@@ -525,7 +523,7 @@ fn lead_time_per_line_primary_observations_carry_the_pair() {
         }),
     );
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     assert_eq!(readout.primary_observations.len(), 4);
     let ratio = |arm: &str| {
         let pairs: Vec<(f64, u64)> = readout
@@ -556,37 +554,36 @@ fn per_line_primary_without_guardrail_is_refused_and_a_breach_is_not_a_winner() 
         return;
     }
     let (_root, runtime) = open_runtime();
-    let refused = runtime
-        .create_experiment(
-            "per-line-unguarded",
-            ExperimentDefinitionInput {
-                arms: Some(arms()),
-                primary_metric: Some("cost_per_line".into()),
-                min_sample: Some(2),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor(),
-        )
-        .expect_err("a per-line primary needs lines_changed");
+    let refused = experiment::create_experiment(
+        &runtime,
+        "per-line-unguarded",
+        ExperimentDefinitionInput {
+            arms: Some(arms()),
+            primary_metric: Some("cost_per_line".into()),
+            min_sample: Some(2),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor(),
+    )
+    .expect_err("a per-line primary needs lines_changed");
     assert!(refused.to_string().contains("lines_changed"), "{refused}");
 
     let (root, runtime) = open_runtime();
     let global = root.path().join("home/.orbit");
-    let experiment = runtime
-        .create_experiment(
-            "per-line-guarded",
-            ExperimentDefinitionInput {
-                arms: Some(arms()),
-                primary_metric: Some("cost_per_line".into()),
-                guardrails: Some(json!({"lines_changed": "+0"})),
-                min_sample: Some(2),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor(),
-        )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor())
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "per-line-guarded",
+        ExperimentDefinitionInput {
+            arms: Some(arms()),
+            primary_metric: Some("cost_per_line".into()),
+            guardrails: Some(json!({"lines_changed": "+0"})),
+            min_sample: Some(2),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor(),
+    )
+    .unwrap();
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor())
         .unwrap();
     // Identical pairs so the ratio interval is the point estimate and excludes zero.
     // Control cost ratio 1, mean lines 10. Treatment cost ratio 0.2, mean lines 100.
@@ -621,7 +618,7 @@ fn per_line_primary_without_guardrail_is_refused_and_a_breach_is_not_a_winner() 
         );
     }
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     let metric = readout
         .metrics
         .iter()

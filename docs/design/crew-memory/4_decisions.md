@@ -148,7 +148,7 @@ On a narrow screen the sub-tab uses the Frictions inline accordion instead of th
 ## Keep the machinery dormant after the no-difference readout
 
 **Recorded:** 2026-11-21 · [ORB-26501] · supersedes in part [Experimental until a randomised readout favours it](#experimental-until-a-randomised-readout-favours-it) and [The dashboard reads memory and proposals but never decides or expires them](#the-dashboard-reads-memory-and-proposals-but-never-decides-or-expires-them)
-**Code anchors:** `crates/orbit-core/src/application/experiment/memory_arms.rs::crew_memory_experiment_running`, `crates/orbit-types/src/tool/mcp_toolset.rs::McpToolset::RunBound`
+**Code anchors:** `crates/orbit-core/src/app/experiment/memory_arm.rs::crew_memory_experiment_running`, `crates/orbit-types/src/tool/mcp_toolset.rs::McpToolset::RunBound`
 
 ### Context
 

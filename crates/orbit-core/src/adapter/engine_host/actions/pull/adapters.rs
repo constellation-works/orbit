@@ -238,7 +238,7 @@ impl LeafPullLauncher<'_> {
             .as_ref()
             .and_then(|receipt| receipt.claim.clone())
             .ok_or_else(|| refused("launching requires an admitted claim"))?;
-        crate::application::experiment::validate_claimed_experiment_capture(
+        crate::app::experiment::validate_claimed_experiment_capture(
             admission
                 .receipt
                 .as_ref()

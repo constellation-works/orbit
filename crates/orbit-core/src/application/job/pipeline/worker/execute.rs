@@ -191,7 +191,8 @@ impl OrbitRuntime {
                     input["crew"] = selection["crew"].clone();
                     input["crew_selection"] = selection;
                 } else {
-                    self.install_job_claimed_experiment_crew(&mut input)?;
+                    crate::app::port::JobExperiment(self)
+                        .install_job_claimed_experiment_crew(&mut input)?;
                     if let Some(selection) = input.get("crew_selection") {
                         self.stores()
                             .jobs()

@@ -8,7 +8,7 @@
 //!   `landing`, `review`, `operator_input`.
 //! - Automation: `auto_tasks`, `automation`, `workspace_auto`,
 //!   `sweep_filing`, `seeding_policy`.
-//! - Agents and runs: `executor`, `experiment`, `resident`, `vision_probe`, `statistics`.
+//! - Agents and runs: `executor`, `resident`, `vision_probe`, `statistics`.
 //! - Tool names: `tool_name_migration`.
 //! - Workspace and host: `distributed`, `pull_drain`,
 //!   `host_labels`, `gc`, `change_watch`, `managed_assets`.
@@ -25,7 +25,6 @@ pub mod change_watch;
 pub mod contracts;
 pub mod distributed;
 pub(crate) mod executor;
-pub mod experiment;
 pub mod gc;
 pub(crate) mod host_labels;
 pub mod job;

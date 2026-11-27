@@ -1,4 +1,5 @@
 use super::*;
+use orbit_core::app::experiment;
 use orbit_types::workflow::{
     CrewMemoryBlock, CrewMemoryDelivery, CrewMemoryRevisions, TagInstructionRole,
 };
@@ -28,8 +29,7 @@ fn shadow_memory_arm_reports_captured_digest_with_null_revisions() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
+    let experiment = experiment::create_experiment(&runtime,
             "shadow-memory-capture",
             ExperimentDefinitionInput {
                 mode: Some("shadow".into()),
@@ -43,8 +43,7 @@ fn shadow_memory_arm_reports_captured_digest_with_null_revisions() {
             actor.clone(),
         )
         .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
         .unwrap();
 
     let task_id = enroll_arm_task(&runtime, &experiment.id, "memory", TaskComplexity::Low);
@@ -106,7 +105,7 @@ fn shadow_memory_arm_reports_captured_digest_with_null_revisions() {
         )
         .unwrap();
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     assert_eq!(readout.experiment.mode, "shadow");
     let arm = readout
         .arms
@@ -197,8 +196,7 @@ fn shadow_readout_uses_input_capture_despite_unreadable_checkpoint() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
+    let experiment = experiment::create_experiment(&runtime,
             "shadow-memory-corrupt-checkpoint",
             ExperimentDefinitionInput {
                 mode: Some("shadow".into()),
@@ -212,8 +210,7 @@ fn shadow_readout_uses_input_capture_despite_unreadable_checkpoint() {
             actor.clone(),
         )
         .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
         .unwrap();
     let task_id = enroll_arm_task(&runtime, &experiment.id, "memory", TaskComplexity::Low);
     let delivery = CrewMemoryDelivery::render(
@@ -269,7 +266,7 @@ fn shadow_readout_uses_input_capture_despite_unreadable_checkpoint() {
         .unwrap();
     plant_unreadable_checkpoint(&runtime, &run.run_id.to_string());
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     let arm = readout
         .arms
         .iter()
@@ -304,8 +301,7 @@ fn live_readout_succeeds_with_unreadable_checkpoint_and_no_capture() {
         actor: "readout-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
+    let experiment = experiment::create_experiment(&runtime,
             "live-corrupt-checkpoint",
             ExperimentDefinitionInput {
                 mode: Some("live".into()),
@@ -319,8 +315,7 @@ fn live_readout_succeeds_with_unreadable_checkpoint_and_no_capture() {
             actor.clone(),
         )
         .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+    experiment::change_experiment(&runtime, &experiment.id, ExperimentChange::Start, actor)
         .unwrap();
     let task_id = enroll_arm_task(&runtime, &experiment.id, "memory", TaskComplexity::Low);
     let run = runtime
@@ -336,7 +331,7 @@ fn live_readout_succeeds_with_unreadable_checkpoint_and_no_capture() {
         .unwrap();
     plant_unreadable_checkpoint(&runtime, &run.run_id.to_string());
 
-    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let readout = experiment::experiment_readout(&runtime, &experiment.id, None).unwrap();
     assert_eq!(readout.experiment.mode, "live");
     assert_eq!(readout.enrollment.analysed, 1);
 }

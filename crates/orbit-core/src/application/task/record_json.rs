@@ -143,8 +143,11 @@ pub fn task_show_json(
     let mut object = task_record_json(runtime, row, status_by_id)?;
     object.insert(
         "experiments".into(),
-        serde_json::to_value(runtime.task_experiment_assignment_readout(&row.task.id)?)
-            .map_err(serialize_error("experiments"))?,
+        serde_json::to_value(
+            crate::app::port::TaskExperiment(runtime)
+                .task_experiment_assignment_readout(&row.task.id)?,
+        )
+        .map_err(serialize_error("experiments"))?,
     );
     if let Some(block) = super::blocked_recovery::block_json(row) {
         object.insert("block".to_string(), block);
@@ -248,10 +251,11 @@ pub(crate) fn task_show_field_json_with_row(
                 history
             )))
         }
-        "experiments" => {
-            serde_json::to_value(runtime.task_experiment_assignment_readout(&task.id)?)
-                .map_err(serialize_error("experiments"))
-        }
+        "experiments" => serde_json::to_value(
+            crate::app::port::TaskExperiment(runtime)
+                .task_experiment_assignment_readout(&task.id)?,
+        )
+        .map_err(serialize_error("experiments")),
         "pilot_warnings" => {
             let comments_owned;
             let comments: &[orbit_types::task::TaskComment] = match row {

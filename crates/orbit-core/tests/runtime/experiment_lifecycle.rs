@@ -3,8 +3,8 @@
 mod admission;
 
 use orbit_common::OrbitError;
-use orbit_core::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+use orbit_core::app::experiment::{
+    self, ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::OrbitRuntime;
@@ -63,23 +63,27 @@ fn disabled_and_stale_admissions_enroll_once_experiments_run() {
         actor: "experiment-lifecycle-test".into(),
         reason: None,
     };
-    let experiment = enabled_runtime
-        .create_experiment(
-            "admission-recovery",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true },
-                    { "name": "treatment" }
-                ])),
-                primary_metric: Some("total_tokens".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    enabled_runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
-        .unwrap();
+    let experiment = experiment::create_experiment(
+        &enabled_runtime,
+        "admission-recovery",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true },
+                { "name": "treatment" }
+            ])),
+            primary_metric: Some("total_tokens".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    experiment::change_experiment(
+        &enabled_runtime,
+        &experiment.id,
+        ExperimentChange::Start,
+        actor,
+    )
+    .unwrap();
 
     // The submission uses the runtime created before enabling. It still has
     // the old disabled settings snapshot, yet the disabled admission wrote
@@ -95,7 +99,7 @@ fn disabled_and_stale_admissions_enroll_once_experiments_run() {
     let captured_arm = recovered_disabled["assignments"][0]["arm"].as_str();
     assert!(matches!(captured_arm, Some("control" | "treatment")));
     assert_eq!(
-        stale_runtime.task_experiments(&disabled_task.id).unwrap()[0]
+        experiment::task_experiments(&stale_runtime, &disabled_task.id).unwrap()[0]
             .arm
             .as_deref(),
         captured_arm
@@ -130,24 +134,28 @@ fn enabled_population_miss_stays_final_across_retries() {
         reason: None,
     };
     let start = |name: &str, tag: &str, overlay: serde_json::Value| {
-        let experiment = runtime
-            .create_experiment(
-                name,
-                ExperimentDefinitionInput {
-                    arms: Some(json!([
-                        { "name": "control", "control": true, "overlay": overlay },
-                        { "name": "treatment", "overlay": overlay }
-                    ])),
-                    population: Some(json!({ "tags_include": [tag] })),
-                    primary_metric: Some("total_tokens".into()),
-                    ..ExperimentDefinitionInput::default()
-                },
-                actor.clone(),
-            )
-            .unwrap();
-        runtime
-            .change_experiment(&experiment.id, ExperimentChange::Start, actor.clone())
-            .unwrap();
+        let experiment = experiment::create_experiment(
+            &runtime,
+            name,
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true, "overlay": overlay },
+                    { "name": "treatment", "overlay": overlay }
+                ])),
+                population: Some(json!({ "tags_include": [tag] })),
+                primary_metric: Some("total_tokens".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+        experiment::change_experiment(
+            &runtime,
+            &experiment.id,
+            ExperimentChange::Start,
+            actor.clone(),
+        )
+        .unwrap();
         experiment.id
     };
     let tagged = start("tagged", "eligible", json!({}));
@@ -192,11 +200,15 @@ fn enabled_population_miss_stays_final_across_retries() {
         retried["assignments"].as_array().unwrap().is_empty(),
         "a retry after the edit enrolled the task: {retried}"
     );
-    assert!(runtime.task_experiments(&missed).unwrap().is_empty());
+    assert!(
+        experiment::task_experiments(&runtime, &missed)
+            .unwrap()
+            .is_empty()
+    );
 
     let contested = add("Task in two crew experiments", &["contested"]);
     submit_experiment_capture(&runtime, &job_path, &contested);
-    let rows = runtime.task_experiments(&contested).unwrap();
+    let rows = experiment::task_experiments(&runtime, &contested).unwrap();
     assert_eq!(rows.len(), 2, "{rows:?}");
     assert_eq!(rows[0].experiment, first_crew);
     assert!(rows[0].arm.is_some(), "{rows:?}");
@@ -206,7 +218,7 @@ fn enabled_population_miss_stays_final_across_retries() {
         Some("surface_conflict")
     );
     submit_experiment_capture(&runtime, &job_path, &contested);
-    let retried_rows = runtime.task_experiments(&contested).unwrap();
+    let retried_rows = experiment::task_experiments(&runtime, &contested).unwrap();
     assert_eq!(
         (
             retried_rows[0].arm.as_deref(),
@@ -242,23 +254,27 @@ fn disabled_setting_stops_new_enrollment_but_keeps_sticky_rows() {
         actor: "experiment-lifecycle-test".into(),
         reason: None,
     };
-    let experiment = enabled_runtime
-        .create_experiment(
-            "disabled-after-start",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true },
-                    { "name": "treatment" }
-                ])),
-                primary_metric: Some("total_tokens".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    enabled_runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
-        .unwrap();
+    let experiment = experiment::create_experiment(
+        &enabled_runtime,
+        "disabled-after-start",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true },
+                { "name": "treatment" }
+            ])),
+            primary_metric: Some("total_tokens".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    experiment::change_experiment(
+        &enabled_runtime,
+        &experiment.id,
+        ExperimentChange::Start,
+        actor,
+    )
+    .unwrap();
     let sticky_task = enabled_runtime
         .add_task(TaskAddParams {
             title: "Task enrolled while the experiment runs".into(),
@@ -280,7 +296,7 @@ fn disabled_setting_stops_new_enrollment_but_keeps_sticky_rows() {
 
     let sticky_capture = submit_experiment_capture(&enabled_runtime, &job_path, &sticky_task.id);
     assert_eq!(sticky_capture["assignments"].as_array().unwrap().len(), 1);
-    let sticky_rows = enabled_runtime.task_experiments(&sticky_task.id).unwrap();
+    let sticky_rows = experiment::task_experiments(&enabled_runtime, &sticky_task.id).unwrap();
 
     // Turn experiments off without pausing the running experiment, then open a
     // fresh runtime that reads the disabled setting.
@@ -294,8 +310,7 @@ fn disabled_setting_stops_new_enrollment_but_keeps_sticky_rows() {
     let fresh_capture = submit_experiment_capture(&disabled_runtime, &job_path, &fresh_task.id);
     assert!(fresh_capture["assignments"].as_array().unwrap().is_empty());
     assert!(
-        disabled_runtime
-            .task_experiments(&fresh_task.id)
+        experiment::task_experiments(&disabled_runtime, &fresh_task.id)
             .unwrap()
             .is_empty()
     );
@@ -304,7 +319,7 @@ fn disabled_setting_stops_new_enrollment_but_keeps_sticky_rows() {
     let kept_capture = submit_experiment_capture(&disabled_runtime, &job_path, &sticky_task.id);
     assert_eq!(kept_capture["assignments"], sticky_capture["assignments"]);
     assert_eq!(
-        disabled_runtime.task_experiments(&sticky_task.id).unwrap(),
+        experiment::task_experiments(&disabled_runtime, &sticky_task.id).unwrap(),
         sticky_rows
     );
 }
@@ -336,16 +351,19 @@ fn start_refuses_after_experiments_are_disabled_on_an_open_runtime() {
 
     std::fs::write(&config_path, "[experiments]\nenabled = false\n").unwrap();
 
-    let error = stale_runtime
-        .change_experiment(&experiment_id, ExperimentChange::Start, actor)
-        .unwrap_err();
+    let error = experiment::change_experiment(
+        &stale_runtime,
+        &experiment_id,
+        ExperimentChange::Start,
+        actor,
+    )
+    .unwrap_err();
     assert!(
         matches!(&error, OrbitError::PolicyDenied(message) if message.contains("experiments.enabled")),
         "start must refuse on the current config, got {error:?}"
     );
     assert_eq!(
-        stale_runtime
-            .experiment_view(&experiment_id)
+        experiment::experiment_view(&stale_runtime, &experiment_id)
             .unwrap()
             .status,
         "draft"
@@ -379,9 +397,13 @@ fn start_accepts_after_experiments_are_enabled_on_an_open_runtime() {
 
     std::fs::write(&config_path, "[experiments]\nenabled = true\n").unwrap();
 
-    let started = stale_runtime
-        .change_experiment(&experiment_id, ExperimentChange::Start, actor)
-        .unwrap();
+    let started = experiment::change_experiment(
+        &stale_runtime,
+        &experiment_id,
+        ExperimentChange::Start,
+        actor,
+    )
+    .unwrap();
     assert_eq!(started.status, "running");
 }
 
@@ -427,14 +449,14 @@ fn start_refuses_legacy_step_local_primary() {
         )
         .unwrap();
 
-    let error = runtime
-        .change_experiment(&legacy_id, ExperimentChange::Start, actor.clone())
-        .unwrap_err();
+    let error =
+        experiment::change_experiment(&runtime, &legacy_id, ExperimentChange::Start, actor.clone())
+            .unwrap_err();
     assert!(
         matches!(&error, OrbitError::InvalidInput(message) if message.contains("implement_tokens") && message.contains("step-local") && message.contains("choose a whole-task metric") && message.contains("total_tokens")),
         "start must refuse a step-local stored primary with the whole-task alternatives, got {error:?}"
     );
-    let legacy = runtime.experiment_view(&legacy_id).unwrap();
+    let legacy = experiment::experiment_view(&runtime, &legacy_id).unwrap();
     assert_eq!(legacy.status, "draft");
     assert!(
         legacy.events.iter().all(|event| event.kind != "started"),
@@ -457,16 +479,20 @@ fn start_refuses_legacy_step_local_primary() {
         capture["assignments"].as_array().unwrap().is_empty(),
         "a refused start enrolled the task: {capture}"
     );
-    assert!(runtime.task_experiments(&task.id).unwrap().is_empty());
+    assert!(
+        experiment::task_experiments(&runtime, &task.id)
+            .unwrap()
+            .is_empty()
+    );
 
     // A draft with a whole-task primary still starts.
-    let started = runtime
-        .change_experiment(
-            &draft_experiment(&runtime, "whole-task-primary", actor.clone()),
-            ExperimentChange::Start,
-            actor,
-        )
-        .unwrap();
+    let started = experiment::change_experiment(
+        &runtime,
+        &draft_experiment(&runtime, "whole-task-primary", actor.clone()),
+        ExperimentChange::Start,
+        actor,
+    )
+    .unwrap();
     assert_eq!(started.status, "running");
 }
 
@@ -499,31 +525,37 @@ fn start_refuses_run_bound_memory_tool_in_arm_tools_add() {
 
     for action in ["show", "write", "propose"] {
         let tool = format!("orbit.memory.{action}");
-        let experiment_id = runtime
-            .create_experiment(
-                &format!("run-bound-{action}"),
-                ExperimentDefinitionInput {
-                    arms: Some(json!([
-                        { "name": "control", "control": true },
-                        { "name": "treatment", "overlay": { "tools": { "add": [tool] } } }
-                    ])),
-                    primary_metric: Some("total_tokens".into()),
-                    ..ExperimentDefinitionInput::default()
-                },
-                actor.clone(),
-            )
-            .unwrap()
-            .id;
+        let experiment_id = experiment::create_experiment(
+            &runtime,
+            &format!("run-bound-{action}"),
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment", "overlay": { "tools": { "add": [tool] } } }
+                ])),
+                primary_metric: Some("total_tokens".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap()
+        .id;
 
-        let error = runtime
-            .change_experiment(&experiment_id, ExperimentChange::Start, actor.clone())
-            .unwrap_err();
+        let error = experiment::change_experiment(
+            &runtime,
+            &experiment_id,
+            ExperimentChange::Start,
+            actor.clone(),
+        )
+        .unwrap_err();
         assert!(
             matches!(&error, OrbitError::InvalidInput(message) if message.contains(&tool) && message.contains("served only to the runs Orbit starts")),
             "start must refuse run-bound `{tool}` in an arm's tools.add, naming the tool and why, got {error:?}"
         );
         assert_eq!(
-            runtime.experiment_view(&experiment_id).unwrap().status,
+            experiment::experiment_view(&runtime, &experiment_id)
+                .unwrap()
+                .status,
             "draft",
             "a refused start must leave the experiment with `{tool}` a draft"
         );
@@ -589,18 +621,17 @@ fn reweight_events_classify_weight_edits_separately_from_retirements() {
     };
 
     let retire_only_id = started_experiment(&runtime, "retire-only", actor.clone());
-    runtime
-        .change_experiment(
-            &retire_only_id,
-            ExperimentChange::Reweight {
-                weights: None,
-                retire: vec!["treatment-a".into()],
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    let retire_only = runtime
-        .experiment_view(&retire_only_id)
+    experiment::change_experiment(
+        &runtime,
+        &retire_only_id,
+        ExperimentChange::Reweight {
+            weights: None,
+            retire: vec!["treatment-a".into()],
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    let retire_only = experiment::experiment_view(&runtime, &retire_only_id)
         .unwrap()
         .events
         .pop()
@@ -610,18 +641,17 @@ fn reweight_events_classify_weight_edits_separately_from_retirements() {
     assert_eq!(retire_only.detail["retired"], json!(["treatment-a"]));
 
     let weight_only_id = started_experiment(&runtime, "weight-only", actor.clone());
-    runtime
-        .change_experiment(
-            &weight_only_id,
-            ExperimentChange::Reweight {
-                weights: Some(json!({"treatment-a": 3})),
-                retire: vec![],
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    let weight_only = runtime
-        .experiment_view(&weight_only_id)
+    experiment::change_experiment(
+        &runtime,
+        &weight_only_id,
+        ExperimentChange::Reweight {
+            weights: Some(json!({"treatment-a": 3})),
+            retire: vec![],
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    let weight_only = experiment::experiment_view(&runtime, &weight_only_id)
         .unwrap()
         .events
         .pop()
@@ -631,18 +661,17 @@ fn reweight_events_classify_weight_edits_separately_from_retirements() {
     assert_eq!(weight_only.detail["retired"], json!([]));
 
     let combined_id = started_experiment(&runtime, "combined", actor.clone());
-    runtime
-        .change_experiment(
-            &combined_id,
-            ExperimentChange::Reweight {
-                weights: Some(json!({"treatment-b": 4})),
-                retire: vec!["treatment-a".into()],
-            },
-            actor,
-        )
-        .unwrap();
-    let combined = runtime
-        .experiment_view(&combined_id)
+    experiment::change_experiment(
+        &runtime,
+        &combined_id,
+        ExperimentChange::Reweight {
+            weights: Some(json!({"treatment-b": 4})),
+            retire: vec!["treatment-a".into()],
+        },
+        actor,
+    )
+    .unwrap();
+    let combined = experiment::experiment_view(&runtime, &combined_id)
         .unwrap()
         .events
         .pop()
@@ -655,27 +684,25 @@ fn reweight_events_classify_weight_edits_separately_from_retirements() {
 
 fn started_experiment(runtime: &OrbitRuntime, name: &str, actor: ExperimentActor) -> String {
     let experiment_id = draft_experiment(runtime, name, actor.clone());
-    runtime
-        .change_experiment(&experiment_id, ExperimentChange::Start, actor)
-        .unwrap();
+    experiment::change_experiment(runtime, &experiment_id, ExperimentChange::Start, actor).unwrap();
     experiment_id
 }
 
 fn draft_experiment(runtime: &OrbitRuntime, name: &str, actor: ExperimentActor) -> String {
-    runtime
-        .create_experiment(
-            name,
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true, "weight": 1 },
-                    { "name": "treatment-a", "weight": 1 },
-                    { "name": "treatment-b", "weight": 1 }
-                ])),
-                primary_metric: Some("total_tokens".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor,
-        )
-        .unwrap()
-        .id
+    experiment::create_experiment(
+        runtime,
+        name,
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true, "weight": 1 },
+                { "name": "treatment-a", "weight": 1 },
+                { "name": "treatment-b", "weight": 1 }
+            ])),
+            primary_metric: Some("total_tokens".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor,
+    )
+    .unwrap()
+    .id
 }

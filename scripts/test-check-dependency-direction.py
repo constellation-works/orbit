@@ -761,45 +761,33 @@ class RelativeImportTests(unittest.TestCase):
         ], rejected=False)
 
     def test_distributed_reaches_experiment_only_through_its_port(self):
-        # [ORB-22416] Admission's capture call into experiment was a hidden
-        # cycle: experiment's readout reads distributed's claim receipt.
-        method = {
-            "experiment/overlay.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn fresh_capture_method(&self) {}\n}\n",
-        }
-        self.check_files({
-            **method,
-            "distributed/serve/admission.rs":
-                "impl OrbitRuntime {\n    fn admit(&self) {\n"
-                "        self.fresh_capture_method();\n    }\n}\n",
-        }, rejected=True)
-        # One batch per detector, as in the forecast shim rows above.
+        # Admission reaches capture through the port. Readout can read the
+        # claim receipt back.
         self.check_rows([
-            ("distributed/serve/admission.rs", "use crate::application::experiment::Probe;\n"),
-        ], rejected=True)
-        self.check_rows([
-            ("distributed/serve/admission.rs", "use crate::application::{experiment::Probe};\n"),
-        ], rejected=True)
-        self.check_rows([
-            ("distributed/worker.rs", "use super::super::experiment::Probe;\n"),
-            ("distributed/worker.rs", "use super::super::{experiment::Probe};\n"),
-            ("distributed/serve/admission.rs", "use super::super::super::{experiment::Probe};\n"),
+            ("distributed/serve/admission.rs",
+             "fn admit(rt: &OrbitRuntime) { crate::app::experiment::capture(rt); }\n"),
+            ("distributed/serve/admission.rs",
+             "use crate::app::{experiment::Probe};\n"),
+            ("distributed/worker.rs", "use super::super::super::app::experiment::Probe;\n"),
+            ("distributed/worker.rs", "use super::super::super::{app::experiment::Probe};\n"),
+            ("distributed/serve/admission.rs",
+             "use super::super::super::super::app::{experiment::Probe};\n"),
         ], rejected=True)
         self.check_files({
-            **method,
-            "distributed/experiment_port.rs":
-                "pub(in crate::application) trait DistributedExperimentPort {\n"
+            "application/distributed/experiment_port.rs":
+                "pub(crate) trait DistributedExperimentPort {\n"
                 "    fn capture_pull_experiments(&self);\n}\n",
-            "experiment/distributed_port.rs":
-                "impl DistributedExperimentPort for OrbitRuntime {\n"
+            "app/experiment/distributed_port.rs":
+                "impl DistributedExperimentPort for DistributedPort<'_> {\n"
                 "    fn capture_pull_experiments(&self) {\n"
-                "        self.fresh_capture_method();\n    }\n}\n",
-            "distributed/serve/admission.rs":
+                "        super::capture(self.0);\n    }\n}\n",
+            "application/distributed/serve/admission.rs":
                 "impl OrbitRuntime {\n    fn admit(&self) {\n"
-                "        self.capture_pull_experiments();\n    }\n}\n",
-            "experiment/readout/admission.rs":
+                "        crate::app::port::DistributedExperiment(self).capture_pull_experiments();\n"
+                "    }\n}\n",
+            "app/experiment/readout/admission.rs":
                 "use crate::application::distributed::claim_receipt;\n",
-        }, rejected=False)
+        }, rejected=False, base=self.app.parent)
 
     def test_automation_reaches_auto_tasks_only_through_its_port(self):
         # [ORB-23334] Automation read the catalog, accepted history, dedupe and
@@ -861,120 +849,78 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=False)
 
     def test_tag_instructions_reaches_experiment_only_through_its_port(self):
-        # [ORB-23019] tag_instructions.rs called experiment's overlay query,
-        # and experiment reads tag-instruction helpers back. The module is one
-        # file, so the caller scan names tag_instructions.rs. The port method
-        # stays distinct from the inherent method the guard indexes.
-        method = {
-            "experiment/overlay.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn fresh_overlay_method(&self) {}\n}\n",
-        }
+        # The experiment app can read tag-instruction helpers. Overlay
+        # selection goes through the tag-instructions port.
         self.check_rejected_exact_rows(self.app, [
-            ("tag_instructions.rs",
-             "impl OrbitRuntime {\n    fn resolve(&self) {\n"
-             f"        {call};\n    }}\n}}\n", 3)
-            for call in (
-                "self.fresh_overlay_method()",
-                "OrbitRuntime::fresh_overlay_method(self)",
-                "Self::fresh_overlay_method(self)",
-                "<crate::OrbitRuntime>::fresh_overlay_method(self)",
-            )
-        ], shared=method)
-        self.check_rejected_exact_rows(self.app, [
-            ("tag_instructions.rs", "use crate::application::experiment::Probe;\n", 1),
-        ], rg_single_file=True)
-        self.check_rejected_exact_rows(self.app, [
-            ("tag_instructions.rs", source, 1) for source in (
-                "use crate::application::{experiment::Probe};\n",
-                "use crate::application::{\n    experiment::Probe,\n};\n",
-            )
-        ], rg_single_file=True)
-        self.check_rejected_exact_rows(self.app, [
-            ("tag_instructions.rs", source, 1) for source in (
-                "use super::experiment::Probe;\n",
-                "use super::{experiment::Probe};\n",
-                "use super::super::application::experiment::Probe;\n",
+            ("tag_instructions.rs", source, line) for source, line in (
+                ("fn resolve(rt: &OrbitRuntime) { crate::app::experiment::overlay(rt); }\n", 1),
+                ("use crate::app::experiment::Probe;\n", 1),
+                ("use crate::app::{experiment::Probe};\n", 1),
+                ("use crate::app::{\n    experiment::Probe,\n};\n", 1),
+                ("use super::super::app::experiment::Probe;\n", 1),
+                ("use super::super::app::{experiment::Probe};\n", 1),
+                ("use super::super::{app::experiment::Probe};\n", 1),
             )
         ])
         self.check_files({
-            "experiment/overlay.rs":
+            "app/experiment/overlay.rs":
                 "use crate::application::tag_instructions::LazyRevision;\n"
-                "impl OrbitRuntime {\n"
-                "    pub(crate) fn experiment_overlays_for_activity(&self) {}\n}\n",
-            "tag_instructions.rs":
-                "pub(in crate::application) trait TagInstructionExperimentPort {\n"
+                "pub(super) fn experiment_overlays_for_activity(rt: &OrbitRuntime) {}\n",
+            "application/tag_instructions.rs":
+                "pub(crate) trait TagInstructionExperimentPort {\n"
                 "    fn tag_instruction_experiment_overlays(&self);\n}\n"
                 "impl OrbitRuntime {\n    fn resolve(&self) {\n"
-                "        self.tag_instruction_experiment_overlays();\n    }\n}\n",
-            "experiment/tag_instruction_port.rs":
-                "impl TagInstructionExperimentPort for OrbitRuntime {\n"
+                "        crate::app::port::TagInstructionExperiment(self)\n"
+                "            .tag_instruction_experiment_overlays();\n    }\n}\n",
+            "app/experiment/tag_instruction_port.rs":
+                "impl TagInstructionExperimentPort for TagInstructionPort<'_> {\n"
                 "    fn tag_instruction_experiment_overlays(&self) {\n"
-                "        self.experiment_overlays_for_activity();\n    }\n}\n",
-            "experiment/skills.rs":
+                "        super::overlay::experiment_overlays_for_activity(self.0);\n    }\n}\n",
+            "app/experiment/skills.rs":
                 "use crate::application::tag_instructions::LazyRevision;\n",
-        }, rejected=False)
+        }, rejected=False, base=self.app.parent)
 
     def test_task_and_job_reach_experiment_only_through_their_ports(self):
-        # [ORB-23015] Task show, the provider-limit gate and job's crew
-        # admission called experiment's inherent methods, and claimed-leaf
-        # authorization named its free capture validation: a hidden cycle, as
-        # experiment reads tasks, their crew source and the claimed leaf back.
-        method = {
-            "experiment/run_policy.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn fresh_pool_method(&self) {}\n}\n",
-        }
-        self.check_rows([
-            ("task/provider_limit/gate.rs",
-             "impl OrbitRuntime {\n    fn gate(&self) {\n"
-             "        self.fresh_pool_method();\n    }\n}\n"),
-            ("job/crew_pools/admission.rs",
-             "impl OrbitRuntime {\n    fn admit(&self) {\n"
-             "        self.fresh_pool_method();\n    }\n}\n"),
-        ], rejected=True, shared=method)
-        # One batch per detector across both modules' chains, as in the
-        # forecast shim rows above.
-        self.check_rows([
-            (f"{module}/claimed.rs", "use crate::application::experiment::Probe;\n")
-            for module in ("task", "job")
-        ], rejected=True)
-        self.check_rows([
-            (f"{module}/claimed.rs", "use crate::application::{experiment::Probe};\n")
-            for module in ("task", "job")
-        ], rejected=True)
+        # Experiment reads tasks, their crew source and the claimed leaf.
+        # Task and job can reach experiment through their ports.
         self.check_rows([
             row for module in ("task", "job") for row in (
-                (f"{module}/claimed.rs", "use super::super::experiment::Probe;\n"),
+                (f"{module}/claimed.rs",
+                 "fn claim(rt: &OrbitRuntime) { crate::app::experiment::pool(rt); }\n"),
+                (f"{module}/claimed.rs", "use crate::app::{experiment::Probe};\n"),
+                (f"{module}/claimed.rs", "use super::super::super::app::experiment::Probe;\n"),
                 (f"{module}/crew_pools/claims.rs",
-                 "use super::super::super::{experiment::Probe};\n"),
+                 "use super::super::super::super::app::{experiment::Probe};\n"),
             )
         ], rejected=True)
         self.check_files({
-            **method,
-            "task/experiment_port.rs":
-                "pub(in crate::application) trait TaskExperimentPort {\n"
+            "application/task/experiment_port.rs":
+                "pub(crate) trait TaskExperimentPort {\n"
                 "    fn task_has_experiment_crew_pool(&self);\n}\n",
-            "job/experiment_port.rs":
-                "pub(in crate::application) trait JobExperimentPort {\n"
+            "application/job/experiment_port.rs":
+                "pub(crate) trait JobExperimentPort {\n"
                 "    fn job_experiment_crew_pool(&self);\n}\n",
-            "experiment/task_port.rs":
-                "impl TaskExperimentPort for OrbitRuntime {\n"
+            "app/experiment/task_port.rs":
+                "impl TaskExperimentPort for TaskPort<'_> {\n"
                 "    fn task_has_experiment_crew_pool(&self) {\n"
-                "        self.fresh_pool_method();\n    }\n}\n",
-            "experiment/job_port.rs":
-                "impl JobExperimentPort for OrbitRuntime {\n"
+                "        super::run_policy::experiment_crew_pool(self.0);\n    }\n}\n",
+            "app/experiment/job_port.rs":
+                "impl JobExperimentPort for JobPort<'_> {\n"
                 "    fn job_experiment_crew_pool(&self) {\n"
-                "        self.fresh_pool_method();\n    }\n}\n",
-            "task/provider_limit/gate.rs":
+                "        super::run_policy::experiment_crew_pool(self.0);\n    }\n}\n",
+            "application/task/provider_limit/gate.rs":
                 "use crate::application::task::TaskExperimentPort;\n"
                 "impl OrbitRuntime {\n    fn gate(&self) {\n"
-                "        self.task_has_experiment_crew_pool();\n    }\n}\n",
-            "job/crew_pools/admission.rs":
+                "        crate::app::port::TaskExperiment(self).task_has_experiment_crew_pool();\n"
+                "    }\n}\n",
+            "application/job/crew_pools/admission.rs":
                 "use crate::application::job::JobExperimentPort;\n"
                 "impl OrbitRuntime {\n    fn admit(&self) {\n"
-                "        self.job_experiment_crew_pool();\n    }\n}\n",
-            "experiment/assignment.rs":
+                "        crate::app::port::JobExperiment(self).job_experiment_crew_pool();\n"
+                "    }\n}\n",
+            "app/experiment/assignment.rs":
                 "use crate::application::task::TaskRecords;\n",
-        }, rejected=False)
+        }, rejected=False, base=self.app.parent)
 
     def test_run_cannot_reach_pipeline(self):
         # [ORB-24781] `job::run` sat on top of `job::pipeline` for its audit
@@ -1243,29 +1189,18 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=False)
 
     def test_agents_cannot_reach_experiment(self):
-        # One batch per detector, as in the forecast shim rows above.
         core_src = self.root / "crates/orbit-core/src"
         self.check_rows([
-            ("app/agent/facts/scan.rs", "use crate::application::experiment::Probe;\n"),
-        ], rejected=True, base=core_src)
-        self.check_rows([
-            ("app/agent/facts/scan.rs", "use crate::application::{experiment::Probe};\n"),
-        ], rejected=True, base=core_src)
-        self.check_rows([
+            ("app/agent/facts/scan.rs", "use crate::app::experiment::Probe;\n"),
+            ("app/agent/facts/scan.rs", "use crate::app::{experiment::Probe};\n"),
+            ("app/agent/facts/scan.rs", "use super::super::super::experiment::Probe;\n"),
+            ("app/agent/facts/scan.rs", "use super::super::super::{experiment::Probe};\n"),
+            ("app/agent/mod.rs", "use super::experiment::Probe;\n"),
             ("app/agent/facts/scan.rs",
-             "use super::super::super::super::application::experiment::Probe;\n"),
-            ("app/agent/facts/scan.rs",
-             "use super::super::super::super::application::{experiment::Probe};\n"),
-            ("app/agent/mod.rs", "use super::super::application::experiment::Probe;\n"),
+             "fn scan(rt: &OrbitRuntime) { crate::app::experiment::readout(rt); }\n"),
         ], rejected=True, base=core_src)
         self.check_files({
-            "application/experiment/readout.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn experiment_probe(&self) {}\n}\n",
-            "app/agent/facts/scan.rs":
-                "fn scan(runtime: &OrbitRuntime) { runtime.experiment_probe(); }\n",
-        }, rejected=True, base=core_src)
-        self.check_files({
-            "application/experiment/readout.rs": "use crate::app::agent::Probe;\n",
+            "app/experiment/readout.rs": "use crate::app::agent::Probe;\n",
             "app/codebase/diff_stat.rs":
                 "pub(crate) fn landed_task_lines_changed(rt: &OrbitRuntime) {}\n",
             "app/agent/facts/scan.rs":
@@ -1485,9 +1420,9 @@ class RelativeImportTests(unittest.TestCase):
         ("application/job/worker.rs", 2, "review"),
         ("application/automation/probe.rs", 2, "auto_tasks"),
         ("application/automation/probe.rs", 2, "review"),
-        ("application/distributed/probe.rs", 2, "experiment"),
+        ("application/distributed/probe.rs", 3, "app::experiment"),
         ("application/distributed/probe.rs", 2, "pull_drain"),
-        ("app/agent/probe.rs", 3, "application::experiment"),
+        ("app/agent/probe.rs", 2, "experiment"),
         ("application/task/probe.rs", 3, "app::agent"),
         ("application/review/probe.rs", 3, "app::codebase"),
         ("application/review/probe.rs", 2, "landing"),
@@ -1556,7 +1491,7 @@ class RelativeImportTests(unittest.TestCase):
         # Single-file callers are scanned by exact path; one run covers them.
         exact = {
             f"{dependency_guard_fixture.CORE_APPLICATION}/tag_instructions.rs":
-                self.inline_chain(2, "experiment"),
+                self.inline_chain(3, "app::experiment"),
             "crates/orbit-engine/src/sandbox_spawn.rs": self.inline_chain(2, "activity_job"),
             "crates/orbit-config/src/alias.rs": self.inline_chain(2, "layering"),
             "crates/orbit-config/src/seeding.rs": self.inline_chain(2, "store"),
@@ -1589,7 +1524,7 @@ class RelativeImportTests(unittest.TestCase):
         ], rejected=False)
         self.check_files({
             f"{dependency_guard_fixture.CORE_APPLICATION}/tag_instructions.rs":
-                self.inline_chain(1, "experiment"),
+                self.inline_chain(2, "app::experiment"),
             "crates/orbit-engine/src/sandbox_spawn.rs": self.inline_chain(1, "activity_job"),
             "crates/orbit-config/src/alias.rs": self.inline_chain(1, "layering"),
             "crates/orbit-config/src/seeding.rs": self.inline_chain(1, "store"),

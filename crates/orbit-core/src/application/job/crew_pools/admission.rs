@@ -182,12 +182,14 @@ impl OrbitRuntime {
                     if let Some(capture) = parent.get("experiment_capture") {
                         input["experiment_capture"] = capture.clone();
                     } else {
-                        snapshot.install_job_experiment_capture(input)?;
+                        crate::app::port::JobExperiment(&snapshot)
+                            .install_job_experiment_capture(input)?;
                     }
-                    snapshot.install_job_experiment_memory(input)?;
+                    crate::app::port::JobExperiment(&snapshot)
+                        .install_job_experiment_memory(input)?;
                     return Ok(None);
                 }
-                snapshot.install_job_experiment_capture(input)?;
+                crate::app::port::JobExperiment(&snapshot).install_job_experiment_capture(input)?;
                 snapshot.capture_auto_task_selection(input, &task_id, random)
             }
             // A top-level submission — a drain, a ship wrapper, or an ordinary
@@ -196,7 +198,7 @@ impl OrbitRuntime {
             // multi-task or discovery run leaves each leaf to draw at its own
             // admission, so siblings stay independent.
             None => {
-                snapshot.install_job_experiment_capture(input)?;
+                crate::app::port::JobExperiment(&snapshot).install_job_experiment_capture(input)?;
                 input[POOLS_KEY] = json!(snapshot.capture_auto_crew_pools(input)?);
                 let Some(task_id) = auto_task_id(input).map(ToOwned::to_owned) else {
                     return Ok(None);
@@ -296,7 +298,7 @@ impl OrbitRuntime {
         {
             None
         } else {
-            self.job_experiment_crew_pool(task_id)?
+            crate::app::port::JobExperiment(self).job_experiment_crew_pool(task_id)?
         };
         let allowlist = self.crew_allowlist_from_input(input)?;
         let explicit = input
@@ -476,7 +478,7 @@ impl OrbitRuntime {
         }
         input["crew"] = json!(selected.crew.name);
         // Crew memory follows the crew just drawn [crew memory §5.2].
-        self.install_job_experiment_memory(input)?;
+        crate::app::port::JobExperiment(self).install_job_experiment_memory(input)?;
         #[cfg(feature = "test-support")]
         super::selection_checkpoint::notify_crew_selection_checkpoint();
         Ok(AdmissionTaskWrites {

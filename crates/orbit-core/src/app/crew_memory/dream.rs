@@ -11,6 +11,7 @@
 //! ids, which is what a dreaming run's write and proposals may cite: the
 //! artifact is the run's to read, the event is Orbit's record of it.
 
+use crate::app::experiment;
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Datelike, SecondsFormat, Utc};
@@ -74,7 +75,7 @@ pub(super) struct RenderedPack {
 pub(crate) fn crew_memory_dream(rt: &OrbitRuntime) -> Result<Value, OrbitError> {
     let now = Utc::now();
     let week = iso_week(now);
-    let experiments = rt.running_memory_experiments()?;
+    let experiments = experiment::running_memory_experiments(rt)?;
     if experiments.is_empty() {
         return Ok(json!({
             "week": week,

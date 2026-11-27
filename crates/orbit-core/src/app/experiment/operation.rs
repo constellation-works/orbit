@@ -1,15 +1,12 @@
-//! The experiment flows: each calls the runtime method its tool handler
-//! called before.
+//! Dispatch experiment verbs to their flows.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::experiment::ExperimentVerb;
 use orbit_common::governance::operation::OperationInput;
 use serde_json::{Value, json};
 
+use super::{ExperimentActor, ExperimentChange, ExperimentDefinitionInput, ExperimentView};
 use crate::OrbitRuntime;
-use crate::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput, ExperimentView,
-};
 
 /// Run one experiment verb for the caller the tool entry resolved. The entry
 /// checked `input` against the verb's spec.
@@ -30,20 +27,28 @@ pub(super) fn dispatch(
         })
     };
     let change = |change: ExperimentChange| -> Result<Value, OrbitError> {
-        view_json(runtime.change_experiment(&input.required_string("id")?, change, by()?)?)
+        view_json(super::change_experiment(
+            runtime,
+            &input.required_string("id")?,
+            change,
+            by()?,
+        )?)
     };
     match verb {
-        ExperimentVerb::Create => view_json(runtime.create_experiment(
+        ExperimentVerb::Create => view_json(super::create_experiment(
+            runtime,
             &input.required_string("name")?,
             definition_input(input, None)?,
             by()?,
         )?),
-        ExperimentVerb::Update => view_json(runtime.update_experiment(
+        ExperimentVerb::Update => view_json(super::update_experiment(
+            runtime,
             &input.required_string("id")?,
             definition_input(input, input.optional_string("name")?)?,
             by()?,
         )?),
-        ExperimentVerb::Clone => view_json(runtime.clone_experiment(
+        ExperimentVerb::Clone => view_json(super::clone_experiment(
+            runtime,
             &input.required_string("id")?,
             &input.required_string("name")?,
             by()?,
@@ -55,25 +60,33 @@ pub(super) fn dispatch(
             weights: input.as_value().get("weights").cloned(),
             retire: input.optional_string_list("retire")?.unwrap_or_default(),
         }),
-        ExperimentVerb::Assign => Ok(json!({"experiments": runtime.force_experiment_assignment(
+        ExperimentVerb::Assign => Ok(
+            json!({"experiments": super::force_experiment_assignment(runtime,
             &input.required_string("id")?,
             &input.required_string("task_id")?,
             &input.required_string("arm")?,
-        )?})),
+        )?}),
+        ),
         ExperimentVerb::Conclude => change(ExperimentChange::Conclude {
             arm: input.optional_string("arm")?,
         }),
         ExperimentVerb::Abandon => change(ExperimentChange::Abandon),
-        ExperimentVerb::Delete => runtime.delete_experiment(&input.required_string("id")?, by()?),
-        ExperimentVerb::Show => view_json(runtime.experiment_view(&input.required_string("id")?)?),
-        ExperimentVerb::Readout => serde_json::to_value(runtime.experiment_readout(
+        ExperimentVerb::Delete => {
+            super::delete_experiment(runtime, &input.required_string("id")?, by()?)
+        }
+        ExperimentVerb::Show => view_json(super::experiment_view(
+            runtime,
+            &input.required_string("id")?,
+        )?),
+        ExperimentVerb::Readout => serde_json::to_value(super::experiment_readout(
+            runtime,
             &input.required_string("id")?,
             input.optional_string("metric")?.as_deref(),
         )?)
         .map_err(|error| OrbitError::Execution(format!("serialize experiment readout: {error}"))),
         ExperimentVerb::List => {
             let experiments =
-                runtime.experiment_views(input.optional_string("status")?.as_deref())?;
+                super::experiment_views(runtime, input.optional_string("status")?.as_deref())?;
             Ok(json!({
                 "count": experiments.len(),
                 "experiments": experiments,

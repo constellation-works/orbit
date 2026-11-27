@@ -7,8 +7,8 @@
 //! ran grok under a codex capacity hold while still naming sol, and the
 //! explicitly crewed ORB-19386 ran luna in the control arm.
 
-use orbit_core::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+use orbit_core::app::experiment::{
+    self, ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::job::{JobRunCancelOutcome, JobRunListParams};
 use orbit_core::application::task::TaskUpdateParams;
@@ -65,28 +65,26 @@ fn started_crew_experiment(runtime: &OrbitRuntime) -> String {
         actor: "admitted-crew-test".into(),
         reason: None,
     };
-    let experiment = runtime
-        .create_experiment(
-            "cheap",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true, "weight": 1 },
-                    {
-                        "name": "cheap-pool",
-                        "weight": 1,
-                        "overlay": { "crew": { "pool": [{ "crew": "luna", "weight": 1 }] } }
-                    }
-                ])),
-                primary_metric: Some("total_tokens".into()),
-                mode: Some("live".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
-        .unwrap();
+    let experiment = experiment::create_experiment(
+        runtime,
+        "cheap",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true, "weight": 1 },
+                {
+                    "name": "cheap-pool",
+                    "weight": 1,
+                    "overlay": { "crew": { "pool": [{ "crew": "luna", "weight": 1 }] } }
+                }
+            ])),
+            primary_metric: Some("total_tokens".into()),
+            mode: Some("live".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    experiment::change_experiment(runtime, &experiment.id, ExperimentChange::Start, actor).unwrap();
     experiment.id
 }
 
@@ -155,7 +153,9 @@ fn enroll_both_arms_tagged(fx: &Fixture, job: &std::path::Path, tags: &[&str]) -
     for _ in 0..40 {
         let task = fx.tagged_task(tags, None).id;
         submit(fx, job, json!({ "task_id": task }));
-        let arm = fx.runtime.task_experiments(&task).unwrap()[0].arm.clone();
+        let arm = experiment::task_experiments(&fx.runtime, &task).unwrap()[0]
+            .arm
+            .clone();
         match arm.as_deref() {
             Some("cheap-pool") if treated.is_none() => treated = Some(task),
             Some("control") if control.is_none() => control = Some(task),
@@ -210,15 +210,15 @@ fn readout_with_config(
     fx: &Fixture,
     config: &str,
     experiment: &str,
-) -> orbit_core::application::experiment::ExperimentReadout {
+) -> orbit_core::app::experiment::ExperimentReadout {
     std::fs::write(fx.repo.join(".orbit/config.toml"), config).unwrap();
     let global = fx.repo.parent().unwrap().join("global");
     let runtime = OrbitRuntime::from_roots(&global, &fx.repo.join(".orbit")).unwrap();
-    runtime.experiment_readout(experiment, None).unwrap()
+    experiment::experiment_readout(&runtime, experiment, None).unwrap()
 }
 
 fn mismatches_for(
-    readout: &orbit_core::application::experiment::ExperimentReadout,
+    readout: &orbit_core::app::experiment::ExperimentReadout,
     task: &str,
 ) -> Vec<String> {
     readout
@@ -266,7 +266,9 @@ fn an_experiment_arm_crew_is_written_back_to_the_task_and_read_by_the_readout() 
         let task = fx.tagged_task(&[], None).id;
         assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("sol"));
         let input = submit(&fx, &job, json!({ "task_id": task }));
-        let arm = fx.runtime.task_experiments(&task).unwrap()[0].arm.clone();
+        let arm = experiment::task_experiments(&fx.runtime, &task).unwrap()[0]
+            .arm
+            .clone();
         match arm.as_deref() {
             Some("cheap-pool") if treated.is_none() => {
                 assert_eq!(input["crew_selection"]["crew"], "luna", "{input}");
@@ -305,7 +307,7 @@ fn an_experiment_arm_crew_is_written_back_to_the_task_and_read_by_the_readout() 
         )
     );
 
-    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    let readout = experiment::experiment_readout(&fx.runtime, &experiment, None).unwrap();
     let cheap = readout
         .arms
         .iter()
@@ -402,18 +404,16 @@ fn an_explicit_crew_is_excluded_from_crew_experiments_until_forced() {
 
     let input = submit(&fx, &job, json!({ "task_id": task }));
     assert_eq!(input["crew_selection"]["crew"], "sol", "{input}");
-    let rows = fx.runtime.task_experiments(&task).unwrap();
+    let rows = experiment::task_experiments(&fx.runtime, &task).unwrap();
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0].arm, None, "{rows:?}");
     assert_eq!(rows[0].exclusion_reason.as_deref(), Some("explicit_crew"));
-    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    let readout = experiment::experiment_readout(&fx.runtime, &experiment, None).unwrap();
     assert_eq!(readout.enrollment.explicit_crew_excluded, 1);
     assert_eq!(readout.enrollment.surface_conflict_excluded, 0);
     assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("sol"));
 
-    fx.runtime
-        .force_experiment_assignment(&experiment, &task, "cheap-pool")
-        .unwrap();
+    experiment::force_experiment_assignment(&fx.runtime, &experiment, &task, "cheap-pool").unwrap();
     let input = submit(&fx, &job, json!({ "task_id": task }));
     assert_eq!(input["crew_selection"]["crew"], "luna", "{input}");
     assert_eq!(
@@ -596,7 +596,7 @@ fn a_complexity_rerate_after_admission_does_not_invent_a_control_mismatch() {
     // readout's actual implementation identity.
     assert_eq!(crew_of(&fx, &control).0.as_deref(), Some("sol"));
 
-    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    let readout = experiment::experiment_readout(&fx.runtime, &experiment, None).unwrap();
     assert!(
         mismatches_for(&readout, &control).is_empty(),
         "{:?}",
@@ -625,7 +625,7 @@ fn a_run_level_pool_override_is_checked_against_its_admission_pool() {
     assert_eq!(input["crew_selection"]["crew"], "luna", "{input}");
     assert_eq!(crew_of(&fx, &control).0.as_deref(), Some("luna"));
 
-    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    let readout = experiment::experiment_readout(&fx.runtime, &experiment, None).unwrap();
     assert!(
         mismatches_for(&readout, &control).is_empty(),
         "{:?}",
@@ -666,7 +666,7 @@ enabled = true
         enroll_both_arms_tagged(&fx, &job, &["crew-purpose:baseline_red_repair"]);
     assert_eq!(crew_of(&fx, &control).0.as_deref(), Some("luna"));
 
-    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    let readout = experiment::experiment_readout(&fx.runtime, &experiment, None).unwrap();
     assert!(
         mismatches_for(&readout, &control).is_empty(),
         "{:?}",
@@ -706,7 +706,7 @@ fn a_control_crew_without_admission_evidence_is_unavailable_not_a_mismatch() {
         }
     }
 
-    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    let readout = experiment::experiment_readout(&fx.runtime, &experiment, None).unwrap();
     assert!(
         mismatches_for(&readout, &control).is_empty(),
         "{:?}",
@@ -1011,7 +1011,7 @@ fn a_rerate_onto_a_superseded_delivery_crew_is_unavailable_not_a_mismatch() {
     seed_historical_scope_redraw(&fx, &target);
     assert_eq!(crew_of(&fx, &target).0.as_deref(), Some("luna"));
 
-    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    let readout = experiment::experiment_readout(&fx.runtime, &experiment, None).unwrap();
     assert!(
         mismatches_for(&readout, &target).is_empty(),
         "{:?}",

@@ -29,7 +29,8 @@ impl OrbitRuntime {
         // Preserve unrelated routing, including human work and standing
         // purpose/type assignments. Only historical crew enrollment needs
         // the fresh-authority projection.
-        let capture = self.job_existing_experiment_capture(&task.id)?;
+        let capture =
+            crate::app::port::JobExperiment(self).job_existing_experiment_capture(&task.id)?;
         if self.is_human_crew(task.crew.as_deref())
             || !capture.assignments.iter().any(|entry| {
                 serde_json::from_str::<Value>(&entry.overlay_json)

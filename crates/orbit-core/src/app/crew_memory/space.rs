@@ -1,5 +1,6 @@
 //! Crew memory's reads and the one write path every writer shares.
 
+use crate::app::experiment;
 use std::collections::BTreeSet;
 
 use chrono::{SubsecRound, Utc};
@@ -102,7 +103,7 @@ pub(super) fn ensure_crew_memory_writes_enabled(
     verb: &str,
     key: &MemoryKey,
 ) -> Result<(), OrbitError> {
-    if rt.crew_memory_experiment_running() {
+    if experiment::crew_memory_experiment_running(rt) {
         return Ok(());
     }
     Err(OrbitError::PolicyDenied(format!(
@@ -205,7 +206,7 @@ pub(super) fn crew_memory_show(
 ) -> Result<Value, OrbitError> {
     let store = rt.sqlite_store()?;
     let workspace_id = rt.workspace_id()?;
-    let enabled = rt.crew_memory_experiment_running();
+    let enabled = experiment::crew_memory_experiment_running(rt);
     let Some(raw) = key else {
         if revision.is_some() {
             return Err(OrbitError::InvalidInput(
@@ -245,7 +246,7 @@ pub(super) fn crew_memory_space_rows(rt: &OrbitRuntime) -> Result<Vec<Value>, Or
     let store = rt.sqlite_store()?;
     let workspace_id = rt.workspace_id()?;
     let current = store.read()?.crew_memory().current(&workspace_id)?;
-    let open = if rt.crew_memory_experiment_running() {
+    let open = if experiment::crew_memory_experiment_running(rt) {
         unexpired_crew_memory_proposals(rt)?
     } else {
         Vec::new()

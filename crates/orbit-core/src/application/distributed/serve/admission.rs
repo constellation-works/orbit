@@ -272,7 +272,8 @@ impl OrbitRuntime {
             effective_task: Some(&|task: &Task| self.fresh_claim_crew_task(task, request)),
             guidance_capture: Some(&|task: &Task| {
                 Ok(AdmissionTaskGuidance {
-                    experiments: self.capture_pull_experiments(task, &request.ship)?,
+                    experiments: crate::app::port::DistributedExperiment(self)
+                        .capture_pull_experiments(task, &request.ship)?,
                     artifacts: Vec::new(),
                 })
             }),

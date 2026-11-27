@@ -1,5 +1,6 @@
 //! Fresh admission authority is separate from immutable enrollment.
 use super::*;
+use orbit_core::app::experiment;
 use orbit_types::workflow::JobRunState;
 
 struct Fixture {
@@ -35,17 +36,29 @@ enabled = true
         .unwrap();
         let job = capture_job(root.path());
         let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
-        let experiment = runtime.create_experiment("admission-authority", ExperimentDefinitionInput {
-            mode: Some("live".into()),
-            arms: Some(json!([
-                {"name":"control", "control":true, "weight":1, "overlay":{"crew":{"pool":[{"crew":"treated","weight":1}]}}},
-                {"name":"treatment", "weight":1, "overlay":{"crew":{"pool":[{"crew":"treated","weight":1}]}}}
-            ])),
-            primary_metric: Some("total_tokens".into()),
-            ..Default::default()
-        }, actor()).unwrap().id;
-        runtime
-            .change_experiment(&experiment, ExperimentChange::Start, actor())
+        let experiment = experiment::create_experiment(
+            &runtime,
+            "admission-authority",
+            ExperimentDefinitionInput {
+                mode: Some("live".into()),
+                arms: Some(json!([
+                    {
+                        "name":"control", "control":true, "weight":1,
+                        "overlay":{"crew":{"pool":[{"crew":"treated","weight":1}]}}
+                    },
+                    {
+                        "name":"treatment", "weight":1,
+                        "overlay":{"crew":{"pool":[{"crew":"treated","weight":1}]}}
+                    }
+                ])),
+                primary_metric: Some("total_tokens".into()),
+                ..Default::default()
+            },
+            actor(),
+        )
+        .unwrap()
+        .id;
+        experiment::change_experiment(&runtime, &experiment, ExperimentChange::Start, actor())
             .unwrap();
         let task = runtime
             .add_task(TaskAddParams {
@@ -121,13 +134,12 @@ fn ended_treatments_do_not_authorize_fresh_admission() {
         let first = f.admit(None);
         let frozen = first.input.as_ref().unwrap();
         assert_eq!(frozen["crew_selection"]["crew"], "treated");
-        let rows = f.runtime.task_experiments(&f.task).unwrap();
-        f.runtime
-            .change_experiment(&f.experiment, end, actor())
-            .unwrap();
-        let events = serde_json::to_value(f.runtime.experiment_view(&f.experiment).unwrap())
-            .unwrap()["events"]
-            .clone();
+        let rows = experiment::task_experiments(&f.runtime, &f.task).unwrap();
+        experiment::change_experiment(&f.runtime, &f.experiment, end, actor()).unwrap();
+        let events =
+            serde_json::to_value(experiment::experiment_view(&f.runtime, &f.experiment).unwrap())
+                .unwrap()["events"]
+                .clone();
         let next = f.admit(None);
         let input = next.input.unwrap();
         assert_eq!(
@@ -136,9 +148,13 @@ fn ended_treatments_do_not_authorize_fresh_admission() {
         );
         assert_eq!(input["experiment_capture"]["assignments"][0]["live"], false);
         assert!(input["crew_selection"]["experiment_overlay_digest"].is_null());
-        assert_eq!(f.runtime.task_experiments(&f.task).unwrap(), rows);
         assert_eq!(
-            serde_json::to_value(f.runtime.experiment_view(&f.experiment).unwrap()).unwrap()["events"],
+            experiment::task_experiments(&f.runtime, &f.task).unwrap(),
+            rows
+        );
+        assert_eq!(
+            serde_json::to_value(experiment::experiment_view(&f.runtime, &f.experiment).unwrap())
+                .unwrap()["events"],
             events
         );
         assert_eq!(
@@ -202,18 +218,20 @@ fn later_operator_crew_wins_over_running_enrollment_and_force() {
     }
     let f = Fixture::new();
     f.admit(None);
-    let rows = f.runtime.task_experiments(&f.task).unwrap();
+    let rows = experiment::task_experiments(&f.runtime, &f.task).unwrap();
     f.pin();
     let fresh = f.admit(None).input.unwrap();
     assert_eq!(fresh["crew_selection"]["crew"], "normal");
     assert_eq!(fresh["crew_selection"]["source"], "task.crew");
     assert_eq!(fresh["experiment_capture"]["assignments"][0]["live"], false);
-    assert_eq!(f.runtime.task_experiments(&f.task).unwrap(), rows);
+    assert_eq!(
+        experiment::task_experiments(&f.runtime, &f.task).unwrap(),
+        rows
+    );
     assert!(fresh["crew_selection"]["experiment_suppressions"].is_array());
     let f = Fixture::new();
     f.pin();
-    f.runtime
-        .force_experiment_assignment(&f.experiment, &f.task, "treatment")
+    experiment::force_experiment_assignment(&f.runtime, &f.experiment, &f.task, "treatment")
         .unwrap();
     assert_eq!(
         f.admit(None).input.unwrap()["crew_selection"]["crew"],
@@ -227,7 +245,7 @@ fn later_operator_crew_wins_over_running_enrollment_and_force() {
         f.admit(None).input.unwrap()["crew_selection"]["crew"],
         "normal"
     );
-    assert!(f.runtime.task_experiments(&f.task).unwrap()[0].forced);
+    assert!(experiment::task_experiments(&f.runtime, &f.task).unwrap()[0].forced);
 }
 
 #[test]
@@ -243,7 +261,7 @@ fn explicit_same_crew_does_not_count_as_experiment_treatment() {
         .sqlite_store()
         .unwrap()
         .write(|tx| {
-            orbit_core::application::experiment::assign_experiments(
+            orbit_core::app::experiment::assign_experiments(
                 tx,
                 &f.runtime.workspace_id().unwrap(),
                 &f.task,
@@ -274,7 +292,7 @@ fn explicit_same_crew_does_not_count_as_experiment_treatment() {
         })
         .unwrap();
     f.admit(None);
-    let before = f.runtime.experiment_readout(&f.experiment, None).unwrap();
+    let before = experiment::experiment_readout(&f.runtime, &f.experiment, None).unwrap();
     let treatment = before
         .arms
         .iter()
@@ -284,7 +302,7 @@ fn explicit_same_crew_does_not_count_as_experiment_treatment() {
     let explicit = f.admit(Some("treated")).input.unwrap();
     assert_eq!(explicit["crew_selection"]["source"], "explicit");
     assert!(explicit["crew_selection"]["experiment_overlay_digest"].is_null());
-    let after = f.runtime.experiment_readout(&f.experiment, None).unwrap();
+    let after = experiment::experiment_readout(&f.runtime, &f.experiment, None).unwrap();
     let treatment = after
         .arms
         .iter()

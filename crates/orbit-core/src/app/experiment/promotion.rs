@@ -15,68 +15,66 @@ use crate::application::task::ProposedTaskInput;
 /// `bounded_text` refuses a description longer than this.
 const DESCRIPTION_LIMIT: usize = 32_768;
 
-impl OrbitRuntime {
-    /// File the promotion task for `arm_name`, or reuse the one already filed
-    /// for this same conclusion. The payload omits the readout's `as_of`, so a
-    /// retry of the same decision finds the same task.
-    pub(super) fn file_experiment_promotion(
-        &self,
-        record: &ExperimentRecord,
-        arm_name: &str,
-        readout: &ExperimentReadout,
-    ) -> Result<String, OrbitError> {
-        let experiment = &record.experiment;
-        let arm = record
-            .arms
-            .iter()
-            .find(|known| known.name == arm_name)
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!(
-                    "experiment `{}` has no arm `{arm_name}`",
-                    experiment.name
-                ))
-            })?;
-        let overlay_value = serde_json::from_str(&arm.overlay_json).map_err(|error| {
-            OrbitError::Execution(format!(
-                "experiment `{}` arm `{arm_name}` overlay is not JSON: {error}",
+/// File the promotion task for `arm_name`, or reuse the one already filed
+/// for this same conclusion. The payload omits the readout's `as_of`, so a
+/// retry of the same decision finds the same task.
+pub(super) fn file_experiment_promotion(
+    rt: &OrbitRuntime,
+    record: &ExperimentRecord,
+    arm_name: &str,
+    readout: &ExperimentReadout,
+) -> Result<String, OrbitError> {
+    let experiment = &record.experiment;
+    let arm = record
+        .arms
+        .iter()
+        .find(|known| known.name == arm_name)
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "experiment `{}` has no arm `{arm_name}`",
                 experiment.name
             ))
         })?;
-        let overlay = ExperimentOverlay::parse(arm_name, overlay_value)?;
-        let description = promotion_description(
-            &experiment.id,
-            &experiment.name,
-            arm_name,
-            readout,
-            &overlay,
-        )?;
-        if description.len() > DESCRIPTION_LIMIT {
-            return Err(OrbitError::InvalidInput(format!(
-                "experiment `{}` arm `{arm_name}` overlay is too large to describe in a promotion task ({} bytes; the limit is {DESCRIPTION_LIMIT})",
-                experiment.name,
-                description.len()
-            )));
+    let overlay_value = serde_json::from_str(&arm.overlay_json).map_err(|error| {
+        OrbitError::Execution(format!(
+            "experiment `{}` arm `{arm_name}` overlay is not JSON: {error}",
+            experiment.name
+        ))
+    })?;
+    let overlay = ExperimentOverlay::parse(arm_name, overlay_value)?;
+    let description = promotion_description(
+        &experiment.id,
+        &experiment.name,
+        arm_name,
+        readout,
+        &overlay,
+    )?;
+    if description.len() > DESCRIPTION_LIMIT {
+        return Err(OrbitError::InvalidInput(format!(
+            "experiment `{}` arm `{arm_name}` overlay is too large to describe in a promotion task ({} bytes; the limit is {DESCRIPTION_LIMIT})",
+            experiment.name,
+            description.len()
+        )));
+    }
+    let workspace_id = rt.workspace_id()?;
+    let input = ProposedTaskInput {
+        request_id: format!("exp-conclude-{}", experiment.id),
+        binding: sha256_hex(workspace_id.as_bytes()),
+        title: format!("Promote experiment {} arm {arm_name}", experiment.name),
+        description,
+        complexity: TaskComplexity::Medium,
+        acceptance_criteria: promotion_criteria(&experiment.name, arm_name, &overlay),
+        priority: TaskPriority::Medium,
+        task_type: Some(TaskType::Feature),
+    };
+    match rt.create_proposed_task(input) {
+        Err(OrbitError::InvalidInput(message)) if message == "action key input changed" => {
+            Err(OrbitError::InvalidInput(format!(
+                "experiment `{}` already has a promotion task for a different conclusion. Conclude again with the same arm and the same readout verdict, or remove that proposed task before choosing another",
+                experiment.name
+            )))
         }
-        let workspace_id = self.workspace_id()?;
-        let input = ProposedTaskInput {
-            request_id: format!("exp-conclude-{}", experiment.id),
-            binding: sha256_hex(workspace_id.as_bytes()),
-            title: format!("Promote experiment {} arm {arm_name}", experiment.name),
-            description,
-            complexity: TaskComplexity::Medium,
-            acceptance_criteria: promotion_criteria(&experiment.name, arm_name, &overlay),
-            priority: TaskPriority::Medium,
-            task_type: Some(TaskType::Feature),
-        };
-        match self.create_proposed_task(input) {
-            Err(OrbitError::InvalidInput(message)) if message == "action key input changed" => {
-                Err(OrbitError::InvalidInput(format!(
-                    "experiment `{}` already has a promotion task for a different conclusion. Conclude again with the same arm and the same readout verdict, or remove that proposed task before choosing another",
-                    experiment.name
-                )))
-            }
-            other => other,
-        }
+        other => other,
     }
 }
 

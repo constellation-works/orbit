@@ -1,4 +1,6 @@
 //! Generic coordination writes translated into owner claim transactions.
+
+use crate::app::experiment;
 use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::automation::AutomationVerb;
@@ -356,7 +358,7 @@ fn worker_read(
         // leaf already holds the captured block and must not receive
         // another copy of the notes, or this workspace's memory tables.
         "crew_memory_policy" => Ok(serde_json::json!({
-            "enabled": runtime.crew_memory_experiment_running(),
+            "enabled": experiment::crew_memory_experiment_running(runtime),
         })),
         "status_index" => serde_json::to_value(runtime.task_status_index()?),
         "completion_by_complexity" => serde_json::to_value(
