@@ -65,7 +65,10 @@ pub struct DoctorRepairFlags {
     #[arg(long)]
     pub fix_stale_artifacts: bool,
 
-    /// Delete empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent (including their task bundles). Unowned or unreachable populated partitions are never touched. Requires --confirm.
+    /// Delete empty unclaimed task-store partitions, and populated partitions whose bound
+    /// checkout is absent beneath a populated, readable immediate parent directory (including
+    /// their task bundles). Unowned or unreachable populated partitions (including empty, missing,
+    /// or unreadable checkout parents) are never touched. Requires --confirm.
     #[arg(long)]
     pub fix_orphan_task_stores: bool,
 

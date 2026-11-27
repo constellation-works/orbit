@@ -36,7 +36,7 @@ Options:
           Retire deprecated skills, jobs, activities, auto-tasks, and routines that Orbit itself wrote. Locally modified ones are preserved, not deleted
 
       --fix-orphan-task-stores
-          Delete empty unclaimed task-store partitions, and populated partitions whose bound checkout is confirmed absent (including their task bundles). Unowned or unreachable populated partitions are never touched. Requires --confirm
+          Delete empty unclaimed task-store partitions, and populated partitions whose bound checkout is absent beneath a populated, readable immediate parent directory (including their task bundles). Unowned or unreachable populated partitions (including empty, missing, or unreadable checkout parents) are never touched. Requires --confirm
 
       --fix-automation-pins
           Delete this Orbit root and workspace's own state-routine attempt pins that no consumer or live run still names. Legacy shared pins, other roots' and workspaces' pins, in-use pins and unrecognized refs are kept and reported. Refuses while a routine sweep runs
