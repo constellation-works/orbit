@@ -2,8 +2,11 @@
 
 /// Full non-ok diagnostics in severity order. Long findings and repair
 /// actions wrap onto indented lines when exceeding the terminal width.
-pub(crate) fn doctor_findings(rows: &[orbit_cmd::WorkspaceDoctorResult], width: u16) -> String {
-    use orbit_cmd::WorkspaceDoctorStatus as Status;
+pub(crate) fn doctor_findings(
+    rows: &[orbit_core::app::doctor::WorkspaceDoctorResult],
+    width: u16,
+) -> String {
+    use orbit_core::app::doctor::WorkspaceDoctorStatus as Status;
     let mut findings = Vec::new();
     for status in [Status::Error, Status::Warning, Status::Skipped] {
         for row in rows.iter().filter(|row| row.status == status) {

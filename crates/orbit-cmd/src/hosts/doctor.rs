@@ -3,10 +3,10 @@
 use std::path::Path;
 
 use orbit_common::HostRegistryCode;
+use orbit_core::app::doctor::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use orbit_registry::hosts::{HostEntry, load_host_registry};
 
 use super::{HostRow, in_parallel, remote_row, replica_owners};
-use crate::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
 const CHECK: &str = "hosts";
 

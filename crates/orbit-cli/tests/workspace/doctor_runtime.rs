@@ -1,13 +1,13 @@
-//! Workspace doctor checks and repairs through `orbit_cmd`'s exported
+//! Workspace doctor checks and repairs through the doctor app's exported
 //! [`DoctorCommands`] and [`doctor_report_probes`], against a runtime opened
 //! on temporary roots.
 
 use std::fs;
 
-use orbit_cmd::{
+use orbit_core::OrbitRuntime;
+use orbit_core::app::doctor::{
     DoctorCommands, WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_report_probes,
 };
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_types::task::{TaskRelation, TaskRelationType};
 
@@ -71,7 +71,12 @@ fn task_relations_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let mut rows = doctor_report_probes()
         .find(|probe| probe.name == "task-relations")
         .expect("task-relations probe")
-        .run(runtime, &orbit_common::Env::default(), false);
+        .run(
+            runtime,
+            &orbit_common::Env::default(),
+            false,
+            orbit_cmd::doctor_host().as_ref(),
+        );
     assert_eq!(rows.len(), 1, "{rows:?}");
     rows.remove(0)
 }
@@ -297,7 +302,12 @@ fn browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit() {
     let rows = doctor_report_probes()
         .find(|probe| probe.name == "browser-kit")
         .expect("browser-kit probe")
-        .run(&runtime, &orbit_common::Env::capture(), false);
+        .run(
+            &runtime,
+            &orbit_common::Env::capture(),
+            false,
+            orbit_cmd::doctor_host().as_ref(),
+        );
     let warning = rows
         .iter()
         .find(|row| row.check_name == "browser-kit-backlog")
@@ -322,7 +332,12 @@ fn standing_drain_probe_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let mut rows = doctor_report_probes()
         .find(|probe| probe.name == "standing-drain")
         .expect("standing-drain probe")
-        .run(runtime, &orbit_common::Env::default(), false);
+        .run(
+            runtime,
+            &orbit_common::Env::default(),
+            false,
+            orbit_cmd::doctor_host().as_ref(),
+        );
     assert_eq!(rows.len(), 1, "{rows:?}");
     rows.remove(0)
 }

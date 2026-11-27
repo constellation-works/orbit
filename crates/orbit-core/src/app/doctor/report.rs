@@ -4,16 +4,17 @@
 //! The CLI and the dashboard's Doctor panel both run [`doctor_report_probes`],
 //! so the two surfaces report the same checks with the same fields. Every
 //! probe here is read-only; repairs stay separate `DoctorCommands` methods
-//! that only the CLI's `--fix-*` flags call.
+//! that only the `orbit doctor` repair flags run.
 
+use crate::OrbitRuntime;
 use orbit_common::Env;
 use orbit_config::{ConfigRoots, ResolvedConfig, canonical_crew_pool};
-use orbit_core::OrbitRuntime;
 use orbit_types::task::{HostOs, quoted_labels};
 use orbit_types::workflow::{ExecutorDef, provider_account_label};
 use serde_json::{Value, json};
 
 use super::browser_kit::browser_kit_rows;
+use super::command::Probe;
 use super::git_protection::git_protection_row;
 use super::host_workspaces::host_workspace_convergence_row;
 use super::permissions::state_directory_permissions_row;
@@ -21,60 +22,53 @@ use super::scan_workers::{forced_pool_size, spawn_scan_worker};
 use super::script_grants::script_grant_rows;
 use super::standing_drain::standing_drain_row;
 use super::worker_containment::worker_containment_row;
-use super::{DoctorProbe, WORKSPACE_PROBES, WorkspaceDoctorResult, WorkspaceDoctorStatus};
+use super::{DoctorProbe, Host, WORKSPACE_PROBES, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
 /// The checks after the workspace ones, in report order.
 const REPORT_PROBES: &[DoctorProbe] = &[
-    DoctorProbe::many("build-budget", |runtime, _, _| build_budget_rows(runtime)),
-    DoctorProbe::one("state-directory-permissions", |runtime, _, _| {
-        state_directory_permissions_row(runtime)
+    DoctorProbe::many("build-budget", |probe| build_budget_rows(probe.runtime)),
+    DoctorProbe::one("state-directory-permissions", |probe| {
+        state_directory_permissions_row(probe.runtime)
     })
     .slow(),
-    DoctorProbe::one("git-protection", |runtime, _, _| {
-        git_protection_row(runtime)
-    })
-    .slow(),
-    DoctorProbe::one("worker-containment", |runtime, _, _| {
-        worker_containment_row(runtime)
+    DoctorProbe::one("git-protection", |probe| git_protection_row(probe.runtime)).slow(),
+    DoctorProbe::one("worker-containment", |probe| {
+        worker_containment_row(probe.runtime)
     }),
-    DoctorProbe::many("script-grants", |runtime, _, _| script_grant_rows(runtime)),
-    DoctorProbe::many("provider", |runtime, env, _| {
-        routed_provider_rows(runtime, env)
+    DoctorProbe::many("script-grants", |probe| script_grant_rows(probe.runtime)),
+    DoctorProbe::many("provider", |probe| {
+        routed_provider_rows(probe.runtime, probe.env)
     }),
-    DoctorProbe::many("provider-auth", |runtime, _, _| provider_auth_rows(runtime)),
-    DoctorProbe::many("provider-limits", |runtime, _, _| {
-        provider_limit_rows(runtime)
+    DoctorProbe::many("provider-auth", |probe| provider_auth_rows(probe.runtime)),
+    DoctorProbe::many("provider-limits", |probe| {
+        provider_limit_rows(probe.runtime)
     }),
-    DoctorProbe::one("mcp-registration", |runtime, env, _| {
+    DoctorProbe::one("mcp-registration", |probe| {
         mcp_registration_row(
-            runtime,
-            orbit_common::fs::path::home_dir(env).ok().as_deref(),
-            env,
+            probe,
+            orbit_common::fs::path::home_dir(probe.env).ok().as_deref(),
         )
     }),
     // Machine-global checks: they read the operator's home, not the workspace.
-    DoctorProbe::one("clock-unit", |runtime, _, _| {
-        clock_unit_row(&runtime.global_root())
+    DoctorProbe::one("clock-unit", |probe| {
+        clock_unit_row(&probe.runtime.global_root())
     }),
-    DoctorProbe::one("hosts", |runtime, _, _| {
-        crate::hosts::doctor_hosts_row(&runtime.global_root())
+    DoctorProbe::one("hosts", |probe| {
+        probe.host.hosts_row(&probe.runtime.global_root())
     }),
-    DoctorProbe::many("browser-kit", |runtime, env, _| {
-        browser_kit_rows(runtime, env)
-    })
-    .slow(),
-    DoctorProbe::one("workspace-convergence", |runtime, _, _| {
-        host_workspace_convergence_row(runtime)
+    DoctorProbe::many("browser-kit", browser_kit_rows).slow(),
+    DoctorProbe::one("workspace-convergence", |probe| {
+        host_workspace_convergence_row(probe.runtime)
     }),
-    DoctorProbe::one("host-labels", |runtime, _, _| host_labels_row(runtime)),
-    DoctorProbe::one("standing-drain", |runtime, _, _| {
-        standing_drain_row(runtime)
-    })
-    .slow(),
-    DoctorProbe::one("plugin-enablement", |runtime, _, _| {
-        plugin_enablement_row(runtime)
+    DoctorProbe::one("host-labels", |probe| host_labels_row(probe.runtime)),
+    DoctorProbe::one("standing-drain", |probe| standing_drain_row(probe.runtime)).slow(),
+    DoctorProbe::one("plugin-enablement", |probe| {
+        plugin_enablement_row(probe.runtime)
     }),
 ];
+
+/// Most probes `run_doctor_report` runs at once.
+const MAX_PARALLEL_PROBES: usize = 8;
 
 /// A `[plugin_enablement]` table in the global (host) config: refused at
 /// load, so every owner-served call fails until it is removed. Reported
@@ -103,7 +97,6 @@ pub(super) fn plugin_enablement_row_for(global_root: &std::path::Path) -> Worksp
     let path = global_root.join("config.toml");
     match orbit_config::misplaced_global_plugin_enablement(&path) {
         Ok(Some(misplaced)) => WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name: "plugin-enablement".into(),
             status: WorkspaceDoctorStatus::Error,
             message: format!(
@@ -112,22 +105,23 @@ pub(super) fn plugin_enablement_row_for(global_root: &std::path::Path) -> Worksp
                 misplaced.host
             ),
             remediation: Some(orbit_config::global_plugin_enablement_fix(&misplaced.path)),
+            duration_ms: 0,
         },
         Ok(None) => WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name: "plugin-enablement".into(),
             status: WorkspaceDoctorStatus::Ok,
             message: "no [plugin_enablement] table in the host config".into(),
             remediation: None,
+            duration_ms: 0,
         },
         Err(error) => WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name: "plugin-enablement".into(),
             status: WorkspaceDoctorStatus::Warning,
             message: format!("cannot inspect host config '{}': {error}", path.display()),
             remediation: Some(
                 "Fix the host config file named above, then rerun `orbit doctor`.".into(),
             ),
+            duration_ms: 0,
         },
     }
 }
@@ -147,7 +141,6 @@ fn host_labels_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
         )
     };
     WorkspaceDoctorResult {
-        duration_ms: 0,
         check_name: "host-labels".into(),
         status: WorkspaceDoctorStatus::Info,
         message,
@@ -156,24 +149,25 @@ fn host_labels_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
              this host has."
                 .to_string()
         }),
+        duration_ms: 0,
     }
 }
 
 fn build_budget_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     match runtime.build_budget_capacity_warnings() {
         Ok(warnings) if warnings.is_empty() => vec![WorkspaceDoctorResult {
-            duration_ms: 0, check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Ok,
-            message: "No running drain exceeds host build slots.".into(), remediation: None,
+            check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Ok, message: "No running drain exceeds host build slots.".into(),
+            remediation: None, duration_ms: 0,
         }],
         Ok(warnings) => warnings.into_iter().map(|warning| WorkspaceDoctorResult {
-            duration_ms: 0, check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Warning,
-            message: format!("{}: {}", warning["run_id"].as_str().unwrap_or("drain"), warning["message"].as_str().unwrap_or("capacity mismatch")),
+            check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Warning, message: format!("{}: {}", warning["run_id"].as_str().unwrap_or("drain"), warning["message"].as_str().unwrap_or("capacity mismatch")),
             remediation: Some(format!("Set ORBIT_BUILD_SLOTS or edit {}; or lower orbit run concurrency.", warning["settings_file"].as_str().unwrap_or("~/.orbit/cache/build-budget/slots"))),
+            duration_ms: 0,
         }).collect(),
         Err(error) => vec![WorkspaceDoctorResult {
-            duration_ms: 0, check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Warning,
-            message: format!("Cannot inspect build-budget capacity: {error}"),
+            check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Warning, message: format!("Cannot inspect build-budget capacity: {error}"),
             remediation: Some("Check ORBIT_BUILD_SLOTS and ~/.orbit/cache/build-budget/slots, then rerun orbit doctor.".into()),
+            duration_ms: 0,
         }],
     }
 }
@@ -182,9 +176,6 @@ fn build_budget_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
 pub fn doctor_report_probes() -> impl Iterator<Item = &'static DoctorProbe> {
     WORKSPACE_PROBES.iter().chain(REPORT_PROBES)
 }
-
-/// Most probes `run_doctor_report` runs at once.
-const MAX_PARALLEL_PROBES: usize = 8;
 
 /// Run every check in [`doctor_report_probes`] and return their rows in
 /// report order. `deep` scans every database page with SQLite quick_check.
@@ -197,6 +188,7 @@ pub fn run_doctor_report(
     runtime: &OrbitRuntime,
     env: &Env,
     deep: bool,
+    host: &dyn Host,
 ) -> Vec<WorkspaceDoctorResult> {
     let probes = doctor_report_probes().collect::<Vec<_>>();
     // Report positions in dispatch order; a stable sort keeps table order
@@ -213,7 +205,7 @@ pub fn run_doctor_report(
     if workers <= 1 {
         return probes
             .iter()
-            .flat_map(|probe| probe.run(runtime, env, deep))
+            .flat_map(|probe| probe.run(runtime, env, deep, host))
             .collect();
     }
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -225,7 +217,7 @@ pub fn run_doctor_report(
             let Some(&index) = dispatch.get(turn) else {
                 return done;
             };
-            done.push((index, probes[index].run(runtime, env, deep)));
+            done.push((index, probes[index].run(runtime, env, deep, host)));
         }
     };
     let finished = std::thread::scope(|scope| {
@@ -282,13 +274,13 @@ fn routed_provider_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDocto
         Ok(config) => config,
         Err(error) => {
             return vec![WorkspaceDoctorResult {
-                duration_ms: 0,
                 check_name: "provider-routing".to_string(),
                 status: WorkspaceDoctorStatus::Error,
                 message: format!("cannot inspect effective crew routing: {error}"),
                 remediation: Some(
                     "Repair the config reported by `orbit doctor`, then rerun it.".to_string(),
                 ),
+                duration_ms: 0,
             }];
         }
     };
@@ -297,13 +289,13 @@ fn routed_provider_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDocto
         Ok(names) => names,
         Err(message) => {
             return vec![WorkspaceDoctorResult {
-                duration_ms: 0,
                 check_name: "provider-routing".to_string(),
                 status: WorkspaceDoctorStatus::Error,
                 message,
                 remediation: Some(
                     "Repair the config reported by `orbit doctor`, then rerun it.".to_string(),
                 ),
+                duration_ms: 0,
             }];
         }
     };
@@ -312,11 +304,11 @@ fn routed_provider_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDocto
         let check_name = format!("provider:{name}");
         let Some(crew) = orbit_types::identity::find_crew(&name, &config.crews) else {
             return WorkspaceDoctorResult {
-                duration_ms: 0,
                 check_name,
                 status: WorkspaceDoctorStatus::Error,
                 message: format!("routed crew '{name}' is not configured"),
                 remediation: Some(format!("Define crew '{name}' in config.toml or change workflow routing.")),
+                duration_ms: 0,
             };
         };
         let provider = &crew.assignment.provider;
@@ -324,50 +316,50 @@ fn routed_provider_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDocto
             // Unsupported here, not missing: the rule `orbit doctor providers`
             // applies, so the operator is not told to install it on this host.
             Ok(Some(def)) if unsupported_on_this_os(&def) => WorkspaceDoctorResult {
-                duration_ms: 0,
                 check_name,
                 status: WorkspaceDoctorStatus::Skipped,
                 message: format!("crew '{name}' uses provider '{provider}', which is unsupported on this OS"),
                 remediation: None,
+                duration_ms: 0,
             },
             Ok(Some(def)) => match def.command.as_deref() {
                 Some(program) => match runtime.locate_provider_launcher(program) {
                     Some(path) => WorkspaceDoctorResult {
-                        duration_ms: 0,
                         check_name,
                         status: WorkspaceDoctorStatus::Ok,
                         message: format!("crew '{name}' uses provider '{provider}'; CLI '{}' found at {} (authentication not checked)", program, path.display()),
                         remediation: None,
+                        duration_ms: 0,
                     },
                     None => WorkspaceDoctorResult {
-                        duration_ms: 0,
                         check_name,
                         status: WorkspaceDoctorStatus::Error,
                         message: format!("crew '{name}' uses provider '{provider}'; CLI '{program}' was not found"),
                         remediation: Some(format!("Install the '{program}' CLI or change crew '{name}' to an available provider.")),
+                        duration_ms: 0,
                     },
                 },
                 None => WorkspaceDoctorResult {
-                    duration_ms: 0,
                     check_name,
                     status: WorkspaceDoctorStatus::Skipped,
                     message: format!("crew '{name}' uses provider '{provider}', which has no CLI command"),
                     remediation: None,
+                    duration_ms: 0,
                 },
             },
             Ok(None) => WorkspaceDoctorResult {
-                duration_ms: 0,
                 check_name,
                 status: WorkspaceDoctorStatus::Error,
                 message: format!("crew '{name}' uses provider '{provider}', but no executor definition exists"),
                 remediation: Some(format!("Restore the '{provider}' executor definition or change crew '{name}'.")),
+                duration_ms: 0,
             },
             Err(error) => WorkspaceDoctorResult {
-                duration_ms: 0,
                 check_name,
                 status: WorkspaceDoctorStatus::Error,
                 message: format!("cannot inspect provider '{provider}' for crew '{name}': {error}"),
                 remediation: Some("Repair executor storage, then rerun `orbit doctor`.".to_string()),
+                duration_ms: 0,
             },
         }
     }).collect()
@@ -435,7 +427,6 @@ fn provider_auth_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
         Ok(exclusions) => exclusions
             .into_iter()
             .map(|exclusion| WorkspaceDoctorResult {
-                duration_ms: 0,
                 check_name: format!(
                     "provider-auth:{}",
                     provider_account_label(&exclusion.provider, exclusion.account.as_deref())
@@ -443,14 +434,15 @@ fn provider_auth_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
                 status: WorkspaceDoctorStatus::Warning,
                 message: exclusion.describe(),
                 remediation: Some(exclusion.relogin_hint),
+                duration_ms: 0,
             })
             .collect(),
         Err(error) => vec![WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name: "provider-auth".into(),
             status: WorkspaceDoctorStatus::Warning,
             message: format!("could not inspect active drain authentication exclusions: {error}"),
             remediation: Some("Inspect the drain with `orbit run show`.".into()),
+            duration_ms: 0,
         }],
     }
 }
@@ -473,18 +465,18 @@ fn provider_limit_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
 /// learns only from failures. The system and review lanes are not gated, so one
 /// whose crew's provider is gated gets its own warning. Each row comes with
 /// the provider it concerns; `None` for a row about every provider.
-pub fn provider_limit_findings(
+pub(super) fn provider_limit_findings(
     runtime: &OrbitRuntime,
 ) -> Vec<(Option<String>, WorkspaceDoctorResult)> {
     let view = runtime.provider_limits_view(chrono::Utc::now());
     let now = view.as_of;
     let row = |check_name: String, status, message: String, remediation: Option<&str>| {
         WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name,
             status,
             message,
             remediation: remediation.map(ToString::to_string),
+            duration_ms: 0,
         }
     };
     if let Some(error) = &view.error {
@@ -596,7 +588,7 @@ pub fn provider_limit_findings(
                     lane.setting,
                     lane.crew,
                     lane.provider,
-                    orbit_core::application::task::short_time(lane.until, now),
+                    crate::application::task::short_time(lane.until, now),
                 ),
                 Some(
                     "Wait for the reset, or point this setting at a crew on another provider \
@@ -609,31 +601,30 @@ pub fn provider_limit_findings(
 }
 
 fn mcp_registration_row(
-    runtime: &OrbitRuntime,
+    probe: &Probe<'_>,
     home_dir: Option<&std::path::Path>,
-    env: &Env,
 ) -> WorkspaceDoctorResult {
+    let runtime = probe.runtime;
     let workspace_id = runtime
         .workspace_runtime_binding()
         .map(|binding| binding.logical_workspace_id.clone())
         .or_else(|| runtime.workspace_id().ok());
-    let clients = crate::mcp_clients::registered_clients_for_workspace(
+    let clients = probe.host.registered_mcp_clients(
         &runtime.paths().repo_root,
         workspace_id.as_deref(),
         home_dir,
-        env,
+        probe.env,
     );
     if clients.is_empty() {
         WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name: "mcp-registration".to_string(),
             status: WorkspaceDoctorStatus::Warning,
             message: "no Orbit MCP client registration found for this workspace".to_string(),
             remediation: Some("Run `orbit mcp init --auto` in this workspace, or configure a client with `orbit mcp init --client <client>`.".to_string()),
+            duration_ms: 0,
         }
     } else {
         WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name: "mcp-registration".to_string(),
             status: WorkspaceDoctorStatus::Ok,
             message: format!(
@@ -641,18 +632,19 @@ fn mcp_registration_row(
                 clients.join(", ")
             ),
             remediation: None,
+            duration_ms: 0,
         }
     }
 }
 
 /// Whether the OS sweep-clock unit invokes this binary [ORB-12244].
 fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
-    match orbit_core::application::routines::inspect_clock_unit() {
+    match crate::application::routines::inspect_clock_unit() {
         Ok(inspection) => {
             let mut row = clock_unit_row_from_inspection(&inspection);
             if !matches!(
                 inspection.verdict,
-                orbit_core::application::routines::ClockUnitVerdict::NoUnitInstalled
+                crate::application::routines::ClockUnitVerdict::NoUnitInstalled
             ) {
                 // A matching unit file does not mean the timer is armed.
                 // `orbit clock status` treats an operator pause as healthy;
@@ -663,7 +655,6 @@ fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
             row
         }
         Err(error) => WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name: "clock-unit".to_string(),
             status: WorkspaceDoctorStatus::Warning,
             message: format!("could not inspect the sweep clock unit: {error}"),
@@ -671,13 +662,14 @@ fn clock_unit_row(global_root: &std::path::Path) -> WorkspaceDoctorResult {
                 "Fix the home-directory or unit-file error named above, then rerun `orbit doctor`."
                     .to_string(),
             ),
+            duration_ms: 0,
         },
     }
 }
 
 /// Fold native timer readiness into a clock-unit row that already has a unit.
 fn apply_clock_manager_readiness(row: &mut WorkspaceDoctorResult, global_root: &std::path::Path) {
-    use orbit_core::application::routines::{clock_status, doctor_clock_not_running_issue};
+    use crate::application::routines::{clock_status, doctor_clock_not_running_issue};
 
     let status = match clock_status(global_root) {
         Ok(status) => status,
@@ -778,9 +770,9 @@ fn add_clock_hold(row: &mut WorkspaceDoctorResult, global_root: &std::path::Path
 }
 
 fn clock_unit_row_from_inspection(
-    inspection: &orbit_core::application::routines::ClockUnitInspection,
+    inspection: &crate::application::routines::ClockUnitInspection,
 ) -> WorkspaceDoctorResult {
-    use orbit_core::application::routines::ClockUnitVerdict;
+    use crate::application::routines::ClockUnitVerdict;
 
     let status = match inspection.verdict {
         ClockUnitVerdict::Matching => WorkspaceDoctorStatus::Ok,
@@ -792,10 +784,10 @@ fn clock_unit_row_from_inspection(
         ClockUnitVerdict::VersionMismatch => WorkspaceDoctorStatus::Error,
     };
     WorkspaceDoctorResult {
-        duration_ms: 0,
         check_name: "clock-unit".to_string(),
         status,
         message: inspection.doctor_message(),
         remediation: inspection.doctor_remediation(),
+        duration_ms: 0,
     }
 }

@@ -1,6 +1,11 @@
-use orbit_core::application::task::EpisodeDisposition;
+use crate::application::task::EpisodeDisposition;
 
 use super::*;
+
+pub(super) struct UnpublishedBundleScan {
+    stubs: Vec<PathBuf>,
+    unresolved: Vec<PathBuf>,
+}
 
 /// Task-store partitions under `<global_root>/tasks/workspaces/<ws_id>/`
 /// that no live registry claim covers — left behind by a `workspace teardown`
@@ -23,9 +28,12 @@ use super::*;
 /// owning checkout [ORB-12131]; a checkout that merely failed to stat may be
 /// intact behind an unmounted volume or an unreadable parent directory, and
 /// the recovery is to restore access [ORB-12143].
-pub(super) fn doctor_check_orphan_task_stores(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+pub(super) fn doctor_check_orphan_task_stores(
+    runtime: &OrbitRuntime,
+    host: &dyn Host,
+) -> WorkspaceDoctorResult {
     let global_root = runtime.global_root();
-    let partitions = match task_store::inspect_task_store_partitions(&global_root) {
+    let partitions = match host.task_store_partitions(&global_root) {
         Ok(Some(partitions)) => partitions,
         Ok(None) => {
             return check(
@@ -270,7 +278,7 @@ pub(super) fn doctor_check_blocked_task_recovery(runtime: &OrbitRuntime) -> Work
 /// Render partitions whose checkout could not be resolved, adding the
 /// filesystem failure that stopped the answer to the usual description.
 pub(super) fn describe_unreachable_partitions(
-    partitions: &[task_store::UnreachablePartition],
+    partitions: &[UnreachableTaskStorePartition],
 ) -> String {
     partitions
         .iter()
@@ -287,13 +295,17 @@ pub(super) fn describe_unreachable_partitions(
 
 /// Render unclaimed partitions for a diagnostic line: each one's workspace id,
 /// its path on disk, and how much task data deleting it would cost.
-pub(super) fn describe_partitions(partitions: &[task_store::UnclaimedPartition]) -> String {
+pub(super) fn describe_partitions(partitions: &[TaskStorePartition]) -> String {
     partitions
         .iter()
         .map(|partition| {
             format!(
                 "{} ({}, {} task bundle(s))",
-                task_store::partition_id_of(&partition.path).unwrap_or("<unnamed>"),
+                partition
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("<unnamed>"),
                 partition.path.display(),
                 partition.task_bundles
             )
@@ -388,15 +400,10 @@ pub(super) fn join_paths(paths: &[PathBuf]) -> String {
         .join("; ")
 }
 
-pub(super) struct UnpublishedBundleScan {
-    stubs: Vec<PathBuf>,
-    unresolved: Vec<PathBuf>,
-}
-
 pub(super) fn collect_unpublished_bundle_dirs(
     global_root: &Path,
 ) -> Result<UnpublishedBundleScan, OrbitError> {
-    let workspaces_dir = task_store::task_workspaces_dir(global_root);
+    let workspaces_dir = orbit_store::maintenance::task_registry::task_workspaces_dir(global_root);
     let partitions = match std::fs::read_dir(&workspaces_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

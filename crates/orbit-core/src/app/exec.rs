@@ -97,6 +97,9 @@ pub(crate) struct MutationAudit {
 pub(crate) struct Operation {
     command: &'static str,
     subcommand: String,
+    /// Whether the invocation row records `subcommand`; a bare command
+    /// records none.
+    recorded_subcommand: bool,
     /// The tool whose governance row this chokepoint decides, if any.
     tool_name: Option<&'static str>,
     target_type: Option<&'static str>,
@@ -122,6 +125,7 @@ impl Operation {
         Self {
             command: noun.cli_name,
             subcommand: spec.cli_path.join("-"),
+            recorded_subcommand: true,
             tool_name: Some(spec.tool_name),
             target_type: Some(noun.audit_target_type),
             target_id: fields
@@ -143,6 +147,7 @@ impl Operation {
         Self {
             command,
             subcommand: subcommand.into(),
+            recorded_subcommand: true,
             tool_name: None,
             target_type: None,
             target_id: None,
@@ -189,6 +194,13 @@ impl Operation {
     /// label the command has always been audited under.
     pub(crate) fn subcommand(mut self, subcommand: impl Into<String>) -> Self {
         self.subcommand = subcommand.into();
+        self
+    }
+
+    /// Record no subcommand on the invocation row: the command ran bare, as
+    /// the command line has always recorded it.
+    pub(crate) fn without_recorded_subcommand(mut self) -> Self {
+        self.recorded_subcommand = false;
         self
     }
 
@@ -403,7 +415,10 @@ impl AuditGuard {
         AuditEventInsertParams {
             execution_id: self.execution_id.clone(),
             command: self.operation.command.to_string(),
-            subcommand: Some(self.operation.subcommand.clone()),
+            subcommand: self
+                .operation
+                .recorded_subcommand
+                .then(|| self.operation.subcommand.clone()),
             tool_name: None,
             target_type: self.operation.target_type.map(ToOwned::to_owned),
             target_id: self.operation.target_id.clone(),

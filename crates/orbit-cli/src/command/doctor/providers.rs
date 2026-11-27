@@ -1,6 +1,8 @@
 use clap::Args;
-use orbit_cmd::WorkspaceDoctorStatus;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::doctor::{
+    Command, Outcome, Providers, WorkspaceDoctorStatus, doctor_row_json, exec,
+};
 use serde_json::{Value, json};
 
 use super::support::status_label;
@@ -13,23 +15,18 @@ pub struct ProvidersArgs {}
 /// `orbit doctor providers`: one row per executor definition, naming the
 /// provider CLI it launches, where dispatch would find that CLI, and the
 /// sandbox mode the effective definition resolves to.
-pub(super) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
+pub(super) fn provider_diagnostics(core: &Core) -> CommandOut {
     use crate::output::common::table::{Column, Table};
 
-    let defs = runtime.list_executor_defs()?;
-    // One fresh user-scoped probe for this diagnostic. The configured executor
-    // mode alone does not establish that the host can create the namespace.
-    let linux_probe = defs
-        .iter()
-        .any(|def| {
-            def.sandbox
-                .is_some_and(|kind| kind.as_str() == "linux-bwrap")
-        })
-        .then(orbit_core::bootstrap::linux_sandbox_host::probe_bwrap_fresh);
-    // [ORB-14698] The same provider-limit rows `orbit doctor` reports, under
-    // the executor of the provider each concerns.
-    let limit_findings = orbit_cmd::provider_limit_findings(runtime);
-    let mut values = Vec::with_capacity(defs.len());
+    let Outcome::Providers(Providers {
+        executors,
+        linux_probe,
+        limit_findings,
+    }) = exec(core, Command::Providers)?
+    else {
+        unreachable!("a providers command answers with its executors")
+    };
+    let mut values = Vec::with_capacity(executors.len());
     let mut telemetry_notes: Vec<String> = Vec::new();
     let mut table = Table::new(vec![
         Column::new("EXECUTOR").fixed(),
@@ -44,11 +41,7 @@ pub(super) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
         Column::new("LAUNCHER").path(),
     ])
     .empty_message("no executors defined");
-    for def in &defs {
-        let launcher = def
-            .command
-            .as_deref()
-            .and_then(|program| runtime.locate_provider_launcher(program));
+    for (def, launcher) in &executors {
         // An executor without a `command` (e.g. `local-shell`) launches no
         // provider CLI, so availability does not apply rather than failing.
         let cli_available = def.command.as_ref().map(|_| launcher.is_some());
@@ -129,7 +122,7 @@ pub(super) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
             "tool_telemetry": telemetry.to_json(),
             "provider_limits": limits
                 .iter()
-                .map(|row| orbit_cmd::doctor_row_json(row))
+                .map(|row| doctor_row_json(row))
                 .collect::<Vec<_>>(),
         }));
         table.add_row(vec![
@@ -154,7 +147,9 @@ pub(super) fn provider_diagnostics(runtime: &OrbitRuntime) -> CommandOut {
                 |status| status_label(status).to_string(),
             ),
             telemetry.label(),
-            launcher.map_or_else(|| "-".to_string(), |path| path.display().to_string()),
+            launcher
+                .as_ref()
+                .map_or_else(|| "-".to_string(), |path| path.display().to_string()),
         ]);
     }
     let mut blocks = vec![Block::table(table)];

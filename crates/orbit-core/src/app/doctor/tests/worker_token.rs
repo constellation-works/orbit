@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use crate::doctor::WorkspaceDoctorStatus;
-use crate::doctor::worker_token::{
+use crate::app::doctor::WorkspaceDoctorStatus;
+use crate::app::doctor::worker_token::{
     ClockCredentials, PassHome, WorkerTokenFacts, classify_clock_credentials, worker_token_row,
 };
 

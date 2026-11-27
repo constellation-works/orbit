@@ -1,4 +1,4 @@
-use orbit_cmd::WorkspaceDoctorStatus;
+use orbit_core::app::doctor::WorkspaceDoctorStatus;
 
 pub(super) fn status_label(status: WorkspaceDoctorStatus) -> &'static str {
     match status {

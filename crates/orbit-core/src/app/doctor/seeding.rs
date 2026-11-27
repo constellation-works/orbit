@@ -1,9 +1,9 @@
 //! The `seeding-policy` rows: what a workspace's `seeding.routines` and
 //! `seeding.auto_tasks` leave out.
 
+use crate::OrbitRuntime;
+use crate::application::seeding_policy::SeedingPolicyExclusions;
 use orbit_config::SeedingPolicy;
-use orbit_core::OrbitRuntime;
-use orbit_core::application::seeding_policy::SeedingPolicyExclusions;
 
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
@@ -50,10 +50,10 @@ fn row(
     remediation: Option<String>,
 ) -> WorkspaceDoctorResult {
     WorkspaceDoctorResult {
-        duration_ms: 0,
         check_name: CHECK.into(),
         status,
         message,
         remediation,
+        duration_ms: 0,
     }
 }

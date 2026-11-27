@@ -278,6 +278,17 @@ macro_rules! core_dispatch {
     }};
 }
 
+/// Dispatch a command that runs through an app's `exec` and reads the
+/// caller's environment.
+macro_rules! core_env_dispatch {
+    ($variant:ident) => {{
+        |command, context| match command {
+            Commands::$variant(command) => command.execute_with_env(context.core()?, context.env),
+            _ => dispatch_mismatch(stringify!($variant)),
+        }
+    }};
+}
+
 macro_rules! runtime_env_dispatch {
     ($variant:ident) => {{
         |command, context| match command {
@@ -302,7 +313,7 @@ macro_rules! boxed_context_dispatch {
 }
 
 // Shared only with the sibling registry; dispatch helpers stay inside operation.
-pub(super) use {boxed_context_dispatch, core_dispatch, runtime_dispatch, runtime_env_dispatch};
+pub(super) use {boxed_context_dispatch, core_dispatch, core_env_dispatch, runtime_dispatch};
 
 pub(super) fn dispatch_mismatch(variant: &str) -> CommandOut {
     Err(OrbitError::Execution(format!(

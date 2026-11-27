@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 use orbit_common::Env;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 
 use super::admission_receipts::{self, AdmissionReceiptsArgs};
 use super::fs_access::{self, FsAccessArgs};
@@ -99,19 +99,19 @@ pub enum DoctorSubcommand {
 }
 
 impl DoctorCommand {
-    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+    pub(crate) fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
         match self.command {
             Some(DoctorSubcommand::AdmissionReceipts(args)) => {
-                return admission_receipts::admission_receipts(runtime, args.compact);
+                return admission_receipts::admission_receipts(core, args.compact);
             }
             Some(DoctorSubcommand::Providers(_)) => {
-                return providers::provider_diagnostics(runtime);
+                return providers::provider_diagnostics(core);
             }
             Some(DoctorSubcommand::FsAccess(args)) => {
-                return fs_access::fs_access(runtime, &args.profile, &args.path);
+                return fs_access::fs_access(core, args.profile, args.path);
             }
             None => {}
         }
-        self.workspace_checks(runtime, env)
+        self.workspace_checks(core, env)
     }
 }

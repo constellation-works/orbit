@@ -5,7 +5,7 @@
 //! that app's `exec`, and renders the `Outcome`. Every `exec` runs through
 //! the one chokepoint in `exec.rs`, which authorizes and audits the command.
 //! `agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`,
-//! `config`, `crew_memory`, `evolution`, `experiment`, `friction`, `gc`,
+//! `config`, `crew_memory`, `doctor`, `evolution`, `experiment`, `friction`, `gc`,
 //! `notice`, `plugin`, `resident`, `routine`, `run`, `search`, `skill`, `task`
 //! and `workspace` are apps; the other subjects still live in `application/` and
 //! are reached through `OrbitRuntime`.
@@ -25,6 +25,8 @@ pub mod codebase;
 pub mod config;
 
 pub mod crew_memory;
+
+pub mod doctor;
 
 pub mod evolution;
 

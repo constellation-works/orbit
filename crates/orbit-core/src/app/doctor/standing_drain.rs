@@ -7,7 +7,7 @@
 //!
 //! Read-only and informational: it reports, and nothing acts on it.
 
-use orbit_core::{IDLE_WITH_WORK_DAYS, IdleWithWork, OrbitRuntime};
+use crate::{IDLE_WITH_WORK_DAYS, IdleWithWork, OrbitRuntime};
 
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
@@ -142,10 +142,10 @@ fn idle_sentence(idle: &IdleWithWork) -> String {
 
 fn row(status: WorkspaceDoctorStatus, message: String) -> WorkspaceDoctorResult {
     WorkspaceDoctorResult {
-        duration_ms: 0,
         check_name: CHECK.into(),
         status,
         message,
         remediation: None,
+        duration_ms: 0,
     }
 }

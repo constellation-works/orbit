@@ -1,7 +1,7 @@
 //! The dashboard's `orbit doctor` report: run on demand, bounded and cached.
 //!
 //! The report runs the same read-only probes as `orbit doctor`
-//! ([`orbit_cmd::doctor_report_probes`]), never with `--deep` and never a
+//! ([`orbit_core::app::doctor::doctor_report_probes`]), never with `--deep` and never a
 //! repair. Some probes take seconds (the state-directory permission walk
 //! visits every directory under the Orbit roots), so the dashboard never runs
 //! the report on its poll: a run happens when no recent report is cached, or
@@ -14,9 +14,12 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use orbit_cmd::{DoctorProbe, WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use orbit_common::Env;
 use orbit_core::OrbitRuntime;
+use orbit_core::app::doctor::{
+    DoctorProbe, WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_report_probes,
+    doctor_row_json,
+};
 use serde_json::{Value, json};
 
 /// Upper bound on one probe. The slowest probe on a large host, the
@@ -164,7 +167,7 @@ impl Report {
             "failures": count(WorkspaceDoctorStatus::Error),
             "warnings": count(WorkspaceDoctorStatus::Warning),
             "check_timeout_ms": elapsed_ms_of(CHECK_TIMEOUT),
-            "checks": self.rows.iter().map(orbit_cmd::doctor_row_json).collect::<Vec<_>>(),
+            "checks": self.rows.iter().map(doctor_row_json).collect::<Vec<_>>(),
         })
     }
 }
@@ -174,8 +177,9 @@ impl Report {
 async fn run_bounded(runtime: Arc<OrbitRuntime>, env: Env) -> Report {
     let ran_at = Utc::now();
     let started = Instant::now();
+    let host = orbit_cmd::doctor_host();
     let mut rows = Vec::new();
-    for probe in orbit_cmd::doctor_report_probes() {
+    for probe in doctor_report_probes() {
         let remaining = RUN_BUDGET.saturating_sub(started.elapsed());
         if remaining.is_zero() {
             rows.push(not_run_row(probe));
@@ -184,9 +188,11 @@ async fn run_bounded(runtime: Arc<OrbitRuntime>, env: Env) -> Report {
         let bound = CHECK_TIMEOUT.min(remaining);
         let probe_runtime = Arc::clone(&runtime);
         let probe_env = env.clone();
+        let probe_host = Arc::clone(&host);
         let probe_copy = *probe;
-        let run =
-            tokio::task::spawn_blocking(move || probe_copy.run(&probe_runtime, &probe_env, false));
+        let run = tokio::task::spawn_blocking(move || {
+            probe_copy.run(&probe_runtime, &probe_env, false, probe_host.as_ref())
+        });
         match tokio::time::timeout(bound, run).await {
             Ok(Ok(probe_rows)) => rows.extend(probe_rows),
             Ok(Err(join_error)) => rows.push(unfinished_row(

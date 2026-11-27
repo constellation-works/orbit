@@ -1206,7 +1206,7 @@ fn render_fixture_child() {
         sink::{FormatArg, OutputSink, SinkEnv},
         table::{Column, Table},
     };
-    use orbit_cmd::{WorkspaceDoctorResult, WorkspaceDoctorStatus as Status};
+    use orbit_core::app::doctor::{WorkspaceDoctorResult, WorkspaceDoctorStatus as Status};
     let Ok(case) = std::env::var("ORBIT_DOCTOR_RENDER_CASE") else {
         return;
     };
@@ -1257,7 +1257,11 @@ fn render_fixture_child() {
             comfy_table::Cell::new(detail),
         ]);
     }
-    let doc = serde_json::Value::Array(rows.iter().map(orbit_cmd::doctor_row_json).collect());
+    let doc = serde_json::Value::Array(
+        rows.iter()
+            .map(orbit_core::app::doctor::doctor_row_json)
+            .collect(),
+    );
     let mode = match case.as_str() {
         "plain" => FormatArg::Plain,
         "json" => FormatArg::Json,
@@ -2660,4 +2664,42 @@ fn only_host_item(attention: &Value) -> &Value {
     let items = attention["items"].as_array().expect("attention items");
     assert_eq!(items.len(), 1, "one doctor item: {attention}");
     &items[0]
+}
+
+#[test]
+fn each_doctor_command_writes_one_invocation_row() {
+    if in_child("doctor::each_doctor_command_writes_one_invocation_row") {
+        return;
+    }
+    let f = WorkCheckout::new();
+    let _ = doctor(&f, &[]);
+    run_ok(&f, &["doctor", "providers", "--json"]);
+    run_ok(
+        &f,
+        &["doctor", "fs-access", "implementer", "src/lib.rs", "--json"],
+    );
+    let listed = run_ok(&f, &["audit", "list", "--limit", "50", "--json"]);
+    let events: Vec<Value> = serde_json::from_slice(&listed.stdout)
+        .unwrap_or_else(|e| panic!("audit JSON: {e}; {listed:?}"));
+    let mut doctor_rows: Vec<(Value, Value, Value)> = events
+        .iter()
+        .filter(|e| e["command"] == "doctor")
+        .map(|e| {
+            (
+                e["subcommand"].clone(),
+                e["target_type"].clone(),
+                e["role"].clone(),
+            )
+        })
+        .collect();
+    doctor_rows.sort_by_key(|row| row.0.to_string());
+    assert_eq!(
+        doctor_rows,
+        [
+            ("fs-access".into(), "policy".into(), "admin".into()),
+            ("providers".into(), "executor".into(), "admin".into()),
+            (Value::Null, "workspace".into(), "admin".into()),
+        ],
+        "one row per doctor command: {events:?}"
+    );
 }

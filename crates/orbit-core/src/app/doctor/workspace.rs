@@ -5,6 +5,18 @@ use orbit_common::protocol::yaml::parse_routine_yaml;
 use super::system::human_bytes;
 use super::*;
 
+/// Store file size above which `orbit doctor` warns without store GC: 1 GiB.
+/// A host store past this with store GC disabled is worth a warning; a normal
+/// fixture store is not.
+///
+/// The former `retention.store_warn_bytes` default, fixed when the key was removed [ORB-22808].
+const STORE_WARN_BYTES: u64 = 1024 * 1024 * 1024;
+
+struct StoreGcRoutine {
+    enabled: bool,
+    name: Option<String>,
+}
+
 pub(super) fn doctor_check_worktree_reclaim(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     const CHECK: &str = "worktree-reclaim";
     if !runtime.paths().repo_root.join(".git").exists() {
@@ -71,7 +83,7 @@ pub(super) fn doctor_check_plugin_builds(runtime: &OrbitRuntime) -> WorkspaceDoc
 /// tasks with the same verdict this row reports.
 pub(super) fn doctor_check_forge_remote(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     const CHECK: &str = "forge-remote";
-    if runtime.automatic_delivery_ship_mode() != orbit_core::ShipMode::Pr {
+    if runtime.automatic_delivery_ship_mode() != crate::ShipMode::Pr {
         return check(
             CHECK,
             WorkspaceDoctorStatus::Skipped,
@@ -198,7 +210,7 @@ pub(super) fn doctor_check_config(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctor
         }
     };
     match orbit_config::ResolvedConfig::load(
-        &orbit_core::composition::composition_env(),
+        &crate::composition::composition_env(),
         &orbit_config::ConfigRoots::new(runtime.global_root(), runtime.data_root()),
     ) {
         Ok(config) => {
@@ -245,18 +257,17 @@ pub(super) fn doctor_check_config(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctor
 /// runtime's cached one: diagnostics must observe a missing or replaced file
 /// and must not repair or migrate it as a side effect.
 pub(super) fn doctor_check_database(runtime: &OrbitRuntime, deep: bool) -> WorkspaceDoctorResult {
-    let store = match orbit_core::composition::store_opener()
-        .open_read_only(&runtime.persistence().audit_db)
-    {
-        Ok(store) => store,
-        Err(error) => {
-            return check(
-                "database",
-                WorkspaceDoctorStatus::Error,
-                format!("cannot open store database: {error}"),
-            );
-        }
-    };
+    let store =
+        match crate::composition::store_opener().open_read_only(&runtime.persistence().audit_db) {
+            Ok(store) => store,
+            Err(error) => {
+                return check(
+                    "database",
+                    WorkspaceDoctorStatus::Error,
+                    format!("cannot open store database: {error}"),
+                );
+            }
+        };
     if deep && let Err(error) = store.quick_check() {
         return check(
             "database",
@@ -484,18 +495,6 @@ pub(super) fn doctor_check_store_retention(runtime: &OrbitRuntime) -> WorkspaceD
         );
     }
     check(CHECK, WorkspaceDoctorStatus::Ok, message)
-}
-
-/// Store file size above which `orbit doctor` warns without store GC: 1 GiB.
-/// A host store past this with store GC disabled is worth a warning; a normal
-/// fixture store is not.
-///
-/// The former `retention.store_warn_bytes` default, fixed when the key was removed [ORB-22808].
-const STORE_WARN_BYTES: u64 = 1024 * 1024 * 1024;
-
-struct StoreGcRoutine {
-    enabled: bool,
-    name: Option<String>,
 }
 
 /// An enabled routine is one whose definition says `enabled: true`. A pause

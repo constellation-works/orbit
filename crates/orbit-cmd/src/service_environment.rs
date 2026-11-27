@@ -51,7 +51,7 @@ pub fn crew_env_config_write_warnings_for_root(
         .filter_map(serde_json::Value::as_str)
         .filter_map(|entry| CrewEnvVar::parse(entry).ok())
         .collect();
-    crew_source_environment_warnings_for_root(global_root, &[(name.to_string(), entries)], env)
+    crew_source_environment_warnings(global_root, &[(name.to_string(), entries)], env)
 }
 
 /// Warnings for declared crew sources missing from the current shell or a
@@ -59,14 +59,6 @@ pub fn crew_env_config_write_warnings_for_root(
 /// A `file:` source is read by the host itself whatever launches it, so it is
 /// reported by the file's own state and no launcher is asked about it.
 pub fn crew_source_environment_warnings(
-    runtime: &OrbitRuntime,
-    crews: &[(String, Vec<CrewEnvVar>)],
-    env: &Env,
-) -> Vec<String> {
-    crew_source_environment_warnings_for_root(&runtime.global_root(), crews, env)
-}
-
-fn crew_source_environment_warnings_for_root(
     global_root: &Path,
     crews: &[(String, Vec<CrewEnvVar>)],
     env: &Env,

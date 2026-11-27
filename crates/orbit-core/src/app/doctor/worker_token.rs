@@ -12,10 +12,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::OrbitRuntime;
+use crate::application::routines::{ClockUnitVerdict, inspect_clock_unit};
 use orbit_common::security::operator_env::{CLOCK_ENV_FILE_NAME, clock_env_file_names};
 use orbit_config::{ConfigRoots, ResolvedConfig};
-use orbit_core::OrbitRuntime;
-use orbit_core::application::routines::{ClockUnitVerdict, inspect_clock_unit};
 
 use super::report::routed_crew_names;
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
@@ -85,11 +85,11 @@ pub(super) struct WorkerTokenFacts {
 
 pub(super) fn worker_token_row(facts: &WorkerTokenFacts) -> WorkspaceDoctorResult {
     let row = |status, message: String, remediation: Option<String>| WorkspaceDoctorResult {
-        duration_ms: 0,
         check_name: CHECK.to_string(),
         status,
         message,
         remediation,
+        duration_ms: 0,
     };
     if !facts.macos {
         return row(
@@ -286,7 +286,7 @@ pub(super) fn doctor_check_claude_worker_token(runtime: &OrbitRuntime) -> Worksp
     let global_root = runtime.global_root();
     let (claude_routed, crew_credentialed, crew_credentials, config_load_error) = if macos {
         match ResolvedConfig::load(
-            &orbit_core::composition::composition_env(),
+            &crate::composition::composition_env(),
             &ConfigRoots::new(&global_root, runtime.shared_root()),
         ) {
             Ok(config) => {

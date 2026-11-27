@@ -155,7 +155,7 @@ pub enum Block {
     /// plain form are applied here, not by the command.
     Table(Box<Table>),
     /// Full doctor findings, shown only after the terminal table.
-    DoctorFindings(Vec<orbit_cmd::WorkspaceDoctorResult>),
+    DoctorFindings(Vec<orbit_core::app::doctor::WorkspaceDoctorResult>),
 }
 
 impl Block {

@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use orbit_core::{OrbitRuntime, RoutineSeedIdentity, reconcile_workspace_managed_artifacts};
+use crate::{OrbitRuntime, RoutineSeedIdentity, reconcile_workspace_managed_artifacts};
 use orbit_registry::workspace_registry;
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 
@@ -126,10 +126,10 @@ fn row(
     remediation: Option<String>,
 ) -> WorkspaceDoctorResult {
     WorkspaceDoctorResult {
-        duration_ms: 0,
         check_name: CHECK.into(),
         status,
         message,
         remediation,
+        duration_ms: 0,
     }
 }

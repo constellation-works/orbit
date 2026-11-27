@@ -8,17 +8,18 @@
 
 use std::path::Path;
 
+use crate::OrbitRuntime;
+use crate::bootstrap::browser_kit::{KIT_HOME_RELATIVE, KitLayout, WORKER_ENV_NAMES};
 use orbit_common::Env;
-use orbit_core::OrbitRuntime;
-use orbit_core::bootstrap::browser_kit::{KIT_HOME_RELATIVE, KitLayout, WORKER_ENV_NAMES};
 use orbit_types::task::BROWSER_KIT_INSTALL_COMMAND;
 
+use super::command::Probe;
+use super::host::BrowserKit;
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
-use crate::browser_kit::{KitStatus, NODE_FIX, find_in_path_value, kit_status};
 
-pub(super) fn browser_kit_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDoctorResult> {
-    let mut rows = kit_rows(runtime, env);
-    rows.extend(backlog_row(runtime));
+pub(super) fn browser_kit_rows(probe: &Probe<'_>) -> Vec<WorkspaceDoctorResult> {
+    let mut rows = kit_rows(probe);
+    rows.extend(backlog_row(probe.runtime));
     rows
 }
 
@@ -56,7 +57,8 @@ fn backlog_row(runtime: &OrbitRuntime) -> Option<WorkspaceDoctorResult> {
     ))
 }
 
-fn kit_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDoctorResult> {
+fn kit_rows(probe: &Probe<'_>) -> Vec<WorkspaceDoctorResult> {
+    let env = probe.env;
     let layout = match KitLayout::current_user(env) {
         Ok(layout) => layout,
         Err(error) => {
@@ -68,7 +70,7 @@ fn kit_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDoctorResult> {
             )];
         }
     };
-    let status = kit_status(&layout, env);
+    let status = probe.host.browser_kit(&layout, env);
     if !status.inspection.present {
         // Shown as `~/...` rather than the absolute path, so the message does not
         // embed the home directory of whichever process rendered it.
@@ -84,14 +86,14 @@ fn kit_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDoctorResult> {
         )];
     }
     let mut rows = vec![kit_row(&status)];
-    if let Some(problem) = status.library_problem() {
+    if let Some(problem) = status.library_problem {
         rows.push(row(
             "browser-kit-libraries",
             WorkspaceDoctorStatus::Warning,
             problem.problem,
             Some(problem.fix),
         ));
-    } else if status.unresolved_libraries.is_some() {
+    } else if status.libraries_checked {
         rows.push(row(
             "browser-kit-libraries",
             WorkspaceDoctorStatus::Ok,
@@ -99,12 +101,12 @@ fn kit_rows(runtime: &OrbitRuntime, env: &Env) -> Vec<WorkspaceDoctorResult> {
             None,
         ));
     }
-    rows.push(node_row(runtime, env));
+    rows.push(node_row(probe, status.node_fix));
     rows
 }
 
-fn kit_row(status: &KitStatus) -> WorkspaceDoctorResult {
-    let problems = status.problems();
+fn kit_row(status: &BrowserKit) -> WorkspaceDoctorResult {
+    let problems = &status.problems;
     if problems.is_empty() {
         let kit = &status.inspection;
         return row(
@@ -123,7 +125,7 @@ fn kit_row(status: &KitStatus) -> WorkspaceDoctorResult {
         );
     }
     let mut fixes: Vec<String> = Vec::new();
-    for problem in &problems {
+    for problem in problems {
         if !fixes.contains(&problem.fix) {
             fixes.push(problem.fix.clone());
         }
@@ -144,13 +146,14 @@ fn kit_row(status: &KitStatus) -> WorkspaceDoctorResult {
 /// login-shell PATH required validation resolves, so a `node` there reaches
 /// workers started by hand and by the clock. The clock service's own PATH is
 /// reported beside it.
-fn node_row(runtime: &OrbitRuntime, env: &Env) -> WorkspaceDoctorResult {
-    let environment = runtime.validation_environment();
+fn node_row(probe: &Probe<'_>, node_fix: &str) -> WorkspaceDoctorResult {
+    let env = probe.env;
+    let environment = probe.runtime.validation_environment();
     let login = environment.program_paths("node").into_iter().next();
     let service = clock_service_path(env);
     let service_node = service
         .as_ref()
-        .and_then(|(_, path)| find_in_path_value("node", path));
+        .and_then(|(_, path)| probe.host.find_in_path("node", path));
     let login_text = login.as_ref().map_or_else(
         || format!("not on the {} PATH", environment.source.as_str()),
         |path| {
@@ -185,7 +188,7 @@ fn node_row(runtime: &OrbitRuntime, env: &Env) -> WorkspaceDoctorResult {
             WorkspaceDoctorStatus::Warning,
             message,
             Some(format!(
-                "{NODE_FIX} Then make sure its directory is on the login profile's PATH or in \
+                "{node_fix} Then make sure its directory is on the login profile's PATH or in \
                  `workflow.validation_env.path`."
             )),
         ),
@@ -235,10 +238,10 @@ fn row(
     remediation: Option<String>,
 ) -> WorkspaceDoctorResult {
     WorkspaceDoctorResult {
-        duration_ms: 0,
         check_name: name.to_string(),
         status,
         message,
         remediation,
+        duration_ms: 0,
     }
 }
