@@ -27,15 +27,20 @@ fn git_protection_tolerates_object_store_leftovers_and_refuses_outside_aliases()
     } else {
         ExecutorSandboxKind::MacosSandboxExec
     };
+    // The one remedy each refusal names: an interrupted write's leftover, a
+    // metadata alias to replace, or a local clone that shares object inodes.
+    const TEMP: &str = "interrupted Git write";
+    const ALIAS: &str = "independent copy";
+    const CLONE: &str = "`git clone`";
     for (case, refusal, remedy) in [
-        ("loose-object-and-temp", false, false),
-        ("pack-index-and-temps", false, false),
-        ("temp-across-fan-out-directories", false, false),
-        ("hook-aliased-outside", true, false),
-        ("config-aliased-outside", true, false),
-        ("object-aliased-outside", true, false),
-        ("temp-aliased-outside", true, true),
-        ("temp-aliased-beside-metadata", true, true),
+        ("loose-object-and-temp", false, ""),
+        ("pack-index-and-temps", false, ""),
+        ("temp-across-fan-out-directories", false, ""),
+        ("hook-aliased-outside", true, ALIAS),
+        ("config-aliased-outside", true, ALIAS),
+        ("object-aliased-outside", true, CLONE),
+        ("temp-aliased-outside", true, TEMP),
+        ("temp-aliased-beside-metadata", true, TEMP),
     ] {
         let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
             .expect("fixture roots");
@@ -124,11 +129,13 @@ fn git_protection_tolerates_object_store_leftovers_and_refuses_outside_aliases()
                     message.contains("hard-linked metadata entry"),
                     "{case}: {message}"
                 );
-                assert_eq!(
-                    message.contains("interrupted Git write"),
-                    remedy,
-                    "{case}: {message}"
-                );
+                for phrase in [TEMP, ALIAS, CLONE] {
+                    assert_eq!(
+                        message.contains(phrase),
+                        phrase == remedy,
+                        "{case}: {message}"
+                    );
+                }
             }
             (other, _) => panic!("{case}: unexpected outcome {other:?}"),
         }

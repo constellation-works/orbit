@@ -17,8 +17,8 @@ pub(super) fn git_protection_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResul
             WorkspaceDoctorStatus::Warning,
             format!("sandboxed leaves would be refused: {reason}"),
             Some(
-                "Remove or repair the entry named above (a leftover `tmp_*` object file can be \
-                 deleted; run `git fsck` afterwards), then rerun `orbit doctor`."
+                "Apply the remedy the message names to the entry it names, then rerun \
+                 `orbit doctor`."
                     .to_string(),
             ),
         ),

@@ -1884,6 +1884,8 @@ fn doctor_reports_git_protection_refusals_with_their_fix() {
     let refused = row(&escape, "git-protection");
     assert_eq!(refused["status"], "warning", "{refused}");
     msg_has(refused, &escaped.display().to_string());
+    msg_has(refused, "`git clone`");
+    msg_has(refused, "`--no-hardlinks`");
     fs::remove_file(&escaped).expect("remove escaped object");
     // A hook aliased to a file outside `.git` stays refused.
     let outside = f.temp.path().join("outside-hook");
@@ -1894,7 +1896,12 @@ fn doctor_reports_git_protection_refusals_with_their_fix() {
     let refused = row(&report, "git-protection");
     assert_eq!(refused["status"], "warning", "{refused}");
     msg_has(refused, &hook.display().to_string());
-    fix_has(refused, "git fsck");
+    // Cloning cannot unlink this alias, so the message names the copy that does.
+    msg_has(refused, "independent copy");
+    msg_has(refused, "`mv` the copy over");
+    let message = refused["message"].as_str().unwrap_or_default();
+    assert!(!message.contains("git clone"), "{refused}");
+    fix_has(refused, "remedy the message names");
 }
 #[test]
 fn fs_access_reports_the_shipped_policy_verdicts_for_workspace_relative_paths() {
