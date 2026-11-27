@@ -12,6 +12,8 @@
 mod builders;
 mod forwarders;
 
+mod permalink;
+
 use std::ops::{Deref, DerefMut};
 use std::sync::OnceLock;
 
@@ -57,6 +59,84 @@ impl OrbitRuntime {
     /// [`WorkspaceCatalog`](workspace::catalog::WorkspaceCatalog) hook was lent.
     pub fn from_kernel(kernel: RuntimeKernel) -> Self {
         Self { kernel }
+    }
+
+    /// Build the exact task permalink `<origin>/t/<id>` when
+    /// `machine.web.public_url` is configured on this runtime's machine.
+    pub(crate) fn task_permalink_url(&self, task_id: &str) -> Option<String> {
+        permalink::build_task_permalink(&self.global_root(), task_id)
+    }
+
+    /// Build the exact run permalink `<origin>/r/<id>` (with `?machine=` and
+    /// `&workspace=` when known) using `run.executed_on.machine_id` or local
+    /// machine identity when `machine.web.public_url` is configured.
+    pub(crate) fn run_permalink_url(&self, run: &orbit_types::workflow::JobRun) -> Option<String> {
+        self.run_permalink_for_location(&run.run_id, run.executed_on.as_ref(), None)
+    }
+
+    /// Build the exact run permalink for `run_id` using an optional execution
+    /// location and optional workspace override.
+    pub(crate) fn run_permalink_for_location(
+        &self,
+        run_id: &str,
+        executed_on: Option<&orbit_types::task::ExecutionLocation>,
+        workspace_override: Option<&str>,
+    ) -> Option<String> {
+        let machine_id = self.resolve_run_machine_id(executed_on);
+        let workspace_id = self.resolve_run_workspace_id(workspace_override);
+        permalink::build_run_permalink(
+            &self.global_root(),
+            run_id,
+            machine_id.as_deref(),
+            workspace_id.as_deref(),
+        )
+    }
+
+    fn resolve_run_machine_id(
+        &self,
+        executed_on: Option<&orbit_types::task::ExecutionLocation>,
+    ) -> Option<String> {
+        executed_on
+            .map(|loc| loc.machine_id.trim())
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                self.automation_machine_identity()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+            })
+            .or_else(|| {
+                orbit_registry::inspect_machine_identity(&self.global_root())
+                    .ok()
+                    .and_then(|identity| {
+                        identity
+                            .id()
+                            .map(str::trim)
+                            .filter(|id| !id.is_empty())
+                            .map(str::to_owned)
+                    })
+            })
+    }
+
+    fn resolve_run_workspace_id(&self, workspace_override: Option<&str>) -> Option<String> {
+        workspace_override
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                self.opened_registered_workspace()
+                    .flatten()
+                    .map(|(id, _)| id.trim())
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+            })
+            .or_else(|| {
+                self.workspace_id()
+                    .ok()
+                    .map(|id| id.trim().to_owned())
+                    .filter(|id| !id.is_empty())
+            })
     }
 
     /// The kernel this runtime owns, for a kernel interface such as

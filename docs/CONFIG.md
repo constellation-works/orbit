@@ -394,7 +394,7 @@ task_prefix = "ORB"
 | `machine.mcp.role` | unset | Yes (`--global`) | The MCP role `orbit mcp serve` and `orbit mcp listen` serve: `operator`, `manager`, `resident`, `agent` or `reader`. Unset serves the default surface. A server's `--role` replaces it. See [MCP roles and toolsets](#mcp-roles-and-toolsets). |
 | `machine.web.trusted_hosts` | `[]` | Yes (`--global`) | **Advanced.** DNS names, besides loopback, that `orbit web serve` admits as `Host`: lowercase, no scheme or port, not an IP address or `localhost`. A request through one needs a listed `Tailscale-User-Login`. Read at startup. See [Dashboard over Tailscale Serve](#dashboard-over-tailscale-serve). |
 | `machine.web.trusted_logins` | `[]` | Yes (`--global`) | **Advanced.** Tailscale login names admitted through a trusted host, matched exactly. Required when `machine.web.trusted_hosts` is set: `orbit web serve` refuses to start without it. |
-| `machine.web.public_url` | unset | Yes (`--global`) | HTTP or HTTPS origin readers can use to open this machine's dashboard links. Set an origin reachable from the reader, with no path, query or fragment. See [Set the public dashboard address](https://orbit-cli.com/how-to/dashboard/#set-the-public-dashboard-address). |
+| `machine.web.public_url` | unset | Yes (`--global`) | HTTP or HTTPS origin readers can use to open this machine's dashboard links. Set an origin reachable from the reader, with no path, query or fragment. The Claude Code mod reads it at session start and falls back to `http://localhost:7878` when unset. See [Set the public dashboard address](https://orbit-cli.com/how-to/dashboard/#set-the-public-dashboard-address). |
 
 ### Dashboard over Tailscale Serve
 

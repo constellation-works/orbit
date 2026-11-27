@@ -111,6 +111,7 @@ under their own terms.
   with `orbit host add` connect over SSH to hosts you name. `orbit host add`,
   `orbit host list`, `orbit host show` and `orbit doctor` open an SSH session
   to each registered host to read its identity, version and workspaces.
+  `orbit host list --no-probe` reads the stored registry locally.
 
 ## Local servers
 
@@ -130,7 +131,7 @@ under their own terms.
 
 The Claude Code, Codex, and Cursor plugins contain skills (Markdown
 instructions) and an MCP configuration. The Claude Code plugin also has a
-session-start hook and a mod that shows your Orbit tasks in the session.
+session-start hook and a mod that links task and run IDs in assistant replies.
 
 - The MCP configuration starts `npx -y @orbit-tools/cli@<version> mcp serve`
   locally. [Installing and updating Orbit](#installing-and-updating-orbit)
@@ -138,10 +139,9 @@ session-start hook and a mod that shows your Orbit tasks in the session.
 - The session-start hook checks whether your project or working directory is
   inside an `.orbit/` workspace. If it is not, the hook shows a fixed message.
   It makes no network calls.
-- The mod reads and changes tasks by running `orbit` on your machine. When the
-  checkout is a replica or is not registered on this machine, it runs `orbit`
-  over SSH instead: on the host you set in the plugin's `ownerHost` option, or
-  on a host registered with `orbit host add`.
+- The mod reads the stored host registry and dashboard address locally once
+  at session start. It changes only the displayed reply. Opening a link
+  sends the task or run ID to the dashboard.
 
 The MCP server gives your agent access to your local Orbit tasks and tools. What
 the agent then does with that content is governed by its provider; see

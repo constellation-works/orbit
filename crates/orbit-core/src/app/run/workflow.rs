@@ -189,12 +189,14 @@ fn show(runtime: &OrbitRuntime, input: Value, observed: bool) -> Result<Value, O
     let evidence = runtime
         .activity_invocation_evidence(&run.run_id)
         .unwrap_or_default();
+    let url = runtime.run_permalink_url(&run);
     let mut value = run_json_enriched(
         runtime,
         &run,
         state.as_ref(),
         Some(&evidence),
         recovery.as_ref(),
+        url.as_deref(),
     );
     let progress = runtime
         .collect_run_execution_progress(&run.run_id)
@@ -297,6 +299,7 @@ fn project_workflow_run_list(
                 states.state(&run.run_id),
                 None,
                 recoveries.get(&run.run_id),
+                None,
             )
         })
         .collect::<Vec<_>>();
@@ -356,6 +359,7 @@ fn run_json_enriched(
     state: Option<&PipelineState>,
     evidence: Option<&[ActivityInvocationEvidence]>,
     recovery: Option<&RunRecoveryAttempts>,
+    url: Option<&str>,
 ) -> Value {
     let steps = run_display_steps(run, || {
         runtime
@@ -370,6 +374,7 @@ fn run_json_enriched(
             activity_evidence: evidence,
             display_steps: Some(&steps),
             recovery,
+            url,
         },
     )
 }

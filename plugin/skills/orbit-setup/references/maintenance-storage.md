@@ -6,6 +6,7 @@
 - [Store retention](#store-retention)
 - [Admission receipt storage](#admission-receipt-storage)
 - [Logs](#logs)
+- [GitHub run-log cache](#github-run-log-cache)
 - [Search indexes](#search-indexes)
 - [What is evidence and must not be edited](#what-is-evidence-and-must-not-be-edited)
 
@@ -186,6 +187,68 @@ orbit log tail --level warn --since 1h
 
 For diagnosing a host-level incident rather than tuning retention, see
 [operational-logs-triage.md](operational-logs-triage.md).
+
+## GitHub run-log cache
+
+`github.run.logs` keeps the log of a completed job or run on the host, so
+paging one log in byte or line windows (or by step) downloads it once instead
+of once per window. It has no settings; its limits are fixed.
+
+- **Location.** `<Orbit data root>/state/github-run-logs/` (`$ORBIT_ROOT`
+when set, else `~/.orbit`), a `0700` directory of `0600` files. Each entry is
+written through a staging file and renamed into place, so a partial download
+is never read as an entry. A sibling lock file beside the directory
+serializes publishes and removals; a removal only deletes the file it
+classified, so a concurrent fresh entry under the same name is kept. Entries
+are named `<sha256>.log`. An older unredacted directory is never read and is
+removed when the cache is next opened or an agent sandbox is prepared.
+
+- **Redacted before storing.** Before any byte reaches the disk, staging files
+included, every span the response redactor would rewrite is overwritten with
+`*` bytes of the same length, so byte and line coordinates stay those of the
+served log. A log whose secret is found only across lines is not cached.
+Every read of a completed log, the read that fills the cache included,
+renders from that masked copy, so a cold and a warm read return the same
+output. Only complete logs are stored; a partial stream is never kept.
+
+- **Read rules.** Every read first asks the hosting service for the job's or
+run's status under the caller's current credential and checkout. The cache
+serves only when that request succeeds and reports the job or run completed.
+Keys use the host and repository the status answer reports, never the
+request's repository text or placeholders: a job-scoped read keys on run, job
+and scope; a run-scoped read keys on run, run attempt and scope, so a rerun
+never serves an earlier attempt's log; the job-log fallback keys on run and
+job, not scope, and is kept apart from the run-scoped entry for the same job.
+When the run-scoped read prints nothing, is refused as not yet complete, or
+fails because the run's log archive arrives as an invalid zip, and the tool
+recovers from a completed job's own log, that whole-job log is cached too, so
+a second window of the same job reuses the download. The recovery still
+reports the job and its `job_api_log` source through `source` and
+`source_jobs`. A refused or failed status request falls through to the plain
+read, so the provider's own error is returned and never a cached log. A
+failure to read or write the cache is a miss, never a read error.
+
+- **Never cached.** A job or run that is not completed, an empty log, a log
+over the 8 MiB source read limit, a log with a secret found only across
+lines, a read whose status request failed, and a status answer that names no
+host and repository. A failed status request or cache file falls back to the
+plain read; the cache never turns a read into an error.
+
+- **Bounds.** At most 256 MiB in total and 24 hours per entry. Every store
+removes entries past either bound (oldest first for size, and staging files a
+crashed write left behind), and a lookup removes the entry it finds expired.
+
+- **Access boundary.** Broker-only state: every agent sandbox masks the
+directory, so a confined worker reads a cached log only through the tool's
+bounded, redacted response.
+
+- **Inspection.** The cache has no command and its responses carry no hit
+flag. List the directory to see entries and the sibling lock; read `source`
+and `source_jobs` on a `github.run.logs` response to tell a run-scoped read
+from a job-log recovery; use `github.auth.status` for quota state, which is
+not cache state. Do not expect a hit indicator the tool does not report.
+
+- **No settings.** There is nothing to configure. Do not invent keys for it.
 
 ## Search indexes
 

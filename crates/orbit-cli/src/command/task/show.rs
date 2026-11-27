@@ -73,6 +73,9 @@ fn record(input: &Map<String, Value>, shown: Shown) -> CommandOut {
     let list = |key: &str| task.get(key).map(strings).unwrap_or_default();
     let mut out = String::new();
     let _ = writeln!(out, "{} {}", bold("ID:"), field("id").unwrap_or_default());
+    if let Some(url) = field("url") {
+        let _ = writeln!(out, "{} {url}", bold("URL:"));
+    }
     if let Some(owner) = &owner {
         let _ = writeln!(out, "{} {}", bold("Workspace:"), owner.label());
     }

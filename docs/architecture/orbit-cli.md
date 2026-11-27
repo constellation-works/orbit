@@ -36,7 +36,7 @@ Design intent: [docs/design/terminal-interface/](../../docs/design/terminal-inte
 
 ## Part-migrated nouns
 
-`lease` and `agents` flatten `Operation(Invocation<V>)`, and `task` flattens `Operation(TaskInvocation)`, where `TaskInvocation` is `Registry(Invocation<TaskVerb>)` plus the hand-wired `locks contention` command. A `TaskVerb` with an empty `cli_path` (`BlockTriage`, `Reject`, `Delete`) gets no `orbit task` subcommand.
+`agents` flattens `Operation(Invocation<V>)`, and `task` flattens `Operation(TaskInvocation)`, where `TaskInvocation` is `Registry(Invocation<TaskVerb>)` plus the hand-wired `locks contention` command. A `TaskVerb` with an empty `cli_path` (`BlockTriage`, `Reject`, `Delete`) gets no `orbit task` subcommand.
 
 ## Ownership by module
 

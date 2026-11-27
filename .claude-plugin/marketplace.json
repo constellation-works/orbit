@@ -9,7 +9,7 @@
     {
       "name": "orbit",
       "source": "./plugin",
-      "description": "Durable tasks, sandboxed parallel runs, and PR-gated delivery for AI coding agents.",
+      "description": "Durable tasks, sandboxed parallel runs, PR-gated delivery, and dashboard links in Claude Code replies.",
       "category": "developer-tools",
       "tags": ["task-management", "orchestration", "audit", "mcp"]
     }

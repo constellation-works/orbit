@@ -15,3 +15,4 @@ Version history of [STD-03](STD-03.md). Adopting repos pin the `version:` in its
   - "Applies to" is now a bullet list of tags with rule scope, deviation examples cite `STD-03@2 §Rn`, and `related` adds STD-01, STD-04 and STD-05.
 - **v1 (2026-09-26).** First publication: R1 to R22.
 - **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).
+- **Editorial (2026-11-27, version unchanged):** R29's orphan-store exemplar points at `crates/orbit-core/src/app/doctor/task.rs`, where the Doctor check moved. No rule changed (ORB-29360).

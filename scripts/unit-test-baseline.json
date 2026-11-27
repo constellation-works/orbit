@@ -206,6 +206,7 @@
         "app/doctor/tests/worker_token.rs::warns_for_each_place_the_worker_token_can_be_lost_and_is_ok_when_none_is",
         "app/host/browser_kit/tests/libraries.rs::fonts_only_no_install_path_names_the_font_gap_and_a_fix",
         "app/host/browser_kit/tests/libraries.rs::resolved_libraries_without_a_font_gap_stay_resolved",
+        "app/host/tests/mod.rs::probe_workers_refused_still_return_ordered_results",
         "application/agents/tests/api.rs::attempt_without_a_run_cannot_borrow_a_later_runs_effort",
         "application/agents/tests/api.rs::crew_label_effort_counts_when_no_effort_is_recorded",
         "application/agents/tests/api.rs::implementer_rows_group_by_model_and_recorded_effort",

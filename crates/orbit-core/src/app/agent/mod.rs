@@ -43,11 +43,13 @@ pub enum Command {
     Rank(RankQuery),
     /// Calibrate the ranking's noise scales and record a new season.
     RankCalibrate(RankQuery),
-    /// Run the image canary once per named crew, or per configured crew.
+    /// Run the image canary once per named crew, or once per enabled
+    /// configured crew when none is named.
     VisionProbe {
-        /// The crews to probe; empty probes every crew.
+        /// The crews to probe; empty probes every enabled crew.
         crews: Vec<String>,
-        /// How long one canary may run.
+        /// Seconds to wait for the launched probe runs to settle, as one
+        /// shared deadline; a run still unsettled then reports `timeout`.
         timeout_seconds: u64,
     },
     /// The dashboard's read of the workspace's agent scan.

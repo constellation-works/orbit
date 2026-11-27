@@ -98,8 +98,8 @@ claimed mode. Run only commands the task's own brief requires; a QA sweep may
 build and run the product, and a review may reproduce a finding when its brief
 asks for it. Keep the brief's evidence artifacts and execution summary.
 
-- `make ci-guards` (or `scripts/ci-guardrails.sh --static`) runs the file and
-  metadata-only subset of the fast repository guards before candidate handoff.
+- `make ci-guards` (or `scripts/ci-guardrails.sh --static`) runs the offline
+  subset of the fast repository guards before candidate handoff.
   It includes unit-test admissions, QA surface inventory, public artifact IDs,
   test shell waits, test child runners, dependency direction, orphan modules,
   vendored standards integrity (`docs/standards/check.sh`), doc links and
@@ -108,7 +108,8 @@ asks for it. Keep the brief's evidence artifacts and execution summary.
   is used
   only for metadata, with `CARGO_NET_OFFLINE=true`; no compilation, formatting,
   Rust tests or network requests run. It needs Python 3.11+, PyYAML, ripgrep and
-  an installed Cargo toolchain. The networked workflow action-pin check, Node UI
+  an installed Cargo toolchain. The Claude Code Markdown link cases also run
+  offline under Node 22.18 or later. The networked workflow action-pin check, Node UI
   behavior tests, scratch plugin installation, and all fixture self-tests remain
   in `make ci-fast` and full CI. The command uses the same bounded pool, names
   failing guards, returns a nonzero status on failure, and prints per-guard and

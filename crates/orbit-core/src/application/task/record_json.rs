@@ -179,6 +179,9 @@ pub fn task_show_json(
             object.insert("open_decisions".to_string(), open);
         }
     }
+    if let Some(url) = runtime.task_permalink_url(&row.task.id) {
+        object.insert("url".to_string(), Value::String(url));
+    }
     Ok(object)
 }
 

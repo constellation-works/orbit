@@ -78,8 +78,8 @@ Open a file only when its condition holds; each stands alone.
 | Manage a legacy external tool (`orbit tool add`, `list`, `show`, `run`, `enable`, `disable`, `remove`, `doctor`); migrate one to a plugin | [plugins-legacy-tools](references/plugins-legacy-tools.md) |
 | Host-local application acting on an operator's consent for exact tool calls: credentials, callbacks, rotation, revocation | [applications](references/applications.md) |
 | MCP clients, SSH federation, role and toolset selection, authority on the destination, TCP MCP | [remote-access-mcp](references/remote-access-mcp.md) |
-| Remote dashboard over Tailscale Serve (trusted hosts and logins, public URL, identity boundary, restart and verification), and switching hosts in the dashboard | [remote-access-dashboard](references/remote-access-dashboard.md) |
-| Owner/replica roles, multiple machines, a breaking workspace-layout upgrade across hosts | [multi-host](references/multi-host.md) |
+| Remote dashboard and switching hosts in the dashboard | [remote-access-dashboard](references/remote-access-dashboard.md) |
+| Owner/replica roles, multiple machines, a breaking workspace-layout upgrade across hosts, planned host downtime (`orbit host offline` and `orbit host online`, what the mark changes) | [multi-host](references/multi-host.md) |
 | Task snapshots: bind a workspace, transfer the source repository, HTTPS credentials, the weekly routine | [publication-bind](references/publication-bind.md) |
 | Publish a task snapshot, inspect one, restore deliberately | [publication-snapshots](references/publication-snapshots.md) |
 | `orbit doctor` repairs and task locks | [maintenance-diagnose](references/maintenance-diagnose.md) |
@@ -91,6 +91,7 @@ Open a file only when its condition holds; each stands alone.
 | Retired features and their leftover keys, commands or toolset names, or a removed command, MCP tool name or task input: what to delete, what replaces it, the deadline | [maintenance-retired-features](references/maintenance-retired-features.md) |
 | Deprecated keys that are translated, ignored or fixed; verify the cleanup with `orbit doctor` | [maintenance-deprecated-keys](references/maintenance-deprecated-keys.md) |
 | Store retention, admission receipt storage, audit events, logs, search indexes, what is evidence and must not be edited | [maintenance-storage](references/maintenance-storage.md) |
+| GitHub run-log cache: fixed behavior, retention, access boundary, inspection; no settings | [maintenance-storage](references/maintenance-storage.md#github-run-log-cache) |
 | Operator procedure for mid-run steering | [mid-run steering](../orbit-orchestrate/references/mid-run-steering.md) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [distributed drain setup](../orbit/references/setup/distributed-drain-setup.md) |
 | Compare implementer models or crews: `orbit agents rank` | [model ranking](../orbit-orchestrate/references/model-ranking.md) |

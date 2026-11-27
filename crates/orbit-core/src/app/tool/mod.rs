@@ -66,6 +66,10 @@ pub enum Command {
         name: String,
         /// Prepared JSON input.
         input: Value,
+        /// Explicit agent override.
+        agent: Option<String>,
+        /// Explicit model override.
+        model: Option<String>,
         /// Session context for admission.
         session: ToolSessionContext,
     },
@@ -214,34 +218,49 @@ impl App for ToolApp {
 
     fn operation(command: &Command) -> Operation {
         match command {
-            Command::List { .. } => Operation::command("tool", "list").without_command_row(),
+            Command::List { .. } => Operation::command("tool", "list")
+                .audit_role("admin")
+                .without_command_row(),
             Command::Show(name) => Operation::command("tool", "show")
                 .target(Some("tool"), Some(name.clone()))
                 .recorded_tool_name(Some(name.clone()))
+                .audit_role("admin")
                 .without_command_row(),
             Command::Add { audit_name, .. } => Operation::command("tool", "add")
                 .target(Some("tool"), audit_name.clone())
                 .recorded_tool_name(audit_name.clone())
+                .audit_role("admin")
                 .without_command_row(),
             Command::Remove(name) => Operation::command("tool", "remove")
                 .target(Some("tool"), Some(name.clone()))
                 .recorded_tool_name(Some(name.clone()))
+                .audit_role("admin")
                 .without_command_row(),
             Command::Enable(name) => Operation::command("tool", "enable")
                 .target(Some("tool"), Some(name.clone()))
                 .recorded_tool_name(Some(name.clone()))
+                .audit_role("admin")
                 .without_command_row(),
             Command::Disable(name) => Operation::command("tool", "disable")
                 .target(Some("tool"), Some(name.clone()))
                 .recorded_tool_name(Some(name.clone()))
+                .audit_role("admin")
                 .without_command_row(),
             Command::Doctor { name } => Operation::command("tool", "doctor")
                 .target(Some("tool"), name.clone())
                 .recorded_tool_name(name.clone())
+                .audit_role("admin")
                 .without_command_row(),
-            Command::DryRun { name, .. } => Operation::command("tool", "run")
+            Command::DryRun {
+                name,
+                input,
+                agent,
+                model,
+                ..
+            } => Operation::command("tool", "run")
                 .target(Some("tool"), Some(name.clone()))
                 .recorded_tool_name(Some(name.clone()))
+                .tool_run_audit_role(input.clone(), agent.clone(), model.clone())
                 .without_command_row(),
             // The generic tool dispatch owns its own authorization and audit row.
             Command::Run { .. } | Command::AuditRefusal { .. } => Operation::command("tool", "run")
@@ -288,6 +307,8 @@ impl App for ToolApp {
             Command::DryRun {
                 name,
                 input,
+                agent: _,
+                model: _,
                 session,
             } => Outcome::DryRun(
                 runtime.run_tool_dry_run_with_session_context(&name, &input, session)?,
