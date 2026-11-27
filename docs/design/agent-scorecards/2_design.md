@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: Implemented Agents dashboard view under Analytics; covers problem attribution, the shared score, per-role terms, the API, CLI and MCP contract, scan budget and delivery tracks.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/app/agent/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents/**", "crates/orbit-core/src/app/codebase/pilot/**", "crates/orbit-core/src/app/codebase/lock_waits.rs", "crates/orbit-core/src/app/codebase/facts/**", "crates/orbit-web/assets/dashboard/**"]
+paths: ["crates/orbit-core/src/app/agent/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents/**", "crates/orbit-core/src/app/codebase/pilot/**", "crates/orbit-core/src/app/codebase/lock_wait.rs", "crates/orbit-core/src/app/codebase/fact/**", "crates/orbit-web/assets/dashboard/**"]
 related_features: [user-interface, review-gate, finding-verification]
 related_artifacts: []
 ---

@@ -31,7 +31,7 @@ pub(in crate::app::codebase) struct HistoryFacts {
     /// The verified landing receipt: its commit and when it landed.
     pub(in crate::app::codebase) receipt: Option<(String, DateTime<Utc>)>,
     /// The task-pilot receipts, read for a task with a landing receipt.
-    pub(in crate::app::codebase) pilot: Option<super::super::pilot::PilotInputs>,
+    pub(in crate::app::codebase) pilot: Option<crate::app::codebase::pilot::PilotInputs>,
     /// The receipt commit's changed paths, once a diff produced them. Never
     /// stored as unavailable: missing objects may be fetched later.
     pub(in crate::app::codebase) landed_paths: Option<BTreeSet<String>>,

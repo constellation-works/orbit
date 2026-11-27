@@ -11,7 +11,7 @@
 //!    command selectors carry no path and are counted as unsupported. Once
 //!    the task is in review or done and its diff resolves, the size is the
 //!    lines changed (insertions plus deletions) of that diff: a done task's
-//!    landed-delivery row ([`super::diff_stats`], written once per landing),
+//!    landed-delivery row ([`super::diff_stat`], written once per landing),
 //!    or a review task's candidate commit against the base its delivery run
 //!    started from, diffed once per commit pair per process. A review or
 //!    done task without a resolvable diff falls back to declared files and
@@ -46,10 +46,10 @@ use orbit_types::task::{Task, TaskStatus};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::diff_stats::{candidate_diff_lines, landed_diff_stats};
-use super::facts::{Anchor, CodebaseFacts};
+use super::diff_stat::{candidate_diff_lines, landed_diff_stats};
+use super::fact::{Anchor, CodebaseFacts};
 use super::regression::RegressionFilter;
-use super::sections::{Params, Rollup};
+use super::section::{Params, Rollup};
 use crate::OrbitRuntime;
 use crate::application::job::CodebaseDeliveryScan;
 
@@ -456,7 +456,7 @@ struct FitStep {
 /// over a fixed 30-day window with a minimum support of 5.
 pub fn task_riskiness_model(rt: &OrbitRuntime) -> Result<TaskRiskinessModel, OrbitError> {
     let since = Utc::now() - Duration::days(i64::from(RISKINESS_WINDOW_DAYS));
-    let facts = super::facts::scan_regressions(rt, since)?;
+    let facts = super::fact::scan_regressions(rt, since)?;
     let mut diff_lines: HashMap<String, u64> = landed_diff_stats(rt, None)
         .unwrap_or_else(|error| {
             tracing::warn!(%error, "riskiness: landed diff stats unreadable");

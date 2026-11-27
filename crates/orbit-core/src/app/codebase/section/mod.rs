@@ -23,11 +23,11 @@ mod regressions;
 mod rejected;
 mod rollup;
 
-use super::facts::{
+use super::fact::{
     ACTOR_KINDS, Anchor, Block, BlockCause, CodebaseFacts, INFRA_CAUSES, ReservationFacts,
     TaskFacts,
 };
-use super::lock_waits::{WaitEpisode, wait_episodes, wait_summary};
+use super::lock_wait::{WaitEpisode, wait_episodes, wait_summary};
 use super::regression::{RegressionFilter, RegressionLink};
 pub(in crate::app::codebase) use blocked::{blocked_rows, rank_blocked};
 use chrono::{DateTime, Utc};

@@ -12,9 +12,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::facts::{CodebaseFacts, TaskFacts};
-use super::lock_waits::{WaitEpisode, wait_summary};
-use super::sections::{
+use super::fact::{CodebaseFacts, TaskFacts};
+use super::lock_wait::{WaitEpisode, wait_summary};
+use super::section::{
     Params, blocked_rows, coupling_pairs, footprint_rows, lock_rows, lock_tally, merge, rank,
     rank_blocked, rate_fields, regressed_fields, regression_rows, rejected_rows, site_entries,
 };

@@ -95,7 +95,7 @@ Full definitions: [references/glossary.md](./references/glossary.md).
 | Reserve and release path selectors with a TTL (exists) | [crates/orbit-runtime/src/stored/locks/command.rs](../../../crates/orbit-runtime/src/stored/locks/command.rs) | — |
 | Which tasks hold their context (exists) | [crates/orbit-runtime/src/stored/locks/index.rs](../../../crates/orbit-runtime/src/stored/locks/index.rs) | — |
 | Reservation rows and lease columns | [crates/orbit-store/src/repository/task_reservation/](../../../crates/orbit-store/src/repository/task_reservation/) | [ORB-18404] |
-| Landed paths per task (exists; feeds landing notices) | [crates/orbit-core/src/app/codebase/facts/scan.rs](../../../crates/orbit-core/src/app/codebase/facts/scan.rs) | — |
+| Landed paths per task (exists; feeds landing notices) | [crates/orbit-core/src/app/codebase/fact/scan.rs](../../../crates/orbit-core/src/app/codebase/fact/scan.rs) | — |
 | SSE streaming pattern (exists, for logs) | [crates/orbit-web/src/api/log.rs](../../../crates/orbit-web/src/api/log.rs) | — |
 | Hard/advisory modes, lease lifetime and notices | implemented by [ORB-18405], [ORB-18551] and [ORB-18554], [2_design.md §2–§6](./2_design.md#2-the-lease-record) | — |
 | Lease queue, expansion and `--no-wait` behavior | implemented by [ORB-18553], [2_design.md §6](./2_design.md#6-surfaces) | — |

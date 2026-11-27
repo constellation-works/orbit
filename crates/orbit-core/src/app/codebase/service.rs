@@ -30,10 +30,10 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::facts::CodebaseFacts;
+use super::fact::CodebaseFacts;
 use super::regression::RegressionFilter;
-use super::sections::{Params, ROW_LIMIT, Rollup};
-use super::{detail, facts, related, sections};
+use super::section::{Params, ROW_LIMIT, Rollup};
+use super::{detail, fact, related, section};
 use crate::OrbitRuntime;
 
 const DEFAULT_WINDOW: &str = "90d";
@@ -193,7 +193,7 @@ enum CheckoutPresence {
 /// and pilot receipts use task-history receipts only, without delivery
 /// observation.
 pub fn codebase_scan(rt: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> {
-    facts::scan(rt, None, true, None)
+    fact::scan(rt, None, true, None)
 }
 
 /// [`codebase_scan`] over a task list and history stamps a
@@ -205,7 +205,7 @@ pub(crate) fn codebase_scan_with_tasks(
     tasks: Vec<orbit_types::task::Task>,
     stamps: std::collections::BTreeMap<String, String>,
 ) -> Result<CodebaseFacts, OrbitError> {
-    facts::scan(rt, None, true, Some((tasks, stamps)))
+    fact::scan(rt, None, true, Some((tasks, stamps)))
 }
 
 /// Scan facts for related-file queries in this window. Delivery fallback
@@ -215,7 +215,7 @@ pub fn codebase_related_scan(
     rt: &OrbitRuntime,
     query: &CodebaseQuery,
 ) -> Result<CodebaseFacts, OrbitError> {
-    facts::scan(rt, Some(&query.params()), true, None)
+    fact::scan(rt, Some(&query.params()), true, None)
 }
 
 /// Scan, then rank for `query`. For callers that keep no scan, so the
@@ -257,11 +257,11 @@ pub fn codebase_analytics(
     cache_ttl: Duration,
 ) -> Value {
     let params = query.params();
-    let mut payload = sections::all_sections(facts, &params);
+    let mut payload = section::all_sections(facts, &params);
     if params.rollup == Rollup::File {
         mark_absent_rows(&mut payload, &facts.repo_root);
     }
-    payload = sections::merge(payload, query.header(facts, params.since));
+    payload = section::merge(payload, query.header(facts, params.since));
     payload["regression_filter"] = query.filter.json();
     payload["known_paths"] = json!(related::known_paths(facts));
     payload["cache_ttl_seconds"] = json!(cache_ttl.as_secs());
@@ -293,7 +293,7 @@ pub fn codebase_path_detail(
         }
     }
     detail["regression_filter"] = query.filter.json();
-    Ok(sections::merge(detail, query.header(facts, params.since)))
+    Ok(section::merge(detail, query.header(facts, params.since)))
 }
 
 // Check each distinct listed path at query time, including cached scan consumers.
@@ -425,5 +425,5 @@ pub fn codebase_related(
 ) -> Result<Value, OrbitError> {
     let params = query.params();
     let payload = related::related(facts, &params, path, top)?;
-    Ok(sections::merge(query.header(facts, params.since), payload))
+    Ok(section::merge(query.header(facts, params.since), payload))
 }

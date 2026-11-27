@@ -436,7 +436,7 @@ forecast's exact-line allowance does not apply to review.
 
 Reviewer effort selection still needs the candidate's reviewable lines and
 changed files. It reads them through review's `ReviewCandidateSizePort`;
-`app/codebase/diff_stats.rs` implements the port on `ReviewPort`, a struct
+`app/codebase/diff_stat.rs` implements the port on `ReviewPort`, a struct
 holding the runtime that `app/port.rs` binds, by delegating to the existing
 `candidate_review_size` calculation. This preserves path filters,
 counting and unreadable-repository or commit fallbacks while removing the
@@ -526,7 +526,7 @@ shim until its remaining callers import `job::run::definition`, a follow-up.
 This cuts the direct `run` ↔ `pipeline` cycle, not the larger strongly
 connected component both modules still sit in.
 
-`codebase/diff_stats.rs` owns landed task line aggregation over landed diff
+`codebase/diff_stat.rs` owns landed task line aggregation over landed diff
 rows, shared by agent facts and experiment readout. Experiment reads agent
 facts, while the dependency guard rejects agents paths, grouped imports,
 `super::` chains and calls to experiment-owned inherent methods. This cuts
@@ -537,7 +537,7 @@ but above `task` [ORB-22625]. Task owns the pure block classification
 (`task::block_cause`: `BlockCause`, `Anchor`, `classify_block`, `actor_kind`,
 `entry_marks_run`), which its blocked-recovery readout calls, and records a
 done landing's diff stats through `task::TaskCodebasePort`, which
-`app::codebase` implements on `TaskPort` in `app/codebase/diff_stats.rs`, bound
+`app::codebase` implements on `TaskPort` in `app/codebase/diff_stat.rs`, bound
 in `app/port.rs`. `codebase` keeps the
 failed-claim settlement read that needs `distributed`, so `task -> codebase ->
 distributed` no longer climbs; it also keeps the persisted representation of

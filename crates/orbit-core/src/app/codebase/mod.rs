@@ -12,17 +12,15 @@
 //! The scans and the regression layers the dashboard slices and checks its
 //! selection against are read models: their [`Outcome`] is the model.
 
-mod analytics;
-
 mod detail;
 
-mod diff_stats;
+mod diff_stat;
 
-mod facts;
+mod fact;
 
 mod landed;
 
-mod lock_waits;
+mod lock_wait;
 
 mod operation;
 
@@ -32,9 +30,11 @@ mod regression;
 
 mod related;
 
-mod riskiness;
+mod risk;
 
-mod sections;
+mod section;
+
+mod service;
 
 mod stored;
 
@@ -49,30 +49,30 @@ pub use super::tool_call::Input;
 use crate::Core;
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
-pub use analytics::{
+pub use diff_stat::{DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill};
+pub use fact::CodebaseFacts;
+pub use regression::RegressionFilter;
+pub use risk::{TASK_RISKINESS_ESTIMATOR_VERSION, TaskRiskinessModel};
+pub use service::{
     CodebaseQuery, RelatedQuery, codebase_analytics, codebase_path_detail, codebase_related,
 };
-pub use diff_stats::{DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill};
-pub use facts::CodebaseFacts;
-pub use regression::RegressionFilter;
-pub use riskiness::{TASK_RISKINESS_ESTIMATOR_VERSION, TaskRiskinessModel};
 
 // Crate-internal re-exports for sibling apps, units and adapters.
-pub(crate) use analytics::codebase_scan_with_tasks;
-#[cfg(test)]
-use analytics::test_mark_absent_row_with_lookup;
-use analytics::{codebase_related_scan, codebase_scan};
 #[cfg(not(feature = "test-support"))]
-use analytics::{scan_analytics, scan_path_detail, scan_related};
-#[cfg(not(feature = "test-support"))]
-pub(crate) use diff_stats::landed_diff_stats;
-pub(crate) use diff_stats::{
+pub(crate) use diff_stat::landed_diff_stats;
+pub(crate) use diff_stat::{
     ReviewPort, TaskPort, backfill_landed_diff_stats, landed_task_lines_changed,
     record_direct_landing_diff_stats,
 };
-pub(crate) use facts::{
+pub(crate) use fact::{
     Anchor, BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements_of,
 };
+pub(crate) use service::codebase_scan_with_tasks;
+#[cfg(test)]
+use service::test_mark_absent_row_with_lookup;
+use service::{codebase_related_scan, codebase_scan};
+#[cfg(not(feature = "test-support"))]
+use service::{scan_analytics, scan_path_detail, scan_related};
 // `PilotAssessment` is named only by scorecard test fixtures.
 #[allow(unused_imports)]
 pub(crate) use pilot::{
@@ -80,18 +80,18 @@ pub(crate) use pilot::{
     pilot_evidence,
 };
 #[cfg(not(feature = "test-support"))]
-pub(crate) use riskiness::task_riskiness_model;
+pub(crate) use risk::task_riskiness_model;
 
 // Integration-fixture re-exports behind the dev-only `test-support` feature.
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
-pub use analytics::{scan_analytics, scan_path_detail, scan_related};
+pub use diff_stat::landed_diff_stats;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
-pub use diff_stats::landed_diff_stats;
+pub use risk::task_riskiness_model;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
-pub use riskiness::task_riskiness_model;
+pub use service::{scan_analytics, scan_path_detail, scan_related};
 
 /// What the codebase app can be asked to do.
 pub enum Command {

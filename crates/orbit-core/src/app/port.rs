@@ -24,7 +24,9 @@ const _: () = {
 
 // Compile-time proof that each bound implementor satisfies its port trait.
 const _: for<'a> fn(&'a TaskCorpus<'a>) -> &'a dyn TaskCorpusPort = |port| port;
+
 const _: for<'a> fn(&'a TaskCodebase<'a>) -> &'a dyn TaskCodebasePort = |port| port;
+
 const _: for<'a> fn(&'a ReviewCandidateSize<'a>) -> &'a dyn ReviewCandidateSizePort = |port| port;
 
 impl ResidentRoutineStatusPort for ResidentRoutineStatus<'_> {

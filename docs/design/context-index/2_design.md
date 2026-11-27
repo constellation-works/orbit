@@ -66,7 +66,7 @@ A fourth seam, a predicted-files hint to the implementer, is deliberately not pr
 
 ### 1.3 What was considered and rejected: a core index
 
-Core could build a file-only index with no plugin at all. It already caches each task's landed paths (`codebase_task_facts`, [facts/history.rs](../../../crates/orbit-core/src/app/codebase/facts/history.rs)) for `orbit.codebase` action `related`, and it holds the task text. That would be the fewest moving parts for files. It is rejected because symbols could never join it, and because a tokeniser, a stopword list and a scoring formula tuned on one workspace's vocabulary are the kind of narrow behaviour core is meant to leave to a plugin. The feed in §1.2 gives a plugin the same data.
+Core could build a file-only index with no plugin at all. It already caches each task's landed paths (`codebase_task_facts`, [fact/history.rs](../../../crates/orbit-core/src/app/codebase/fact/history.rs)) for `orbit.codebase` action `related`, and it holds the task text. That would be the fewest moving parts for files. It is rejected because symbols could never join it, and because a tokeniser, a stopword list and a scoring formula tuned on one workspace's vocabulary are the kind of narrow behaviour core is meant to leave to a plugin. The feed in §1.2 gives a plugin the same data.
 
 ## 2. What is indexed
 

@@ -32,8 +32,8 @@ use orbit_types::task::{
 };
 use serde_json::{Value, json};
 
-use super::facts::{Anchor, CodebaseFacts, TaskFacts, actor_kind};
-use super::sections::{Params, Tally, rate_fields};
+use super::fact::{Anchor, CodebaseFacts, TaskFacts, actor_kind};
+use super::section::{Params, Tally, rate_fields};
 
 /// A link stored without a `regression` payload.
 const ABSENT: &str = "absent";

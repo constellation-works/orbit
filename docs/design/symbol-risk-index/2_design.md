@@ -183,7 +183,7 @@ Five proposed owner-store tables, added by one store migration:
 | `symbol_index_generations` | `(workspace, generation_id)` | The §1 header |
 | `symbol_index_records` | `(generation_id, selector)` | The §1 record, plus `(generation_id, path)` file rows |
 | `symbol_lineage` | `(workspace, from_selector, to_selector)` | Rename links with the generation that recorded them and the basis (`indexer`, `digest`) |
-| `symbol_change_events` | `(workspace, landed_commit, selector)` | Which selectors a landed commit changed, joined to its task through the landed-delivery rows of `codebase/diff_stats.rs` |
+| `symbol_change_events` | `(workspace, landed_commit, selector)` | Which selectors a landed commit changed, joined to its task through the landed-delivery rows of `codebase/diff_stat.rs` |
 | `symbol_index_build_state` | `(workspace)` | One row per workspace: the next `build_seq` to allocate and the advisory single-flight lease (`lease_run_id`, `lease_expires_at`); see §4 |
 
 The records and generations are a **derived cache**. Dropping them costs one rebuild. Change

@@ -18,13 +18,13 @@ use crate::OrbitRuntime;
 
 #[derive(Debug, Clone)]
 pub(in crate::app::codebase) struct TaskFacts {
-    pub(in crate::app::codebase) landed: Option<super::super::landed::Landed>,
+    pub(in crate::app::codebase) landed: Option<crate::app::codebase::landed::Landed>,
     /// Landing receipt time, else done time: admits delivery fallback and
     /// places unavailable deliveries in the same window.
     pub(in crate::app::codebase) delivery_at: Option<DateTime<Utc>>,
     /// For a landed task, what its task-pilot receipts record; attributed to
     /// a pilot run only when the pilots scorecard reads it.
-    pub(in crate::app::codebase) pilot: Option<super::super::pilot::PilotInputs>,
+    pub(in crate::app::codebase) pilot: Option<crate::app::codebase::pilot::PilotInputs>,
     /// Tagged `no-diff-expected`: the task was not meant to change files.
     pub(in crate::app::codebase) no_diff: bool,
     pub(in crate::app::codebase) id: String,
@@ -49,7 +49,7 @@ pub(in crate::app::codebase) struct TaskFacts {
     pub(in crate::app::codebase) blocks: Vec<Block>,
     /// The `regression_from` links that target this task, one per
     /// regression task, by its ID.
-    pub(in crate::app::codebase) regressions: Vec<super::super::regression::RegressionLink>,
+    pub(in crate::app::codebase) regressions: Vec<crate::app::codebase::regression::RegressionLink>,
     /// When the task entered a status other than `backlog`, ascending: each
     /// ends any lock wait in progress, since only a backlog task is admitted.
     pub(in crate::app::codebase) left_backlog: Vec<DateTime<Utc>>,
@@ -140,7 +140,7 @@ pub struct CodebaseFacts {
 /// stamp and settlements match, and computed and stored otherwise.
 pub(in crate::app::codebase) fn scan(
     runtime: &OrbitRuntime,
-    delivery_window: Option<&super::super::sections::Params>,
+    delivery_window: Option<&crate::app::codebase::section::Params>,
     include_landed: bool,
     listed: Option<(Vec<Task>, BTreeMap<String, String>)>,
 ) -> Result<CodebaseFacts, OrbitError> {

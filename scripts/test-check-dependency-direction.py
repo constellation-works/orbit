@@ -561,9 +561,9 @@ class RelativeImportTests(unittest.TestCase):
                 "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
                 "        crate::app::port::TaskCodebase { rt: self }.record_landed_probe();\n"
                 "    }\n}\n",
-            "app/codebase/diff_stats.rs":
+            "app/codebase/diff_stat.rs":
                 "impl TaskCodebasePort for TaskPort<'_> {\n    fn record_landed_probe(&self) {}\n}\n",
-            "app/codebase/facts/block_cause.rs":
+            "app/codebase/fact/block_cause.rs":
                 "use crate::application::distributed::LeafSettlement;\n"
                 "pub(crate) use crate::application::task::classify_block;\n",
         }, rejected=False, base=core_src)
@@ -708,7 +708,7 @@ class RelativeImportTests(unittest.TestCase):
         allowed = ("fn assemble(runtime: &OrbitRuntime) {\n"
                    "    let risk_model = crate::app::codebase::task_riskiness_model(runtime)?;\n}\n")
         self.check_files({
-            "app/codebase/riskiness.rs": codebase,
+            "app/codebase/risk.rs": codebase,
             "application/backlog_forecast/assembly.rs": allowed,
         }, rejected=False, base=core_src)
         for relative, source in (
@@ -726,7 +726,7 @@ class RelativeImportTests(unittest.TestCase):
              "use super::super::super::application::{backlog_forecast::Probe};\n"),
         ):
             with self.subTest(relative=relative, source=source):
-                self.check_files({"app/codebase/riskiness.rs": codebase, relative: source},
+                self.check_files({"app/codebase/risk.rs": codebase, relative: source},
                                  rejected=True, base=core_src)
 
     def test_review_cannot_name_codebase(self):
@@ -1266,7 +1266,7 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=True, base=core_src)
         self.check_files({
             "application/experiment/readout.rs": "use crate::app::agent::Probe;\n",
-            "app/codebase/diff_stats.rs":
+            "app/codebase/diff_stat.rs":
                 "pub(crate) fn landed_task_lines_changed(rt: &OrbitRuntime) {}\n",
             "app/agent/facts/scan.rs":
                 "fn scan(runtime: &OrbitRuntime) {\n"
