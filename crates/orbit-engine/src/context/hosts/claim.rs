@@ -43,6 +43,9 @@ pub struct HandoffLandingContext {
     /// The accepted candidate: repository, branches, candidate/base revisions
     /// and delivery variant.
     pub candidate: orbit_types::workflow::handoff::HandoffCandidate,
+    /// Whether the owner requires review of the exact handoff head even
+    /// when landing could otherwise adopt a verified base-only update.
+    pub security_state_review_required: bool,
     /// An external merge request this owner sent but never confirmed. It must
     /// be reconciled against real state before anything else happens.
     pub unresolved_merge_intent: Option<String>,

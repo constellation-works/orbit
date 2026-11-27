@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_types::task::{Task, requires_security_state_review};
 use serde_json::{Value, json};
 
 use crate::context::{HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment};
@@ -35,6 +36,7 @@ struct FastForwardTarget<'a> {
     base: &'a str,
     workspace_branch: &'a str,
     base_sync_mode: BaseSyncMode,
+    security_review: bool,
 }
 
 pub(in crate::executor::automation) fn merge_batch_worktree_into_base<
@@ -42,6 +44,7 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<
 >(
     host: &H,
     input: &Value,
+    batch_tasks: &[Task],
 ) -> Result<Value, OrbitError> {
     let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
     let run_id = super::require_run_id(input, "merge_batch_worktree_into_base")?;
@@ -97,6 +100,9 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<
             base: &base,
             workspace_branch: &workspace_branch,
             base_sync_mode,
+            security_review: batch_tasks
+                .iter()
+                .any(|task| requires_security_state_review(&task.tags)),
         },
     )?;
     // A moved branch is a fact even if recording its diff stats fails.
@@ -161,6 +167,7 @@ fn merge_with_rebase_retry(
         base,
         workspace_branch,
         base_sync_mode,
+        security_review,
     } = target;
     for attempt in 0..=MAX_REBASE_RETRY_ATTEMPTS {
         let start_point =
@@ -186,6 +193,22 @@ fn merge_with_rebase_retry(
         }
         let before = git_output(process_env, base_checkout, &["rev-parse", "HEAD"])?;
         let after = git_output(process_env, workspace_path, &["rev-parse", "HEAD"])?;
+        if security_review {
+            if !crate::executor::automation::vcs::git::is_ancestor(
+                process_env,
+                repo_root,
+                after.trim(),
+                before.trim(),
+            )? {
+                return Err(
+                    crate::executor::automation::vcs::pr::tagged_candidate_requires_pr_review(),
+                );
+            }
+            return Ok(FastForwardLanding {
+                before: before.trim().to_string(),
+                after: before.trim().to_string(),
+            });
+        }
         if before.trim() != after.trim()
             && crate::executor::automation::vcs::git::is_ancestor(
                 process_env,

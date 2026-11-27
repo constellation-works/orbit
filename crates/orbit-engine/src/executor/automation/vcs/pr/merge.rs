@@ -1,7 +1,11 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskStatus};
+use orbit_types::task::{
+    GITHUB_PR_EXTERNAL_REF_SYSTEM, SECURITY_STATE_REVIEW_TAG, TaskStatus,
+    requires_security_state_review,
+};
+use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
 use crate::context::{
@@ -137,12 +141,32 @@ pub(in crate::executor::automation) fn git_merge<
             if let Some(held) = local_completion_hold(host, input, batch_id, &batch_tasks)? {
                 return Ok(held);
             }
-            super::super::worktree::merge_batch_worktree_into_base(host, input)
+            crate::executor::automation::vcs::worktree::merge_batch_worktree_into_base(
+                host,
+                input,
+                &batch_tasks,
+            )
+        }
+        "pr_merge"
+            if batch_tasks
+                .iter()
+                .any(|task| requires_security_state_review(&task.tags)) =>
+        {
+            Err(tagged_candidate_requires_pr_review())
         }
         "pr_merge" => merge_batch_pr(host, input),
         other => Err(OrbitError::InvalidInput(format!(
             "git_merge: unknown strategy '{other}'; expected fast_forward or pr_merge"
         ))),
+    }
+}
+
+pub(in crate::executor::automation::vcs) fn tagged_candidate_requires_pr_review() -> OrbitError {
+    OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::RequirementsUnsatisfied,
+        message: format!(
+            "`{SECURITY_STATE_REVIEW_TAG}` requires review before landing; use the reviewed PR delivery route"
+        ),
     }
 }
 

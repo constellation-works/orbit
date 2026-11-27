@@ -254,7 +254,8 @@ selected from `workflow.purpose_crews.pre_landing_review` (else
 `workflow.purpose_crews.review`) and its source, the lineage budget,
 the policy version, the owner's `workflow.required_validation_commands`
 list, and its `review.baseline_commands` list (§4). A
-parent-authorized child inherits its parent's snapshot exactly; any other submission resolves from the
+parent-authorized child inherits its parent's snapshot. The PR leaf applies
+its task obligations to that snapshot. Other submissions resolve the
 workspace preferences at that moment. A distributed drain
 (`workspace_pull_pipeline`) captures the same snapshot, so the `before_pr` it
 declares to owners is the value it was submitted with. Ordinary input naming
@@ -271,6 +272,13 @@ refused there the same way, since a local delivery opens no pull request to
 review. Readiness and the drain's wave hold such backlog work before dispatch
 (`local_route_before_pr`, `local_route_before_landing`), and doctor fails its
 `review` check while either switch is on for a workspace that ships locally.
+
+Any delivered task tagged `security-state-review` requires the candidate to
+pass review before landing. An owner PR leaf uses the captured layer, or
+before-landing review when the captured policy is off. The admission evidence
+records the tag as the source. Built-in and mapped review-skip tags cannot
+waive it. A local route or a claim without an owner-captured review layer
+holds the candidate. A moved head needs its own approval.
 
 ## 3. The gate
 

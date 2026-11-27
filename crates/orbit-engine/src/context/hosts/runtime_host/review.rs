@@ -142,6 +142,16 @@ pub trait ReviewGate: Send + Sync {
 
     // ── Before-PR review coverage [ORB-11333] ───────────────────────────
 
+    /// Check the authenticated passing review on the exact head for a task
+    /// that requires security-state review. Hosts with no evidence refuse it.
+    fn security_state_review_ready(
+        &self,
+        _task: &orbit_types::task::Task,
+        _head: &str,
+    ) -> Result<bool, OrbitError> {
+        Ok(false)
+    }
+
     /// Record how a reviewed candidate actually landed after a managed
     /// merge. Hosts without review evidence keep the pre-existing behavior.
     fn record_review_landing(&self, request: &ReviewLandingRequest) -> Result<(), OrbitError>;

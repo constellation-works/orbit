@@ -307,6 +307,7 @@ pub(super) fn accepted_landing(fx: &Fixture, host: DeliveryHost) -> AcceptedLand
     AcceptedLanding {
         host,
         context: orbit_engine::HandoffLandingContext {
+            security_state_review_required: false,
             handoff_id: "accepted-fixture".into(),
             task_id: TASK_ID.into(),
             claim_id: "fixture-claim".into(),

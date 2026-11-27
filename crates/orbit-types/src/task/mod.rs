@@ -174,5 +174,6 @@ pub use ui_requirement::{
     BROWSER_KIT_INSTALL_COMMAND, UI_TAG, browser_kit_wait, requires_browser_kit,
 };
 pub use work_class::{
-    CHANGE_WORK_CLASS, NO_DIFF_WORK_CLASS, auto_task_template, is_no_diff_expected, work_class,
+    CHANGE_WORK_CLASS, NO_DIFF_WORK_CLASS, SECURITY_STATE_REVIEW_TAG, auto_task_template,
+    is_no_diff_expected, requires_security_state_review, work_class,
 };

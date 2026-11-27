@@ -72,6 +72,7 @@ fn hand_off<'a>(fx: &Fixture, follower: &'a DeliveryHost, spent: bool) -> DraftL
     DraftLanding {
         follower,
         context: HandoffLandingContext {
+            security_state_review_required: false,
             handoff_id: "draft-handoff".into(),
             task_id: TASK_ID.into(),
             claim_id: "claim-landing".into(),

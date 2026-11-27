@@ -42,7 +42,11 @@ impl OrbitRuntime {
                 .iter()
                 .map(|entry| entry.event.as_str()),
         ) > 0;
+        let security_state_review_required = orbit_types::task::requires_security_state_review(
+            &self.get_task(&accepted.handoff.task_id)?.tags,
+        );
         Ok(HandoffLandingContext {
+            security_state_review_required,
             handoff_id: accepted.handoff_id,
             task_id: accepted.handoff.task_id,
             claim_id: accepted.handoff.claim_id,

@@ -1,6 +1,8 @@
 //! Completing a pull request delivery: input pins, completion and task updates.
 
 use orbit_common::OrbitError;
+use orbit_types::task::{SECURITY_STATE_REVIEW_TAG, requires_security_state_review};
+use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
 use crate::context::{
@@ -16,7 +18,7 @@ use super::super::super::completion_hold::{
 };
 use super::super::super::handoff::load_handoff_context;
 use super::super::auto_fix::AutoFix;
-use super::drive::{Delivery, drive_pr_to_merged};
+use super::drive::{CompletionDrive, Delivery, drive_pr_to_merged};
 use super::mutation::{ensure_all_tasks_no_diff_expected, resolve_pr_number};
 use super::reviewed::reviewed_head_sha;
 
@@ -81,6 +83,37 @@ where
             json!({ "merged": false, "reason": "no_diff_expected" })
         }
     } else {
+        let security_tasks = context
+            .tasks
+            .iter()
+            .filter(|task| requires_security_state_review(&task.tags));
+        let exact_review_required = security_tasks.clone().next().is_some();
+        // A resumed delivery may already have an authenticated approval for
+        // its published head, even if its checkpoint carries no review pin.
+        let from_publication = (exact_review_required && reviewed_head_sha(input).is_none())
+            .then(|| input_string_field(input, "published_head_sha"))
+            .flatten()
+            .map(|head| {
+                let mut pinned = input.clone();
+                pinned["reviewed_head_sha"] = json!(head);
+                pinned
+            });
+        let input = from_publication.as_ref().unwrap_or(input);
+        let reviewed = reviewed_head_sha(input);
+        for task in security_tasks {
+            let ready = match &reviewed {
+                Some(head) => host.security_state_review_ready(task, head)?,
+                None => false,
+            };
+            if !ready {
+                return Err(OrbitError::DeliveryRefused {
+                    refusal: DeliveryRefusal::RequirementsUnsatisfied,
+                    message: format!(
+                        "`{SECURITY_STATE_REVIEW_TAG}` requires a passing review of this exact candidate before landing"
+                    ),
+                });
+            }
+        }
         let workspace_path = context.workspace_path.to_string_lossy().into_owned();
         let pr_number = resolve_pr_number(input, &context.tasks)?;
         // [ORB-23322] Decide a hold on the files the pull request changes
@@ -120,12 +153,15 @@ where
         });
         let delivered = match drive_pr_to_merged(
             host,
-            input,
-            &workspace_path,
-            &pr_number,
-            &task_ids,
-            auto_fix.as_ref(),
-            hold_check.as_ref(),
+            CompletionDrive {
+                input,
+                workspace_path: &workspace_path,
+                pr_number: &pr_number,
+                task_ids: &task_ids,
+                auto_fix: auto_fix.as_ref(),
+                hold_check: hold_check.as_ref(),
+                exact_review_required,
+            },
         )? {
             Delivery::Held(hold) => {
                 record_completion_hold(host, &task_ids, &hold)?;
@@ -267,12 +303,15 @@ where
     Ok(
         match drive_pr_to_merged(
             host,
-            &watch_input,
-            workspace_path,
-            pr_number,
-            task_ids,
-            Some(&auto_fix),
-            None,
+            CompletionDrive {
+                input: &watch_input,
+                workspace_path,
+                pr_number,
+                task_ids,
+                auto_fix: Some(&auto_fix),
+                hold_check: None,
+                exact_review_required: false,
+            },
         )? {
             Delivery::Watched(outcome) => held_output(false, outcome, task_ids, hold, false, None),
             // A watch carries no hold check, so this arm is unreachable;

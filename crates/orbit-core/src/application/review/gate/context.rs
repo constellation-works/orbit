@@ -6,14 +6,14 @@ use std::path::PathBuf;
 use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
 use orbit_common::OrbitError;
 use orbit_engine::BaseSyncMode;
-use orbit_types::task::Task;
+use orbit_types::task::{Task, requires_security_state_review};
 use orbit_types::workflow::{ReviewAdmission, ReviewGateAdmissionOutput, ReviewGateNotApplicable};
 use serde_json::{Value, json};
 
-use super::super::admission::run_review_admission;
 use super::super::{MAX_RESUME_CHAIN, automation_error, lineage_key, resumes_owner};
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
+use crate::application::review::admission::{apply_security_state_review, run_review_admission};
 
 /// Shared inputs of both gate steps.
 pub(super) struct GateContext {
@@ -74,23 +74,14 @@ impl GateContext {
         admission: Option<ReviewAdmission>,
     ) -> Result<Self, OrbitError> {
         let run_id = admitted_run_id(input)?;
-        let task_ids = input
-            .get("completed_task_ids")
-            .and_then(Value::as_array)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::trim)
-                    .filter(|id| !id.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|ids| !ids.is_empty())
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(
-                    "review gate requires input.completed_task_ids".to_string(),
-                )
-            })?;
+        let task_ids = completed_task_ids(input)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if task_ids.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "review gate requires input.completed_task_ids".to_string(),
+            ));
+        }
         let workspace_path = PathBuf::from(required_string(input, "workspace_path")?)
             .canonicalize()
             .map_err(|error| {
@@ -142,10 +133,17 @@ impl GateContext {
             }
             tasks.push(task);
         }
-        let admission = match admission {
+        let mut admission = match admission {
             Some(admission) => Some(admission),
             None => run_review_admission(runtime, &run_id)?,
         };
+        if let Some(admission) = &mut admission
+            && tasks
+                .iter()
+                .any(|task| requires_security_state_review(&task.tags))
+        {
+            apply_security_state_review(admission);
+        }
         let task_digests = compute_task_digests(&tasks)?;
         // A claim is one delivery attempt, never resumed: it keys its own
         // lineage, held in this executor's review store.
@@ -287,6 +285,17 @@ fn required_string(input: &Value, key: &str) -> Result<String, OrbitError> {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .ok_or_else(|| OrbitError::InvalidInput(format!("review gate requires input.{key}")))
+}
+
+pub(super) fn completed_task_ids(input: &Value) -> impl Iterator<Item = &str> {
+    input
+        .get("completed_task_ids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
 }
 
 /// The admitted job that captured review policy and owns the candidate.

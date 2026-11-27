@@ -69,3 +69,5 @@ pub(in crate::executor::automation::vcs) use open::{
 pub(in crate::executor::automation) use promote::pr_promote;
 pub(crate) use recovery::{CompletionRecoveryChecks, completion_recovery_checks};
 pub(in crate::executor::automation::vcs) use review_retry::{ReviewCiRetryStep, recover_review_ci};
+
+pub(in crate::executor::automation::vcs) use merge::tagged_candidate_requires_pr_review;

@@ -1,7 +1,7 @@
 //! Review's side of the task-owned review port [ORB-17936].
 
 use orbit_common::OrbitError;
-use orbit_types::task::{ArtifactManifestFileV2, Task};
+use orbit_types::task::{ArtifactManifestFileV2, Task, requires_security_state_review};
 use orbit_types::workflow::ReviewAdmission;
 use orbit_types::workflow::handoff::AcceptedHandoff;
 use serde_json::Value;
@@ -36,7 +36,15 @@ impl TaskReviewPort for OrbitRuntime {
             .flatten();
         let gated = |timing| matches!(timing, ReviewTiming::BeforePr | ReviewTiming::BeforeLanding);
         let policy = self.operation_policy();
-        if !policy.review_before_pr.value
+        let mut security_review = requires_security_state_review(&task.tags);
+        if !security_review && let Some(run_id) = &task.job_run_id {
+            security_review = self
+                .list_run_tasks(run_id)?
+                .iter()
+                .any(|member| requires_security_state_review(&member.tags));
+        }
+        if !security_review
+            && !policy.review_before_pr.value
             && !policy.review_before_landing.value
             && !captured.is_some_and(|admission| gated(admission.timing))
         {
@@ -80,10 +88,15 @@ impl TaskReviewPort for OrbitRuntime {
         if !certificate.verdict.passed()
             || !certificate.validation_complete
             || !certificate.task_ids.contains(&task.id)
+            || (security_review
+                && orbit_automation::review::certificate_acceptable(&certificate).is_err())
         {
             return Ok(false);
         }
         if certificate.final_candidate.commit != head {
+            if security_review {
+                return Ok(false);
+            }
             let base_branch = self.delivery_target_branch(task);
             let pr_number = task
                 .external_refs
