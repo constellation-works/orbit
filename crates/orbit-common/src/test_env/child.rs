@@ -145,6 +145,10 @@ impl FixtureProgress {
         self.report("done");
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "fixture progress bypasses libtest capture so an overrun's kill does not lose the line"
+    )]
     fn report(&mut self, state: &str) {
         self.reported = std::time::Instant::now();
         // Bypass libtest capture: an overrun's kill must not lose the line.
@@ -183,6 +187,10 @@ pub fn assert_child_test_passed(
 /// Like [`assert_child_test_passed`], but forwards a matched notice line only
 /// when `forward_notice` returns `true`, so negative-control tests that trigger
 /// a `SKIP:` notice on purpose do not emit it as a real host coverage gap.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "deferral/skip/test-note notices bypass libtest capture, as the child's own notice did"
+)]
 pub fn assert_child_test_passed_filtering(
     test_name: &str,
     status: std::process::ExitStatus,
@@ -225,6 +233,10 @@ pub fn assert_child_test_passed_filtering(
 /// Retain a consolidated behavioral row's completion at the test-command boundary.
 /// Call only after the row's assertions return; unavailable coverage must still
 /// emit its skip or deferral notice, which invalidates QA execution credit.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "qa-scenario-pass rows bypass libtest capture to retain completion at the test-command boundary"
+)]
 pub fn record_scenario_pass(name: &str) {
     let _ = writeln!(std::io::stderr(), "qa-scenario-pass: {name}");
 }
