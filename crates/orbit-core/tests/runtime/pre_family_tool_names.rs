@@ -4,9 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
+use orbit_core::app::workspace::reconcile_workspace_managed_artifacts;
 use orbit_core::application::auto_tasks::AutoTaskBody;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::application::workspace_sync::reconcile_workspace_managed_artifacts;
 use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Recovery;
 use orbit_types::plugin::InstalledPlugin;

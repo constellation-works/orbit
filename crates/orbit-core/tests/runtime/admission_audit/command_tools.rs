@@ -129,8 +129,7 @@ fn auth_family_env_is_excluded_from_child_and_not_leaked_in_persisted_output() {
         "author name must remain intact in diagnostic output: {rendered}"
     );
 
-    let events = runtime
-        .list_audit_events(None, None, None, None, 200)
+    let events = orbit_core::app::audit::list_audit_events(&runtime, None, None, None, None, 200)
         .expect("read audit events");
     let event = events
         .iter()
@@ -171,8 +170,7 @@ fn secret_argv_reaches_child_but_is_redacted_in_the_audit_record() {
         "the raw secret must reach the controlled test child unchanged: {result}"
     );
 
-    let events = runtime
-        .list_audit_events(None, None, None, None, 200)
+    let events = orbit_core::app::audit::list_audit_events(&runtime, None, None, None, None, 200)
         .expect("read audit events");
     let event = events
         .iter()
@@ -402,8 +400,7 @@ fn audited_exec_refusal(runtime: &OrbitRuntime, input: Value) -> String {
 
 /// The audit row a refused `orbit.command.exec` call left behind.
 fn refused_exec_audit_arguments(runtime: &OrbitRuntime) -> String {
-    let events = runtime
-        .list_audit_events(None, None, None, None, 200)
+    let events = orbit_core::app::audit::list_audit_events(runtime, None, None, None, None, 200)
         .expect("read audit events");
     events
         .iter()

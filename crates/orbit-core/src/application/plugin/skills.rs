@@ -23,7 +23,7 @@ use orbit_common::OrbitError;
 use orbit_common::fs::io::{create_dir_symlink, remove_path_if_exists};
 use orbit_tools::plugin::LoadedPlugin;
 
-use crate::application::skill::skill_link_roots;
+use crate::app::skill::skill_link_roots;
 
 /// Kernel `ELOOP` bound. A longer chain, including a cycle, has no physical
 /// target this process can prove, so the link is not owned.

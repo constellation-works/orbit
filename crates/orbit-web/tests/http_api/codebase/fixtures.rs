@@ -184,16 +184,15 @@ pub(super) fn related(server: &Server, query: &str) -> Value {
 }
 
 pub(super) fn denied_events(fixture: &Fixture) -> Vec<orbit_types::telemetry::AuditEvent> {
-    fixture
-        .runtime
-        .list_audit_events(
-            None,
-            Some("orbit.task.locks.reserve".into()),
-            Some(AuditEventStatus::Denied),
-            None,
-            100,
-        )
-        .unwrap()
+    orbit_core::app::audit::list_audit_events(
+        &fixture.runtime,
+        None,
+        Some("orbit.task.locks.reserve".into()),
+        Some(AuditEventStatus::Denied),
+        None,
+        100,
+    )
+    .unwrap()
 }
 
 pub(super) fn request_lock(fixture: &Fixture, task: &str) -> Value {
@@ -512,9 +511,9 @@ pub(super) fn lock_denial_in_workspace(
         "conflicts": [{"file": format!("file:{file}"), "held_by": "task", "held_by_id": "HF-999"}],
         "owner_run_id": run,
     });
-    fixture
-        .runtime
-        .record_audit_event(&AuditEventInsertParams {
+    orbit_core::app::audit::record_audit_event(
+        &fixture.runtime,
+        &AuditEventInsertParams {
             execution_id: format!("lock-denial-{index}"),
             command: "task.locks.reserve.denied".into(),
             subcommand: None,
@@ -547,8 +546,9 @@ pub(super) fn lock_denial_in_workspace(
             job_run_id: run.map(str::to_string),
             activity_id: None,
             step_index: None,
-        })
-        .unwrap();
+        },
+    )
+    .unwrap();
 }
 
 pub(super) fn row<'a>(section: &'a Value, path: &str) -> Option<&'a Value> {

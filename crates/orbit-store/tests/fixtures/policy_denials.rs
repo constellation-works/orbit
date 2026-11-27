@@ -80,8 +80,9 @@ pub fn seed(runtime: &OrbitRuntime) {
         } else {
             None
         };
-        runtime
-            .record_audit_event(&AuditEventInsertParams {
+        orbit_core::app::audit::record_audit_event(
+            runtime,
+            &AuditEventInsertParams {
                 execution_id: id.to_string(),
                 command: command.to_string(),
                 subcommand: Some("run-mcp".to_string()),
@@ -127,8 +128,9 @@ pub fn seed(runtime: &OrbitRuntime) {
                 job_run_id: None,
                 activity_id: None,
                 step_index: None,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
     }
     runtime
         .insert_v2_audit_event(&V2AuditEventInsertParams {

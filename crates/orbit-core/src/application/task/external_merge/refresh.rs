@@ -93,7 +93,7 @@ impl OrbitRuntime {
         let mut heads = Vec::new();
         let mut parents = HashMap::new();
         loop {
-            let rows = self.list_audit_events_filtered(&filter)?;
+            let rows = crate::app::audit::list_audit_events_filtered(self, &filter)?;
             for row in &rows {
                 if row.command != PR_REFRESH_AUDIT_COMMAND
                     || row.subcommand.as_deref() != Some("updated")

@@ -76,6 +76,7 @@ pub use script::DashboardScriptGrant;
 pub use show::{RunDetail, ShownRun, WaitingTasks};
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::app::workspace::workspace_live_run_ids;
 pub use crate::application::change_watch::{RunStateStamp, TaskChangeStamp};
 pub use crate::application::contracts::{
     ClaimedLeafStage, DrainClaimedLeaf, PULL_DRAIN_JOB, PullSettlementEntry, PullSettlementOutcome,
@@ -101,7 +102,6 @@ pub use crate::application::job::{
     run_upgrade_paused,
 };
 pub use crate::application::workflow::{CompletionPolicy, ShipMode, resolved_ship_mode};
-pub use crate::application::workspace_live_runs::workspace_live_run_ids;
 pub use orbit_runtime::HostLifetime;
 pub use orbit_runtime::audit::run::{
     AuditStepOutcome, RunAuditEvent, RunAuditStep, RunProviderProcess, RunScriptExecution,

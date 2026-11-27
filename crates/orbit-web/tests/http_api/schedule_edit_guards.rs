@@ -204,17 +204,16 @@ fn denied_schedule_audits(
     fixture: &Fixture,
     operation: &str,
 ) -> Vec<orbit_types::telemetry::AuditEvent> {
-    fixture
-        .runtime
-        .list_audit_events_with_kind(
-            None,
-            None,
-            Some(operation.into()),
-            Some(AuditEventStatus::Denied),
-            None,
-            20,
-        )
-        .unwrap()
+    orbit_core::app::audit::list_audit_events_with_kind(
+        &fixture.runtime,
+        None,
+        None,
+        Some(operation.into()),
+        Some(AuditEventStatus::Denied),
+        None,
+        20,
+    )
+    .unwrap()
 }
 
 fn arguments_of(event: &orbit_types::telemetry::AuditEvent) -> Value {

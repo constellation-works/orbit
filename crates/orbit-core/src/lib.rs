@@ -285,6 +285,7 @@ pub use orbit_common::OrbitError as Error;
 // Crate-private shorthands the modules below name as `crate::…`.
 pub(crate) use app::routine::RoutineSeedIdentity;
 pub(crate) use app::search::{GlobalSearchKind, SearchRequest, SearchRequestProfile};
+pub(crate) use app::workspace::reconcile_workspace_managed_artifacts;
 pub(crate) use application::backlog_forecast::BacklogForecastHistory;
 pub(crate) use application::contracts::DrainEntryPoint;
 pub(crate) use application::distributed::WorkspacePullRequest;
@@ -298,7 +299,6 @@ pub(crate) use application::workflow::{
 };
 pub(crate) use application::workspace_auto::FleetReadinessFacts;
 pub(crate) use application::workspace_auto::{IDLE_WITH_WORK_DAYS, IdleWithWork};
-pub(crate) use application::workspace_sync::reconcile_workspace_managed_artifacts;
 pub(crate) use orbit_common::security::redaction::redact_sensitive_env_text;
 pub(crate) use orbit_common::{NotFoundKind, OrbitError};
 pub(crate) use orbit_runtime::context::ActorIdentity;

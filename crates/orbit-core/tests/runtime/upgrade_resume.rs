@@ -542,18 +542,20 @@ fn review_admission(runtime: &OrbitRuntime) -> ReviewAdmission {
 
 /// Every successful auto-resume decision recorded for `run_id`.
 fn decisions(ctx: &TestContext, run_id: &str) -> Vec<serde_json::Value> {
-    ctx.runtime
-        .list_audit_events_filtered(&AuditEventFilter {
+    orbit_core::app::audit::list_audit_events_filtered(
+        &ctx.runtime,
+        &AuditEventFilter {
             tool_name: Some(UPGRADE_RESUME_AUDIT.to_string()),
             status: Some(AuditEventStatus::Success),
             job_run_id: Some(run_id.to_string()),
             limit: 10,
             ..AuditEventFilter::default()
-        })
-        .unwrap()
-        .iter()
-        .map(|event| serde_json::from_str(event.arguments_json.as_deref().unwrap()).unwrap())
-        .collect()
+        },
+    )
+    .unwrap()
+    .iter()
+    .map(|event| serde_json::from_str(event.arguments_json.as_deref().unwrap()).unwrap())
+    .collect()
 }
 
 fn assert_skipped(ctx: &TestContext, run_id: &str, reason: &str) {

@@ -10,22 +10,27 @@ const WORKSPACE: &str = "?workspace=ws_http_fixture";
 
 /// The unknown-field audit rows written for `tool`, as `(field, tool)` pairs.
 fn unknown_field_rows(fixture: &Fixture, tool: &str) -> Vec<(String, String)> {
-    fixture
-        .runtime
-        .list_audit_events(None, Some(tool.to_string()), None, None, 100)
-        .expect("list audit events")
-        .into_iter()
-        .filter(|event| event.command == "tool_input")
-        .map(|event| {
-            let arguments: Value =
-                serde_json::from_str(event.arguments_json.as_deref().expect("audit arguments"))
-                    .expect("audit arguments JSON");
-            (
-                arguments["field"].as_str().expect("field").to_string(),
-                arguments["tool_name"].as_str().expect("tool").to_string(),
-            )
-        })
-        .collect()
+    orbit_core::app::audit::list_audit_events(
+        &fixture.runtime,
+        None,
+        Some(tool.to_string()),
+        None,
+        None,
+        100,
+    )
+    .expect("list audit events")
+    .into_iter()
+    .filter(|event| event.command == "tool_input")
+    .map(|event| {
+        let arguments: Value =
+            serde_json::from_str(event.arguments_json.as_deref().expect("audit arguments"))
+                .expect("audit arguments JSON");
+        (
+            arguments["field"].as_str().expect("field").to_string(),
+            arguments["tool_name"].as_str().expect("tool").to_string(),
+        )
+    })
+    .collect()
 }
 
 #[test]
@@ -82,20 +87,25 @@ fn dashboard_friction_requests_write_no_invocation_audit_row() {
                 json!({"status": "triaged"}),
             ));
 
-            let rows = fixture
-                .runtime
-                .list_audit_events(None, None, None, None, 100)
-                .expect("list audit events")
-                .into_iter()
-                .filter(|event| {
-                    event.command == "friction"
-                        || event
-                            .tool_name
-                            .as_deref()
-                            .is_some_and(|tool| tool.starts_with("orbit.friction"))
-                })
-                .map(|event| (event.command, event.subcommand, event.tool_name))
-                .collect::<Vec<_>>();
+            let rows = orbit_core::app::audit::list_audit_events(
+                &fixture.runtime,
+                None,
+                None,
+                None,
+                None,
+                100,
+            )
+            .expect("list audit events")
+            .into_iter()
+            .filter(|event| {
+                event.command == "friction"
+                    || event
+                        .tool_name
+                        .as_deref()
+                        .is_some_and(|tool| tool.starts_with("orbit.friction"))
+            })
+            .map(|event| (event.command, event.subcommand, event.tool_name))
+            .collect::<Vec<_>>();
             assert!(
                 rows.is_empty(),
                 "the dashboard audits no friction call: {rows:?}"

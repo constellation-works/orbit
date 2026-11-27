@@ -1301,9 +1301,11 @@ fn forwarded_audit_cursor_walks_the_remote_window_page_by_page() {
                         AuditEventStatus::Success,
                     )
                 };
-                b.runtime
-                    .record_audit_event(&audit_row(&id, Some(tool), status))
-                    .unwrap();
+                orbit_core::app::audit::record_audit_event(
+                    &b.runtime,
+                    &audit_row(&id, Some(tool), status),
+                )
+                .unwrap();
                 seeded.push((id, status));
             }
             let b_server = b.server(false);
@@ -1415,13 +1417,15 @@ fn forwarded_audit_cursor_survives_a_capped_short_page() {
             let b = Fixture::host("hostb", "HB");
             // More rows than one scan examines, none matching the needle.
             for index in 0..10_001 {
-                b.runtime
-                    .record_audit_event(&audit_row(
+                orbit_core::app::audit::record_audit_event(
+                    &b.runtime,
+                    &audit_row(
                         &format!("bulk-{index}"),
                         Some("orbit.task.show"),
                         AuditEventStatus::Success,
-                    ))
-                    .unwrap();
+                    ),
+                )
+                .unwrap();
             }
             let b_server = b.server(false);
             let a = Fixture::new();

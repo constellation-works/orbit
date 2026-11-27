@@ -228,10 +228,17 @@ fn add_task(runtime: &OrbitRuntime, title: &str) -> String {
 }
 
 fn notice_audit(runtime: &OrbitRuntime, status: AuditEventStatus) -> usize {
-    runtime
-        .list_audit_events_with_kind(None, None, Some("notice".into()), Some(status), None, 500)
-        .unwrap()
-        .len()
+    orbit_core::app::audit::list_audit_events_with_kind(
+        runtime,
+        None,
+        None,
+        Some("notice".into()),
+        Some(status),
+        None,
+        500,
+    )
+    .unwrap()
+    .len()
 }
 
 fn operator_posts_updates_and_closes_any_notice() {

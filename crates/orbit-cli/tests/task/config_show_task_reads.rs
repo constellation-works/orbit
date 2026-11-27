@@ -76,7 +76,7 @@ pub(crate) fn assert_one_config_show_takes_the_task_commit_lock_once(
 
     // The dashboard's effective view embeds the same section.
     let (effective, taken) =
-        acquisitions(|| orbit_core::application::config::effective_view(runtime).unwrap());
+        acquisitions(|| orbit_core::app::config::effective_view(runtime).unwrap());
     assert!(effective["review"]["after_landing"]["health"].is_object());
     assert_eq!(taken, 1, "the effective config view takes the lock once");
 }

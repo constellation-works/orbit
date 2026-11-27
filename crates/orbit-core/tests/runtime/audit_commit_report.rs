@@ -209,9 +209,15 @@ fn tasks_titled(runtime: &OrbitRuntime, title: &str) -> Vec<String> {
 }
 
 fn audit_rows(runtime: &OrbitRuntime) -> Vec<orbit_types::telemetry::AuditEvent> {
-    runtime
-        .list_audit_events(None, Some("orbit.task.add".to_string()), None, None, 20)
-        .expect("list audit rows")
+    orbit_core::app::audit::list_audit_events(
+        runtime,
+        None,
+        Some("orbit.task.add".to_string()),
+        None,
+        None,
+        20,
+    )
+    .expect("list audit rows")
 }
 
 fn test_runtime() -> (TempDir, OrbitRuntime, PathBuf, PathBuf) {

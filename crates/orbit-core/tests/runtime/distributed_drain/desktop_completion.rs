@@ -1483,10 +1483,15 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
     assert!(!task_comments.contains(&reason_secret), "{task_comments}");
     assert_contains(&task_comments, "[REDACTED_SECRET]", "baseline");
 
-    let audit_events = delivery
-        .owner
-        .list_audit_events(None, Some(RECONCILE.into()), None, None, 100)
-        .unwrap();
+    let audit_events = orbit_core::app::audit::list_audit_events(
+        &delivery.owner,
+        None,
+        Some(RECONCILE.into()),
+        None,
+        None,
+        100,
+    )
+    .unwrap();
     assert!(
         audit_events
             .iter()

@@ -14,7 +14,7 @@ use orbit_config::{ConfigRoots, ResolvedConfig};
 use orbit_store::compose::compiled_compatibility;
 use orbit_store::compose::global_policy_def_store;
 
-use crate::application::workspace_product_profile::ProductProfile;
+use crate::app::workspace::ProductProfile;
 use crate::bootstrap::global_defaults::global_defaults_are_current;
 use crate::bootstrap::init;
 use crate::bootstrap::policy::seed_default_policies;

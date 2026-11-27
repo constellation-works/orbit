@@ -546,12 +546,15 @@ fn a_worker_update_persists_redacted_text_and_a_task_scoped_audit() {
             .unwrap()
             .contains(secret)
     );
-    let rows = leaf
-        .pair
-        .wire
-        .owner
-        .list_audit_events(None, None, None, None, 50)
-        .unwrap();
+    let rows = orbit_core::app::audit::list_audit_events(
+        &leaf.pair.wire.owner,
+        None,
+        None,
+        None,
+        None,
+        50,
+    )
+    .unwrap();
     assert!(
         rows.iter()
             .any(|row| row.task_id.as_deref() == Some(&leaf.task)

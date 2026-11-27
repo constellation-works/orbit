@@ -329,7 +329,7 @@ fn an_unset_purpose_resolves_as_it_did_before_purposes() {
     );
 
     // The existing per-purpose keys are the final-recovery and review pools.
-    let view = orbit_core::application::config::effective_view(&fx.runtime).unwrap();
+    let view = orbit_core::app::config::effective_view(&fx.runtime).unwrap();
     let rows = view["crew_purposes"].as_array().unwrap();
     let row = |purpose: &str| {
         rows.iter()
@@ -349,7 +349,7 @@ fn an_unset_purpose_resolves_as_it_did_before_purposes() {
 
 fn the_config_view_names_each_configured_purpose_pool_and_its_source() {
     let fx = fixture(PURPOSES);
-    let view = orbit_core::application::config::effective_view(&fx.runtime).unwrap();
+    let view = orbit_core::app::config::effective_view(&fx.runtime).unwrap();
     let rows = view["crew_purposes"].as_array().unwrap();
     let recovery = rows
         .iter()

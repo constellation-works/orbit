@@ -65,8 +65,7 @@ fn a_refused_dispatch_is_recorded_as_denied_without_the_holders_token() {
         ..Default::default()
     });
 
-    let events = runtime
-        .list_audit_events(None, None, None, None, 200)
+    let events = orbit_core::app::audit::list_audit_events(&runtime, None, None, None, None, 200)
         .expect("read audit events");
     let denial = events
         .iter()

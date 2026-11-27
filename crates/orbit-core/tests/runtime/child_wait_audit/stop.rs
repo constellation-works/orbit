@@ -175,10 +175,15 @@ fn child_stop_refusal_preserves_owner_candidate_reservation_and_lineage() {
             ),
             "the substitute/bystander must never be signalled for {identity}"
         );
-        let completions = fixture
-            .runtime
-            .list_audit_events(None, None, None, None, 1000)
-            .unwrap();
+        let completions = orbit_core::app::audit::list_audit_events(
+            &fixture.runtime,
+            None,
+            None,
+            None,
+            None,
+            1000,
+        )
+        .unwrap();
         assert!(
             completions.iter().any(|event| {
                 event.tool_name.as_deref() == Some("pipeline.run.cancel.completed")

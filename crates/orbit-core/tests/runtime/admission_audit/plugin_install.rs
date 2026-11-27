@@ -111,9 +111,15 @@ fn an_ungranted_plugin_call_is_audited_as_denied_with_plugin_provenance() {
     fixture
         .call(&runtime, "demo.hello")
         .expect_err("the grant is missing");
-    let events = runtime
-        .list_audit_events(None, Some("demo.hello".to_string()), None, None, 10)
-        .expect("audit events");
+    let events = orbit_core::app::audit::list_audit_events(
+        &runtime,
+        None,
+        Some("demo.hello".to_string()),
+        None,
+        None,
+        10,
+    )
+    .expect("audit events");
     let event = events.first().expect("the refusal was audited");
     assert_eq!(event.status, AuditEventStatus::Denied);
     assert_eq!(

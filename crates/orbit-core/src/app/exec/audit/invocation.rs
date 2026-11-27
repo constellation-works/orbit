@@ -170,7 +170,7 @@ impl Drop for AuditGuard {
     fn drop(&mut self) {
         let row = self.row();
         let written = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.runtime.record_audit_event(&row)
+            crate::app::audit::record_audit_event(&self.runtime, &row)
         }));
         // A row that was not written stays owed: the command line's
         // invocation scope then writes it, and reports the failure if it

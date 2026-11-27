@@ -268,24 +268,23 @@ fn artifact(fixture: &Fixture, path: &str) -> Option<Value> {
 }
 
 fn audit_rows(fixture: &Fixture) -> Vec<(AuditEventStatus, Value)> {
-    fixture
-        .runtime
-        .list_audit_events(
-            None,
-            Some(EVIDENCE_FULFILMENT_AUDIT.into()),
-            None,
-            None,
-            100,
+    orbit_core::app::audit::list_audit_events(
+        &fixture.runtime,
+        None,
+        Some(EVIDENCE_FULFILMENT_AUDIT.into()),
+        None,
+        None,
+        100,
+    )
+    .unwrap()
+    .into_iter()
+    .map(|row| {
+        (
+            row.status,
+            serde_json::from_str(row.arguments_json.as_deref().unwrap()).unwrap(),
         )
-        .unwrap()
-        .into_iter()
-        .map(|row| {
-            (
-                row.status,
-                serde_json::from_str(row.arguments_json.as_deref().unwrap()).unwrap(),
-            )
-        })
-        .collect()
+    })
+    .collect()
 }
 
 /// The event of the task's latest delivery decision: a status change, or a

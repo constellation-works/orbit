@@ -137,18 +137,19 @@ fn busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
     assert!(!marker.exists(), "no repair editor started");
     assert_eq!(fx.status(&task), TaskStatus::Backlog);
 
-    let deferred = fx
-        .runtime
-        .audit_failure_incidents(&orbit_store::contract::FailureIncidentQuery::default())
-        .unwrap()
-        .incidents
-        .into_iter()
-        .filter(|incident| {
-            incident.surface == orbit_store::contract::RUN_DEFERRED_SURFACE
-                && incident.run_ids.contains(&run.run_id)
-        })
-        .map(|incident| incident.class)
-        .collect::<Vec<_>>();
+    let deferred = orbit_core::app::audit::audit_failure_incidents(
+        &fx.runtime,
+        &orbit_store::contract::FailureIncidentQuery::default(),
+    )
+    .unwrap()
+    .incidents
+    .into_iter()
+    .filter(|incident| {
+        incident.surface == orbit_store::contract::RUN_DEFERRED_SURFACE
+            && incident.run_ids.contains(&run.run_id)
+    })
+    .map(|incident| incident.class)
+    .collect::<Vec<_>>();
     assert_eq!(deferred, [orbit_store::contract::FailureClass::Deferred]);
 
     let replay_count = fx.runtime.get_task_history(&task).unwrap().len();
@@ -712,18 +713,19 @@ fn step_recovery_busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
             "{recovery_activity}: working tree untouched"
         );
 
-        let deferred = fx
-            .runtime
-            .audit_failure_incidents(&orbit_store::contract::FailureIncidentQuery::default())
-            .unwrap()
-            .incidents
-            .into_iter()
-            .filter(|incident| {
-                incident.surface == orbit_store::contract::RUN_DEFERRED_SURFACE
-                    && incident.run_ids.contains(&run.run_id)
-            })
-            .map(|incident| incident.class)
-            .collect::<Vec<_>>();
+        let deferred = orbit_core::app::audit::audit_failure_incidents(
+            &fx.runtime,
+            &orbit_store::contract::FailureIncidentQuery::default(),
+        )
+        .unwrap()
+        .incidents
+        .into_iter()
+        .filter(|incident| {
+            incident.surface == orbit_store::contract::RUN_DEFERRED_SURFACE
+                && incident.run_ids.contains(&run.run_id)
+        })
+        .map(|incident| incident.class)
+        .collect::<Vec<_>>();
         assert_eq!(
             deferred,
             [orbit_store::contract::FailureClass::Deferred],

@@ -9,14 +9,16 @@ use orbit_types::workflow::ShipMode;
 use orbit_types::workspace::{DEFAULT_BASE_BRANCH, WorkspacePaths};
 
 use crate::app::routine::RoutineSeedIdentity;
+use crate::app::skill::{
+    default_skill_ids, is_default_skill_tree_for_root, seed_default_skills, skill_link_roots,
+};
+use crate::app::workspace::{
+    ManagedArtifactOutcome, ProductProfile, WorkspacePreset, reconcile_workspace_catalog_copies,
+    reconcile_workspace_managed_artifacts,
+};
 use crate::application::executor::seed_default_executors;
 use crate::application::job::seed_default_jobs;
 use crate::application::managed_assets::MANAGED_ASSET_MANIFEST_FILE;
-use crate::application::skill::{
-    default_skill_ids, is_default_skill_tree_for_root, seed_default_skills, skill_link_roots,
-};
-use crate::application::workspace_product_profile::ProductProfile;
-use crate::application::workspace_sync::{self, ManagedArtifactOutcome};
 use crate::bootstrap::activity::seed_default_activities;
 use crate::bootstrap::global_defaults::{
     global_defaults_are_current, record_global_defaults_reconciled,
@@ -82,7 +84,7 @@ pub struct InitOptions {
     /// A validated preset (`orbit workspace init --preset`) whose seeding
     /// policy and config keys are written into the workspace config before its
     /// defaults are reconciled, so the policy governs this very seed.
-    pub workspace_preset: Option<crate::application::workspace_preset::WorkspacePreset>,
+    pub workspace_preset: Option<WorkspacePreset>,
 }
 
 #[derive(Debug, Clone)]
@@ -144,8 +146,7 @@ pub(crate) fn ensure_orbit_root_initialized(
 /// Refresh legacy catalog copies even when a registered checkout opens
 /// directly through composition, bypassing implicit global initialization.
 pub(crate) fn refresh_workspace_catalog_copies_on_open(global_root: &Path, workspace_root: &Path) {
-    let copies =
-        workspace_sync::reconcile_workspace_catalog_copies(global_root, workspace_root, false);
+    let copies = reconcile_workspace_catalog_copies(global_root, workspace_root, false);
     match copies {
         Ok(report) => {
             for warning in report.warnings {
@@ -350,7 +351,7 @@ pub fn init_workspace_at_root(
             // Machine identity is owned by higher-level composition and
             // injected; Core never resolves it or falls back to an OS hostname.
             {
-                let reconciliation = workspace_sync::reconcile_workspace_managed_artifacts(
+                let reconciliation = reconcile_workspace_managed_artifacts(
                     &global_root,
                     &orbit_root,
                     options.routine_seed_identity.as_ref(),

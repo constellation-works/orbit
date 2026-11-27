@@ -96,14 +96,11 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 |---|---|---|
 | `admission` | `unit::admission` | 7 |
 | `application_authority.rs` | `app::auto_task` | above task |
-| `audit_event.rs` | `app::audit` | above task |
-| `audit_event` | `app::audit` | above task |
 | `auto_tasks` | `app::auto_task` | above task |
 | `automation` | `app::automation` | 3 |
 | `backlog_forecast` | `unit::backlog_forecast` | 9 |
 | `change_watch.rs` | `unit::change_watch` | leaf |
 | `codebase` | `app::codebase` | above task |
-| `config` | `app::config` | above task |
 | `contracts` | dissolved: each shape goes to the app that owns it | — |
 | `distributed` | `unit::distributed` | 5 |
 | `executor.rs` | `unit::executor` | leaf |
@@ -119,7 +116,6 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `resident` | `app::resident` | above task |
 | `review` | `app::review` | 4 |
 | `seeding_policy.rs` | `unit::seeding_policy` | above task |
-| `skill` | `app::skill` | above task |
 | `statistics.rs` | `unit::statistics` | leaf |
 | `store_opener.rs` | `unit::store_opener` | leaf |
 | `sweep_filing` | `unit::sweep_filing` | 10 |
@@ -131,7 +127,6 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `tool_name_migration` | `migrate` | — |
 | `vision_probe.rs` | `app::agent` | above task |
 | `workflow.rs` | `app::run` | 2 |
-| `workspace` | `app::workspace` | above task |
 | `workspace_auto` | `unit::workspace_auto` | 8 |
 
 New apps with no `application/` entry: `friction` (built, `app/friction/`), `host` (built, `app/host/`), `update` (built, `app/update/`), `remote_command` (built, `app/remote_command/`, moved out of `app::run` in ORB-28971; [design §3](../design/architecture-restructure/2_design.md#the-remote-command-gets-its-own-app)), and `lease` (built, `app/lease/`, moved out of `app::run` in ORB-28986; [design §3](../design/architecture-restructure/2_design.md#leases-get-their-own-app-and-lock-contention-goes-to-the-task-app)). They have no row, since there is no entry.

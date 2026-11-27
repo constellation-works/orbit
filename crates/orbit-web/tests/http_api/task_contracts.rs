@@ -1341,18 +1341,18 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
                     .is_none()
             );
             let expiry_events = || {
-                runtime
-                    .list_audit_events(
-                        None,
-                        Some("orbit.task.locks.reserve".into()),
-                        None,
-                        None,
-                        100,
-                    )
-                    .unwrap()
-                    .into_iter()
-                    .filter(|event| event.command == "task.locks.reserve.expired")
-                    .collect::<Vec<_>>()
+                orbit_core::app::audit::list_audit_events(
+                    runtime,
+                    None,
+                    Some("orbit.task.locks.reserve".into()),
+                    None,
+                    None,
+                    100,
+                )
+                .unwrap()
+                .into_iter()
+                .filter(|event| event.command == "task.locks.reserve.expired")
+                .collect::<Vec<_>>()
             };
             assert_eq!(
                 expiry_events().len(),

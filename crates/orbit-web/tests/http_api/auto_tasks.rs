@@ -631,17 +631,16 @@ fn delete_audits(
     fixture: &Fixture,
     status: AuditEventStatus,
 ) -> Vec<orbit_types::telemetry::AuditEvent> {
-    fixture
-        .runtime
-        .list_audit_events_with_kind(
-            None,
-            None,
-            Some("auto_task.delete".into()),
-            Some(status),
-            None,
-            20,
-        )
-        .unwrap()
+    orbit_core::app::audit::list_audit_events_with_kind(
+        &fixture.runtime,
+        None,
+        None,
+        Some("auto_task.delete".into()),
+        Some(status),
+        None,
+        20,
+    )
+    .unwrap()
 }
 
 /// Authorized delete, the open minted-task refusal, and an operator denial,

@@ -281,9 +281,15 @@ impl Serving {
     }
 
     fn rows(&self, tool: &str) -> Vec<AuditEvent> {
-        self.runtime
-            .list_audit_events(None, Some(tool.to_string()), None, None, 10)
-            .expect("audit events")
+        crate::app::audit::list_audit_events(
+            &self.runtime,
+            None,
+            Some(tool.to_string()),
+            None,
+            None,
+            10,
+        )
+        .expect("audit events")
     }
 }
 

@@ -284,17 +284,19 @@ fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
 
             let stored = runtime.get_job_run_backend(&run.run_id).unwrap().unwrap();
             let case = format!("{job}, as_error={as_error}: {:?}", stored.steps);
-            let deferred = runtime
-                .audit_failure_incidents(&orbit_store::contract::FailureIncidentQuery::default())
-                .unwrap()
-                .incidents
-                .into_iter()
-                .filter(|incident| {
-                    incident.surface == orbit_store::contract::RUN_DEFERRED_SURFACE
-                        && incident.run_ids.contains(&run.run_id)
-                })
-                .map(|incident| incident.class)
-                .collect::<Vec<_>>();
+            let deferred = crate::app::audit::audit_failure_incidents(
+                &runtime,
+                &orbit_store::contract::FailureIncidentQuery::default(),
+            )
+            .unwrap()
+            .incidents
+            .into_iter()
+            .filter(|incident| {
+                incident.surface == orbit_store::contract::RUN_DEFERRED_SURFACE
+                    && incident.run_ids.contains(&run.run_id)
+            })
+            .map(|incident| incident.class)
+            .collect::<Vec<_>>();
             assert_eq!(stored.state, JobRunState::Held, "{case}");
             let step = stored.steps.last().expect("held diagnostic step");
             assert_eq!(step.error_code.as_deref(), Some("provider_limit"), "{case}");
