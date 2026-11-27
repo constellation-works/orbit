@@ -31,6 +31,9 @@ mod host_tunnels;
 mod lease;
 mod log_format;
 mod parse;
+
+mod permalink;
+
 mod projections;
 mod runtime_memo;
 mod serve;

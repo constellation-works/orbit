@@ -13,7 +13,7 @@ HTTP API + embedded dashboard (axum), `web connect` SSH tunnel, `/api/on/<host>`
 
 ## Main modules and types
 
-`api`, `serve` (`serve`, `serve_from_env` in `crates/orbit-web/src/serve.rs`), `state`, `lease`, `connect`, `host_tunnels`, `health`, `projections`. See ``crates/orbit-web/src/lib.rs``.
+`api`, `serve` (`serve`, `serve_from_env` in `crates/orbit-web/src/serve.rs`), `state`, `lease`, `connect`, `host_tunnels`, `health`, `permalink`, `projections`. See ``crates/orbit-web/src/lib.rs``.
 
 ## Dependencies
 
@@ -40,6 +40,7 @@ Design intent: [docs/design/user-interface/](../../docs/design/user-interface/) 
 - `lease`: Lease listener and operator-owned Unix-socket intake transport; imports `api::leases`, `shutdown`, `state`, `orbit-auth`, `orbit-common`, `orbit-core`, and `orbit-types` (never `serve`).
 - `log_format`: Web log scanning and HTML rendering for `/api/log` and `/api/diagnostics`; imports `parse`, `orbit-cmd`, `orbit-common`, and `orbit-core` (never `api` or `serve`).
 - `parse`: Dashboard query duration and timestamp parsers; imports `orbit-common` and `orbit-core` (never `api` or `serve`).
+- `permalink`: Dashboard task and run permalinks, resolved through the host registry; imports `assets`, `state`, `orbit-registry`, and `orbit-types` (never `api` or `serve`).
 - `projections`: The audit event JSON the API serves and the cached task riskiness model lent to the task app; imports `runtime_memo`, `state`, `orbit-core`, and `orbit-types` (never `api` or `serve`).
 - `runtime_memo`: Process-local single-flight TTL cache keyed by runtime identity or host inputs; imports `axum`, `orbit-core`, and `serde_json` only (never `api` or `serve`).
 - `serve`: Axum HTTP server bootstrap, loopback bind enforcement, middleware, and graceful shutdown; imports `api`, `assets`, `connect`, `health`, `heap`, `lease`, `shutdown`, `state`, and composition/core crates.

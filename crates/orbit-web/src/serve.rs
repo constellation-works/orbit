@@ -24,7 +24,7 @@ use tower_http::compression::CompressionLayer;
 
 #[cfg(unix)]
 use crate::lease_intake;
-use crate::{api, assets, health, heap, state};
+use crate::{api, assets, health, heap, permalink, state};
 
 // Compatibility shims for names serve still calls. Retirement: import `connect`
 // and `shutdown` at the call sites, then drop these re-exports.
@@ -221,13 +221,15 @@ pub(crate) fn health_router(state: &state::DashboardState) -> Router<state::Dash
         .layer(middleware::map_response(api::nosniff_json_responses))
 }
 
-/// The complete dashboard app: embedded assets, `/healthz` and `/api`, all
-/// behind [`security_headers`]. The embedded assets require an admitted Host
-/// (loopback, or a trusted host with a listed Tailscale login) and validate a
-/// supplied Origin (STD-05 §§R16–R17). Trusted hosts also enforce Fetch
-/// Metadata on the shell and assets.
+/// The complete dashboard app: embedded assets, the `/t/<id>` and `/r/<id>`
+/// permalinks, `/healthz` and `/api`, all behind [`security_headers`]. The
+/// embedded assets require an admitted Host (loopback, or a trusted host with
+/// a listed Tailscale login) and validate a supplied Origin (STD-05
+/// §§R16–R17). Trusted hosts also enforce Fetch Metadata on the shell, assets
+/// and permalinks.
 pub(crate) fn build_app(state: state::DashboardState) -> Result<Router, OrbitError> {
     Ok(assets::dashboard_file_router()?
+        .merge(permalink::router())
         .layer(middleware::from_fn_with_state(
             state.remote_access(),
             api::require_localhost_host,

@@ -594,7 +594,8 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/notices.js"),
     ),
 ];
-pub(super) const DASHBOARD_CSP: &str = concat!(
+
+pub(crate) const DASHBOARD_CSP: &str = concat!(
     "default-src 'self'; ",
     "script-src 'self'; ",
     "style-src 'self' 'unsafe-inline'; ",
