@@ -6,6 +6,8 @@ use orbit_core::application::distributed::{PullCrewWindow, RESOURCE_THROTTLED};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::runtime::JobRuns;
+use orbit_engine::HostEnvironment;
+use orbit_engine::{Dispatch, Recovery, RunLifecycle};
 use orbit_store::contract::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
 use orbit_types::task::{HostOs, TaskStatus};
 use orbit_types::workflow::{
@@ -2679,19 +2681,19 @@ fn cross_workspace_dependency_resolves_through_claim_lookup() {
         owner_a.get_task(&prerequisite).is_err(),
         "the prerequisite is not in the dependent's workspace"
     );
-    let resolved = RuntimeHost::get_dependency_task(&owner_a, &prerequisite)
+    let resolved = RunLifecycle::get_dependency_task(&owner_a, &prerequisite)
         .expect("dependency lookup")
         .expect("cross-workspace dependency resolves through its owner");
     assert_eq!(resolved.id, prerequisite);
     assert_eq!(resolved.status, orbit_types::task::TaskStatus::Done);
-    let history = RuntimeHost::get_dependency_history(&owner_a, &prerequisite)
+    let history = RunLifecycle::get_dependency_history(&owner_a, &prerequisite)
         .expect("dependency history")
         .expect("cross-workspace dependency history resolves");
     assert!(!history.is_empty(), "history is read from the owner");
 
     // A dangling dependency is absent, not a `not_found` failure.
     assert_eq!(
-        RuntimeHost::get_dependency_task(&owner_a, "ORB-999999").unwrap(),
+        RunLifecycle::get_dependency_task(&owner_a, "ORB-999999").unwrap(),
         None
     );
 }

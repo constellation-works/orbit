@@ -5,7 +5,7 @@
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{Task, TaskStatus};
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use serde_json::{Value, json};
 

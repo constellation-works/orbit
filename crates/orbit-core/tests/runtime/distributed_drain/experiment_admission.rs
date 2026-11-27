@@ -1,4 +1,6 @@
 //! Claims preserve admitted treatment; fresh pulls use current owner authority.
+
+use orbit_engine::Recovery;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -211,7 +213,7 @@ fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
         );
         execute_empty_claim_worker(&pair, &second_bound, &second);
         assert_eq!(
-            RuntimeHost::agent_crew_config_for_input(
+            Recovery::agent_crew_config_for_input(
                 &second_bound,
                 &json!({"run_id":second,"task_id":second_claim.task_id})
             )

@@ -5,6 +5,7 @@
 
 use super::*;
 use orbit_common::security::release::sha256_hex;
+use orbit_engine::RunLifecycle;
 use orbit_types::task::names_task_delivery_pull_request;
 use orbit_types::workflow::{
     DeliveryConventions, MissingSectionPolicy, PR_SECTION_GAP_EVENT, PR_SECTIONS_ARTIFACT,

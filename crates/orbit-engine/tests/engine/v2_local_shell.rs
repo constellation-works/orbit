@@ -14,10 +14,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_agent::loop_engine::InMemorySink;
+use orbit_engine::HostEnvironment;
 use orbit_engine::activity_job::load_activity_asset;
 use orbit_engine::{
-    DispatchError, DispatchOutcome, ResolvedShellExecutor, RuntimeHost, V2AuditWriter,
-    V2DispatchInput, V2SqliteSink, dispatch_v2_activity,
+    DispatchError, DispatchOutcome, ResolvedShellExecutor, V2AuditWriter, V2DispatchInput,
+    V2SqliteSink, dispatch_v2_activity,
 };
 use orbit_types::workflow::activity_job::{V2AuditEvent, V2AuditEventKind};
 use serde_json::{Value, json};

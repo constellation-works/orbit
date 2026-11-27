@@ -2,7 +2,8 @@
 
 use chrono::{Duration, Utc};
 use orbit_core::app::run::ReliabilityWindow;
-use orbit_engine::{ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost};
+use orbit_engine::{Dispatch, ReviewGate};
+use orbit_engine::{ReviewReleaseRequest, ReviewerInvocationRequest};
 use orbit_store::contract::ReviewSettlement;
 use orbit_types::workflow::{
     JobRunState, REVIEW_MANIFEST_ARTIFACT, ReviewLedger, ReviewVerdict, ReviewerInvocationEvent,
@@ -37,7 +38,7 @@ fn exhausted_review_admission_holds_the_run_without_reserving_again() {
                 runtime_seconds: if reviewed { 10 } else { 60 },
             },
         ] {
-            RuntimeHost::record_reviewer_invocation(
+            ReviewGate::record_reviewer_invocation(
                 runtime,
                 &ReviewerInvocationRequest {
                     run_id: run_id.into(),
@@ -65,7 +66,7 @@ fn exhausted_review_admission_holds_the_run_without_reserving_again() {
                 })
                 .unwrap();
         } else {
-            RuntimeHost::release_review_attempt(
+            ReviewGate::release_review_attempt(
                 runtime,
                 &ReviewReleaseRequest {
                     run_id: run_id.into(),

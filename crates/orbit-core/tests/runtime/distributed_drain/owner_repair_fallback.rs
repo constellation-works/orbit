@@ -9,6 +9,7 @@
 //! `pull_refill` pass takes the repair through the owner's admission.
 
 use super::*;
+use orbit_engine::{Dispatch, ReviewGate};
 
 /// [ORB-17303] A follower's stopped landing whose executor never pulls again
 /// is not stranded: the owner's `orbit run auto` drain names that executor
@@ -130,7 +131,7 @@ fn owner_fallback(busy: bool, with_backlog: bool, distinct_logical: bool) {
             .mutate_execution_claim(Some(&landing), id, &mutation)
             .unwrap();
     }
-    RuntimeHost::record_handoff_landing(
+    ReviewGate::record_handoff_landing(
         &owner,
         &orbit_engine::HandoffLandingUpdate {
             handoff_id,

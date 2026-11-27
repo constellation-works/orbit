@@ -1,6 +1,7 @@
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{JobRunState, JobTargetType, TaskStatus};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 

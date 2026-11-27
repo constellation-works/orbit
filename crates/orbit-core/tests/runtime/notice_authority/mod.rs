@@ -8,7 +8,7 @@ use std::path::Path;
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::TaskAddParams;
-use orbit_engine::RuntimeHost as _;
+use orbit_engine::{Dispatch, Recovery, RunLifecycle};
 use orbit_types::task::ExecutionLocation;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext, WorkerInvocation};

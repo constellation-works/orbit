@@ -25,7 +25,7 @@
 //!   marked partial commit before publication, with the claimed-path policy.
 //!
 //! Neither activity trusts its input. Task, claim, machine and bound run come
-//! from [`RuntimeHost::claim_execution_context`](crate::context::RuntimeHost::claim_execution_context), which the runtime derives
+//! from [`crate::ReviewGate::claim_execution_context`], which the runtime derives
 //! from the process worker binding; a payload that disagrees with what Git and
 //! that binding say is a refusal, never an override.
 //!

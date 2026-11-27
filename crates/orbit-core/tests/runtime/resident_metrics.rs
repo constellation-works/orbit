@@ -13,7 +13,8 @@ use orbit_core::application::resident::{
 };
 use orbit_core::application::task::{AgentDecisionRaise, TaskAddParams, TaskUpdateParams};
 use orbit_core::{ActorIdentity, OrbitRuntime};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{
     DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, DecisionRiskTier, TaskArtifact,
     TaskComment, TaskHistoryEntry, TaskRelation, TaskRelationType, TaskStatus,

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_engine::RuntimeHost;
+use orbit_engine::RunLifecycle;
 use orbit_types::task::{TaskArtifact, canonical_artifact_path};
 use orbit_types::workflow::{JobRunState, is_reserved_review_artifact};
 use serde::Deserialize;

@@ -18,6 +18,8 @@ use orbit_core::runtime::JobRuns;
 use orbit_core::runtime::host_resource::accuracy::AccuracySelection;
 use orbit_core::runtime::host_resource::forecast::{AdmissionReservationRequest, ForecastDecision};
 use orbit_core::runtime::host_resource::profile::ProfileLookup;
+use orbit_engine::Dispatch;
+use orbit_engine::HostEnvironment;
 use orbit_store::contract::{
     AdmissionForecastRecord, AdmissionReservation, HostResourceMinute, RunResourceMinute,
 };

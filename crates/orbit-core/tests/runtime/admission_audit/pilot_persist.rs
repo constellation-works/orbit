@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};

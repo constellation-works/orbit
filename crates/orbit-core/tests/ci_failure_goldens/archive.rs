@@ -1,6 +1,7 @@
 //! Historical broad keys must not transfer an archive to a different cause.
 
 use super::*;
+use orbit_engine::Dispatch;
 
 const DOWNLOAD: &str = "error: failed to download `aho-corasick` from registry\nCaused by: invalid argument while writing .cargo-ok (illegal byte sequence)";
 const CODE: &str = "error: fields `stdout` and `stdout_over_cap` are never read\n --> crates/orbit-exec/src/build_sandbox/supervise.rs:25:5\n = note: `-D dead-code` implied by `-D warnings`";

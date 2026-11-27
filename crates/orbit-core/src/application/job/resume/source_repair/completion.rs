@@ -2,6 +2,7 @@
 use super::*;
 use crate::application::job::ReviewAdmissionHook;
 use crate::runtime::recovery_authority::RecoveryAuthority;
+use orbit_engine::HostEnvironment;
 use orbit_engine::{
     CompletionObservationAdmission, CompletionOwnerLiveness, PublishedCompletionObservation,
     admit_published_completion_observation,

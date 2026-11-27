@@ -1,6 +1,7 @@
 //! Desktop review of a native publication after normal discard/requeue.
 use super::published_owner::{publication_at, publication_number};
 use super::*;
+use orbit_engine::RunLifecycle;
 use orbit_types::desktop::{
     DesktopCriterionOutcome, DesktopReviewDecision, DesktopReviewVerdict, DesktopTaskOperation,
     DesktopTaskRequest, DesktopTaskSnapshot,

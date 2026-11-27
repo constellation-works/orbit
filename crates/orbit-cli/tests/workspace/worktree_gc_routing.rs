@@ -469,7 +469,8 @@ pub(super) fn seed_archived_run(orbit_dir: &Path, home: &Path, label: &str) -> (
     // a bare Core runtime would leave a fresh allocator at its default prefix.
     use orbit_core::application::task::TaskAddParams;
     use orbit_core::runtime::OrbitRuntimeRoots;
-    use orbit_engine::RuntimeHost;
+    use orbit_engine::RunLifecycle;
+
     use orbit_types::workflow::JobRunState;
 
     let runtime = orbit_cmd::test_support::open_resolved_roots(OrbitRuntimeRoots {

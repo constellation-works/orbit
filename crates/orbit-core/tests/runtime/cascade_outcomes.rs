@@ -20,7 +20,8 @@ use orbit_core::application::job::{fold_run_incidents, job_run_to_json};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::TaskAutomationUpdate;
+use orbit_engine::{Dispatch, RunLifecycle};
 use orbit_store::contract::JobRunStepParams;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::{

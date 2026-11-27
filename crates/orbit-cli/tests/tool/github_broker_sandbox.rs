@@ -15,7 +15,8 @@ use std::process::{Command, Stdio};
 
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::plugin::sandbox_mask::prepare_plugin_mask;
-use orbit_engine::{PluginBrokerRun, RuntimeHost};
+use orbit_engine::PluginBrokerRun;
+use orbit_engine::{HostEnvironment, RunLifecycle};
 use orbit_exec::{LinuxBwrapMask, LinuxBwrapSpawnRequest};
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::policy::ResolvedFsProfile;

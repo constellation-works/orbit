@@ -17,7 +17,7 @@ use orbit_core::application::plugin::{PluginAddOptions, install_plugin};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus};
-use orbit_engine::RuntimeHost;
+use orbit_engine::{Dispatch, Recovery, RunLifecycle};
 use orbit_tools::{ActivityBinding, ToolCaller, ToolContext};
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
@@ -309,7 +309,7 @@ exit 99
 
     fn deterministic_context(&self, run_id: &str) -> ToolContext {
         let mut ctx =
-            RuntimeHost::tool_context_for_activity(&self.runtime, Some(run_id), None, None, None);
+            Recovery::tool_context_for_activity(&self.runtime, Some(run_id), None, None, None);
         ctx.caller = ToolCaller::DeterministicStep(Default::default());
         ctx.activity_binding = Some(ActivityBinding {
             job_run_id: run_id.to_string(),

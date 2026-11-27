@@ -5,7 +5,8 @@ use std::process::Output;
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_store::contract::ReviewableLines;
 use orbit_types::workflow::automation::DirectLandingRequest;
 
@@ -99,7 +100,7 @@ fn two_task_landing_counts_only_that_tasks_reviewable_lines() {
     );
     let after = head(&repo);
 
-    RuntimeHost::record_direct_landing(
+    RunLifecycle::record_direct_landing(
         &runtime,
         &DirectLandingRequest {
             run_id: "run-reviewable".into(),

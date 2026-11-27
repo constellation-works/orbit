@@ -5,6 +5,7 @@
 //! task and then claims it whatever machine runs the test.
 
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_engine::Dispatch;
 use orbit_types::task::HostOs;
 
 use super::*;

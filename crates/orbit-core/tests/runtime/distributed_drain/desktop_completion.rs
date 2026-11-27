@@ -17,6 +17,8 @@
 //! stopped, including a held red base; operator recovery alone does not.
 
 use super::*;
+use orbit_engine::HostEnvironment;
+use orbit_engine::RunLifecycle;
 
 use orbit_core::application::review::ExpectedCandidate;
 use orbit_store::contract::ClaimSettlementKind;

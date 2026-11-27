@@ -10,6 +10,7 @@
 //! its gate's host-owned channel writes.
 
 use super::*;
+use orbit_engine::RunLifecycle;
 
 use super::claimed_review::{ReviewedLeaf, revision};
 
@@ -508,7 +509,7 @@ fn agent_input_cannot_select_host_updates_or_escape_the_worker_allowlist() {
             .iter()
             .any(|entry| entry.note.as_deref() == Some("host-owned note"))
     );
-    let task = RuntimeHost::update_task_from_activity(
+    let task = RunLifecycle::update_task_from_activity(
         &leaf.bound,
         &leaf.task,
         orbit_engine::TaskActivityUpdate {

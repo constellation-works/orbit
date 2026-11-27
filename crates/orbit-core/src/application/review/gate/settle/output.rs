@@ -1,6 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::workflow::handoff::{HandoffArtifactRef, HandoffReviewEvidence};
 use orbit_types::workflow::{
     REVIEW_GATE_ARTIFACT, REVIEW_LANDING_DECISION_PENDING, REVIEW_MANIFEST_ARTIFACT,

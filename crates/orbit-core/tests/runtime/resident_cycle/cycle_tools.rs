@@ -3,7 +3,8 @@
 //! list (ORB-27590), and each mapped action still meets the cycle guard's
 //! live-grant, workspace and recovery gates when it is called.
 
-use orbit_engine::{RuntimeHost, load_activity_asset};
+use orbit_engine::Recovery;
+use orbit_engine::load_activity_asset;
 
 use super::*;
 

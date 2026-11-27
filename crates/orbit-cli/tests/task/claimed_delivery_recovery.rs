@@ -560,7 +560,7 @@ fn version_one_receipts_still_read_as_accepted_coverage(
 ) {
     assert_eq!(receipts.len(), 1);
     let evidence =
-        orbit_engine::RuntimeHost::accepted_automation_coverage(runtime, &receipts[0].action_id)
+        orbit_engine::RunLifecycle::accepted_automation_coverage(runtime, &receipts[0].action_id)
             .unwrap()
             .expect("version 1 coverage reads");
     assert_eq!(evidence.schema_version, 1);

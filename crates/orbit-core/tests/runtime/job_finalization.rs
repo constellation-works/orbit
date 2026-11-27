@@ -212,7 +212,8 @@ fn successful_runs_stay_successful_when_final_summary_writes_fail() {
 }
 
 fn incomplete_step_diagnostics_survive_without_making_resume_skip_the_step() {
-    use orbit_engine::RuntimeHost;
+    use orbit_engine::Recovery;
+
     let fixture = Fixture::new(false);
     let run = fixture.queued(json!({}));
     let state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));

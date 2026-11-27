@@ -54,7 +54,8 @@ DEFINITIONS = {
     "orbit_runtime_ref_param_fns":
         "functions with a `&OrbitRuntime` or `&mut OrbitRuntime` parameter",
     "runtime_host_required_methods":
-        "required methods of `RuntimeHost`: declarations with no default body",
+        "required methods of `RuntimeHost` and its capability supertraits: declarations "
+        "with no default body",
     "application_port_methods":
         "methods of the `ApplicationPort` trait",
     "from_kernel_ref_uses":
@@ -84,7 +85,7 @@ CLOSER = {"{": "}", "(": ")", "[": "]"}
 FN_NAME = re.compile(r"\bfn\s+([A-Za-z_]\w*)")
 FN_TOKEN = re.compile(r"->|[<>(;{]")
 FN_BEFORE = re.compile(r"\bfn\s+$")
-MACRO_CALL = re.compile(r"(\w+)::(\w+)!\s*\(\s*\)\s*;")
+SUPERTRAIT = re.compile(r"\b([A-Z]\w*)\b")
 FnDecl = namedtuple("FnDecl", "name offset params body")
 
 # Count patterns.
@@ -250,13 +251,6 @@ def _trait_body(masked, trait):
     return open_index + 1, _closing(masked, open_index)
 
 
-def _macro_body(masked, name):
-    match = re.search(rf"macro_rules!\s+{re.escape(name)}\s*\{{", masked)
-    if match is None:
-        raise ValueError(f"macro {name} is missing")
-    return match.end(), _closing(masked, match.end() - 1)
-
-
 def preceded_by_fn(masked, start):
     return FN_BEFORE.search(masked, max(0, start - 16), start) is not None
 
@@ -313,13 +307,20 @@ def files_matching(sources, pattern):
 
 
 def runtime_host_required(by_path):
+    # `RuntimeHost` declares its capabilities through supertraits, each
+    # re-exported from its own module beside `mod.rs`; their required methods
+    # count as the host's.
     host = _source(by_path, RUNTIME_HOST_MOD)
     start, end = _trait_body(host.masked, "RuntimeHost")
     entries = [host.location(decl.offset, decl.name)
                for decl in fn_decls(host.masked, start, end) if decl.body == ";"]
-    for call in MACRO_CALL.finditer(host.masked, start, end):
-        module = _source(by_path, f"{RUNTIME_HOST_DIR}/{call.group(1)}.rs")
-        body_start, body_end = _macro_body(module.masked, call.group(2))
+    header = re.search(r"\btrait\s+RuntimeHost\b", host.masked)
+    for name in SUPERTRAIT.findall(host.masked, header.end(), start - 1):
+        export = re.search(rf"\bpub\s+use\s+(\w+)\s*::\s*{name}\s*;", host.masked)
+        if export is None:
+            continue
+        module = _source(by_path, f"{RUNTIME_HOST_DIR}/{export.group(1)}.rs")
+        body_start, body_end = _trait_body(module.masked, name)
         entries.extend(module.location(decl.offset, decl.name)
                        for decl in fn_decls(module.masked, body_start, body_end)
                        if decl.body == ";")

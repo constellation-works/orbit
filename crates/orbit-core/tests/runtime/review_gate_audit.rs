@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use chrono::Utc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitRuntime, TaskStatus};
-use orbit_engine::{ReviewLandingRequest, ReviewerInvocationRequest, RuntimeHost};
+use orbit_engine::{Dispatch, ReviewGate, RunLifecycle};
+use orbit_engine::{ReviewLandingRequest, ReviewerInvocationRequest};
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::telemetry::incident::{FailureClass, classify};
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
@@ -571,7 +572,7 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
             runtime_seconds: 601,
         },
     ] {
-        RuntimeHost::record_reviewer_invocation(
+        ReviewGate::record_reviewer_invocation(
             &fixture.runtime,
             &ReviewerInvocationRequest {
                 run_id: fixture.input["job_run_id"].as_str().unwrap().into(),

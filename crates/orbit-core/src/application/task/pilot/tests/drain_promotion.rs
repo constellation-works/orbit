@@ -2,7 +2,7 @@
 //! race between the pilot write and the approval transition is honoured.
 
 use chrono::Utc;
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use orbit_types::task::{
     NO_AUTO_APPROVE_TAG, Task, TaskComplexity, TaskHistoryEntry, TaskRelation, TaskRelationType,

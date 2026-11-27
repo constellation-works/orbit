@@ -1,6 +1,7 @@
 //! Reclaim through the shipped deterministic boundary and resume through a fake CLI.
 
 use super::*;
+use orbit_engine::HostEnvironment;
 use std::os::unix::fs::symlink;
 
 fn sweep_reclaims_declared_paths_in_kept_worktrees_and_preserves_candidates() {

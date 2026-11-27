@@ -4,7 +4,7 @@
 //!
 //! `claim_validate` and `candidate_validate` share this runner, so they see the
 //! same shell, environment, timeout, output capture and failure text. The
-//! environment is [`RuntimeHost::validation_subprocess_environment`]: PATH
+//! environment is [`crate::HostEnvironment::validation_subprocess_environment`]: PATH
 //! and toolchain locators from the owner's login shell (or configuration)
 //! over the allowlisted agent environment. Which source decided PATH is
 //! recorded on every run.

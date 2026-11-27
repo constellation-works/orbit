@@ -4,7 +4,8 @@
 
 use crate::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use chrono::Utc;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_store::contract::FrictionAddParams;
 use orbit_types::record::{FrictionRecord, FrictionStatus};
 use orbit_types::task::{TaskRelation, TaskRelationType, TaskStatus};

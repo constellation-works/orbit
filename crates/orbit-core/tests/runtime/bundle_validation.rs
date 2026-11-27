@@ -4,7 +4,8 @@
 //! passes. A nonempty set admits its members and refuses every other ID.
 
 use orbit_core::OrbitRuntime;
-use orbit_engine::{DispatchError, RuntimeHost};
+use orbit_engine::Dispatch;
+use orbit_engine::DispatchError;
 use orbit_tools::ToolContext;
 use serde_json::{Value, json};
 

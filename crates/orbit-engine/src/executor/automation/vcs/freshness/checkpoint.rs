@@ -28,7 +28,7 @@ pub(super) enum RecoveryCheckpointLookup {
 ///
 /// The run store these entries come from is writable by managed leaves, so a
 /// matching entry is a candidate, not authority. Every candidate must also
-/// carry the host's certificate from [`RuntimeHost::verify_rebase_recovery`].
+/// carry the host's certificate from [`crate::Recovery::verify_rebase_recovery`].
 /// Whether a checkpoint's recorded workspace directory is `workspace`.
 ///
 /// The host records the checkout it certified at its resolved path, while the

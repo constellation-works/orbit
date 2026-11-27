@@ -308,7 +308,7 @@ fn receipts_respect_step_expiry_after_downtime() {
             request: &orbit_engine::AutoTaskStepRequest,
         ) -> Result<orbit_engine::AutoTaskObservation, orbit_engine::DispatchError> {
             let mut observation =
-                orbit_engine::RuntimeHost::observe_auto_task_step(self.runtime, run, request)?;
+                orbit_engine::Recovery::observe_auto_task_step(self.runtime, run, request)?;
             if let Some(receipt) = &mut observation.receipt {
                 receipt.settled_at -= Duration::hours(self.backdate_hours);
             }
@@ -320,7 +320,7 @@ fn receipts_respect_step_expiry_after_downtime() {
             step: &str,
             record: &AutoTaskStepRecord,
         ) -> Result<(), orbit_engine::DispatchError> {
-            orbit_engine::RuntimeHost::checkpoint_auto_task_step(self.runtime, run, step, record)
+            orbit_engine::Recovery::checkpoint_auto_task_step(self.runtime, run, step, record)
         }
     }
     for (expiry, age_hours, backdate_hours, expected) in [
@@ -432,7 +432,8 @@ fn receipts_respect_step_expiry_after_downtime() {
 /// checkpoint under a still-live block does not masquerade as done.
 fn nested_parallel_branch_waits_observe_durable_outcomes() {
     use chrono::{Duration, Utc};
-    use orbit_engine::{AutoTaskReadiness, AutoTaskStepRequest, RuntimeHost};
+    use orbit_engine::Recovery;
+    use orbit_engine::{AutoTaskReadiness, AutoTaskStepRequest};
     use orbit_types::workflow::{
         AUTO_TASK_CHECKPOINT_VERSION, AutoTaskRunCheckpoint, JobRunState, PipelineState,
     };
@@ -483,7 +484,7 @@ fn nested_parallel_branch_waits_observe_durable_outcomes() {
             parked: None,
         });
         jobs.write_run_state(&run.run_id, &state).unwrap();
-        RuntimeHost::observe_auto_task_step(
+        Recovery::observe_auto_task_step(
             &runtime,
             &run.run_id,
             &AutoTaskStepRequest {
@@ -524,7 +525,8 @@ fn nested_parallel_branch_waits_observe_durable_outcomes() {
 #[cfg(unix)]
 fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
     use chrono::{Duration, Utc};
-    use orbit_engine::{AutoTaskAdmission, AutoTaskStepRequest, RuntimeHost};
+    use orbit_engine::Recovery;
+    use orbit_engine::{AutoTaskAdmission, AutoTaskStepRequest};
     use orbit_store::contract::AdmissionRunContext;
     use orbit_types::tool::{McpTransport, ToolSessionContext};
     use orbit_types::workflow::{
@@ -618,7 +620,7 @@ fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
             parked: None,
         });
         jobs.write_run_state(&source.run_id, &state).unwrap();
-        let observation = RuntimeHost::observe_auto_task_step(
+        let observation = Recovery::observe_auto_task_step(
             &runtime,
             &source.run_id,
             &AutoTaskStepRequest {
@@ -640,18 +642,18 @@ fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
             settled_at: None,
             diagnostic: None,
         };
-        RuntimeHost::checkpoint_auto_task_step(&runtime, &source.run_id, "qa", &record).unwrap();
+        Recovery::checkpoint_auto_task_step(&runtime, &source.run_id, "qa", &record).unwrap();
         let AutoTaskAdmission::Bound {
             task_id,
             minted: true,
-        } = RuntimeHost::admit_auto_task_step(&runtime, &source.run_id, "qa").unwrap()
+        } = Recovery::admit_auto_task_step(&runtime, &source.run_id, "qa").unwrap()
         else {
             panic!("the reserved step must mint its child")
         };
         record.task_id = Some(task_id.clone());
         record.minted = true;
         record.status = AutoTaskStepStatus::Queued;
-        RuntimeHost::checkpoint_auto_task_step(&runtime, &source.run_id, "qa", &record).unwrap();
+        Recovery::checkpoint_auto_task_step(&runtime, &source.run_id, "qa", &record).unwrap();
         // Implementation mints now await approval. Keep the continuation
         // admission checks below focused on an approved child.
         assert_eq!(
@@ -733,7 +735,7 @@ fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
         let AutoTaskAdmission::Bound {
             task_id: rebound,
             minted: true,
-        } = RuntimeHost::admit_auto_task_step(&runtime, &resumed.run_id, "qa").unwrap()
+        } = Recovery::admit_auto_task_step(&runtime, &resumed.run_id, "qa").unwrap()
         else {
             panic!("resume must reuse the keyed child")
         };

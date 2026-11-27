@@ -7,6 +7,7 @@
 //! holds again with the same code on the same head stops at a ceiling and is
 //! then reported under its hold code.
 
+use orbit_engine::RunLifecycle;
 use orbit_types::task::{TaskDecision, TaskHistoryEntry};
 use orbit_types::workflow::{COMPLETION_HELD_EVENT, CompletionHold, CompletionHoldField};
 

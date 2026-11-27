@@ -2,6 +2,7 @@
 //! observation waits for settlement and independent failures still file.
 
 use super::*;
+use orbit_engine::RunLifecycle;
 
 const LOG_PATH: &str = r"crates\orbit-core\src\application\distributed\entry.rs";
 const LOG_MESSAGE: &str = "cannot find `git_sandbox` in `runtime`";

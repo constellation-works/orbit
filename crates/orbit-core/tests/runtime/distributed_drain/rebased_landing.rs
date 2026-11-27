@@ -9,6 +9,8 @@ use super::*;
 use crate::admission_test_support::{
     admission_request, admission_review_contract, admission_ship_contract,
 };
+use orbit_engine::HostEnvironment;
+use orbit_engine::{ReviewGate, RunLifecycle};
 
 use orbit_automation::review::REBASED_CLEAN_ASSURANCE;
 use orbit_store::contract::{
@@ -193,7 +195,7 @@ fn handoff_ci_history_uses_the_claim_scoped_mutation() {
             r#"{"classification":"transient","attempts":3}"#,
         ),
     ] {
-        RuntimeHost::record_handoff_landing_history(owner, &accepted.handoff_id, event, note)
+        ReviewGate::record_handoff_landing_history(owner, &accepted.handoff_id, event, note)
             .unwrap();
     }
     let history = owner.get_task_history(&accepted.handoff.task_id).unwrap();
@@ -217,7 +219,7 @@ fn handoff_ci_history_uses_the_claim_scoped_mutation() {
         );
     }
 
-    let unscoped = RuntimeHost::apply_task_automation_update(
+    let unscoped = RunLifecycle::apply_task_automation_update(
         owner,
         &accepted.handoff.task_id,
         orbit_engine::TaskAutomationUpdate {
@@ -292,7 +294,7 @@ fn handoff_ci_history_uses_the_claim_scoped_mutation() {
         "a scoped mutation for another run is refused"
     );
     assert!(
-        RuntimeHost::record_handoff_landing_history(
+        ReviewGate::record_handoff_landing_history(
             owner,
             &accepted.handoff_id,
             "other_history_event",
@@ -365,7 +367,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
         )
         .unwrap();
     if stop {
-        RuntimeHost::record_handoff_landing(
+        ReviewGate::record_handoff_landing(
             owner,
             &orbit_engine::HandoffLandingUpdate {
                 handoff_id: accepted.handoff_id.clone(),
@@ -733,7 +735,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
         evidence: json!({"cause":"fixture-authority-control"}),
     };
     assert!(
-        RuntimeHost::admit_handoff_base_update(owner, &accepted.handoff_id, &update_request)
+        ReviewGate::admit_handoff_base_update(owner, &accepted.handoff_id, &update_request)
             .is_err(),
         "native evidence is rechecked before reserving an external base update"
     );
@@ -797,7 +799,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
     // [ORB-19393] A landing that waits for its base records why in task
     // history through the handed-off claim, which refuses unscoped writes.
     let wait = r#"{"state":"waiting_for_base","reason":"the base is still red"}"#;
-    RuntimeHost::record_handoff_landing_wait(owner, &accepted.handoff_id, wait).unwrap();
+    ReviewGate::record_handoff_landing_wait(owner, &accepted.handoff_id, wait).unwrap();
     assert!(
         owner
             .get_task_history(&accepted.handoff.task_id)
@@ -811,7 +813,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
     );
     if stop {
         // Model a lost external reply via the normal trusted intent boundary.
-        RuntimeHost::record_handoff_landing(
+        ReviewGate::record_handoff_landing(
             owner,
             &orbit_engine::HandoffLandingUpdate {
                 handoff_id: accepted.handoff_id.clone(),
@@ -976,12 +978,12 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
         evidence: json!({"cause":"inherited","classification":"fixture inherited failure"}),
     };
     assert!(matches!(
-        RuntimeHost::admit_handoff_base_update(owner, &accepted.handoff_id, &request).unwrap(),
+        ReviewGate::admit_handoff_base_update(owner, &accepted.handoff_id, &request).unwrap(),
         PrBaseUpdateAdmission::Reserved
     ));
     assert!(
         matches!(
-            RuntimeHost::admit_handoff_base_update(owner, &accepted.handoff_id, &request).unwrap(),
+            ReviewGate::admit_handoff_base_update(owner, &accepted.handoff_id, &request).unwrap(),
             PrBaseUpdateAdmission::Observe(_)
         ),
         "authority recheck never grants another provider update"
@@ -1026,7 +1028,7 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
     let decisions = std::thread::scope(|scope| {
         let first = scope.spawn(|| {
             barrier.wait();
-            RuntimeHost::admit_ci_rerun(
+            ReviewGate::admit_ci_rerun(
                 owner,
                 std::slice::from_ref(&accepted.handoff.task_id),
                 Some(&accepted.handoff_id),
@@ -1037,7 +1039,7 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
         });
         let second = scope.spawn(|| {
             barrier.wait();
-            RuntimeHost::admit_ci_rerun(
+            ReviewGate::admit_ci_rerun(
                 owner,
                 std::slice::from_ref(&accepted.handoff.task_id),
                 Some(&accepted.handoff_id),
@@ -1075,7 +1077,17 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
             .with_automation_machine_identity(Some(OWNER.to_string())),
     );
     assert!(
-        matches!(RuntimeHost::admit_ci_rerun(&reopened,std::slice::from_ref(&accepted.handoff.task_id),Some(&accepted.handoff_id),&retry,chrono::Utc::now().timestamp_millis() as u64).unwrap(),orbit_types::workflow::CiRerunAdmission::Observe(prior) if *prior==retry),
+        matches!(
+            ReviewGate::admit_ci_rerun(
+                &reopened,
+                std::slice::from_ref(&accepted.handoff.task_id),
+                Some(&accepted.handoff_id),
+                &retry,
+                chrono::Utc::now().timestamp_millis() as u64,
+            )
+            .unwrap(),
+            orbit_types::workflow::CiRerunAdmission::Observe(prior) if *prior == retry
+        ),
         "a fresh runtime re-observes the durable authorization after an unknown reply, without admitting another send"
     );
     let reserved = reopened
@@ -1108,7 +1120,7 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
     let later = chrono::Utc::now().timestamp_millis() as u64 + 60_000;
     assert!(
         matches!(
-            RuntimeHost::admit_ci_rerun(
+            ReviewGate::admit_ci_rerun(
                 &reopened,
                 std::slice::from_ref(&accepted.handoff.task_id),
                 Some(&accepted.handoff_id),
@@ -1121,7 +1133,7 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
         "a later infrastructure attempt gets its own durable claim receipt"
     );
     assert!(
-        matches!(RuntimeHost::admit_ci_rerun(&reopened,
+        matches!(ReviewGate::admit_ci_rerun(&reopened,
         std::slice::from_ref(&accepted.handoff.task_id), Some(&accepted.handoff_id), &next, later).unwrap(),
         orbit_types::workflow::CiRerunAdmission::Observe(prior) if *prior == next),
         "the second reservation is replayed, never sent twice"
@@ -1147,11 +1159,11 @@ fn base_update_admission_rechecks_current_native_handoff_authority() {
         .unwrap();
     let history = owner.get_task_history(&accepted.handoff.task_id).unwrap();
     assert!(
-        RuntimeHost::admit_handoff_base_update(owner, &accepted.handoff_id, &request).is_err(),
+        ReviewGate::admit_handoff_base_update(owner, &accepted.handoff_id, &request).is_err(),
         "revocation refuses even a reserved mutation before the provider call"
     );
     assert!(
-        RuntimeHost::admit_ci_rerun(
+        ReviewGate::admit_ci_rerun(
             owner,
             std::slice::from_ref(&accepted.handoff.task_id),
             Some(&accepted.handoff_id),
@@ -1439,7 +1451,7 @@ fn light_base_update(tag: LightTag, outside: bool) {
     };
     if outside {
         let history = owner.get_task_history(&task_id).unwrap();
-        let error = RuntimeHost::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
+        let error = ReviewGate::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
             .expect_err("a path outside the allow-list refuses the base update")
             .to_string();
         assert!(
@@ -1467,13 +1479,13 @@ fn light_base_update(tag: LightTag, outside: bool) {
         )
         .expect("operator approves the light handoff");
     assert!(matches!(
-        RuntimeHost::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
+        ReviewGate::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
             .expect("light handoff reserves a provider base update"),
         PrBaseUpdateAdmission::Reserved
     ));
     assert!(
         matches!(
-            RuntimeHost::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
+            ReviewGate::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
                 .expect("replaying the same update observes the reservation"),
             PrBaseUpdateAdmission::Observe(_)
         ),
@@ -1491,7 +1503,7 @@ fn light_base_update(tag: LightTag, outside: bool) {
     document.tags.retain(|carried| carried != tag.as_str());
     std::fs::write(&envelope, serde_yaml::to_string(&document).unwrap()).unwrap();
     let history = owner.get_task_history(&task_id).unwrap();
-    let error = RuntimeHost::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
+    let error = ReviewGate::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
         .expect_err("withdrawing the tag refuses the reserved base update")
         .to_string();
     assert!(
@@ -1512,7 +1524,7 @@ fn light_base_update(tag: LightTag, outside: bool) {
         )
         .unwrap();
     let history = owner.get_task_history(&task_id).unwrap();
-    let error = RuntimeHost::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
+    let error = ReviewGate::admit_handoff_base_update(&owner, &accepted.handoff_id, &update)
         .expect_err("revocation refuses the reserved base update")
         .to_string();
     assert!(

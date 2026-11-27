@@ -6,7 +6,8 @@ use chrono::Utc;
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest,
 };
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{RecordedFinalRecovery, TaskComment, TaskDecision};
 use orbit_types::workflow::RecoveryFault;
 use serde_json::{Value, json};
@@ -69,7 +70,7 @@ fn typed_decisions(fixture: &Fixture, task: &str) -> Vec<(String, RecordedFinalR
 /// Append a `system` comment, as an applier that predates the typed
 /// decision wrote its record.
 fn system_comment(fixture: &Fixture, task: &str, message: String) {
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &fixture.runtime,
         task,
         TaskAutomationUpdate {
@@ -125,7 +126,7 @@ fn untrusted_legacy_outcomes_do_not_suppress_a_fresh_decision() {
             "archived",
         ] {
             let task = fixture.task();
-            RuntimeHost::apply_task_automation_update(
+            RunLifecycle::apply_task_automation_update(
                 &fixture.runtime,
                 &task,
                 TaskAutomationUpdate {

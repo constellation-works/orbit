@@ -1,6 +1,7 @@
 //! Resumed auto-fix authority through the public job and PR boundaries.
 
 use super::*;
+use orbit_engine::HostEnvironment;
 use orbit_types::workflow::{
     PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed, PrAutoFixHeadFailure, PrAutoFixReadDeferral,
     PrAutoFixReadReset,

@@ -6,6 +6,7 @@
 use super::races::apply_input;
 use super::source_moves::{apply_claim, claimed, prepare_claim};
 use super::*;
+use orbit_engine::Dispatch;
 
 /// Mark `attempt`'s run running, as its worker does before any step.
 fn start_run(workspace: &Workspace, attempt: &MemberAttempt) -> String {

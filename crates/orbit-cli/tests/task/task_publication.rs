@@ -638,7 +638,8 @@ fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
     use chrono::Utc;
     use orbit_core::TaskStatus;
     use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-    use orbit_engine::RuntimeHost;
+
+    use orbit_engine::{Dispatch, RunLifecycle};
     use orbit_types::task::ArtifactWriter;
     use orbit_types::workflow::{
         REVIEW_CONTRACT_VERSION, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,

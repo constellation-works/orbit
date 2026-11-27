@@ -1,4 +1,5 @@
 use super::*;
+use orbit_engine::RunLifecycle;
 use orbit_types::task::{TaskRelation, TaskRelationType};
 
 #[test]

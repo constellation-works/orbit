@@ -1,5 +1,6 @@
 //! A recovery host carries evidence to its claim owner without task-write tools.
 
+use orbit_engine::{Dispatch, HostEnvironment, Recovery, ReviewGate, RunLifecycle};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::claimed_review::ToOwner;
@@ -68,13 +69,7 @@ fn final_recovery_handoff_persists_only_its_claimed_tasks_evidence() {
     let evidence = json!({"execution_summary": "Outcome: success\nChanges: repaired claimed candidate.",
         "task_artifacts": [{"path": "recovery/repair.log", "source_path": ".orbit/tmp/repair.log"}]});
     let persist = |id: &str| {
-        RuntimeHost::persist_final_recovery_evidence(
-            &bound,
-            &leaf,
-            id,
-            &pair.follower_repo,
-            &evidence,
-        )
+        Recovery::persist_final_recovery_evidence(&bound, &leaf, id, &pair.follower_repo, &evidence)
     };
     assert!(
         persist(other).is_err(),
@@ -159,7 +154,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
         task_id: &str,
         update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
-        RuntimeHost::apply_task_automation_update(&self.bound, task_id, update)
+        RunLifecycle::apply_task_automation_update(&self.bound, task_id, update)
     }
 
     fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
@@ -234,13 +229,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
         workspace: &Path,
         evidence: &Value,
     ) -> Result<(), OrbitError> {
-        RuntimeHost::persist_final_recovery_evidence(
-            &self.bound,
-            run_id,
-            task_id,
-            workspace,
-            evidence,
-        )
+        Recovery::persist_final_recovery_evidence(&self.bound, run_id, task_id, workspace, evidence)
     }
 
     fn final_recovery_log_tail(&self, run: &str) -> Result<Option<String>, OrbitError> {
@@ -260,7 +249,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
         run: &str,
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError> {
-        RuntimeHost::apply_final_recovery(&self.bound, run, application)
+        Recovery::apply_final_recovery(&self.bound, run, application)
     }
 }
 
@@ -535,7 +524,7 @@ fn claimed_final_recovery_refused_commit_routes_patch_to_owner_or_fallback() {
 
     // Claim fence preservation on the active claim:
     // - Cannot write an artifact to another task.
-    let foreign_err = RuntimeHost::apply_task_automation_update(
+    let foreign_err = RunLifecycle::apply_task_automation_update(
         &accepted.bound,
         &accepted.other,
         TaskAutomationUpdate {
@@ -600,7 +589,7 @@ fn claimed_final_recovery_refused_commit_routes_patch_to_owner_or_fallback() {
     // - Once the claim is no longer active, artifact writes are refused as stale_claim.
     accepted.pair.leaf_fails_with(&accepted.leaf, "claim ended");
     accepted.pair.pass(&accepted.drain);
-    let stale_err = RuntimeHost::apply_task_automation_update(
+    let stale_err = RunLifecycle::apply_task_automation_update(
         &accepted.bound,
         &accepted.task,
         TaskAutomationUpdate {

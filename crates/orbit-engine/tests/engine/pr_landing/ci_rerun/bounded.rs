@@ -1,5 +1,6 @@
 //! Oversized recovery evidence through the public adapter and completion.
 use super::*;
+use orbit_engine::ReviewGate;
 
 // Reproduce ORB-19929 through the actual streaming reader, adapter and owner:
 // the source is complete while both displays omit bytes. The root command
@@ -588,7 +589,7 @@ fn no_edit_repair_authenticates_waiter_and_ambiguous_raw_log() {
                 assert_eq!(plan.failed_jobs.len(), 2);
 
                 assert_eq!(
-                    RuntimeHost::admit_ci_rerun(&host, &[TASK_ID.into()], None, &plan, 1_000)
+                    ReviewGate::admit_ci_rerun(&host, &[TASK_ID.into()], None, &plan, 1_000)
                         .unwrap(),
                     orbit_types::workflow::CiRerunAdmission::Refused(
                         orbit_types::workflow::CiRerunRefusal::InvalidAuthorization
@@ -614,14 +615,14 @@ fn no_edit_repair_authenticates_waiter_and_ambiguous_raw_log() {
                         )),
                     );
                 assert_eq!(
-                    RuntimeHost::admit_ci_rerun(&host, &[TASK_ID.into()], None, &plan, 1_000)
+                    ReviewGate::admit_ci_rerun(&host, &[TASK_ID.into()], None, &plan, 1_000)
                         .unwrap(),
                     orbit_types::workflow::CiRerunAdmission::Reserved
                 );
                 let mut repeat = plan.clone();
                 repeat.run_attempt = 2;
                 assert_eq!(
-                    RuntimeHost::admit_ci_rerun(&host, &[TASK_ID.into()], None, &repeat, 2_000)
+                    ReviewGate::admit_ci_rerun(&host, &[TASK_ID.into()], None, &repeat, 2_000)
                         .unwrap(),
                     orbit_types::workflow::CiRerunAdmission::Observe(Box::new(plan))
                 );

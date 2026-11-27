@@ -5,6 +5,7 @@
 
 use orbit_core::application::job::{TaskAutoFixError, TaskAutoFixRefusal};
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, PullRequestBlockers};
+use orbit_engine::RunLifecycle;
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{DeliveryRefusal, PR_AUTO_FIX_ADMITTED_EVENT, SOURCE_REPAIR_RESERVED};
 

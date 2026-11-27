@@ -8,9 +8,10 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
+use orbit_engine::{Dispatch, HostEnvironment, Recovery, ReviewGate, RunLifecycle};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, RuntimeHost, V2AuditWriter, execute_job_with_resume,
+    FinalRecoveryApplied, V2AuditWriter, execute_job_with_resume,
 };
 use orbit_tools::ToolContext;
 use orbit_types::workflow::activity_job::JobV2;
@@ -506,7 +507,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         workspace: &std::path::Path,
         evidence: &Value,
     ) -> Result<(), OrbitError> {
-        RuntimeHost::persist_final_recovery_evidence(
+        Recovery::persist_final_recovery_evidence(
             &self.fixture.runtime,
             run_id,
             task_id,
@@ -532,7 +533,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         run: &str,
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError> {
-        RuntimeHost::apply_final_recovery(&self.fixture.runtime, run, application)
+        Recovery::apply_final_recovery(&self.fixture.runtime, run, application)
     }
 }
 
@@ -1373,7 +1374,7 @@ fn interrupted_and_resumed(fixture: &Fixture) -> (PipelineState, String, Pipelin
         state.record_pipeline_output(id, output);
     }
     fixture.runtime.write_run_state(owner, &state).unwrap();
-    RuntimeHost::finalize_job_run(
+    RunLifecycle::finalize_job_run(
         &fixture.runtime,
         owner,
         JobRunState::Interrupted,

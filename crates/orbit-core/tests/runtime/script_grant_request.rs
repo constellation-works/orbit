@@ -12,7 +12,8 @@ use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::{DecisionSubmitCaller, DecisionSubmitParams};
 use orbit_core::runtime::scripts::{self, ScriptGrantOptions, ScriptGrantState};
-use orbit_engine::{RuntimeHost, ScriptStepRequest, ScriptStepRun};
+use orbit_engine::Dispatch;
+use orbit_engine::{ScriptStepRequest, ScriptStepRun};
 use orbit_types::task::{DecisionGate, DecisionRequest};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::activity_job::{ScriptGrantRequest, ScriptNetwork, script_refusal};
@@ -258,7 +259,7 @@ fn stored_script_grant_timeout_checks() {
             code,
             message,
             record,
-        } = RuntimeHost::run_script_step(
+        } = Dispatch::run_script_step(
             &fx.runtime,
             &ScriptStepRequest {
                 run_id: "stored-grant-timeout".to_string(),

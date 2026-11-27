@@ -13,6 +13,7 @@
 //! with its typed refusal instead of settling.
 
 use orbit_engine::{JobOutcome, V2SqliteSink, execute_job_with_resume};
+use orbit_engine::{Recovery, RunLifecycle};
 use orbit_types::workflow::activity_job::{JobV2, V2AuditEventKind};
 
 use super::*;

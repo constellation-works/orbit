@@ -16,7 +16,9 @@ use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryRequest, TaskUpdateParams,
 };
 use orbit_core::{ActorIdentity, OrbitError, OrbitRuntime};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::HostEnvironment;
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{
     DECISION_ANSWERED_EVENT, DECISION_REQUESTED_EVENT, DecisionAnswer, DecisionBinding,
     DecisionGate, DecisionRequest, DecisionRequestState, TaskComment, TaskDecision,

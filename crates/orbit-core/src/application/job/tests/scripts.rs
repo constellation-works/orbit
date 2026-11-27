@@ -109,14 +109,15 @@ fn script_launcher_env_carries_user_bus_locators_but_script_env_does_not() {
 
 // Unit admission (test_strategy criterion 3, fail-closed validation): the
 // attach action attaches only bytes that still match their recorded digest,
-// driven at the public `RuntimeHost::run_deterministic` boundary. The
+// driven at the public `Dispatch::run_deterministic` boundary. The
 // crate-private output publisher and run-definition snapshot writer are its
 // only fixtures; a crate-root replay would need a real script run, which the
 // nested kernel sandbox refuses in agent lanes.
 #[test]
 #[cfg(unix)]
 fn attach_script_files_attaches_verified_outputs_and_refuses_changed_bytes() {
-    use orbit_engine::{RuntimeHost, ScriptStepEnd, ScriptStepOutputs, ScriptStepRan};
+    use orbit_engine::Dispatch;
+    use orbit_engine::{ScriptStepEnd, ScriptStepOutputs, ScriptStepRan};
     use orbit_types::workflow::activity_job::{ScriptFileOutputs, script_sha256_hex};
     use orbit_types::workflow::{JobRunState, PipelineState};
     use serde_json::json;
@@ -228,7 +229,7 @@ fn attach_script_files_attaches_verified_outputs_and_refuses_changed_bytes() {
         ..Default::default()
     };
     let attach = |input: serde_json::Value| {
-        RuntimeHost::run_deterministic(
+        Dispatch::run_deterministic(
             &runtime,
             "attach_script_files",
             &json!({}),

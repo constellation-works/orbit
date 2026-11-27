@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{ActorIdentity, JobRun, JobRunState, OrbitRuntime};
-use orbit_engine::RuntimeHost;
+use orbit_engine::RunLifecycle;
 use orbit_types::task::{
     DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2,

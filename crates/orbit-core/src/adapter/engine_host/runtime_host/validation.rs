@@ -1,7 +1,7 @@
 //! Validation evidence and the bounded cache of validated trees.
 
 use orbit_common::OrbitError;
-use orbit_engine::RuntimeHost;
+use orbit_engine::RunLifecycle;
 
 use crate::OrbitRuntime;
 

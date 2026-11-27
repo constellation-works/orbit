@@ -44,7 +44,8 @@ use orbit_core::runtime::plugin::sandbox_mask::prepare_plugin_mask;
 use orbit_core::test_support::{
     ReviewInvocationRecord, ReviewReserveRequest, route_worker_host_tool,
 };
-use orbit_engine::{PluginBrokerHandle, PluginBrokerRun, RuntimeHost};
+use orbit_engine::{HostEnvironment, RunLifecycle};
+use orbit_engine::{PluginBrokerHandle, PluginBrokerRun};
 use orbit_mcp::federated::{Destination, FederatedMcpHost, SshDestinationProbe};
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::policy::ResolvedFsProfile;
@@ -598,8 +599,8 @@ impl Confined {
         // What the step runner records for the provider it just spawned.
         // The provider waits on `start_signal` before it opens the follower
         // store, so these writes finish first.
-        RuntimeHost::register_worker_process(runner, pid).expect("record the worker");
-        RuntimeHost::register_worker_pid_namespace(runner, pid).expect("record the namespace");
+        RunLifecycle::register_worker_process(runner, pid).expect("record the worker");
+        RunLifecycle::register_worker_pid_namespace(runner, pid).expect("record the namespace");
         for broker in brokers {
             broker.bind_sandbox(pid).expect("authenticate the sandbox");
         }

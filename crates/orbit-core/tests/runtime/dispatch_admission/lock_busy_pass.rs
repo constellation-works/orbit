@@ -21,7 +21,7 @@ use orbit_common::fs::io::{
 };
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::host_resource::forecast::{ForecastDecision, HostLoadForecast};
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use orbit_types::workflow::{DrainAdmissionPass, PipelineState};
 use serde_json::{Value, json};

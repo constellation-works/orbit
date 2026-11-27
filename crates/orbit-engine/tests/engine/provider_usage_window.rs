@@ -22,9 +22,9 @@ use std::path::Path;
 
 use chrono::{DateTime, Local, Utc};
 use orbit_common::model::pricing::derive_cost_usd;
+use orbit_engine::{Dispatch, HostEnvironment};
 use orbit_engine::{
-    DispatchError, DispatchOutcome, ResolvedCliExecutor, RuntimeHost, V2DispatchInput,
-    dispatch_v2_activity,
+    DispatchError, DispatchOutcome, ResolvedCliExecutor, V2DispatchInput, dispatch_v2_activity,
 };
 use orbit_types::telemetry::{
     InvocationTrace, ProviderLimitObservation, ProviderLimitSource, TokenUsage,
@@ -51,11 +51,11 @@ struct UsageHost {
 
 impl orbit_engine::test_support::NullRuntimeHost for UsageHost {
     fn agent_subprocess_environment(&self, names: &[&str]) -> Vec<(String, String)> {
-        RuntimeHost::agent_subprocess_environment(&self.provider, names)
+        HostEnvironment::agent_subprocess_environment(&self.provider, names)
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        let mut executor = RuntimeHost::resolve_cli_executor(&self.provider, provider)?;
+        let mut executor = Dispatch::resolve_cli_executor(&self.provider, provider)?;
         if let Some(command) = &self.cli_command {
             executor.command = command.clone();
         }

@@ -14,7 +14,8 @@ use orbit_core::application::job::JobRunListParams;
 use orbit_core::{
     CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, Task, TaskComplexity, TaskStatus,
 };
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
+use orbit_engine::HostEnvironment;
 use orbit_tools::ToolContext;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::JobRunTrigger;

@@ -1,7 +1,8 @@
 //! A deferred infra requeue records the redacted authentication error.
 
 use chrono::Utc;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_store::TaskReservationReleaseReason;
 use orbit_types::task::{RecordedFinalRecovery, TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
@@ -71,7 +72,7 @@ fn transient_infra_deferral_redacts_the_authentication_error() {
         .jobs()
         .write_run_state(&run.run_id, &state)
         .expect("handoff receipt");
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &runtime,
         &task.id,
         TaskAutomationUpdate {

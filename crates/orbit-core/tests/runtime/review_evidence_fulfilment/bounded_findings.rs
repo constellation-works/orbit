@@ -2,7 +2,7 @@
 
 use orbit_core::TaskStatus;
 use orbit_core::test_support::with_review_evidence_completion;
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_tools::{ReservationOwnerContext, ToolContext};
 use orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES;
 use orbit_types::workflow::{

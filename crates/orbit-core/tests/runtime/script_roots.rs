@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::scripts::{ScriptGrantOptions, ScriptGrantState};
-use orbit_engine::{RuntimeHost, ScriptStepRequest, ScriptStepRun};
+use orbit_engine::Dispatch;
+use orbit_engine::{ScriptStepRequest, ScriptStepRun};
 use orbit_types::workflow::activity_job::script_refusal;
 use serde_json::json;
 
@@ -143,7 +144,7 @@ fn a_granted_root_missing_at_run_time_refuses_before_spawn() {
         code,
         message,
         record,
-    } = RuntimeHost::run_script_step(&fixture.runtime, &request())
+    } = Dispatch::run_script_step(&fixture.runtime, &request())
     else {
         panic!("a step whose granted root is gone must refuse");
     };
@@ -252,7 +253,7 @@ fn a_granted_read_root_replaced_with_a_fifo_refuses_before_spawn() {
         code,
         message,
         record,
-    } = RuntimeHost::run_script_step(&fixture.runtime, &request())
+    } = Dispatch::run_script_step(&fixture.runtime, &request())
     else {
         panic!("a step whose granted read root became a FIFO must refuse");
     };
@@ -294,7 +295,7 @@ fn strict_containment_refuses_every_script_step_on_macos() {
         code,
         message,
         record,
-    } = RuntimeHost::run_script_step(&fixture.runtime, &request())
+    } = Dispatch::run_script_step(&fixture.runtime, &request())
     else {
         panic!("strict containment must refuse a macOS script step");
     };

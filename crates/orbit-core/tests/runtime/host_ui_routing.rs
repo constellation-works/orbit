@@ -12,7 +12,7 @@ use orbit_core::bootstrap::browser_kit::{KitLayout, PLAYWRIGHT_VERSION};
 use orbit_core::{
     CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, Task, TaskComplexity, TaskStatus,
 };
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use orbit_types::task::{HostOs, browser_kit_wait};
 use orbit_types::workflow::{JobRunTrigger, PipelineState};

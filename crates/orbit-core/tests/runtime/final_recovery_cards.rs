@@ -9,7 +9,7 @@ use orbit_types::task::{DecisionGate, DecisionRequestState, TaskRelationType, Ta
 use orbit_types::workflow::FinalRecoveryDecision;
 use serde_json::{Value, json};
 
-use orbit_engine::RuntimeHost as _;
+use orbit_engine::RunLifecycle;
 
 use super::recovery_fixture::{Fixture, fixture};
 

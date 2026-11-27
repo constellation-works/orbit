@@ -4,6 +4,7 @@
 //! disjoint siblings still apply.
 
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_engine::Dispatch;
 use orbit_tools::ReservationOwnerContext;
 
 use super::races::apply_input;

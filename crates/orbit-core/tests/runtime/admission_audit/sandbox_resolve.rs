@@ -1,4 +1,4 @@
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 #[cfg(target_os = "linux")]
 use orbit_exec::{
     compile_linux_bwrap_argv, linux_bwrap_write_grant_diagnostic, prepare_linux_bwrap_write_grants,

@@ -1,323 +1,334 @@
-#![expect(
-    clippy::arbitrary_source_item_ordering,
-    reason = "macro_rules! recovery_methods must precede pub(super) use recovery_methods in lexical scope"
-)]
+use orbit_common::OrbitError;
+use orbit_tools::{FsAuditLogger, ToolContext};
+use orbit_types::workflow::{AutoTaskStepRecord, ParkedWait};
+use serde_json::Value;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
-macro_rules! recovery_methods {
-    () => {
-        /// Resolve a deny-mode activity's callable tools for one agent launch.
-        ///
-        /// `effective_tools` is every registered agent-facing tool the disallow
-        /// list does not cover. A requirement never overrides that list.
-        /// `agent_implement`, and any activity that is not a shipped
-        /// non-implementer, admits `required_tools` fail-closed: unknown,
-        /// inactive, malformed and denied requirements refuse dispatch, naming
-        /// the tool and `activity`. Final recovery, step recovery, reviewers and
-        /// the other shipped non-implementers drop a covered requirement from
-        /// `requested_tools` and record why on `omitted_requirement_notes`.
-        /// A host without a tool registry cannot compute the set, so it refuses
-        /// rather than guessing. Pass the dispatched run's ID when resolving
-        /// a launch, so the host can include advisory resident discovery.
-        fn resolve_activity_tool_denials(
-            &self,
-            run_id: Option<&str>,
-            task_ids: &[String],
-            activity: &str,
-            disallow_list: &[String],
-        ) -> Result<ResolvedActivityTools, DispatchError>;
+use crate::context::dispatch_contract::{DispatchError, DispatchInvocationTrace};
 
-        /// Compose and validate the exact task-scoped tools for one agent launch.
-        /// Hosts without a task/tool registry preserve the activity baseline.
-        fn resolve_activity_tools(
-            &self,
-            task_ids: &[String],
-            baseline_tools: &[String],
-        ) -> Result<ResolvedActivityTools, DispatchError>;
+use crate::context::hosts::{AutoTaskAdmission, AutoTaskObservation, AutoTaskStepRequest};
+use crate::context::hosts::{
+    CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
+    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
+    RebaseRecoveryAttemptScope, ResolvedActivityTools,
+};
 
-        /// Persist a durable checkpoint after a completed top-level job step
-        /// (ORB-10002). `output` is the completing step's own raw output;
-        /// `compound_outputs` holds the other pipeline entries a compound step
-        /// (`parallel:`, `fan_out:`, `loop:`) exposed — nested step outputs and
-        /// nested fan-in aliases — and is empty for a target step. The host
-        /// accumulates by step, so the bytes handed over per checkpoint never
-        /// grow with the run.
-        ///
-        /// Hosts with run persistence (orbit-core) record this into the run's
-        /// `PipelineState` (`step_outputs[step_index]`,
-        /// `compound_outputs[step_index]`, and `pipeline` by key) so an
-        /// interrupted run can be resumed without re-executing completed steps.
-        /// `script_outputs` holds the script output sets behind the exposed
-        /// entries, by pipeline key (`script_output_sets[step_index]`), and
-        /// belongs to the same write.
-        /// Both halves belong to one write: a step recorded as completed without
-        /// its compound outputs would resume with those entries missing. A host
-        /// without run storage records nothing. Checkpoint failures are non-fatal to the run: the executor
-        /// logs and continues.
-        fn checkpoint_step(
-            &self,
-            run_id: &str,
-            step_index: u32,
-            step_id: &str,
-            output: &Value,
-            compound_outputs: &BTreeMap<String, Value>,
-            script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
-        ) -> Result<(), DispatchError>;
+/// Checkpoints and recovery: activity tools, step and auto-task
+/// checkpoints, final recovery, completion, rebase recovery, and agent
+/// execution traces.
+pub trait Recovery: Send + Sync {
+    /// Resolve a deny-mode activity's callable tools for one agent launch.
+    ///
+    /// `effective_tools` is every registered agent-facing tool the disallow
+    /// list does not cover. A requirement never overrides that list.
+    /// `agent_implement`, and any activity that is not a shipped
+    /// non-implementer, admits `required_tools` fail-closed: unknown,
+    /// inactive, malformed and denied requirements refuse dispatch, naming
+    /// the tool and `activity`. Final recovery, step recovery, reviewers and
+    /// the other shipped non-implementers drop a covered requirement from
+    /// `requested_tools` and record why on `omitted_requirement_notes`.
+    /// A host without a tool registry cannot compute the set, so it refuses
+    /// rather than guessing. Pass the dispatched run's ID when resolving
+    /// a launch, so the host can include advisory resident discovery.
+    fn resolve_activity_tool_denials(
+        &self,
+        run_id: Option<&str>,
+        task_ids: &[String],
+        activity: &str,
+        disallow_list: &[String],
+    ) -> Result<ResolvedActivityTools, DispatchError>;
 
-        /// Persist the checkpoint of a top-level step its `when:` skipped. It
-        /// records what [`Self::checkpoint_step`] records for a null output
-        /// (the step stays `success`, which readers of completed steps rely
-        /// on) and also marks the step skipped, so a resumed run leaves its
-        /// output absent from later templates, as the uninterrupted run did,
-        /// while an executed step's null output is still restored. Non-fatal,
-        /// like `checkpoint_step`.
-        fn checkpoint_skipped_step(
-            &self,
-            run_id: &str,
-            step_index: u32,
-            step_id: &str,
-        ) -> Result<(), DispatchError>;
+    /// Compose and validate the exact task-scoped tools for one agent launch.
+    /// Hosts without a task/tool registry preserve the activity baseline.
+    fn resolve_activity_tools(
+        &self,
+        task_ids: &[String],
+        baseline_tools: &[String],
+    ) -> Result<ResolvedActivityTools, DispatchError>;
 
-        /// Observe one `auto-task:` step pass deterministically (ORB-20158):
-        /// its durable record, the frozen definition's hold, the bound task's
-        /// terminal receipt, the deadline, expiry and readiness at the owner's
-        /// pass time. Writes nothing. A host that cannot observe refuses, so
-        /// the step never mints on a guess.
-        fn observe_auto_task_step(
-            &self,
-            run_id: &str,
-            request: &AutoTaskStepRequest,
-        ) -> Result<AutoTaskObservation, DispatchError>;
+    /// Persist a durable checkpoint after a completed top-level job step
+    /// (ORB-10002). `output` is the completing step's own raw output;
+    /// `compound_outputs` holds the other pipeline entries a compound step
+    /// (`parallel:`, `fan_out:`, `loop:`) exposed — nested step outputs and
+    /// nested fan-in aliases — and is empty for a target step. The host
+    /// accumulates by step, so the bytes handed over per checkpoint never
+    /// grow with the run.
+    ///
+    /// Hosts with run persistence (orbit-core) record this into the run's
+    /// `PipelineState` (`step_outputs[step_index]`,
+    /// `compound_outputs[step_index]`, and `pipeline` by key) so an
+    /// interrupted run can be resumed without re-executing completed steps.
+    /// `script_outputs` holds the script output sets behind the exposed
+    /// entries, by pipeline key (`script_output_sets[step_index]`), and
+    /// belongs to the same write.
+    /// Both halves belong to one write: a step recorded as completed without
+    /// its compound outputs would resume with those entries missing. A host
+    /// without run storage records nothing. Checkpoint failures are non-fatal to the run: the
+    /// executor logs and continues.
+    fn checkpoint_step(
+        &self,
+        run_id: &str,
+        step_index: u32,
+        step_id: &str,
+        output: &Value,
+        compound_outputs: &BTreeMap<String, Value>,
+        script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
+    ) -> Result<(), DispatchError>;
 
-        /// Durably record an `auto-task:` step's record in the run's versioned
-        /// checkpoint before the engine relies on it. Fail-closed: the engine
-        /// admits nothing after an error.
-        fn checkpoint_auto_task_step(
-            &self,
-            run_id: &str,
-            step_id: &str,
-            record: &AutoTaskStepRecord,
-        ) -> Result<(), DispatchError>;
+    /// Persist the checkpoint of a top-level step its `when:` skipped. It
+    /// records what [`Self::checkpoint_step`] records for a null output
+    /// (the step stays `success`, which readers of completed steps rely
+    /// on) and also marks the step skipped, so a resumed run leaves its
+    /// output absent from later templates, as the uninterrupted run did,
+    /// while an executed step's null output is still restored. Non-fatal,
+    /// like `checkpoint_step`.
+    fn checkpoint_skipped_step(
+        &self,
+        run_id: &str,
+        step_index: u32,
+        step_id: &str,
+    ) -> Result<(), DispatchError>;
 
-        /// Resolve the step's durable reservation under the owner admission
-        /// fence: an existing task minted for its action key, a compatible
-        /// open instance, a hold, or one keyed mint after re-checking
-        /// readiness, guards and expiry. Requires a checkpointed reservation.
-        fn admit_auto_task_step(
-            &self,
-            run_id: &str,
-            step_id: &str,
-        ) -> Result<AutoTaskAdmission, DispatchError>;
+    /// Observe one `auto-task:` step pass deterministically (ORB-20158):
+    /// its durable record, the frozen definition's hold, the bound task's
+    /// terminal receipt, the deadline, expiry and readiness at the owner's
+    /// pass time. Writes nothing. A host that cannot observe refuses, so
+    /// the step never mints on a guess.
+    fn observe_auto_task_step(
+        &self,
+        run_id: &str,
+        request: &AutoTaskStepRequest,
+    ) -> Result<AutoTaskObservation, DispatchError>;
 
-        /// Durably record a succeeded branch of a `parallel:` block in a job
-        /// with auto-task steps, so a replay restores it instead of running
-        /// it again. Fail-closed. A target branch's `output` is that
-        /// branch's raw output. A compound branch (`loop`, `fan_out`, or a
-        /// nested `parallel`) stores an opaque object the engine reads
-        /// back: the branch output plus the other pipeline entries it
-        /// exposed. Hosts persist the value unchanged.
-        fn checkpoint_parallel_branch(
-            &self,
-            run_id: &str,
-            step_id: &str,
-            branch_id: &str,
-            output: &Value,
-        ) -> Result<(), DispatchError>;
+    /// Durably record an `auto-task:` step's record in the run's versioned
+    /// checkpoint before the engine relies on it. Fail-closed: the engine
+    /// admits nothing after an error.
+    fn checkpoint_auto_task_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        record: &AutoTaskStepRecord,
+    ) -> Result<(), DispatchError>;
 
-        /// Park the run: it stays live and counts against its job's
-        /// `max_active_runs`, holds no worker, and the owner clock resumes it
-        /// at `park.wake_at`. Orphan reconciliation tells it from worker loss.
-        fn park_job_run(&self, run_id: &str, park: &ParkedWait) -> Result<(), DispatchError>;
+    /// Resolve the step's durable reservation under the owner admission
+    /// fence: an existing task minted for its action key, a compatible
+    /// open instance, a hold, or one keyed mint after re-checking
+    /// readiness, guards and expiry. Requires a checkpointed reservation.
+    fn admit_auto_task_step(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<AutoTaskAdmission, DispatchError>;
 
-        /// Persist diagnostic output from an incomplete step without marking it
-        /// successful or making it eligible for resume skipping.
-        fn checkpoint_step_diagnostic(
-            &self,
-            _run_id: &str,
-            _step_id: &str,
-            _output: &Value,
-        ) -> Result<(), DispatchError>;
+    /// Durably record a succeeded branch of a `parallel:` block in a job
+    /// with auto-task steps, so a replay restores it instead of running
+    /// it again. Fail-closed. A target branch's `output` is that
+    /// branch's raw output. A compound branch (`loop`, `fan_out`, or a
+    /// nested `parallel`) stores an opaque object the engine reads
+    /// back: the branch output plus the other pipeline entries it
+    /// exposed. Hosts persist the value unchanged.
+    fn checkpoint_parallel_branch(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        branch_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError>;
 
-        /// Persist a successful terminal failure activity separately from normal
-        /// step checkpoints. The failed step remains failed; this records only the
-        /// recovery evidence a later resume may authenticate.
-        fn checkpoint_failure_activity(
-            &self,
-            run_id: &str,
-            activity_name: &str,
-            failed_step_id: &str,
-            output: &Value,
-        ) -> Result<(), DispatchError>;
+    /// Park the run: it stays live and counts against its job's
+    /// `max_active_runs`, holds no worker, and the owner clock resumes it
+    /// at `park.wake_at`. Orphan reconciliation tells it from worker loss.
+    fn park_job_run(&self, run_id: &str, park: &ParkedWait) -> Result<(), DispatchError>;
 
-        /// Read only this run's bounded, redacted worker log tail for built-in
-        /// step and final recovery. `None` means the run has no worker log; read failures must
-        /// remain distinguishable from an empty log. This host capability is
-        /// internal and grants no agent-facing run observation tool.
-        fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError>;
+    /// Persist diagnostic output from an incomplete step without marking it
+    /// successful or making it eligible for resume skipping.
+    fn checkpoint_step_diagnostic(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        _output: &Value,
+    ) -> Result<(), DispatchError>;
 
-        /// [ORB-13907] Admit a job's final recovery for a failed run, once.
-        ///
-        /// A host with run storage records the admission in the run's state
-        /// before answering `Admitted`, so neither a crash during the activity
-        /// nor any resume of the run invokes it again; it skips when final
-        /// recovery is disabled (an empty `workflow.purpose_crews.final_recovery`), when
-        /// the run already spent it, or when the run is no longer running. A host
-        /// without run storage skips: it cannot promise "once".
-        fn admit_final_recovery(
-            &self,
-            run_id: &str,
-            request: &FinalRecoveryAdmissionRequest,
-        ) -> Result<FinalRecoveryAdmission, OrbitError>;
+    /// Persist a successful terminal failure activity separately from normal
+    /// step checkpoints. The failed step remains failed; this records only the
+    /// recovery evidence a later resume may authenticate.
+    fn checkpoint_failure_activity(
+        &self,
+        run_id: &str,
+        activity_name: &str,
+        failed_step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError>;
 
-        /// Keep one absolute completion budget across retries of a persisted run.
-        /// An unpersisted host uses the current invocation's deadline.
-        fn completion_deadline(
-            &self,
-            _run_id: &str,
-            _pull_request: &str,
-            proposed: u64,
-        ) -> Result<u64, OrbitError>;
+    /// Read only this run's bounded, redacted worker log tail for built-in
+    /// step and final recovery. `None` means the run has no worker log; read failures must
+    /// remain distinguishable from an empty log. This host capability is
+    /// internal and grants no agent-facing run observation tool.
+    fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError>;
 
-        /// Bind native validation to task meaning and the effective completion policy.
-        /// Hosts without this evidence never reuse a published completion prefix.
-        fn completion_policy_digest(
-            &self,
-            _run_id: &str,
-            _task_ids: &[String],
-        ) -> Result<Option<String>, OrbitError>;
+    /// [ORB-13907] Admit a job's final recovery for a failed run, once.
+    ///
+    /// A host with run storage records the admission in the run's state
+    /// before answering `Admitted`, so neither a crash during the activity
+    /// nor any resume of the run invokes it again; it skips when final
+    /// recovery is disabled (an empty `workflow.purpose_crews.final_recovery`), when
+    /// the run already spent it, or when the run is no longer running. A host
+    /// without run storage skips: it cannot promise "once".
+    fn admit_final_recovery(
+        &self,
+        run_id: &str,
+        request: &FinalRecoveryAdmissionRequest,
+    ) -> Result<FinalRecoveryAdmission, OrbitError>;
 
-        /// Classify a transient completion observation after authenticating the
-        /// publication and its receipts. A stopped run with unchanged evidence
-        /// is requeued under current policy. This grants no authority to retry
-        /// mutations or to merge.
-        fn completion_observation_admission(
-            &self,
-            run_id: &str,
-            task_id: &str,
-            step_id: &str,
-        ) -> Result<CompletionObservationAdmission, OrbitError>;
+    /// Keep one absolute completion budget across retries of a persisted run.
+    /// An unpersisted host uses the current invocation's deadline.
+    fn completion_deadline(
+        &self,
+        _run_id: &str,
+        _pull_request: &str,
+        proposed: u64,
+    ) -> Result<u64, OrbitError>;
 
-        /// Authenticate an unchanged publication before the once-only final recovery
-        /// retries a read-only completion observation in the same active execution.
-        fn authenticate_completion_tail(
-            &self,
-            _run_id: &str,
-            _task_id: &str,
-            _step_id: &str,
-        ) -> Result<bool, OrbitError>;
+    /// Bind native validation to task meaning and the effective completion policy.
+    /// Hosts without this evidence never reuse a published completion prefix.
+    fn completion_policy_digest(
+        &self,
+        _run_id: &str,
+        _task_ids: &[String],
+    ) -> Result<Option<String>, OrbitError>;
 
-        /// [ORB-13907] Act on an admitted final recovery's decision: record it,
-        /// and apply every decision but `resume` to the task through the
-        /// deterministic applier — or, for a claimed leaf, hand it to the claim
-        /// settlement instead of writing the owner's task.
-        fn apply_final_recovery(
-            &self,
-            run_id: &str,
-            application: &FinalRecoveryApplication,
-        ) -> Result<FinalRecoveryApplied, OrbitError>;
+    /// Classify a transient completion observation after authenticating the
+    /// publication and its receipts. A stopped run with unchanged evidence
+    /// is requeued under current policy. This grants no authority to retry
+    /// mutations or to merge.
+    fn completion_observation_admission(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        step_id: &str,
+    ) -> Result<CompletionObservationAdmission, OrbitError>;
 
-        /// Persist bounded scratch evidence for this run's admitted recovery task.
-        /// The host authenticates the task, reads files under the assigned
-        /// worktree's scratch directory and carries claimed evidence to its owner.
-        fn persist_final_recovery_evidence(
-            &self,
-            run_id: &str,
-            task_id: &str,
-            workspace: &std::path::Path,
-            evidence: &Value,
-        ) -> Result<(), OrbitError>;
+    /// Authenticate an unchanged publication before the once-only final recovery
+    /// retries a read-only completion observation in the same active execution.
+    fn authenticate_completion_tail(
+        &self,
+        _run_id: &str,
+        _task_id: &str,
+        _step_id: &str,
+    ) -> Result<bool, OrbitError>;
 
-        /// Reserve the host-only identity of one preparation or rebase recovery
-        /// of `step_id`, before issuing its certificate (and, for conflicts,
-        /// before its provider runs).
-        ///
-        /// The host assigns the attempt; the caller only carries it, in memory, to
-        /// the checkpoint it stamps as `recovery_attempt`. A later reservation for
-        /// the same run and step supersedes this one, so only the newest admitted
-        /// recovery can be certified. Hosts without a recovery authority refuse,
-        /// which stops the recovery before the provider launches.
-        fn begin_rebase_recovery_attempt(
-            &self,
-            run_id: &str,
-            step_id: &str,
-            scope: &RebaseRecoveryAttemptScope,
-        ) -> Result<u64, DispatchError>;
+    /// [ORB-13907] Act on an admitted final recovery's decision: record it,
+    /// and apply every decision but `resume` to the task through the
+    /// deterministic applier — or, for a claimed leaf, hand it to the claim
+    /// settlement instead of writing the owner's task.
+    fn apply_final_recovery(
+        &self,
+        run_id: &str,
+        application: &FinalRecoveryApplication,
+    ) -> Result<FinalRecoveryApplied, OrbitError>;
 
-        /// Persist an exact host-validated preparation or recovered rebase before
-        /// reporting success. Preparations use separate step identities from
-        /// rewrites and bind their entire observation payload. Unlike ordinary
-        /// step checkpoints, durability failure is fatal.
-        /// `output` carries the attempt reserved by
-        /// [`Self::begin_rebase_recovery_attempt`] as `recovery_attempt`.
-        fn checkpoint_rebase_recovery(
-            &self,
-            run_id: &str,
-            step_id: &str,
-            output: &Value,
-        ) -> Result<(), DispatchError>;
+    /// Persist bounded scratch evidence for this run's admitted recovery task.
+    /// The host authenticates the task, reads files under the assigned
+    /// worktree's scratch directory and carries claimed evidence to its owner.
+    fn persist_final_recovery_evidence(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        workspace: &std::path::Path,
+        evidence: &Value,
+    ) -> Result<(), OrbitError>;
 
-        /// Whether `checkpoint` is exactly the current recovery evidence this host
-        /// certified for `run_id` / `step_id`: its own attempt's evidence, with no
-        /// later attempt of that step certified since.
-        ///
-        /// The run store a checkpoint is read back from is writable by managed
-        /// leaves, so the stored bytes are progress data. Authority lives in a
-        /// host-only record this method consults. Hosts without one certify
-        /// nothing and therefore authenticate nothing.
-        fn verify_rebase_recovery(
-            &self,
-            run_id: &str,
-            step_id: &str,
-            checkpoint: &Value,
-        ) -> Result<bool, OrbitError>;
+    /// Reserve the host-only identity of one preparation or rebase recovery
+    /// of `step_id`, before issuing its certificate (and, for conflicts,
+    /// before its provider runs).
+    ///
+    /// The host assigns the attempt; the caller only carries it, in memory, to
+    /// the checkpoint it stamps as `recovery_attempt`. A later reservation for
+    /// the same run and step supersedes this one, so only the newest admitted
+    /// recovery can be certified. Hosts without a recovery authority refuse,
+    /// which stops the recovery before the provider launches.
+    fn begin_rebase_recovery_attempt(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        scope: &RebaseRecoveryAttemptScope,
+    ) -> Result<u64, DispatchError>;
 
-        /// Every recovery attempt this host reserved for `run_id` / `step_id`,
-        /// oldest first, read from the same host-only record that assigns them.
-        /// Completion counts the distinct bases a step rebased onto to bound how
-        /// often it follows a moving base [ORB-14393].
-        fn rebase_recovery_attempts(
-            &self,
-            run_id: &str,
-            step_id: &str,
-        ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError>;
+    /// Persist an exact host-validated preparation or recovered rebase before
+    /// reporting success. Preparations use separate step identities from
+    /// rewrites and bind their entire observation payload. Unlike ordinary
+    /// step checkpoints, durability failure is fatal.
+    /// `output` carries the attempt reserved by
+    /// [`Self::begin_rebase_recovery_attempt`] as `recovery_attempt`.
+    fn checkpoint_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        output: &Value,
+    ) -> Result<(), DispatchError>;
 
-        fn tool_context_for_activity(
-            &self,
-            run_id: Option<&str>,
-            fs_profile: Option<&str>,
-            fs_audit: Option<Arc<dyn FsAuditLogger>>,
-            proc_allowed_programs: Option<&[String]>,
-        ) -> ToolContext;
+    /// Whether `checkpoint` is exactly the current recovery evidence this host
+    /// certified for `run_id` / `step_id`: its own attempt's evidence, with no
+    /// later attempt of that step certified since.
+    ///
+    /// The run store a checkpoint is read back from is writable by managed
+    /// leaves, so the stored bytes are progress data. Authority lives in a
+    /// host-only record this method consults. Hosts without one certify
+    /// nothing and therefore authenticate nothing.
+    fn verify_rebase_recovery(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        checkpoint: &Value,
+    ) -> Result<bool, OrbitError>;
 
-        /// Record one dispatch's launch identity before its provider starts.
-        /// This includes the provider, model, and crew account.
-        fn begin_agent_execution(
-            &self,
-            run_id: &str,
-            activity_id: &str,
-            provider: &str,
-            model: Option<&str>,
-            identity: &orbit_types::telemetry::AgentExecutionIdentity,
-        ) -> Result<Option<i64>, OrbitError>;
+    /// Every recovery attempt this host reserved for `run_id` / `step_id`,
+    /// oldest first, read from the same host-only record that assigns them.
+    /// Completion counts the distinct bases a step rebased onto to bound how
+    /// often it follows a moving base [ORB-14393].
+    fn rebase_recovery_attempts(
+        &self,
+        run_id: &str,
+        step_id: &str,
+    ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError>;
 
-        /// Record one dispatch's invocation: its provider, model, crew account
-        /// and trace.
-        fn persist_invocation_trace(
-            &self,
-            job_run_id: &str,
-            activity_id: &str,
-            input: &Value,
-            invocation: &DispatchInvocationTrace,
-        ) -> Result<(), DispatchError>;
+    fn tool_context_for_activity(
+        &self,
+        run_id: Option<&str>,
+        fs_profile: Option<&str>,
+        fs_audit: Option<Arc<dyn FsAuditLogger>>,
+        proc_allowed_programs: Option<&[String]>,
+    ) -> ToolContext;
 
-        /// Resolve the crew selected for an activity dispatch. The engine passes
-        /// rendered activity input when it contains an explicit `crew`; otherwise
-        /// it passes the run input so the run's resolved crew is the fallback.
-        /// Hosts without a crew registry may return `None` only when no explicit
-        /// crew was requested, preserving inline settings in isolated tests.
-        fn agent_crew_config_for_input(
-            &self,
-            input: &Value,
-        ) -> Result<Option<CrewConfig>, DispatchError>;
-    };
+    /// Record one dispatch's launch identity before its provider starts.
+    /// This includes the provider, model, and crew account.
+    fn begin_agent_execution(
+        &self,
+        run_id: &str,
+        activity_id: &str,
+        provider: &str,
+        model: Option<&str>,
+        identity: &orbit_types::telemetry::AgentExecutionIdentity,
+    ) -> Result<Option<i64>, OrbitError>;
+
+    /// Record one dispatch's invocation: its provider, model, crew account
+    /// and trace.
+    fn persist_invocation_trace(
+        &self,
+        job_run_id: &str,
+        activity_id: &str,
+        input: &Value,
+        invocation: &DispatchInvocationTrace,
+    ) -> Result<(), DispatchError>;
+
+    /// Resolve the crew selected for an activity dispatch. The engine passes
+    /// rendered activity input when it contains an explicit `crew`; otherwise
+    /// it passes the run input so the run's resolved crew is the fallback.
+    /// Hosts without a crew registry may return `None` only when no explicit
+    /// crew was requested, preserving inline settings in isolated tests.
+    fn agent_crew_config_for_input(
+        &self,
+        input: &Value,
+    ) -> Result<Option<CrewConfig>, DispatchError>;
 }
-pub(super) use recovery_methods;

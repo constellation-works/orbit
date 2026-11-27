@@ -1,6 +1,7 @@
 //! Advisory findings must survive admission without becoming warning holds.
 
 use super::*;
+use orbit_engine::Dispatch;
 
 fn advisory_findings_are_approved_and_reach_the_worker() {
     let workspace = Workspace::new();
@@ -45,7 +46,7 @@ fn advisory_findings_are_approved_and_reach_the_worker() {
     let audit = crate::task_pilot::pilot_audit(&workspace.runtime, &task.id, &comment);
     assert_eq!(audit["assessment"]["surface_warnings"], json!([surface]));
     assert_eq!(audit["assessment"]["utility_warnings"], json!([utility]));
-    let context = RuntimeHost::task_context_for_agent_input(
+    let context = Dispatch::task_context_for_agent_input(
         &workspace.runtime,
         &drain,
         "implement",

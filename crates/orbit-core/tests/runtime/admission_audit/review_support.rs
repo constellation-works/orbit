@@ -8,7 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use orbit_engine::{ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost};
+use orbit_engine::{Dispatch, ReviewGate, RunLifecycle};
+use orbit_engine::{ReviewReleaseRequest, ReviewerInvocationRequest};
 use orbit_types::task::{Task, TaskArtifact, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{
     FindingDisposition, JobRun, NegativeControl, PipelineState, REVIEW_CONTRACT_VERSION,
@@ -133,7 +134,7 @@ fn admitted_run(runtime: &OrbitRuntime, job: &str, task_ids: &[String]) -> JobRu
         captured_at: Utc::now(),
     })
     .unwrap();
-    let run = RuntimeHost::insert_job_run(runtime, job, 1, Utc::now(), Some(input), None)
+    let run = RunLifecycle::insert_job_run(runtime, job, 1, Utc::now(), Some(input), None)
         .expect("insert run");
     bind_tasks(runtime, task_ids, &run.run_id);
     run
@@ -303,7 +304,7 @@ impl Gated {
             .get_job_run(source)
             .expect("read source run")
             .and_then(|run| run.input);
-        let run = RuntimeHost::insert_job_run(
+        let run = RunLifecycle::insert_job_run(
             runtime,
             "task_pr_pipeline",
             2,
@@ -326,7 +327,7 @@ impl Gated {
 
     /// Record `run_id` as running since `started_at`.
     pub(super) fn start(&self, run_id: &str, started_at: chrono::DateTime<Utc>) {
-        RuntimeHost::mark_job_run_running(
+        RunLifecycle::mark_job_run_running(
             &self.fixture.runtime,
             run_id,
             started_at,
@@ -527,19 +528,19 @@ pub(super) fn record_reviewer_invocation(
     runtime: &OrbitRuntime,
     request: &ReviewerInvocationRequest,
 ) -> Result<Option<u64>, orbit_common::OrbitError> {
-    RuntimeHost::record_reviewer_invocation(runtime, request)
+    ReviewGate::record_reviewer_invocation(runtime, request)
 }
 fn release_review_attempt(
     runtime: &OrbitRuntime,
     request: &ReviewReleaseRequest,
 ) -> Result<(), orbit_common::OrbitError> {
-    RuntimeHost::release_review_attempt(runtime, request)
+    ReviewGate::release_review_attempt(runtime, request)
 }
 pub(super) fn review_report_correction(
     runtime: &OrbitRuntime,
     request: &orbit_engine::ReviewReportCorrectionRequest,
 ) -> Result<Option<String>, orbit_common::OrbitError> {
-    RuntimeHost::review_report_correction(runtime, request)
+    ReviewGate::review_report_correction(runtime, request)
 }
 // The persisted lineage key used when preparing a hostile pre-admission ledger.
 pub(super) fn lineage_key(workspace: &str, tasks: &[String], base: &str, run: &str) -> String {

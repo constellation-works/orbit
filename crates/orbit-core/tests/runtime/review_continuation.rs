@@ -3,9 +3,10 @@
 use chrono::Utc;
 use orbit_core::TaskStatus;
 use orbit_core::runtime::audit::run::AuditStepOutcome;
+use orbit_engine::{Dispatch, ReviewGate, RunLifecycle};
 use orbit_engine::{
-    DispatchError, ReviewReleaseRequest, ReviewerInvocationRequest, RuntimeHost,
-    TaskAutomationUpdate, execute_deterministic_action,
+    DispatchError, ReviewReleaseRequest, ReviewerInvocationRequest, TaskAutomationUpdate,
+    execute_deterministic_action,
 };
 use orbit_types::workflow::{
     JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
@@ -156,7 +157,7 @@ fn the_manifest_advertises_the_deadline_the_host_hands_the_reviewer() {
     for (minutes, deadline_seconds) in [(30_u32, 1800_u64), (60, 3600), (120, 7200)] {
         let mut fixture = Fixture::new_with_review_minutes(minutes);
         fixture.admit();
-        RuntimeHost::mark_job_run_running(
+        RunLifecycle::mark_job_run_running(
             &fixture.runtime,
             fixture.input["job_run_id"].as_str().unwrap(),
             Utc::now(),
@@ -165,7 +166,7 @@ fn the_manifest_advertises_the_deadline_the_host_hands_the_reviewer() {
         .unwrap();
         let advertised = manifest(&fixture);
         assert_eq!(advertised.budget.minutes, minutes);
-        let bound = RuntimeHost::record_reviewer_invocation(
+        let bound = ReviewGate::record_reviewer_invocation(
             &fixture.runtime,
             &ReviewerInvocationRequest {
                 run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
@@ -200,7 +201,7 @@ fn the_manifest_advertises_the_deadline_the_host_hands_the_reviewer() {
 fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     let mut fixture = Fixture::new();
     fixture.admit();
-    RuntimeHost::mark_job_run_running(
+    RunLifecycle::mark_job_run_running(
         &fixture.runtime,
         fixture.input["job_run_id"].as_str().unwrap(),
         Utc::now(),
@@ -221,7 +222,7 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
             .into(),
         event,
     };
-    let bound = RuntimeHost::record_reviewer_invocation(
+    let bound = ReviewGate::record_reviewer_invocation(
         &fixture.runtime,
         &request(ReviewerInvocationEvent::Started),
     )
@@ -237,8 +238,8 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
     let finished = request(ReviewerInvocationEvent::TimedOut {
         runtime_seconds: ran,
     });
-    RuntimeHost::record_reviewer_invocation(&fixture.runtime, &finished).unwrap();
-    RuntimeHost::release_review_attempt(
+    ReviewGate::record_reviewer_invocation(&fixture.runtime, &finished).unwrap();
+    ReviewGate::release_review_attempt(
         &fixture.runtime,
         &ReviewReleaseRequest {
             run_id: finished.run_id.clone(),
@@ -280,7 +281,7 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
         serde_json::from_slice::<Value>(&kept.content).unwrap(),
         partial
     );
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &fixture.runtime,
         &fixture.task_id,
         TaskAutomationUpdate {
@@ -291,7 +292,7 @@ fn timeout_retains_partial_report_and_budget_and_resumes_the_same_review() {
         },
     )
     .unwrap();
-    RuntimeHost::finalize_job_run(
+    RunLifecycle::finalize_job_run(
         &fixture.runtime,
         &finished.run_id,
         JobRunState::Failed,
@@ -372,7 +373,7 @@ fn start_fresh_run(fixture: &mut Fixture) {
 /// Returns the handoff output; the caller finalizes the run.
 fn reviewer_timeout_handoff(fixture: &mut Fixture) -> Value {
     fixture.admit();
-    RuntimeHost::mark_job_run_running(
+    RunLifecycle::mark_job_run_running(
         &fixture.runtime,
         fixture.input["job_run_id"].as_str().unwrap(),
         Utc::now(),
@@ -392,13 +393,13 @@ fn reviewer_timeout_handoff(fixture: &mut Fixture) -> Value {
             .into(),
         event,
     };
-    let bound = RuntimeHost::record_reviewer_invocation(
+    let bound = ReviewGate::record_reviewer_invocation(
         &fixture.runtime,
         &request(ReviewerInvocationEvent::Started),
     )
     .unwrap()
     .unwrap();
-    RuntimeHost::record_reviewer_invocation(
+    ReviewGate::record_reviewer_invocation(
         &fixture.runtime,
         &request(ReviewerInvocationEvent::TimedOut {
             runtime_seconds: bound,
@@ -441,7 +442,7 @@ fn review_gate_handoff(
 }
 
 fn finalize_failed_run(fixture: &Fixture) {
-    RuntimeHost::finalize_job_run(
+    RunLifecycle::finalize_job_run(
         &fixture.runtime,
         fixture.input["job_run_id"].as_str().unwrap(),
         JobRunState::Failed,
@@ -1159,7 +1160,7 @@ fn a_late_review_handoff_cannot_overwrite_an_operator_block() {
             None,
         )
         .unwrap();
-    let refused = RuntimeHost::apply_task_automation_update(
+    let refused = RunLifecycle::apply_task_automation_update(
         &fixture.runtime,
         &fixture.task_id,
         TaskAutomationUpdate {
@@ -1191,7 +1192,7 @@ fn an_abandoned_before_pr_review_is_released_and_the_handoff_says_so() {
     let mut fixture = Fixture::new();
     add_origin(&fixture);
     fixture.admit();
-    RuntimeHost::mark_job_run_running(
+    RunLifecycle::mark_job_run_running(
         &fixture.runtime,
         fixture.input["job_run_id"].as_str().unwrap(),
         Utc::now(),

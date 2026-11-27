@@ -11,7 +11,7 @@ use orbit_core::runtime::host_resource::profile::{
     BaseClass, ProfileLookup, ProfileSource, ResourceProfile,
 };
 use orbit_core::{JobRunState, OrbitRuntime};
-use orbit_engine::RuntimeHost;
+use orbit_engine::RunLifecycle;
 use orbit_store::Store;
 use orbit_store::contract::RunResourceMinute;
 use orbit_types::task::TaskStatus;

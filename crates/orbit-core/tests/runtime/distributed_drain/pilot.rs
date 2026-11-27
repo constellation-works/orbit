@@ -1,8 +1,9 @@
 //! Pilot/owner-pull interleavings at the real owner tool boundary.
 
-use super::*;
-
 mod owner_evidence;
+
+use super::*;
+use orbit_engine::Dispatch;
 
 fn action(pair: &Pair, name: &str, input: Value) -> Value {
     pair.wire

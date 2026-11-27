@@ -11,7 +11,7 @@ use std::path::Path;
 use chrono::{Duration, TimeZone, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
-use orbit_engine::RuntimeHost;
+use orbit_engine::RunLifecycle;
 use orbit_types::workflow::{CommitObservationStatus, JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;

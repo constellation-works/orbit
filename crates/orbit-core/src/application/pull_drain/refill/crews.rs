@@ -1,7 +1,7 @@
 //! The crews a pull drain's window can run [ORB-13941].
 
 use orbit_common::OrbitError;
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, PullCrewPreflight};
 
 use crate::OrbitRuntime;
@@ -69,7 +69,7 @@ fn crew_preflight(runtime: &OrbitRuntime) -> PullCrewPreflight {
                 unset.describe()
             ))
         } else if crew.enabled {
-            match RuntimeHost::resolve_cli_executor(runtime, &crew.provider) {
+            match Dispatch::resolve_cli_executor(runtime, &crew.provider) {
                 Ok(executor) => runtime
                     .locate_provider_launcher(&executor.command)
                     .is_none()

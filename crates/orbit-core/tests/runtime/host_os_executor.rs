@@ -12,7 +12,7 @@ use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::{
     CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, Task, TaskComplexity, TaskStatus,
 };
-use orbit_engine::RuntimeHost;
+use orbit_engine::{Dispatch, Recovery};
 use orbit_tools::ToolContext;
 use orbit_types::task::HostOs;
 use orbit_types::workflow::{ExecutorDef, ExecutorType, JobRunState, JobRunTrigger, PipelineState};

@@ -4,7 +4,7 @@
 //! whole required list. When `workflow.unlocked_path_validation_commands` is
 //! set, [`validation_scope`] compares the candidate's tree with the last tree
 //! this run passed the full list on, as the host recorded it
-//! ([`RuntimeHost::record_validated_tree`]). A difference confined to paths
+//! ([`crate::HostEnvironment::record_validated_tree`]). A difference confined to paths
 //! matching `workflow.unlocked_context_paths` runs only the configured
 //! commands; any other difference runs the full list. The decision is the
 //! tree diff alone, never what an agent reports it changed: a rebase onto a

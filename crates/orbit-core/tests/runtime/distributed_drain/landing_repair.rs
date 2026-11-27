@@ -36,6 +36,7 @@ mod owner_fallback;
 mod waiting;
 
 use super::*;
+use orbit_engine::ReviewGate;
 use std::io::Write;
 
 use worker::LandingWorkers;
@@ -328,12 +329,9 @@ fn a_spent_repair_whose_candidate_fails_its_check_returns_to_the_backlog_until_b
         )
     };
     let spent = |owner: &OwnerLocal, task: &str| {
-        RuntimeHost::handoff_landing_context(
-            &owner.pair.wire.owner,
-            &owner.dispatched_handoff(task),
-        )
-        .expect("landing context")
-        .automatic_repair_spent
+        ReviewGate::handoff_landing_context(&owner.pair.wire.owner, &owner.dispatched_handoff(task))
+            .expect("landing context")
+            .automatic_repair_spent
     };
     let requeues = |owner: &OwnerLocal, task: &str| {
         owner.pair.owner_task(task)["history"]
@@ -987,7 +985,7 @@ impl OwnerLocal {
             .unwrap_or_else(|| panic!("no landing dispatched for {task}"));
         let handoff_id = attempt.handoff_id.clone();
         self.own_landing_worker(attempt.job_run_id.as_deref().expect("landing job"));
-        RuntimeHost::record_handoff_landing(
+        ReviewGate::record_handoff_landing(
             runtime,
             &orbit_engine::HandoffLandingUpdate {
                 handoff_id: handoff_id.clone(),

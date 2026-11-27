@@ -14,7 +14,8 @@ use orbit_core::application::task::RecheckKind;
 use orbit_core::runtime::task_pr_forge::{
     ForgePullRequest, MergedPullRequest, PullRequestBlockers, TaskPrForge,
 };
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
+use orbit_engine::RunLifecycle;
+use orbit_engine::{TaskAutomationUpdate, blocked_workflow_failure_update};
 use orbit_types::task::{TaskDecision, TaskHistoryEntry};
 use orbit_types::workflow::{PR_AUTO_FIX_BASE_RED_EVENT, PrAutoFixBaseRed};
 use serde_json::json;
@@ -172,7 +173,7 @@ fn record_base_red(fx: &Fixture, task: &str, head: &str, storage: BaseRedStorage
         ),
         BaseRedStorage::LegacyMinimal => (json!({"failed_head": head, "reason": "base_red"}), None),
     };
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &fx.runtime,
         task,
         TaskAutomationUpdate {
@@ -201,7 +202,7 @@ fn run_blocks(fx: &Fixture, task: &str, base_red_head: Option<&str>, storage: Ba
     if let Some(head) = base_red_head {
         record_base_red(fx, task, head, storage);
     }
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &fx.runtime,
         task,
         blocked_workflow_failure_update(

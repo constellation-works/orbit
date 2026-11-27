@@ -66,8 +66,9 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_engine::RunLifecycle;
 use orbit_engine::{
-    RuntimeHost, TaskAutomationUpdate, baseline_red_hold_update, blocked_workflow_failure_update,
+    TaskAutomationUpdate, baseline_red_hold_update, blocked_workflow_failure_update,
     blocked_workflow_interruption_update, blocked_workflow_owner_signoff_update,
 };
 use orbit_types::task::{TaskDecision, TaskStatus};
@@ -325,7 +326,7 @@ impl OrbitRuntime {
                         return Ok(());
                     }
                     if footprint_unavailable && hold.is_none() && provider_failure.is_none() {
-                        return RuntimeHost::apply_task_automation_update(
+                        return RunLifecycle::apply_task_automation_update(
                             self,
                             &task.id,
                             TaskAutomationUpdate {
@@ -349,7 +350,7 @@ impl OrbitRuntime {
                         );
                     }
                     if upgrade_pending && hold.is_none() && provider_failure.is_none() {
-                        return RuntimeHost::apply_task_automation_update(
+                        return RunLifecycle::apply_task_automation_update(
                             self,
                             &task.id,
                             TaskAutomationUpdate {
@@ -412,7 +413,7 @@ impl OrbitRuntime {
                             ),
                         }
                     };
-                    RuntimeHost::apply_task_automation_update(self, &task.id, update)
+                    RunLifecycle::apply_task_automation_update(self, &task.id, update)
                 });
             // Per-task best-effort: one task's write failure must not strand the
             // rest of the bundle.

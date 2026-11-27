@@ -308,7 +308,7 @@ fn shadow_memory_readout_labels_captures_not_delivered() {
                 "memory": { "enabled": true, "deliveries": [delivery] }
             }]
         });
-        orbit_engine::RuntimeHost::insert_job_run(
+        orbit_engine::RunLifecycle::insert_job_run(
             &runtime,
             "task_local_pipeline",
             1,

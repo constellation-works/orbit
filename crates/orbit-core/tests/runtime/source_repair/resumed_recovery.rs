@@ -7,6 +7,7 @@ use orbit_engine::{
     FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied,
 };
+use orbit_engine::{Recovery, RunLifecycle};
 use orbit_types::workflow::{FinalRecoveryDecision, FinalRecoveryRepairCommit, PipelineState};
 
 struct Resumed {
@@ -178,7 +179,7 @@ fn resumed_fixture() -> Resumed {
         infrastructure: None,
     };
     assert_eq!(
-        RuntimeHost::apply_final_recovery(&f.runtime, &resumed, &application).unwrap(),
+        Recovery::apply_final_recovery(&f.runtime, &resumed, &application).unwrap(),
         FinalRecoveryApplied::Resume
     );
 
@@ -242,7 +243,7 @@ fn resumed_fixture() -> Resumed {
 /// Finalize through the host, then release the fixture's own live PID: a
 /// stopped worker no longer holds it.
 fn stop(f: &Fixture, id: &str, state: JobRunState) {
-    RuntimeHost::finalize_job_run(&f.runtime, id, state, Utc::now(), None).unwrap();
+    RunLifecycle::finalize_job_run(&f.runtime, id, state, Utc::now(), None).unwrap();
     let mut run = f.runtime.show_job_run_observed(id).unwrap();
     run.pid = None;
     published_owner::save_run(f, &run);

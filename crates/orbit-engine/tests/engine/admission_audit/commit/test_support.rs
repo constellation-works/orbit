@@ -14,7 +14,8 @@ use orbit_types::workflow::JobRun;
 use orbit_types::workflow::ReviewVerdict;
 use tempfile::tempdir;
 
-use orbit_engine::{RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::{TaskActivityUpdate, TaskAutomationUpdate};
 
 use super::git_success;
 

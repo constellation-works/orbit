@@ -2,7 +2,7 @@
 
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
-use orbit_engine::RuntimeHost;
+use orbit_engine::ReviewGate;
 use orbit_store::contract::FrictionListFilter;
 use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};
@@ -70,7 +70,7 @@ fn flaky_signatures_are_filed_once_across_runs_and_tasks() {
         let id = task["id"].as_str().unwrap();
         record.run_id = format!("jrun-{index}");
         for _ in 0..2 {
-            RuntimeHost::record_flaky_validation(&runtime, id, &record).unwrap();
+            ReviewGate::record_flaky_validation(&runtime, id, &record).unwrap();
         }
         let history = runtime.get_task_history(id).unwrap();
         let observed = history

@@ -1,7 +1,8 @@
 //! Terminal run publication precedes coupled-task cleanup at the injected publication seam.
 
 use chrono::Utc;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_store::{TaskCreateParams, TaskReservationReleaseReason};
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::{JobRun, JobRunState};

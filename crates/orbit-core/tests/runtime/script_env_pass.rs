@@ -14,7 +14,8 @@ use std::process::Command;
 
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::scripts::ScriptGrantOptions;
-use orbit_engine::{RuntimeHost, ScriptStepEnd, ScriptStepRequest, ScriptStepRun};
+use orbit_engine::Dispatch;
+use orbit_engine::{ScriptStepEnd, ScriptStepRequest, ScriptStepRun};
 use orbit_types::workflow::activity_job::{ScriptNetwork, script_refusal};
 use serde_json::{Value, json};
 
@@ -148,7 +149,7 @@ fn a_network_request_beyond_the_grant_refuses_before_spawn() {
         code,
         message,
         record,
-    } = RuntimeHost::run_script_step(&fixture.runtime, &request())
+    } = Dispatch::run_script_step(&fixture.runtime, &request())
     else {
         panic!("a manifest asking for more network than its grant must refuse");
     };
@@ -210,7 +211,7 @@ fn granted_variables_alone_reach_the_script_and_their_values_are_redacted_in_chi
         ScriptGrantOptions::default(),
     );
 
-    let ran = match RuntimeHost::run_script_step(&fixture.runtime, &request()) {
+    let ran = match Dispatch::run_script_step(&fixture.runtime, &request()) {
         ScriptStepRun::Refused {
             code,
             message,

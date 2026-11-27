@@ -1,5 +1,6 @@
 //! Unsettled prerequisite observations through the public completion job.
 use super::*;
+use orbit_engine::RunLifecycle;
 use orbit_types::workflow::activity_job::V2AuditEventKind;
 use std::{cell::Cell, rc::Rc};
 

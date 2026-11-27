@@ -1,6 +1,7 @@
 //! Production-shaped legacy reservations through the public operator route.
 use super::*;
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_engine::RunLifecycle;
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
     SourceRepairAdmission, source_repair_authorizations, source_repair_reservations,

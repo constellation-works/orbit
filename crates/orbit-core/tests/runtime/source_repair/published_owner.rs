@@ -3,6 +3,8 @@ use super::*;
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest,
 };
+use orbit_engine::ReviewGate;
+use orbit_engine::{Dispatch, HostEnvironment, RunLifecycle};
 use orbit_types::workflow::{JobRun, PipelineState};
 use std::path::Path;
 
@@ -1772,7 +1774,7 @@ pub(super) fn footprint_held_resume_keeps_the_preserved_publication() {
             },
         )
         .unwrap();
-    RuntimeHost::finalize_job_run(
+    RunLifecycle::finalize_job_run(
         &f.runtime,
         &held.run_id,
         JobRunState::Held,

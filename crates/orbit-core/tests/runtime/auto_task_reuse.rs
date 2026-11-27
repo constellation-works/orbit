@@ -10,7 +10,8 @@ use std::rc::Rc;
 use chrono::{Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskUpdateParams;
-use orbit_engine::{AutoTaskAdmission, RuntimeHost};
+use orbit_engine::AutoTaskAdmission;
+use orbit_engine::Recovery;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::AutoTaskStepStatus;
 use serde_json::{Value, json};
@@ -27,7 +28,7 @@ const REUSE_QA: &str = "    - id: qa\n      target: auto-task:full-qa-sweep\n   
 const PREP: &str = "    - id: prep\n      target: auto-task:prepare-release\n";
 
 fn admit(runtime: &OrbitRuntime, run: &str, step: &str) -> AutoTaskAdmission {
-    RuntimeHost::admit_auto_task_step(runtime, run, step).unwrap()
+    Recovery::admit_auto_task_step(runtime, run, step).unwrap()
 }
 
 fn history_path(runtime: &OrbitRuntime) -> std::path::PathBuf {
@@ -72,14 +73,14 @@ fn reuse_when_settles_on_a_revalidated_receipt_and_otherwise_mints_or_holds() {
         record.task_id = Some(child.clone());
         record.minted = true;
         record.status = AutoTaskStepStatus::Queued;
-        RuntimeHost::checkpoint_auto_task_step(runtime, &first, "qa", &record).unwrap();
+        Recovery::checkpoint_auto_task_step(runtime, &first, "qa", &record).unwrap();
         complete_with_evidence(runtime, &child, &first, revision);
         let receipt = observe_step(runtime, &first, "qa", TARGET).receipt.unwrap();
         assert!(receipt.result.is_some(), "{receipt:?}");
         record.receipt = Some(receipt);
         record.status = AutoTaskStepStatus::Done;
         record.settled_at = Some(Utc::now());
-        RuntimeHost::checkpoint_auto_task_step(runtime, &first, "qa", &record).unwrap();
+        Recovery::checkpoint_auto_task_step(runtime, &first, "qa", &record).unwrap();
         let accepted: Value =
             serde_json::from_str(&std::fs::read_to_string(history_path(runtime)).unwrap()).unwrap();
 
@@ -98,7 +99,7 @@ fn reuse_when_settles_on_a_revalidated_receipt_and_otherwise_mints_or_holds() {
         record.receipt = Some(*receipt);
         record.status = AutoTaskStepStatus::Done;
         record.settled_at = Some(Utc::now());
-        RuntimeHost::checkpoint_auto_task_step(runtime, &reuse, "qa", &record).unwrap();
+        Recovery::checkpoint_auto_task_step(runtime, &reuse, "qa", &record).unwrap();
 
         // A later step's mint asks the adapter about the reused result again.
         reserve_step(runtime, &reuse, "prep", PREP_TARGET);

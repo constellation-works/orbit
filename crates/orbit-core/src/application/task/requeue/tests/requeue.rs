@@ -2,7 +2,8 @@
 //! that candidate as the one the next run resumes.
 
 use chrono::Utc;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_store::TaskReservationReleaseReason;
 use orbit_types::task::{TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate, JobRunState};
@@ -43,7 +44,7 @@ fn requeue_reports_the_candidate_its_stopped_run_held() {
             TaskReservationReleaseReason::RunTerminal,
         )
         .expect("stop the run");
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &runtime,
         &task.id,
         TaskAutomationUpdate {

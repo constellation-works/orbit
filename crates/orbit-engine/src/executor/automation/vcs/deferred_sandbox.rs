@@ -5,12 +5,12 @@
 //! [`accept_implementer_deferral`] runs at the implement step boundary. The
 //! implementer names only the validation summary its gate wrote; Orbit derives
 //! the [`DeferredSandboxValidation`] from it, checks it against the gates this
-//! host names ([`RuntimeHost::validation_gates`]: on a claimed leaf, the
+//! host names ([`crate::HostEnvironment::validation_gates`]: on a claimed leaf, the
 //! owner's gates its claim captured [ORB-15622]) and the step's pinned base,
 //! and runs each deferring sandbox's probe in the implementer's lane itself
 //! [ORB-15516]: one per kind the notices name, all of which must refuse
 //! [ORB-15692]. Whether the step is claimed and the host's OS
-//! ([`RuntimeHost::host_os`]) decide which kinds it may defer. The derived
+//! ([`crate::HostEnvironment::host_os`]) decide which kinds it may defer. The derived
 //! record replaces the handoff in the step's output, and an owner run keeps
 //! it on the task as [`DEFERRED_SANDBOX_ARTIFACT`]: a resumed candidate skips
 //! the implementer, so the obligation must outlive the run that created it.

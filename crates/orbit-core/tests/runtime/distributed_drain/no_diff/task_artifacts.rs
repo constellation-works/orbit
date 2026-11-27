@@ -1,5 +1,6 @@
 //! Required task evidence crosses the same claimed commit boundary for every delivery shape.
 use super::*;
+use orbit_engine::ReviewGate;
 
 fn task_artifact(fixture: &mut CleanLeaf, path: &str, bytes: &[u8]) {
     let source = fixture.pair.follower_repo.join(".orbit/tmp/task-evidence");

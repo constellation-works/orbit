@@ -1,5 +1,6 @@
 //! Config drift cannot turn a read-only forge outage into an operator repair.
 use super::*;
+use orbit_engine::ReviewGate;
 
 fn reload(f: &mut Fixture) {
     f.runtime = orbit_core::OrbitRuntime::from_roots(

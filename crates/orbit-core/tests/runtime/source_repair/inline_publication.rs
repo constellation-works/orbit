@@ -2,6 +2,7 @@
 use super::failed_publication::{escalate, escalated_completion_fixture};
 use super::published_owner::{next, save_run};
 use super::*;
+use orbit_engine::{Dispatch, RunLifecycle};
 use orbit_types::workflow::JobRun;
 
 /// Actual publication and failure hook, followed by an expired completion

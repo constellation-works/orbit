@@ -18,7 +18,8 @@ use orbit_core::application::task::{
     TaskUpdateParams,
 };
 use orbit_core::{OrbitRuntime, TaskComplexity};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
+use orbit_engine::RunLifecycle;
+use orbit_engine::{TaskAutomationUpdate, blocked_workflow_failure_update};
 use orbit_types::task::TaskArtifact;
 use serde_json::{Value, json};
 

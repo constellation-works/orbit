@@ -1,5 +1,6 @@
 //! Real Git and provider-source proof through public completion/landing actions.
 use super::*;
+use orbit_engine::{ReviewGate, RunLifecycle};
 
 pub(super) const NEW: &str = "name: CI\non:\n  pull_request:\n    branches: [agent-main]\npermissions: {}\njobs:\n  check:\n    name: Protected (${{ matrix.language }})\n    strategy:\n      matrix:\n        language: [rust]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n";
 
@@ -17,7 +18,7 @@ impl orbit_engine::test_support::NullRuntimeHost for AcceptedLanding {
         _: &str,
         request: &orbit_types::workflow::PrBaseUpdateReservation,
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
-        RuntimeHost::admit_pr_base_update(self, &[TASK_ID.into()], request)
+        ReviewGate::admit_pr_base_update(self, &[TASK_ID.into()], request)
     }
 
     fn handoff_landing_context(
@@ -27,14 +28,14 @@ impl orbit_engine::test_support::NullRuntimeHost for AcceptedLanding {
         Ok(self.context.clone())
     }
     fn get_task_history(&self, id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
-        RuntimeHost::get_task_history(&self.host, id)
+        RunLifecycle::get_task_history(&self.host, id)
     }
     fn admit_pr_base_update(
         &self,
         tasks: &[String],
         request: &orbit_types::workflow::PrBaseUpdateReservation,
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
-        RuntimeHost::admit_pr_base_update(&self.host, tasks, request)
+        ReviewGate::admit_pr_base_update(&self.host, tasks, request)
     }
     fn record_handoff_landing(
         &self,
@@ -825,7 +826,7 @@ fn transient_prerequisite_read_resumes_only_before_any_mutation() {
                         fs::write(fx.forge.join("base-applied"), "current").unwrap();
                     }
                     if case == "unknown_merge_outcome" {
-                        RuntimeHost::apply_task_automation_update(
+                        RunLifecycle::apply_task_automation_update(
                             &host,
                             TASK_ID,
                             TaskAutomationUpdate {

@@ -16,7 +16,8 @@ use std::process::Command;
 
 use chrono::{Duration, Utc};
 use orbit_core::application::automation::evaluate_auto_task;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::workflow::automation::{
     AutomationState, BatchAttempt, BatchState, CoverageEvidence, EVIDENCE_AUTHORITY_ARTIFACT,
     ExaminationCheck, evidence_template,
@@ -558,7 +559,7 @@ fn complete_evidence(attempt: &BatchAttempt) -> CoverageEvidence {
 
 /// Records an execution summary as the review agent's own.
 fn persist_agent_summary(runtime: &orbit_core::OrbitRuntime, action_id: &str) {
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         runtime,
         action_id,
         TaskAutomationUpdate {
@@ -689,7 +690,7 @@ fn admitted_action(
     assert_eq!(attempt.state, BatchState::Admitted);
     let action_id = attempt.action_id.clone().expect("admitted action");
 
-    let run = RuntimeHost::insert_job_run(
+    let run = RunLifecycle::insert_job_run(
         &runtime,
         "delivery-evidence",
         1,
@@ -698,7 +699,7 @@ fn admitted_action(
         None,
     )
     .expect("insert the executor run");
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &runtime,
         &action_id,
         TaskAutomationUpdate {

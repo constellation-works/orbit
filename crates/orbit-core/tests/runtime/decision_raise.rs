@@ -119,7 +119,8 @@ fn raise_input(task: &str, question: &str) -> Value {
 
 #[cfg(target_os = "linux")]
 fn managed_raise_keeps_shared_root_read_only() -> crate::scenarios::Outcome {
-    use orbit_engine::RuntimeHost;
+    use orbit_engine::Dispatch;
+
     use orbit_exec::{LinuxBwrapMountAuthority, LinuxBwrapSpawnRequest};
     use std::process::Stdio;
 

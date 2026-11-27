@@ -96,7 +96,8 @@ use orbit_core::application::routines::{
     DiscoveredWorkspaces, RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions,
 };
 use orbit_core::runtime::JobRuns;
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
+use orbit_engine::HostEnvironment;
 use orbit_store::contract::{
     ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, HandoffObservation, JobRunStepParams,
     LocalPullAdmission, LocalPullMutation, LocalPullPhase, SettlementRefusal,

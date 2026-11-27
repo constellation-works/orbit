@@ -22,7 +22,7 @@ use chrono::{DateTime, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::JobRuns;
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_types::workflow::{CommentLogMark, PipelineState, SteeringWatermark};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -155,7 +155,7 @@ impl Fixture {
 
     /// The task context `step` of `run` embeds in its agent prompt.
     fn prompt(&self, run: &str, step: &str) -> Value {
-        RuntimeHost::task_context_for_agent_input(
+        Dispatch::task_context_for_agent_input(
             &self.runtime,
             run,
             step,
@@ -290,7 +290,7 @@ fn two_runs_of_one_task_hold_independent_watermarks() {
 
     // A dispatch outside any persisted run has no record to hold a
     // watermark: the prompt fails rather than silently losing it.
-    let refused = RuntimeHost::task_context_for_agent_input(
+    let refused = Dispatch::task_context_for_agent_input(
         &fx.runtime,
         "jrun-without-state",
         "implement",
@@ -312,7 +312,7 @@ fn a_prompt_whose_run_has_no_state_fails_instead_of_dropping_the_watermark() {
             None,
         )
         .unwrap();
-    let refused = RuntimeHost::task_context_for_agent_input(
+    let refused = Dispatch::task_context_for_agent_input(
         &fx.runtime,
         &run.run_id,
         "implement",

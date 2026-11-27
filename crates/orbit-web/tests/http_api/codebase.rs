@@ -10,7 +10,7 @@ use std::fs;
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
 use orbit_core::{OrbitError, TaskStatus};
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_types::task::{
     DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
     TaskComplexity, TaskOrigin,

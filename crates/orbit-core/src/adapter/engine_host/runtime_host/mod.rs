@@ -1,14 +1,9 @@
-//! The `RuntimeHost` implementation for `OrbitRuntime`: the single trait impl in
-//! `host`, with its method bodies grouped by concern beside it. A trait can be
-//! implemented once per type, so `host` holds every method.
-//!
-//! Residual size: `host/implementation.rs` is 1176 lines. That is above the
-//! ~800-line guideline because Rust requires exactly one
-//! `impl RuntimeHost for OrbitRuntime` block holding all trait methods;
-//! splitting the impl or lowering the count with an assembly macro would
-//! change the trait-implementation structure. Each body in `host` delegates
-//! to `claims`, `validation`, `recovery`, `invocation`, `host_metadata` or
-//! another named sibling, or adapts a type on the way through.
+//! The `RuntimeHost` implementation for `OrbitRuntime`: one impl per capability
+//! trait in `host` (`RunLifecycle`, `ReviewGate`, `HostEnvironment`, `Dispatch`
+//! and `Recovery`), with their method bodies grouped by concern beside it. Each
+//! body in `host` delegates to `claims`, `validation`, `recovery`,
+//! `invocation`, `host_metadata` or another named sibling, or adapts a type on
+//! the way through.
 
 pub(in crate::adapter::engine_host) mod activity_tools;
 mod agent;

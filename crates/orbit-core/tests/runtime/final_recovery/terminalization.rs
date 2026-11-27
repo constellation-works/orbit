@@ -11,9 +11,10 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, RuntimeHost, TaskAutomationUpdate, V2AuditWriter,
-    WORKFLOW_RUN_FAILED_EVENT, execute_job_with_resume,
+    FinalRecoveryApplied, TaskAutomationUpdate, V2AuditWriter, WORKFLOW_RUN_FAILED_EVENT,
+    execute_job_with_resume,
 };
+use orbit_engine::{Recovery, RunLifecycle};
 use orbit_store::contract::JobRunStepParams;
 use orbit_tools::ToolContext;
 use orbit_types::task::TaskStatus;
@@ -115,7 +116,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
     }
 
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        RuntimeHost::final_recovery_log_tail(&self.fixture.runtime, run_id)
+        Recovery::final_recovery_log_tail(&self.fixture.runtime, run_id)
     }
 
     fn admit_final_recovery(
@@ -131,7 +132,7 @@ impl orbit_engine::test_support::NullRuntimeHost for FailingPipeline<'_> {
         run_id: &str,
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError> {
-        RuntimeHost::apply_final_recovery(&self.fixture.runtime, run_id, application)
+        Recovery::apply_final_recovery(&self.fixture.runtime, run_id, application)
     }
 
     fn apply_task_automation_update(

@@ -10,6 +10,7 @@ use orbit_core::runtime::task_pr_forge::{
     PullRequestBlockers, PullRequestMergeOutcome, TaskPrForge,
 };
 use orbit_core::{ActorIdentity, OrbitError};
+use orbit_engine::RunLifecycle;
 use orbit_types::task::{DecisionRequest, DecisionRequestState};
 use std::path::Path;
 use std::sync::{Arc, Mutex};

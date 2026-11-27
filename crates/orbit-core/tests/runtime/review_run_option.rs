@@ -15,7 +15,8 @@ use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{
     CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, TaskComplexity, TaskStatus,
 };
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
+use orbit_engine::HostEnvironment;
 use orbit_tools::{ReservationOwnerContext, ToolContext};
 use orbit_types::task::{PipelineChildAdmissionMeta, ReservationOwnerMetadata};
 use orbit_types::workflow::{JobRunTrigger, PipelineState, ReviewAdmission, ReviewLayer};

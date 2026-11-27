@@ -4,7 +4,7 @@ use chrono::{Duration, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{OrbitRuntime, ShipMode};
-use orbit_engine::RuntimeHost;
+use orbit_engine::RunLifecycle;
 use orbit_store::contract::{InvocationInsertParams, JobRunStepParams};
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};

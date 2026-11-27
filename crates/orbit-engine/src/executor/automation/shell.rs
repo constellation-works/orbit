@@ -27,7 +27,7 @@
 //! allowlist, and none of the Orbit registry/workspace identity variables a
 //! CLI agent is launched with. Its environment is the allowlisted one with
 //! PATH and toolchain locators resolved the way required validation resolves
-//! them ([`RuntimeHost::validation_subprocess_environment`]), so a step finds
+//! them ([`crate::HostEnvironment::validation_subprocess_environment`]), so a step finds
 //! the same tools whether the worker was launched from ssh, a service unit or
 //! launchd [ORB-13987].
 

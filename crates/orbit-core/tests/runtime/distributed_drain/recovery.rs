@@ -1,6 +1,7 @@
 //! Final recovery of claimed leaves.
 
 use super::*;
+use orbit_engine::{HostEnvironment, Recovery, RunLifecycle};
 
 /// [ORB-13964, ORB-14635] The owner recovers the settled follower failure,
 /// even when an unrelated local run has the same machine-local ID. Explicit

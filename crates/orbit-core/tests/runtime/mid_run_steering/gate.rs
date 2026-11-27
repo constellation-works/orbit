@@ -17,9 +17,10 @@ use orbit_core::OrbitRuntime;
 use orbit_core::TaskStatus;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_engine::activity_job::load_job_asset;
+use orbit_engine::{Dispatch, RunLifecycle};
 use orbit_engine::{
-    DispatchError, JobOutcome, RuntimeHost, SteeringGateReading, SteeringRoundAdmission,
-    TaskAutomationUpdate, V2AuditWriter, execute_job_with_resume,
+    DispatchError, JobOutcome, SteeringGateReading, SteeringRoundAdmission, TaskAutomationUpdate,
+    V2AuditWriter, execute_job_with_resume,
 };
 use orbit_tools::ToolContext;
 use orbit_types::task::ExecutionLocation;
@@ -257,7 +258,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
                 } else {
                     input["task_id"].as_str().unwrap()
                 };
-                let prompt = RuntimeHost::task_context_for_agent_input(
+                let prompt = Dispatch::task_context_for_agent_input(
                     &self.runtime(),
                     &self.run,
                     "implement_one",
@@ -299,7 +300,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         } else {
             task_id
         };
-        let reading = RuntimeHost::steering_gate(&self.runtime(), run_id, task, candidate_source);
+        let reading = Dispatch::steering_gate(&self.runtime(), run_id, task, candidate_source);
         if std::mem::take(&mut *self.comment_after_gate_read.lock().unwrap()) {
             self.fx
                 .operator_comment("STEER-LATE: written while the gate's verdict stands.");
@@ -314,7 +315,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         outstanding: &[CommentLogMark],
         candidate_source: Option<&str>,
     ) -> Result<SteeringRoundAdmission, OrbitError> {
-        RuntimeHost::admit_steering_round(
+        Dispatch::admit_steering_round(
             &self.fx.runtime,
             run_id,
             task_id,
@@ -328,7 +329,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
         task_id: &str,
         update: TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
-        RuntimeHost::apply_task_automation_update(&self.fx.runtime, task_id, update)
+        RunLifecycle::apply_task_automation_update(&self.fx.runtime, task_id, update)
     }
 }
 
@@ -479,7 +480,7 @@ fn a_refusal_spends_one_round_whose_prompt_delivers_and_then_commits() {
         assert_eq!(fx.deliveries().len(), 1, "{pipeline}: delivered once");
         assert_eq!(rounds(&fx, &run), 1, "{pipeline}");
         assert_eq!(
-            RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
+            Dispatch::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
             SteeringGateReading::Clear
         );
     }
@@ -617,7 +618,7 @@ fn a_fresh_run_carrying_a_candidate_delivers_guidance_written_after_its_source_p
         );
         assert_eq!(fx.deliveries().len(), 1, "{pipeline}");
         assert_eq!(
-            RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, Some(&source)).unwrap(),
+            Dispatch::steering_gate(&fx.runtime, &run, &fx.task, Some(&source)).unwrap(),
             SteeringGateReading::Clear
         );
     }
@@ -849,7 +850,7 @@ fn an_unreadable_gate_fails_closed_and_a_later_comment_waits_for_the_next_gate()
         assert!(fx.deliveries().is_empty(), "{pipeline}");
         let late = fx.runtime.get_task_comments(&fx.task).unwrap().len() - 1;
         let SteeringGateReading::Outstanding(outstanding) =
-            RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap()
+            Dispatch::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap()
         else {
             panic!("{pipeline}: the late comment is the next gate's steering");
         };
@@ -871,7 +872,7 @@ fn a_terminal_task_stops_the_run_and_reports_its_outstanding_steering() {
         let mut host = Pipeline::new(&fx, &run);
         host.on_implement = Box::new(|fx, _| {
             fx.operator_comment("STEER: never mind, this is done elsewhere.");
-            RuntimeHost::apply_task_automation_update(
+            RunLifecycle::apply_task_automation_update(
                 &fx.runtime,
                 &fx.task,
                 TaskAutomationUpdate {

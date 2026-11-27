@@ -1,5 +1,6 @@
 //! Public refusal and reconciliation controls for completion mutation provenance.
 use super::*;
+use orbit_engine::{Recovery, RunLifecycle};
 
 pub(crate) fn enabled_completion_refuses_repair_and_mutation_provenance() {
     use orbit_types::task::TaskHistoryEntry;

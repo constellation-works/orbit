@@ -9,7 +9,8 @@ use std::sync::{Arc, Mutex};
 use chrono::{Duration, Utc};
 use orbit_core::TaskStatus;
 use orbit_core::application::task::TaskUpdateParams;
-use orbit_engine::{RuntimeHost, SteeringGateReading, SteeringRoundAdmission};
+use orbit_engine::Dispatch;
+use orbit_engine::{SteeringGateReading, SteeringRoundAdmission};
 use orbit_types::workflow::activity_job::JobV2;
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
@@ -173,7 +174,7 @@ fn the_seven_minute_correction_reaches_a_safe_point_or_a_round_before_real_commi
                 }
             );
             assert_eq!(
-                RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
+                Dispatch::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
                 SteeringGateReading::Clear
             );
         }
@@ -200,7 +201,7 @@ fn enabling_an_in_flight_run_without_a_watermark_delivers_only_post_dispatch_com
             let config = fx.workspace.join("config.toml");
             std::fs::write(&config, ENABLED).unwrap();
             let SteeringGateReading::Outstanding(pending) =
-                RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap()
+                Dispatch::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap()
             else {
                 panic!("{pipeline}: enabling must not snapshot away unseen steering");
             };
@@ -211,7 +212,7 @@ fn enabling_an_in_flight_run_without_a_watermark_delivers_only_post_dispatch_com
             // than falling back to the runtime's original disabled snapshot.
             std::fs::write(&config, "[workflow\n").unwrap();
             assert_eq!(
-                RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
+                Dispatch::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
                 SteeringGateReading::Outstanding(pending.clone())
             );
             std::fs::write(&config, ENABLED).unwrap();
@@ -278,12 +279,12 @@ fn disabling_mid_flight_leaves_watermarks_and_rounds_inert_at_prompt_and_commit(
         fx.prompt(&run, "implement_one");
         fx.operator_comment(CORRECTION);
         let SteeringGateReading::Outstanding(pending) =
-            RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap()
+            Dispatch::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap()
         else {
             panic!("{pipeline}: pending steering before disable");
         };
         assert!(matches!(
-            RuntimeHost::admit_steering_round(&fx.runtime, &run, &fx.task, &pending, None).unwrap(),
+            Dispatch::admit_steering_round(&fx.runtime, &run, &fx.task, &pending, None).unwrap(),
             SteeringRoundAdmission::Admitted { round: 1, .. }
         ));
         assert!(carries_correction(&fx.prompt(&run, "implement_one")));
@@ -296,14 +297,14 @@ fn disabling_mid_flight_leaves_watermarks_and_rounds_inert_at_prompt_and_commit(
         std::fs::write(fx.workspace.join("config.toml"), "").unwrap();
         assert!(fx.prompt(&run, "validate_repair").get("steering").is_none());
         assert_eq!(
-            RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
+            Dispatch::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
             SteeringGateReading::Disabled
         );
         // An invalid edit must not resurrect the originally enabled policy.
         std::fs::write(fx.workspace.join("config.toml"), "[workflow\n").unwrap();
         assert!(fx.prompt(&run, "final_recovery").get("steering").is_none());
         assert_eq!(
-            RuntimeHost::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
+            Dispatch::steering_gate(&fx.runtime, &run, &fx.task, None).unwrap(),
             SteeringGateReading::Disabled
         );
         std::fs::write(fx.workspace.join("config.toml"), "").unwrap();

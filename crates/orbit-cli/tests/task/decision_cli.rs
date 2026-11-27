@@ -5,7 +5,8 @@ use std::path::Path;
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{ActorIdentity, OrbitRuntime};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{
     DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, TaskArtifact, TaskStatus,
 };

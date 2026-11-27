@@ -1,5 +1,5 @@
 use super::*;
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 
 const COMPOSED: &str = "FIXTURE_COMPOSED_CODEX_OVERRIDE";
 const AMBIENT: &str = "FIXTURE_AMBIENT_CODEX_OVERRIDE";
@@ -19,7 +19,7 @@ fn composed_provider_override_reaches_executor_resolution() {
     // composed value instead of capturing the ambient environment again.
     let _ambient = orbit_common::test_env::scoped([("ORBIT_V2_CLI_CODEX", Some(AMBIENT))]);
 
-    let executor = RuntimeHost::resolve_cli_executor(&runtime, "codex")
+    let executor = Dispatch::resolve_cli_executor(&runtime, "codex")
         .expect("the composed override resolves the codex executor");
     assert_eq!(executor.command, COMPOSED);
 }

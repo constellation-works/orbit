@@ -1832,7 +1832,7 @@ runtime_contracts!(runtime_contracts_5: exhausted_review_preflight_stops_the_shi
 
 #[test]
 fn null_runtime_host_forwards_capability_overrides() {
-    use orbit_engine::RuntimeHost;
+    use orbit_engine::{Dispatch, HostEnvironment, Recovery};
     struct OverrideHost;
     impl orbit_engine::test_support::NullRuntimeHost for OverrideHost {
         fn validation_build_output_env(&self) -> Vec<String> {
@@ -1865,22 +1865,22 @@ fn null_runtime_host_forwards_capability_overrides() {
     }
     let host = OverrideHost;
     assert_eq!(
-        RuntimeHost::validation_build_output_env(&host),
+        HostEnvironment::validation_build_output_env(&host),
         ["override"]
     );
-    assert!(RuntimeHost::mid_run_steering_enabled(&host));
-    assert!(RuntimeHost::record_resident_continuity_rebuilt(&host, "run").is_err());
+    assert!(Dispatch::mid_run_steering_enabled(&host));
+    assert!(Dispatch::record_resident_continuity_rebuilt(&host, "run").is_err());
     assert_eq!(
-        RuntimeHost::completion_deadline(&host, "run", "pr", 1).unwrap(),
+        Recovery::completion_deadline(&host, "run", "pr", 1).unwrap(),
         42
     );
     assert_eq!(
-        RuntimeHost::completion_policy_digest(&host, "run", &[])
+        Recovery::completion_policy_digest(&host, "run", &[])
             .unwrap()
             .as_deref(),
         Some("override")
     );
-    assert!(RuntimeHost::authenticate_completion_tail(&host, "run", "task", "step").unwrap());
+    assert!(Recovery::authenticate_completion_tail(&host, "run", "task", "step").unwrap());
 }
 
 #[test]

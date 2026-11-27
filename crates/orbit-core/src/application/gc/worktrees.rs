@@ -2,9 +2,10 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::RemoteToolCode;
+use orbit_engine::HostEnvironment;
 use orbit_engine::{
-    RuntimeHost, WORKTREE_IDENTITY_INPUT_KEYS, WorktreeGcOptions, WorktreeGcResult,
-    WorktreeGcTaskLookup, collect_worktrees, run_worktree_has_reclaim_output,
+    WORKTREE_IDENTITY_INPUT_KEYS, WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup,
+    collect_worktrees, run_worktree_has_reclaim_output,
 };
 use orbit_store::contract::{ClaimMutation, JobRunQuery, LocalPullPhase};
 use orbit_types::task::{TaskHistoryEntry, TaskStatus, task_id_prefix};

@@ -1,7 +1,7 @@
 //! One attempt of a `target: script:<name>` step (script steps §4–§5).
 //!
 //! The host checks the grant, snapshots the script and runs it under the
-//! script profile ([`RuntimeHost::run_script_step`]). This side decides
+//! script profile ([`crate::Dispatch::run_script_step`]). This side decides
 //! what the answer means for the step and records it: valid stdout JSON is
 //! the step's output; invalid output fails without retry; a nonzero exit,
 //! a signal, a timeout or a scratch breach is `Ok(success = false)` with

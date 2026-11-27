@@ -5,9 +5,8 @@
 
 use chrono::Utc;
 use orbit_core::application::task::TaskUpdateParams;
-use orbit_engine::{
-    FinalRecoveryAdmission, FinalRecoveryApplied, RuntimeHost, TaskAutomationUpdate,
-};
+use orbit_engine::RunLifecycle;
+use orbit_engine::{FinalRecoveryAdmission, FinalRecoveryApplied, TaskAutomationUpdate};
 use orbit_types::task::{ContextWideningStep, TaskComment};
 use orbit_types::workflow::FinalRecoveryDecision;
 use serde_json::json;
@@ -41,7 +40,7 @@ fn context_files(fixture: &Fixture, task: &str) -> Vec<String> {
 
 /// Widen `task` over `path` as a recovery agent's repair in `run` does.
 fn recovery_widens(fixture: &Fixture, task: &str, run: &str, path: &str) {
-    let widened = RuntimeHost::widen_task_context_files(
+    let widened = RunLifecycle::widen_task_context_files(
         &fixture.runtime,
         task,
         run,
@@ -112,7 +111,7 @@ fn writes_the_recovery_may_cause_leave_its_requeue_standing() {
         )
         .unwrap();
     recovery_widens(&fixture, &task, &run, "src/repair.rs");
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &fixture.runtime,
         &task,
         TaskAutomationUpdate {
@@ -295,7 +294,7 @@ fn a_revision_observed_before_the_digest_compares_by_update_time() {
     let (task, run) = admitted(&fixture);
     legacy(&run);
     let observed = updated_at(&fixture, &task);
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &fixture.runtime,
         &task,
         TaskAutomationUpdate {

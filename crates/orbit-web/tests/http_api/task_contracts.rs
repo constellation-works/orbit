@@ -910,7 +910,8 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
                 base - chrono::Duration::hours(4),
             );
             {
-                use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+                use orbit_engine::RunLifecycle;
+                use orbit_engine::TaskAutomationUpdate;
                 use orbit_types::task::TaskHistoryEntry;
                 let entry = |at: chrono::DateTime<chrono::Utc>, event: &str, note: Value| {
                     TaskHistoryEntry {

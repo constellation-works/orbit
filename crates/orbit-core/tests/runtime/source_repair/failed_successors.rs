@@ -7,6 +7,7 @@
 use super::failed_publication::escalate;
 use super::published_owner::{next, publication, requeue, save_run};
 use super::*;
+use orbit_engine::RunLifecycle;
 use orbit_types::workflow::JobRun;
 
 /// The fixture job's `resume_candidate` (candidate adoption) step and the

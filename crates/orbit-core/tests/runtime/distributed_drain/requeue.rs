@@ -1,6 +1,8 @@
 //! Machine-qualified requeue through the public tool boundary.
 
 use super::*;
+use orbit_engine::HostEnvironment;
+use orbit_engine::RunLifecycle;
 
 /// A settled follower claim fences its leaf even while an unrelated owner
 /// run with the same ID is live or has published its own candidate.

@@ -16,7 +16,8 @@ use orbit_core::application::task::{
     TaskUpdateParams,
 };
 use orbit_core::test_support::V2AuditEventInsertParams;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
+use orbit_engine::RunLifecycle;
+use orbit_engine::{TaskAutomationUpdate, blocked_workflow_failure_update};
 use orbit_types::task::{
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskComplexity, TaskDecision,
     TaskEventRowV2,

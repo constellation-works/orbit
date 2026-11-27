@@ -7,9 +7,10 @@ use chrono::{Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::runtime::scripts::ScriptGrantOptions;
+use orbit_engine::Recovery;
 use orbit_engine::{
-    AutoTaskAdmission, AutoTaskStepRequest, RuntimeHost, ScriptStepEnd, ScriptStepOutputs,
-    ScriptStepRan, ScriptStepRequest, ScriptStepRun,
+    AutoTaskAdmission, AutoTaskStepRequest, ScriptStepEnd, ScriptStepOutputs, ScriptStepRan,
+    ScriptStepRequest, ScriptStepRun,
 };
 use orbit_types::task::{TaskArtifact, TaskStatus};
 use orbit_types::workflow::activity_job::ScriptExecutionRecord;
@@ -204,7 +205,7 @@ pub(super) fn reserve_step(
         settled_at: None,
         diagnostic: None,
     };
-    RuntimeHost::checkpoint_auto_task_step(runtime, run, step, &record).unwrap();
+    Recovery::checkpoint_auto_task_step(runtime, run, step, &record).unwrap();
     record
 }
 
@@ -220,7 +221,7 @@ pub(super) fn observe_step(
     step: &str,
     auto_task: &str,
 ) -> orbit_engine::AutoTaskObservation {
-    RuntimeHost::observe_auto_task_step(
+    Recovery::observe_auto_task_step(
         runtime,
         run,
         &AutoTaskStepRequest {
@@ -320,7 +321,7 @@ fn compatible_jobs_accept_one_child_and_reject_other_inputs() {
     for (name, expected_minted) in [("first-readiness", true), ("second-readiness", false)] {
         let (run, mut record) = reserve(&runtime, name, &revision);
         let AutoTaskAdmission::Bound { task_id, minted } =
-            RuntimeHost::admit_auto_task_step(&runtime, &run, "qa").unwrap()
+            Recovery::admit_auto_task_step(&runtime, &run, "qa").unwrap()
         else {
             panic!("compatible job {name} must bind")
         };
@@ -328,7 +329,7 @@ fn compatible_jobs_accept_one_child_and_reject_other_inputs() {
         record.task_id = Some(task_id);
         record.minted = minted;
         record.status = AutoTaskStepStatus::Queued;
-        RuntimeHost::checkpoint_auto_task_step(&runtime, &run, "qa", &record).unwrap();
+        Recovery::checkpoint_auto_task_step(&runtime, &run, "qa", &record).unwrap();
         consumers.push((run, record));
     }
     assert_ne!(consumers[0].1.action_key, consumers[1].1.action_key);
@@ -345,14 +346,14 @@ fn compatible_jobs_accept_one_child_and_reject_other_inputs() {
     .unwrap();
     let (different_definition, _) = reserve(&runtime, "different-definition", &revision);
     assert!(matches!(
-        RuntimeHost::admit_auto_task_step(&runtime, &different_definition, "qa").unwrap(),
+        Recovery::admit_auto_task_step(&runtime, &different_definition, "qa").unwrap(),
         AutoTaskAdmission::Held(_)
     ));
     std::fs::write(&definition_path, definition_yaml).unwrap();
     let next_revision = commit(&runtime, "Next fixture revision");
     let (different_source, _) = reserve(&runtime, "different-source", &next_revision);
     assert!(matches!(
-        RuntimeHost::admit_auto_task_step(&runtime, &different_source, "qa").unwrap(),
+        Recovery::admit_auto_task_step(&runtime, &different_source, "qa").unwrap(),
         AutoTaskAdmission::Held(_)
     ));
     let branch = format!("refs/heads/{}", runtime.workflow_base_branch());
@@ -367,7 +368,7 @@ fn compatible_jobs_accept_one_child_and_reject_other_inputs() {
             let mut record = observe(&runtime, run).record.unwrap();
             record.task_id = Some(child.clone());
             record.input_digest = consumers[0].1.input_digest.clone();
-            RuntimeHost::checkpoint_auto_task_step(&runtime, run, "qa", &record).unwrap();
+            Recovery::checkpoint_auto_task_step(&runtime, run, "qa", &record).unwrap();
             let observation = observe(&runtime, run);
             assert!(observation.result_hold.is_some(), "{run}: {observation:?}");
             assert!(observation.receipt.unwrap().result.is_none());
@@ -391,7 +392,7 @@ fn compatible_jobs_accept_one_child_and_reject_other_inputs() {
             record.receipt = Some(receipt);
             record.status = AutoTaskStepStatus::Done;
             record.settled_at = Some(Utc::now());
-            RuntimeHost::checkpoint_auto_task_step(&runtime, &run, "qa", &record).unwrap();
+            Recovery::checkpoint_auto_task_step(&runtime, &run, "qa", &record).unwrap();
         }
     });
     assert_eq!(

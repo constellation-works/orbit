@@ -11,7 +11,8 @@ use orbit_core::runtime::task_pr_forge::{
     CheckRerunOutcome, ForgePullRequest, PullRequestBlockers, TaskPrForge,
 };
 use orbit_core::{ActorIdentity, OrbitRuntime};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::ExternalRef;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -158,7 +159,7 @@ impl Fixture {
 impl Fixture {
     /// Record pull request `number` on `task`, as delivery records it.
     pub(super) fn record_pull_request(&self, task: &str, number: u64) {
-        RuntimeHost::apply_task_automation_update(
+        RunLifecycle::apply_task_automation_update(
             &self.runtime,
             task,
             TaskAutomationUpdate {

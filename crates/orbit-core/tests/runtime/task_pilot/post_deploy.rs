@@ -10,7 +10,8 @@ use orbit_core::application::task::{
     TaskUpdateParams,
 };
 use orbit_core::{OrbitError, Task, TaskComplexity, TaskStatus};
-use orbit_engine::{RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate};
+use orbit_engine::{HostEnvironment, RunLifecycle};
+use orbit_engine::{TaskActivityUpdate, TaskAutomationUpdate};
 use orbit_types::desktop::{
     DesktopCriterionOutcome, DesktopReviewDecision, DesktopReviewVerdict, DesktopTaskOperation,
     DesktopTaskRequest,
@@ -178,12 +179,14 @@ fn an_owed_post_deploy_criterion_settles_in_review_until_an_operator_records_it(
     // Only the criterion the pilot typed, on its host, may be owed. Every
     // other unmet criterion still fails the implementer's step.
     for refused in [vec![owed(1, HOST)], vec![owed(2, "another-host")]] {
-        let error = RuntimeHost::admit_owed_criteria(&workspace.runtime, &task.id, RUN, &refused)
-            .unwrap_err();
+        let error =
+            HostEnvironment::admit_owed_criteria(&workspace.runtime, &task.id, RUN, &refused)
+                .unwrap_err();
         assert!(matches!(error, OrbitError::PolicyDenied(_)), "{error}");
     }
     assert!(show(&workspace, &task).get("owed_criteria").is_none());
-    RuntimeHost::admit_owed_criteria(&workspace.runtime, &task.id, RUN, &[owed(2, HOST)]).unwrap();
+    HostEnvironment::admit_owed_criteria(&workspace.runtime, &task.id, RUN, &[owed(2, HOST)])
+        .unwrap();
 
     let refused = workspace
         .runtime
@@ -269,7 +272,7 @@ fn a_reused_candidate_keeps_its_previous_runs_post_deploy_obligation() {
     let applied = apply(&workspace, &task, latency_after_deploy());
     assert_eq!(applied["status"], "succeeded", "{applied}");
     in_review(&workspace, &task);
-    RuntimeHost::admit_owed_criteria(
+    HostEnvironment::admit_owed_criteria(
         &workspace.runtime,
         &task.id,
         "jrun-previous-delivery",
@@ -327,7 +330,7 @@ fn unreadable_newest_post_deploy_history_refuses_completion_and_show() {
         .with_note(Some(note.into()))
     })
     .collect();
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &workspace.runtime,
         &task.id,
         TaskAutomationUpdate {
@@ -379,7 +382,7 @@ fn post_deploy_operator_measurements_do_not_hold_candidate_admission() {
         .unwrap();
     let applied = apply(&workspace, &task, latency_after_deploy());
     assert_eq!(applied["status"], "succeeded", "{applied}");
-    RuntimeHost::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
+    RunLifecycle::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
         .expect("an operator measurement owed after deploy must not hold candidate admission");
     let backlog = workspace.action("list_backlog_tasks", json!({"task_ids": [task.id]}));
     assert!(
@@ -411,7 +414,7 @@ fn post_deploy_operator_measurements_do_not_hold_candidate_admission() {
     let applied = apply(&workspace, &task, latency_after_deploy());
     assert_eq!(applied["status"], "succeeded", "{applied}");
     let error =
-        RuntimeHost::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
+        RunLifecycle::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
             .expect_err("an ordinary operator requirement must still hold candidate admission");
     assert!(
         error
@@ -475,8 +478,13 @@ fn stopped_delivery_owing_measurement(workspace: &Workspace) -> Task {
             Some("gpt-6.1-sol".into()),
         )
         .unwrap();
-    RuntimeHost::admit_owed_criteria(&workspace.runtime, &task.id, &run.run_id, &[owed(2, HOST)])
-        .unwrap();
+    HostEnvironment::admit_owed_criteria(
+        &workspace.runtime,
+        &task.id,
+        &run.run_id,
+        &[owed(2, HOST)],
+    )
+    .unwrap();
     task
 }
 
@@ -537,7 +545,7 @@ fn attempt_completion(
                 )
                 .map(|_| ())
         }
-        CompletionBoundary::Activity => RuntimeHost::update_task_from_activity(
+        CompletionBoundary::Activity => RunLifecycle::update_task_from_activity(
             runtime,
             &task.id,
             TaskActivityUpdate {
@@ -552,7 +560,7 @@ fn attempt_completion(
             },
         )
         .map(|_| ()),
-        CompletionBoundary::Automation => RuntimeHost::apply_task_automation_update(
+        CompletionBoundary::Automation => RunLifecycle::apply_task_automation_update(
             runtime,
             &task.id,
             TaskAutomationUpdate {

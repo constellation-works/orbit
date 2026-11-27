@@ -6,7 +6,7 @@ use std::sync::{Arc, Barrier, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};

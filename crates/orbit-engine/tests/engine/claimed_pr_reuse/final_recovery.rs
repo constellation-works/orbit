@@ -3,11 +3,11 @@ use super::*;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use orbit_engine::RunLifecycle;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{
     ClaimExecutionContext, DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest,
-    FinalRecoveryApplication, FinalRecoveryApplied, RuntimeHost, V2AuditWriter,
-    execute_job_with_resume,
+    FinalRecoveryApplication, FinalRecoveryApplied, V2AuditWriter, execute_job_with_resume,
 };
 use orbit_types::workflow::activity_job::JobV2;
 use orbit_types::workflow::handoff::TaskHandoff;
@@ -42,13 +42,13 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
 
     fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
         assert_eq!(id, TASK_ID);
-        let mut task = RuntimeHost::get_task(&Host::new(&self.fx.repo), super::TASK_ID)?;
+        let mut task = RunLifecycle::get_task(&Host::new(&self.fx.repo), super::TASK_ID)?;
         task.id = TASK_ID.into();
         Ok(task)
     }
 
     fn list_run_tasks(&self, _: &str) -> Result<Vec<Task>, OrbitError> {
-        Ok(vec![RuntimeHost::get_task(self, TASK_ID)?])
+        Ok(vec![RunLifecycle::get_task(self, TASK_ID)?])
     }
 
     fn repo_root(&self) -> Result<String, OrbitError> {

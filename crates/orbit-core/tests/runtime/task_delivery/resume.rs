@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use chrono::Duration;
-use orbit_engine::RuntimeHost;
+use orbit_engine::RunLifecycle;
 use orbit_store::contract::JobRunStepParams;
 use orbit_types::workflow::{
     CommitObservationStatus, JobRun, JobRunState, JobTargetType, PipelineState,
