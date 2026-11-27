@@ -512,10 +512,20 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
             let config = fixture.work.join("config.toml");
             std::fs::write(&config, "# fixture\n").unwrap();
             let server = fixture.server(true);
-            for (key, value) in [
-                ("workflow.base_brunch", json!("main")),
-                ("execution.codex.sandbox", json!("wide-open")),
-                ("decision_channel.enabled", json!("true")),
+            for (key, value, expected_error) in [
+                ("workflow.base_brunch", json!("main"), None),
+                ("execution.codex.sandbox", json!("wide-open"), None),
+                ("decision_channel.enabled", json!("true"), None),
+                (
+                    "completion.hold",
+                    json!([{"name":"Review","tags":[null]}]),
+                    Some("TOML has no null value"),
+                ),
+                (
+                    "review.minutes",
+                    json!(u64::MAX),
+                    Some("integer is outside the signed 64-bit range"),
+                ),
             ] {
                 let before = std::fs::read(&config).unwrap();
                 let response = server.send(
@@ -530,6 +540,12 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                 );
                 let error = response.json::<Value>().unwrap();
                 assert!(error["error"].is_string());
+                if let Some(expected_error) = expected_error {
+                    assert!(
+                        error["error"].as_str().unwrap().contains(expected_error),
+                        "{error}"
+                    );
+                }
                 if key == "workflow.base_brunch" {
                     let expected = orbit_core::application::config::set_key(
                         &fixture.runtime,
@@ -583,6 +599,14 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                 "a boolean config write stays a boolean on HTTP readback"
             );
             assert_eq!(row["source"]["layer"], "workspace");
+
+            let rules = json!([{"name":"Review \"before landing\"", "tags":["security","docs"]}]);
+            let written = super::support::json_ok(server.send(
+                "PUT",
+                "/api/config/keys/completion.hold?workspace=ws_http_fixture",
+                json!({"value":rules}),
+            ));
+            assert_eq!(written["new_value"], rules);
 
             let effective_keys = read["sections"]
                 .as_array()

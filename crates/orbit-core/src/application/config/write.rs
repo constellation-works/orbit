@@ -583,10 +583,39 @@ fn write_outcome(
 /// is written as a string rather than inferred as a boolean, and an array is
 /// written as a TOML array rather than as its debug spelling.
 fn toml_literal(value: &JsonValue) -> Result<String, OrbitError> {
-    let literal: toml::Value = serde_json::from_value(value.clone()).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "value is not representable in config.toml: {error}"
-        ))
-    })?;
-    Ok(literal.to_string())
+    Ok(json_to_toml(value)?.to_string())
+}
+
+fn json_to_toml(value: &JsonValue) -> Result<toml::Value, OrbitError> {
+    Ok(match value {
+        JsonValue::Null => {
+            return Err(OrbitError::InvalidInput(
+                "value is not representable in config.toml: TOML has no null value".into(),
+            ));
+        }
+        JsonValue::Bool(value) => toml::Value::Boolean(*value),
+        JsonValue::Number(number) => {
+            if let Some(integer) = number.as_i64() {
+                toml::Value::Integer(integer)
+            } else if let Some(float) = number.as_f64().filter(|_| number.is_f64()) {
+                toml::Value::Float(float)
+            } else {
+                return Err(OrbitError::InvalidInput(
+                    "value is not representable in config.toml: integer is outside the signed 64-bit range"
+                        .into(),
+                ));
+            }
+        }
+        JsonValue::String(value) => toml::Value::String(value.clone()),
+        JsonValue::Array(values) => {
+            toml::Value::Array(values.iter().map(json_to_toml).collect::<Result<_, _>>()?)
+        }
+        // Build tables from JSON keys directly so only JSON value types cross this boundary.
+        JsonValue::Object(fields) => toml::Value::Table(
+            fields
+                .iter()
+                .map(|(key, value)| json_to_toml(value).map(|value| (key.clone(), value)))
+                .collect::<Result<_, _>>()?,
+        ),
+    })
 }
