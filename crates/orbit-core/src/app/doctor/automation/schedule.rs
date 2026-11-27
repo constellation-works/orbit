@@ -2,14 +2,15 @@
 //! and a host shutdown or reboot that holds unattended admissions.
 
 use super::pull::format_age;
-use crate::doctor::*;
+use crate::app::doctor::*;
 use orbit_common::storage::timestamp::parse_stored_timestamp;
 
 /// Warn when an enabled cron routine's last success is older than three times
 /// its schedule interval. A routine that has never succeeded is judged from
 /// the cursor baseline. Disabled, paused, and non-cron routines are quiet.
-pub(in crate::doctor) fn doctor_check_routine_freshness(
+pub(in crate::app::doctor) fn doctor_check_routine_freshness(
     runtime: &OrbitRuntime,
+    host: &dyn Host,
 ) -> WorkspaceDoctorResult {
     const CHECK: &str = "routine-freshness";
     let root = runtime.global_root();
@@ -24,7 +25,9 @@ pub(in crate::doctor) fn doctor_check_routine_freshness(
             WorkspaceDoctorStatus::Warning,
             format!("cannot inspect machine identity: {error}"),
         ),
-        Ok(orbit_registry::MachineIdentityState::Present(_)) => match stale_routine_message(&root) {
+        Ok(orbit_registry::MachineIdentityState::Present(_)) => match stale_routine_message(
+            &root, host,
+        ) {
             Ok(None) => check(
                 CHECK,
                 WorkspaceDoctorStatus::Ok,
@@ -47,20 +50,23 @@ pub(in crate::doctor) fn doctor_check_routine_freshness(
 }
 
 /// `None` when every enabled cron routine is inside the window.
-fn stale_routine_message(global_root: &std::path::Path) -> Result<Option<String>, OrbitError> {
-    use orbit_core::application::routines::{minimum_cron_interval, parse_cron};
+fn stale_routine_message(
+    global_root: &std::path::Path,
+    host: &dyn Host,
+) -> Result<Option<String>, OrbitError> {
+    use crate::application::routines::{minimum_cron_interval, parse_cron};
 
     // A missing scheduler store has no fires to judge; doctor must not reach the
     // status read, which now refuses to create it (STD-01 R31).
     let database = orbit_config::resolved_audit_db_path(
-        &orbit_core::composition::composition_env(),
+        &crate::composition::composition_env(),
         &orbit_config::ConfigRoots::global_only(global_root),
     )?;
     if !database.exists() {
         return Ok(None);
     }
-    let report = crate::registry_routines::routine_statuses(global_root)?;
-    let store = orbit_core::composition::store_opener().open_read_only(&database)?;
+    let report = host.routine_statuses(global_root)?;
+    let store = crate::composition::store_opener().open_read_only(&database)?;
     let now = chrono::Utc::now();
     let mut stale = Vec::new();
     for status in &report.statuses {
@@ -113,7 +119,7 @@ fn stale_routine_message(global_root: &std::path::Path) -> Result<Option<String>
 /// mode and time [ORB-12968]. A later schedule is still named, as ok: nothing
 /// is wrong, and work continues until the horizon. Nothing is
 /// wrong with the workspace either way.
-pub(in crate::doctor) fn doctor_check_host_shutdown(
+pub(in crate::app::doctor) fn doctor_check_host_shutdown(
     runtime: &OrbitRuntime,
 ) -> WorkspaceDoctorResult {
     let Some(shutdown) = runtime.scheduled_host_shutdown() else {

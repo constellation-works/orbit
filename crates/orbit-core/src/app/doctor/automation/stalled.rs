@@ -2,12 +2,14 @@
 //! and delivery automation consumers that are stalled, wedged, unresolvable or
 //! unadmittable on this host.
 
-use crate::doctor::*;
+use crate::app::doctor::*;
 
 /// `running`/`pending` job runs with no live worker process — dead recorded
 /// owner, or a queued run no worker ever claimed (read-only view of the
 /// reconcile signal; see `job/run/reconcile.rs`) [ORB-10070].
-pub(in crate::doctor) fn doctor_check_job_runs(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+pub(in crate::app::doctor) fn doctor_check_job_runs(
+    runtime: &OrbitRuntime,
+) -> WorkspaceDoctorResult {
     let running = match runtime.list_orphaned_running_job_runs() {
         Ok(orphans) => orphans,
         Err(error) => {
@@ -87,10 +89,10 @@ pub(in crate::doctor) fn doctor_check_job_runs(runtime: &OrbitRuntime) -> Worksp
 /// task closed with missing or malformed coverage — is wedged: evaluation
 /// settles it, so one still reported means no evaluation reaches it, and it
 /// admits nothing new until one does or an operator recovers or resets it.
-pub(in crate::doctor) fn doctor_check_stalled_automation(
+pub(in crate::app::doctor) fn doctor_check_stalled_automation(
     runtime: &OrbitRuntime,
 ) -> WorkspaceDoctorResult {
-    let stalled = match orbit_core::application::automation::stalled_consumers(runtime) {
+    let stalled = match crate::application::automation::stalled_consumers(runtime) {
         Ok(stalled) => stalled,
         Err(error) => {
             return check(
@@ -100,20 +102,20 @@ pub(in crate::doctor) fn doctor_check_stalled_automation(
             );
         }
     };
-    let unresolvable =
-        match orbit_core::application::automation::unresolvable_delivery_branches(runtime) {
-            Ok(unresolvable) => unresolvable,
-            Err(error) => {
-                return check(
-                    "automation-consumers",
-                    WorkspaceDoctorStatus::Warning,
-                    format!("cannot read delivery automation definitions: {error}"),
-                );
-            }
-        };
+    let unresolvable = match crate::application::automation::unresolvable_delivery_branches(runtime)
+    {
+        Ok(unresolvable) => unresolvable,
+        Err(error) => {
+            return check(
+                "automation-consumers",
+                WorkspaceDoctorStatus::Warning,
+                format!("cannot read delivery automation definitions: {error}"),
+            );
+        }
+    };
 
     let unadmittable =
-        match orbit_core::application::automation::unadmittable_delivery_definitions(runtime) {
+        match crate::application::automation::unadmittable_delivery_definitions(runtime) {
             Ok(unadmittable) => unadmittable,
             Err(error) => {
                 return check(
@@ -125,8 +127,7 @@ pub(in crate::doctor) fn doctor_check_stalled_automation(
         };
 
     let now = chrono::Utc::now();
-    let wedged = match orbit_core::application::automation::wedged_delivery_consumers(runtime, now)
-    {
+    let wedged = match crate::application::automation::wedged_delivery_consumers(runtime, now) {
         Ok(wedged) => wedged,
         Err(error) => {
             return check(
@@ -184,7 +185,7 @@ pub(in crate::doctor) fn doctor_check_stalled_automation(
                     "{} ({}, stalled {} min)",
                     consumer.definition(),
                     consumer.stall.reason,
-                    orbit_core::application::automation::stalled_minutes(&consumer.stall, now)
+                    crate::application::automation::stalled_minutes(&consumer.stall, now)
                 )
             })
             .collect::<Vec<_>>()

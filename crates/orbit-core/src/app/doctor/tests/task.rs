@@ -37,9 +37,9 @@ fn write_holder_lock(path: &Path, pid: u32, label: &str) {
 fn stale_lock_cleanup_preserves_mutual_exclusion_for_queued_openers() {
     use std::os::unix::fs::MetadataExt;
 
-    use crate::doctor::task::remove_stale_lock_file_after_acquire;
+    use crate::app::doctor::task::remove_stale_lock_file_after_acquire;
 
-    if crate::tests::lib::run_isolated_test(std::any::type_name_of_val(
+    if crate::application::run_isolated_test(std::any::type_name_of_val(
         &stale_lock_cleanup_preserves_mutual_exclusion_for_queued_openers,
     )) {
         return;

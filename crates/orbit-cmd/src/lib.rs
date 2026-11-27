@@ -29,28 +29,36 @@
 orbit_common::isolate_test_process!();
 
 pub mod agent_rules;
+
 pub mod browser_kit;
-mod doctor;
+
+pub mod doctor_host;
+
 pub mod hosts;
+
 pub mod log_format;
+
 pub mod mcp_clients;
+
 mod migrate;
+
 mod registry;
+
 pub mod service_environment;
+
 mod task;
+
 pub mod update;
+
 mod worker_coordination;
+
 mod workspace_catalog;
+
 pub mod workspace_rebind;
+
 pub mod workspace_removal;
 
-#[cfg(feature = "test-support")]
-pub use doctor::DoctorWorkerSpawnRefusal;
-pub use doctor::{
-    DoctorCommands, DoctorProbe, OrphanTaskStoreRemoval, RetiredConfigKeyRepair,
-    WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_report_probes, doctor_row_json,
-    misplaced_plugin_enablement_row, provider_limit_findings, run_doctor_report,
-};
+pub use doctor_host::doctor_host;
 pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
 /// Materialize executor-local artifact bytes before an owner coordination call.
 pub use orbit_tools::prepare_remote_task_artifact_put;

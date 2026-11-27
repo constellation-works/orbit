@@ -1,7 +1,7 @@
 //! Automatic review switches: deprecated before-PR, before-landing and
 //! after-landing review in one row [ORB-20099].
 
-use crate::doctor::*;
+use crate::app::doctor::*;
 
 /// Every automatic-review switch in one row [ORB-13992] [ORB-20099]:
 /// before-PR review (deprecated `review.timing = before_pr`, its minutes and
@@ -21,20 +21,19 @@ use crate::doctor::*;
 /// that does not, or trailing `origin/<branch>` past the batch's
 /// `max_wait_minutes`. The trail is the remote-tracking ref already in the
 /// checkout; this check does not fetch.
-pub(in crate::doctor) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+pub(in crate::app::doctor) fn doctor_check_review(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     const CHECK: &str = "review";
-    let switches =
-        match orbit_core::application::review::review_switches(runtime, chrono::Utc::now()) {
-            Ok(switches) => switches,
-            Err(error) => {
-                return actionable_check(
-                    CHECK,
-                    WorkspaceDoctorStatus::Error,
-                    format!("cannot establish which automatic review runs here: {error}"),
-                    "Resolve the error, then rerun `orbit doctor`.".to_string(),
-                );
-            }
-        };
+    let switches = match crate::application::review::review_switches(runtime, chrono::Utc::now()) {
+        Ok(switches) => switches,
+        Err(error) => {
+            return actionable_check(
+                CHECK,
+                WorkspaceDoctorStatus::Error,
+                format!("cannot establish which automatic review runs here: {error}"),
+                "Resolve the error, then rerun `orbit doctor`.".to_string(),
+            );
+        }
+    };
     let message = format!(
         "before-PR review: {}. before-landing review: {}. after-landing review: {}",
         switches.before_pr_line(),

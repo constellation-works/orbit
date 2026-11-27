@@ -1,6 +1,27 @@
-use super::scan_workers::{forced_pool_size, spawn_scan_worker};
+use super::scan_worker::{forced_pool_size, spawn_scan_worker};
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
-use orbit_core::{OrbitError, OrbitRuntime};
+use crate::{OrbitError, OrbitRuntime};
+
+/// A directory with at least this many child directories has its subtrees
+/// split across threads; the task store holds one per task.
+#[cfg(unix)]
+const FAN_OUT_MIN_CHILDREN: usize = 64;
+
+/// Most threads one directory's subtrees are split across.
+#[cfg(unix)]
+const MAX_SCAN_THREADS: usize = 8;
+
+#[cfg(unix)]
+struct PermissionScan {
+    writable: Vec<(std::path::PathBuf, u32)>,
+    offenders: Vec<(std::path::PathBuf, usize)>,
+}
+
+#[cfg(all(test, unix))]
+pub(super) type ScanReport = (
+    std::collections::BTreeSet<std::path::PathBuf>,
+    Vec<(std::path::PathBuf, u32)>,
+);
 
 /// Report Orbit-owned state directories whose write bits let another local
 /// principal replace or unlink private files held beneath them.
@@ -11,7 +32,6 @@ pub(super) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> Workspa
             match inspect_state_directories(runtime) {
                 Ok(scan) => scan,
                 Err(error) => return WorkspaceDoctorResult {
-                    duration_ms: 0,
                     check_name: "state-directory-permissions".to_string(),
                     status: WorkspaceDoctorStatus::Error,
                     message: error.to_string(),
@@ -19,15 +39,16 @@ pub(super) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> Workspa
                         "Fix the directory access error named above, then rerun `orbit doctor`."
                             .to_string(),
                     ),
+                    duration_ms: 0,
                 },
             };
         if scan.writable.is_empty() {
             return WorkspaceDoctorResult {
-                duration_ms: 0,
                 check_name: "state-directory-permissions".to_string(),
                 status: WorkspaceDoctorStatus::Ok,
                 message: "all Orbit state directories deny group/world write access".to_string(),
                 remediation: None,
+                duration_ms: 0,
             };
         }
         let locations = scan
@@ -37,12 +58,15 @@ pub(super) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> Workspa
             .collect::<Vec<_>>()
             .join(", ");
         WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name: "state-directory-permissions".to_string(),
             status: WorkspaceDoctorStatus::Warning,
             message: format!("{} Orbit state director{} group/world writable under: {locations}",
                 scan.writable.len(), if scan.writable.len() == 1 { "y is" } else { "ies are" }),
-            remediation: Some("Run `orbit doctor --fix-state-directory-permissions` to restrict writable Orbit state directories to owner-only access, excluding run worktrees and target trees, then rerun `orbit doctor`.".to_string()),
+            remediation: Some(
+                "Run `orbit doctor --fix-state-directory-permissions` to restrict writable Orbit state directories to owner-only access, excluding run worktrees and target trees, then rerun `orbit doctor`."
+                    .to_string(),
+            ),
+            duration_ms: 0,
         }
     }
     #[cfg(not(unix))]
@@ -84,12 +108,6 @@ pub(super) fn repair_state_directory_permissions(
             "Unix directory mode repairs are not available on this platform".to_string(),
         ))
     }
-}
-
-#[cfg(unix)]
-struct PermissionScan {
-    writable: Vec<(std::path::PathBuf, u32)>,
-    offenders: Vec<(std::path::PathBuf, usize)>,
 }
 
 #[cfg(unix)]
@@ -154,7 +172,8 @@ fn inspect_state_directories(runtime: &OrbitRuntime) -> Result<PermissionScan, O
 fn open_directory_no_follow(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
-    use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::path::Component;
 
     if !path.is_absolute() {
@@ -229,15 +248,6 @@ fn present<T>(result: std::io::Result<T>) -> std::io::Result<Option<T>> {
         Err(error) => Err(error),
     }
 }
-
-/// A directory with at least this many child directories has its subtrees
-/// split across threads; the task store holds one per task.
-#[cfg(unix)]
-const FAN_OUT_MIN_CHILDREN: usize = 64;
-
-/// Most threads one directory's subtrees are split across.
-#[cfg(unix)]
-const MAX_SCAN_THREADS: usize = 8;
 
 /// [`visit`], with the subtrees of a wide directory scanned on a few threads.
 /// Each thread walks a contiguous run of children sequentially, and the runs
@@ -436,9 +446,3 @@ pub(super) fn scan_with_hook(
     )?;
     Ok((seen, writable))
 }
-
-#[cfg(all(test, unix))]
-pub(super) type ScanReport = (
-    std::collections::BTreeSet<std::path::PathBuf>,
-    Vec<(std::path::PathBuf, u32)>,
-);

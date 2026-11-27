@@ -152,11 +152,11 @@ impl WorkspaceCatalog for RegistryWorkspaceCatalog {
         &self,
         runtime: &orbit_core::runtime::RuntimeKernel,
     ) -> Result<Option<Vec<orbit_types::tool::AttentionHealthCheck>>, OrbitError> {
-        use crate::doctor::{DoctorCommands, WorkspaceDoctorStatus};
+        use orbit_core::app::doctor::{DoctorCommands, WorkspaceDoctorStatus};
         let runtime = OrbitRuntime::from_kernel(runtime.clone());
         Ok(Some(
             runtime
-                .doctor_workspace_with_depth(&self.env, false)?
+                .doctor_workspace_with_depth(&self.env, false, &crate::doctor_host::DoctorHost)?
                 .into_iter()
                 .filter_map(|row| {
                     let status = match row.status {

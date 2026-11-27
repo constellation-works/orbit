@@ -1,5 +1,5 @@
-use crate::doctor::WorkspaceDoctorStatus;
-use crate::doctor::report::plugin_enablement_row_for;
+use crate::app::doctor::WorkspaceDoctorStatus;
+use crate::app::doctor::report::plugin_enablement_row_for;
 
 #[test]
 fn misplaced_global_plugin_enablement_is_an_error_with_the_exact_fix() {

@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use orbit_common::Env;
 use orbit_common::security::operator_env::clock_env_file_names;
 
-use crate::doctor::*;
+use crate::app::doctor::*;
 
 /// `execution.env.pass` variables runs do not receive [ORB-14777, ORB-25291].
 ///
@@ -22,9 +22,10 @@ use crate::doctor::*;
 ///
 /// A crew whose `[crews.<name>] env` reads an unset source is reported in the
 /// same row: drains exclude that crew and its activities are refused.
-pub(in crate::doctor) fn doctor_check_env_pass(
+pub(in crate::app::doctor) fn doctor_check_env_pass(
     runtime: &OrbitRuntime,
     env: &Env,
+    host: &dyn Host,
 ) -> WorkspaceDoctorResult {
     let unset = runtime.unset_env_pass_names();
     // Judge the environment runs actually receive: names `clock.env` supplies
@@ -46,7 +47,7 @@ pub(in crate::doctor) fn doctor_check_env_pass(
         .collect();
     let crews = runtime.configured_crew_env_sources();
     let service_warnings =
-        crate::service_environment::crew_source_environment_warnings(runtime, &crews, env);
+        host.crew_source_environment_warnings(&runtime.global_root(), &crews, env);
     if effective_unset.is_empty() && crew_unset.is_empty() && service_warnings.is_empty() {
         return check(
             "env-pass",
@@ -130,7 +131,7 @@ fn clock_held_pass_names(runtime: &OrbitRuntime, names: &[String]) -> BTreeSet<S
 /// later PATH entry contains a different executable shadowed by an earlier one,
 /// or when an agent session would resolve `python3`, `git`, `make` or `cargo`
 /// to a different executable than required validation.
-pub(in crate::doctor) fn doctor_check_validation_env(
+pub(in crate::app::doctor) fn doctor_check_validation_env(
     runtime: &OrbitRuntime,
 ) -> WorkspaceDoctorResult {
     if runtime.workflow_required_validation_commands().is_empty() {

@@ -11,6 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::OrbitRuntime;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_config::{
@@ -18,12 +19,20 @@ use orbit_config::{
     compatibility_config_keys_present, deprecated_key_rewrites, unknown_config_keys_at,
     unknown_config_keys_present,
 };
-use orbit_core::OrbitRuntime;
 
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus, actionable_check, check};
 
 const CHECK: &str = "retired-config-keys";
+
 const FIX: &str = "Run `orbit doctor --fix-retired-config-keys`.";
+
+const RETIRED_SCRIPTS_CHECK: &str = "retired-scripts";
+
+const RETIRED_SCRIPT_MANIFESTS: &[RetiredScriptManifest] = &[RetiredScriptManifest {
+    name: "ux_rules_runner",
+    entry: "scripts/ux-rules/step.mjs",
+    retired_by: "the ux-rules routine was removed",
+}];
 
 struct ConfigLayer {
     path: PathBuf,
@@ -60,6 +69,24 @@ pub struct RetiredConfigKeyRepair {
     pub removed: Vec<RemovedRetiredConfigKey>,
     /// Replacement keys written, in file order, before the removal.
     pub written: Vec<WrittenReplacementConfigKey>,
+}
+
+/// A script manifest the old setup guidance had operators copy into
+/// `.orbit/resources/scripts/`, for a routine that has since been removed.
+struct RetiredScriptManifest {
+    name: &'static str,
+    /// The workspace-relative entry the shipped template named. A manifest
+    /// is recognised only when it still names it, so an operator's own
+    /// script under the same name is left alone.
+    entry: &'static str,
+    retired_by: &'static str,
+}
+
+struct PlannedRepair<'a> {
+    layer: &'a ConfigLayer,
+    store: ConfigStore,
+    removed_keys: Vec<String>,
+    written_keys: Vec<String>,
 }
 
 pub(super) fn doctor_check_retired_config_keys(
@@ -125,25 +152,6 @@ pub(super) fn doctor_check_retired_config_keys(
         warnings
     }
 }
-
-const RETIRED_SCRIPTS_CHECK: &str = "retired-scripts";
-
-/// A script manifest the old setup guidance had operators copy into
-/// `.orbit/resources/scripts/`, for a routine that has since been removed.
-struct RetiredScriptManifest {
-    name: &'static str,
-    /// The workspace-relative entry the shipped template named. A manifest
-    /// is recognised only when it still names it, so an operator's own
-    /// script under the same name is left alone.
-    entry: &'static str,
-    retired_by: &'static str,
-}
-
-const RETIRED_SCRIPT_MANIFESTS: &[RetiredScriptManifest] = &[RetiredScriptManifest {
-    name: "ux_rules_runner",
-    entry: "scripts/ux-rules/step.mjs",
-    retired_by: "the ux-rules routine was removed",
-}];
 
 /// Report each retired script manifest still in the workspace scripts
 /// directory. A script whose entry no longer exists cannot be used.
@@ -258,13 +266,6 @@ fn with_config_locks<T>(
     }
 }
 
-struct PlannedRepair<'a> {
-    layer: &'a ConfigLayer,
-    store: ConfigStore,
-    removed_keys: Vec<String>,
-    written_keys: Vec<String>,
-}
-
 /// The file at `path` as written, or `None` when it does not exist.
 fn read_document(path: &Path) -> Result<Option<toml::Value>, OrbitError> {
     if !path.exists() {
@@ -319,7 +320,7 @@ fn prepare_layer<'a>(
     }
     let rewrites = deprecated_key_rewrites(&document, lower, &layer.path)?;
     let mut store = ConfigStore::open(
-        &orbit_core::composition::composition_env(),
+        &crate::composition::composition_env(),
         layer.scope,
         &layer.path,
     )?;

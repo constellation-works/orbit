@@ -3,9 +3,9 @@
 
 use std::collections::BTreeSet;
 
-use orbit_core::application::health::artifact::ArtifactCondition;
+use crate::application::health::artifact::ArtifactCondition;
 
-use crate::doctor::*;
+use crate::app::doctor::*;
 
 /// Task relation/dependency targets that no longer resolve to a registered
 /// task bundle — the "grandfathered" relations that make a generated task
@@ -13,7 +13,7 @@ use crate::doctor::*;
 /// from a bundle scan (ORB-10305). Audited from the canonical bundles and
 /// scoped to the current workspace: an edge the generated index lost is the
 /// one blocking its repair, so it is reported (and marked) rather than hidden.
-pub(in crate::doctor) fn doctor_check_task_relations(
+pub(in crate::app::doctor) fn doctor_check_task_relations(
     runtime: &OrbitRuntime,
 ) -> WorkspaceDoctorResult {
     let workspace_id = match runtime.workspace_id() {
@@ -80,7 +80,7 @@ pub(in crate::doctor) fn doctor_check_task_relations(
 /// default* — a broken install: Orbit-written content that no longer parses,
 /// or a primary shipped default that is simply gone — escalates to `Error`.
 /// Everything else warns.
-pub(in crate::doctor) fn doctor_check_definition_artifacts(
+pub(in crate::app::doctor) fn doctor_check_definition_artifacts(
     runtime: &OrbitRuntime,
 ) -> Vec<WorkspaceDoctorResult> {
     let report = match runtime.inspect_definition_artifacts() {

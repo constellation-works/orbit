@@ -3,11 +3,11 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
-use crate::doctor::permissions::scan_with_hook;
+use crate::app::doctor::permission::scan_with_hook;
 
 #[test]
 fn repair_refuses_final_and_parent_symlink_swaps_after_scanning() {
-    use crate::doctor::permissions::tighten_directory;
+    use crate::app::doctor::permission::tighten_directory;
     use std::os::unix::fs::symlink;
 
     let temp = tempfile::tempdir().expect("fixture");

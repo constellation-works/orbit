@@ -1,9 +1,9 @@
 //! Pull-drain health: protocol skew on the latest pull, validation gates that
 //! drifted from the owner's, and follower settlements not yet delivered.
 
-use orbit_core::application::distributed::PendingPullSettlements;
+use crate::application::distributed::PendingPullSettlements;
 
-use crate::doctor::*;
+use crate::app::doctor::*;
 
 /// A workspace whose job definitions are not installed yet has run no pull
 /// drain. The report observes it without installing them, so it names the
@@ -12,7 +12,7 @@ fn pull_job_not_installed(check_name: &str, error: &OrbitError) -> Option<Worksp
     matches!(
         error,
         OrbitError::NotFound {
-            kind: orbit_core::NotFoundKind::Job,
+            kind: crate::NotFoundKind::Job,
             ..
         }
     )
@@ -30,7 +30,7 @@ fn pull_job_not_installed(check_name: &str, error: &OrbitError) -> Option<Worksp
 
 /// The latest pull window remains actionable after it ends on wire skew.
 /// A newer healthy window supersedes that diagnosis, avoiding stale warnings.
-pub(in crate::doctor) fn doctor_check_pull_protocol(
+pub(in crate::app::doctor) fn doctor_check_pull_protocol(
     runtime: &OrbitRuntime,
 ) -> WorkspaceDoctorResult {
     const CHECK: &str = "pull-protocol";
@@ -38,12 +38,11 @@ pub(in crate::doctor) fn doctor_check_pull_protocol(
         // [ORB-25811] Observed, not reconciled: a reconciling list finalizes a
         // stale pull drain and releases its reservations on any runtime that is
         // not write-free, including a same-generation read-only one.
-        let runs =
-            runtime.list_job_runs_observed(orbit_core::application::job::JobRunListParams {
-                job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
-                limit: Some(1),
-                ..Default::default()
-            })?;
+        let runs = runtime.list_job_runs_observed(crate::application::job::JobRunListParams {
+            job_id: Some(crate::application::contracts::PULL_DRAIN_JOB.to_string()),
+            limit: Some(1),
+            ..Default::default()
+        })?;
         let Some(run) = runs.first() else {
             return Ok(None);
         };
@@ -83,16 +82,17 @@ pub(in crate::doctor) fn doctor_check_pull_protocol(
 /// drain recorded the owner's from its probe at submission. Claimed leaves
 /// validate against the owner's gates each claim captures, but a leaf of an
 /// older owner falls back to this copy, and untracked config drifts silently.
-pub(in crate::doctor) fn doctor_check_pull_gates(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
+pub(in crate::app::doctor) fn doctor_check_pull_gates(
+    runtime: &OrbitRuntime,
+) -> WorkspaceDoctorResult {
     const CHECK: &str = "pull-gates";
     let inspect = || -> Result<Option<Option<String>>, OrbitError> {
         // [ORB-25811] Observed, not reconciled; see `doctor_check_pull_protocol`.
-        let runs =
-            runtime.list_job_runs_observed(orbit_core::application::job::JobRunListParams {
-                job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
-                limit: Some(1),
-                ..Default::default()
-            })?;
+        let runs = runtime.list_job_runs_observed(crate::application::job::JobRunListParams {
+            job_id: Some(crate::application::contracts::PULL_DRAIN_JOB.to_string()),
+            limit: Some(1),
+            ..Default::default()
+        })?;
         let Some(run) = runs.first() else {
             return Ok(None);
         };
@@ -132,7 +132,7 @@ pub(in crate::doctor) fn doctor_check_pull_gates(runtime: &OrbitRuntime) -> Work
 /// owner. Nothing retries delivery on a timer, so the owner keeps the claim
 /// `running` until an operator runs a settle-only pass; this row is what makes
 /// that wait visible. A workspace that never pulled reports none.
-pub(in crate::doctor) fn doctor_check_pull_settlements(
+pub(in crate::app::doctor) fn doctor_check_pull_settlements(
     runtime: &OrbitRuntime,
 ) -> WorkspaceDoctorResult {
     pull_settlements_finding(runtime.pending_pull_settlements(), chrono::Utc::now())

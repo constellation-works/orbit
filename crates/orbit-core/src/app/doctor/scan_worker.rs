@@ -31,6 +31,35 @@ mod seam {
 use std::io;
 use std::thread::{Scope, ScopedJoinHandle};
 
+/// Per-thread seam that makes every doctor scan worker spawn attempt fail the
+/// way an exhausted thread limit does, without placing load on the host. A scan
+/// attempts a spawn only with two or more work items: subdirectories of one
+/// directory, or doctor probes. With zero or one item it runs on the calling
+/// thread, and `refused` stays at zero.
+#[cfg(feature = "test-support")]
+pub struct DoctorWorkerSpawnRefusal;
+
+#[cfg(feature = "test-support")]
+impl DoctorWorkerSpawnRefusal {
+    /// Refuse every worker spawn on this thread until the guard drops.
+    pub fn install() -> Self {
+        seam::REFUSED.with(|slot| slot.set(Some(0)));
+        Self
+    }
+
+    /// Worker spawns refused since [`Self::install`].
+    pub fn refused(&self) -> usize {
+        seam::REFUSED.with(|slot| slot.get().unwrap_or(0))
+    }
+}
+
+#[cfg(feature = "test-support")]
+impl Drop for DoctorWorkerSpawnRefusal {
+    fn drop(&mut self) {
+        seam::REFUSED.with(|slot| slot.set(None));
+    }
+}
+
 /// Start one scoped worker, returning the OS refusal instead of panicking.
 pub(super) fn spawn_scan_worker<'scope, 'env, T: Send + 'scope>(
     scope: &'scope Scope<'scope, 'env>,
@@ -59,33 +88,4 @@ pub(super) fn forced_pool_size(max: usize, work_items: usize) -> Option<usize> {
     }
     let _ = (max, work_items);
     None
-}
-
-/// Per-thread seam that makes every doctor scan worker spawn attempt fail the
-/// way an exhausted thread limit does, without placing load on the host. A scan
-/// attempts a spawn only with two or more work items: subdirectories of one
-/// directory, or doctor probes. With zero or one item it runs on the calling
-/// thread, and `refused` stays at zero.
-#[cfg(feature = "test-support")]
-pub struct DoctorWorkerSpawnRefusal;
-
-#[cfg(feature = "test-support")]
-impl DoctorWorkerSpawnRefusal {
-    /// Refuse every worker spawn on this thread until the guard drops.
-    pub fn install() -> Self {
-        seam::REFUSED.with(|slot| slot.set(Some(0)));
-        Self
-    }
-
-    /// Worker spawns refused since [`Self::install`].
-    pub fn refused(&self) -> usize {
-        seam::REFUSED.with(|slot| slot.get().unwrap_or(0))
-    }
-}
-
-#[cfg(feature = "test-support")]
-impl Drop for DoctorWorkerSpawnRefusal {
-    fn drop(&mut self) {
-        seam::REFUSED.with(|slot| slot.set(None));
-    }
 }

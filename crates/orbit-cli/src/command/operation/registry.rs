@@ -600,7 +600,7 @@ impl Commands {
                         target_id,
                     )),
                     None,
-                    runtime_env_dispatch!(Doctor),
+                    core_env_dispatch!(Doctor),
                 )
             }
             Commands::AutoTask(command) => {

@@ -1,5 +1,5 @@
+use crate::OrbitRuntime;
 use orbit_config::{ConfigRoots, ResolvedConfig, WorkerContainmentSettings};
-use orbit_core::OrbitRuntime;
 
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
@@ -7,7 +7,7 @@ use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 /// operator sees whether a runaway leaf is bounded in memory and CPU.
 pub(super) fn worker_containment_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let settings = ResolvedConfig::load(
-        &orbit_core::composition::composition_env(),
+        &crate::composition::composition_env(),
         &ConfigRoots::new(runtime.global_root(), runtime.shared_root()),
     )
     .map(|config| config.snapshot.worker_containment());
@@ -88,10 +88,10 @@ fn worker_containment_row_for(
         }
     };
     WorkspaceDoctorResult {
-        duration_ms: 0,
         check_name: "worker-containment".to_string(),
         status,
         message,
         remediation,
+        duration_ms: 0,
     }
 }

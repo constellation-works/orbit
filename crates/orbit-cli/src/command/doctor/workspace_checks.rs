@@ -1,9 +1,10 @@
-use orbit_cmd::{
-    DoctorCommands, OrphanTaskStoreRemoval, RetiredConfigKeyRepair, WorkspaceDoctorResult,
-    WorkspaceDoctorStatus,
-};
 use orbit_common::Env;
-use orbit_core::{DOCTOR_FINDINGS_MESSAGE_PREFIX, OrbitError, OrbitRuntime};
+use orbit_core::app::doctor::{
+    AttemptPinCleanup, Command, OrphanTaskStoreRemoval, Outcome, Repaired, Repairs,
+    RetiredConfigKeyRepair, WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_row_json, exec,
+    misplaced_plugin_enablement_row,
+};
+use orbit_core::{Core, DOCTOR_FINDINGS_MESSAGE_PREFIX, OrbitError};
 use serde_json::Value;
 
 use super::command::DoctorCommand;
@@ -44,7 +45,7 @@ impl DoctorCommand {
             )
             .ok()?
             .global_root;
-        let misplaced = orbit_cmd::misplaced_plugin_enablement_row(&global_root);
+        let misplaced = misplaced_plugin_enablement_row(&global_root);
         let missing_store = !global_root.join("orbit.db").exists()
             || !global_root.join("tasks").join("index.sqlite").exists();
         let needs_migration = !missing_store && bootstrap.owes_writable_store_open();
@@ -75,142 +76,116 @@ impl DoctorCommand {
 
 impl DoctorCommand {
     /// The bare `orbit doctor` body: optional repairs, then the workspace report.
-    pub(super) fn workspace_checks(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
-        if self.repairs.fix_orphan_task_stores && !self.confirm {
-            return Err(orbit_core::OrbitError::InvalidInput(
-                    "--fix-orphan-task-stores deletes task-store partition directories and their task bundles. Pass --confirm to proceed."
-                        .to_string(),
-                ));
-        }
+    pub(super) fn workspace_checks(self, core: &Core, env: &Env) -> CommandOut {
+        let flags = &self.repairs;
+        let repairs = Repairs {
+            missing_pr_refs: flags.fix_missing_pr_refs,
+            state_directory_permissions: flags.fix_state_directory_permissions,
+            stale_locks: flags.fix_stale_locks,
+            stale_task_locks: flags.fix_stale_task_locks,
+            graph: flags.remove_graph,
+            stale_artifacts: flags.fix_stale_artifacts,
+            orphan_task_stores: flags.fix_orphan_task_stores,
+            automation_pins: flags.fix_automation_pins,
+            retired_config_keys: flags.fix_retired_config_keys,
+        };
+        let mut repaired_rows = Vec::new();
+        let mut repaired = |repair: Repaired, started: std::time::Instant| {
+            push_repaired(&mut repaired_rows, repair, started);
+        };
+        let Outcome::Report { cpu_source, rows } = exec(
+            core,
+            Command::Report {
+                repairs,
+                confirm: self.confirm,
+                deep: self.deep,
+                env: env.clone(),
+                host: orbit_cmd::doctor_host(),
+                repaired: &mut repaired,
+            },
+        )?
+        else {
+            unreachable!("a doctor report command answers with its rows")
+        };
         let mut results = vec![WorkspaceDoctorResult {
             duration_ms: 0,
             check_name: "resource-throttle".to_string(),
             status: WorkspaceDoctorStatus::Info,
-            message: format!(
-                "CPU source: {}",
-                runtime.resource_throttle_settings().cpu_source
-            ),
+            message: format!("CPU source: {cpu_source}"),
             remediation: None,
         }];
-        if self.repairs.fix_missing_pr_refs {
-            let started = std::time::Instant::now();
-            let repaired = runtime.repair_missing_handoff_pr_refs()?;
-            push_repair_result(
-                &mut results,
-                "fix-missing-pr-refs",
-                started,
-                WorkspaceDoctorStatus::Ok,
-                format!(
-                    "Restored pull request references on {} review tasks.",
-                    repaired.len()
-                ),
-            );
-        }
-        if self.repairs.fix_state_directory_permissions {
-            let started = std::time::Instant::now();
-            let repaired = runtime.repair_state_directory_permissions()?;
-            let message = format!(
-                "Restricted {repaired} writable Orbit state director{} to owner-only access.",
-                if repaired == 1 { "y" } else { "ies" }
-            );
-            push_repair_result(
-                &mut results,
-                "fix-state-directory-permissions",
-                started,
-                WorkspaceDoctorStatus::Ok,
-                message,
-            );
-        }
-        if self.repairs.fix_stale_locks {
-            let started = std::time::Instant::now();
-            let cleared = runtime.remove_stale_lock_files()?;
-            push_repair_result(
-                &mut results,
-                "fix-stale-locks",
-                started,
-                WorkspaceDoctorStatus::Ok,
-                format!("Cleared {cleared} stale lock holder record(s)."),
-            );
-        }
-        if self.repairs.fix_stale_task_locks {
-            let started = std::time::Instant::now();
-            let released = runtime.clear_stale_task_reservations()?;
-            push_repair_result(
-                &mut results,
-                "fix-stale-task-locks",
-                started,
-                WorkspaceDoctorStatus::Ok,
-                format!("Released {released} stale task reservation(s)."),
-            );
-        }
-        if self.repairs.remove_graph {
-            let started = std::time::Instant::now();
-            let removed = runtime.remove_retired_graph_state()?;
-            push_repair_result(
-                &mut results,
-                "remove-graph",
-                started,
-                WorkspaceDoctorStatus::Ok,
-                format!("Removed {removed} retired graph location(s)."),
-            );
-        }
-        if self.repairs.fix_stale_artifacts {
-            let started = std::time::Instant::now();
-            let removed = runtime.remove_stale_definition_artifacts()?;
-            push_repair_result(
-                &mut results,
-                "fix-stale-artifacts",
-                started,
-                WorkspaceDoctorStatus::Ok,
-                format!("Retired {removed} deprecated definition artifact(s)."),
-            );
-        }
-        if self.repairs.fix_orphan_task_stores {
-            let started = std::time::Instant::now();
-            let removed = runtime.remove_orphan_task_stores()?;
-            let message = orphan_task_store_removal_message(&removed);
-            push_repair_result(
-                &mut results,
-                "fix-orphan-task-stores",
-                started,
-                WorkspaceDoctorStatus::Ok,
-                message,
-            );
-        }
-        if self.repairs.fix_automation_pins {
-            let started = std::time::Instant::now();
-            let cleanup =
-                orbit_core::application::automation::release_unreferenced_attempt_pins(runtime)?;
-            let message = automation_pin_cleanup_message(&cleanup);
-            push_repair_result(
-                &mut results,
-                "fix-automation-pins",
-                started,
-                if cleanup.kept.is_empty()
-                    && (cleanup.refused.is_none() || cleanup.retained_unproven == 0)
-                {
-                    WorkspaceDoctorStatus::Ok
-                } else {
-                    WorkspaceDoctorStatus::Warning
-                },
-                message,
-            );
-        }
-        if self.repairs.fix_retired_config_keys {
-            let started = std::time::Instant::now();
-            let repair = runtime.remove_retired_config_keys()?;
-            let message = retired_config_key_repair_message(&repair);
-            push_repair_result(
-                &mut results,
-                "fix-retired-config-keys",
-                started,
-                WorkspaceDoctorStatus::Ok,
-                message,
-            );
-        }
-        results.extend(orbit_cmd::run_doctor_report(runtime, env, self.deep));
+        results.extend(repaired_rows);
+        results.extend(rows);
         report_output(results, self.problems, self.check.as_deref())
     }
+}
+
+/// Report one finished repair on stderr and add its row.
+fn push_repaired(
+    results: &mut Vec<WorkspaceDoctorResult>,
+    repair: Repaired,
+    started: std::time::Instant,
+) {
+    let (check_name, status, message) = match repair {
+        Repaired::MissingPrRefs(repaired) => (
+            "fix-missing-pr-refs",
+            WorkspaceDoctorStatus::Ok,
+            format!(
+                "Restored pull request references on {} review tasks.",
+                repaired.len()
+            ),
+        ),
+        Repaired::StateDirectoryPermissions(repaired) => (
+            "fix-state-directory-permissions",
+            WorkspaceDoctorStatus::Ok,
+            format!(
+                "Restricted {repaired} writable Orbit state director{} to owner-only access.",
+                if repaired == 1 { "y" } else { "ies" }
+            ),
+        ),
+        Repaired::StaleLocks(cleared) => (
+            "fix-stale-locks",
+            WorkspaceDoctorStatus::Ok,
+            format!("Cleared {cleared} stale lock holder record(s)."),
+        ),
+        Repaired::StaleTaskLocks(released) => (
+            "fix-stale-task-locks",
+            WorkspaceDoctorStatus::Ok,
+            format!("Released {released} stale task reservation(s)."),
+        ),
+        Repaired::Graph(removed) => (
+            "remove-graph",
+            WorkspaceDoctorStatus::Ok,
+            format!("Removed {removed} retired graph location(s)."),
+        ),
+        Repaired::StaleArtifacts(removed) => (
+            "fix-stale-artifacts",
+            WorkspaceDoctorStatus::Ok,
+            format!("Retired {removed} deprecated definition artifact(s)."),
+        ),
+        Repaired::OrphanTaskStores(removed) => (
+            "fix-orphan-task-stores",
+            WorkspaceDoctorStatus::Ok,
+            orphan_task_store_removal_message(&removed),
+        ),
+        Repaired::AutomationPins(cleanup) => (
+            "fix-automation-pins",
+            if cleanup.kept.is_empty()
+                && (cleanup.refused.is_none() || cleanup.retained_unproven == 0)
+            {
+                WorkspaceDoctorStatus::Ok
+            } else {
+                WorkspaceDoctorStatus::Warning
+            },
+            automation_pin_cleanup_message(&cleanup),
+        ),
+        Repaired::RetiredConfigKeys(repair) => (
+            "fix-retired-config-keys",
+            WorkspaceDoctorStatus::Ok,
+            retired_config_key_repair_message(&repair),
+        ),
+    };
+    push_repair_result(results, check_name, started, status, message);
 }
 
 fn push_repair_result(
@@ -248,7 +223,7 @@ fn report_output(
             })?;
         let failed = row.status == WorkspaceDoctorStatus::Error;
         let mut payload = Payload::detail(
-            orbit_cmd::doctor_row_json(row),
+            doctor_row_json(row),
             format!(
                 "Check: {}\nStatus: {}\nDetails: {}",
                 row.check_name,
@@ -272,10 +247,7 @@ fn report_output(
         .filter(|row| row.status == WorkspaceDoctorStatus::Warning)
         .count();
 
-    let values = results
-        .iter()
-        .map(orbit_cmd::doctor_row_json)
-        .collect::<Vec<_>>();
+    let values = results.iter().map(doctor_row_json).collect::<Vec<_>>();
 
     let summary = format!("{failures} failure(s), {warnings} warning(s).");
     eprintln!("{summary}");
@@ -417,9 +389,7 @@ fn retired_config_key_repair_message(repair: &RetiredConfigKeyRepair) -> String 
 /// Render `--fix-automation-pins`'s outcome: what it reclaimed, why the rest
 /// of its own namespace stayed, and every pin it retained without proof of
 /// ownership.
-fn automation_pin_cleanup_message(
-    cleanup: &orbit_core::application::automation::AttemptPinCleanup,
-) -> String {
+fn automation_pin_cleanup_message(cleanup: &AttemptPinCleanup) -> String {
     let mut message = match &cleanup.refused {
         Some(reason) => format!(
             "Reclaimed no automation attempt pins: ownership of {} is not proved ({reason}); \

@@ -1,6 +1,7 @@
 use clap::Args;
-use orbit_core::{OrbitError, OrbitRuntime};
-use orbit_types::policy::{DEFAULT_POLICY_NAME, FsOperation};
+use orbit_core::Core;
+use orbit_core::app::doctor::{Command, Outcome, exec};
+use orbit_types::policy::DEFAULT_POLICY_NAME;
 use serde_json::json;
 
 use crate::command::{CommandOut, Payload};
@@ -15,14 +16,17 @@ pub struct FsAccessArgs {
 
 /// `orbit doctor fs-access`: the active policy's read and modify verdicts for
 /// one path under one fsProfile, without running anything.
-pub(super) fn fs_access(runtime: &OrbitRuntime, profile: &str, path: &str) -> CommandOut {
-    let def = runtime
-        .get_policy_def(DEFAULT_POLICY_NAME)?
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(format!("policy not found: {DEFAULT_POLICY_NAME}"))
-        })?;
-    let read = def.check_path(profile, FsOperation::Read, path)?;
-    let modify = def.check_path(profile, FsOperation::Modify, path)?;
+pub(super) fn fs_access(core: &Core, profile: String, path: String) -> CommandOut {
+    let Outcome::FsAccess { read, modify } = exec(
+        core,
+        Command::FsAccess {
+            profile: profile.clone(),
+            path: path.clone(),
+        },
+    )?
+    else {
+        unreachable!("an fs-access command answers with its verdicts")
+    };
 
     let doc = json!({
         "policy": DEFAULT_POLICY_NAME,

@@ -19,8 +19,8 @@ use std::time::Duration;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_cmd::DoctorCommands;
 use orbit_core::OrbitRuntime;
+use orbit_core::app::doctor::DoctorCommands;
 use serde::Deserialize;
 use serde_json::{Value, json};
 

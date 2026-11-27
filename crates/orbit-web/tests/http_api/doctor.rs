@@ -28,13 +28,14 @@ fn doctor_returns_the_cli_report_rows_with_remediation() {
 
             let body = json_ok(server.get(DOCTOR));
             let checks = body["checks"].as_array().expect("doctor rows");
-            let expected = orbit_cmd::run_doctor_report(
+            let expected = orbit_core::app::doctor::run_doctor_report(
                 &fixture.runtime,
                 &orbit_common::Env::capture(),
                 false,
+                orbit_cmd::doctor_host().as_ref(),
             )
             .iter()
-            .map(orbit_cmd::doctor_row_json)
+            .map(orbit_core::app::doctor::doctor_row_json)
             .collect::<Vec<_>>();
 
             assert_eq!(
@@ -112,20 +113,22 @@ fn doctor_report_is_complete_and_ordered_when_workers_cannot_start() {
         "doctor::doctor_report_is_complete_and_ordered_when_workers_cannot_start",
         || {
             let fixture = Fixture::new();
-            let expected = orbit_cmd::run_doctor_report(
+            let expected = orbit_core::app::doctor::run_doctor_report(
                 &fixture.runtime,
                 &orbit_common::Env::capture(),
                 false,
+                orbit_cmd::doctor_host().as_ref(),
             )
             .iter()
             .map(|row| row.check_name.clone())
             .collect::<Vec<_>>();
 
-            let refusal = orbit_cmd::DoctorWorkerSpawnRefusal::install();
-            let degraded = orbit_cmd::run_doctor_report(
+            let refusal = orbit_core::app::doctor::DoctorWorkerSpawnRefusal::install();
+            let degraded = orbit_core::app::doctor::run_doctor_report(
                 &fixture.runtime,
                 &orbit_common::Env::capture(),
                 false,
+                orbit_cmd::doctor_host().as_ref(),
             )
             .iter()
             .map(|row| row.check_name.clone())
@@ -143,7 +146,7 @@ fn doctor_report_is_complete_and_ordered_when_workers_cannot_start() {
 fn permission_repair_visits_the_same_directories_when_workers_cannot_start() {
     use std::os::unix::fs::PermissionsExt;
 
-    use orbit_cmd::DoctorCommands;
+    use orbit_core::app::doctor::DoctorCommands;
 
     isolated(
         "doctor::permission_repair_visits_the_same_directories_when_workers_cannot_start",
@@ -202,7 +205,7 @@ fn permission_repair_visits_the_same_directories_when_workers_cannot_start() {
 
             let refused = Fixture::new();
             let (refused_eligible, refused_excluded) = prepare(&refused);
-            let refusal = orbit_cmd::DoctorWorkerSpawnRefusal::install();
+            let refusal = orbit_core::app::doctor::DoctorWorkerSpawnRefusal::install();
             let repaired = refused
                 .runtime
                 .repair_state_directory_permissions()

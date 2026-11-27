@@ -9,8 +9,8 @@
 //! macOS profile's documented gaps, and whether `strict` worker containment
 //! refuses every step on this host.
 
-use orbit_core::OrbitRuntime;
-use orbit_core::runtime::scripts::ScriptGrantState;
+use crate::OrbitRuntime;
+use crate::runtime::scripts::ScriptGrantState;
 
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 
@@ -19,7 +19,6 @@ pub(super) fn script_grant_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorRe
         Ok(statuses) => statuses,
         Err(error) => {
             return vec![WorkspaceDoctorResult {
-                duration_ms: 0,
                 check_name: "script-grants".into(),
                 status: WorkspaceDoctorStatus::Warning,
                 message: format!("Cannot inspect script grants: {error}"),
@@ -27,16 +26,17 @@ pub(super) fn script_grant_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorRe
                     "Fix the script manifest or store error it names, then rerun `orbit doctor`."
                         .into(),
                 ),
+                duration_ms: 0,
             }];
         }
     };
     if statuses.is_empty() {
         return vec![WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name: "script-grants".into(),
             status: WorkspaceDoctorStatus::Skipped,
             message: "This workspace declares no scripts and holds no script grants.".into(),
             remediation: None,
+            duration_ms: 0,
         }];
     }
     let mut rows: Vec<WorkspaceDoctorResult> = Vec::new();
@@ -80,7 +80,6 @@ pub(super) fn script_grant_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorRe
             ),
         };
         rows.push(WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name: "script-grants".into(),
             status: doctor_status,
             message: format!(
@@ -88,12 +87,12 @@ pub(super) fn script_grant_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorRe
                 status.name, status.state, status.detail
             ),
             remediation,
+            duration_ms: 0,
         });
     }
     rows.push(script_sandbox_row(runtime));
     if rows.len() == 1 {
         rows.push(WorkspaceDoctorResult {
-            duration_ms: 0,
             check_name: "script-grants".into(),
             status: WorkspaceDoctorStatus::Ok,
             message: format!(
@@ -101,6 +100,7 @@ pub(super) fn script_grant_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorRe
                 if granted == 1 { " is" } else { "s are" }
             ),
             remediation: None,
+            duration_ms: 0,
         });
     }
     rows
@@ -143,10 +143,10 @@ fn script_sandbox_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
         },
     };
     WorkspaceDoctorResult {
-        duration_ms: 0,
         check_name: "script-sandbox".into(),
         status,
         message,
         remediation,
+        duration_ms: 0,
     }
 }

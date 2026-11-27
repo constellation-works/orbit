@@ -1,5 +1,5 @@
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
-use orbit_core::{OrbitError, OrbitRuntime};
+use crate::{OrbitError, OrbitRuntime};
 
 /// Run the scan a sandboxed leaf meets at launch on the registered checkout,
 /// so an operator sees a refusal before a drain admits work.
@@ -29,10 +29,10 @@ pub(super) fn git_protection_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResul
         ),
     };
     WorkspaceDoctorResult {
-        duration_ms: 0,
         check_name: "git-protection".to_string(),
         status,
         message,
         remediation,
+        duration_ms: 0,
     }
 }

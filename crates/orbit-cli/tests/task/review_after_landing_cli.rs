@@ -1245,8 +1245,8 @@ fn historical_timing_spellings_keep_task_commands_and_config_writes_usable() {
 /// spelling and write a file the previous release can still read.
 #[test]
 fn doctor_timing_alias_rewrite_preserves_policy_and_legacy_readability() {
-    use orbit_cmd::DoctorCommands;
     use orbit_core::OrbitRuntime;
+    use orbit_core::app::doctor::DoctorCommands;
     const TEST: &str = "review_after_landing_cli::doctor_timing_alias_rewrite_preserves_policy_and_legacy_readability";
     if !in_isolated_child(TEST) {
         return;
