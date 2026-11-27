@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Glossary of resident-orchestrator terms: manager, mandate, authority, resident, fire, cycle, checkpoint, wake digest, cost event, evolution record"
-last_validated: 2026-11-15
+last_validated: 2026-11-27
 title: Resident Orchestrator — Glossary
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: resident-orchestrator
 tags: [resident-orchestrator, glossary]
 related_features: [resident-orchestrator]
 related_artifacts: [ORB-21229]
-last_updated: 2026-11-02
+last_updated: 2026-11-27
 ---
 
 # Resident Orchestrator — Glossary
@@ -42,3 +42,9 @@ where they are used.
 | Signature | Kebab-case key naming a capability gap; groups cost events into one evolution record ([evolution-ledger](../specs/evolution-ledger.md#cost-event)) |
 | Takeover | Control action that stops firing so a human or interactive session runs the mandate until `release` ([manager-channel](../specs/manager-channel.md#orbitresidentcontrol)) |
 | Wake digest | Hash over the facts a mandate watches; a change makes it due ([2_design.md §4.2](../2_design.md#42-fires)) |
+
+## Task References
+
+- [ORB-22844] — removed the scheduled evolution pass routine, job and proposal filing
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

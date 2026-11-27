@@ -3,7 +3,7 @@ title: Terminal Interface — Overview
 owner: claude
 created_date: 2026-08-01
 updated_date: 2026-11-08
-last_validated: 2026-11-08
+last_validated: 2026-11-27
 status: Implemented
 stage: shipped
 next: "—"

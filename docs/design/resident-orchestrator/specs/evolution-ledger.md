@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: resident cost events, the evolution record kind (separate from friction), and the manager digest; the scheduled evolution pass was removed in ORB-22844"
-last_validated: 2026-11-02
+last_validated: 2026-11-27
 title: Spec — Evolution ledger
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: resident-orchestrator
 tags: [resident-orchestrator, spec, evolution]
 related_features: [resident-orchestrator, routines, project-learnings]
 related_artifacts: [ORB-21229, ORB-21248, ORB-21249]
-last_updated: 2026-11-07
+last_updated: 2026-11-27
 ---
 
 # Spec: Evolution ledger
@@ -163,6 +163,7 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21248] and [
 - [ORB-21229] — designed the evolution loop
 - [ORB-21248] — implements cost events and the evolution record kind
 - [ORB-21249] — implements the evolution pass and the manager digest
+- [ORB-22808] — fixed the removed pass's `window_days` and `decline_suppress_days` settings behind deprecation warnings
 - [ORB-22844] — removed the evolution pass
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

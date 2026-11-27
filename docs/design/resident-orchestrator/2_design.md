@@ -2,8 +2,8 @@
 title: Resident Orchestrator — Design
 owner: claude
 created_date: 2026-07-17
-updated_date: 2026-11-24
-last_validated: 2026-11-08
+updated_date: 2026-11-27
+last_validated: 2026-11-27
 status: Draft
 feature: resident-orchestrator
 doc_role: design
@@ -24,7 +24,7 @@ of [ORB-21229]. Slices 1–9 ([ORB-21242] to [ORB-21250]) have landed, slice 3 (
 [manager-channel](./specs/manager-channel.md) and
 [evolution-ledger](./specs/evolution-ledger.md). The question → section map:
 
-| Question in ORB-21229 | Answered in |
+| Question in [ORB-21229] | Answered in |
 |---|---|
 | 1. The resident's lifecycle | [§4](#4-lifecycle) |
 | 2. The checkpoint and resume contract | [§5](#5-the-cycle), [checkpoint-contract](./specs/checkpoint-contract.md) |
@@ -99,9 +99,10 @@ not the prompt.
   `promote_held` (move an eligible `no-auto-approve` proposal to `backlog` with a current clean
   pilot). Task-pilot assessment
   is a separate gate: it can assess
-  eligible `proposed` or `backlog` tasks. Reading, commenting, filing `proposed` tasks, filing
+  eligible `proposed` or `backlog` tasks. Reading (including `orbit.attention` runtime attention
+  for covered workspaces [ORB-25254]), commenting, filing `proposed` tasks, filing
   friction records in the mandate's own workspace, updating friction records in any covered
-  workspace (without moving them via `rehome_to`), and checkpointing need no right. Anything not
+  workspace (without moving them via `rehome_to`) [ORB-26833], and checkpointing need no right. Anything not
   listed (releases, tags, publishing, host changes, config edits, secrets) is not grantable to a
   resident in v1.
 - **Scope.** A list of covered workspaces. A tool call naming a workspace outside the list is
@@ -110,7 +111,8 @@ not the prompt.
 - **Enforcement.** The cycle's tool grant is computed from the authority at cycle start and frozen
   for the cycle, like a dispatched attempt's [granted tools](../granted-tools/1_scope.md). A right the
   mandate lacks is a tool the cycle cannot call; a workspace outside scope fails the call in core.
-  Core also refuses `resident.*` writes whose cycle id is not the mandate's live cycle.
+  Exercising a resident right on an operator-only operation requires the run's authenticated
+  resident broker [ORB-26169]. Core also refuses `resident.*` writes whose cycle id is not the mandate's live cycle.
 - **Who widens.** Only the human. The operator at a native terminal writes a grant directly
   (`orbit resident grant`); any MCP session, even one served `--operator`, counts as a relay. The
   manager, which is an agent session, submits the same input and gets a
@@ -448,7 +450,7 @@ to `review` (`resident_handoff_by_checkpoint`): it hands off with a checkpoint
 through native `orbit task lint --restore-pruned`. Context maintenance has no resident right;
 operator restoration outside a cycle is unchanged.
 
-The provider envelope uses the live grant recorded for the dispatched run. A grant with delivery
+The provider envelope uses the live grant recorded for the dispatched run [ORB-27590]. A grant with delivery
 rights advertises the corresponding `orbit.workflow` and `orbit.task.recover` families and
 supplies them in the nested MCP toolset stamp. Expired and observe-only cycles contribute no
 delivery families.
@@ -572,9 +574,10 @@ cycle. The resident design adds rules on top; the notice record and poster class
 
 - **Who posts.** Both, under the existing poster classes. The manager posts as `orchestrator` (or as
   `operator` when the session holds operator authority): `maintenance` and `global` notices, and the
-  human's broadcasts. A resident cycle is a run-bound session, so it posts as `agent`: only
-  `workspace`-scope `incident` or `info` notices, about what it observed, with a linked task or
-  evidence, for at most 24 hours ([notice-authority](../fleet-notices/specs/notice-authority.md)).
+  human's broadcasts. A resident cycle is a run-bound session, so it posts as `agent`: one live
+  `info` status-line notice per mandate (excluded from the `max_open_per_resident` blocker cap [ORB-25095],
+  [ORB-27591]), and `workspace`-scope `incident` or `info` notices, about what it observed, with a
+  linked task or evidence, for at most 24 hours ([notice-authority](../fleet-notices/specs/notice-authority.md)).
   That is enough for "the review gate refuses every candidate, fix ORB-N in flight", and keeps
   residents from broadcasting fleet-wide instructions. No new poster class.
 - **Reacting to a maintenance notice.** While a `maintenance` notice is open in a covered workspace,
@@ -647,7 +650,8 @@ with the recommended option, the residents are over-asking.
 ### 8.3 How a resident escalates
 
 It composes existing tools. The resident files a human-crew task in the assignment's workspace,
-`related_to` the assignment and `blocked_by`-linked from any work it must wait for, and raises a
+`related_to` the assignment and `blocked_by`-linked from any work it must wait for (and routes any
+security/policy choice on a machine-owned repair task onto a related human-crew task [ORB-25507]), and raises a
 multiple-choice decision on it with `orbit.decision` action `raise`: two to four options, one recommended,
 each with a `risk_tier`. The human's answer completes that task, which unblocks the dependents and
 changes the resident's wake digest. Agent-raised requests are already deduplicated and capped per
@@ -950,8 +954,16 @@ Slices 1–9 have landed (slice 3 as [§5.1](#51-slice-3-as-implemented) describ
 - [ORB-21263] — MCP roles: the manager and resident surfaces
 - [ORB-21649] — the dashboard Residents view and how a dashboard widening is authorized
 - [ORB-21642] — fixed `orbit resident metrics --baseline` failing on a baseline task in another workspace
+- [ORB-22808] — removed decision assistance and model-answered categories; fixed evolution window and decline-suppression defaults behind deprecation warnings
 - [ORB-22844] — removed the evolution pass routine, job and proposal filing; the ledger and manager digest stay
+- [ORB-25095] — added one live `info` status-line notice per resident and warning notices for operator asks
 - [ORB-25105] — wake only on changes the mandate acts on, honour the planned next wake, default the floor to the heartbeat
+- [ORB-25254] — let live resident cycles read runtime attention for covered workspaces
+- [ORB-25507] — routed resident policy escalations on machine-owned repairs through a related human-crew task
+- [ORB-25960] — counted only mandates with a valid `resident/mandate.json` over their active span in `orbit resident metrics`
+- [ORB-26169] — required the run's authenticated resident broker for right-gated exemptions on operator-only operations
 - [ORB-26833] — let resident cycles update friction records in covered workspaces without a right and without `rehome_to`
+- [ORB-27590] — stamped `orbit.workflow` and `orbit.task.recover` in the cycle's nested MCP toolset when holding delivery rights
+- [ORB-27591] — excluded the resident's mandatory status-line notice key from the `max_open_per_resident` warning cap
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

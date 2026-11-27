@@ -3,7 +3,7 @@ title: Terminal Interface — Vision
 owner: claude
 created_date: 2026-08-01
 updated_date: 2026-11-02
-last_validated: 2026-11-02
+last_validated: 2026-11-27
 status: Accepted
 feature: terminal-interface
 doc_role: vision
