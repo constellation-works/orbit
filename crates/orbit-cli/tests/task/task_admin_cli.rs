@@ -400,6 +400,17 @@ fn lock_contention_cli_reports_shared_backlog_surface_without_reserving() {
         before,
         "contention is a diagnostic, not a reservation"
     );
+    // The read keeps its invocation row under the operation the run app used.
+    let audited: Vec<_> = fixture
+        .json(&["audit", "list", "--json"])
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["command"] == "task" && row["subcommand"] == "locks-contention")
+        .cloned()
+        .collect();
+    assert_eq!(audited.len(), 1, "one audit row for the contention read");
+    assert_eq!(audited[0]["status"], "success");
 }
 
 #[test]

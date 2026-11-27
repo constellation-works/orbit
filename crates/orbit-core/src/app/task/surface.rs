@@ -71,6 +71,7 @@ pub(super) fn operation(command: &Command<'_>) -> Operation {
             unlisted("archive").target(Some("task"), Some(archive.id.clone()))
         }
         Command::Flow { .. } => unlisted("flow"),
+        Command::Contention => unlisted("locks-contention"),
         Command::RecheckBlocked { .. } => unlisted("recheck-blocked"),
         Command::SettleMerged(settle) => match settle {
             SettleMerged::All => unlisted("settle-merged"),

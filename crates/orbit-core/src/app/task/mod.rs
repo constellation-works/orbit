@@ -12,8 +12,8 @@
 //!   so `orbit task add`, `orbit.task.add` and `POST /api/tasks` end in the
 //!   same arm.
 //! - A task command that has no registry verb and stays hand-written on the
-//!   command line: archive, flow, recheck-blocked, settle-merged, export,
-//!   import, reindex and publication.
+//!   command line: archive, flow, locks contention, recheck-blocked,
+//!   settle-merged, export, import, reindex and publication.
 //! - A read model or a record the dashboard takes: [`Command::Read`] and
 //!   [`Command::Record`].
 //!
@@ -55,9 +55,9 @@ use crate::Core;
 use crate::application::resident::ResidentActionTicket;
 use crate::application::task::InfraBlockedTask;
 use crate::application::task::{
-    DecisionChannelInfo, ExternalMergeSettlement, PostDeployOperatorRecord, ProposedTaskInput,
-    ScreenedTaskWrite, TaskAddParams, TaskListFilter, TaskListQuery, TaskPage, TaskRow,
-    TaskUpdateAuthority, TaskUpdateParams, TransientInfraBlockedTask,
+    DecisionChannelInfo, ExternalMergeSettlement, LockContentionReport, PostDeployOperatorRecord,
+    ProposedTaskInput, ScreenedTaskWrite, TaskAddParams, TaskListFilter, TaskListQuery, TaskPage,
+    TaskRow, TaskUpdateAuthority, TaskUpdateParams, TransientInfraBlockedTask,
 };
 use crate::application::task_bundle::migration::{
     ExportOutcome, ExportSelection, ImportConflictPolicy, ImportOutcome, ReindexOutcome,
@@ -97,6 +97,8 @@ pub enum Command<'a> {
         /// Only tasks of this type.
         task_type: Option<TaskType>,
     },
+    /// The lock contention across the backlog: `orbit task locks contention`.
+    Contention,
     /// The infra-blocked tasks, requeueing the cleared ones on `confirm`.
     RecheckBlocked {
         /// Return the cleared tasks to backlog.
@@ -483,6 +485,8 @@ pub enum Outcome {
     Shown(Box<Shown>),
     /// Tasks with their histories.
     Flow(Vec<(Task, Vec<TaskHistoryEntry>)>),
+    /// The backlog's lock contention report.
+    Contention(LockContentionReport),
     /// The infra-blocked tasks and the ones requeued.
     Rechecked(Rechecked),
     /// The settled tasks.
@@ -614,6 +618,8 @@ outcome_accessors! {
     into_shown => Shown(Box<Shown>),
     /// The tasks with their histories.
     into_flow => Flow(Vec<(Task, Vec<TaskHistoryEntry>)>),
+    /// The lock contention report.
+    into_contention => Contention(LockContentionReport),
     /// The rechecked infra-blocked tasks.
     into_rechecked => Rechecked(Rechecked),
     /// The settled tasks.
@@ -714,6 +720,9 @@ impl<'a> App for TaskApp<'a> {
             },
             Command::Archive(archive) => surface::archive(runtime, archive),
             Command::Flow { tags, task_type } => surface::flow(runtime, &tags, task_type),
+            Command::Contention => runtime
+                .task_lock_contention(&[TaskStatus::Backlog])
+                .map(Outcome::Contention),
             Command::RecheckBlocked { confirm } => surface::recheck_blocked(runtime, confirm),
             Command::SettleMerged(settle) => surface::settle_merged(runtime, settle),
             Command::Export {

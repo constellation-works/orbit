@@ -1,5 +1,4 @@
 use super::{Command, Operation};
-use crate::LockContentionReport;
 use crate::OrbitError;
 use crate::application::distributed::LeafSettlement;
 use crate::application::distributed::{
@@ -9,7 +8,6 @@ use crate::runtime::host_resource::accuracy::{AccuracySelection, ForecastAccurac
 use crate::runtime::host_resource::profile::ProfileSet;
 use chrono::{DateTime, Utc};
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
-use orbit_types::task::TaskStatus;
 use std::sync::Arc;
 
 impl<'a> Command<'a, Arc<ProfileSet>> {
@@ -40,16 +38,6 @@ impl<'a> Command<'a, Vec<LeafSettlement>> {
         Self::new(
             Operation::command("run", "settlements").target(Some("execution_claim"), None),
             move |core| core.runtime().leaf_settlements(since, reconcile),
-        )
-    }
-}
-
-impl<'a> Command<'a, LockContentionReport> {
-    /// Read backlog lock contention.
-    pub fn contention() -> Self {
-        Self::new(
-            Operation::command("task", "locks-contention"),
-            move |core| core.runtime().task_lock_contention(&[TaskStatus::Backlog]),
         )
     }
 }
