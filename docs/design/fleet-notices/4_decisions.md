@@ -2,7 +2,7 @@
 title: Fleet Notices — Decisions
 owner: claude
 created_date: 2026-11-01
-updated_date: 2026-11-18
+updated_date: 2026-11-27
 last_validated: 2026-11-15
 status: Draft
 feature: fleet-notices
@@ -10,7 +10,7 @@ doc_role: decisions
 type: design
 summary: "Decisions for fleet notices: Orbit state not a Library board, notices never grant authority, derived poster class, scoped agent posting not broadcast, mandatory expiry, derived effective state, corroborating dedupe, brief switch separate from the toolset, maintenance hold deferred"
 tags: [fleet-notices]
-paths: ["crates/orbit-core/src/application/notice/**", "crates/orbit-common/src/governance/notice.rs", "crates/orbit-types/src/tool/mcp_toolset.rs"]
+paths: ["crates/orbit-core/src/app/notice/**", "crates/orbit-common/src/governance/notice.rs", "crates/orbit-types/src/tool/mcp_toolset.rs"]
 related_features: [fleet-notices, operator-attention, federated-mcp, mid-run-steering]
 related_artifacts: [ORB-21207]
 ---
@@ -89,7 +89,7 @@ Cost: operators who want an announcement to *do* something must also make the go
 
 **Recorded:** 2026-11-02 · [ORB-21207]
 
-**Code anchors:** the planned poster-class resolution in `crates/orbit-core/src/application/notice/`;
+**Code anchors:** the planned poster-class resolution in `crates/orbit-core/src/app/notice/`;
 `crates/orbit-common/src/governance/authorization/caller.rs::CallerEnvelope`.
 
 ### Context
@@ -173,7 +173,7 @@ every brief.
 
 **Recorded:** 2026-11-02 · [ORB-21207]
 
-**Code anchors:** the planned effective-state function in `crates/orbit-core/src/application/notice/`
+**Code anchors:** the planned effective-state function in `crates/orbit-core/src/app/notice/`
 and the closure materializer.
 
 ### Context

@@ -2,7 +2,7 @@
 title: Fleet Notices — Design
 owner: claude
 created_date: 2026-11-01
-updated_date: 2026-11-08
+updated_date: 2026-11-27
 last_validated: 2026-11-14
 status: Draft
 feature: fleet-notices
@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: "Design of fleet notices: a stored owner record, the NOTICE operation noun and notice toolset, managed-agent posting, brief delivery, configuration, the maintenance dispatch-hold extension point, and implementation slices"
 tags: [fleet-notices]
-paths: ["crates/orbit-common/src/governance/**", "crates/orbit-core/src/application/notice/**", "crates/orbit-types/src/record/notice.rs", "crates/orbit-store/src/driver/sqlite/host/schema/notices.rs", "crates/orbit-types/src/tool/mcp_toolset.rs", "crates/orbit-core/src/adapter/engine_host/actions/task_context.rs", "crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs"]
+paths: ["crates/orbit-common/src/governance/**", "crates/orbit-core/src/app/notice/**", "crates/orbit-types/src/record/notice.rs", "crates/orbit-store/src/driver/sqlite/host/schema/notices.rs", "crates/orbit-types/src/tool/mcp_toolset.rs", "crates/orbit-core/src/adapter/engine_host/actions/task_context.rs", "crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch/preparation.rs"]
 related_features: [fleet-notices, operator-attention, federated-mcp, mid-run-steering, distributed-drain, operations-as-data]
 related_artifacts: [ORB-21207]
 ---

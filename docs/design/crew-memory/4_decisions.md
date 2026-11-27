@@ -2,7 +2,7 @@
 title: Crew Memory — Decisions
 owner: claude
 created_date: 2026-11-08
-updated_date: 2026-11-21
+updated_date: 2026-11-27
 last_validated: 2026-11-09
 status: Accepted
 feature: crew-memory
@@ -10,7 +10,7 @@ doc_role: decisions
 type: design
 summary: "Why crew memory is experimental until a randomised readout favours it, score-blind, own-space-only, keyed by model, and held in the owner store rather than host files."
 tags: [crew-memory]
-paths: ["crates/orbit-core/src/application/crew_memory/**"]
+paths: ["crates/orbit-core/src/app/crew_memory/**"]
 related_features: [experiments, project-learnings, agent-scorecards]
 related_artifacts: [ORB-23105, ORB-10736, ORB-23644, ORB-26501]
 ---
@@ -48,7 +48,7 @@ How this differs from project learnings:
 ## Reflection is score-blind
 
 **Recorded:** 2026-11 · [ORB-23105]
-**Code anchors:** `crates/orbit-core/src/application/crew_memory/evidence.rs::build_pack` (planned)
+**Code anchors:** `crates/orbit-core/src/app/crew_memory/evidence.rs::build_pack` (planned)
 
 ### Context
 
@@ -90,7 +90,7 @@ A run receives exactly two spaces: its own model's space and the global memory. 
 ## Memory is keyed by model, not crew
 
 **Recorded:** 2026-11 · [ORB-23105]
-**Code anchors:** `crates/orbit-core/src/application/crew_memory/key.rs::memory_key`
+**Code anchors:** `crates/orbit-core/src/app/crew_memory/key.rs::memory_key`
 
 ### Context
 
@@ -126,7 +126,7 @@ Spaces, revisions and proposals are rows in the owner's store (`~/.orbit/orbit.d
 ## The dashboard reads memory and proposals but never decides or expires them
 
 **Recorded:** 2026-11 · [ORB-23644]
-**Code anchors:** `crates/orbit-core/src/application/crew_memory/proposals.rs::crew_memory_proposal_board`, `crates/orbit-web/src/api/crew_memory.rs`
+**Code anchors:** `crates/orbit-core/src/app/crew_memory/proposal.rs::crew_memory_proposal_board`, `crates/orbit-web/src/api/crew_memory.rs`
 
 ### Context
 
