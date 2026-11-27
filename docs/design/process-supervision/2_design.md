@@ -220,7 +220,7 @@ Tests that call a supervisor directly are left out.
 | `crates/orbit-runtime/src/host/exec/command_exec.rs` (`orbit.command.exec`) | `run_bounded_capped_typed` | Deadline (clamped), prefix cap, spawn error kind; timed-out output discarded |
 | `orbit-core/src/application/gc/scratch.rs` (`lsof`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/task/final_recovery/verify.rs` (`git fetch`) | `run_bounded_capped` | Deadline, prefix cap |
-| `orbit-core/src/application/task/retained_candidate.rs` (`git status`) | `run_bounded_capped` | Deadline, prefix cap |
+| `orbit-core/src/application/task/retained_candidate.rs` (`git status`, `git rev-parse --verify HEAD`, retained patch `git diff HEAD`) | `run_bounded_capped` via `read_only_git` | Deadline (30 s), prefix cap: 256 KiB status, 256 B HEAD, 8 MiB patch; the retained-patch reads refuse a truncated status or patch |
 | `orbit-core/src/application/job/catalog/loading.rs` (`git check-ref-format`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-clock/src/manager.rs` (launchd/systemd) | `run_bounded_capped` | Deadline, prefix cap, timeout mapped to its own error |
 | `orbit-clock/src/inspect.rs` (version probe) | `run_bounded_capped` | Deadline, prefix cap |
