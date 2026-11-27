@@ -19,7 +19,7 @@ related_artifacts: [ORB-14448, ORB-14449, ORB-14451]
 
 ## 1. Boundary and dependency direction
 
-The live implementation has five layers.
+The live implementation has six layers.
 
 | Layer | Owns | Must not own |
 |---|---|---|
