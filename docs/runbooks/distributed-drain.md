@@ -1781,13 +1781,19 @@ one. From then on:
   then 60s apart, within the job's check-wait budget. This includes the
   required-check evidence read for a blocked pull request; recovery still
   requires fresh check evidence for the accepted head. A credential,
-  permission or rate-limit refusal is not retried. A landing job that still
-  fails, for that or any other reason, records its attempt `stopped` with
-  the error, so the dashboard and `orbit.drain.claims` show the stop instead
-  of an attempt left `dispatched` behind a finished job. A failure after the
-  merge request was sent is never resent: the attempt keeps its unresolved
-  merge intent, and the next attempt (**Retry landing**) reconciles that
-  intent against the pull request before anything else.
+  permission or rate-limit refusal is not retried. For pull requests, a
+  landing job that still cannot observe the forge records its attempt `stopped`
+  with typed `waiting_gate: forge_observation_unavailable` evidence and holds
+  the run (`delivery_forge_observation_unavailable`) with the candidate in
+  review instead of failing; the owner waiting-gate sweep re-observes the
+  forge and opens the next attempt automatically within its retry budget (or
+  an operator can use **Retry landing** / `orbit task retry-handoff`). Other
+  failures record the attempt `stopped` with the error, so the dashboard and
+  `orbit.drain.claims` show the stop instead of an attempt left `dispatched`
+  behind a finished job. A failure after the merge request was sent is never
+  resent: the attempt keeps its unresolved merge intent, and the next attempt
+  (**Retry landing**) reconciles that intent against the pull request before
+  anything else.
 - A section-gap draft (its live body is the body a recorded section gap
   created it with, or, for a PR published before that record existed,
   carries Orbit's missing-required-section note) returns for the same automatic repair described below. The

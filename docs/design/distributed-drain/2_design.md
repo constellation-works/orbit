@@ -1200,7 +1200,11 @@ resumes through the owner clock sweep after a fresh observation confirms the gat
 subject to fresh candidate and authority checks. The sweep allows at most three automatic retries
 (landing attempts 2–4) with minimum 60/120/240-second backoffs; explicit retries count toward that
 ceiling. Other stops and stops after the automatic retry budget is exhausted use the operator's
-**Retry landing** or `orbit task retry-handoff` procedure. An operator-revoked refusal requires a
+**Retry landing** or `orbit task retry-handoff` procedure. Pre-write transient forge-observation
+failures that exhaust all three landing passes on a pull request likewise record a resumable
+`delivery_forge_observation_unavailable` hold with the `forge_observation_unavailable` waiting gate,
+so the owner sweep re-observes the forge and opens the next attempt automatically once it answers.
+An operator-revoked refusal requires a
 recorded revoked authority.
 When no failed-job log can be read, including a collector timeout, landing retries the read
 after 5, 10 and 20 seconds within its original deadline. Exhaustion records a resumable

@@ -36,8 +36,9 @@ fn a_timed_out_job_log_is_read_again_and_classified() {
 
 #[test]
 fn exhausted_transient_required_check_reads_hold_for_forge_recovery() {
-    // [ORB-29163] Every transport pass loses the required-checks read
-    // before any external write: the run holds instead of failing.
+    // [ORB-29163] [ORB-29422] Every transport pass loses the required-checks
+    // read before any external write: the run holds with a typed waiting gate
+    // instead of failing or directing operators to `orbit job resume`.
     let (_sandbox, forge, head, _) = forge_fixture(false, false);
     forge.job(&head, passed(1, 11));
     forge.with_state(|s| s.required_check_transients = 100);
@@ -51,15 +52,17 @@ fn exhausted_transient_required_check_reads_hold_for_forge_recovery() {
                 ..
             }
         ),
-        "the held run remains resumable: {error}"
+        "the held run records ForgeObservationUnavailable: {error}"
     );
     assert!(
         error.to_string().contains("after 3 tries")
             && error
                 .to_string()
                 .contains("no merge or other external write was sent")
-            && error.to_string().contains("the candidate stays in review"),
-        "the hold names its exhaustion and its clean stop: {error}"
+            && error.to_string().contains("the candidate stays in review")
+            && !error.to_string().contains("orbit job resume")
+            && !error.to_string().contains("resuming the held run"),
+        "the hold names its exhaustion and clean stop without job resume guidance: {error}"
     );
     assert_eq!(
         waits,
@@ -90,11 +93,39 @@ fn exhausted_transient_required_check_reads_hold_for_forge_recovery() {
         refusal
             .reason
             .value
-            .contains("the candidate stays in review"),
-        "the stored refusal keeps the hold disposition"
+            .contains("the candidate stays in review")
+            && refusal.reason.value.contains("waiting-gate")
+            && refusal.reason.value.contains("orbit task retry-handoff")
+            && !refusal.reason.value.contains("orbit job resume")
+            && !refusal.reason.value.contains("resuming the held run"),
+        "the stored refusal keeps the hold disposition and waiting-gate guidance: {}",
+        refusal.reason.value
     );
-    // The forge recovers: the next attempt re-reads the checks and lands.
+    let gate = refusal
+        .waiting_gate
+        .expect("the owner sweep needs a typed waiting gate");
+    assert_eq!(gate, LandingWaitGate::ForgeObservationUnavailable);
+    assert!(
+        !orbit_engine::landing_wait_gate_cleared(&forge, &forge.context, gate).unwrap(),
+        "still-failing required-checks observation keeps the gate closed"
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "waiting-gate probe must not mutate the forge before recovery",
+    );
+    // The forge recovers: the waiting gate clears without mutating the forge,
+    // and the next attempt re-reads the checks and lands.
     forge.with_state(|s| s.required_check_transients = 0);
+    assert!(
+        orbit_engine::landing_wait_gate_cleared(&forge, &forge.context, gate).unwrap(),
+        "a recovered forge clears the waiting gate cleanly"
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "waiting-gate probe must not mutate the forge after recovery",
+    );
     let (resumed, resume_waits) = counted_land(&forge, json!({"max_wait_seconds": 300}));
     assert_landed(resumed, "a readable forge lets the resumed landing merge");
     assert!(resume_waits.is_empty());

@@ -208,12 +208,14 @@ fn settle_failure<H: ReviewGate + ?Sized>(
     if pass.intent_open.get() {
         return error;
     }
-    // [ORB-29163] A transport failure before any external write is
+    // [ORB-29163] [ORB-29422] A transport failure before any external write is
     // inconclusive evidence, not a verdict on the candidate: the forge never
-    // answered, so hold the run instead of failing it. Resuming the held run
-    // reads the forge again. A write (or an open intent above) keeps the
-    // existing failure and intent-reconciliation behavior, as does every
-    // non-transient error.
+    // answered, so hold the run instead of failing it. For pull requests,
+    // `hold_pr` records `LandingWaitGate::ForgeObservationUnavailable` so the
+    // owner waiting-gate sweep re-observes the forge and opens the next attempt
+    // automatically within its retry budget (or an operator retries the handoff).
+    // A write (or an open intent above) keeps the existing failure and
+    // intent-reconciliation behavior, as does every non-transient error.
     if !pass.wrote.get() && transport_failure(&error) {
         let tries = if passes > 1 {
             format!(" after {passes} tries")
@@ -222,16 +224,28 @@ fn settle_failure<H: ReviewGate + ?Sized>(
         };
         let detail = error.to_string();
         let detail = detail.strip_prefix("handoff_land: ").unwrap_or(&detail);
-        let target = match &pass.candidate.delivery {
-            HandoffDelivery::PullRequest { number } => format!("pull request #{number}"),
-            HandoffDelivery::LocalCandidate => "the local candidate".to_string(),
-            HandoffDelivery::NoDiff { .. } => "the no-diff candidate".to_string(),
-            HandoffDelivery::AlreadyLanded { .. } => "the already-landed candidate".to_string(),
+        let (target, recovery) = match &pass.candidate.delivery {
+            HandoffDelivery::PullRequest { number } => (
+                format!("pull request #{number}"),
+                "the owner waiting-gate sweep will re-observe the forge and retry the handoff \
+                 once it recovers, or you can use Retry landing or `orbit task retry-handoff`",
+            ),
+            HandoffDelivery::LocalCandidate => (
+                "the local candidate".to_string(),
+                "retry the handoff with Retry landing or `orbit task retry-handoff`",
+            ),
+            HandoffDelivery::NoDiff { .. } => (
+                "the no-diff candidate".to_string(),
+                "retry the handoff with Retry landing or `orbit task retry-handoff`",
+            ),
+            HandoffDelivery::AlreadyLanded { .. } => (
+                "the already-landed candidate".to_string(),
+                "retry the handoff with Retry landing or `orbit task retry-handoff`",
+            ),
         };
         let reason = format!(
             "{target} could not be observed{tries}: {detail}; no merge or other external write \
-             was sent, so the candidate stays in review and resuming the held run reads the \
-             forge again"
+             was sent, so the candidate stays in review; {recovery}"
         );
         let observation = json!({
             "transport_retry_exhausted": true,
