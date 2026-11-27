@@ -401,6 +401,7 @@ impl<'a> App for WorkspaceApp<'a> {
                 return Operation::command("migrate", "")
                     .without_recorded_subcommand()
                     .target(Some("workspace"), None)
+                    .audit_role("admin")
                     .without_command_row();
             }
         };

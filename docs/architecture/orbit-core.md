@@ -83,7 +83,7 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 - `application`: Directional domain operations exposed on `OrbitRuntime` over one workspace and host; imports `runtime` and lower workspace crates (never `adapter`, `bootstrap`, or `composition`).
 - `bootstrap`: Workspace initialization, managed asset seeding, and forward-only startup migrations; imports `application`, `runtime`, and lower workspace crates (never `composition`).
 - `composition`: Composition root joining resolved configuration, bootstrap, `RuntimeKernel`, and adapters; imports `application`, `bootstrap`, `runtime`, and lower workspace crates.
-- `metrics`: Crate-private (`pub(crate)`) reliability and run metrics computed from persisted job-run data; external callers import from `app::run` ([ORB-28962]), and [ORB-28963] moves its internals into `app::run`; imports `application`, `runtime`, `orbit-common`, `orbit-runtime`, `orbit-store`, and `orbit-types`.
+- `metrics`: Source directory `metrics/` for the crate-private Rust module `metric` (declared with `#[path = "metrics/mod.rs"]`); `metric` contains reliability and run metrics computed from persisted job-run data and imports `application`, `runtime`, `orbit-common`, `orbit-runtime`, `orbit-store`, and `orbit-types`. External callers import from `app::run` ([ORB-28962]), and [ORB-28963] moves `metric`'s internals into `app::run`.
 - `runtime`: Re-export of `orbit-runtime` and the public `OrbitRuntime` wrapper over `RuntimeKernel`; imports lower workspace crates only (never `application`, `adapter`, `bootstrap`, or `composition`).
 
 ## Application module destinations
@@ -140,7 +140,7 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 
 New apps with no `application/` entry: `friction` (built, `app/friction/`), `host` (built, `app/host/`), `update` (built, `app/update/`), `remote_command` (built, `app/remote_command/`, moved out of `app::run` in ORB-28971; [design §3](../design/architecture-restructure/2_design.md#the-remote-command-gets-its-own-app)), and `lease` (built, `app/lease/`, moved out of `app::run` in ORB-28986; [design §3](../design/architecture-restructure/2_design.md#leases-get-their-own-app-and-lock-contention-goes-to-the-task-app)). They have no row, since there is no entry.
 
-A module beside `application/`: `metrics` dissolves into `app::run` (order 2) in two steps, ORB-28962 (built: surface exports on `app::run`, `GET /api/metrics/knowledge` run command, and crate-private `metric` module over `metrics/`) then ORB-28963 (moves the internals into `app::run`) ([design §3](../design/architecture-restructure/2_design.md#metrics-dissolves-into-the-run-app)). It has no row, since it is not an `application/` entry.
+The source directory `metrics/`, beside `application/`, dissolves into `app::run` (order 2) in two steps. ORB-28962 (built) added surface exports on `app::run`, the `GET /api/metrics/knowledge` run command, and the crate-private Rust module `metric` over `metrics/`; ORB-28963 moves the internals into `app::run` ([design §3](../design/architecture-restructure/2_design.md#metrics-dissolves-into-the-run-app)). It has no row, since it is not an `application/` entry.
 
 ### Decided by callers
 
@@ -162,7 +162,7 @@ Callers were checked at base `2f18287`, by module path and by inherent-method na
   - `workflow.rs` → `app::run`: the ship and auto workflow and drain-window rules; `job` is the only app user, and `distributed` and `workspace_auto` are units above `run` that reach it downward.
 - Kept as units though no app imports them directly: `pull_drain`, `workspace_auto`, `sweep_filing`, `backlog_forecast` and `landing`. Their callers are units, the engine action dispatch, the runtime or the dashboard. `workspace_auto` stays above `admission` and `pull_drain`, which it calls.
 - Kept as an app: `crew_memory`. Its engine adapter and `experiment` callers are internal, but its run-bound crew memory tools are a user-facing surface.
-- `metrics` → `app::run`, checked at `84f63223cd`: the only production caller of its reliability reads is `app::run::Command::fleet_reliability`; `orbit-web` names it in four files, one of which calls `aggregate`; its `cost` is an alias for the runtime's module.
+- `metrics/` (source directory for `crate::metric`) → `app::run`, checked at `84f63223cd`: the only production caller of its reliability reads is `app::run::Command::fleet_reliability`; `orbit-web` names it in four files, one of which calls `aggregate`; its `cost` is an alias for the runtime's module.
 - CLI-only command placements decided by callers:
   - `orbit log` (`orbit log tail`) → `app::audit`: reads the host's unified JSONL log feed beside the audit log, opens a runtime, and routes through `app::audit::exec` with its `log`/`tail` invocation row.
   - `orbit clock` (and its `orbit sweep` alias) → `app::routine`: calls `app::routine` for clock status/enable/pause/cadence/repair and `orbit_cmd::registry_routines` for sweep ticks; all subcommands run with `RuntimeNeed::Forbidden` and resolve explicit `--root`/`ORBIT_ROOT` overrides through `orbit-cmd`.
