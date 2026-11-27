@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use clap::Args;
-use orbit_cmd::hosts::{self, HostList};
+use orbit_core::app::host::{Command, HostList};
 
-use super::support::{UNKNOWN, marked_name, reachability, to_json, workspace_role};
+use super::support::{UNKNOWN, marked_name, reachability, run, to_json, workspace_role};
 use crate::command::{CommandOut, Payload};
 use crate::output::common::table::{Column, Table};
 
@@ -15,11 +15,14 @@ pub struct HostListArgs {
 }
 
 pub(super) fn execute(args: HostListArgs, global_root: &Path) -> CommandOut {
-    list_payload(hosts::list_hosts(global_root, !args.no_probe)?)
+    run(Command::List {
+        global_root: global_root.to_path_buf(),
+        probe: !args.no_probe,
+    })
 }
 
 /// A table of the hosts; `orbit host show` has each one's full detail.
-fn list_payload(list: HostList) -> CommandOut {
+pub(super) fn list_payload(list: HostList) -> CommandOut {
     let has_offline = list.hosts.iter().any(|host| host.offline.is_some());
     let mut columns = vec![
         Column::new("NAME"),

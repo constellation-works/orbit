@@ -9,10 +9,9 @@ use orbit_registry::hosts::{ResolvedHost, load_host_registry};
 use orbit_registry::workspace_registry::{
     find_workspace_by_id, load_registry_from_read_only, registry_path_for,
 };
-use orbit_types::workflow::JobRunState;
 use orbit_types::workspace::{Workspace, WorkspaceCheckoutRole, WorkspaceRegistry};
 
-use super::{HostDependents, PullDrainDependent, ReplicaDependent};
+use super::{HostDependents, PullDrains, ReplicaDependent};
 
 impl HostDependents {
     pub fn is_empty(&self) -> bool {
@@ -44,13 +43,14 @@ impl HostDependents {
 /// What on this machine routes to the host `selector` names: the dependents a
 /// `host_in_use` refusal lists. `None` for the local host.
 pub fn dependents_of(
+    pull_drains: &dyn PullDrains,
     global_root: &Path,
     selector: &str,
 ) -> Result<Option<HostDependents>, OrbitError> {
     let registry = load_host_registry(global_root)?;
     match registry.resolve(selector)? {
         ResolvedHost::Local(_) => Ok(None),
-        resolved => host_dependents(global_root, resolved.machine_id()).map(Some),
+        resolved => host_dependents(pull_drains, global_root, resolved.machine_id()).map(Some),
     }
 }
 
@@ -59,6 +59,7 @@ pub fn dependents_of(
 /// of the owner its selector names, so the checkouts are the complete set to
 /// inspect.
 pub(super) fn host_dependents(
+    pull_drains: &dyn PullDrains,
     global_root: &Path,
     machine_id: &str,
 ) -> Result<HostDependents, OrbitError> {
@@ -70,38 +71,9 @@ pub(super) fn host_dependents(
             workspace_name: workspace.name.clone(),
             repo_root: checkout.repo_root.clone(),
         });
-        let runtime = match crate::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout_read_only(
-            global_root,
-            workspace,
-            checkout,
-        ) {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                tracing::warn!(%error, workspace = %workspace.id, "cannot inspect pull drains");
-                continue;
-            }
-        };
-        for state in [JobRunState::Running, JobRunState::Pending] {
-            let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
-                job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
-                state: Some(state),
-                ..Default::default()
-            });
-            match runs {
-                Ok(runs) => {
-                    dependents
-                        .pull_drains
-                        .extend(runs.into_iter().map(|run| PullDrainDependent {
-                            workspace_id: workspace.id.clone(),
-                            run_id: run.run_id,
-                            state: run.state.to_string(),
-                        }))
-                }
-                Err(error) => {
-                    tracing::warn!(%error, workspace = %workspace.id, "cannot list pull drains");
-                }
-            }
-        }
+        dependents
+            .pull_drains
+            .extend(pull_drains.pull_drains(global_root, workspace, checkout));
     }
     Ok(dependents)
 }

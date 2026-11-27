@@ -1,17 +1,30 @@
 use std::fmt::Write as _;
 
-use orbit_cmd::hosts::{HostChange, HostRow, HostWorkspace};
 use orbit_core::OrbitError;
+use orbit_core::app::host::{self, Command, HostChange, HostRow, HostWorkspace, Outcome};
 use serde_json::Value;
 
+use super::list::list_payload;
+use super::show::show_payload;
 use crate::command::{CommandOut, Payload};
+
+pub(super) const UNKNOWN: &str = "unknown";
+
+/// Run one host command and render what it produced.
+pub(super) fn run(command: Command) -> CommandOut {
+    match host::run(orbit_cmd::hosts::ports(), command).map_err(OrbitError::from)? {
+        Outcome::Listed(list) => list_payload(list),
+        Outcome::Shown(detail) => show_payload(*detail),
+        Outcome::Changed(change) => change_payload(*change),
+    }
+}
 
 pub(super) fn to_json(value: &impl serde::Serialize) -> Result<Value, OrbitError> {
     serde_json::to_value(value)
         .map_err(|error| OrbitError::Execution(format!("serialize host report: {error}")))
 }
 
-pub(super) fn change_payload(change: HostChange) -> CommandOut {
+fn change_payload(change: HostChange) -> CommandOut {
     let mut text = String::new();
     let entry = &change.entry;
     match change.action {
@@ -60,8 +73,6 @@ pub(super) fn change_payload(change: HostChange) -> CommandOut {
     }
     Ok(Payload::detail(to_json(&change)?, text).into())
 }
-
-pub(super) const UNKNOWN: &str = "unknown";
 
 /// The host name with its `local` and `SKEW` marks.
 pub(super) fn marked_name(host: &HostRow) -> String {

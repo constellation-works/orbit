@@ -9,7 +9,7 @@ use orbit_common::process::{CapturedOutput, run_bounded_capped};
 use orbit_common::{Env, OrbitError};
 
 /// The fix for a host without Node; Orbit never installs it.
-pub(crate) const NODE_FIX: &str = "Install Node.js 18 or newer (https://nodejs.org or the system \
+pub const NODE_FIX: &str = "Install Node.js 18 or newer (https://nodejs.org or the system \
      package manager) so `node` and `npm` are on PATH, then rerun `orbit config browser-kit install`. \
      Orbit does not install Node.";
 
@@ -25,7 +25,7 @@ pub(super) fn find_on_path(env: &Env, program: &str) -> Option<PathBuf> {
 }
 
 /// The first executable `program` in a colon-separated PATH value.
-pub(crate) fn find_in_path_value(program: &str, path: &str) -> Option<PathBuf> {
+pub fn find_in_path_value(program: &str, path: &str) -> Option<PathBuf> {
     path.split(':')
         .filter(|entry| !entry.is_empty())
         .map(|entry| Path::new(entry).join(program))

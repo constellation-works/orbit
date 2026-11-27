@@ -10,12 +10,12 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
-use orbit_common::{Env, OrbitError};
-use orbit_core::bootstrap::browser_kit::{
+use crate::bootstrap::browser_kit::{
     BROWSERS_PATH_ENV, ENV_SCRIPT_ENV, KitInspection, KitLayout, KitVerification, MODULE_ENV,
     PIXEL_HELPER_VERSION,
 };
+use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
+use orbit_common::{Env, OrbitError};
 use serde::Serialize;
 
 use orbit_common::env_vars::ORBIT_BROWSER_KIT_SCREENSHOT as SCREENSHOT_ENV;

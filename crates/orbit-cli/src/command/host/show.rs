@@ -1,17 +1,20 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use orbit_cmd::hosts::{self, HostDetail};
+use orbit_core::app::host::{Command, HostDetail};
 
-use super::support::{host_block, to_json};
+use super::support::{host_block, run, to_json};
 use super::target::HostShowArgs;
 use crate::command::{CommandOut, Payload};
 
 pub(super) fn execute(args: HostShowArgs, global_root: &Path) -> CommandOut {
-    show_payload(hosts::show_host(global_root, &args.host)?)
+    run(Command::Show {
+        global_root: global_root.to_path_buf(),
+        host: args.host,
+    })
 }
 
-fn show_payload(detail: HostDetail) -> CommandOut {
+pub(super) fn show_payload(detail: HostDetail) -> CommandOut {
     let mut text = host_block(&detail.host);
     if let Some(dependents) = &detail.dependents {
         let lines = dependents.describe();

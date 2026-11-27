@@ -1,6 +1,6 @@
 use clap::Args;
-use orbit_cmd::browser_kit;
 use orbit_common::Env;
+use orbit_core::app::host::browser_kit;
 use orbit_core::bootstrap::browser_kit::KitLayout;
 
 use super::support::{to_json, verify_text};

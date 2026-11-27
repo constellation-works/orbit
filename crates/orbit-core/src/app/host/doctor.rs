@@ -2,11 +2,11 @@
 
 use std::path::Path;
 
+use crate::app::doctor::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use orbit_common::HostRegistryCode;
-use orbit_core::app::doctor::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use orbit_registry::hosts::{HostEntry, load_host_registry};
 
-use super::{HostRow, in_parallel, remote_row, replica_owners};
+use super::{HostRow, Probe, in_parallel, replica_owners};
 
 const CHECK: &str = "hosts";
 
@@ -19,7 +19,7 @@ const CHECK: &str = "hosts";
 /// reachable host that reports no version or protocol fingerprint (an unknown
 /// is never a match, and fails like a difference on a host pulled from), a
 /// replica owner with no entry.
-pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
+pub fn doctor_hosts_row(probe: &dyn Probe, global_root: &Path) -> WorkspaceDoctorResult {
     let registry = match load_host_registry(global_root) {
         Ok(registry) => registry,
         Err(error) => {
@@ -62,7 +62,7 @@ pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
             ));
         }
     }
-    let rows = in_parallel(targets, |target| remote_row(target, &local.id, true));
+    let rows = in_parallel(targets, |target| probe.remote_row(target, &local.id, true));
     for (target, host) in targets.iter().zip(&rows) {
         if let Some(mark) = &host.offline {
             let name = &target.name;
@@ -186,9 +186,9 @@ fn row(
 ) -> WorkspaceDoctorResult {
     WorkspaceDoctorResult {
         check_name: CHECK.to_string(),
-        duration_ms: 0,
         status,
         message,
         remediation: remediation.map(ToOwned::to_owned),
+        duration_ms: 0,
     }
 }
