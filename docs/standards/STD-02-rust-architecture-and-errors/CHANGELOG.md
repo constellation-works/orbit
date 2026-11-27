@@ -2,6 +2,7 @@
 
 Version history of [STD-02](STD-02.md). Adopting repos pin the `version:` in its frontmatter as `STD-02@<version>`; a version changes only when a rule is added, removed or changed in meaning.
 
+- **Editorial (2026-11-27, version unchanged):** existing lines in `why.md` and `CHANGELOG.md` that quoted a person's chat words now record them as facts (the role or owner, the date, the decision), with the raw words kept in the scribe entries and tasks (scribe standard-29).
 - **11** (2026-11-26): R6: the kit ban's "no exemption" covers shipped code; a test target may carry a reasoned expectation (ORB-28599).
   - R15: the stream names are banned in `clippy.toml`, not by a grep guard; an exception is a reasoned `#[expect]` (ORB-28599).
   - R19: the tests of a module's `mod.rs` are named for the module; `tests/mod.rs` is wiring only (ORB-28599).

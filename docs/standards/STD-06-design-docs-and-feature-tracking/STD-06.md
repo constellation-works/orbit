@@ -3,9 +3,9 @@ id: STD-06-design-docs-and-feature-tracking
 title: Design docs and feature tracking — one folder per feature, a delivery stage separate from doc approval, a generated feature board, admitted decisions, and tasks tagged with their feature
 summary: Normative rules for how a project keeps feature designs and knows where each feature stands — one docs/design/<feature>/ folder on a scope or full track, required frontmatter, a `stage` and `next` on the entry doc kept apart from the doc's approval `status`, a generated and CI-checked feature board, decision entries admitted only when they explain surprising code or govern future choices, and every implementation task tagged with its feature slug so live progress is read from the tracker; follow it in any project with design docs.
 tags: [standard, docs, design, tracking, agents]
-version: 2
+version: 3
 created_date: 2026-10-25
-updated_date: 2026-11-25
+updated_date: 2026-11-27
 last_validated: 2026-10-25
 related: [STD-04-testing-and-verification]
 ---
@@ -69,6 +69,7 @@ This standard is a directory. This file holds the binding text: the rules, where
 
   Either way it MUST name a real alternative and carry at least one `Cost:` line. Other choices go in design prose.
 - **R11.** A decision entry is addressed by its unique `##` title. Supersession MUST be a `**Superseded by:**` title link, and the superseded entry stays in place.
+- **R15.** A design doc tracked in a public repository MUST NOT quote a person's chat words. Record an approval as a fact (the role or owner, the date, the decision) and keep the words in the private record (the scribe entry or the task). Naming a role rather than a person SHOULD be preferred outside the `owner` field §R4 requires. This rule binds new and changed text and does not require a scrub of existing docs.
 
 ### Tasks and progress
 
@@ -81,7 +82,7 @@ This standard is a directory. This file holds the binding text: the rules, where
 
 ## Applies to
 
-- `universal`: R1 to R14. Any project that keeps design docs, of any size or language, and any author or operator, human or agent.
+- `universal`: R1 to R15. Any project that keeps design docs, of any size or language, and any author or operator, human or agent.
 - R12 and R13 bind on whoever files and promotes tasks: in constellation repos that is the orchestrator or operator, not the implementing worker.
 
 ## Deviations
