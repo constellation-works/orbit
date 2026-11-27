@@ -315,10 +315,19 @@ open, the dock already shows the task.
 In windows 1315px wide or narrower the dock is its own route instead of a
 side panel, so the shortcut does nothing there.
 
-The navigation rail has its own toggle button, which collapses it to a
-narrow strip. The rail has no shortcut, and this browser remembers its state
-separately from the dock. On phones the rail is a top strip instead, so
-collapsing does not apply there.
+The navigation rail changes with the window width:
+
+- At 1316px and wider, it starts as a 200px labelled rail. Its toggle switches
+  to a 56px icon rail.
+- From 761px to 1315px, it starts as a 56px icon rail, with the host and
+  workspace pickers in the header. The toggle temporarily opens a labelled
+  rail over the content; that choice is not saved.
+- At 760px and narrower, the rail and its toggle are hidden. A bottom
+  navigation bar replaces them, with a **More** button for the remaining
+  sections.
+
+The wide rail choice is saved per browser, separately from the dock, and
+restored when you return to a wide window. The rail has no keyboard shortcut.
 
 ### Edit task metadata
 
