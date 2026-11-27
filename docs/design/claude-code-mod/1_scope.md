@@ -192,14 +192,19 @@ existing link alone, so a link the model wrote from `url` is kept as written.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `machine.web.public_url` | unset | The address this machine's operator opens the dashboard at: a Tailscale Serve name, or `http://localhost:7878` for a local server or an `orbit web connect` tunnel. `http` or `https` only. Global. |
+| `machine.web.public_url` | unset | The address this machine's operator opens the dashboard at: a Tailscale Serve name, or `http://localhost:<port>` for a local server or an `orbit web connect` tunnel, where `<port>` is the port that server or tunnel listens on. `http` or `https` only. Global. |
 
 One fact, two readers:
 
 - **Results** carry `url` only when the producing machine has the key set. An unset key
   adds nothing, since `localhost` would be wrong on the machine that reads the result.
 - **The mod** reads the key at `session.start` on the machine it runs on. Unset, it uses
-  `http://localhost:7878`, which is right wherever a local server or a tunnel listens.
+  `http://localhost:7878`, the conventional port, without checking which port answers. That
+  is right only when the dashboard listens on 7878. A local `orbit web serve --port <N>`, or
+  an `orbit web connect --port <N>` tunnel on another port, can leave the link pointing at
+  nothing or at another local listener, so set the key to the origin the dashboard actually
+  answers on. Without `--port`, `orbit web connect` picks an ephemeral port instead of 7878
+  when 7878 is busy, so the default can be wrong even when nobody chose another port.
 
 The plugin has no setting of its own.
 
