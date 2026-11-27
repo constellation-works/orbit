@@ -6,6 +6,7 @@ use orbit_common::security::redaction::redact_all;
 use orbit_common::{OrbitError, ProviderReadThrottle};
 use orbit_exec::{ExecRequest, NoSandbox, run_process};
 use serde_json::{Value, json};
+
 /// One job whose own log may stand in for an empty run-scoped read.
 struct FallbackJob {
     id: u64,
@@ -38,6 +39,22 @@ enum JobLogFailure {
     Admission(OrbitError),
     /// The read ran, or its metadata check did, and failed.
     Read(OrbitError),
+}
+
+/// Why the fallback found no job to read, already rendered, and the provider
+/// throttle behind it when one answered.
+struct FallbackGap {
+    reason: String,
+    throttle: Option<Box<ProviderReadThrottle>>,
+}
+
+impl From<String> for FallbackGap {
+    fn from(reason: String) -> Self {
+        Self {
+            reason,
+            throttle: None,
+        }
+    }
 }
 
 /// One verified fallback job's whole log (`request` is its unguarded job-log
@@ -287,22 +304,6 @@ fn fallback_jobs(
         }));
     }
     Ok(jobs)
-}
-
-/// Why the fallback found no job to read, already rendered, and the provider
-/// throttle behind it when one answered.
-struct FallbackGap {
-    reason: String,
-    throttle: Option<Box<ProviderReadThrottle>>,
-}
-
-impl From<String> for FallbackGap {
-    fn from(reason: String) -> Self {
-        Self {
-            reason,
-            throttle: None,
-        }
-    }
 }
 
 /// Read one job array out of a projected run view, keeping only jobs this

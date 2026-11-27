@@ -8,6 +8,13 @@ use orbit_policy::PolicyEngine;
 use super::fs_audit::FsAuditLogger;
 use super::host::{OrbitToolHost, ReservationOwnerContext};
 
+/// Longest timeout, in minutes, one `proc.spawn` call may use inside an
+/// activity: long enough for a cold workspace build and test gate, still
+/// bounded below a typical activity.
+///
+/// The former `execution.proc_spawn_max_timeout_minutes` default, fixed when the key was removed [ORB-22808].
+pub const PROC_SPAWN_MAX_TIMEOUT_MINUTES: u64 = 45;
+
 /// The managed activity a tool call serves, attested by the host that
 /// dispatched it.
 ///
@@ -69,13 +76,6 @@ pub struct WitnessedProgramGrant {
     /// the host could not verify the grant for this call.
     pub programs: Result<std::collections::BTreeMap<String, PathBuf>, String>,
 }
-
-/// Longest timeout, in minutes, one `proc.spawn` call may use inside an
-/// activity: long enough for a cold workspace build and test gate, still
-/// bounded below a typical activity.
-///
-/// The former `execution.proc_spawn_max_timeout_minutes` default, fixed when the key was removed [ORB-22808].
-pub const PROC_SPAWN_MAX_TIMEOUT_MINUTES: u64 = 45;
 
 /// The wall-clock budget a managed activity grants `proc.spawn`.
 ///

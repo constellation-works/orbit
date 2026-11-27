@@ -72,26 +72,6 @@ pub(super) struct LineReceiver {
     budget: Arc<Budget>,
 }
 
-pub(super) fn line_queue() -> (LineSender, LineReceiver) {
-    bounded_line_queue(MAX_QUEUED_BYTES)
-}
-
-pub(super) fn bounded_line_queue(limit: usize) -> (LineSender, LineReceiver) {
-    let (lines_tx, lines_rx) = sync_channel(LINE_QUEUE);
-    let budget = Arc::new(Budget::default());
-    (
-        LineSender {
-            lines: lines_tx,
-            budget: Arc::clone(&budget),
-            limit,
-        },
-        LineReceiver {
-            lines: lines_rx,
-            budget,
-        },
-    )
-}
-
 impl LineSender {
     /// Queue `line`, blocking while the queued bytes would exceed the budget.
     /// Fails once the consumer is gone.
@@ -128,4 +108,24 @@ impl Drop for LineReceiver {
     fn drop(&mut self) {
         self.budget.close();
     }
+}
+
+pub(super) fn line_queue() -> (LineSender, LineReceiver) {
+    bounded_line_queue(MAX_QUEUED_BYTES)
+}
+
+pub(super) fn bounded_line_queue(limit: usize) -> (LineSender, LineReceiver) {
+    let (lines_tx, lines_rx) = sync_channel(LINE_QUEUE);
+    let budget = Arc::new(Budget::default());
+    (
+        LineSender {
+            lines: lines_tx,
+            budget: Arc::clone(&budget),
+            limit,
+        },
+        LineReceiver {
+            lines: lines_rx,
+            budget,
+        },
+    )
 }

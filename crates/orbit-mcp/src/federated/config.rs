@@ -51,10 +51,6 @@ impl fmt::Display for MachineQualifiedSelector {
     }
 }
 
-fn unknown_selector(token: &str) -> OrbitError {
-    OrbitError::UnknownSelector(token.to_string())
-}
-
 /// How the mux reaches one destination.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DestinationTransport {
@@ -115,6 +111,10 @@ impl Destination {
             DestinationTransport::Local { .. } => None,
         }
     }
+}
+
+fn unknown_selector(token: &str) -> OrbitError {
+    OrbitError::UnknownSelector(token.to_string())
 }
 
 /// Load the registered SSH remotes from the operator's host file.

@@ -162,10 +162,6 @@ impl PluginSandboxProfile {
     }
 }
 
-fn negated(patterns: &[String]) -> impl Iterator<Item = String> + '_ {
-    patterns.iter().map(|pattern| format!("!{pattern}"))
-}
-
 impl Sandbox for PluginSandboxProfile {
     fn validate(&self, _req: &ExecRequest) -> Result<(), OrbitError> {
         Ok(())
@@ -233,6 +229,10 @@ impl Sandbox for PluginSandboxProfile {
         }
         spawn_confined(self, req, &inherited)
     }
+}
+
+fn negated(patterns: &[String]) -> impl Iterator<Item = String> + '_ {
+    patterns.iter().map(|pattern| format!("!{pattern}"))
 }
 
 /// Create an absent write root only when its normalized path is contained by

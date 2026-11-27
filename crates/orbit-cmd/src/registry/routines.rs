@@ -105,6 +105,25 @@ impl RoutineWorkspaceProvider for RegistryRoutineEnvironment {
     }
 }
 
+type CheckoutOpener = fn(
+    &Path,
+    &orbit_types::workspace::Workspace,
+    &orbit_types::workspace::WorkspaceCheckout,
+) -> Result<orbit_core::OrbitRuntime, OrbitError>;
+
+/// Change tokens over the shared audit database's routine rows, split by how
+/// a caller should react to them.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RoutineStoreFingerprint {
+    /// Routine fires, cursors, pauses and automation consumers: rare writes an
+    /// operator acts on, so a caller invalidates on them at once.
+    pub routines: String,
+    /// Job runs, the fire record of state-, delivery- and condition-triggered
+    /// routines. A live drain moves this with every run it starts or finishes,
+    /// so a caller may serve the previous status for its freshness bound.
+    pub job_runs: String,
+}
+
 /// Discover the checkouts this machine evaluates schedules for, optionally
 /// restricted to one registered workspace id: every active checkout with a
 /// `.orbit/` directory. Registration is the whole opt-in [ORB-12236]. A
@@ -120,12 +139,6 @@ pub(crate) fn discover_registered_workspaces(
 ) -> Result<DiscoveredWorkspaces, OrbitError> {
     discover_registered_workspaces_until(global_root, workspace_filter, None, false)
 }
-
-type CheckoutOpener = fn(
-    &Path,
-    &orbit_types::workspace::Workspace,
-    &orbit_types::workspace::WorkspaceCheckout,
-) -> Result<orbit_core::OrbitRuntime, OrbitError>;
 
 fn load_registry_and_opener(
     global_root: &Path,
@@ -308,19 +321,6 @@ pub fn routine_status_task_store_paths(global_root: &Path) -> [std::path::PathBu
         database.file_name().unwrap_or_default().to_string_lossy()
     ));
     [wal, database]
-}
-
-/// Change tokens over the shared audit database's routine rows, split by how
-/// a caller should react to them.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RoutineStoreFingerprint {
-    /// Routine fires, cursors, pauses and automation consumers: rare writes an
-    /// operator acts on, so a caller invalidates on them at once.
-    pub routines: String,
-    /// Job runs, the fire record of state-, delivery- and condition-triggered
-    /// routines. A live drain moves this with every run it starts or finishes,
-    /// so a caller may serve the previous status for its freshness bound.
-    pub job_runs: String,
 }
 
 /// Change tokens over the rows (routine fires, cursors and pauses, job runs and

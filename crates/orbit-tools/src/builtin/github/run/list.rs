@@ -17,6 +17,37 @@ const AMBIGUOUS_WORKFLOW_MARKER: &str = "could not resolve to a unique workflow"
 /// `gh run list` stderr when `--workflow` names no workflow.
 const UNKNOWN_WORKFLOW_MARKER: &str = "could not find any workflows named";
 
+super::super::gh_tool! {
+    pub struct GithubRunListTool;
+    name: "github.run.list";
+    description: "List recent GitHub Actions workflow runs with each run's reported head SHA. Filter by branch, workflow, status/conclusion, and event.";
+    parameters: [
+        super::super::tool_param("branch", "Restrict to runs for one branch", "string", false),
+        super::super::tool_param("workflow", "Restrict to one workflow file name (for example codeql.yml) or numeric workflow id; a job display name is not a workflow name and is not accepted", "string", false),
+        super::super::tool_param("status", "Restrict to one run status or conclusion (queued, in_progress, completed, failure, success, cancelled, timed_out, action_required)", "string", false),
+        super::super::tool_param("event", "Restrict to one triggering event (push, pull_request, schedule)", "string", false),
+        super::super::tool_param("limit", "Maximum runs to return (default 20, capped at 100)", "integer", false),
+        super::super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
+    ];
+    request: |ctx, input| {
+        build_exec_request(input).map(|request| super::super::in_tool_workspace(request, ctx))
+    }
+    response: |_ctx, input, result| {
+        if let Some(error) = workflow_resolution_error(input, result) {
+            return Err(error);
+        }
+        check_exec_result(result, "gh run list")?;
+
+        let runs = super::super::parse_gh_json(&result.stdout, "gh run list")?;
+        let runs: Vec<Value> = runs
+            .as_array()
+            .map(|entries| entries.iter().map(project_run).collect())
+            .unwrap_or_default();
+
+        Ok(json!({ "count": runs.len(), "runs": runs }))
+    }
+}
+
 /// The `workflow` input the caller asked `gh` to resolve, for error reporting.
 ///
 /// Trimmed. `build_exec_request` refuses non-string values before `gh` runs,
@@ -147,35 +178,4 @@ pub fn project_run(run: &Value) -> Value {
         "updated_at": run["updatedAt"],
         "url": run["url"],
     })
-}
-
-super::super::gh_tool! {
-    pub struct GithubRunListTool;
-    name: "github.run.list";
-    description: "List recent GitHub Actions workflow runs with each run's reported head SHA. Filter by branch, workflow, status/conclusion, and event.";
-    parameters: [
-        super::super::tool_param("branch", "Restrict to runs for one branch", "string", false),
-        super::super::tool_param("workflow", "Restrict to one workflow file name (for example codeql.yml) or numeric workflow id; a job display name is not a workflow name and is not accepted", "string", false),
-        super::super::tool_param("status", "Restrict to one run status or conclusion (queued, in_progress, completed, failure, success, cancelled, timed_out, action_required)", "string", false),
-        super::super::tool_param("event", "Restrict to one triggering event (push, pull_request, schedule)", "string", false),
-        super::super::tool_param("limit", "Maximum runs to return (default 20, capped at 100)", "integer", false),
-        super::super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
-    ];
-    request: |ctx, input| {
-        build_exec_request(input).map(|request| super::super::in_tool_workspace(request, ctx))
-    }
-    response: |_ctx, input, result| {
-        if let Some(error) = workflow_resolution_error(input, result) {
-            return Err(error);
-        }
-        check_exec_result(result, "gh run list")?;
-
-        let runs = super::super::parse_gh_json(&result.stdout, "gh run list")?;
-        let runs: Vec<Value> = runs
-            .as_array()
-            .map(|entries| entries.iter().map(project_run).collect())
-            .unwrap_or_default();
-
-        Ok(json!({ "count": runs.len(), "runs": runs }))
-    }
 }

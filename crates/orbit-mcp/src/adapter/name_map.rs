@@ -7,15 +7,6 @@ use rmcp::ErrorData as McpError;
 #[cfg(test)]
 use serde_json::json;
 
-/// Sanitize an Orbit tool name into the character set MCP clients accept.
-///
-/// Cursor enforces `[a-zA-Z0-9_]` and VS Code enforces `[a-z0-9_-]`. Replacing
-/// `.` with `_` keeps Orbit's existing names within the intersection of both
-/// rule sets without renaming any internal canonical identifier.
-pub(super) fn sanitize_tool_name(name: &str) -> String {
-    mcp_advertised_tool_name(name)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ToolNameCollision {
     pub(super) advertised_name: String,
@@ -46,6 +37,15 @@ impl fmt::Display for ToolNameCollision {
             self.canonical_names.join(", ")
         )
     }
+}
+
+/// Sanitize an Orbit tool name into the character set MCP clients accept.
+///
+/// Cursor enforces `[a-zA-Z0-9_]` and VS Code enforces `[a-z0-9_-]`. Replacing
+/// `.` with `_` keeps Orbit's existing names within the intersection of both
+/// rule sets without renaming any internal canonical identifier.
+pub(super) fn sanitize_tool_name(name: &str) -> String {
+    mcp_advertised_tool_name(name)
 }
 
 pub(super) fn build_name_map(

@@ -14,28 +14,6 @@ use serde_json::Value;
 pub(crate) const OWNER_MACHINE: &str = "hm_owner";
 pub(crate) const REPLICA_MACHINE: &str = "hm_replica";
 
-pub(crate) fn destination(ssh: &str, machine_id: &str) -> Destination {
-    Destination::ssh(ssh, machine_id)
-}
-
-pub(crate) fn workspace(id: &str, owner_machine_id: Option<&str>) -> Workspace {
-    let at = Utc
-        .with_ymd_and_hms(2026, 8, 23, 0, 0, 0)
-        .single()
-        .expect("fixture timestamp");
-    Workspace {
-        id: id.to_string(),
-        name: id.trim_start_matches("ws_").to_string(),
-        owner_machine_id: owner_machine_id.map(ToOwned::to_owned),
-        git_remote: None,
-        ship_mode: None,
-        base_branch: "main".to_string(),
-        status: WorkspaceStatus::Active,
-        created_at: at,
-        updated_at: at,
-    }
-}
-
 type RoutedCall = (String, String, Value);
 
 #[derive(Clone)]
@@ -223,6 +201,28 @@ impl RoutedSession for ScriptedRoute {
                     .to_string(),
             }),
         }
+    }
+}
+
+pub(crate) fn destination(ssh: &str, machine_id: &str) -> Destination {
+    Destination::ssh(ssh, machine_id)
+}
+
+pub(crate) fn workspace(id: &str, owner_machine_id: Option<&str>) -> Workspace {
+    let at = Utc
+        .with_ymd_and_hms(2026, 8, 23, 0, 0, 0)
+        .single()
+        .expect("fixture timestamp");
+    Workspace {
+        id: id.to_string(),
+        name: id.trim_start_matches("ws_").to_string(),
+        owner_machine_id: owner_machine_id.map(ToOwned::to_owned),
+        git_remote: None,
+        ship_mode: None,
+        base_branch: "main".to_string(),
+        status: WorkspaceStatus::Active,
+        created_at: at,
+        updated_at: at,
     }
 }
 

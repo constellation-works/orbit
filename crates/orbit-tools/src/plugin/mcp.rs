@@ -118,10 +118,10 @@ impl McpBackend {
         Self {
             spec,
             expected,
-            startups: Mutex::new(BTreeMap::new()),
             state: Mutex::new(McpState::Ready {
                 sessions: BTreeMap::new(),
             }),
+            startups: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -439,121 +439,6 @@ impl McpSessionHandle {
     }
 }
 
-/// The working directory the child is spawned in: the caller's workspace
-/// root when it has one, else its cwd.
-fn child_cwd(ctx: &ToolContext, tool_name: &str) -> Result<String, OrbitError> {
-    ctx.workspace_root
-        .as_ref()
-        .map(|path| path.to_string_lossy().into_owned())
-        .or_else(|| ctx.cwd.clone())
-        .ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "plugin tool '{tool_name}' requires ToolContext.cwd"
-            ))
-        })
-}
-
-/// The `tools/call` params one proxied call sends.
-///
-/// `_meta.orbit` is the `context` object an `exec` backend reads from its
-/// stdin envelope (`envelope.rs`), plus the tool name: one `mcp` child serves
-/// every tool of its plugin and every caller sharing its key, so
-/// `ORBIT_TOOL_NAME` is absent from its environment (§4.2) and
-/// `ORBIT_WORKSPACE_ROOT` names the workspace the session is bound to rather
-/// than this call's. The plugin's declared secrets ride here too, as
-/// `_meta.orbit.secrets`.
-pub(crate) fn tools_call_params(
-    spec: &PluginBackendSpec,
-    ctx: &ToolContext,
-    tool_name: &str,
-    verb: &str,
-    input: Value,
-    secrets: &CallSecrets,
-) -> Value {
-    json!({
-        "name": verb,
-        "arguments": input,
-        "_meta": { "orbit": call_context(spec, ctx, Some(tool_name), secrets) },
-    })
-}
-
-/// The first disagreement between the manifest and the server, naming the
-/// tool: a manifest tool the server lacks, a server tool the manifest never
-/// declared, or an input schema that differs.
-fn manifest_mismatch(expected: &[McpExpectedTool], advertised: &[Value]) -> Option<String> {
-    for tool in expected {
-        let Some(served) = advertised
-            .iter()
-            .find(|served| served["name"].as_str() == Some(tool.verb.as_str()))
-        else {
-            return Some(format!(
-                "the manifest declares tool '{}' but the server does not serve it",
-                tool.verb
-            ));
-        };
-        if let Some(schema) = &tool.input_schema
-            && served.get("inputSchema") != Some(schema)
-        {
-            return Some(format!(
-                "tool '{}' has a different input schema on the server than in the manifest",
-                tool.verb
-            ));
-        }
-    }
-    for served in advertised {
-        let name = served["name"].as_str().unwrap_or("<unnamed>");
-        if !expected.iter().any(|tool| tool.verb == name) {
-            return Some(format!(
-                "the server serves tool '{name}' which the manifest does not declare"
-            ));
-        }
-    }
-    None
-}
-
-/// Map a `tools/call` result onto the envelope's `output`: an `isError`
-/// result is the tool error, `structuredContent` is the output when present,
-/// otherwise the single text content parsed as JSON, or the raw text.
-pub(crate) fn tool_result(tool_name: &str, response: &Value) -> Result<Value, OrbitError> {
-    let result = &response["result"];
-    let structured = result
-        .get("structuredContent")
-        .filter(|value| !value.is_null());
-    let text = result["content"].as_array().and_then(|items| {
-        let texts: Vec<&str> = items
-            .iter()
-            .filter(|item| item["type"] == "text")
-            .filter_map(|item| item["text"].as_str())
-            .collect();
-        (texts.len() == 1).then(|| texts[0].to_string())
-    });
-    if result["isError"].as_bool().unwrap_or(false) {
-        let text_error = text
-            .as_deref()
-            .and_then(|text| serde_json::from_str::<Value>(text).ok());
-        if let Some(error) = structured
-            .or(text_error.as_ref())
-            .and_then(|value| plugin_error(tool_name, value))
-        {
-            return Err(error);
-        }
-        let message = structured
-            .and_then(|value| value["message"].as_str().map(ToOwned::to_owned))
-            .or(text)
-            .unwrap_or_else(|| "the server reported an error without a message".to_string());
-        return Err(OrbitError::Execution(format!(
-            "plugin tool '{tool_name}' failed: {message}"
-        )));
-    }
-    if let Some(structured) = structured {
-        return Ok(structured.clone());
-    }
-    Ok(match text {
-        Some(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
-        None => result["content"].clone(),
-    })
-}
-
 impl McpSession {
     fn start(mut child: OwnedChild) -> Result<Self, OrbitError> {
         let (Some(stdin), Some(stdout)) = (
@@ -786,6 +671,121 @@ impl McpSession {
             self.child.kill_and_reap();
         }
     }
+}
+
+/// The working directory the child is spawned in: the caller's workspace
+/// root when it has one, else its cwd.
+fn child_cwd(ctx: &ToolContext, tool_name: &str) -> Result<String, OrbitError> {
+    ctx.workspace_root
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned())
+        .or_else(|| ctx.cwd.clone())
+        .ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "plugin tool '{tool_name}' requires ToolContext.cwd"
+            ))
+        })
+}
+
+/// The `tools/call` params one proxied call sends.
+///
+/// `_meta.orbit` is the `context` object an `exec` backend reads from its
+/// stdin envelope (`envelope.rs`), plus the tool name: one `mcp` child serves
+/// every tool of its plugin and every caller sharing its key, so
+/// `ORBIT_TOOL_NAME` is absent from its environment (§4.2) and
+/// `ORBIT_WORKSPACE_ROOT` names the workspace the session is bound to rather
+/// than this call's. The plugin's declared secrets ride here too, as
+/// `_meta.orbit.secrets`.
+pub(crate) fn tools_call_params(
+    spec: &PluginBackendSpec,
+    ctx: &ToolContext,
+    tool_name: &str,
+    verb: &str,
+    input: Value,
+    secrets: &CallSecrets,
+) -> Value {
+    json!({
+        "name": verb,
+        "arguments": input,
+        "_meta": { "orbit": call_context(spec, ctx, Some(tool_name), secrets) },
+    })
+}
+
+/// The first disagreement between the manifest and the server, naming the
+/// tool: a manifest tool the server lacks, a server tool the manifest never
+/// declared, or an input schema that differs.
+fn manifest_mismatch(expected: &[McpExpectedTool], advertised: &[Value]) -> Option<String> {
+    for tool in expected {
+        let Some(served) = advertised
+            .iter()
+            .find(|served| served["name"].as_str() == Some(tool.verb.as_str()))
+        else {
+            return Some(format!(
+                "the manifest declares tool '{}' but the server does not serve it",
+                tool.verb
+            ));
+        };
+        if let Some(schema) = &tool.input_schema
+            && served.get("inputSchema") != Some(schema)
+        {
+            return Some(format!(
+                "tool '{}' has a different input schema on the server than in the manifest",
+                tool.verb
+            ));
+        }
+    }
+    for served in advertised {
+        let name = served["name"].as_str().unwrap_or("<unnamed>");
+        if !expected.iter().any(|tool| tool.verb == name) {
+            return Some(format!(
+                "the server serves tool '{name}' which the manifest does not declare"
+            ));
+        }
+    }
+    None
+}
+
+/// Map a `tools/call` result onto the envelope's `output`: an `isError`
+/// result is the tool error, `structuredContent` is the output when present,
+/// otherwise the single text content parsed as JSON, or the raw text.
+pub(crate) fn tool_result(tool_name: &str, response: &Value) -> Result<Value, OrbitError> {
+    let result = &response["result"];
+    let structured = result
+        .get("structuredContent")
+        .filter(|value| !value.is_null());
+    let text = result["content"].as_array().and_then(|items| {
+        let texts: Vec<&str> = items
+            .iter()
+            .filter(|item| item["type"] == "text")
+            .filter_map(|item| item["text"].as_str())
+            .collect();
+        (texts.len() == 1).then(|| texts[0].to_string())
+    });
+    if result["isError"].as_bool().unwrap_or(false) {
+        let text_error = text
+            .as_deref()
+            .and_then(|text| serde_json::from_str::<Value>(text).ok());
+        if let Some(error) = structured
+            .or(text_error.as_ref())
+            .and_then(|value| plugin_error(tool_name, value))
+        {
+            return Err(error);
+        }
+        let message = structured
+            .and_then(|value| value["message"].as_str().map(ToOwned::to_owned))
+            .or(text)
+            .unwrap_or_else(|| "the server reported an error without a message".to_string());
+        return Err(OrbitError::Execution(format!(
+            "plugin tool '{tool_name}' failed: {message}"
+        )));
+    }
+    if let Some(structured) = structured {
+        return Ok(structured.clone());
+    }
+    Ok(match text {
+        Some(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
+        None => result["content"].clone(),
+    })
 }
 
 fn lock_for_call<'a, T>(

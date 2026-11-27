@@ -23,72 +23,6 @@ pub const PLUGIN_ENVELOPE_SCHEMA_VERSION: u32 = 1;
 /// Maximum serialized JSON bytes retained from a backend's error detail.
 pub(crate) const MAX_PLUGIN_ERROR_DETAIL_BYTES: usize = 16 * 1024;
 
-/// What a backend is told about the call it is serving.
-///
-/// `exec` sends it as the envelope's `context` on stdin and `mcp` sends it as
-/// `params._meta.orbit` on `tools/call` (`mcp.rs`), which is why it is built
-/// here: one resolution, so the two dispatch surfaces cannot tell the same
-/// plugin two different things about the same workspace. `config` is the
-/// effective `[plugins.<ns>]` section the host validated against the plugin's
-/// schema — the backend's own view of its configuration, which until now it
-/// could only see through the manifest's `{{config.<key>}}` templates.
-///
-/// `task_id` and `job_run_id` name the managed activity the call serves. They
-/// come from [`ToolContext::activity_binding`], which only the dispatching
-/// host sets, so a backend can bind a write to the task that authorized it;
-/// they are `null` for an interactive call. Tool input never reaches them.
-///
-/// `tool_name` is `Some` only for `mcp`: the `exec` envelope already names the
-/// tool at its top level, while one `mcp` child serves every tool of its
-/// plugin and has no `ORBIT_TOOL_NAME` in its environment (§4.2).
-///
-/// `secrets` is what [`CallSecrets::resolve`] read for this call: present
-/// only when the plugin declares secrets, holding `{value, version}` for each
-/// declared one that is set. This request is the only place a value travels —
-/// never the child's environment or argv.
-pub(crate) fn call_context(
-    spec: &PluginBackendSpec,
-    ctx: &ToolContext,
-    tool_name: Option<&str>,
-    secrets: &CallSecrets,
-) -> Value {
-    let mut context = json!({
-        "workspace_root": ctx
-            .workspace_root
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned()),
-        "agent": ctx.agent_name,
-        "model": ctx.model_name,
-        "config": spec.config.as_value(),
-        "task_id": ctx
-            .activity_binding
-            .as_ref()
-            .and_then(|binding| binding.task_id.as_deref()),
-        "job_run_id": ctx
-            .activity_binding
-            .as_ref()
-            .map(|binding| binding.job_run_id.as_str()),
-    });
-    if let Some(fields) = context.as_object_mut() {
-        if let Some(tool_name) = tool_name {
-            fields.insert("tool".to_string(), Value::String(tool_name.to_string()));
-        }
-        if let Some(secrets) = secrets.delivered() {
-            let delivered = secrets
-                .iter()
-                .map(|(name, secret)| {
-                    (
-                        name.clone(),
-                        json!({ "value": secret.value, "version": secret.version }),
-                    )
-                })
-                .collect();
-            fields.insert("secrets".to_string(), Value::Object(delivered));
-        }
-    }
-    context
-}
-
 /// The declared secrets one call carries, read once for that call, plus the
 /// values its backend reported in `secret_updates`.
 ///
@@ -210,6 +144,126 @@ impl CallSecrets {
     }
 }
 
+/// Why the host refused one `secret_updates` entry. The diagnostic built
+/// from it names the secret and the cause, never a value.
+enum SecretUpdateRefusal {
+    Undeclared,
+    NotRotatable,
+    Malformed,
+    Stale,
+    Unsupported,
+    Failed(OrbitError),
+}
+
+impl SecretUpdateRefusal {
+    fn reason(&self) -> String {
+        match self {
+            Self::Undeclared => "the manifest does not declare it in spec.secrets".to_string(),
+            Self::NotRotatable => "the manifest does not declare it `rotatable`".to_string(),
+            Self::Malformed => "the entry is not `{\"value\": <string>, \"expected_version\": \
+                                <string or null>}`"
+                .to_string(),
+            Self::Stale => "its expected_version is not the stored version; another update or \
+                            `orbit plugin secret set` got there first. The next call carries \
+                            the stored value and version"
+                .to_string(),
+            Self::Unsupported => "this run does not store secret updates".to_string(),
+            Self::Failed(error) => format!("the store could not apply it: {error}"),
+        }
+    }
+}
+
+enum ExpectedSecretVersion<'a> {
+    MissingOrMalformed,
+    Unset,
+    Version(&'a str),
+}
+
+struct PluginSecretUpdateEntry<'a> {
+    value: Option<&'a str>,
+    expected_version: ExpectedSecretVersion<'a>,
+}
+
+impl<'a> PluginSecretUpdateEntry<'a> {
+    fn parse(entry: &'a Value) -> Self {
+        let expected_version = match entry.get("expected_version") {
+            Some(Value::String(version)) => ExpectedSecretVersion::Version(version),
+            Some(Value::Null) => ExpectedSecretVersion::Unset,
+            _ => ExpectedSecretVersion::MissingOrMalformed,
+        };
+        Self {
+            value: entry.get("value").and_then(Value::as_str),
+            expected_version,
+        }
+    }
+}
+
+/// What a backend is told about the call it is serving.
+///
+/// `exec` sends it as the envelope's `context` on stdin and `mcp` sends it as
+/// `params._meta.orbit` on `tools/call` (`mcp.rs`), which is why it is built
+/// here: one resolution, so the two dispatch surfaces cannot tell the same
+/// plugin two different things about the same workspace. `config` is the
+/// effective `[plugins.<ns>]` section the host validated against the plugin's
+/// schema — the backend's own view of its configuration, which until now it
+/// could only see through the manifest's `{{config.<key>}}` templates.
+///
+/// `task_id` and `job_run_id` name the managed activity the call serves. They
+/// come from [`ToolContext::activity_binding`], which only the dispatching
+/// host sets, so a backend can bind a write to the task that authorized it;
+/// they are `null` for an interactive call. Tool input never reaches them.
+///
+/// `tool_name` is `Some` only for `mcp`: the `exec` envelope already names the
+/// tool at its top level, while one `mcp` child serves every tool of its
+/// plugin and has no `ORBIT_TOOL_NAME` in its environment (§4.2).
+///
+/// `secrets` is what [`CallSecrets::resolve`] read for this call: present
+/// only when the plugin declares secrets, holding `{value, version}` for each
+/// declared one that is set. This request is the only place a value travels —
+/// never the child's environment or argv.
+pub(crate) fn call_context(
+    spec: &PluginBackendSpec,
+    ctx: &ToolContext,
+    tool_name: Option<&str>,
+    secrets: &CallSecrets,
+) -> Value {
+    let mut context = json!({
+        "workspace_root": ctx
+            .workspace_root
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        "agent": ctx.agent_name,
+        "model": ctx.model_name,
+        "config": spec.config.as_value(),
+        "task_id": ctx
+            .activity_binding
+            .as_ref()
+            .and_then(|binding| binding.task_id.as_deref()),
+        "job_run_id": ctx
+            .activity_binding
+            .as_ref()
+            .map(|binding| binding.job_run_id.as_str()),
+    });
+    if let Some(fields) = context.as_object_mut() {
+        if let Some(tool_name) = tool_name {
+            fields.insert("tool".to_string(), Value::String(tool_name.to_string()));
+        }
+        if let Some(secrets) = secrets.delivered() {
+            let delivered = secrets
+                .iter()
+                .map(|(name, secret)| {
+                    (
+                        name.clone(),
+                        json!({ "value": secret.value, "version": secret.version }),
+                    )
+                })
+                .collect();
+            fields.insert("secrets".to_string(), Value::Object(delivered));
+        }
+    }
+    context
+}
+
 /// Replace every occurrence of any pattern with one marker. Matches are found
 /// against the original text and merged first, so secrets that overlap one
 /// another are masked as one span rather than leaving a readable remainder.
@@ -305,60 +359,6 @@ pub fn take_delivered_plugin_secret_names() -> Vec<String> {
 /// the same way as [`take_delivered_plugin_secret_names`].
 pub fn take_plugin_secret_updates() -> BTreeMap<String, PluginSecretUpdateStatus> {
     SECRET_UPDATES.with(|cell| std::mem::take(&mut *cell.borrow_mut()))
-}
-
-/// Why the host refused one `secret_updates` entry. The diagnostic built
-/// from it names the secret and the cause, never a value.
-enum SecretUpdateRefusal {
-    Undeclared,
-    NotRotatable,
-    Malformed,
-    Stale,
-    Unsupported,
-    Failed(OrbitError),
-}
-
-impl SecretUpdateRefusal {
-    fn reason(&self) -> String {
-        match self {
-            Self::Undeclared => "the manifest does not declare it in spec.secrets".to_string(),
-            Self::NotRotatable => "the manifest does not declare it `rotatable`".to_string(),
-            Self::Malformed => "the entry is not `{\"value\": <string>, \"expected_version\": \
-                                <string or null>}`"
-                .to_string(),
-            Self::Stale => "its expected_version is not the stored version; another update or \
-                            `orbit plugin secret set` got there first. The next call carries \
-                            the stored value and version"
-                .to_string(),
-            Self::Unsupported => "this run does not store secret updates".to_string(),
-            Self::Failed(error) => format!("the store could not apply it: {error}"),
-        }
-    }
-}
-
-enum ExpectedSecretVersion<'a> {
-    MissingOrMalformed,
-    Unset,
-    Version(&'a str),
-}
-
-struct PluginSecretUpdateEntry<'a> {
-    value: Option<&'a str>,
-    expected_version: ExpectedSecretVersion<'a>,
-}
-
-impl<'a> PluginSecretUpdateEntry<'a> {
-    fn parse(entry: &'a Value) -> Self {
-        let expected_version = match entry.get("expected_version") {
-            Some(Value::String(version)) => ExpectedSecretVersion::Version(version),
-            Some(Value::Null) => ExpectedSecretVersion::Unset,
-            _ => ExpectedSecretVersion::MissingOrMalformed,
-        };
-        Self {
-            value: entry.get("value").and_then(Value::as_str),
-            expected_version,
-        }
-    }
 }
 
 /// Apply a backend's `secret_updates` (design §3, "Plugin secrets"): `exec`

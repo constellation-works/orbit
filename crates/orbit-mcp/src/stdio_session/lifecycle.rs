@@ -23,6 +23,26 @@ use super::{Resumed, StdioExit, input, tracking, writer};
 /// How often an idle session checks for a replacement or a pending switch.
 const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(2);
 
+/// The session state one image hands the next.
+#[derive(Serialize, Deserialize)]
+struct ResumeState {
+    /// The process that handed over. `exec` keeps the pid, so a child that
+    /// merely inherited the environment can never mistake itself for the
+    /// resumed server.
+    pid: u32,
+    /// The client's `initialize` params as sent, if it initialized.
+    initialize: Option<Value>,
+    /// Bytes of a partial line read before the handover, base64-encoded.
+    carryover: String,
+}
+
+/// What an idle session should do next.
+enum Lifecycle {
+    Continue,
+    Yield,
+    HandOver(PathBuf),
+}
+
 fn lifecycle_interval_from_env(value: Option<&str>, debug_build: bool) -> Duration {
     if debug_build
         && let Some(milliseconds) = value.and_then(|raw| raw.parse::<u64>().ok())
@@ -44,19 +64,6 @@ pub(crate) fn lifecycle_interval(env: &Env) -> Duration {
         None
     };
     lifecycle_interval_from_env(raw, cfg!(debug_assertions))
-}
-
-/// The session state one image hands the next.
-#[derive(Serialize, Deserialize)]
-struct ResumeState {
-    /// The process that handed over. `exec` keeps the pid, so a child that
-    /// merely inherited the environment can never mistake itself for the
-    /// resumed server.
-    pid: u32,
-    /// The client's `initialize` params as sent, if it initialized.
-    initialize: Option<Value>,
-    /// Bytes of a partial line read before the handover, base64-encoded.
-    carryover: String,
 }
 
 /// Read the handed-over session, when this image was exec'd to resume one.
@@ -85,13 +92,6 @@ pub(crate) fn resumed_session(env: &Env) -> Option<Resumed> {
         initialize,
         carryover,
     })
-}
-
-/// What an idle session should do next.
-enum Lifecycle {
-    Continue,
-    Yield,
-    HandOver(PathBuf),
 }
 
 fn lifecycle() -> Lifecycle {

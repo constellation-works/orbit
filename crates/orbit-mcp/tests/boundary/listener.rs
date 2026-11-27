@@ -14,6 +14,11 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
+/// Sessions one listener serves at once. Matches the listener's ceiling; the
+/// permit gate itself is not part of the public API, so release is observed
+/// by whether another client can start.
+const SESSION_CEILING: usize = 64;
+
 struct NoTools;
 
 /// Records whether a tool call was dispatched. The refusal test admits a uid
@@ -170,11 +175,6 @@ async fn initialized_sessions_remain_usable_after_the_initialization_budget() {
     client.cancel().await.expect("close session");
     accepting.abort();
 }
-
-/// Sessions one listener serves at once. Matches the listener's ceiling; the
-/// permit gate itself is not part of the public API, so release is observed
-/// by whether another client can start.
-const SESSION_CEILING: usize = 64;
 
 #[tokio::test]
 async fn non_loopback_addresses_are_refused_before_the_socket_opens() {

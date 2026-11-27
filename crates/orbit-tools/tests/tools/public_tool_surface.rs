@@ -10,6 +10,43 @@ use std::collections::BTreeSet;
 use orbit_tools::{ToolContext, ToolRegistry};
 use orbit_types::tool::tool_family;
 
+const RETIRED_AGENT_TOOL_NAMES: &[&str] = &[
+    "git.push",
+    "github.pr.comment",
+    "github.pr.comment.reply",
+    "github.pr.comments",
+    "github.pr.create",
+    "github.pr.merge",
+    "github.pr.review",
+    "github.pr.review.comment",
+    "github.pr.view",
+    "orbit.adr.add",
+    "orbit.adr.show",
+    "orbit.adr.list",
+    "orbit.adr.restore",
+    "orbit.adr.update",
+    "orbit.adr.supersede",
+    "orbit.state.get",
+    "orbit.state.set",
+];
+
+const INACTIVE_TOOL_NAMES: &[&str] = &[
+    // Candidate inspection stays on the CLI surface.
+    "orbit.auto_task.show",
+    "orbit.task.locks",
+    "orbit.task.locks.release",
+    "orbit.task.locks.reserve",
+    // ORB-10709: workspace claim, a coordination hold like the task locks.
+    "orbit.workspace.claim.acquire",
+    "orbit.workspace.claim.release",
+    "orbit.workspace.claim.show",
+    "orbit.friction.stats",
+    // Admin/destructive ops — CLI path retains them, agent MCP surface does
+    // not expose them.
+    "orbit.task.delete",
+    "orbit.task.lint",
+];
+
 #[test]
 fn registry_validated_task_tools_reject_unknown_and_mistyped_fields_at_dispatch() {
     let mut registry = ToolRegistry::new();
@@ -150,43 +187,6 @@ fn task_add_retired_fields_keep_their_replacement_hints_at_dispatch() {
     assert!(message.contains("unknown field 'titel'"), "{message}");
     assert!(message.contains("(did you mean 'title'?)"), "{message}");
 }
-
-const RETIRED_AGENT_TOOL_NAMES: &[&str] = &[
-    "git.push",
-    "github.pr.comment",
-    "github.pr.comment.reply",
-    "github.pr.comments",
-    "github.pr.create",
-    "github.pr.merge",
-    "github.pr.review",
-    "github.pr.review.comment",
-    "github.pr.view",
-    "orbit.adr.add",
-    "orbit.adr.show",
-    "orbit.adr.list",
-    "orbit.adr.restore",
-    "orbit.adr.update",
-    "orbit.adr.supersede",
-    "orbit.state.get",
-    "orbit.state.set",
-];
-
-const INACTIVE_TOOL_NAMES: &[&str] = &[
-    // Candidate inspection stays on the CLI surface.
-    "orbit.auto_task.show",
-    "orbit.task.locks",
-    "orbit.task.locks.release",
-    "orbit.task.locks.reserve",
-    // ORB-10709: workspace claim, a coordination hold like the task locks.
-    "orbit.workspace.claim.acquire",
-    "orbit.workspace.claim.release",
-    "orbit.workspace.claim.show",
-    "orbit.friction.stats",
-    // Admin/destructive ops — CLI path retains them, agent MCP surface does
-    // not expose them.
-    "orbit.task.delete",
-    "orbit.task.lint",
-];
 
 #[test]
 fn unused_tools_are_not_registered_in_public_surface() {

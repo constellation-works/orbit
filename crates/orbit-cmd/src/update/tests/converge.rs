@@ -12,6 +12,22 @@ use orbit_common::test_env::{wait_until, with_supervision_clock};
 
 use super::super::converge::{DEFAULT_PROBE_TIMEOUT, probe_version, require_admission_contract};
 
+struct DescendantGuard<'a>(&'a Path);
+
+impl Drop for DescendantGuard<'_> {
+    fn drop(&mut self) {
+        let pid = fs::read_to_string(self.0)
+            .ok()
+            .and_then(|pid| pid.trim().parse::<u32>().ok());
+        if let Some(pid) = pid
+            .filter(|pid| *pid > 1 && probe_process_liveness(*pid, None) == ProcessLiveness::Alive)
+        {
+            // SAFETY: only this disposable probe writes the helper PID.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
+
 #[test]
 fn probe_timeouts_tear_down_descendants_before_and_after_parent_exit() {
     for contract in [false, true] {
@@ -79,22 +95,6 @@ fn probe_timeouts_tear_down_descendants_before_and_after_parent_exit() {
             wait_until("the probe's descendant to stop", || {
                 probe_process_liveness(pid, None) == ProcessLiveness::Exited
             });
-        }
-    }
-}
-
-struct DescendantGuard<'a>(&'a Path);
-
-impl Drop for DescendantGuard<'_> {
-    fn drop(&mut self) {
-        let pid = fs::read_to_string(self.0)
-            .ok()
-            .and_then(|pid| pid.trim().parse::<u32>().ok());
-        if let Some(pid) = pid
-            .filter(|pid| *pid > 1 && probe_process_liveness(*pid, None) == ProcessLiveness::Alive)
-        {
-            // SAFETY: only this disposable probe writes the helper PID.
-            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
         }
     }
 }

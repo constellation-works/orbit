@@ -17,6 +17,56 @@ use super::name_map::sanitize_tool_name;
 /// rules live in the installed Orbit skill `references/task-fields-*.md` references.
 pub(crate) use orbit_common::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION;
 
+/// Canonical name of the authoritative server's workspace selector.
+pub(crate) const WORKSPACE_SELECTOR_PARAM: &str = "workspace";
+
+/// Property descriptions on these tools are hand-written concise contracts.
+const HAND_AUTHORED_PROPERTY_TOOLS: &[&str] = &[
+    "orbit.task.add",
+    "orbit.task.update",
+    "orbit.task.list",
+    "orbit.task.show",
+];
+const HAND_AUTHORED_PROPERTY_CAP: usize = 200;
+/// Other property descriptions stay short so `tools/list` cannot regrow.
+const ADVERTISED_PROPERTY_CAP: usize = 48;
+/// Tool descriptions that tests and the skill link require whole.
+const PRESERVED_TOOL_DESCRIPTIONS: &[&str] = &[
+    "orbit.task.add",
+    "orbit.task.update",
+    "orbit.task.list",
+    "orbit.task.show",
+];
+const ADVERTISED_TOOL_DESCRIPTION_CAP: usize = 80;
+
+/// Words a complete sentence or clause never ends with.
+const DANGLING_END_WORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "nor", "by", "with", "without", "within", "for", "to",
+    "of", "in", "on", "at", "from", "as", "per", "via", "over", "under", "into", "onto", "between",
+    "through", "during", "before", "after", "about", "against", "whose", "which", "that", "this",
+    "is", "are", "was", "were", "be", "been", "has", "have", "had", "e.g", "i.e",
+];
+
+/// Whether the session being served already carries a workspace selector.
+///
+/// The two states are advertised differently because they place different
+/// obligations on the caller: a bound session may omit the selector, an
+/// unbound one is refused without it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum WorkspaceBinding {
+    Bound,
+    Unbound,
+}
+
+/// How this session advertises the workspace selector on workspace-scoped tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum SelectorAdvertisement {
+    /// v1 local/remote MCP: registered name, `ws_*`, or absolute path.
+    Authoritative(WorkspaceBinding),
+    /// Federated mux: copy `selector` from federated `orbit.workspace.list`.
+    Federated,
+}
+
 pub(super) fn schema_to_tool(
     schema: ToolSchema,
     input_schema: JsonObject,
@@ -41,28 +91,6 @@ fn tool_annotations(annotations: McpToolAnnotations) -> ToolAnnotations {
     hints
 }
 
-/// Canonical name of the authoritative server's workspace selector.
-pub(crate) const WORKSPACE_SELECTOR_PARAM: &str = "workspace";
-
-/// Property descriptions on these tools are hand-written concise contracts.
-const HAND_AUTHORED_PROPERTY_TOOLS: &[&str] = &[
-    "orbit.task.add",
-    "orbit.task.update",
-    "orbit.task.list",
-    "orbit.task.show",
-];
-const HAND_AUTHORED_PROPERTY_CAP: usize = 200;
-/// Other property descriptions stay short so `tools/list` cannot regrow.
-const ADVERTISED_PROPERTY_CAP: usize = 48;
-/// Tool descriptions that tests and the skill link require whole.
-const PRESERVED_TOOL_DESCRIPTIONS: &[&str] = &[
-    "orbit.task.add",
-    "orbit.task.update",
-    "orbit.task.list",
-    "orbit.task.show",
-];
-const ADVERTISED_TOOL_DESCRIPTION_CAP: usize = 80;
-
 /// A tool's own declared input schema, as advertised before the host adds its
 /// selector: every keyword verbatim except the root `type`, which is always
 /// `"object"` — MCP's `inputSchema` must describe an object and `tools/call`
@@ -71,26 +99,6 @@ pub(super) fn declared_input_schema(declared: &JsonObject) -> JsonObject {
     let mut schema = declared.clone();
     schema.insert("type".to_string(), json!("object"));
     schema
-}
-
-/// Whether the session being served already carries a workspace selector.
-///
-/// The two states are advertised differently because they place different
-/// obligations on the caller: a bound session may omit the selector, an
-/// unbound one is refused without it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum WorkspaceBinding {
-    Bound,
-    Unbound,
-}
-
-/// How this session advertises the workspace selector on workspace-scoped tools.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum SelectorAdvertisement {
-    /// v1 local/remote MCP: registered name, `ws_*`, or absolute path.
-    Authoritative(WorkspaceBinding),
-    /// Federated mux: copy `selector` from federated `orbit.workspace.list`.
-    Federated,
 }
 
 /// Advertise the workspace selector on every workspace-scoped tool.
@@ -429,14 +437,6 @@ fn split_sentences(text: &str) -> Vec<String> {
     }
     sentences
 }
-
-/// Words a complete sentence or clause never ends with.
-const DANGLING_END_WORDS: &[&str] = &[
-    "a", "an", "the", "and", "or", "but", "nor", "by", "with", "without", "within", "for", "to",
-    "of", "in", "on", "at", "from", "as", "per", "via", "over", "under", "into", "onto", "between",
-    "through", "during", "before", "after", "about", "against", "whose", "which", "that", "this",
-    "is", "are", "was", "were", "be", "been", "has", "have", "had", "e.g", "i.e",
-];
 
 fn is_complete_candidate(head: &str) -> bool {
     let candidate = head.trim().trim_end_matches([',', ';', ':']);

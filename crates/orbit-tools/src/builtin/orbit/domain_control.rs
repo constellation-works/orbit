@@ -8,14 +8,7 @@ use orbit_types::tool::ToolSchema;
 use serde_json::{Value, json};
 
 pub struct RoutineControlTool;
-pub(super) fn ensure_operator_leaf(ctx: &ToolContext) -> Result<(), OrbitError> {
-    if ctx.is_managed_run() {
-        return Err(OrbitError::CapabilityDenied(
-            "managed runs cannot control automation or submit catalog jobs".into(),
-        ));
-    }
-    Ok(())
-}
+
 impl Tool for RoutineControlTool {
     fn execution_kind(&self) -> ToolExecutionKind {
         ToolExecutionKind::Mutating
@@ -87,6 +80,15 @@ impl Tool for RoutineControlTool {
             )),
         }
     }
+}
+
+pub(super) fn ensure_operator_leaf(ctx: &ToolContext) -> Result<(), OrbitError> {
+    if ctx.is_managed_run() {
+        return Err(OrbitError::CapabilityDenied(
+            "managed runs cannot control automation or submit catalog jobs".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn mode_field_error(error: OrbitError, mode: &str) -> OrbitError {

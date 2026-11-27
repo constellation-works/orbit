@@ -62,6 +62,13 @@ const STDERR_SETTLE_GRACE: Duration = Duration::from_millis(500);
 /// change rather than silently degrading.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// ssh's exit status for its own failure — a refused or dropped connection,
+/// an authentication failure — as opposed to the remote command's.
+const SSH_FAILURE_EXIT: i32 = 255;
+
+/// How a failed `orbit` command reports its error on stderr, as its last line.
+const ORBIT_ERROR_PREFIX: &str = "error: ";
+
 /// Upstream client and write provenance carried in `_meta.orbit` on `initialize`.
 #[derive(Clone, Copy, Default)]
 pub(super) struct HandshakeProvenance<'a> {
@@ -777,6 +784,21 @@ impl DestinationSession {
     }
 }
 
+impl Drop for DestinationSession {
+    fn drop(&mut self) {
+        if let Err(error) = self.child.kill() {
+            tracing::debug!(
+                machine_id = %self.destination.machine_id,
+                %error,
+                "federated probe session was already gone"
+            );
+        }
+        // Reap it: an unwaited SSH child would linger as a zombie for the life
+        // of this long-running server process, once per destination per call.
+        let _ = self.child.wait();
+    }
+}
+
 /// The reader refused a line that outgrew the cap of the phase in flight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LineTooLong {
@@ -796,48 +818,6 @@ pub(super) enum BoundedLine {
     },
     /// The stream ended with nothing pending.
     Eof,
-}
-
-/// Read one line without ever holding more than the current cap.
-///
-/// The cap is re-read on every buffer refill rather than fixed per line, so a
-/// phase change that raises it takes effect for a line the reader is already
-/// blocked on. Invalid UTF-8 is an error, as it was for `read_line`.
-pub(super) fn read_bounded_line(
-    reader: &mut impl BufRead,
-    cap: &AtomicU64,
-) -> std::io::Result<BoundedLine> {
-    let mut line: Vec<u8> = Vec::new();
-    loop {
-        let limit = cap.load(Ordering::Acquire);
-        let chunk = reader.fill_buf()?;
-        if chunk.is_empty() {
-            if line.is_empty() {
-                return Ok(BoundedLine::Eof);
-            }
-            break;
-        }
-        let (take, complete) = match chunk.iter().position(|byte| *byte == b'\n') {
-            Some(newline) => (newline + 1, true),
-            None => (chunk.len(), false),
-        };
-        if (line.len() + take) as u64 > limit {
-            // Count only the current line bytes already visible in the fixed-size
-            // read buffer. Never consume/drain further to find its end.
-            return Ok(BoundedLine::TooLong {
-                limit,
-                observed_bytes_lower_bound: line.len() as u64 + take as u64,
-            });
-        }
-        line.extend_from_slice(&chunk[..take]);
-        reader.consume(take);
-        if complete {
-            break;
-        }
-    }
-    String::from_utf8(line)
-        .map(BoundedLine::Line)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// The end of the session's stderr, drained by a thread so the destination
@@ -906,37 +886,6 @@ impl StderrTail {
     }
 }
 
-/// ssh's exit status for its own failure — a refused or dropped connection,
-/// an authentication failure — as opposed to the remote command's.
-const SSH_FAILURE_EXIT: i32 = 255;
-
-/// How a failed `orbit` command reports its error on stderr, as its last line.
-const ORBIT_ERROR_PREFIX: &str = "error: ";
-
-/// A stderr stream's non-empty lines, trimmed and with control characters
-/// dropped, because the text came from another host and ends up on a
-/// terminal.
-fn stderr_lines(bytes: &[u8]) -> Vec<String> {
-    String::from_utf8_lossy(bytes)
-        .lines()
-        .map(|line| {
-            line.chars()
-                .filter(|character| !character.is_control())
-                .collect::<String>()
-                .trim()
-                .to_string()
-        })
-        .filter(|line| !line.is_empty())
-        .collect()
-}
-
-fn quote_tail(bytes: &[u8]) -> String {
-    let lines = stderr_lines(bytes);
-    let quoted = lines[lines.len().saturating_sub(STDERR_TAIL_LINES)..].join(" | ");
-    let skip = quoted.chars().count().saturating_sub(STDERR_TAIL_CHARS);
-    quoted.chars().skip(skip).collect()
-}
-
 /// The session's stdin, owned by a thread so a write the destination never
 /// drains cannot hold the caller past its deadline.
 ///
@@ -965,17 +914,68 @@ impl RequestWriter {
     }
 }
 
-impl Drop for DestinationSession {
-    fn drop(&mut self) {
-        if let Err(error) = self.child.kill() {
-            tracing::debug!(
-                machine_id = %self.destination.machine_id,
-                %error,
-                "federated probe session was already gone"
-            );
+/// Read one line without ever holding more than the current cap.
+///
+/// The cap is re-read on every buffer refill rather than fixed per line, so a
+/// phase change that raises it takes effect for a line the reader is already
+/// blocked on. Invalid UTF-8 is an error, as it was for `read_line`.
+pub(super) fn read_bounded_line(
+    reader: &mut impl BufRead,
+    cap: &AtomicU64,
+) -> std::io::Result<BoundedLine> {
+    let mut line: Vec<u8> = Vec::new();
+    loop {
+        let limit = cap.load(Ordering::Acquire);
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            if line.is_empty() {
+                return Ok(BoundedLine::Eof);
+            }
+            break;
         }
-        // Reap it: an unwaited SSH child would linger as a zombie for the life
-        // of this long-running server process, once per destination per call.
-        let _ = self.child.wait();
+        let (take, complete) = match chunk.iter().position(|byte| *byte == b'\n') {
+            Some(newline) => (newline + 1, true),
+            None => (chunk.len(), false),
+        };
+        if (line.len() + take) as u64 > limit {
+            // Count only the current line bytes already visible in the fixed-size
+            // read buffer. Never consume/drain further to find its end.
+            return Ok(BoundedLine::TooLong {
+                limit,
+                observed_bytes_lower_bound: line.len() as u64 + take as u64,
+            });
+        }
+        line.extend_from_slice(&chunk[..take]);
+        reader.consume(take);
+        if complete {
+            break;
+        }
     }
+    String::from_utf8(line)
+        .map(BoundedLine::Line)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
+
+/// A stderr stream's non-empty lines, trimmed and with control characters
+/// dropped, because the text came from another host and ends up on a
+/// terminal.
+fn stderr_lines(bytes: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(|line| {
+            line.chars()
+                .filter(|character| !character.is_control())
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+fn quote_tail(bytes: &[u8]) -> String {
+    let lines = stderr_lines(bytes);
+    let quoted = lines[lines.len().saturating_sub(STDERR_TAIL_LINES)..].join(" | ");
+    let skip = quoted.chars().count().saturating_sub(STDERR_TAIL_CHARS);
+    quoted.chars().skip(skip).collect()
 }

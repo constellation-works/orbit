@@ -4,6 +4,33 @@ use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, Provid
 use orbit_exec::{ExecRequest, NoSandbox, run_process};
 use orbit_types::tool::ExecutionResult;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// A local refusal decided under the record lock and not yet counted: counting
+/// waits until the caller knows its budget survived to deliver the typed
+/// throttle, so a refusal that becomes a timeout leaves the count unchanged.
+struct DecidedRefusal {
+    refusal: QuotaRefusal,
+    store: GithubQuotaStore,
+    account: String,
+    now: u64,
+}
+
+impl DecidedRefusal {
+    /// The typed throttle for `request`, counting the refusal first when
+    /// `counted`.
+    fn deliver(self, request: &ExecRequest, counted: bool) -> OrbitError {
+        if counted {
+            self.store.record_refusal(
+                &self.account,
+                self.refusal.caller,
+                &self.refusal.resource,
+                self.now,
+            );
+        }
+        refusal_error(&self.refusal, request)
+    }
+}
+
 pub(super) fn now_epoch_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -88,32 +115,6 @@ pub fn admit_gh_request_within_budget(
     let bounded = remaining_request_budget(request, deadline).ok_or_else(exhausted)?;
     admitted.map_err(|decided| decided.deliver(request, true))?;
     Ok(bounded)
-}
-
-/// A local refusal decided under the record lock and not yet counted: counting
-/// waits until the caller knows its budget survived to deliver the typed
-/// throttle, so a refusal that becomes a timeout leaves the count unchanged.
-struct DecidedRefusal {
-    refusal: QuotaRefusal,
-    store: GithubQuotaStore,
-    account: String,
-    now: u64,
-}
-
-impl DecidedRefusal {
-    /// The typed throttle for `request`, counting the refusal first when
-    /// `counted`.
-    fn deliver(self, request: &ExecRequest, counted: bool) -> OrbitError {
-        if counted {
-            self.store.record_refusal(
-                &self.account,
-                self.refusal.caller,
-                &self.refusal.resource,
-                self.now,
-            );
-        }
-        refusal_error(&self.refusal, request)
-    }
 }
 
 /// Admit `request` against `deadline`. A read admitted once the deadline has

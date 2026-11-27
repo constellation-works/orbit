@@ -4,6 +4,54 @@ use orbit_types::identity::{MACHINE_ID_PREFIX, WORKSPACE_ID_PREFIX};
 
 use super::*;
 
+pub(super) enum CliWorkspaceTarget<'a> {
+    CurrentRuntime,
+    Checkout {
+        workspace: &'a Workspace,
+        checkout: &'a WorkspaceCheckout,
+        rewrite_to_repo_root: bool,
+        local_root: PathBuf,
+    },
+}
+
+/// The two inputs every runtime open reads before it dispatches anything: the
+/// global `config.toml` `[machine]` table, which classifies this machine for
+/// the task-prefix projection, the automation identity, and registry
+/// validation; and `workspaces.json`, which selects the checkout. Agents shell
+/// out to `orbit` hundreds of times per run, so each is read once and threaded
+/// through the open rather than re-read by every step that needs it
+/// [DANI-10371].
+pub(super) struct RuntimeOpenInputs {
+    pub(super) global_root: PathBuf,
+    pub(super) identity: MachineIdentityState,
+    pub(super) registry: WorkspaceRegistry,
+}
+
+impl RuntimeOpenInputs {
+    pub(super) fn read(global_root: &Path) -> Result<Self, OrbitError> {
+        let identity = inspect_machine_identity(global_root)?;
+        let registry = workspace_registry::load_registry_from_with_machine(
+            &workspace_registry::registry_path_for(global_root),
+            &identity,
+        )?;
+        Ok(Self {
+            global_root: global_root.to_path_buf(),
+            identity,
+            registry,
+        })
+    }
+}
+
+/// Identity and workspace registry a runtime open already loaded.
+///
+/// The kernel stores this opaquely. Registry-owning callers downcast it
+/// instead of reading `config.toml` and `workspaces.json` again.
+#[derive(Clone)]
+pub(crate) struct OpenedSelectorInputs {
+    pub(crate) identity: MachineIdentityState,
+    pub(crate) registry: WorkspaceRegistry,
+}
+
 pub(crate) fn retry_pipeline_worker_bootstrap<T>(
     mut bootstrap: impl FnMut() -> Result<T, OrbitError>,
     timeout: Duration,
@@ -58,16 +106,6 @@ pub fn global_root_for(root_override: Option<&Path>) -> Result<PathBuf, OrbitErr
         }
     }?;
     Ok(orbit_core::runtime::resolve_existing_root_traversal(root))
-}
-
-pub(super) enum CliWorkspaceTarget<'a> {
-    CurrentRuntime,
-    Checkout {
-        workspace: &'a Workspace,
-        checkout: &'a WorkspaceCheckout,
-        rewrite_to_repo_root: bool,
-        local_root: PathBuf,
-    },
 }
 
 pub(super) fn cli_workspace_selector(input: &Value) -> Result<Option<String>, OrbitError> {
@@ -421,34 +459,6 @@ pub(super) fn inactive_cli_workspace(
     ))
 }
 
-/// The two inputs every runtime open reads before it dispatches anything: the
-/// global `config.toml` `[machine]` table, which classifies this machine for
-/// the task-prefix projection, the automation identity, and registry
-/// validation; and `workspaces.json`, which selects the checkout. Agents shell
-/// out to `orbit` hundreds of times per run, so each is read once and threaded
-/// through the open rather than re-read by every step that needs it
-/// [DANI-10371].
-pub(super) struct RuntimeOpenInputs {
-    pub(super) global_root: PathBuf,
-    pub(super) identity: MachineIdentityState,
-    pub(super) registry: WorkspaceRegistry,
-}
-
-impl RuntimeOpenInputs {
-    pub(super) fn read(global_root: &Path) -> Result<Self, OrbitError> {
-        let identity = inspect_machine_identity(global_root)?;
-        let registry = workspace_registry::load_registry_from_with_machine(
-            &workspace_registry::registry_path_for(global_root),
-            &identity,
-        )?;
-        Ok(Self {
-            global_root: global_root.to_path_buf(),
-            identity,
-            registry,
-        })
-    }
-}
-
 /// The task prefix a present machine identity projects onto the allocator.
 ///
 /// Absent identity leaves the allocator prefix untouched. Callers hand this
@@ -462,16 +472,6 @@ pub(super) fn sync_task_prefix_for_identity(identity: &MachineIdentityState) -> 
         MachineIdentityState::Present(identity) => Some(identity.task_prefix.as_str()),
         MachineIdentityState::Absent => None,
     }
-}
-
-/// Identity and workspace registry a runtime open already loaded.
-///
-/// The kernel stores this opaquely. Registry-owning callers downcast it
-/// instead of reading `config.toml` and `workspaces.json` again.
-#[derive(Clone)]
-pub(crate) struct OpenedSelectorInputs {
-    pub(crate) identity: MachineIdentityState,
-    pub(crate) registry: WorkspaceRegistry,
 }
 
 /// Identity and registry for a CLI tool bind.

@@ -32,44 +32,6 @@ const AMBIGUOUS_RELEASE_PAYLOADS: [&[u8]; 2] = [
     br#"{"generation":7,"previous_claim":null}"#,
 ];
 
-fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-}
-
-fn known(core_remaining: u64, reset: u64) -> RateLimitAnswer {
-    let mut observed = BTreeMap::new();
-    for (resource, remaining) in [(RESOURCE_CORE, core_remaining), (RESOURCE_GRAPHQL, 4000)] {
-        observed.insert(
-            resource.to_string(),
-            ObservedQuota {
-                limit: 5000,
-                remaining,
-                reset_epoch_seconds: reset,
-            },
-        );
-    }
-    RateLimitAnswer::Known(observed)
-}
-
-fn unknown_not_due() -> RateLimitAnswer {
-    RateLimitAnswer::Unknown("not due".into())
-}
-
-fn recv_ready(rx: &mpsc::Receiver<()>, what: &str) {
-    rx.recv_timeout(Duration::from_secs(10)).expect(what);
-}
-
-fn store(dir: &Path) -> GithubQuotaStore {
-    GithubQuotaStore::new(dir.to_path_buf())
-}
-
-fn hold_lock(path: &Path, label: &str) -> orbit_common::fs::io::HeldFileLock {
-    hold_exclusive_file_lock_options(path, label, FileLockOptions::default()).unwrap()
-}
-
 /// A fake `gh` that logs every call and answers the rate-limit endpoint from
 /// `rate_limit` and every other call from `answer` (`ok`, `empty` or `throttle`).
 struct FakeGh {
@@ -259,11 +221,6 @@ impl QuotaFixture {
     }
 }
 
-fn finish_refresh((finish, worker): (Arc<Barrier>, std::thread::JoinHandle<()>)) {
-    finish.wait();
-    worker.join().unwrap();
-}
-
 /// Exclusive account-lock holder on a background thread, released explicitly or on drop.
 struct ContendedRecordLock {
     release_tx: Option<mpsc::Sender<()>>,
@@ -327,6 +284,49 @@ impl Drop for ContendedRecordLock {
     fn drop(&mut self) {
         let _ = self.stop();
     }
+}
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+fn known(core_remaining: u64, reset: u64) -> RateLimitAnswer {
+    let mut observed = BTreeMap::new();
+    for (resource, remaining) in [(RESOURCE_CORE, core_remaining), (RESOURCE_GRAPHQL, 4000)] {
+        observed.insert(
+            resource.to_string(),
+            ObservedQuota {
+                limit: 5000,
+                remaining,
+                reset_epoch_seconds: reset,
+            },
+        );
+    }
+    RateLimitAnswer::Known(observed)
+}
+
+fn unknown_not_due() -> RateLimitAnswer {
+    RateLimitAnswer::Unknown("not due".into())
+}
+
+fn recv_ready(rx: &mpsc::Receiver<()>, what: &str) {
+    rx.recv_timeout(Duration::from_secs(10)).expect(what);
+}
+
+fn store(dir: &Path) -> GithubQuotaStore {
+    GithubQuotaStore::new(dir.to_path_buf())
+}
+
+fn hold_lock(path: &Path, label: &str) -> orbit_common::fs::io::HeldFileLock {
+    hold_exclusive_file_lock_options(path, label, FileLockOptions::default()).unwrap()
+}
+
+fn finish_refresh((finish, worker): (Arc<Barrier>, std::thread::JoinHandle<()>)) {
+    finish.wait();
+    worker.join().unwrap();
 }
 
 fn held_gh(timeout_ms: u64, now: u64, reset: u64) -> (QuotaFixture, FakeGh, ExecRequest, String) {

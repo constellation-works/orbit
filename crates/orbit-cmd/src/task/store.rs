@@ -38,12 +38,6 @@ use orbit_store::maintenance::task_registry::{
 use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workspace::WorkspaceCheckout;
 
-/// Path to one workspace's task-store partition under
-/// `<global_root>/tasks/workspaces/<partition_id>/`.
-pub fn task_store_partition_path(global_root: &Path, partition_id: &str) -> PathBuf {
-    task_workspaces_dir(global_root).join(partition_id)
-}
-
 /// One partition directory that no registry claims, with the amount of task
 /// data it still holds.
 #[derive(Debug, Clone)]
@@ -92,61 +86,6 @@ pub struct TaskStorePartitions {
     pub unreachable: Vec<UnreachablePartition>,
 }
 
-/// Classify every task-store partition on this host as claimed, removable,
-/// confirmed stale, unowned-but-populated, or unreachable.
-///
-/// `None` means the directory has never been created (fresh host, no task ever
-/// committed) — nothing to diagnose rather than nothing orphaned.
-pub fn inspect_task_store_partitions(
-    global_root: &Path,
-) -> Result<Option<TaskStorePartitions>, OrbitError> {
-    let Some(partitions) = task_store_partitions(global_root)? else {
-        return Ok(None);
-    };
-    let claims = partition_claims(global_root)?;
-    let scanned = partitions.len();
-
-    let mut removable = Vec::new();
-    let mut stale = Vec::new();
-    let mut unowned = Vec::new();
-    let mut unreachable = Vec::new();
-    for path in partitions {
-        let Some(id) = partition_id_of(&path).map(str::to_owned) else {
-            continue;
-        };
-        if claims.claimed.contains(&id) {
-            continue;
-        }
-
-        let partition = UnclaimedPartition {
-            task_bundles: count_task_bundles(&path),
-            path,
-        };
-        // An empty partition costs nothing to delete, so any binding that is
-        // not a live claim reclaims it; only bundles need stronger evidence.
-        if partition.task_bundles == 0 {
-            removable.push(partition);
-        } else if claims.gone.contains(&id) {
-            stale.push(partition);
-        } else if let Some(reason) = claims.unreachable.get(&id) {
-            unreachable.push(UnreachablePartition {
-                partition,
-                reason: reason.clone(),
-            });
-        } else {
-            unowned.push(partition);
-        }
-    }
-
-    Ok(Some(TaskStorePartitions {
-        scanned,
-        removable,
-        stale,
-        unowned,
-        unreachable,
-    }))
-}
-
 /// Partitions actually deleted by [`remove_unclaimed_task_stores`], split by
 /// whether removing them cost any task data — so a caller can report each
 /// count honestly instead of collapsing both into one "empty" figure
@@ -173,6 +112,94 @@ impl RemovedTaskStores {
             .map(|partition| partition.task_bundles)
             .sum()
     }
+}
+
+/// Who claims each partition on this host, and why the rest do not.
+///
+/// Every set is keyed by *partition id*. A catalog workspace contributes a
+/// claim only where its id is also a partition id — never the other way round.
+struct PartitionClaims {
+    /// Registered task workspaces, live workspace catalog ids, and the
+    /// synthetic partition every `--root <data-dir>` write lands in.
+    claimed: BTreeSet<String>,
+    /// Task-registry bindings that carry their own checkout paths. Their
+    /// evidence takes precedence over a catalog checkout with the same id.
+    checkout_bound: BTreeSet<String>,
+    /// Bindings or catalog checkouts that are confirmed absent.
+    gone: BTreeSet<String>,
+    /// Bindings or catalog checkouts whose filesystem state could not be
+    /// answered, mapped to the failure that stopped the answer.
+    unreachable: BTreeMap<String, String>,
+}
+
+/// What the filesystem can testify about a bound checkout directory.
+enum CheckoutEvidence {
+    /// The bound checkout root is there: the binding is a live claim.
+    Present,
+    /// The bound checkout root stats as plain absent, and the nearest
+    /// existing ancestor is a directory whose listing can be read.
+    Gone,
+    /// Neither answer was available, naming the path and the failure.
+    Unreachable(String),
+}
+
+/// Path to one workspace's task-store partition under
+/// `<global_root>/tasks/workspaces/<partition_id>/`.
+pub fn task_store_partition_path(global_root: &Path, partition_id: &str) -> PathBuf {
+    task_workspaces_dir(global_root).join(partition_id)
+}
+
+/// Classify every task-store partition on this host as claimed, removable,
+/// confirmed stale, unowned-but-populated, or unreachable.
+///
+/// `None` means the directory has never been created (fresh host, no task ever
+/// committed) — nothing to diagnose rather than nothing orphaned.
+pub fn inspect_task_store_partitions(
+    global_root: &Path,
+) -> Result<Option<TaskStorePartitions>, OrbitError> {
+    let Some(partitions) = task_store_partitions(global_root)? else {
+        return Ok(None);
+    };
+    let claims = partition_claims(global_root)?;
+    let scanned = partitions.len();
+
+    let mut removable = Vec::new();
+    let mut stale = Vec::new();
+    let mut unowned = Vec::new();
+    let mut unreachable = Vec::new();
+    for path in partitions {
+        let Some(id) = partition_id_of(&path).map(str::to_owned) else {
+            continue;
+        };
+        if claims.claimed.contains(&id) {
+            continue;
+        }
+
+        let task_bundles = count_task_bundles(&path);
+        let partition = UnclaimedPartition { path, task_bundles };
+        // An empty partition costs nothing to delete, so any binding that is
+        // not a live claim reclaims it; only bundles need stronger evidence.
+        if partition.task_bundles == 0 {
+            removable.push(partition);
+        } else if claims.gone.contains(&id) {
+            stale.push(partition);
+        } else if let Some(reason) = claims.unreachable.get(&id) {
+            unreachable.push(UnreachablePartition {
+                partition,
+                reason: reason.clone(),
+            });
+        } else {
+            unowned.push(partition);
+        }
+    }
+
+    Ok(Some(TaskStorePartitions {
+        scanned,
+        removable,
+        stale,
+        unowned,
+        unreachable,
+    }))
 }
 
 /// Delete every empty unclaimed partition and every partition whose bound
@@ -342,10 +369,8 @@ fn leftover_task_partition(global_root: &Path, partition_id: &str) -> Option<Unc
     if !path.is_dir() {
         return None;
     }
-    Some(UnclaimedPartition {
-        task_bundles: count_task_bundles(&path),
-        path,
-    })
+    let task_bundles = count_task_bundles(&path);
+    Some(UnclaimedPartition { path, task_bundles })
 }
 
 fn ensure_checkout_evidence(
@@ -372,24 +397,6 @@ fn ensure_checkout_evidence(
         repo_fingerprint: None,
     })?;
     Ok(())
-}
-
-/// Who claims each partition on this host, and why the rest do not.
-///
-/// Every set is keyed by *partition id*. A catalog workspace contributes a
-/// claim only where its id is also a partition id — never the other way round.
-struct PartitionClaims {
-    /// Registered task workspaces, live workspace catalog ids, and the
-    /// synthetic partition every `--root <data-dir>` write lands in.
-    claimed: BTreeSet<String>,
-    /// Task-registry bindings that carry their own checkout paths. Their
-    /// evidence takes precedence over a catalog checkout with the same id.
-    checkout_bound: BTreeSet<String>,
-    /// Bindings or catalog checkouts that are confirmed absent.
-    gone: BTreeSet<String>,
-    /// Bindings or catalog checkouts whose filesystem state could not be
-    /// answered, mapped to the failure that stopped the answer.
-    unreachable: BTreeMap<String, String>,
 }
 
 /// Resolve every partition claim, classifying each task-registry binding by
@@ -488,17 +495,6 @@ fn record_catalog_checkout_evidence(
                 .insert(catalog_workspace_id.to_string(), reason);
         }
     }
-}
-
-/// What the filesystem can testify about a bound checkout directory.
-enum CheckoutEvidence {
-    /// The bound checkout root is there: the binding is a live claim.
-    Present,
-    /// The bound checkout root stats as plain absent, and the nearest
-    /// existing ancestor is a directory whose listing can be read.
-    Gone,
-    /// Neither answer was available, naming the path and the failure.
-    Unreachable(String),
 }
 
 /// Classify one bound checkout's repository root.

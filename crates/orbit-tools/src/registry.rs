@@ -560,6 +560,24 @@ impl ToolRegistry {
     }
 }
 
+struct BuiltinCatalog {
+    // Includes CLI-only operations and the operations behind MCP families.
+    id_routes: HashMap<String, McpIdRoute>,
+    // Plugin validation uses standalone tool names, including family names.
+    tool_names: Vec<String>,
+}
+
+impl PluginValidationPolicy {
+    /// The policy for a host that has not verified the plugin's origin.
+    pub fn host_default() -> Self {
+        Self {
+            first_party_verified: false,
+            builtin_tools: builtin_catalog().tool_names.clone(),
+            reserved_cli_commands: RESERVED_CLI_COMMANDS,
+        }
+    }
+}
+
 /// Whether a definition's tool addresses exactly one id with an optional
 /// workspace: a required `id` parameter, and a workspace that is either an
 /// optional declared parameter or left to the selector the MCP host adds
@@ -577,13 +595,6 @@ fn addresses_one_id_with_optional_workspace(definition: &McpToolDefinition) -> b
         None => definition.scope != McpToolScope::Global,
     };
     id_required && workspace_optional
-}
-
-struct BuiltinCatalog {
-    // Includes CLI-only operations and the operations behind MCP families.
-    id_routes: HashMap<String, McpIdRoute>,
-    // Plugin validation uses standalone tool names, including family names.
-    tool_names: Vec<String>,
 }
 
 fn builtin_catalog() -> &'static BuiltinCatalog {
@@ -614,17 +625,6 @@ pub fn builtin_mcp_rules(name: &str) -> McpToolRules {
         .cloned()
         .unwrap_or(McpIdRoute::Unspecified);
     mcp::builtin_mcp_rules_with_route(name, id_route)
-}
-
-impl PluginValidationPolicy {
-    /// The policy for a host that has not verified the plugin's origin.
-    pub fn host_default() -> Self {
-        Self {
-            first_party_verified: false,
-            builtin_tools: builtin_catalog().tool_names.clone(),
-            reserved_cli_commands: RESERVED_CLI_COMMANDS,
-        }
-    }
 }
 
 /// Workspace-independent source for every canonical registry-backed MCP definition.

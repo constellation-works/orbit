@@ -38,29 +38,6 @@ pub(super) const ORBIT_TOOLS_GLOBAL_WRITE_FILES: &[&str] = &[
 /// on each marker that exists above its roots, and nothing else there.
 pub const ORBIT_PRODUCT_MARKER: &str = ".orbit-product";
 
-/// Every regular-file product marker ([`ORBIT_PRODUCT_MARKER`]) in a physical
-/// ancestor of `roots`, excluding each root's own, in the order Orbit's
-/// product check visits them. A confined `orbit` needs read on exactly these
-/// files to open state beneath `roots`. A missing or non-file marker is left
-/// off: the check either skips it or refuses on its own, and a Landlock rule
-/// cannot bind a name that does not exist.
-pub fn orbit_product_markers_above_roots(roots: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
-    let mut markers = Vec::new();
-    for root in roots {
-        let physical = physical_with_missing_tail(&root);
-        for ancestor in physical.ancestors().skip(1) {
-            let marker = ancestor.join(ORBIT_PRODUCT_MARKER);
-            let is_file = std::fs::symlink_metadata(&marker)
-                .map(|metadata| metadata.file_type().is_file())
-                .unwrap_or(false);
-            if is_file && !markers.contains(&marker) {
-                markers.push(marker);
-            }
-        }
-    }
-    markers
-}
-
 /// Host-owned trees beneath the global root that no plugin child may read,
 /// whatever else it was granted.
 ///
@@ -124,13 +101,6 @@ pub const DECISION_CHANNEL_STORE_DIR: &str = "state/decision-channels";
 /// Named here because the sandbox decides who may read it.
 pub const PLUGIN_GRANT_WITNESS_DIR: &str = ".grants";
 
-/// Where `plugin`'s witness sits, relative to the global root.
-pub fn plugin_grant_witness_relative(plugin: &str) -> PathBuf {
-    Path::new("plugins")
-        .join(PLUGIN_GRANT_WITNESS_DIR)
-        .join(format!("{plugin}.json"))
-}
-
 /// Host-owned directory beside the grant witnesses, holding one link per
 /// granted `requires.programs` name in each plugin's subdirectory. Each link
 /// points at the recorded executable, so a child's `PATH` can resolve the
@@ -138,13 +108,6 @@ pub fn plugin_grant_witness_relative(plugin: &str) -> PathBuf {
 /// The plugin is granted read on it and never write, so it cannot re-point a
 /// granted name; only the host writes these links.
 pub const PLUGIN_PROGRAM_LINK_DIR: &str = ".programs";
-
-/// Where `plugin`'s program links sit, relative to the global root.
-pub fn plugin_program_links_relative(plugin: &str) -> PathBuf {
-    Path::new("plugins")
-        .join(PLUGIN_PROGRAM_LINK_DIR)
-        .join(plugin)
-}
 
 /// The same narrowing for the workspace's `.orbit/`: the stores a callback
 /// writes, never `plugins.yaml` (the install pin), `routines/`, `auto_tasks/`
@@ -448,6 +411,65 @@ pub struct RenderedFsRoots {
     pub write_files: Vec<PathBuf>,
 }
 
+/// One filesystem root the sandbox will actually open, beside the manifest
+/// entry it serves so a refusal can name what was asked for.
+pub(super) struct EffectiveRoot {
+    pub(super) path: PathBuf,
+    pub(super) field: String,
+    pub(super) declared: String,
+}
+
+/// A manifest root the operator's grant left out entirely.
+///
+/// The plugin will fail to reach it at run time, which is the intended
+/// outcome of scoping a grant — but it is also the shape of an honest
+/// mistake, so every surface that can name it does: a log line at call time
+/// and an `orbit plugin doctor` row before the call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DroppedFsRoot {
+    /// `spec.permissions.fs.write[1]`.
+    pub field: String,
+    /// The root as the manifest declares it, before rendering.
+    pub declared: String,
+}
+
+/// Every regular-file product marker ([`ORBIT_PRODUCT_MARKER`]) in a physical
+/// ancestor of `roots`, excluding each root's own, in the order Orbit's
+/// product check visits them. A confined `orbit` needs read on exactly these
+/// files to open state beneath `roots`. A missing or non-file marker is left
+/// off: the check either skips it or refuses on its own, and a Landlock rule
+/// cannot bind a name that does not exist.
+pub fn orbit_product_markers_above_roots(roots: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
+    let mut markers = Vec::new();
+    for root in roots {
+        let physical = physical_with_missing_tail(&root);
+        for ancestor in physical.ancestors().skip(1) {
+            let marker = ancestor.join(ORBIT_PRODUCT_MARKER);
+            let is_file = std::fs::symlink_metadata(&marker)
+                .map(|metadata| metadata.file_type().is_file())
+                .unwrap_or(false);
+            if is_file && !markers.contains(&marker) {
+                markers.push(marker);
+            }
+        }
+    }
+    markers
+}
+
+/// Where `plugin`'s witness sits, relative to the global root.
+pub fn plugin_grant_witness_relative(plugin: &str) -> PathBuf {
+    Path::new("plugins")
+        .join(PLUGIN_GRANT_WITNESS_DIR)
+        .join(format!("{plugin}.json"))
+}
+
+/// Where `plugin`'s program links sit, relative to the global root.
+pub fn plugin_program_links_relative(plugin: &str) -> PathBuf {
+    Path::new("plugins")
+        .join(PLUGIN_PROGRAM_LINK_DIR)
+        .join(plugin)
+}
+
 /// Render the filesystem permission lists through one path-resolution rule.
 ///
 /// Relative roots belong to the plugin that declared them, so every phase
@@ -506,28 +528,6 @@ pub(super) fn render_root_list(
             })
         })
         .collect()
-}
-
-/// One filesystem root the sandbox will actually open, beside the manifest
-/// entry it serves so a refusal can name what was asked for.
-pub(super) struct EffectiveRoot {
-    pub(super) path: PathBuf,
-    pub(super) field: String,
-    pub(super) declared: String,
-}
-
-/// A manifest root the operator's grant left out entirely.
-///
-/// The plugin will fail to reach it at run time, which is the intended
-/// outcome of scoping a grant — but it is also the shape of an honest
-/// mistake, so every surface that can name it does: a log line at call time
-/// and an `orbit plugin doctor` row before the call.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DroppedFsRoot {
-    /// `spec.permissions.fs.write[1]`.
-    pub field: String,
-    /// The root as the manifest declares it, before rendering.
-    pub declared: String,
 }
 
 /// Narrow the manifest's rendered request to what the operator granted.

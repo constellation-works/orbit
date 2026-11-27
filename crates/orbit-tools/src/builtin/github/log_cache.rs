@@ -143,40 +143,6 @@ impl RedactedLog {
     }
 }
 
-/// `line` with the bytes between its common prefix and suffix with
-/// `redacted` overwritten by `*`, cut at character boundaries. A line that is
-/// not UTF-8 is masked whole, its line break kept.
-fn mask_changed_span(line: &[u8], redacted: &str) -> Vec<u8> {
-    let Ok(text) = std::str::from_utf8(line) else {
-        return line
-            .iter()
-            .map(|byte| if *byte == b'\n' { b'\n' } else { b'*' })
-            .collect();
-    };
-    let (source, redacted) = (text.as_bytes(), redacted.as_bytes());
-    let mut start = source
-        .iter()
-        .zip(redacted)
-        .take_while(|(left, right)| left == right)
-        .count();
-    let suffix = source[start..]
-        .iter()
-        .rev()
-        .zip(redacted[start..].iter().rev())
-        .take_while(|(left, right)| left == right)
-        .count();
-    let mut end = source.len() - suffix;
-    while !text.is_char_boundary(start) {
-        start -= 1;
-    }
-    while !text.is_char_boundary(end) {
-        end += 1;
-    }
-    let mut masked = line.to_vec();
-    masked[start..end].fill(b'*');
-    masked
-}
-
 /// A bounded directory of completed logs.
 #[derive(Debug, Clone)]
 pub(crate) struct LogCache {
@@ -357,6 +323,40 @@ impl LogCache {
             }
         }
     }
+}
+
+/// `line` with the bytes between its common prefix and suffix with
+/// `redacted` overwritten by `*`, cut at character boundaries. A line that is
+/// not UTF-8 is masked whole, its line break kept.
+fn mask_changed_span(line: &[u8], redacted: &str) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(line) else {
+        return line
+            .iter()
+            .map(|byte| if *byte == b'\n' { b'\n' } else { b'*' })
+            .collect();
+    };
+    let (source, redacted) = (text.as_bytes(), redacted.as_bytes());
+    let mut start = source
+        .iter()
+        .zip(redacted)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let suffix = source[start..]
+        .iter()
+        .rev()
+        .zip(redacted[start..].iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut end = source.len() - suffix;
+    while !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    while !text.is_char_boundary(end) {
+        end += 1;
+    }
+    let mut masked = line.to_vec();
+    masked[start..end].fill(b'*');
+    masked
 }
 
 /// Whether two metadata snapshots describe the same file, not merely the same

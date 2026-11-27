@@ -1,6 +1,24 @@
 use super::*;
 use orbit_common::security::token;
 
+/// What one file in the session directory turned out to hold.
+enum SessionScan {
+    /// A record this host's schema reads.
+    Current(SessionRecord),
+    /// A complete JSON value that is not a current-schema session record: a
+    /// leftover minted by a host whose record schema differs from this one.
+    /// Every byte of it was written, so it is a finished record rather than a
+    /// mint caught in progress.
+    Foreign,
+    /// Bytes that are not a complete JSON value: corruption, or a record read
+    /// between the `create_new` that opened it and the single `write` that
+    /// fills it. `mint` passes through that window, so a concurrent sweep must
+    /// not reap what it finds there — unlinking a live session's file would
+    /// also break the Landlock grant its child reads the record through, and
+    /// the descriptor the host is about to hand that child.
+    Unreadable,
+}
+
 /// Count callback session records that no live child can still be using:
 /// those whose recorded process is gone, and those this host's schema cannot
 /// read at all.
@@ -61,24 +79,6 @@ fn stale_session_paths(dir: &Path) -> Result<Vec<PathBuf>, OrbitError> {
         }
     }
     Ok(stale)
-}
-
-/// What one file in the session directory turned out to hold.
-enum SessionScan {
-    /// A record this host's schema reads.
-    Current(SessionRecord),
-    /// A complete JSON value that is not a current-schema session record: a
-    /// leftover minted by a host whose record schema differs from this one.
-    /// Every byte of it was written, so it is a finished record rather than a
-    /// mint caught in progress.
-    Foreign,
-    /// Bytes that are not a complete JSON value: corruption, or a record read
-    /// between the `create_new` that opened it and the single `write` that
-    /// fills it. `mint` passes through that window, so a concurrent sweep must
-    /// not reap what it finds there — unlinking a live session's file would
-    /// also break the Landlock grant its child reads the record through, and
-    /// the descriptor the host is about to hand that child.
-    Unreadable,
 }
 
 fn scan_session_file(bytes: &[u8]) -> SessionScan {

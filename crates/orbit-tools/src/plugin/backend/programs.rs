@@ -25,6 +25,69 @@ impl PluginProgramStatus {
     }
 }
 
+impl PluginBackendSpec {
+    /// The host-owned directory of this plugin's program links.
+    fn program_link_dir(&self) -> PathBuf {
+        self.global_root
+            .join(plugin_program_links_relative(&self.provenance.name))
+    }
+
+    /// Granted bare program names with the recorded file each one links to.
+    /// Absolute declared entries run as written and need no link.
+    fn linkable_programs(&self) -> Vec<(String, PathBuf)> {
+        self.program_statuses()
+            .into_iter()
+            .filter(|status| status.granted() && is_bare_program_name(&status.name))
+            .filter_map(|status| status.path.map(|path| (status.name, path)))
+            .collect()
+    }
+
+    /// The directory the child's `PATH` gets prepended with, when at least one
+    /// granted program is reachable by its declared name. Reads no link; the
+    /// sandbox grants read on it so the child can look names up in it.
+    pub(crate) fn granted_program_dir(&self) -> Option<PathBuf> {
+        (!self.linkable_programs().is_empty()).then(|| self.program_link_dir())
+    }
+
+    /// Make the program link directory hold exactly one link per granted
+    /// program name, each pointing at its recorded path, and remove every
+    /// other link (a name the manifest no longer declares or no longer
+    /// grants). Returns the directory when it holds at least one link.
+    ///
+    /// The directory lives under `plugins/`, which the plugin may read but
+    /// never write, so only this host call changes what a granted name runs.
+    ///
+    /// Concurrent calls (other threads, other Orbit processes, rendered
+    /// validation) share the directory, so the whole reconciliation runs under
+    /// one advisory lock on the namespace, bounded by the default lock
+    /// deadline (STD-03 §R6, §R7). Each writer stages under a name only it
+    /// owns, and pruning runs inside the same lock, so it never consumes a
+    /// staging link another writer still needs.
+    pub(crate) fn materialize_program_links(&self) -> Result<Option<PathBuf>, OrbitError> {
+        let programs = self.linkable_programs();
+        let dir = self.program_link_dir();
+        if programs.is_empty() && !dir.exists() {
+            // Nothing to publish and nothing to prune; do not create the
+            // namespace (or its lock file) for a plugin with no program links.
+            return Ok(None);
+        }
+        orbit_common::fs::io::with_exclusive_file_lock(&dir, "plugin program links", || {
+            let wanted: Vec<&str> = programs.iter().map(|(name, _)| name.as_str()).collect();
+            if programs.is_empty() {
+                remove_program_links_except(&dir, &wanted)?;
+                return Ok(None);
+            }
+            orbit_common::fs::io::create_private_dir_all(&dir)
+                .map_err(|error| link_error(&dir, &error))?;
+            for (name, target) in &programs {
+                replace_program_link(&dir, name, target)?;
+            }
+            remove_program_links_except(&dir, &wanted)?;
+            Ok(Some(dir.clone()))
+        })
+    }
+}
+
 /// Whether a declared entry is a bare name the child finds on its `PATH`
 /// (`uv`), rather than an absolute path it runs as written.
 fn is_bare_program_name(name: &str) -> bool {
@@ -150,69 +213,6 @@ pub fn program_statuses(
             }
         })
         .collect()
-}
-
-impl PluginBackendSpec {
-    /// The host-owned directory of this plugin's program links.
-    fn program_link_dir(&self) -> PathBuf {
-        self.global_root
-            .join(plugin_program_links_relative(&self.provenance.name))
-    }
-
-    /// Granted bare program names with the recorded file each one links to.
-    /// Absolute declared entries run as written and need no link.
-    fn linkable_programs(&self) -> Vec<(String, PathBuf)> {
-        self.program_statuses()
-            .into_iter()
-            .filter(|status| status.granted() && is_bare_program_name(&status.name))
-            .filter_map(|status| status.path.map(|path| (status.name, path)))
-            .collect()
-    }
-
-    /// The directory the child's `PATH` gets prepended with, when at least one
-    /// granted program is reachable by its declared name. Reads no link; the
-    /// sandbox grants read on it so the child can look names up in it.
-    pub(crate) fn granted_program_dir(&self) -> Option<PathBuf> {
-        (!self.linkable_programs().is_empty()).then(|| self.program_link_dir())
-    }
-
-    /// Make the program link directory hold exactly one link per granted
-    /// program name, each pointing at its recorded path, and remove every
-    /// other link (a name the manifest no longer declares or no longer
-    /// grants). Returns the directory when it holds at least one link.
-    ///
-    /// The directory lives under `plugins/`, which the plugin may read but
-    /// never write, so only this host call changes what a granted name runs.
-    ///
-    /// Concurrent calls (other threads, other Orbit processes, rendered
-    /// validation) share the directory, so the whole reconciliation runs under
-    /// one advisory lock on the namespace, bounded by the default lock
-    /// deadline (STD-03 §R6, §R7). Each writer stages under a name only it
-    /// owns, and pruning runs inside the same lock, so it never consumes a
-    /// staging link another writer still needs.
-    pub(crate) fn materialize_program_links(&self) -> Result<Option<PathBuf>, OrbitError> {
-        let programs = self.linkable_programs();
-        let dir = self.program_link_dir();
-        if programs.is_empty() && !dir.exists() {
-            // Nothing to publish and nothing to prune; do not create the
-            // namespace (or its lock file) for a plugin with no program links.
-            return Ok(None);
-        }
-        orbit_common::fs::io::with_exclusive_file_lock(&dir, "plugin program links", || {
-            let wanted: Vec<&str> = programs.iter().map(|(name, _)| name.as_str()).collect();
-            if programs.is_empty() {
-                remove_program_links_except(&dir, &wanted)?;
-                return Ok(None);
-            }
-            orbit_common::fs::io::create_private_dir_all(&dir)
-                .map_err(|error| link_error(&dir, &error))?;
-            for (name, target) in &programs {
-                replace_program_link(&dir, name, target)?;
-            }
-            remove_program_links_except(&dir, &wanted)?;
-            Ok(Some(dir.clone()))
-        })
-    }
 }
 
 fn link_error(path: &Path, error: &std::io::Error) -> OrbitError {

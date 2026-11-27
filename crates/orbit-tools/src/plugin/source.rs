@@ -49,6 +49,9 @@ pub(super) const MAX_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
 /// files cannot exhaust inodes before the size bound ever trips.
 const MAX_ARCHIVE_ENTRIES: usize = 20_000;
 
+/// Most redirects the fetch follows, every hop of which must stay on HTTPS.
+const MAX_REDIRECTS: u32 = 5;
+
 /// The bounds one unpack runs under.
 ///
 /// Carried as a value rather than read from the constants at each use so the
@@ -70,9 +73,6 @@ impl ArchiveLimits {
         entries: MAX_ARCHIVE_ENTRIES,
     };
 }
-
-/// Most redirects the fetch follows, every hop of which must stay on HTTPS.
-const MAX_REDIRECTS: u32 = 5;
 
 /// Where a resolved source's tree lives, and what the source was.
 #[derive(Debug)]
@@ -118,6 +118,14 @@ pub struct PluginSourceRequest<'a> {
     /// knows which entry to correct — e.g. "the `.orbit/plugins.yaml` pin for
     /// 'graph'".
     pub digest_origin: &'a str,
+}
+
+/// Archive containers a plugin source may use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchiveKind {
+    TarGz,
+    Tar,
+    Zip,
 }
 
 /// Fetch or locate `request.source`. Network and filesystem work only; the
@@ -577,14 +585,6 @@ fn refuse_oversize_archive(path: &Path, source_name: &str) -> Result<(), OrbitEr
         )));
     }
     Ok(())
-}
-
-/// Archive containers a plugin source may use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ArchiveKind {
-    TarGz,
-    Tar,
-    Zip,
 }
 
 /// The part of a URL before any query string or fragment, which is the only

@@ -11,7 +11,30 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 struct ManagedHost(AtomicUsize);
+
+impl OrbitToolHost for ManagedHost {
+    fn task_scope(&self) -> OrbitTaskScope {
+        OrbitTaskScope {
+            run_id: Some("jrun-managed".into()),
+            ..Default::default()
+        }
+    }
+
+    fn execute(
+        &self,
+        _: OrbitBuiltinAction,
+        _: Value,
+        _: Option<String>,
+        _: Option<String>,
+        _: Option<ReservationOwnerContext>,
+    ) -> Result<Value, OrbitError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(json!({}))
+    }
+}
+
 struct ReceiptHost(Value);
+
 impl OrbitToolHost for ReceiptHost {
     fn task_scope(&self) -> OrbitTaskScope {
         OrbitTaskScope::default()
@@ -50,25 +73,7 @@ fn projected_review_retains_accepted_refresh_failure() {
         );
     }
 }
-impl OrbitToolHost for ManagedHost {
-    fn task_scope(&self) -> OrbitTaskScope {
-        OrbitTaskScope {
-            run_id: Some("jrun-managed".into()),
-            ..Default::default()
-        }
-    }
-    fn execute(
-        &self,
-        _: OrbitBuiltinAction,
-        _: Value,
-        _: Option<String>,
-        _: Option<String>,
-        _: Option<ReservationOwnerContext>,
-    ) -> Result<Value, OrbitError> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(json!({}))
-    }
-}
+
 #[test]
 fn domain_operator_modes_never_dispatch_from_a_managed_run() {
     let host = Arc::new(ManagedHost(AtomicUsize::new(0)));

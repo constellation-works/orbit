@@ -131,6 +131,9 @@ mod unix {
         }
     }
 
+    /// Room for a handful of descriptors, aligned for `cmsghdr`.
+    type ControlBuffer = [u64; 8];
+
     /// Duplicate `fd` above `floor`, close-on-exec, when it sits at or below it.
     fn lift_above(fd: OwnedFd, floor: RawFd) -> io::Result<OwnedFd> {
         if fd.as_raw_fd() > floor {
@@ -290,9 +293,6 @@ mod unix {
         };
         status == 0 && kind == libc::SOCK_DGRAM
     }
-
-    /// Room for a handful of descriptors, aligned for `cmsghdr`.
-    type ControlBuffer = [u64; 8];
 
     fn send_descriptor(route: &UnixDatagram, fd: RawFd) -> io::Result<()> {
         let mut byte = [0u8; 1];
@@ -455,23 +455,15 @@ pub const PLUGIN_HOST_ROUTE_FD: i32 = 4;
 const DECISION_CHANNEL_CALLBACK_TOOLS: [&str; 2] =
     ["orbit.decision.digest", "orbit.decision.submit"];
 
-/// Whether `tool` is a callback the host route may run on the host: a
-/// decision-channel callback, or a tool an application consent may list as a
-/// callback.
-pub fn is_host_routed_callback_tool(tool: &str) -> bool {
-    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
-        || orbit_common::governance::authorization::application_callback_tool(tool)
-}
+/// Largest request frame the host reads. A submission's raw message is
+/// bounded at 256 KiB before JSON escaping.
+const MAX_REQUEST_BYTES: u32 = 4 * 1024 * 1024;
+/// Largest response frame a caller reads: a digest lists every open request.
+const MAX_RESPONSE_BYTES: u32 = 64 * 1024 * 1024;
+const SCHEMA_VERSION: u64 = 1;
 
-/// Whether `record`'s child sends `tool` over the host route. An application
-/// callback tool is routed only for a session bound to an application;
-/// without one, a plugin granted the tool keeps calling it in its own
-/// sandbox, as before.
-pub(super) fn routes_on_host(record: &SessionRecord, tool: &str) -> bool {
-    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
-        || (record.application.is_some()
-            && orbit_common::governance::authorization::application_callback_tool(tool))
-}
+/// The message a refusal carries when the frame names none a caller can read.
+const UNREADABLE_ERROR_MESSAGE: &str = "the host route answered with an unreadable error";
 
 /// The task a `pin` callback bound for one host route's session.
 type PinnedTask = Arc<Mutex<Option<String>>>;
@@ -496,51 +488,6 @@ thread_local! {
     static ROUTED_CALLBACK: RefCell<Option<RoutedCallback>> = const { RefCell::new(None) };
 }
 
-/// The session the current thread is answering a host-route call for, with
-/// the task its application invocation has pinned so far.
-pub(super) fn routed_callback_record() -> Option<SessionRecord> {
-    ROUTED_CALLBACK.with(|routed| {
-        routed.borrow().as_ref().map(|routed| {
-            let mut record = routed.record.clone();
-            if let Some(application) = record.application.as_mut() {
-                application
-                    .pinned_task
-                    .clone_from(&routed.pinned.lock().unwrap_or_else(PoisonError::into_inner));
-            }
-            record
-        })
-    })
-}
-
-/// Pin `task` for the rest of the application invocation the current
-/// host-route call runs under. Refused when another task is already pinned,
-/// and outside a host-route call, where no host-owned pin exists.
-pub fn pin_routed_application_task(task: &str) -> Result<(), OrbitError> {
-    ROUTED_CALLBACK.with(|routed| {
-        let routed = routed.borrow();
-        let Some(routed) = routed
-            .as_ref()
-            .filter(|routed| routed.record.application.is_some())
-        else {
-            return Err(OrbitError::CapabilityDenied(
-                "a pinned application callback runs only on the plugin host route".into(),
-            ));
-        };
-        let mut pinned = routed.pinned.lock().unwrap_or_else(PoisonError::into_inner);
-        match pinned.as_deref() {
-            Some(current) if current != task => Err(OrbitError::CapabilityDenied(
-                "application callback names a task other than the one this invocation pinned"
-                    .into(),
-            )),
-            Some(_) => Ok(()),
-            None => {
-                *pinned = Some(task.to_owned());
-                Ok(())
-            }
-        }
-    })
-}
-
 /// What a forwarded call came back with.
 #[derive(Debug)]
 pub enum HostRouteOutcome {
@@ -550,27 +497,6 @@ pub enum HostRouteOutcome {
     /// the host refused the request first. The caller audits it.
     Unanswered(OrbitError),
 }
-
-/// No other platform inherits descriptors, so no call is forwarded.
-#[cfg(not(unix))]
-pub fn forward_host_routed_callback(
-    _env: &orbit_common::Env,
-    _global_root: &Path,
-    _tool: &str,
-    _input: &Value,
-) -> Option<HostRouteOutcome> {
-    None
-}
-
-/// Largest request frame the host reads. A submission's raw message is
-/// bounded at 256 KiB before JSON escaping.
-const MAX_REQUEST_BYTES: u32 = 4 * 1024 * 1024;
-/// Largest response frame a caller reads: a digest lists every open request.
-const MAX_RESPONSE_BYTES: u32 = 64 * 1024 * 1024;
-const SCHEMA_VERSION: u64 = 1;
-
-/// The message a refusal carries when the frame names none a caller can read.
-const UNREADABLE_ERROR_MESSAGE: &str = "the host route answered with an unreadable error";
 
 /// A host error as the route carries it. The kinds a caller branches on keep
 /// their variant, decision refusals their stable code; everything else keeps
@@ -677,15 +603,6 @@ impl From<ErrorFrame> for PluginHostRouteError {
             _ => Self::Execution { message },
         }
     }
-}
-
-/// A value of `T` when the JSON has that shape, else absent.
-fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: DeserializeOwned,
-{
-    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
 }
 
 /// A frame section that is a JSON object of the expected shape, else its
@@ -830,6 +747,89 @@ impl From<PluginHostRouteReply> for HostRouteOutcome {
             PluginHostRouteReply::Unanswered { error } => Self::Unanswered(error.into()),
         }
     }
+}
+
+/// Whether `tool` is a callback the host route may run on the host: a
+/// decision-channel callback, or a tool an application consent may list as a
+/// callback.
+pub fn is_host_routed_callback_tool(tool: &str) -> bool {
+    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
+        || orbit_common::governance::authorization::application_callback_tool(tool)
+}
+
+/// Whether `record`'s child sends `tool` over the host route. An application
+/// callback tool is routed only for a session bound to an application;
+/// without one, a plugin granted the tool keeps calling it in its own
+/// sandbox, as before.
+pub(super) fn routes_on_host(record: &SessionRecord, tool: &str) -> bool {
+    DECISION_CHANNEL_CALLBACK_TOOLS.contains(&tool)
+        || (record.application.is_some()
+            && orbit_common::governance::authorization::application_callback_tool(tool))
+}
+
+/// The session the current thread is answering a host-route call for, with
+/// the task its application invocation has pinned so far.
+pub(super) fn routed_callback_record() -> Option<SessionRecord> {
+    ROUTED_CALLBACK.with(|routed| {
+        routed.borrow().as_ref().map(|routed| {
+            let mut record = routed.record.clone();
+            if let Some(application) = record.application.as_mut() {
+                application
+                    .pinned_task
+                    .clone_from(&routed.pinned.lock().unwrap_or_else(PoisonError::into_inner));
+            }
+            record
+        })
+    })
+}
+
+/// Pin `task` for the rest of the application invocation the current
+/// host-route call runs under. Refused when another task is already pinned,
+/// and outside a host-route call, where no host-owned pin exists.
+pub fn pin_routed_application_task(task: &str) -> Result<(), OrbitError> {
+    ROUTED_CALLBACK.with(|routed| {
+        let routed = routed.borrow();
+        let Some(routed) = routed
+            .as_ref()
+            .filter(|routed| routed.record.application.is_some())
+        else {
+            return Err(OrbitError::CapabilityDenied(
+                "a pinned application callback runs only on the plugin host route".into(),
+            ));
+        };
+        let mut pinned = routed.pinned.lock().unwrap_or_else(PoisonError::into_inner);
+        match pinned.as_deref() {
+            Some(current) if current != task => Err(OrbitError::CapabilityDenied(
+                "application callback names a task other than the one this invocation pinned"
+                    .into(),
+            )),
+            Some(_) => Ok(()),
+            None => {
+                *pinned = Some(task.to_owned());
+                Ok(())
+            }
+        }
+    })
+}
+
+/// No other platform inherits descriptors, so no call is forwarded.
+#[cfg(not(unix))]
+pub fn forward_host_routed_callback(
+    _env: &orbit_common::Env,
+    _global_root: &Path,
+    _tool: &str,
+    _input: &Value,
+) -> Option<HostRouteOutcome> {
+    None
+}
+
+/// A value of `T` when the JSON has that shape, else absent.
+fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
 }
 
 fn parse_request(body: &[u8]) -> Result<(String, Value), OrbitError> {

@@ -7,6 +7,9 @@ use super::model::{
     CHECKOUT_MARKERS, CheckoutEvidence, MAX_CHECKOUT_EVIDENCE_LINE_BYTES, MAX_SHA_LEN, MIN_SHA_LEN,
 };
 
+/// The prose `actions/checkout` prints in front of the commit it landed on.
+const HEAD_IS_NOW_AT: &str = "head is now at";
+
 pub(super) struct CheckoutEvidenceCollector {
     max_lines: usize,
     scan_limit: usize,
@@ -360,9 +363,6 @@ fn checkout_identity_command(payload: &str) -> Option<String> {
     }
     Some(command.to_string())
 }
-
-/// The prose `actions/checkout` prints in front of the commit it landed on.
-const HEAD_IS_NOW_AT: &str = "head is now at";
 
 /// The commit this line *names* as checked out, if it names one.
 ///

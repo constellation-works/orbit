@@ -9,6 +9,11 @@ use orbit_common::governance::tool_schema::tool_input_schema_for;
 use orbit_types::tool::ToolParam;
 use serde_json::{Map, Value};
 
+/// Keywords whose value is instance data rather than a subschema: a `$ref`
+/// key inside one of them is a plain object the tool exchanges, not a
+/// reference this walk may read.
+const SCHEMA_DATA_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
+
 /// A tool schema and the validator compiled from it, once, at load.
 ///
 /// Compiling here is what makes a nested unresolvable `$ref` or an invalid
@@ -58,10 +63,21 @@ impl CompiledSchema {
     }
 }
 
-/// Keywords whose value is instance data rather than a subschema: a `$ref`
-/// key inside one of them is a plain object the tool exchanges, not a
-/// reference this walk may read.
-const SCHEMA_DATA_KEYWORDS: &[&str] = &["const", "enum", "default", "examples"];
+impl std::fmt::Debug for CompiledSchema {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompiledSchema")
+            .field("schema", &self.schema)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The validator is a pure function of the document, so comparing documents
+/// compares what two compiled schemas accept.
+impl PartialEq for CompiledSchema {
+    fn eq(&self, other: &Self) -> bool {
+        self.schema == other.schema
+    }
+}
 
 /// Refuse a `$ref` that resolves to nothing, at any depth.
 ///
@@ -99,22 +115,6 @@ fn refuse_unresolvable_refs(root: &Value, node: &Value) -> Result<(), String> {
             .iter()
             .try_for_each(|item| refuse_unresolvable_refs(root, item)),
         _ => Ok(()),
-    }
-}
-
-impl std::fmt::Debug for CompiledSchema {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CompiledSchema")
-            .field("schema", &self.schema)
-            .finish_non_exhaustive()
-    }
-}
-
-/// The validator is a pure function of the document, so comparing documents
-/// compares what two compiled schemas accept.
-impl PartialEq for CompiledSchema {
-    fn eq(&self, other: &Self) -> bool {
-        self.schema == other.schema
     }
 }
 

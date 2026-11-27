@@ -7,6 +7,26 @@ use crate::{TIMEOUT_DEFAULT_MS, check_exec_result};
 /// The `gh run view --json` fields this tool projects.
 const RUN_VIEW_FIELDS: &str = "databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs";
 
+super::super::gh_tool! {
+    pub struct GithubRunViewTool;
+    name: "github.run.view";
+    description: "Inspect one GitHub Actions workflow run: its reported head SHA, event, branch, and every job with its URL, steps, and conclusions. Unsuccessful jobs and steps are also collected separately.";
+    parameters: [
+        super::super::tool_param("run", "Numeric workflow-run ID", "string", true),
+        super::super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
+    ];
+    request: |ctx, input| {
+        orbit_common::protocol::tool_input::reject_unknown_tool_fields(input, &["run", "repo"])?;
+        build_exec_request(input).map(|request| super::super::in_tool_workspace(request, ctx))
+    }
+    response: |_ctx, _input, result| {
+        check_exec_result(result, "gh run view")?;
+
+        let run = super::super::parse_gh_json(&result.stdout, "gh run view")?;
+        Ok(project_run_view(&run))
+    }
+}
+
 pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
     let mut args = vec![
         "run".to_string(),
@@ -131,24 +151,4 @@ pub fn project_run_view(run: &Value) -> Value {
         "jobs": jobs,
         "failed_jobs": failed_jobs,
     })
-}
-
-super::super::gh_tool! {
-    pub struct GithubRunViewTool;
-    name: "github.run.view";
-    description: "Inspect one GitHub Actions workflow run: its reported head SHA, event, branch, and every job with its URL, steps, and conclusions. Unsuccessful jobs and steps are also collected separately.";
-    parameters: [
-        super::super::tool_param("run", "Numeric workflow-run ID", "string", true),
-        super::super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
-    ];
-    request: |ctx, input| {
-        orbit_common::protocol::tool_input::reject_unknown_tool_fields(input, &["run", "repo"])?;
-        build_exec_request(input).map(|request| super::super::in_tool_workspace(request, ctx))
-    }
-    response: |_ctx, _input, result| {
-        check_exec_result(result, "gh run view")?;
-
-        let run = super::super::parse_gh_json(&result.stdout, "gh run view")?;
-        Ok(project_run_view(&run))
-    }
 }

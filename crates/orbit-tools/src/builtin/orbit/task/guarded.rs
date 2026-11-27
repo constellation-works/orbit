@@ -9,6 +9,15 @@ use orbit_common::{
 };
 use serde_json::{Value, json};
 
+const CREATE_ENVELOPE_KEYS: &[&str] = &["workspace", "request_id", "model"];
+const UPDATE_ENVELOPE_KEYS: &[&str] = &[
+    "workspace",
+    "request_id",
+    "id",
+    "expected_revision",
+    "model",
+];
+
 pub(crate) fn is_guarded(input: &Value) -> bool {
     GUARDED_SELECTOR_KEYS
         .iter()
@@ -103,15 +112,6 @@ fn validate_guarded_write_fields(
     spec.parse_input_fields(Value::Object(fields))?;
     Ok(())
 }
-
-const CREATE_ENVELOPE_KEYS: &[&str] = &["workspace", "request_id", "model"];
-const UPDATE_ENVELOPE_KEYS: &[&str] = &[
-    "workspace",
-    "request_id",
-    "id",
-    "expected_revision",
-    "model",
-];
 
 fn guarded_selectors_present(input: &Value) -> Vec<&str> {
     GUARDED_SELECTOR_KEYS

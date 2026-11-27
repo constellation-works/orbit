@@ -40,69 +40,6 @@ const RELEASE_HOSTS: [&str; 2] = ["api.github.com", "github.com"];
 /// Most redirects one release request follows, matching reqwest's default.
 const MAX_RELEASE_REDIRECTS: usize = 10;
 
-/// Parse a release request URL, requiring HTTPS to a GitHub release host.
-///
-/// Release metadata and artifacts never travel in cleartext. The configured
-/// repository name only ever lands in the path, so this also pins the host.
-/// Code scanning treats the returned URL as a cleartext-transmission barrier
-/// (`.github/codeql/extensions/orbit-rust-release-transport`).
-pub(super) fn validated_release_url(url: &str) -> Result<reqwest::Url, OrbitError> {
-    let parsed = reqwest::Url::parse(url).map_err(|error| {
-        OrbitError::InvalidInput(format!("release URL '{url}' is not a URL: {error}"))
-    })?;
-    let host_allowed = parsed
-        .host_str()
-        .is_some_and(|host| RELEASE_HOSTS.contains(&host));
-    if parsed.scheme() != "https" || !host_allowed {
-        return Err(OrbitError::InvalidInput(format!(
-            "release URL '{url}' must be https:// on {}",
-            RELEASE_HOSTS.join(" or ")
-        )));
-    }
-    Ok(parsed)
-}
-
-/// Follow redirects only while they stay on HTTPS.
-fn https_redirect_policy() -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(|attempt| {
-        if attempt.url().scheme() != "https" {
-            let refused = format!("refusing a non-HTTPS release redirect to {}", attempt.url());
-            attempt.error(refused)
-        } else if attempt.previous().len() >= MAX_RELEASE_REDIRECTS {
-            attempt.error("too many release redirects")
-        } else {
-            attempt.follow()
-        }
-    })
-}
-
-/// Build the release source this process should use.
-///
-/// A configured mirror wins over the network so an air-gapped host never
-/// silently reaches out.
-pub fn release_source_from_env(env: &Env) -> Box<dyn ReleaseSource> {
-    if let Some(dir) = env
-        .orbit_update_release_dir()
-        .filter(|value| !value.is_empty())
-    {
-        return Box::new(DirectoryReleaseSource::new(PathBuf::from(dir)));
-    }
-    let repo = env
-        .orbit_install_repo()
-        .and_then(OsStr::to_str)
-        .filter(|value| !value.is_empty())
-        .map_or_else(|| DEFAULT_RELEASE_REPO.to_string(), str::to_string);
-    #[cfg(all(feature = "test-release-api-base", debug_assertions))]
-    let test_api_base = env
-        .orbit_test_release_api_base()
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string_lossy().into_owned());
-    let source = HttpReleaseSource::new(repo);
-    #[cfg(all(feature = "test-release-api-base", debug_assertions))]
-    let source = source.with_test_api_base(test_api_base);
-    Box::new(source)
-}
-
 /// GitHub Releases over HTTPS.
 #[derive(Debug, Clone)]
 pub struct HttpReleaseSource {
@@ -176,35 +113,6 @@ impl HttpReleaseSource {
 
         validated_release_url(&format!("https://api.github.com/{path}"))
     }
-}
-
-/// Validate the loopback-only endpoint used by the CLI process-test feature.
-#[cfg(all(feature = "test-release-api-base", debug_assertions))]
-fn test_release_api_url(base: &str, path: &str) -> Result<reqwest::Url, OrbitError> {
-    let parsed = reqwest::Url::parse(base).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "test release API base '{base}' is not a URL: {error}"
-        ))
-    })?;
-    let loopback_ip = parsed
-        .host_str()
-        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
-        .is_some_and(|address| address.is_loopback());
-    if parsed.scheme() != "http"
-        || !loopback_ip
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.path() != "/"
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err(OrbitError::InvalidInput(
-            "test release API base must be an HTTP loopback origin".to_string(),
-        ));
-    }
-    parsed.join(path).map_err(|error| {
-        OrbitError::InvalidInput(format!("test release API path is invalid: {error}"))
-    })
 }
 
 impl ReleaseSource for HttpReleaseSource {
@@ -329,4 +237,96 @@ impl ReleaseSource for DirectoryReleaseSource {
             asset_limit(asset),
         )
     }
+}
+
+/// Parse a release request URL, requiring HTTPS to a GitHub release host.
+///
+/// Release metadata and artifacts never travel in cleartext. The configured
+/// repository name only ever lands in the path, so this also pins the host.
+/// Code scanning treats the returned URL as a cleartext-transmission barrier
+/// (`.github/codeql/extensions/orbit-rust-release-transport`).
+pub(super) fn validated_release_url(url: &str) -> Result<reqwest::Url, OrbitError> {
+    let parsed = reqwest::Url::parse(url).map_err(|error| {
+        OrbitError::InvalidInput(format!("release URL '{url}' is not a URL: {error}"))
+    })?;
+    let host_allowed = parsed
+        .host_str()
+        .is_some_and(|host| RELEASE_HOSTS.contains(&host));
+    if parsed.scheme() != "https" || !host_allowed {
+        return Err(OrbitError::InvalidInput(format!(
+            "release URL '{url}' must be https:// on {}",
+            RELEASE_HOSTS.join(" or ")
+        )));
+    }
+    Ok(parsed)
+}
+
+/// Follow redirects only while they stay on HTTPS.
+fn https_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.url().scheme() != "https" {
+            let refused = format!("refusing a non-HTTPS release redirect to {}", attempt.url());
+            attempt.error(refused)
+        } else if attempt.previous().len() >= MAX_RELEASE_REDIRECTS {
+            attempt.error("too many release redirects")
+        } else {
+            attempt.follow()
+        }
+    })
+}
+
+/// Build the release source this process should use.
+///
+/// A configured mirror wins over the network so an air-gapped host never
+/// silently reaches out.
+pub fn release_source_from_env(env: &Env) -> Box<dyn ReleaseSource> {
+    if let Some(dir) = env
+        .orbit_update_release_dir()
+        .filter(|value| !value.is_empty())
+    {
+        return Box::new(DirectoryReleaseSource::new(PathBuf::from(dir)));
+    }
+    let repo = env
+        .orbit_install_repo()
+        .and_then(OsStr::to_str)
+        .filter(|value| !value.is_empty())
+        .map_or_else(|| DEFAULT_RELEASE_REPO.to_string(), str::to_string);
+    #[cfg(all(feature = "test-release-api-base", debug_assertions))]
+    let test_api_base = env
+        .orbit_test_release_api_base()
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string_lossy().into_owned());
+    let source = HttpReleaseSource::new(repo);
+    #[cfg(all(feature = "test-release-api-base", debug_assertions))]
+    let source = source.with_test_api_base(test_api_base);
+    Box::new(source)
+}
+
+/// Validate the loopback-only endpoint used by the CLI process-test feature.
+#[cfg(all(feature = "test-release-api-base", debug_assertions))]
+fn test_release_api_url(base: &str, path: &str) -> Result<reqwest::Url, OrbitError> {
+    let parsed = reqwest::Url::parse(base).map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "test release API base '{base}' is not a URL: {error}"
+        ))
+    })?;
+    let loopback_ip = parsed
+        .host_str()
+        .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+        .is_some_and(|address| address.is_loopback());
+    if parsed.scheme() != "http"
+        || !loopback_ip
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(OrbitError::InvalidInput(
+            "test release API base must be an HTTP loopback origin".to_string(),
+        ));
+    }
+    parsed.join(path).map_err(|error| {
+        OrbitError::InvalidInput(format!("test release API path is invalid: {error}"))
+    })
 }

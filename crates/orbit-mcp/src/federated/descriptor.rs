@@ -88,14 +88,15 @@ impl WorkspaceDescriptor {
             &destination.machine_id,
             workspace.owner_machine_id.as_deref(),
         );
+        let selector = selector_for(&destination.machine_id, &workspace.id);
         Self {
-            selector: selector_for(&destination.machine_id, &workspace.id),
+            workspace: Some(workspace_for_discovery(workspace)),
+            selector,
             machine_name: destination.machine_name_display().to_string(),
             machine_id: destination.machine_id.clone(),
             reachability: Reachability::Reachable,
             checkout_health,
             capabilities,
-            workspace: Some(workspace_for_discovery(workspace)),
             crews: Map::new(),
         }
     }

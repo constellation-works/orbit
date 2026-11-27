@@ -1,18 +1,5 @@
 //! The adapter-owned read-only presentation tool and its actions.
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PresentationKind {
-    Open,
-    Inspect,
-}
-
-/// One action of the presentation tool and the host entrypoint it serves.
-pub(crate) struct PresentationAction {
-    pub action: &'static str,
-    pub entrypoint: &'static str,
-    pub kind: PresentationKind,
-}
-
 /// The presentation tool's advertised and canonical names.
 pub(crate) const PRESENTATION_TOOL_NAME: &str = "orbit_ui";
 pub(crate) const PRESENTATION_TOOL_ALIAS: &str = "orbit.ui";
@@ -30,6 +17,19 @@ pub(crate) const PRESENTATION_ACTIONS: &[PresentationAction] = &[
         kind: PresentationKind::Inspect,
     },
 ];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PresentationKind {
+    Open,
+    Inspect,
+}
+
+/// One action of the presentation tool and the host entrypoint it serves.
+pub(crate) struct PresentationAction {
+    pub action: &'static str,
+    pub entrypoint: &'static str,
+    pub kind: PresentationKind,
+}
 
 pub(crate) fn is_presentation_tool(name: &str) -> bool {
     name == PRESENTATION_TOOL_NAME || name == PRESENTATION_TOOL_ALIAS

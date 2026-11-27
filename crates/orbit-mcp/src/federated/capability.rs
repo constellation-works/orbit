@@ -34,6 +34,49 @@ impl McpToolClass {
     }
 }
 
+/// Capability classes a destination advertises for one workspace checkout.
+///
+/// Advertisement is a hint that may lag; destination Core refusal stays the
+/// correctness boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapabilityClasses {
+    control_plane: bool,
+    execute: bool,
+}
+
+impl CapabilityClasses {
+    pub fn new(control_plane: bool, execute: bool) -> Self {
+        Self {
+            control_plane,
+            execute,
+        }
+    }
+
+    /// Advertisement helper: the classes this local checkout holds.
+    ///
+    /// An owner checkout is the workspace's control-plane authority and also
+    /// runs work locally today. A replica is an execution binding only. A
+    /// workspace whose logical record omits `owner_machine_id` predates host
+    /// identity and cannot advertise `control_plane` at all. A missing checkout
+    /// role is the legacy standalone shape that registry validation
+    /// canonicalizes to owner.
+    pub fn for_checkout(workspace: &Workspace, checkout: &WorkspaceCheckout) -> Self {
+        let is_replica = checkout.role == Some(WorkspaceCheckoutRole::Replica);
+        Self {
+            control_plane: !is_replica && workspace.owner_machine_id.is_some(),
+            execute: true,
+        }
+    }
+
+    pub fn holds(self, class: McpToolClass) -> bool {
+        match class {
+            McpToolClass::Unclassified => true,
+            McpToolClass::ControlPlane => self.control_plane,
+            McpToolClass::Execute => self.execute,
+        }
+    }
+}
+
 /// Classify public tools and internal drain operations by behavior.
 ///
 /// Accepts either the canonical (`orbit.task.add`) or advertised
@@ -103,49 +146,6 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_workflow_run_show"
         | "orbit_workflow_run_resume" => McpToolClass::Execute,
         _ => McpToolClass::Unclassified,
-    }
-}
-
-/// Capability classes a destination advertises for one workspace checkout.
-///
-/// Advertisement is a hint that may lag; destination Core refusal stays the
-/// correctness boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CapabilityClasses {
-    control_plane: bool,
-    execute: bool,
-}
-
-impl CapabilityClasses {
-    pub fn new(control_plane: bool, execute: bool) -> Self {
-        Self {
-            control_plane,
-            execute,
-        }
-    }
-
-    /// Advertisement helper: the classes this local checkout holds.
-    ///
-    /// An owner checkout is the workspace's control-plane authority and also
-    /// runs work locally today. A replica is an execution binding only. A
-    /// workspace whose logical record omits `owner_machine_id` predates host
-    /// identity and cannot advertise `control_plane` at all. A missing checkout
-    /// role is the legacy standalone shape that registry validation
-    /// canonicalizes to owner.
-    pub fn for_checkout(workspace: &Workspace, checkout: &WorkspaceCheckout) -> Self {
-        let is_replica = checkout.role == Some(WorkspaceCheckoutRole::Replica);
-        Self {
-            control_plane: !is_replica && workspace.owner_machine_id.is_some(),
-            execute: true,
-        }
-    }
-
-    pub fn holds(self, class: McpToolClass) -> bool {
-        match class {
-            McpToolClass::Unclassified => true,
-            McpToolClass::ControlPlane => self.control_plane,
-            McpToolClass::Execute => self.execute,
-        }
     }
 }
 

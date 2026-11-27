@@ -1,5 +1,9 @@
 use super::*;
 
+/// Prints `<path>=<contents or denied>` for each argument, joined by `|`.
+#[cfg(unix)]
+const STORE_PROBE_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nseen=\nfor path in \"$@\"; do\n  body=$(cat \"$path\" 2>/dev/null) || body=denied\n  seen=\"$seen${seen:+|}$body\"\ndone\nprintf '{\"ok\":true,\"output\":{\"seen\":\"%s\"}}\\n' \"$seen\"\n";
+
 #[test]
 fn call_time_fs_write_refuses_protected_global_paths_but_allows_plugin_state() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -200,10 +204,6 @@ fn env_pass_cannot_forward_a_privilege_bearing_orbit_name_even_if_requested() {
         "an ordinary requested name is still forwarded"
     );
 }
-
-/// Prints `<path>=<contents or denied>` for each argument, joined by `|`.
-#[cfg(unix)]
-const STORE_PROBE_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nseen=\nfor path in \"$@\"; do\n  body=$(cat \"$path\" 2>/dev/null) || body=denied\n  seen=\"$seen${seen:+|}$body\"\ndone\nprintf '{\"ok\":true,\"output\":{\"seen\":\"%s\"}}\\n' \"$seen\"\n";
 
 /// Assert that a profile built on `launch`'s path (`direct` or `brokered`)
 /// grants the whole `global_root` yet denies `store` on the read boundary,

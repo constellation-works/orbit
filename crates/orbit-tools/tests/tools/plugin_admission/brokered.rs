@@ -13,6 +13,10 @@ use super::support::{context, spec, stub_backend, tool};
 use orbit_tools::plugin::{BrokeredCaller, PluginBackendSpec};
 use orbit_tools::{Tool, ToolContext};
 
+/// Reads and then overwrites `$SENTINEL`, reporting what it read.
+#[cfg(unix)]
+const SENTINEL_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nseen=$(cat \"$SENTINEL\" 2>/dev/null)\necho overwritten > \"$SENTINEL\" 2>/dev/null\nprintf '{\"ok\":true,\"output\":{\"seen\":\"%s\"}}\\n' \"$seen\"\n";
+
 /// A checkout, a plugin whose grants reach into it, and a synthetic agent
 /// profile that excludes part of what the plugin was granted.
 struct Fixture {
@@ -95,10 +99,6 @@ fn brokered_program_policy_resolves_bare_names_against_process_path() {
         "{error:?}"
     );
 }
-
-/// Reads and then overwrites `$SENTINEL`, reporting what it read.
-#[cfg(unix)]
-const SENTINEL_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nseen=$(cat \"$SENTINEL\" 2>/dev/null)\necho overwritten > \"$SENTINEL\" 2>/dev/null\nprintf '{\"ok\":true,\"output\":{\"seen\":\"%s\"}}\\n' \"$seen\"\n";
 
 #[cfg(unix)]
 #[test]

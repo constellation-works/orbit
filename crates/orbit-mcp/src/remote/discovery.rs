@@ -21,6 +21,9 @@ use serde_json::{Value, json};
 pub const FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL: &str =
     "orbit_federated_destination_workspace_list";
 
+/// `include` value that attaches each workspace's effective crews to its row.
+pub const WORKSPACE_LIST_INCLUDE_CREWS: &str = "crews";
+
 /// What a destination says about itself on every discovery envelope.
 ///
 /// `machine_id` is the v1 key. The other four are additive [ORB-14448]: a
@@ -86,9 +89,6 @@ pub(crate) fn workspace_for_discovery(mut workspace: Workspace) -> Workspace {
     workspace.git_remote = workspace.git_remote.as_deref().map(redact_git_remote);
     workspace
 }
-
-/// `include` value that attaches each workspace's effective crews to its row.
-pub const WORKSPACE_LIST_INCLUDE_CREWS: &str = "crews";
 
 pub(super) fn discovery_tool_definitions() -> Result<Vec<McpToolDefinition>, McpToolDefinitionError>
 {

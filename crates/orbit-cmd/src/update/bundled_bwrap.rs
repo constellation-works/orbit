@@ -20,12 +20,6 @@ use orbit_common::{Env, OrbitError};
 
 use super::source::{ReleaseSource, release_source_from_env};
 
-/// Release asset holding the static Bubblewrap for `arch`
-/// (`std::env::consts::ARCH`), or `None` where none is published.
-pub fn bundled_bwrap_asset_name(arch: &str) -> Option<String> {
-    matches!(arch, "x86_64" | "aarch64").then(|| format!("orbit-bwrap-{arch}-linux"))
-}
-
 /// An authenticated bundled Bubblewrap in a private directory, removed on drop.
 #[derive(Debug)]
 pub struct StagedBwrap {
@@ -42,6 +36,12 @@ impl StagedBwrap {
     pub fn path(&self) -> &Path {
         &self.path
     }
+}
+
+/// Release asset holding the static Bubblewrap for `arch`
+/// (`std::env::consts::ARCH`), or `None` where none is published.
+pub fn bundled_bwrap_asset_name(arch: &str) -> Option<String> {
+    matches!(arch, "x86_64" | "aarch64").then(|| format!("orbit-bwrap-{arch}-linux"))
 }
 
 /// Fetch and authenticate `asset` as published with `version`.

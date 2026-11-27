@@ -3,6 +3,16 @@ use super::guard::active_guard;
 use super::{request, *};
 use orbit_exec::ExecRequest;
 use std::time::Instant;
+
+/// The reset a completion-style caller waits for, from the shared record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SharedReset {
+    /// The guard is off: the caller reads the endpoint itself.
+    Unguarded,
+    /// The record's latest exhausted reset among the asked resources, if any.
+    Guarded(Option<u64>),
+}
+
 /// The opaque record key for the GitHub host and credential `request` uses.
 pub fn request_account_key(env: &orbit_common::Env, request: &ExecRequest) -> String {
     request::request_account(env, request)
@@ -14,15 +24,6 @@ pub fn inherited_account_key(env: &orbit_common::Env) -> String {
         env,
         &crate::gh_request::gh_exec_request(Vec::new(), None, 0),
     )
-}
-
-/// The reset a completion-style caller waits for, from the shared record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SharedReset {
-    /// The guard is off: the caller reads the endpoint itself.
-    Unguarded,
-    /// The record's latest exhausted reset among the asked resources, if any.
-    Guarded(Option<u64>),
 }
 
 /// The latest exhausted reset of `resources` for the account `request` uses,

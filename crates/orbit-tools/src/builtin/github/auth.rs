@@ -5,6 +5,37 @@ use serde_json::{Value, json};
 
 use crate::TIMEOUT_DEFAULT_MS;
 
+super::gh_tool! {
+    pub struct GithubAuthStatusTool;
+    name: "github.auth.status";
+    description: "Preflight the GitHub CLI surface (`available` and `authenticated`); neither absence nor missing credentials is an error. Quota details: the orbit skill's tool-surface-registry.md reference, section `GitHub auth status`.";
+    parameters: [];
+    execute: |ctx, input| {
+        let req = build_exec_request(&input)?;
+        // A missing `gh`, or a sandbox that denies executing it, surfaces here
+        // as a spawn error. That is a capability answer, not a tool fault.
+        let result = match orbit_exec::run_process(&ctx.env, &req, &orbit_exec::NoSandbox) {
+            Ok(result) => result,
+            Err(error) => {
+                return Ok(unavailable(ctx, redact_all(&error.to_string())));
+            }
+        };
+
+        Ok(json!({
+            "available": true,
+            "authenticated": result.success,
+            "stdout": redact_all(&result.stdout),
+            "stderr": redact_all(&result.stderr),
+            "detail": if result.success {
+                "GitHub CLI is authenticated on this execution lane"
+            } else {
+                "GitHub CLI is present but holds no usable credentials on this execution lane"
+            },
+            "quota": quota_status(ctx),
+        }))
+    }
+}
+
 pub fn build_exec_request(_input: &Value) -> Result<ExecRequest, OrbitError> {
     Ok(super::gh_exec_request(
         vec!["auth".to_string(), "status".to_string()],
@@ -37,35 +68,4 @@ fn quota_status(ctx: &crate::ToolContext) -> Value {
     crate::github_quota::host_quota_status(&ctx.env)
         .and_then(|status| serde_json::to_value(status).ok())
         .unwrap_or(Value::Null)
-}
-
-super::gh_tool! {
-    pub struct GithubAuthStatusTool;
-    name: "github.auth.status";
-    description: "Preflight the GitHub CLI surface (`available` and `authenticated`); neither absence nor missing credentials is an error. Quota details: the orbit skill's tool-surface-registry.md reference, section `GitHub auth status`.";
-    parameters: [];
-    execute: |ctx, input| {
-        let req = build_exec_request(&input)?;
-        // A missing `gh`, or a sandbox that denies executing it, surfaces here
-        // as a spawn error. That is a capability answer, not a tool fault.
-        let result = match orbit_exec::run_process(&ctx.env, &req, &orbit_exec::NoSandbox) {
-            Ok(result) => result,
-            Err(error) => {
-                return Ok(unavailable(ctx, redact_all(&error.to_string())));
-            }
-        };
-
-        Ok(json!({
-            "available": true,
-            "authenticated": result.success,
-            "stdout": redact_all(&result.stdout),
-            "stderr": redact_all(&result.stderr),
-            "detail": if result.success {
-                "GitHub CLI is authenticated on this execution lane"
-            } else {
-                "GitHub CLI is present but holds no usable credentials on this execution lane"
-            },
-            "quota": quota_status(ctx),
-        }))
-    }
 }

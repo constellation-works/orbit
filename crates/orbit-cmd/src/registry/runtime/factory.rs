@@ -7,6 +7,17 @@ use orbit_core::composition::{
 };
 use orbit_types::plugin::InstalledPlugin;
 
+/// The layered runtime configuration file, read from both `global_root` and
+/// the checkout's `.orbit` directory (`orbit_config::ConfigRoots`).
+const CONFIG_TOML_FILE: &str = "config.toml";
+
+/// Admit retry attempts for fifteen seconds. An attempt already in SQLite may
+/// consume its five-second busy timeout, so wall-clock bootstrap is bounded to
+/// twenty seconds. The parent observer has no shorter kill deadline and keeps
+/// supervising an unclaimed pending child throughout this recovery window.
+const PIPELINE_WORKER_BOOTSTRAP_RETRY_DEADLINE: Duration = Duration::from_secs(15);
+const PIPELINE_WORKER_BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Registered workspace metadata keeps the logical catalog ID distinct from the
 /// task/runtime ID stored in `.orbit/config.yaml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,10 +135,6 @@ impl RegisteredRuntimeStamp {
     }
 }
 
-/// The layered runtime configuration file, read from both `global_root` and
-/// the checkout's `.orbit` directory (`orbit_config::ConfigRoots`).
-const CONFIG_TOML_FILE: &str = "config.toml";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileStamp(Option<(SystemTime, u64)>);
 
@@ -139,16 +146,6 @@ impl FileStamp {
                 .ok(),
         )
     }
-}
-
-/// Build Core's authoritative runtime binding for a registered checkout.
-/// The runtime ID deliberately comes from config.yaml rather than the logical
-/// registry record because legacy installations may validly differ (L-0098).
-pub fn workspace_runtime_binding(
-    workspace: &Workspace,
-    checkout: &WorkspaceCheckout,
-) -> Result<WorkspaceRuntimeBinding, OrbitError> {
-    orbit_core::runtime::workspace_runtime_binding(workspace, checkout)
 }
 
 /// How much state opening a runtime may write.
@@ -166,13 +163,6 @@ enum OpenAccess {
 /// Registry-aware runtime factory. Registered checkouts carry an explicit
 /// Core workspace binding.
 pub struct RegisteredRuntimeFactory;
-
-/// Admit retry attempts for fifteen seconds. An attempt already in SQLite may
-/// consume its five-second busy timeout, so wall-clock bootstrap is bounded to
-/// twenty seconds. The parent observer has no shorter kill deadline and keeps
-/// supervising an unclaimed pending child throughout this recovery window.
-const PIPELINE_WORKER_BOOTSTRAP_RETRY_DEADLINE: Duration = Duration::from_secs(15);
-const PIPELINE_WORKER_BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
 impl RegisteredRuntimeFactory {
     /// The opaque handle a one-command process passes to an app's `exec`,
@@ -899,4 +889,14 @@ impl RegisteredRuntimeFactory {
             )
         })
     }
+}
+
+/// Build Core's authoritative runtime binding for a registered checkout.
+/// The runtime ID deliberately comes from config.yaml rather than the logical
+/// registry record because legacy installations may validly differ (L-0098).
+pub fn workspace_runtime_binding(
+    workspace: &Workspace,
+    checkout: &WorkspaceCheckout,
+) -> Result<WorkspaceRuntimeBinding, OrbitError> {
+    orbit_core::runtime::workspace_runtime_binding(workspace, checkout)
 }
