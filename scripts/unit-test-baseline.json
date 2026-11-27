@@ -731,6 +731,7 @@
     },
     "orbit-web": {
       "test_function_paths": [
+        "api/tests/activity.rs::remote_access_http_snapshot_excludes_out_of_order_expired_activity",
         "api/tests/codebase_blocking.rs::codebase_file_rollup_rank_runs_on_blocking_pool_on_memo_hit",
         "api/tests/handlers.rs::non_operator_dashboard_on_a_terminal_refuses_governed_writes",
         "api/tests/handlers.rs::routine_health_clock_token_for_each_status_combination",

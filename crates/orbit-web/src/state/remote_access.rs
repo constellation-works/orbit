@@ -576,14 +576,24 @@ fn device_key(device: Option<IpAddr>) -> String {
     device.map_or_else(|| "unknown".to_string(), |ip| ip.to_string())
 }
 
-/// Add one to the newest bucket and drop buckets that left the window.
+/// Add one to the bucket holding `now` and drop buckets that left the window.
+///
+/// Timestamps are sampled before the activity lock is taken, so they can
+/// arrive out of order. Buckets stay sorted by slot, so [`prune`] can stop at
+/// its first live bucket. A late event is counted against the newest bucket's
+/// window and dropped when it is already outside it.
 fn bump(buckets: &mut VecDeque<(i64, u64)>, window: Window, now: i64) {
     let slot = window.slot(now);
-    match buckets.back_mut() {
-        Some((last, count)) if *last == slot => *count += 1,
-        _ => buckets.push_back((slot, 1)),
+    let newest = buckets.back().map_or(slot, |(last, _)| (*last).max(slot));
+    let reference = now.max(newest.saturating_mul(window.bucket_secs));
+    if window.is_live(slot, reference) {
+        let after = buckets.partition_point(|(at, _)| *at < slot);
+        match buckets.get_mut(after) {
+            Some((at, count)) if *at == slot => *count += 1,
+            _ => buckets.insert(after, (slot, 1)),
+        }
     }
-    prune(buckets, window, now);
+    prune(buckets, window, reference);
 }
 
 fn prune(buckets: &mut VecDeque<(i64, u64)>, window: Window, now: i64) {
