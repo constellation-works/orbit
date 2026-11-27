@@ -117,16 +117,33 @@ function historyStructured(entry, parsed) {
   return decision && typeof decision === "object" ? decision : null;
 }
 
+// Mirrors `history_note_summary` in `orbit-types` (the CLI's `orbit task show`):
+// only these human-oriented fields are eligible, so schema ids, run and
+// operation ids and digests never reach the collapsed row. Change both together.
+const HISTORY_SUMMARY_TEXT_FIELDS = [
+  "summary", "disposition", "verdict", "blocker", "detail", "tool", "phase", "ref", "outcome", "status", "code",
+];
+const HISTORY_SUMMARY_MAX_CHARS = 75;
+
+// Words of a field that are neither a `sha256` digest nor a 32+ character hex run.
+function historySummaryWords(value) {
+  if (typeof value !== "string") return "";
+  return value
+    .split(/\s+/)
+    .filter((word) => word && !word.toLowerCase().includes("sha256")
+      && !word.split(/[^0-9a-fA-F]/).some((part) => part.length >= 32))
+    .join(" ");
+}
+
 function historyJsonSummary(data) {
   if (Array.isArray(data)) return historyCountLabel(data.length, "item");
-  const pairs = Object.entries(data)
-    .filter(([, value]) => value == null || typeof value !== "object")
-    .slice(0, 2)
-    .map(([key, value]) => {
-      const text = String(value);
-      return `${key}: ${text.length > 40 ? `${text.slice(0, 40)}…` : text}`;
-    });
-  return pairs.length ? pairs.join(" · ") : historyCountLabel(Object.keys(data).length, "field");
+  const parts = HISTORY_SUMMARY_TEXT_FIELDS.map((key) => historySummaryWords(data[key])).filter(Boolean);
+  const classification = historySummaryWords(data.classification);
+  if (classification) parts.push(`classification=${classification}`);
+  if (Number.isInteger(data.attempts) && data.attempts >= 0) parts.push(`attempts=${data.attempts}`);
+  const summary = parts.length ? parts.join(" · ") : "structured note";
+  const chars = Array.from(summary);
+  return chars.length > HISTORY_SUMMARY_MAX_CHARS ? `${chars.slice(0, HISTORY_SUMMARY_MAX_CHARS).join("")}…` : summary;
 }
 
 // The sentence after the actor, as `{ parts, note, fallback }`. `note` is the

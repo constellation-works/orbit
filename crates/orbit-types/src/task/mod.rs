@@ -7,6 +7,9 @@ mod epic;
 mod error;
 mod fields_updated;
 mod granted_tools;
+
+mod history_note;
+
 mod host_labels;
 mod light_delivery;
 mod model;
@@ -73,6 +76,9 @@ pub use granted_tools::{
     GRANTED_TOOLS_CHANGED_EVENT, GRANTED_TOOLS_FIELD, TOOL_NAMES_MIGRATED_EVENT,
     granted_tools_change_note, tool_names_migrated_note,
 };
+
+pub use history_note::history_note_summary;
+
 pub use host_labels::{
     MAX_HOST_LABEL_BYTES, REQUIRES_LABELS_FIELD, TAG_REQUIRES_LABELS_KEY, TagLabelRequirements,
     effective_host_labels, host_labels_unavailable, host_labels_wait, missing_host_labels,
