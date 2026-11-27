@@ -844,12 +844,14 @@ fn opaque_affected_test_record_names_all_uncovered_deferrals() {
             .collect();
         let mut validation = vec![
             json!({"id":"V1", "command":"fixture check", "outcome":"passed", "role":"required"}),
-            json!({"id":"V8", "command":broad, "outcome":"passed", "role":"required", "deferred":notices}),
+            json!({"id":"V8", "command":broad, "outcome":"passed", "role":"required",
+                "deferred":notices}),
         ];
         let mut evidence = Vec::new();
         for (index, test) in tests.iter().enumerate() {
             let command = lib_requirement(test);
-            validation.push(json!({"id":format!("V{}", index + 11), "command":command, "outcome":"not_run", "role":"required"}));
+            validation.push(json!({"id":format!("V{}", index + 11), "command":command,
+                "outcome":"not_run", "role":"required"}));
             evidence.push(
                 json!({"kind":"host_sandbox_test", "name":test, "command":command,
                 "artifact":format!("evidence/sandbox-{index}.json"), "os":"linux"}),
