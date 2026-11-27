@@ -1,7 +1,7 @@
 use orbit_common::Env;
 
-use super::super::{Commands, Execute, ExecuteCore};
 use super::spec::*;
+use crate::command::{Commands, ExecuteCore};
 
 impl Commands {
     /// Resolve all cross-cutting behavior for this command from one exhaustive
@@ -29,9 +29,9 @@ impl Commands {
                         id,
                     )),
                     None,
-                    runtime_dispatch!(Application),
+                    // The review app's `exec` authorizes `application` commands.
+                    core_dispatch!(Application),
                 )
-                .governed_when(true, "application", subcommand)
             }
             Commands::Init(_) => CommandOperation::new(
                 RuntimeNeed::Forbidden,

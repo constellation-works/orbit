@@ -6,8 +6,8 @@
 //! the one chokepoint in `exec.rs`, which authorizes and audits the command.
 //! `agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`,
 //! `config`, `crew_memory`, `doctor`, `evolution`, `experiment`, `friction`, `gc`,
-//! `host`, `notice`, `plugin`, `resident`, `routine`, `run`, `search`, `skill`, `task`
-//! and `workspace` are apps; `host` opens no workspace, so it has no `exec` and
+//! `host`, `notice`, `plugin`, `resident`, `review`, `routine`, `run`, `search`,
+//! `skill`, `task` and `workspace` are apps; `host` opens no workspace, so it has no `exec` and
 //! its surfaces call it directly. The other subjects still live in `application/` and
 //! are reached through `OrbitRuntime`.
 
@@ -46,6 +46,8 @@ pub mod notice;
 pub mod plugin;
 
 pub mod resident;
+
+pub mod review;
 
 pub mod routine;
 

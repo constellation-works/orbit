@@ -1,14 +1,17 @@
 //! Operator consent and credential lifecycle for scoped applications.
 
-use crate::command::{CommandOut, Execute, Payload};
+use std::path::PathBuf;
+
 use chrono::SecondsFormat;
 use clap::{Args, Subcommand};
-use orbit_core::OrbitRuntime;
+use orbit_core::app::review;
+use orbit_core::{Core, OrbitError};
 use orbit_types::tool::{
     ApplicationConsent, ApplicationConstraint, ApplicationOperation, ApplicationScope,
     ApplicationTaskPredicate,
 };
-use std::path::PathBuf;
+
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 #[command(
@@ -18,6 +21,40 @@ use std::path::PathBuf;
 pub struct ApplicationCommand {
     #[command(subcommand)]
     pub command: ApplicationSubcommand,
+}
+
+impl ExecuteCore for ApplicationCommand {
+    fn execute(self, core: &Core) -> CommandOut {
+        let command = match self.command {
+            ApplicationSubcommand::Consent(args) => review::Command::ConsentApplication {
+                input_file: args.input_file,
+                credential_file: args.credential_file,
+            },
+            ApplicationSubcommand::Rotate(args) => review::Command::RotateApplication {
+                consent_id: args.consent_id,
+                input_file: args.consent.input_file,
+                credential_file: args.consent.credential_file,
+            },
+            ApplicationSubcommand::Revoke(args) => review::Command::RevokeApplication {
+                consent_id: args.consent_id,
+            },
+        };
+        match review::exec(core, command)? {
+            review::Outcome::ApplicationConsented(consent) => Ok(Payload::detail(
+                serde_json::json!(consent),
+                consent_issued_text(&consent),
+            )
+            .into()),
+            review::Outcome::ApplicationRevoked { consent_id } => Ok(Payload::detail(
+                serde_json::json!({"revoked": consent_id}),
+                "Application consent revoked.\n",
+            )
+            .into()),
+            _ => Err(OrbitError::Execution(
+                "review app answered application command with unexpected outcome".to_string(),
+            )),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -50,32 +87,6 @@ pub struct ApplicationRotateArgs {
 #[derive(Args)]
 pub struct ApplicationRevokeArgs {
     pub consent_id: String,
-}
-
-impl Execute for ApplicationCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let consent = match self.command {
-            ApplicationSubcommand::Consent(args) => runtime.provision_application_from_file(
-                &args.input_file,
-                &args.credential_file,
-                None,
-            )?,
-            ApplicationSubcommand::Rotate(args) => runtime.provision_application_from_file(
-                &args.consent.input_file,
-                &args.consent.credential_file,
-                Some(&args.consent_id),
-            )?,
-            ApplicationSubcommand::Revoke(args) => {
-                runtime.revoke_application(&args.consent_id, &Default::default())?;
-                return Ok(Payload::detail(
-                    serde_json::json!({"revoked": args.consent_id}),
-                    "Application consent revoked.\n",
-                )
-                .into());
-            }
-        };
-        Ok(Payload::detail(serde_json::json!(consent), consent_issued_text(&consent)).into())
-    }
 }
 
 /// One plain line per constrained scope, after the issued sentence.
