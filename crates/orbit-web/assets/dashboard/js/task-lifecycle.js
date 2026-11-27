@@ -41,11 +41,28 @@ export function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
     select.id = `detail-${task.id}-crew`;
     const chip = el("span", { class: "task-chip task-crew-control" }, [select]);
     control.prepend(chip);
+    controls.appendChild(control);
     const resizeSelect = () => sizeCrewSelect(select);
     resizeSelect();
     select.addEventListener("change", resizeSelect);
     document.fonts?.ready.then(resizeSelect);
-    controls.appendChild(control);
+    // Wait until the detail is mounted so the selected label is measured with
+    // its inherited font and container-query styles. The query container can
+    // change the select's font without changing the select's fixed width.
+    requestAnimationFrame(() => {
+      if (!select.isConnected) return;
+      resizeSelect();
+      const queryContainer = select.closest(".task-levers-task");
+      if (!queryContainer || typeof ResizeObserver !== "function") return;
+      const observer = new ResizeObserver(() => {
+        if (!select.isConnected) {
+          observer.disconnect();
+          return;
+        }
+        resizeSelect();
+      });
+      observer.observe(queryContainer);
+    });
   } else {
     const crew = explicitCrewValue(task);
     controls.appendChild(el("span", { class: "task-chip task-chip-crew", title: "Crew" }, [
@@ -70,7 +87,8 @@ export function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
 
 // Native select auto-sizing follows its widest option in some browsers. Size
 // the task-detail crew pill to its selected label and keep it in sync on edits.
-function sizeCrewSelect(select) {
+export function sizeCrewSelect(select) {
+  if (!select.isConnected) return;
   const selected = select.selectedOptions?.[0];
   const context = document.createElement("canvas").getContext("2d");
   if (!selected || !context) return;
