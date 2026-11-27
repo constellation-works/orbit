@@ -98,3 +98,180 @@ fn comment(comment_id: &str, body: &str) -> TaskCommentRowV2 {
         operation_id: None,
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn symlinked_bundle_files_and_directory_are_refused_without_touching_targets() {
+    if !support::isolated(
+        "jsonl::symlinked_bundle_files_and_directory_are_refused_without_touching_targets",
+    ) {
+        return;
+    }
+    let temp = tempdir().expect("temporary directory");
+    let store = store(&temp);
+
+    let create_with_outside = |title: &str| {
+        let id = store
+            .task
+            .create_task(create_params(title, TaskStatus::Backlog))
+            .unwrap()
+            .id;
+        let dir = bundle_path(&id);
+        (id, dir)
+    };
+
+    let comment_update = || TaskHistoryUpdateParams {
+        actor: "test".into(),
+        append_comments: vec![TaskComment {
+            at: Utc::now(),
+            by: "test".into(),
+            message: "should fail".into(),
+            operation_id: None,
+        }],
+        ..Default::default()
+    };
+
+    // 1. Symlinked comments.jsonl (both dangling and existing outside target)
+    let (comments_id, comments_bundle) = create_with_outside("Symlinked comments");
+    let comments_file = comments_bundle.join(orbit_types::task::TASK_COMMENTS_FILE_NAME);
+    let outside_comments = temp.path().join("outside-comments.jsonl");
+    fs::remove_file(&comments_file).unwrap();
+    std::os::unix::fs::symlink(&outside_comments, &comments_file).unwrap();
+    assert!(
+        store
+            .history
+            .update_task_history(&comments_id, comment_update())
+            .is_err(),
+        "dangling symlinked comments.jsonl must be refused"
+    );
+    assert!(
+        !outside_comments.exists(),
+        "dangling symlink target must not be created"
+    );
+    let sentinel = b"unrelated outside bytes\n";
+    fs::write(&outside_comments, sentinel).unwrap();
+    assert!(
+        store
+            .history
+            .update_task_history(&comments_id, comment_update())
+            .is_err(),
+        "symlinked comments.jsonl must be refused"
+    );
+    assert_eq!(fs::read(&outside_comments).unwrap(), sentinel);
+
+    // 2. Symlinked .pending-write.yaml
+    let (pending_id, pending_bundle) = create_with_outside("Symlinked pending");
+    let pending_file = pending_bundle.join(".pending-write.yaml");
+    let outside_pending = temp.path().join("outside-pending.yaml");
+    fs::write(&outside_pending, sentinel).unwrap();
+    std::os::unix::fs::symlink(&outside_pending, &pending_file).unwrap();
+    assert!(
+        store
+            .history
+            .update_task_history(&pending_id, comment_update())
+            .is_err(),
+        "symlinked .pending-write.yaml must be refused"
+    );
+    assert_eq!(fs::read(&outside_pending).unwrap(), sentinel);
+
+    // 3. Symlinked description.md
+    let (desc_id, desc_bundle) = create_with_outside("Symlinked description");
+    let desc_file = desc_bundle.join(orbit_types::task::TASK_DESCRIPTION_FILE_NAME);
+    let outside_desc = temp.path().join("outside-desc.md");
+    fs::write(&outside_desc, "secret outside text").unwrap();
+    fs::remove_file(&desc_file).unwrap();
+    std::os::unix::fs::symlink(&outside_desc, &desc_file).unwrap();
+    assert!(
+        store.task.get_task(&desc_id).is_err(),
+        "symlinked description.md must be refused"
+    );
+
+    // 4. Symlinked task.yaml pointing to a valid envelope outside the bundle
+    let (env_id, env_bundle) = create_with_outside("Symlinked envelope");
+    let env_file = env_bundle.join(orbit_types::task::TASK_ENVELOPE_FILE_NAME);
+    let outside_env = temp.path().join("outside-task.yaml");
+    fs::copy(&env_file, &outside_env).unwrap();
+    fs::remove_file(&env_file).unwrap();
+    std::os::unix::fs::symlink(&outside_env, &env_file).unwrap();
+    assert!(
+        store.task.get_task(&env_id).is_err(),
+        "symlinked task.yaml must be refused"
+    );
+
+    // 5. Symlinked bundle directory itself
+    let (dir_id, dir_bundle) = create_with_outside("Symlinked bundle dir");
+    let outside_dir = temp.path().join("outside-bundle-dir");
+    fs::create_dir_all(&outside_dir).unwrap();
+    for entry in fs::read_dir(&dir_bundle).unwrap() {
+        let entry = entry.unwrap();
+        let target = outside_dir.join(entry.file_name());
+        if entry.file_type().unwrap().is_file() {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+    fs::remove_dir_all(&dir_bundle).unwrap();
+    std::os::unix::fs::symlink(&outside_dir, &dir_bundle).unwrap();
+    assert!(
+        store.task.get_task(&dir_id).is_err(),
+        "symlinked bundle directory must be refused"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_store_ancestor_keeps_bundle_reads_and_writes_working() {
+    if !support::isolated("jsonl::symlinked_store_ancestor_keeps_bundle_reads_and_writes_working") {
+        return;
+    }
+    let temp = tempdir().expect("temporary directory");
+    let real_home = temp.path().join("real-home");
+    let alias_home = temp.path().join("alias-home");
+    fs::create_dir_all(&real_home).unwrap();
+    std::os::unix::fs::symlink(&real_home, &alias_home).unwrap();
+
+    let registry = TaskRegistryStore::open(&task_registry_path(&alias_home)).unwrap();
+    let backends =
+        repair_gate::bound_store_at(&registry, temp.path(), "orbit-alias-123456", "alias-repo");
+    let created = backends
+        .task
+        .create_task(create_params("Alias ancestor", TaskStatus::Backlog))
+        .unwrap();
+    let initial_comments = backends
+        .history
+        .get_task_comments(&created.id)
+        .expect("read initial comments beneath symlinked ancestor")
+        .expect("comments present")
+        .len();
+    backends
+        .history
+        .update_task_history(
+            &created.id,
+            TaskHistoryUpdateParams {
+                actor: "test".into(),
+                append_comments: vec![TaskComment {
+                    at: Utc::now(),
+                    by: "test".into(),
+                    message: "comment through symlinked ancestor".into(),
+                    operation_id: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .expect("append comment beneath symlinked ancestor");
+    let fetched = backends
+        .task
+        .get_task(&created.id)
+        .expect("read task beneath symlinked ancestor")
+        .expect("task present");
+    assert_eq!(fetched.id, created.id);
+    let comments = backends
+        .history
+        .get_task_comments(&created.id)
+        .expect("read comments beneath symlinked ancestor")
+        .expect("comments present");
+    assert_eq!(comments.len(), initial_comments + 1);
+    assert_eq!(
+        comments.last().unwrap().message,
+        "comment through symlinked ancestor"
+    );
+}

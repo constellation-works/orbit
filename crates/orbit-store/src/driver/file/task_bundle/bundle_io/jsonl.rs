@@ -70,25 +70,30 @@ where
         encoded.push('\n');
     }
     with_exclusive_file_lock(path, "task jsonl", || {
-        repair_jsonl_tail(path)?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
+        let validated_path = super::validated_bundle_file_path(path)
             .map_err(|err| OrbitError::from_write_io(path, err))?;
+        repair_jsonl_tail(&validated_path)?;
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        let mut file = super::open_bundle_file_no_follow(&validated_path, &mut options)
+            .map_err(|err| OrbitError::from_write_io(&validated_path, err))?;
         file.write_all(encoded.as_bytes())
-            .map_err(|err| OrbitError::from_write_io(path, err))?;
+            .map_err(|err| OrbitError::from_write_io(&validated_path, err))?;
         file.flush()
-            .map_err(|err| OrbitError::from_write_io(path, err))?;
+            .map_err(|err| OrbitError::from_write_io(&validated_path, err))?;
         orbit_common::fs::io::sync_file(&file)
-            .map_err(|err| OrbitError::from_write_io(path, err))?;
+            .map_err(|err| OrbitError::from_write_io(&validated_path, err))?;
         Ok(())
     })
 }
 
 fn repair_jsonl_tail(path: &Path) -> Result<(), OrbitError> {
-    let Ok(mut file) = OpenOptions::new().read(true).write(true).open(path) else {
-        return Ok(());
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    let mut file = match super::open_bundle_file_no_follow(path, &mut options) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(OrbitError::from_write_io(path, err)),
     };
 
     let mut raw = Vec::new();

@@ -213,7 +213,7 @@ pub(crate) fn has_pending_write(bundle_dir: &Path) -> bool {
 
 fn read_pending(bundle_dir: &Path) -> Result<Option<PendingWrite>, OrbitError> {
     let path = pending_path(bundle_dir);
-    match fs::read_to_string(&path) {
+    match super::read_bundle_file_string(&path) {
         Ok(raw) => {
             let pending: PendingWrite = serde_yaml::from_str(&raw).map_err(|err| {
                 OrbitError::Store(format!(
@@ -249,7 +249,12 @@ fn abort_pending(bundle_dir: &Path, pending: &PendingWrite) -> Result<(), OrbitE
 }
 
 fn remove_pending_file(bundle_dir: &Path) -> Result<(), OrbitError> {
-    let path = pending_path(bundle_dir);
+    let raw_path = pending_path(bundle_dir);
+    let path = match super::validated_bundle_file_path(&raw_path) {
+        Ok(path) => path,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(OrbitError::from_write_io(&raw_path, err)),
+    };
     match fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -263,7 +268,8 @@ fn pending_path(bundle_dir: &Path) -> PathBuf {
 
 fn envelope_sha256(bundle_dir: &Path) -> Result<String, OrbitError> {
     let path = bundle_dir.join(TASK_ENVELOPE_FILE_NAME);
-    let bytes = fs::read(&path).map_err(|err| OrbitError::from_write_io(&path, err))?;
+    let bytes = super::read_bundle_file_bytes(&path)
+        .map_err(|err| OrbitError::from_write_io(&path, err))?;
     Ok(sha256_hex(&bytes))
 }
 
@@ -281,7 +287,9 @@ fn existing_file_len(path: &Path) -> Result<u64, OrbitError> {
 /// pre-call state, and the commit-boundary replay drops any partial tail
 /// before re-appending its intent rows.
 pub(crate) fn truncate_jsonl_file(path: &Path, len: u64) -> Result<(), OrbitError> {
-    match OpenOptions::new().write(true).open(path) {
+    let mut options = OpenOptions::new();
+    options.write(true);
+    match super::open_bundle_file_no_follow(path, &mut options) {
         Ok(file) => {
             // Already at that length: nothing to cut, and the next append's
             // sync covers the file's length anyway.

@@ -17,7 +17,6 @@ use orbit_types::task::{
     TaskEventRowV2,
 };
 use serde::de::DeserializeOwned;
-use std::fs::{self};
 use std::path::Path;
 
 /// Canonical full-bundle read: parse every sidecar and hash every artifact blob.
@@ -186,14 +185,21 @@ fn read_envelope_for_id(
     )
     .entered();
     let envelope_path = bundle_dir.join(TASK_ENVELOPE_FILE_NAME);
-    if !envelope_path.is_file() {
-        return Err(OrbitError::not_found(
-            NotFoundKind::Task,
-            expected_task_id.to_string(),
-        ));
-    }
+    let raw = match super::read_bundle_file_string(&envelope_path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(OrbitError::not_found(
+                NotFoundKind::Task,
+                expected_task_id.to_string(),
+            ));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
+            return Err(OrbitError::InvalidInput(err.to_string()));
+        }
+        Err(err) => return Err(OrbitError::Io(err.to_string())),
+    };
     let envelope: TaskEnvelopeV2 =
-        read_migrated_yaml_file(&envelope_path, task_migrations::envelope_plan())?;
+        migrate_yaml_text(&raw, &envelope_path, task_migrations::envelope_plan())?;
     if envelope.id != expected_task_id {
         return Err(OrbitError::Store(format!(
             "task bundle directory {} represents task id {} but contains task id {}",
@@ -277,12 +283,11 @@ fn task_id_from_bundle_dir(bundle_dir: &Path) -> Result<String, OrbitError> {
         })
 }
 
-fn read_migrated_yaml_file<T>(path: &Path, plan: &Plan) -> Result<T, OrbitError>
+fn migrate_yaml_text<T>(raw: &str, path: &Path, plan: &Plan) -> Result<T, OrbitError>
 where
     T: DeserializeOwned,
 {
-    let raw = read_required_text(path)?;
-    let value: serde_yaml::Value = parse_yaml_with(&raw, path, |_, err| {
+    let value: serde_yaml::Value = parse_yaml_with(raw, path, |_, err| {
         OrbitError::Store(format!("invalid YAML at {}: {err}", path.display()))
     })?;
     let migrated = plan.migrate(value).map_err(|err| match err {
@@ -296,23 +301,23 @@ where
 }
 
 pub(crate) fn read_required_text(path: &Path) -> Result<String, OrbitError> {
-    match fs::read_to_string(path) {
-        Ok(value) => Ok(value),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(OrbitError::Store(format!(
-            "missing task bundle file {}",
-            path.display()
-        ))),
-        Err(err) => Err(OrbitError::Io(err.to_string())),
-    }
+    map_required_read(path, super::read_bundle_file_string(path))
 }
 
 pub(super) fn read_required_bytes(path: &Path) -> Result<Vec<u8>, OrbitError> {
-    match fs::read(path) {
+    map_required_read(path, super::read_bundle_file_bytes(path))
+}
+
+fn map_required_read<T>(path: &Path, result: std::io::Result<T>) -> Result<T, OrbitError> {
+    match result {
         Ok(value) => Ok(value),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(OrbitError::Store(format!(
             "missing task bundle file {}",
             path.display()
         ))),
+        Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
+            Err(OrbitError::InvalidInput(err.to_string()))
+        }
         Err(err) => Err(OrbitError::Io(err.to_string())),
     }
 }
