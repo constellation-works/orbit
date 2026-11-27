@@ -338,7 +338,7 @@ impl OrbitRuntime {
         let writes_coverage = params.upsert_artifacts.iter().any(|artifact| {
             canonical_artifact_path(&artifact.path).ok().as_deref() == Some(COVERAGE_ARTIFACT)
         });
-        let mandate_artifact = params.upsert_artifacts.iter().find(|artifact| {
+        let mandate_artifact = params.upsert_artifacts.iter().rev().find(|artifact| {
             canonical_artifact_path(&artifact.path).ok().as_deref()
                 == Some(RESIDENT_MANDATE_ARTIFACT)
         });

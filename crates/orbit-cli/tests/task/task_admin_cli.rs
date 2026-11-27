@@ -161,6 +161,68 @@ fn task_update_with_non_canonical_mandate_path_syncs_crew_and_activates() {
 }
 
 #[test]
+fn task_update_with_canonical_mandate_aliases_syncs_crew_to_stored_artifact() {
+    let fixture = Fixture::new();
+    let config = fixture.root.join("config.toml");
+    let mut settings = fs::read_to_string(&config).unwrap();
+    settings.push_str(
+        "\n[crews.mandate-first]\nprovider = \"codex\"\nmodel = \"gpt-6-sol\"\n\
+         \n[crews.mandate-second]\nprovider = \"codex\"\nmodel = \"gpt-6-sol\"\n",
+    );
+    fs::write(config, settings).unwrap();
+    let first_mandate = json!({
+        "schema": "resident.mandate/v1",
+        "goal": "Use the first mandate",
+        "exit_criteria": ["All release checks pass"],
+        "workspaces": ["audit-qa"],
+        "crew": "mandate-first",
+        "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+    })
+    .to_string();
+    let second_mandate = json!({
+        "schema": "resident.mandate/v1",
+        "goal": "Use the stored second mandate",
+        "exit_criteria": ["All release checks pass"],
+        "workspaces": ["audit-qa"],
+        "crew": "mandate-second",
+        "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+    })
+    .to_string();
+    let id = add_plain_task(&fixture, "backlog", "resident");
+
+    let updated = fixture.json(&[
+        "task",
+        "update",
+        &id,
+        "--artifact",
+        &format!("./resident/mandate.json={first_mandate}"),
+        "--artifact",
+        &format!("resident/mandate.json={second_mandate}"),
+        "--json",
+    ]);
+    assert_eq!(updated["crew"], "mandate-second", "{updated}");
+
+    let stored_task = fixture.json(&["task", "show", &id, "--json"]);
+    assert_eq!(stored_task["crew"], "mandate-second", "{stored_task}");
+    let stored_mandate = fixture
+        .command(&["task", "artifact", "get", &id, "resident/mandate.json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stored_mandate = String::from_utf8(stored_mandate).unwrap();
+    assert!(
+        stored_mandate.contains("Use the stored second mandate"),
+        "{stored_mandate}"
+    );
+    assert!(
+        !stored_mandate.contains("Use the first mandate"),
+        "{stored_mandate}"
+    );
+}
+
+#[test]
 fn task_artifact_put_with_non_canonical_mandate_path_matches_control_and_refuses_traversal() {
     let (fixture, mandate) = mandate_fixture();
     let routine = fixture.repo.join(".orbit/routines/resident_cycle.yaml");
