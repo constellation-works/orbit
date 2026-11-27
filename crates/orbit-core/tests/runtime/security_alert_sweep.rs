@@ -1478,6 +1478,28 @@ fn install_pr_delivery_run(
     landed_commit: &str,
     no_change: bool,
 ) {
+    install_pr_delivery_run_with_evidence(
+        runtime,
+        task_id,
+        base_branch,
+        landed_commit,
+        landed_commit,
+        no_change,
+    );
+}
+
+/// Installs a `pr_complete` run shaped as the engine persists it: the merge
+/// outcome sits under `merge`, and its delivery evidence under
+/// `merge.delivery_evidence`. `evidence_merge_commit` is the commit the evidence
+/// records; it differs from `landed_commit` only in the mismatch case.
+fn install_pr_delivery_run_with_evidence(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    base_branch: &str,
+    landed_commit: &str,
+    evidence_merge_commit: &str,
+    no_change: bool,
+) {
     let resources = runtime.paths().global_dir.join("resources");
     std::fs::create_dir_all(resources.join("activities")).unwrap();
     std::fs::create_dir_all(resources.join("jobs")).unwrap();
@@ -1541,11 +1563,18 @@ fn install_pr_delivery_run(
             "complete_pr",
             json!({
                 "phase": "complete",
-                "merge": {"merged": true, "pr_number": "11490", "landed_commit": landed_commit},
-                "delivery_evidence": {
+                "merge": {
+                    "merged": true,
                     "pr_number": "11490",
-                    "base_ref": base_branch,
-                    "merge_commit": landed_commit,
+                    "landed_commit": landed_commit,
+                    "delivery_evidence": {
+                        "pr_number": "11490",
+                        "merged_at": "2026-11-27T21:00:00Z",
+                        "head_ref": "orbit/fixture-repair",
+                        "base_ref": base_branch,
+                        "head_sha": "b".repeat(40),
+                        "merge_commit": evidence_merge_commit,
+                    },
                 },
             }),
         ),
@@ -2117,6 +2146,42 @@ fn unmatched_branch_or_missing_and_contradictory_evidence_remain_eligible() {
                 "## Per-alert disposition\n- #507: `fixed`",
             );
             install_pr_delivery_run(runtime, id, "agent-main", &history.landed_shas[1], false);
+        },
+        &|history| {
+            code_alert_at(
+                507,
+                "rust/cleartext-logging",
+                "crates/a.rs",
+                12,
+                git_ref,
+                &history.pre_fix_sha,
+            )
+        },
+    );
+
+    // 6b. Real-shaped pr_complete run whose `merge.delivery_evidence` records a
+    // merge commit other than the `merge.landed_commit` it reports.
+    run_case(
+        &|runtime, id, history| {
+            orbit_core::test_support::EngineHost::new(runtime)
+                .apply_task_automation_update(
+                    id,
+                    orbit_engine::TaskAutomationUpdate {
+                        status: Some(TaskStatus::Done),
+                        execution_summary: Some("## Per-alert disposition\n- #507: `fixed`".into()),
+                        status_note: Some("completed".into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            install_pr_delivery_run_with_evidence(
+                runtime,
+                id,
+                "agent-main",
+                &history.landed_shas[0],
+                &history.landed_shas[1],
+                false,
+            );
         },
         &|history| {
             code_alert_at(
