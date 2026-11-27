@@ -667,13 +667,11 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
         assert!(wait.results[0].error.is_none());
         let reliability = fixture
             .runtime
-            .pipeline_reliability(
-                &orbit_core::metrics::reliability::ReliabilityWindow::ending_at(
-                    "fixture",
-                    Utc::now() + chrono::Duration::seconds(1),
-                    chrono::Duration::minutes(10),
-                ),
-            )
+            .pipeline_reliability(&orbit_core::app::run::ReliabilityWindow::ending_at(
+                "fixture",
+                Utc::now() + chrono::Duration::seconds(1),
+                chrono::Duration::minutes(10),
+            ))
             .unwrap();
         assert_eq!(reliability.job_runs.overall.held, 1);
         assert_eq!(reliability.job_runs.overall.failed, 0);

@@ -1,6 +1,21 @@
 use super::{Command, Operation};
-use crate::metrics::cost::{ManagedExecutionCost, MetricsWindow};
-use crate::metrics::reliability::{JobDefinitionReads, ReliabilityWindow, RuntimeReliability};
+use crate::application::job::JobRunListParams;
+use crate::metric::aggregate;
+use crate::metric::reliability::JobDefinitionReads;
+
+pub use crate::metric::cost::{
+    ManagedExecutionCost, MetricsWindow, NormalizedTokenSummary, OrchestrationBucketKind,
+    OrchestrationBucketSummary, OrchestrationModelSummary, OrchestrationSummary, TaskTokenSpend,
+    TaskTokenTotals,
+};
+pub use crate::metric::reliability::{
+    ActivityCount, ActivityRole, BucketGranularity, BucketOutcomeRow, JobOutcomeRow,
+    JobRunReliability, MIN_CONFIDENT_SAMPLE, OutcomeCounts, Rate, RecoveryReliability,
+    ReliabilityWindow, RuntimeReliability,
+};
+pub use crate::metric::{
+    DoubleReadSummary, KnowledgeStatsSummary, RatioSummary, TokenInputSummary,
+};
 
 impl<'a> Command<'a, ManagedExecutionCost> {
     /// Read execution costs in the given window.
@@ -20,5 +35,21 @@ impl<'a> Command<'a, Vec<Result<RuntimeReliability, crate::OrbitError>>> {
                 runtime.pipeline_reliability_sharing_reads(window, &definitions)
             }))
         })
+    }
+}
+
+impl<'a> Command<'a, KnowledgeStatsSummary> {
+    /// List up to `limit` recent job runs and aggregate their historical knowledge metrics.
+    pub fn knowledge_metrics(limit: usize) -> Self {
+        Self::new(
+            Operation::dashboard_read("run", "knowledge-metrics"),
+            move |core| {
+                let runs = core.runtime().list_job_runs(JobRunListParams {
+                    limit: Some(limit),
+                    ..Default::default()
+                })?;
+                Ok(aggregate(&runs))
+            },
+        )
     }
 }

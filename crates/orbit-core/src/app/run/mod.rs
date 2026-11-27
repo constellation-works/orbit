@@ -60,6 +60,14 @@ pub use job::{JobEntry, PilotRequest, SubmittedJob, WorkflowDispatchResult, wait
 pub use leaves::{DrainLeafSummary, WaitingBacklog, WaitingTask, waiting_backlog};
 pub use locate::{DashboardReplay, LookupError, RunLookup};
 pub use logs::{LogFollower, LogSnapshot};
+pub use metrics::{
+    ActivityCount, ActivityRole, BucketGranularity, BucketOutcomeRow, DoubleReadSummary,
+    JobOutcomeRow, JobRunReliability, KnowledgeStatsSummary, MIN_CONFIDENT_SAMPLE,
+    ManagedExecutionCost, MetricsWindow, NormalizedTokenSummary, OrchestrationBucketKind,
+    OrchestrationBucketSummary, OrchestrationModelSummary, OrchestrationSummary, OutcomeCounts,
+    Rate, RatioSummary, RecoveryReliability, ReliabilityWindow, RuntimeReliability, TaskTokenSpend,
+    TaskTokenTotals, TokenInputSummary,
+};
 pub use read::RunRead;
 pub use show::{RunDetail, ShownRun, WaitingTasks};
 
