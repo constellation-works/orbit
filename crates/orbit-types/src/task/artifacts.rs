@@ -510,9 +510,9 @@ pub fn validate_task_relations_for_source(
         }
         let key = (relation.relation_type, relation.target.as_str());
         if !seen.insert(key) {
-            return Err(TaskError::Invalid(format!(
-                "duplicate task relation {:?} -> '{}'",
-                relation.relation_type, relation.target
+            return Err(TaskError::Invalid(duplicate_relation_message(
+                relation.relation_type,
+                &relation.target,
             )));
         }
     }
@@ -538,6 +538,22 @@ pub fn validate_task_relations_for_source(
     }
 
     Ok(())
+}
+
+/// Refusal text for a repeated `(relation_type, target)` edge. A `BlockedBy`
+/// duplicate names the two creation inputs that produce that edge so callers
+/// know to supply the prerequisite once; every other type keeps the generic
+/// supply-once correction.
+fn duplicate_relation_message(relation_type: TaskRelationType, target: &str) -> String {
+    if relation_type == TaskRelationType::BlockedBy {
+        format!(
+            "duplicate task relation {relation_type:?} -> '{target}': 'dependencies' and a 'blocked_by' entry in 'relations' represent the same prerequisite edge; supply '{target}' once (remove it from one of the two fields)"
+        )
+    } else {
+        format!(
+            "duplicate task relation {relation_type:?} -> '{target}': supply each relation once"
+        )
+    }
 }
 
 fn validate_target_for(relation_type: TaskRelationType, target: &str) -> Result<(), TaskError> {

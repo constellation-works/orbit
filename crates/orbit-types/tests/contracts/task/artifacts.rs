@@ -45,6 +45,76 @@ mod presentation {
     }
 }
 
+mod duplicate_relation {
+    use orbit_types::task::{TaskRelation, TaskRelationType, validate_task_relations_for_source};
+
+    fn relation(relation_type: TaskRelationType, target: &str) -> TaskRelation {
+        TaskRelation {
+            relation_type,
+            target: target.to_string(),
+            regression: None,
+        }
+    }
+
+    #[test]
+    fn single_blocking_edge_passes_validation() {
+        validate_task_relations_for_source(
+            "ORB-1",
+            &[relation(TaskRelationType::BlockedBy, "ORB-2")],
+            &[],
+        )
+        .expect("one prerequisite is one edge");
+    }
+
+    #[test]
+    fn duplicate_blocking_edge_names_both_representations_and_the_fix() {
+        let error = validate_task_relations_for_source(
+            "ORB-1",
+            &[
+                relation(TaskRelationType::BlockedBy, "ORB-2"),
+                relation(TaskRelationType::BlockedBy, "ORB-2"),
+            ],
+            &[],
+        )
+        .expect_err("repeated prerequisite must stay refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("duplicate task relation BlockedBy -> 'ORB-2'"),
+            "refusal names the duplicate edge, got: {message}"
+        );
+        assert!(
+            message.contains("dependencies") && message.contains("blocked_by"),
+            "refusal names both prerequisite representations, got: {message}"
+        );
+        assert!(
+            message.contains("once"),
+            "refusal tells the caller to supply the prerequisite once, got: {message}"
+        );
+    }
+
+    #[test]
+    fn unrelated_duplicate_relations_stay_refused() {
+        let error = validate_task_relations_for_source(
+            "ORB-1",
+            &[
+                relation(TaskRelationType::RelatedTo, "ORB-2"),
+                relation(TaskRelationType::RelatedTo, "ORB-2"),
+            ],
+            &[],
+        )
+        .expect_err("repeated non-prerequisite relations must stay refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("duplicate task relation"),
+            "refusal names the duplicate edge, got: {message}"
+        );
+        assert!(
+            message.contains("once"),
+            "refusal tells the caller to supply each relation once, got: {message}"
+        );
+    }
+}
+
 mod textual_policy {
     use orbit_types::task::is_textual_artifact_media_type;
 
