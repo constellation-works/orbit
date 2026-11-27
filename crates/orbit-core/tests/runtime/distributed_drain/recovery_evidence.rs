@@ -165,6 +165,10 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
         self.bound.get_job_run(run)
     }
 
+    fn required_validation_commands(&self) -> Vec<String> {
+        self.bound.required_validation_commands()
+    }
+
     fn run_settings(&self) -> orbit_engine::RunSettings {
         HostEnvironment::run_settings(&self.bound)
     }

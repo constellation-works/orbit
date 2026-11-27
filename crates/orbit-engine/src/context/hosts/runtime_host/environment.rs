@@ -13,8 +13,8 @@ use crate::context::RunSettings;
 use crate::context::hosts::{ScratchGcReport, ValidatedTree, WorktreeGcTaskLookup};
 
 /// Host configuration and environment: resolved run settings, owed criteria,
-/// subprocess environments, events, worktree and scratch GC, provider
-/// telemetry, tool runs and model identity.
+/// validation gates, subprocess environments, events, worktree and scratch GC,
+/// provider telemetry, tool runs and model identity.
 pub trait HostEnvironment: Send + Sync {
     /// Resolved host and workspace configuration for this run, delivered as one
     /// value rather than individual configuration getters.
@@ -40,6 +40,25 @@ pub trait HostEnvironment: Send + Sync {
         task_id: &str,
         run_id: Option<&str>,
     ) -> Result<Vec<usize>, OrbitError>;
+
+    // ── Validation gates ───────────────────────────────────────────────
+
+    /// Commands every delivered candidate must pass
+    /// (`workflow.required_validation_commands`). Empty means no required
+    /// check: the owner delivery path validates nothing.
+    fn required_validation_commands(&self) -> Vec<String>;
+
+    /// The owner's review gates (`review.baseline_commands`). With the
+    /// required commands they are the gates whose Bubblewrap deferrals an
+    /// implementer may hand off for a native replay [ORB-15287].
+    fn review_baseline_commands(&self) -> Vec<String>;
+
+    /// The gates this host holds a candidate to, with where it read them
+    /// [ORB-15622]. An owner answers with its own accessors; a claimed leaf's
+    /// host answers with the owner's gates its claim captured, so a
+    /// replica's drifted configuration never decides which deferrals it
+    /// accepts or replays.
+    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates;
 
     /// Remember `tree` as the last tree its run passed the full required
     /// list on. The record is the host's own, never task or run-state data

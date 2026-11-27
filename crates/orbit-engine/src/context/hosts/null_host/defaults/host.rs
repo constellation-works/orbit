@@ -586,6 +586,23 @@ pub trait NullRuntimeHost: Send + Sync {
 
     // ── Config accessors (implementors provide these) ──────────────────
 
+    fn required_validation_commands(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn review_baseline_commands(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
+        orbit_types::workflow::HostValidationGates::local(orbit_types::workflow::ValidationGates {
+            required_validation_commands: NullRuntimeHost::required_validation_commands(self),
+            baseline_commands: NullRuntimeHost::review_baseline_commands(self),
+            light_delivery_paths: None,
+            review_skip_tags: None,
+        })
+    }
+
     fn record_validated_tree(
         &self,
         _tree: &crate::context::ValidatedTree,

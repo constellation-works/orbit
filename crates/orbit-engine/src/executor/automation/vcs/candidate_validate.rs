@@ -113,13 +113,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
         Some(task_ids) => deferred_replays(host, &task_ids)?,
         None => Vec::new(),
     };
-    let commands = with_replays(
-        host.run_settings()
-            .validation_gates
-            .gates
-            .required_validation_commands,
-        &replays,
-    );
+    let commands = with_replays(host.required_validation_commands(), &replays);
     if commands.is_empty() {
         // [ORB-17140] Optional reuse evidence: with nothing to run, the
         // effective policy is all an unchanged completion retry can bind.

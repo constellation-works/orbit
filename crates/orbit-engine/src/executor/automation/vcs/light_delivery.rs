@@ -118,7 +118,7 @@ pub(super) fn light_delivery_decision<H: RuntimeHost + ?Sized>(
         workspace,
         base,
         head,
-        host.run_settings().validation_gates.light_delivery_paths(),
+        host.validation_gates().light_delivery_paths(),
     )?;
     Ok(LightDeliveryDecision::decide(tag, &tagged, head, judgement))
 }
