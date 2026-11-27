@@ -332,8 +332,9 @@ command cannot create a crew: add a `[crews.<name>]` table with `provider` and
 
 At dispatch the first crew that is set wins: an explicit crew on the run or
 activity input, then the task's `crew`, then `default_crew`. `default_crew`
-must name a defined crew. If you define crews and leave it unset, Orbit uses
-an `opus` (or legacy `claude`) crew, and otherwise refuses to load.
+must name a defined crew. If you define crews and leave `default_crew` and
+`CONSTELLATION_DEFAULT_PROVIDER` unset, Orbit uses the `opus` crew if defined.
+If `opus` is missing, Orbit refuses to load and lists the available crews.
 
 `gemini` is the legacy Google CLI lane. `ollama` and `openai_compat` are
 recognized provider IDs with no shipped executor, so a crew naming one loads

@@ -174,3 +174,29 @@ fn default_crew_admission_and_provenance_do_not_depend_on_file_presence() {
         );
     }
 }
+
+#[test]
+fn default_crew_refuses_a_lone_claude_crew_without_a_fallback() {
+    let directory = tempfile::tempdir().expect("fixture directory");
+    let roots = ConfigRoots::new(
+        directory.path().join("global"),
+        directory.path().join("workspace"),
+    );
+    default_crew_write_config(
+        roots.global(),
+        "[crews.claude]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n",
+    );
+    // No provider variable: the refusal must not depend on the runner's environment.
+    let env = orbit_common::Env::from_vars(Vec::<(String, String)>::new());
+    let error =
+        ResolvedConfig::load(&env, &roots).expect_err("a lone claude crew must not be selected");
+    let OrbitError::InvalidInput(message) = error else {
+        panic!("expected default-crew refusal, got {error}");
+    };
+    assert!(
+        message.contains(
+            "[workflow].default_crew must be set when defining [crews.*]; choose one of: claude"
+        ),
+        "wrong refusal: {message}"
+    );
+}

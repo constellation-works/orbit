@@ -12,8 +12,7 @@ use orbit_types::workflow::automation::members::MaterialField;
 use orbit_types::workflow::{ConventionTemplate, PrBodyTemplateSource, Provider, TemplateSurface};
 
 use super::super::{
-    CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigAllowedValues, DEFAULT_WORKFLOW_CREW,
-    LEGACY_DEFAULT_WORKFLOW_CREW, describe,
+    CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigAllowedValues, DEFAULT_WORKFLOW_CREW, describe,
 };
 use crate::memory_limit::MemoryLimit;
 
@@ -440,9 +439,6 @@ pub(super) fn resolve_default_crew(
     }
     if crews.contains_key(DEFAULT_WORKFLOW_CREW) {
         return Ok(Some(DEFAULT_WORKFLOW_CREW.to_string()));
-    }
-    if crews.contains_key(LEGACY_DEFAULT_WORKFLOW_CREW) {
-        return Ok(Some(LEGACY_DEFAULT_WORKFLOW_CREW.to_string()));
     }
     if crews.is_empty() || !require_selection {
         return Ok(None);

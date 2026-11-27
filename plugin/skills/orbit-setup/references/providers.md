@@ -37,7 +37,7 @@ For task dispatch, the first applicable tier wins:
    `opus`, `codex` selects `sol`, `antigravity` selects `gemini-flash` and
    `muse` selects `muse-spark` when defined, other IDs select a same-named crew.
    This applies even without config files; unset/blank leaves the built-in default.
-5. Built-in default: `opus`, or the legacy `claude` crew.
+5. Built-in default: `opus`.
 
 Inspect `orbit config show` for the effective default and its source, task
 assignment history for pool provenance, and `orbit run show <run>` for the
