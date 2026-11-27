@@ -40,7 +40,7 @@ fn replica_gc(mut pair: Pair, config: &str) -> Pair {
                 owner_machine_id: Some(OWNER.into()),
                 checkout_role: None,
                 repo_root: pair.follower_repo.clone(),
-                ship_mode: orbit_core::ShipMode::Local,
+                ship_mode: orbit_core::app::run::ShipMode::Local,
                 base_branch: None,
             },
         )

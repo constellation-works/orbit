@@ -48,8 +48,8 @@ pub struct DiscoveredWorkspaces {
     /// Registered workspaces that could not be opened.
     pub errors: Vec<RoutineLoadError>,
     /// Active replica checkouts. The sweep delivers the pull settlements
-    /// their follower drains recorded and fires only their
-    /// [replica-local](runs_in_replica) routines; no other routine, auto-task
+    /// their follower drains recorded and fires only their replica-local
+    /// routines (`runs_in_replica`); no other routine, auto-task
     /// or task recovery runs in them.
     pub replicas: Vec<(Workspace, OrbitRuntime)>,
     /// Registered workspaces not opened because this tick exhausted its budget.
@@ -324,7 +324,7 @@ fn drop_peer_name_collisions(
 
 /// Whether `orbit_dir` contains any parseable routine definition whose declared
 /// `name` is in `names`. Unreadable directories and unparseable files are
-/// ignored, matching [`collect_host_routines`].
+/// ignored, matching `collect_host_routines`.
 pub fn declares_any_routine_name(orbit_dir: &Path, names: &BTreeSet<String>) -> bool {
     !names.is_empty()
         && orbit_automation::routines::loader::declared_routine_names(orbit_dir)

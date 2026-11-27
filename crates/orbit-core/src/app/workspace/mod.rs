@@ -40,6 +40,28 @@ use crate::application::task::{TaskListFilter, TaskRow};
 use crate::application::workspace_preset::AppliedWorkspacePreset;
 use crate::{Core, ShipMode};
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::adapter::HubCoordinationExecutor;
+pub use crate::application::workspace_auto::FleetReadinessFacts;
+pub use crate::application::workspace_preset::WorkspacePreset;
+pub use crate::application::workspace_sync::{
+    ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,
+    reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
+};
+pub use crate::bootstrap::init::{
+    InitOptions, allocated_task_prefix, init_global, init_workspace_at_root,
+};
+pub use crate::bootstrap::task_migration::seed_task_id_start;
+pub use crate::composition::{
+    Opening, WorkspaceAuthorityAdoption, adopt_workspace_layout_authority, core_for_request,
+    store_opener, verify_workspace_layout_authority,
+};
+pub use orbit_runtime::{
+    WorkspaceRuntimeBinding, is_global_orbit_root, managed_workspace_selector_from_env,
+    resolve_generation_root, resolve_global_root, resolve_process_generation_root,
+    resolve_root_path_value,
+};
+
 /// The caller's own flow for a command whose body lives above this crate. It
 /// is called once, with the host's global root, after the command is
 /// admitted.

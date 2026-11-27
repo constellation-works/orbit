@@ -3,9 +3,10 @@
 use chrono::{Duration, Utc};
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{JobRunState, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::RunLifecycle;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 

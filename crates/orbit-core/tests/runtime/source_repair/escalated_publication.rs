@@ -26,21 +26,28 @@ impl TaskPrForge for ChecksForge {
     fn open_pull_requests(
         &self,
         _: &Path,
-    ) -> Result<Vec<ForgePullRequest>, orbit_core::OrbitError> {
+    ) -> Result<Vec<ForgePullRequest>, orbit_common::OrbitError> {
         Ok(vec![self.0.lock().unwrap().pull.clone()])
     }
     fn pull_request_blockers(
         &self,
         _: &Path,
         number: u64,
-    ) -> Result<Option<PullRequestBlockers>, orbit_core::OrbitError> {
+    ) -> Result<Option<PullRequestBlockers>, orbit_common::OrbitError> {
         let blockers = self.0.lock().unwrap().clone();
         Ok((blockers.pull.number == number).then_some(blockers))
     }
-    fn authenticated_login(&self, _: &Path) -> Result<String, orbit_core::OrbitError> {
+
+    fn authenticated_login(&self, _: &Path) -> Result<String, orbit_common::OrbitError> {
         Ok("orbit-bot".into())
     }
-    fn close_pull_request(&self, _: &Path, _: u64, _: &str) -> Result<(), orbit_core::OrbitError> {
+
+    fn close_pull_request(
+        &self,
+        _: &Path,
+        _: u64,
+        _: &str,
+    ) -> Result<(), orbit_common::OrbitError> {
         Ok(())
     }
 }

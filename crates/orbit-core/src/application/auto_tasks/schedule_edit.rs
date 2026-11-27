@@ -38,16 +38,16 @@ pub enum AutoTaskScheduleOutcome {
     /// The definition was written and stamped; it holds what now loads.
     Written(AutoTaskDefinition),
     /// The stored schedule already matched the request, so nothing was
-    /// validated or written ([`AutoTaskScheduleProfile::Observed`] only).
+    /// validated or written (`AutoTaskScheduleProfile::Observed` only).
     AlreadySet(AutoTaskDefinition),
     /// The observed schedule was stale before any write was attempted
-    /// ([`AutoTaskScheduleProfile::Observed`] only).
+    /// (`AutoTaskScheduleProfile::Observed` only).
     Stale {
         /// The definition's current schedule.
         actual_schedule: Box<AutoTaskSchedule>,
     },
     /// No definition of that name was found before any write was attempted
-    /// ([`AutoTaskScheduleProfile::Observed`] only).
+    /// (`AutoTaskScheduleProfile::Observed` only).
     NotFound,
 }
 

@@ -123,7 +123,7 @@ pub enum JobRunProjectionProfile {
     /// input, no `pid_start_time` (CLI `run history`).
     ListHistory,
     /// Plain list row: the base projection with no worker fields and no
-    /// provenance sections (HTTP run list via [`JobRunListStates::row`]).
+    /// provenance sections (HTTP run list via `JobRunListStates::row`).
     ListRow,
     /// Bounded summary: `id` alias plus `run_id`, core timing/state fields
     /// and `usage.state = unavailable` (desktop bounded read).

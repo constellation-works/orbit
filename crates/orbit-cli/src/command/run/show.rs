@@ -2,12 +2,15 @@ use clap::Args;
 use orbit_core::app::run::{Command, exec};
 use std::collections::HashSet;
 
-use orbit_core::application::contracts::{ClaimedLeafStage, DrainClaimedLeaf};
-use orbit_core::application::job::{
+use orbit_common::OrbitError;
+use orbit_core::Core;
+use orbit_core::app::run::CatalogReferenceLayer;
+use orbit_core::app::run::{ClaimedLeafStage, DrainClaimedLeaf};
+use orbit_core::app::run::{
     RunFailureCause, agent_invoke_result, display_steps_with_agent_execution_to_json,
 };
-use orbit_core::runtime::audit::run::{RunProviderProcess, RunScriptExecution};
-use orbit_core::{CatalogReferenceLayer, Core, JobRun, OrbitError};
+use orbit_core::app::run::{RunProviderProcess, RunScriptExecution};
+use orbit_types::workflow::JobRun;
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 
@@ -311,7 +314,7 @@ pub(crate) fn run_show_payload(
             header.push_str(&line);
         }
     }
-    for id in orbit_core::application::job::job_run_task_ids(&run) {
+    for id in orbit_core::app::run::job_run_task_ids(&run) {
         let title = task_titles.get(&id);
         header.push_str(&format!(
             "\n{} {}{}",
@@ -422,7 +425,7 @@ pub(crate) fn run_show_payload(
         if let Some(error) = &pass.last_pass_error {
             // A local drain records a pass only when it deferred it on a busy
             // task-store lock; the next pass retries.
-            let label = if run.job_id == orbit_core::application::contracts::PULL_DRAIN_JOB {
+            let label = if run.job_id == orbit_core::app::run::PULL_DRAIN_JOB {
                 "Pull pass warning:"
             } else {
                 "Admission pass deferred:"

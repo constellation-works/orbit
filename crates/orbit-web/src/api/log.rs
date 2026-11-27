@@ -312,7 +312,7 @@ pub(super) async fn stream_log(
         .body(Body::from_stream(stream))
     {
         Ok(response) => response,
-        Err(e) => server_error(orbit_core::OrbitError::Execution(format!(
+        Err(e) => server_error(orbit_common::OrbitError::Execution(format!(
             "build SSE response: {e}"
         ))),
     }
@@ -338,10 +338,10 @@ fn read_log_snapshot_from_path(
     path: &std::path::Path,
     query: &LogQuery,
     home: Option<&str>,
-) -> Result<LogSnapshot, orbit_core::OrbitError> {
+) -> Result<LogSnapshot, orbit_common::OrbitError> {
     let limit = match query.limit {
         Some(limit) if limit > LOG_MAX_LIMIT => {
-            return Err(orbit_core::OrbitError::InvalidInput(format!(
+            return Err(orbit_common::OrbitError::InvalidInput(format!(
                 "limit must be <= {LOG_MAX_LIMIT}; got {limit}"
             )));
         }
@@ -350,12 +350,12 @@ fn read_log_snapshot_from_path(
     };
     let filters = log_filters(query)?;
     let mut tail = read_recent_matching_tail(path, &filters, limit)
-        .map_err(|e| orbit_core::OrbitError::Io(format!("read log {}: {e}", path.display())))?;
+        .map_err(|e| orbit_common::OrbitError::Io(format!("read log {}: {e}", path.display())))?;
     let mut agent_offset = 0;
     let mut agent_cursor = None;
     if let Some(agent_path) = orbit_common::observability::logging::agent_jsonl_log_path(path) {
         let agent_tail = read_recent_matching_tail(&agent_path, &filters, limit).map_err(|e| {
-            orbit_core::OrbitError::Io(format!("read log {}: {e}", agent_path.display()))
+            orbit_common::OrbitError::Io(format!("read log {}: {e}", agent_path.display()))
         })?;
         agent_offset = agent_tail.cursor;
         agent_cursor = Some(FeedCursor {
@@ -448,7 +448,7 @@ fn last_event_id_header(headers: &HeaderMap) -> Option<&str> {
         .and_then(|value| value.to_str().ok())
 }
 
-fn log_filters(query: &LogQuery) -> Result<LogFilters, orbit_core::OrbitError> {
+fn log_filters(query: &LogQuery) -> Result<LogFilters, orbit_common::OrbitError> {
     log_format::filters_from_query_parts(
         query.target.as_deref().and_then(non_empty_string),
         query.level.as_deref().and_then(non_empty_string),

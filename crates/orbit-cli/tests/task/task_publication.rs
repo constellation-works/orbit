@@ -636,11 +636,11 @@ fn set_equivalent_legacy_pairing(home: &Path, partition: &str) {
 #[test]
 fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
     use chrono::Utc;
-    use orbit_core::TaskStatus;
     use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-
-    use orbit_engine::{Dispatch, RunLifecycle};
+    use orbit_core::test_support::fixture_engine::Dispatch;
+    use orbit_core::test_support::fixture_engine::RunLifecycle;
     use orbit_types::task::ArtifactWriter;
+    use orbit_types::task::TaskStatus;
     use orbit_types::workflow::{
         REVIEW_CONTRACT_VERSION, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
         REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewBudget, ReviewEvidenceHold, ReviewTiming,
@@ -744,7 +744,7 @@ fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
         .unwrap();
     assert!(matches!(
         runtime.run_deterministic("review_gate_settle", &json!({}), &input, Default::default()),
-        Err(orbit_engine::DispatchError::ReviewEvidenceHold(_))
+        Err(orbit_core::test_support::fixture_engine::DispatchError::ReviewEvidenceHold(_))
     ));
     let certificate = runtime
         .get_task_artifact(id, REVIEW_GATE_ARTIFACT)

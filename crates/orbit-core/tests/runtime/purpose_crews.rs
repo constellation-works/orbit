@@ -5,12 +5,15 @@
 //! Pool and crew names are fixture policy.
 
 use chrono::Utc;
+use orbit_core::application::auto_tasks::AutoTaskAddParams;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
-use orbit_core::{
-    AutoTaskAddParams, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType,
-};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Recovery;
+use orbit_types::task::TaskComplexity;
+use orbit_types::task::TaskPriority;
+use orbit_types::task::TaskStatus;
+use orbit_types::task::TaskType;
 use orbit_types::workflow::{
     ActivityCrewDraw, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, PipelineState,
 };
@@ -134,7 +137,7 @@ impl Fixture {
             .activity_crew_draws
     }
 
-    fn task(&self, tags: &[&str], crew: Option<&str>) -> orbit_core::Task {
+    fn task(&self, tags: &[&str], crew: Option<&str>) -> orbit_types::task::Task {
         self.runtime
             .add_task(TaskAddParams {
                 title: "Purpose-filed task".into(),
@@ -150,7 +153,7 @@ impl Fixture {
             .unwrap()
     }
 
-    fn mint(&self, name: &str, tags: &[&str], crew: Option<&str>) -> orbit_core::Task {
+    fn mint(&self, name: &str, tags: &[&str], crew: Option<&str>) -> orbit_types::task::Task {
         self.runtime
             .auto_task_add(AutoTaskAddParams {
                 name: name.into(),

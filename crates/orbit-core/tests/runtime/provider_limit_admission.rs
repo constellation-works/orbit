@@ -7,9 +7,11 @@
 //! every delivery submission runs.
 
 use chrono::{DateTime, Duration, SubsecRound, Utc};
+use orbit_core::app::run::ShipMode;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus};
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{JobRunState, JobRunTrigger};
 use serde_json::{Value, json};
@@ -80,7 +82,7 @@ impl Fixture {
                 plan: "1. Deliver it.".into(),
                 complexity,
                 context_files: vec!["dir:.".into()],
-                task_type: Some(orbit_core::TaskType::Chore),
+                task_type: Some(orbit_types::task::TaskType::Chore),
                 status: Some(TaskStatus::Backlog),
                 crew: crew.map(ToOwned::to_owned),
                 ..Default::default()
@@ -196,7 +198,12 @@ impl Fixture {
     /// `context` is its only selector (`file:<path>`). The file is written
     /// into the repo so two tasks in one workspace do not share `dir:.` and
     /// block each other with a live claim.
-    fn filed_task(&self, crew: Option<&str>, tags: &[&str], context: &str) -> orbit_core::Task {
+    fn filed_task(
+        &self,
+        crew: Option<&str>,
+        tags: &[&str],
+        context: &str,
+    ) -> orbit_types::task::Task {
         let relative = context.strip_prefix("file:").unwrap_or_else(|| {
             panic!("purpose-limit fixture wants a file selector, got {context}")
         });
@@ -213,7 +220,7 @@ impl Fixture {
                 plan: "1. Deliver it.".into(),
                 complexity: TaskComplexity::Hard,
                 context_files: vec![context.to_string()],
-                task_type: Some(orbit_core::TaskType::Chore),
+                task_type: Some(orbit_types::task::TaskType::Chore),
                 status: Some(TaskStatus::Backlog),
                 tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
                 crew: crew.map(str::to_string),
@@ -999,7 +1006,7 @@ fn allowlist_redraws_a_purpose_assignment() {
             plan: "Review.".into(),
             complexity: TaskComplexity::Hard,
             context_files: vec!["dir:.".into()],
-            task_type: Some(orbit_core::TaskType::Chore),
+            task_type: Some(orbit_types::task::TaskType::Chore),
             status: Some(TaskStatus::Backlog),
             crew: Some("opus".into()),
             crew_source: Some("workflow.purpose_crews.review".into()),

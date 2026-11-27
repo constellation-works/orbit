@@ -1,7 +1,7 @@
 //! Disk-pressure recovery through actual backlog admission, over real Git worktrees.
 
 use chrono::{Duration, Utc};
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use orbit_types::workflow::JobRunState;

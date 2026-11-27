@@ -1,9 +1,9 @@
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_core::Core;
 use orbit_core::app::Session;
+use orbit_core::app::agent::AgentFacts;
+use orbit_core::app::codebase::CodebaseFacts;
 use orbit_core::app::run;
-use orbit_core::application::agents::AgentFacts;
-use orbit_core::application::codebase::CodebaseFacts;
 
 use super::*;
 

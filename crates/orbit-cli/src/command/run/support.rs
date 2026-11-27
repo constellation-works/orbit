@@ -1,10 +1,10 @@
+use orbit_core::app::run::PullSettlementOutcome;
 use orbit_core::app::run::WorkflowDispatchResult;
-use orbit_core::application::contracts::PullSettlementOutcome;
 use std::fmt::Write as _;
 
 use clap::Args;
-use orbit_core::OrbitError;
-use orbit_core::application::job::{AutoDrainSubmissionReceipt, ShipSubmissionReceipt};
+use orbit_common::OrbitError;
+use orbit_core::app::run::{AutoDrainSubmissionReceipt, ShipSubmissionReceipt};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, Payload};
@@ -158,7 +158,9 @@ fn single_line(value: &str) -> String {
 
 /// Human lines for the pull settlements a cancel or stop carried
 /// [ORB-13663]. Empty when the pass touched nothing.
-pub(super) fn pull_settlement_lines(entries: &[orbit_core::PullSettlementEntry]) -> Vec<String> {
+pub(super) fn pull_settlement_lines(
+    entries: &[orbit_core::app::run::PullSettlementEntry],
+) -> Vec<String> {
     if entries.is_empty() {
         return Vec::new();
     }

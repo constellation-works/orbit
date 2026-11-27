@@ -209,7 +209,7 @@ fn a_package_wide_lib_deferral_is_received_when_settlement_runs_that_lib_test() 
         assert_eq!(evidence["command"], requirement, "{broad}");
         assert_eq!(
             fixture.runtime.get_task(&fixture.task_id).unwrap().status,
-            orbit_core::TaskStatus::Review,
+            orbit_types::task::TaskStatus::Review,
             "{broad}"
         );
     }

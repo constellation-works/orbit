@@ -87,7 +87,7 @@ fn fixture_with_timing(
     .unwrap();
     std::fs::write(global.join("resources/activities/completion_refused.yaml"),
         "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: completion_refused\nspec:\n  type: deterministic\n  description: A refused fast path must stop this fixture\n  action: candidate_validate\n  config: {}\n").unwrap();
-    f.runtime = orbit_core::OrbitRuntime::from_roots(&global, &f.repo.join(".orbit"))
+    f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(&global, &f.repo.join(".orbit"))
         .unwrap()
         .with_automation_execution_location(Some(orbit_types::task::ExecutionLocation {
             machine_id: "hm_fixture".into(),
@@ -451,7 +451,7 @@ pub(super) fn refreshed_preparation_retry_admits_unchanged_and_refuses_drift() {
         "required_validation_commands = [\"false\"]",
     );
     std::fs::write(path, config).unwrap();
-    f.runtime = orbit_core::OrbitRuntime::from_roots(
+    f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &f._root.path().join("global"),
         &f.repo.join(".orbit"),
     )
@@ -648,7 +648,7 @@ pub(super) fn empty_requirements_still_bind_completion_policy() {
         format!("{config}[crews.added]\nprovider = \"codex\"\nmodel = \"other-model\"\nbackend = \"cli\"\n"),
     )
     .unwrap();
-    f.runtime = orbit_core::OrbitRuntime::from_roots(
+    f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &f._root.path().join("global"),
         &f.repo.join(".orbit"),
     )
@@ -767,7 +767,7 @@ pub(super) fn completion_reuse_refuses_drift() {
                     "required_validation_commands = [\"false\"]",
                 );
                 std::fs::write(path, config).unwrap();
-                f.runtime = orbit_core::OrbitRuntime::from_roots(
+                f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
                     &f._root.path().join("global"),
                     &f.repo.join(".orbit"),
                 )
@@ -1250,7 +1250,7 @@ fn configure_review(f: &mut Fixture, checkout: &std::path::Path) -> PathBuf {
             .replace("before_pr = false", "before_pr = true"),
     )
     .unwrap();
-    f.runtime = orbit_core::OrbitRuntime::from_roots(
+    f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &f._root.path().join("global"),
         &f.repo.join(".orbit"),
     )
@@ -1327,7 +1327,7 @@ pub(super) fn timing_alias_rewrites_preserve_published_completion_authentication
                 store.validate().unwrap();
                 store.save().unwrap();
             }
-            f.runtime = orbit_core::OrbitRuntime::from_roots(
+            f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
                 &f._root.path().join("global"),
                 &f.repo.join(".orbit"),
             )

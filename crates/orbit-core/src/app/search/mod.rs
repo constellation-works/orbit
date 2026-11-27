@@ -24,6 +24,11 @@ use super::tool_call;
 pub use super::tool_call::Input;
 use crate::Core;
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::application::search::{
+    GlobalSearchKind, GlobalSearchParams, SearchRequest, SearchRequestProfile,
+};
+
 /// What the search app can be asked to do.
 pub enum Command {
     /// A registry verb of the search noun and the fields it is called with.

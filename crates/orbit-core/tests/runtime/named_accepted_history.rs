@@ -9,7 +9,9 @@
 //! never "never accepted".
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::{AutoTaskAddParams, OrbitRuntime, TaskPriority, TaskStatus, TaskType};
+use orbit_core::application::auto_tasks::AutoTaskAddParams;
+use orbit_core::runtime::OrbitRuntime;
+use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{
     AUTO_TASK_ACCEPTED_HISTORY_SCHEMA_VERSION, AutoTaskAcceptedHistoryFile,
     AutoTaskCompletionContract, AutoTaskCompletionReceipt, AutoTaskResultStatus, AutoTaskSchedule,

@@ -7,8 +7,8 @@
 use orbit_core::application::task::{
     TaskAddParams, TaskUpdateAuthority, TaskUpdateParams, TaskWriteScreen,
 };
-use orbit_core::{Task, TaskStatus};
 use orbit_types::task::TaskArtifact;
+use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
 use super::{Workspace, runtime_at};

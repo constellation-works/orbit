@@ -2,9 +2,9 @@
 //! session minted, and only for the workspaces that session read.
 
 use orbit_common::OrbitError;
-use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::attention::AttentionWaitStatus;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Value, json};
 

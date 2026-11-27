@@ -1,8 +1,8 @@
 //! Bodyless metadata across the public bound-worker/owner boundary.
 use super::claimed_review::{ReviewedLeaf, ToOwner};
 use super::*;
-use orbit_core::TaskStatus;
 use orbit_core::application::task::TaskAddParams;
+use orbit_types::task::TaskStatus;
 
 const CEILING: usize = 6000;
 

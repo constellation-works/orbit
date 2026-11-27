@@ -2,7 +2,7 @@
 
 use super::*;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{TaskComplexity, TaskStatus, TaskType};
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 use orbit_types::workflow::{DrainAdmissionPass, PipelineState};
 use serde_json::json;
 

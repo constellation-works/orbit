@@ -13,14 +13,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{DateTime, Duration, Utc};
+use orbit_common::OrbitError;
 use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
 use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
-use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
 use orbit_store::contract::JobRunStepParams;
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 use orbit_types::workflow::activity_job::{V2AuditEvent, V2AuditEventKind};
 use orbit_types::workflow::{
     DeliveryRefusal, FORGE_UNAVAILABLE_ERROR_CODE, FORGE_UNAVAILABLE_EXPIRED_EVENT,

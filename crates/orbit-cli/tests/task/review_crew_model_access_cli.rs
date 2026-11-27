@@ -8,9 +8,9 @@ use std::fs;
 use std::io::Write as _;
 
 use chrono::{Duration, Utc};
-use orbit_core::OrbitRuntime;
 use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
-use orbit_engine::RunLifecycle;
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
 use orbit_types::workflow::{
     IMPLEMENT_ONE_STEP_ID, JobRunState, MUSE_MODEL_ACCESS_OUTPUT_KEY, MuseModelAccess,
     PipelineState, TASK_LOCAL_PIPELINE_JOB,

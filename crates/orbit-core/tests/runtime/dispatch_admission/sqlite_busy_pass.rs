@@ -24,7 +24,7 @@ fn store_gc_allows_task_updates_and_dispatch_during_history_selection() {
     if !isolated(TEST) {
         return;
     }
-    use orbit_core::OrbitRuntime;
+    use orbit_core::runtime::OrbitRuntime;
     use orbit_store::contract::RunResourceMinute;
     use rusqlite::functions::FunctionFlags;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

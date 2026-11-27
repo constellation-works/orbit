@@ -3,8 +3,8 @@
 //! assessment JSON must not push steering out of the agent's context, and
 //! only the latest assessment is carried, as its summary line [ORB-23676].
 
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use serde_json::{Value, json};
 use tempfile::TempDir;

@@ -9,7 +9,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use flate2::{Compression, write::GzEncoder};
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 use crate::state;
 

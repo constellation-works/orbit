@@ -1,6 +1,7 @@
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{JobRunState, TaskStatus};
+use orbit_types::task::TaskStatus;
+use orbit_types::workflow::JobRunState;
 use serde_json::json;
 
 use super::support::{Fixture, error_code, isolated};

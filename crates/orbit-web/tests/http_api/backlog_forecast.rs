@@ -3,8 +3,11 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
-use orbit_store::contract::StoredBacklogForecast;
-use orbit_store::contract::{InvocationInsertParams, TaskHistoryUpdateParams};
+use orbit_core::test_support::fixture_store;
+use orbit_core::test_support::fixture_store::contract::StoredBacklogForecast;
+use orbit_core::test_support::fixture_store::contract::{
+    InvocationInsertParams, TaskHistoryUpdateParams,
+};
 use orbit_types::task::{TaskComment, TaskComplexity, TaskEnvelopeV2, TaskEventRowV2, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};
@@ -30,7 +33,7 @@ impl orbit_core::application::routines::loader::RoutineWorkspaceProvider for For
         _: &std::path::Path,
     ) -> Result<
         orbit_core::application::routines::loader::DiscoveredWorkspaces,
-        orbit_core::OrbitError,
+        orbit_common::OrbitError,
     > {
         let registry = orbit_registry::workspace_registry::load_registry_from(
             &orbit_registry::workspace_registry::registry_path_for(&self.0.global),
@@ -211,7 +214,7 @@ fn clock_forecast_skips_replica_and_missing_history_and_contains_write_failure()
                             "CREATE TRIGGER refuse_forecast BEFORE INSERT ON backlog_forecasts
                              BEGIN SELECT RAISE(ABORT, 'fixture forecast write refused'); END;",
                         )
-                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                        .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                     Ok(())
                 })
                 .unwrap();
@@ -229,7 +232,7 @@ fn clock_forecast_skips_replica_and_missing_history_and_contains_write_failure()
                 .with_transaction(|tx| {
                     tx.connection()
                         .execute_batch("DROP TRIGGER refuse_forecast;")
-                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                        .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                     Ok(())
                 })
                 .unwrap();
@@ -405,7 +408,7 @@ fn stale_and_legacy_rows_compute_live_and_stay_readable() {
                         .execute_batch(
                             "UPDATE backlog_forecasts SET result_json = json_remove(result_json, '$.snapshot');",
                         )
-                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                        .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                     Ok(())
                 })
                 .unwrap();
@@ -422,14 +425,14 @@ fn stale_and_legacy_rows_compute_live_and_stay_readable() {
     );
 }
 
-pub(super) fn history(fixture: &Fixture) -> orbit_store::TaskHistoryRepository {
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
+pub(super) fn history(fixture: &Fixture) -> fixture_store::TaskHistoryRepository {
+    let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+        &fixture_store::maintenance::task_registry::task_registry_path(
             &fixture.runtime.global_root(),
         ),
     )
     .unwrap();
-    orbit_store::compose::workspace_coordinated_backends(
+    fixture_store::compose::workspace_coordinated_backends(
         registry,
         fixture.runtime.workspace_id().unwrap(),
         fixture.runtime.sqlite_store().unwrap(),
@@ -493,7 +496,7 @@ fn completed_delivery(
                     "UPDATE invocations SET ts = ?1 WHERE job_run_id = ?2",
                     (at.to_rfc3339(), format!("delivery-{id}")),
                 )
-                .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                .map_err(|e| orbit_common::OrbitError::Store(e.to_string()))?;
             Ok(())
         })
         .unwrap();
@@ -519,8 +522,8 @@ fn dated_done_task(
         .unwrap()
         .id
         .to_string();
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
+    let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+        &fixture_store::maintenance::task_registry::task_registry_path(
             &fixture.runtime.global_root(),
         ),
     )
@@ -604,8 +607,8 @@ pub(super) fn comment_on_task(fixture: &Fixture, id: &str) {
 }
 
 fn remove_history(fixture: &Fixture, id: &str) {
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
+    let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+        &fixture_store::maintenance::task_registry::task_registry_path(
             &fixture.runtime.global_root(),
         ),
     )
@@ -1518,7 +1521,7 @@ pub(super) fn retimestamp_invocation(fixture: &Fixture, id: &str, at: DateTime<U
                     "UPDATE invocations SET ts = ?1 WHERE job_run_id = ?2",
                     (at.to_rfc3339(), format!("delivery-{id}")),
                 )
-                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
             Ok(())
         })
         .unwrap();

@@ -3,7 +3,7 @@
 
 use chrono::{TimeZone, Utc};
 use orbit_common::OrbitError;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;

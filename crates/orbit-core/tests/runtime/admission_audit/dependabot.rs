@@ -3,7 +3,7 @@ use orbit_tools::ToolContext;
 use serde_json::{Value, json};
 
 use super::engine_support::runtime_with_workspace_layout;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 
 pub(super) fn expanded_snapshot(
     dependabot: Vec<Value>,

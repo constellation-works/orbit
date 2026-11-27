@@ -3,8 +3,8 @@ use std::path::Path;
 use crate::command::{CommandOut, Payload};
 use clap::{Args, Subcommand};
 use orbit_cmd::registry_routines::routine_statuses;
-use orbit_core::OrbitError;
-use orbit_core::application::routines::{
+use orbit_common::OrbitError;
+use orbit_core::app::routine::{
     RoutineBreakerAction, RoutineEditRefusal, control_listed_routine_breaker,
 };
 use serde_json::json;
@@ -67,7 +67,7 @@ impl RoutineBreakerArgs {
         // workspace narrows it. A misspelt name is refused rather than
         // reported as not tripped.
         let changed = control_listed_routine_breaker(
-            orbit_core::composition::store_opener(),
+            orbit_core::app::workspace::store_opener(),
             global_root,
             &report,
             &name,

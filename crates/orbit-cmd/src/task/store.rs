@@ -29,8 +29,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_core::runtime::UNBOUND_DATA_DIR_PARTITION_ID;
 use orbit_registry::workspace_registry;
+use orbit_runtime::UNBOUND_DATA_DIR_PARTITION_ID;
 pub use orbit_store::maintenance::task_registry::task_workspaces_dir;
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, TaskRegistryStore, task_registry_path,

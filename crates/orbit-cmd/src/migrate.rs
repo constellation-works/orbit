@@ -36,7 +36,7 @@ pub fn migrate_dry_run_at(
     orbit_dir: &Path,
 ) -> Result<MigrateStatus, OrbitError> {
     let audit_db = orbit_config::resolved_audit_db_path(
-        &orbit_core::composition::composition_env(),
+        &orbit_core::app::host::composition_env(),
         &orbit_config::ConfigRoots::new(global_root, orbit_dir),
     )?;
     let ledger = read_schema_ledger_status(&audit_db)?;

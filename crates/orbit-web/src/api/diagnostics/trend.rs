@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::{Core, OrbitError};
+use orbit_common::OrbitError;
+use orbit_core::Core;
 use orbit_types::task::{TaskStatus, UNSET_BUCKET, complexity_bucket_ord};
 use serde_json::{Value, json};
 
@@ -495,7 +496,7 @@ impl CohortWindowData {
 /// `since` or `month` as the other diagnostics read them, else the last day.
 pub(super) fn trend_range(
     q: &DiagnosticsQuery,
-) -> Result<DiagnosticsRange, orbit_core::OrbitError> {
+) -> Result<DiagnosticsRange, orbit_common::OrbitError> {
     let range = if q.since.is_some() || q.month.is_some() {
         DiagnosticsRange::from_query(q, false)?
     } else {
@@ -516,7 +517,7 @@ pub(super) fn trend_range(
 /// Refuse an explicit window the bucket ladder cannot bound, or whose
 /// equally long previous window is not representable. `all` windows have
 /// no previous window and are widened in [`TrendWindow::new`] instead.
-fn validate_trend_range(range: &DiagnosticsRange) -> Result<(), orbit_core::OrbitError> {
+fn validate_trend_range(range: &DiagnosticsRange) -> Result<(), orbit_common::OrbitError> {
     let Some(since) = range.since else {
         return Ok(());
     };
@@ -528,14 +529,14 @@ fn validate_trend_range(range: &DiagnosticsRange) -> Result<(), orbit_core::Orbi
         .copied()
         .find(|width| span / width < MAX_BUCKETS)
     else {
-        return Err(orbit_core::OrbitError::InvalidInput(format!(
+        return Err(orbit_common::OrbitError::InvalidInput(format!(
             "trend window '{}' is too large: it would exceed {MAX_BUCKETS} buckets",
             range.key
         )));
     };
     let start = floor(open, bucket_secs);
     if start.checked_sub_signed(until - start).is_none() {
-        return Err(orbit_core::OrbitError::InvalidInput(format!(
+        return Err(orbit_common::OrbitError::InvalidInput(format!(
             "trend window '{}' is too large: its previous window is not representable",
             range.key
         )));

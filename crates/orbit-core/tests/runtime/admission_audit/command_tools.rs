@@ -9,8 +9,8 @@ use super::tool_support::{
     invalid_input_message, managed_tool_env_guard, run_tool_as_operator, test_runtime,
     unmanaged_tool_env_guard,
 };
-use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 
 /// Acquire the workspace claim as `actor` and return its token.

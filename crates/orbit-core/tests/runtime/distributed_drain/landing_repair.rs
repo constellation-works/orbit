@@ -622,7 +622,7 @@ impl OwnerLocal {
                 owner_machine_id: None,
                 checkout_role: None,
                 repo_root: repo.clone(),
-                ship_mode: orbit_core::ShipMode::Local,
+                ship_mode: orbit_core::app::run::ShipMode::Local,
                 base_branch: Some("main".to_string()),
             },
         )
@@ -884,7 +884,7 @@ impl OwnerLocal {
             .unwrap();
         assert_eq!(
             observed.results[0].status,
-            orbit_core::PipelineWaitStatus::from(terminal),
+            orbit_core::application::job::PipelineWaitStatus::from(terminal),
             "{observed:?}"
         );
         assert_eq!(

@@ -460,7 +460,7 @@ env = ["OPENAI_API_KEY={SOURCE}"]
         let submit = |runtime: &OrbitRuntime, names: &[String], pull: bool| {
             if pull {
                 runtime.submit_workspace_pull_run(
-                    orbit_core::WorkspacePullRequest {
+                    orbit_core::application::distributed::WorkspacePullRequest {
                         selector: "credential-owner/ws_review_option",
                         for_seconds: Some(60),
                         allowed_crews: names,
@@ -469,7 +469,7 @@ env = ["OPENAI_API_KEY={SOURCE}"]
                     JobRunTrigger::cli(),
                 )
             } else {
-                runtime.submit_workspace_auto_run(orbit_core::AutoDrainRequest {
+                runtime.submit_workspace_auto_run(orbit_core::application::job::AutoDrainRequest {
                     for_seconds: Some(60),
                     max_active_leaf_runs: Some(1),
                     completion: CompletionPolicy::Review,

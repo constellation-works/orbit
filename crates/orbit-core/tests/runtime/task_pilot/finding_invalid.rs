@@ -6,8 +6,11 @@
 use orbit_core::application::task::{
     FindingVerdict, TaskAddParams, TaskUpdateParams, VerdictSource,
 };
-use orbit_core::{Task, TaskStatus, TaskType};
-use orbit_engine::{Dispatch, RunLifecycle};
+use orbit_engine::Dispatch;
+use orbit_engine::RunLifecycle;
+use orbit_types::task::Task;
+use orbit_types::task::TaskStatus;
+use orbit_types::task::TaskType;
 use orbit_types::workflow::handoff::{FindingInvalidCitation, FindingInvalidReport};
 use serde_json::{Value, json};
 

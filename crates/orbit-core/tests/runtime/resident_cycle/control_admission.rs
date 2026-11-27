@@ -1,6 +1,6 @@
 //! Manager control wins over a cycle that has only observed its mandate.
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_core::test_support::with_resident_cycle_admission_checkpoint;
 use orbit_types::workflow::RESIDENT_CYCLE_GRANTED_EVENT;
 

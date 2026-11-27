@@ -4,7 +4,7 @@
 //! and apply actions against a real store and repository in isolated children.
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
-use orbit_core::{Task, TaskStatus};
+use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
 use super::Workspace;

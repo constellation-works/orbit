@@ -1,6 +1,6 @@
 //! Host resource observations through the composed runtime's public injection boundary.
 use chrono::{Duration, Utc};
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::host_resource::{
     DiskSample, HostResourceProbe, HostResourceSample, ResourceSeverity,
     host_resource_probe_with_clock,

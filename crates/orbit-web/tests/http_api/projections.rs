@@ -7,8 +7,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Duration, Timelike, Utc};
 use orbit_common::storage::blob_store::BlobStore;
-use orbit_core::AutoTaskAddParams;
-use orbit_core::InvocationInsertParams;
+use orbit_core::application::auto_tasks::AutoTaskAddParams;
 use orbit_core::application::auto_tasks::cursor_state_path;
 use orbit_core::application::routines::pause_routine;
 use orbit_core::application::task::{
@@ -16,8 +15,10 @@ use orbit_core::application::task::{
     TaskUpdateParams,
 };
 use orbit_core::test_support::V2AuditEventInsertParams;
-use orbit_engine::RunLifecycle;
-use orbit_engine::{TaskAutomationUpdate, blocked_workflow_failure_update};
+use orbit_core::test_support::fixture_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
+use orbit_core::test_support::fixture_engine::blocked_workflow_failure_update;
+use orbit_core::test_support::fixture_store::InvocationInsertParams;
 use orbit_types::task::{
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskComplexity, TaskDecision,
     TaskEventRowV2,
@@ -507,7 +508,7 @@ fn assert_contains(value: &Value, key: &str, needle: &str) {
     check!(value[key].as_str().is_some_and(|text| text.contains(needle)); "{key} must name {needle}: {value}");
 }
 fn seed_null_scope(
-    rt: &orbit_core::OrbitRuntime,
+    rt: &orbit_core::runtime::OrbitRuntime,
     fixture: &Fixture,
     run: &str,
     activity: &str,
@@ -726,7 +727,11 @@ fn seed_row(
     place_invocation(fixture, run, at, partition);
 }
 
-fn insert_invocation(runtime: &orbit_core::OrbitRuntime, run: &str, row: InvocationRow<'_>) {
+fn insert_invocation(
+    runtime: &orbit_core::runtime::OrbitRuntime,
+    run: &str,
+    row: InvocationRow<'_>,
+) {
     let (activity, agent, model, task_ids, tool, result_bytes, input, output) = row;
     runtime
         .insert_invocation_trace_record(&InvocationInsertParams {
@@ -764,7 +769,7 @@ fn place_invocation(fixture: &Fixture, run: &str, at: DateTime<Utc>, partition: 
             "UPDATE invocations SET ts = ?1, workspace_id = COALESCE(?2, workspace_id)
              WHERE id = (SELECT id FROM invocations WHERE job_run_id = ?3 ORDER BY id DESC LIMIT 1)",
             (at.to_rfc3339(), partition, run),
-        ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+        ).map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
         Ok(())
     }).unwrap();
 }
@@ -839,7 +844,7 @@ projections_test!(
                         "DELETE FROM invocations WHERE workspace_id = ?1",
                         ["ws_http_fixture"],
                     )
-                    .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                 let count: i64 = tx
                     .connection()
                     .query_row(
@@ -847,7 +852,7 @@ projections_test!(
                         [],
                         |row| row.get(0),
                     )
-                    .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                 Ok(count)
             })
             .unwrap();
@@ -1483,7 +1488,7 @@ projections_test!(
 
 /// A run-blocked task with an escalation recorded without another status change.
 fn block_with_final_recovery(
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     repo: &Path,
     id: &str,
     run_id: &str,
@@ -1723,7 +1728,11 @@ projections_test!(
     }
 );
 
-fn add_scope_workspace(fixture: &Fixture, id: &str, name: &str) -> orbit_core::OrbitRuntime {
+fn add_scope_workspace(
+    fixture: &Fixture,
+    id: &str,
+    name: &str,
+) -> orbit_core::runtime::OrbitRuntime {
     let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
     let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
     let mut workspace = registry.workspaces[0].clone();
@@ -1746,7 +1755,7 @@ fn add_scope_workspace(fixture: &Fixture, id: &str, name: &str) -> orbit_core::O
         .unwrap()
 }
 
-fn seed_scope(runtime: &orbit_core::OrbitRuntime, invocation: InvocationFixture<'_>) {
+fn seed_scope(runtime: &orbit_core::runtime::OrbitRuntime, invocation: InvocationFixture<'_>) {
     let InvocationFixture {
         run,
         activity,
@@ -1781,7 +1790,7 @@ fn null_scope_workspace(fixture: &Fixture, run: &str) {
                     "UPDATE invocations SET workspace_id = NULL WHERE job_run_id = ?1",
                     [run],
                 )
-                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
             Ok(())
         })
         .unwrap();

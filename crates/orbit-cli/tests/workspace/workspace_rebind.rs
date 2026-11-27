@@ -12,8 +12,9 @@ use std::process::Output;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
+use orbit_common::OrbitError;
 use orbit_common::test_env;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
 use serde_json::Value;
 use tempfile::tempdir;
 

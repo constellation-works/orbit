@@ -27,7 +27,7 @@ use orbit_core::app::routine::{
     self, ClockAction, ClockControl, ClockControlled, Command, DashboardWrite, DashboardWritten,
     ListedRoutine, Outcome,
 };
-use orbit_core::application::routines::{
+use orbit_core::app::routine::{
     ClockHealth, ClockStatus, FireField, RoutineEditRefusal, RoutineField, RoutineStatus,
     RoutineStatusReport, trigger_options,
 };
@@ -238,7 +238,7 @@ fn compute_routine_health(
     generated_at: DateTime<Utc>,
     operator_session: bool,
     include_inactive_plugins: bool,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let started = Instant::now();
     let report = routine_statuses(state.global_root())?;
     let report_ms = started.elapsed().as_millis();
@@ -285,7 +285,7 @@ pub(super) fn dashboard_caller(
 
 /// An app answered one command with another command's outcome.
 pub(super) fn unexpected_outcome(label: &str) -> Response {
-    super::server_error(orbit_core::OrbitError::Execution(format!(
+    super::server_error(orbit_common::OrbitError::Execution(format!(
         "{label} answered with another command's outcome"
     )))
 }

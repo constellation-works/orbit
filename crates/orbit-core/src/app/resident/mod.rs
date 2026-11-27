@@ -32,6 +32,10 @@ pub use crate::application::resident::{
     ResidentDashboardGrant, ResidentDashboardGrantOutcome, ResidentDashboardGrantParams,
 };
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::application::resident::take_failed_resident_action_key;
+pub use orbit_runtime::authorization::route_resident_delivery_recovery_to_broker;
+
 /// What the resident app can be asked to do.
 pub enum Command {
     /// One registry verb and the fields it is called with.

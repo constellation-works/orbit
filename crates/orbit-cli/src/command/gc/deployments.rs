@@ -1,6 +1,6 @@
 use clap::Args;
 use clap::builder::TypedValueParser;
-use orbit_core::application::gc::DEFAULT_DEPLOYMENT_KEEP;
+use orbit_core::app::gc::DEFAULT_DEPLOYMENT_KEEP;
 
 #[derive(Args)]
 #[command(

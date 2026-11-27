@@ -2,7 +2,7 @@
 //! running and retrying runs, by the activity that started them.
 
 use chrono::Utc;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_store::contract::V2AuditEventInsertParams;
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};
 use serde_json::{Value, json};

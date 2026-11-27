@@ -17,11 +17,11 @@ use std::time::{Duration, Instant};
 use chrono::{SecondsFormat, Utc};
 use orbit_common::process::ancestry::process_start_key;
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
-use orbit_core::AuditEventStatus;
-use orbit_core::JobRunState;
-use orbit_core::TaskStatus;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_types::task::TaskArtifact;
+use orbit_types::task::TaskStatus;
+use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::workflow::JobRunState;
 use reqwest::blocking::Response;
 use serde_json::{Value, json};
 

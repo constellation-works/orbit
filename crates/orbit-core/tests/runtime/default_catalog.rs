@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::protocol::yaml::parse_routine_yaml;
-use orbit_core::RoutineSeedIdentity;
+use orbit_core::app::routine::RoutineSeedIdentity;
 use orbit_core::application::auto_tasks::collect_auto_tasks;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 
@@ -63,7 +63,7 @@ fn published_lists_cover_initialized_defaults_and_owner_pinned_routines() {
 
     // Regression: an activity naming inactive tools once broke loading of
     // every activity catalog.
-    let runtime = orbit_core::OrbitRuntime::from_roots(&global, &workspace)
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(&global, &workspace)
         .expect("initialized public runtime");
     runtime
         .v2_activity_catalog()

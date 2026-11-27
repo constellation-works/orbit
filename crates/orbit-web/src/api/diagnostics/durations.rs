@@ -8,7 +8,8 @@ use std::collections::{BTreeMap, HashMap};
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::{Core, InvocationQuery};
+use orbit_core::Core;
+use orbit_core::app::audit::InvocationQuery;
 use orbit_types::task::{UNSET_BUCKET, complexity_bucket_ord};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -48,7 +49,7 @@ pub(in crate::api) async fn diagnostics_implement_one(
         "succeeded" => true,
         "all" => false,
         _ => {
-            return map_runtime_error(orbit_core::OrbitError::InvalidInput(
+            return map_runtime_error(orbit_common::OrbitError::InvalidInput(
                 "outcome must be succeeded or all".to_string(),
             ));
         }
@@ -80,7 +81,7 @@ fn implement_one_trend(
     runtime: &Core,
     range: &DiagnosticsRange,
     succeeded_only: bool,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let complexity_since = Utc::now() - Duration::days(COMPLEXITY_ACTORS_DAYS);
     // The task complexity map is independent of the invocation rows, so it
     // is read alongside them rather than after.
@@ -101,7 +102,7 @@ fn implement_one_trend(
         let complexity = complexity
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
-        Ok::<_, orbit_core::OrbitError>((records?, complexity?))
+        Ok::<_, orbit_common::OrbitError>((records?, complexity?))
     })?;
     let truncated = records.len() >= RECORD_LIMIT;
     let runs: Vec<Run> = records

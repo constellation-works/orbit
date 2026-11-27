@@ -5,8 +5,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use chrono::Utc;
-use orbit_core::JobRunState;
 use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use crate::agents_fixture::{self, AgentsFixture, SeedRun};
@@ -619,20 +619,22 @@ fn agents_scorecard_plain_by_type_and_per_task_distinguish_effort_rows() {
         if let Some(effort) = effort {
             let execution_id = agents.begin_execution(&run_id, "fixture", crew, *effort);
             runtime
-                .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
-                    agent_execution_id: Some(execution_id),
-                    job_run_id: run_id,
-                    account: None,
-                    activity_id: "implement_one".into(),
-                    agent: "fixture".into(),
-                    provider: None,
-                    model: Some("model-fixture".into()),
-                    task_ids: vec![id],
-                    trace: orbit_types::telemetry::InvocationTrace {
-                        duration_ms: 60_000,
-                        ..Default::default()
+                .insert_invocation_trace_record(
+                    &orbit_core::test_support::fixture_store::InvocationInsertParams {
+                        agent_execution_id: Some(execution_id),
+                        job_run_id: run_id,
+                        account: None,
+                        activity_id: "implement_one".into(),
+                        agent: "fixture".into(),
+                        provider: None,
+                        model: Some("model-fixture".into()),
+                        task_ids: vec![id],
+                        trace: orbit_types::telemetry::InvocationTrace {
+                            duration_ms: 60_000,
+                            ..Default::default()
+                        },
                     },
-                })
+                )
                 .unwrap();
         }
     }

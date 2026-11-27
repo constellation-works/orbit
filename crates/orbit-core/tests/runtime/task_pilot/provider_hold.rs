@@ -10,7 +10,6 @@ use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_core::application::automation::evaluate_routine;
 use orbit_core::application::contracts::PULL_DRAIN_JOB;
 use orbit_core::application::job::JobRunListParams;
-use orbit_core::{JobRun, JobRunState, JobRunStep, JobTargetType};
 use orbit_engine::Recovery;
 use orbit_types::task::ExecutionLocation;
 use orbit_types::workflow::automation::AutomationDiagnostic;
@@ -18,6 +17,7 @@ use orbit_types::workflow::{
     ActivityCrewDraw, PipelineState, ProviderFailureClass, PullAuthExclusion, PullAuthRecovery,
     provider_failure_text,
 };
+use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType};
 use serde_json::json;
 
 use super::{Workspace, pilot_routine, runtime_at};

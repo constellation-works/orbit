@@ -377,7 +377,9 @@ fn reconciliation_rechecks_live_authority_policy_and_lease() {
     let other = f
         .runtime
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:another-operator"));
+        .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+            "human:another-operator",
+        ));
     assert!(
         other
             .run_tool_as_human("orbit.workflow.run.resume", request.clone())
@@ -387,7 +389,7 @@ fn reconciliation_rechecks_live_authority_policy_and_lease() {
     let agent = f
         .runtime
         .clone()
-        .with_actor(orbit_core::ActorIdentity::agent("codex"));
+        .with_actor(orbit_core::runtime::context::ActorIdentity::agent("codex"));
     assert!(
         agent
             .run_tool_as_human("orbit.workflow.run.resume", request.clone())
@@ -469,7 +471,7 @@ fn reconciliation_rechecks_live_authority_policy_and_lease() {
         original_config.replace("before_landing = false", "before_landing = true"),
     )
     .unwrap();
-    f.runtime = orbit_core::OrbitRuntime::from_roots(
+    f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &f._root.path().join("global"),
         &f.repo.join(".orbit"),
     )

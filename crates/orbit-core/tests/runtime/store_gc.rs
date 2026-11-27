@@ -7,7 +7,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 #[cfg(unix)]
 use orbit_engine::RunLifecycle;
 use orbit_store::Store;

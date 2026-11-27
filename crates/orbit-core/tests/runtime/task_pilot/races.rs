@@ -1,8 +1,8 @@
 //! Admission and operator interleavings through the composed runtime.
 
-use orbit_core::TaskComplexity;
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_engine::RunLifecycle;
+use orbit_types::task::TaskComplexity;
 
 use super::*;
 
@@ -391,7 +391,7 @@ fn local_auto_ship_and_readiness_wait_for_an_active_pilot_checkpoint() {
     }
     let held_ship = workspace
         .runtime
-        .submit_ship_run(orbit_core::ShipRunRequest {
+        .submit_ship_run(orbit_core::application::job::ShipRunRequest {
             mode: orbit_types::workflow::ShipMode::Local,
             base_branch: Some("main"),
             task_ids: std::slice::from_ref(&task.id),
@@ -551,7 +551,7 @@ fn mixed_named_shipment_dispatches_eligible_and_audits_hold() {
     let request = |ids: &[String]| {
         workspace
             .runtime
-            .submit_ship_run(orbit_core::ShipRunRequest {
+            .submit_ship_run(orbit_core::application::job::ShipRunRequest {
                 mode: orbit_types::workflow::ShipMode::Local,
                 base_branch: Some("main"),
                 task_ids: ids,

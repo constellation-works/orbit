@@ -1,6 +1,7 @@
 //! Regressions for bounded incident evidence and complete message recovery.
 
-use orbit_core::{AuditEventStatus, FailureIncidentQuery};
+use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::telemetry::incident::FailureIncidentQuery;
 use serde_json::{Value, json};
 
 use super::audit;

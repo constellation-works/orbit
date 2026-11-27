@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 use orbit_common::Env;
-use orbit_core::bootstrap::browser_kit::KitLayout;
+use orbit_core::app::host::KitLayout;
 
 use super::install::BrowserKitInstallArgs;
 use super::remove::BrowserKitRemoveArgs;

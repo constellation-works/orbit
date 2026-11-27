@@ -7,11 +7,11 @@ use std::io::Write;
 use std::path::Path;
 
 use orbit_common::Env;
+use orbit_common::OrbitError;
 use orbit_config::{
     AgentCrewNames, HumanCrewSeedOutcome, human_crew_seed_collides, normalize_human_crew_name,
     os_user_human_crew_name, seed_operator_human_crew,
 };
-use orbit_core::OrbitError;
 
 use super::prompt_stdin;
 use crate::output::common::sink;

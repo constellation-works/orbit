@@ -1,13 +1,13 @@
 //! Review interruption and external evidence through runtime/tool boundaries.
 
 use chrono::Utc;
-use orbit_core::TaskStatus;
 use orbit_core::runtime::audit::run::AuditStepOutcome;
 use orbit_engine::{Dispatch, ReviewGate, RunLifecycle};
 use orbit_engine::{
     DispatchError, ReviewReleaseRequest, ReviewerInvocationRequest, TaskAutomationUpdate,
     execute_deterministic_action,
 };
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
     REVIEW_REPORT_ARTIFACT, ReviewAttemptState, ReviewCertificate, ReviewEvidenceHold,
@@ -39,7 +39,9 @@ pub(super) fn attach_as_operator(fixture: &Fixture, path: &str, content: &Value)
     fixture
         .runtime
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+            "human:operator",
+        ))
         .update_task_with_identity(
             &fixture.task_id,
             orbit_core::application::task::TaskUpdateParams {
@@ -664,7 +666,10 @@ fn named_external_checks_hold_until_every_matching_result_and_log_arrives() {
             .runtime
             .wait_pipeline_runs(std::slice::from_ref(&hold.run_id), 1, 1, None)
             .unwrap();
-        assert_eq!(wait.results[0].status, orbit_core::PipelineWaitStatus::Held);
+        assert_eq!(
+            wait.results[0].status,
+            orbit_core::application::job::PipelineWaitStatus::Held
+        );
         assert!(wait.results[0].error.is_none());
         let reliability = fixture
             .runtime
@@ -1148,7 +1153,9 @@ fn a_late_review_handoff_cannot_overwrite_an_operator_block() {
     fixture
         .runtime
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+            "human:operator",
+        ))
         .force_update_task_with_identity(
             &fixture.task_id,
             orbit_core::application::task::TaskUpdateParams {

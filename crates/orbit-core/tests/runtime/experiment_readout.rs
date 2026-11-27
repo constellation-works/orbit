@@ -10,11 +10,12 @@ use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput, ExperimentReadout,
 };
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_store::contract::{
     ExperimentAssignment, ExperimentEventRow, ExperimentWrite, ExperimentWriteOutcome,
     InvocationInsertParams,
 };
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage, ToolCallTrace};
 use serde_json::json;
 

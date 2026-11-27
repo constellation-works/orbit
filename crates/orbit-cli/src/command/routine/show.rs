@@ -3,8 +3,8 @@ use std::path::Path;
 use crate::command::{CommandOut, Payload};
 use clap::Args;
 use orbit_cmd::registry_routines::routine_statuses;
-use orbit_core::OrbitError;
-use orbit_core::application::routines::{
+use orbit_common::OrbitError;
+use orbit_core::app::routine::{
     FireField, OwnerOnlyRoutine, RetiredRoutine, RoutineField, RoutineStatusReport, project_fire,
     recent_fires, routine_breaker_events,
 };
@@ -79,7 +79,7 @@ impl RoutineShowArgs {
                 self.name
             )));
         };
-        let opener = orbit_core::composition::store_opener();
+        let opener = orbit_core::app::workspace::store_opener();
         let fires = recent_fires(opener, global_root, &self.name, RECENT_FIRE_LIMIT)?;
         let breaker_events =
             routine_breaker_events(opener, global_root, &self.name, BREAKER_EVENT_LIMIT)?;
@@ -165,8 +165,8 @@ impl RoutineShowArgs {
                 "Trigger: cron \"{}\" (missed_run: {})",
                 definition.trigger.cron,
                 match definition.trigger.missed_run {
-                    orbit_core::MissedRunPolicy::CatchUpOnce => "catch_up_once",
-                    orbit_core::MissedRunPolicy::Skip => "skip",
+                    orbit_types::workflow::MissedRunPolicy::CatchUpOnce => "catch_up_once",
+                    orbit_types::workflow::MissedRunPolicy::Skip => "skip",
                 }
             );
         }
@@ -184,8 +184,8 @@ impl RoutineShowArgs {
             definition.policy.retries.max,
             definition.policy.retries.backoff_minutes,
             match definition.policy.overlap {
-                orbit_core::OverlapPolicy::Forbid => "forbid",
-                orbit_core::OverlapPolicy::Allow => "allow",
+                orbit_types::workflow::OverlapPolicy::Forbid => "forbid",
+                orbit_types::workflow::OverlapPolicy::Allow => "allow",
             }
         );
         let _ = writeln!(

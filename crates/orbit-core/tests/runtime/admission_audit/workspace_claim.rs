@@ -9,9 +9,9 @@ use orbit_types::telemetry::AuditEventStatus;
 use serde_json::json;
 
 use super::tool_support::{run_tool_as_operator, test_runtime, unmanaged_tool_env_guard};
-use orbit_core::OrbitRuntime;
+use orbit_core::app::run::{CompletionPolicy, ShipMode};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{CompletionPolicy, ShipMode};
+use orbit_core::runtime::OrbitRuntime;
 
 /// Acquire the claim and return its token.
 fn acquire_claim(runtime: &OrbitRuntime, actor: &str) -> String {
@@ -53,7 +53,7 @@ fn a_refused_dispatch_is_recorded_as_denied_without_the_holders_token() {
     let token = acquire_claim(&runtime, "claude");
     let task_id = add_backlog_task(&runtime);
 
-    let _ = runtime.submit_ship_run(orbit_core::ShipRunRequest {
+    let _ = runtime.submit_ship_run(orbit_core::application::job::ShipRunRequest {
         mode: ShipMode::Local,
         base_branch: Some("main"),
         task_ids: std::slice::from_ref(&task_id),

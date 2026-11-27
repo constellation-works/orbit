@@ -92,7 +92,7 @@ fn workspace_show_json(
             "id": workspace.id,
             "name": workspace.name,
             "base_branch": workspace.base_branch,
-            "ship_mode": orbit_core::resolved_ship_mode(workspace).as_input_value(),
+            "ship_mode": orbit_core::app::run::resolved_ship_mode(workspace).as_input_value(),
             "status": workspace.status.to_string(),
             "owner_machine_id": workspace.owner_machine_id,
             "git_remote": workspace.git_remote.as_deref().map(redact_git_remote),
@@ -127,7 +127,7 @@ fn format_workspace_show(
         checkout.repo_root.display(),
         checkout.orbit_dir.display(),
         workspace.base_branch,
-        orbit_core::resolved_ship_mode(workspace).as_input_value(),
+        orbit_core::app::run::resolved_ship_mode(workspace).as_input_value(),
         workspace.status,
     );
     output.push_str(&format!(

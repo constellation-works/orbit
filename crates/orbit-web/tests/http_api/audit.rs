@@ -1,11 +1,12 @@
 //! Audit counts through the HTTP API and real runtime dispatch, in isolated children.
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::{
-    AuditEventFilter, AuditEventInsertParams, AuditEventStatus, FailureClass, FailureIncidentQuery,
-    JobRunState, OrbitError,
-};
-use orbit_store::contract::AuditInvocationFields;
+use orbit_common::OrbitError;
+use orbit_core::test_support::fixture_store::contract::AuditInvocationFields;
+use orbit_core::test_support::fixture_store::{AuditEventFilter, AuditEventInsertParams};
+use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::telemetry::incident::{FailureClass, FailureIncidentQuery};
+use orbit_types::workflow::JobRunState;
 use serde_json::json;
 
 use super::support::{Fixture, isolated, json_ok, walk_audit_pages};

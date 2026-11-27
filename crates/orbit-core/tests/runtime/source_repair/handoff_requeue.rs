@@ -38,7 +38,7 @@ impl TaskPrForge for Forge {
     fn open_pull_requests(
         &self,
         _: &Path,
-    ) -> Result<Vec<ForgePullRequest>, orbit_core::OrbitError> {
+    ) -> Result<Vec<ForgePullRequest>, orbit_common::OrbitError> {
         let closed = self.closed.lock().unwrap();
         Ok(
             (!closed.iter().any(|(number, _)| *number == self.open.number))
@@ -47,7 +47,8 @@ impl TaskPrForge for Forge {
                 .collect(),
         )
     }
-    fn authenticated_login(&self, _: &Path) -> Result<String, orbit_core::OrbitError> {
+
+    fn authenticated_login(&self, _: &Path) -> Result<String, orbit_common::OrbitError> {
         Ok(self.open.author.clone())
     }
     fn close_pull_request(
@@ -55,7 +56,7 @@ impl TaskPrForge for Forge {
         _: &Path,
         number: u64,
         comment: &str,
-    ) -> Result<(), orbit_core::OrbitError> {
+    ) -> Result<(), orbit_common::OrbitError> {
         self.closed.lock().unwrap().push((number, comment.into()));
         Ok(())
     }
@@ -74,13 +75,13 @@ pub(super) fn delivery_forge(f: &Fixture) -> Forge {
     }
 }
 
-struct SingleWorkspace(orbit_core::OrbitRuntime);
+struct SingleWorkspace(orbit_core::runtime::OrbitRuntime);
 
 impl RoutineWorkspaceProvider for SingleWorkspace {
     fn discover_workspaces(
         &self,
         _: &Path,
-    ) -> Result<DiscoveredWorkspaces, orbit_core::OrbitError> {
+    ) -> Result<DiscoveredWorkspaces, orbit_common::OrbitError> {
         let workspace = Workspace {
             id: self.0.workspace_id()?,
             name: "fixture".into(),
@@ -115,7 +116,7 @@ fn tick(f: &Fixture) {
     assert!(!sweep.lock_busy);
 }
 
-pub(super) fn requeue(f: &Fixture, discard: bool) -> Result<Value, orbit_core::OrbitError> {
+pub(super) fn requeue(f: &Fixture, discard: bool) -> Result<Value, orbit_common::OrbitError> {
     f.runtime.run_tool_as_human(
         "orbit.task.requeue",
         json!({"id": f.task, "workspace": f.repo, "reason": "the publication is sound; resume it",
@@ -849,7 +850,7 @@ fn a_requeue_without_a_receipt_refuses_an_unbound_pull_request() {
 
 /// A plain status update through the public task-update tool, as an
 /// operator or agent would move a blocked task back to backlog.
-pub(super) fn plain_backlog(f: &Fixture, discard: bool) -> Result<(), orbit_core::OrbitError> {
+pub(super) fn plain_backlog(f: &Fixture, discard: bool) -> Result<(), orbit_common::OrbitError> {
     if discard {
         // The tool host carries `discard_candidate` as a CLI-style option;
         // the human surface below is the same shared core operation.

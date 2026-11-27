@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
-use orbit_core::OrbitError;
-use orbit_core::application::agents::RankQuery;
+use orbit_common::OrbitError;
+use orbit_core::app::agent::RankQuery;
 use serde_json::Value;
 
 use super::support::{number, text};

@@ -1,5 +1,5 @@
 use crate::serve::{drain_with_grace_period, teardown_runtime};
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;

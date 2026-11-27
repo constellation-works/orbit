@@ -1,12 +1,12 @@
 //! Tier-normalised implementer scores through the public runtime and HTTP API.
 
 use chrono::{Duration, Utc};
-use orbit_core::TaskStatus;
-use orbit_core::TaskTypeDefinition;
+use orbit_config::TaskTypeDefinition;
 use orbit_core::application::agents::{
     AgentQuery, AgentRole, agent_by_type_scorecard, agent_detail, agent_scorecard,
 };
 use orbit_core::application::task::TaskAddParams;
+use orbit_types::task::TaskStatus;
 use orbit_types::task::{DefectSeverity, RegressionEscape, RegressionNature, TaskComplexity};
 use serde_json::{Value, json};
 
@@ -999,7 +999,9 @@ fn delivery_review_regressions_rank_crews_without_pre_landing_review() {
                     Vec::new(),
                 ));
             }
-            use orbit_store::contract::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
+            use orbit_core::test_support::fixture_store::contract::{
+                DiffClassCounts, LandedDiffSource, LandedDiffStats,
+            };
             for (index, id) in ids.iter().take(3).enumerate() {
                 fixture
                     .runtime

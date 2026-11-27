@@ -8,13 +8,15 @@ use axum::extract::{Query, State};
 use axum::http::HeaderValue;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, Utc};
+use orbit_common::OrbitError;
 use orbit_core::app::audit::{
     AuditListingColumns, AuditListingExactIds, AuditListingHttpWindow, AuditListingPredicates,
     AuditListingProfile, AuditSummary, Command, Outcome, exec,
 };
-use orbit_core::{
-    AuditEventStatus, AuditToolAggregate, AuditToolModelAggregate, FailureClass,
-    FailureIncidentReport, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, OrbitError,
+use orbit_core::app::audit::{AuditToolAggregate, AuditToolModelAggregate};
+use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::telemetry::incident::{
+    FailureClass, FailureIncidentReport, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
     is_failure_only_diagnostic_surface,
 };
 use orbit_types::tool::{McpCapability, McpTransport};

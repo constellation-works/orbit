@@ -186,9 +186,9 @@ pub enum RoutineField {
     FirstObservedAt,
     LastEvaluatedSlot,
     NextDue,
-    /// [`ScheduleDisplayState::next_evaluation`] over the next slot.
+    /// `ScheduleDisplayState::next_evaluation` over the next slot.
     NextEvaluation,
-    /// [`ScheduleDisplayState`] token.
+    /// `ScheduleDisplayState` token.
     State,
     /// The last fire, projected with these columns.
     LastFire(&'static [(&'static str, FireField)]),
@@ -196,7 +196,7 @@ pub enum RoutineField {
     RecentFires(&'static [(&'static str, FireField)]),
     /// `{count, since, truncated}` of the latest consecutive failures.
     FailureStreak,
-    /// The routine's circuit breaker ([`breaker_json`]), or null when it
+    /// The routine's circuit breaker (`breaker_json`), or null when it
     /// never tripped on this host.
     Breaker,
     /// Whether Orbit ships and seeds this routine's definition file: the file

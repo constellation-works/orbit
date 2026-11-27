@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
-use orbit_core::JobRunState;
+use orbit_types::workflow::JobRunState;
 use reqwest::blocking::Response;
 use serde_json::{Value, json};
 
@@ -637,7 +637,7 @@ fn diagnostics_errors_scope_process_rows_to_the_selected_workspaces_runs() {
         "log::diagnostics_errors_scope_process_rows_to_the_selected_workspaces_runs",
         || {
             use chrono::{Duration, Utc};
-            use orbit_core::OrbitRuntime;
+            use orbit_core::runtime::OrbitRuntime;
             use orbit_core::test_support::V2AuditEventInsertParams;
             use orbit_types::workspace::WorkspaceCheckout;
             const OTHER: &str = "ws_http_other";

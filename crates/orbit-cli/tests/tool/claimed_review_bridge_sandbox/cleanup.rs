@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use orbit_common::OrbitError;
 use orbit_common::test_env::FIXTURE_STEP_DEADLINE;
-use orbit_engine::PluginBrokerHandle;
+use orbit_core::test_support::fixture_engine::PluginBrokerHandle;
 
 use super::{Confined, Node, ResolvedFsProfile, fs, wait_for};
 

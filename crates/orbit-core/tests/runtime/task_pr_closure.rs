@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use orbit_common::OrbitError;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, TaskPrForge};
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
@@ -783,10 +783,12 @@ fn a_requeue_while_the_tasks_run_is_live_closes_nothing() {
 
     // Force does not authenticate an unbound publication. Refuse atomically,
     // then exercise the live-PR closure guard through the explicit discard.
-    let operator = fx
-        .runtime
-        .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+    let operator =
+        fx.runtime
+            .clone()
+            .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+                "human:operator",
+            ));
     let before = fx.runtime.get_task(&task_id).unwrap();
     let history = fx.runtime.get_task_history(&task_id).unwrap();
     operator
@@ -889,10 +891,12 @@ fn a_requeue_while_a_resumed_retry_is_live_closes_nothing() {
 
     // Force does not authenticate an unbound publication. Refuse atomically,
     // then exercise the live-PR closure guard through the explicit discard.
-    let operator = fx
-        .runtime
-        .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+    let operator =
+        fx.runtime
+            .clone()
+            .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+                "human:operator",
+            ));
     let before = fx.runtime.get_task(&task_id).unwrap();
     let history = fx.runtime.get_task_history(&task_id).unwrap();
     operator

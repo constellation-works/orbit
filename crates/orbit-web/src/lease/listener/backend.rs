@@ -8,7 +8,7 @@ use crate::lease_intake::{
 };
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;

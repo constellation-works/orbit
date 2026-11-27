@@ -5,7 +5,7 @@ use orbit_types::timestamp::UtcTimestamp;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 use tempfile::tempdir_in;
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 
 pub(crate) fn seed_executor(
     runtime: &OrbitRuntime,

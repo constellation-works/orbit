@@ -4,8 +4,8 @@ use crate::state::run_read;
 use axum::extract::Query;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
+use orbit_core::app::audit::{InvocationQuery, InvocationRecord};
 use orbit_core::app::run::Command as RunCommand;
-use orbit_core::{InvocationQuery, InvocationRecord};
 use serde_json::{Value, json};
 
 use super::super::{
@@ -25,9 +25,9 @@ impl DiagnosticsRange {
     pub(super) fn from_query(
         q: &DiagnosticsQuery,
         default_month: bool,
-    ) -> Result<Self, orbit_core::OrbitError> {
+    ) -> Result<Self, orbit_common::OrbitError> {
         if q.since.is_some() && q.month.is_some() {
-            return Err(orbit_core::OrbitError::InvalidInput(
+            return Err(orbit_common::OrbitError::InvalidInput(
                 "supply either since or month, not both".to_string(),
             ));
         }

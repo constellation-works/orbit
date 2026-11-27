@@ -1,8 +1,9 @@
 //! Grant changes stay frozen while a stopped attempt's worktree survives.
 
 use chrono::Utc;
+use orbit_common::OrbitError;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_store::contract::{
     AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
 };

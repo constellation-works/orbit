@@ -140,7 +140,7 @@ impl UnstoppedLeaf {
 }
 
 /// Compatibility profile a surface selects for the shared
-/// [`JobRunCancelResult`] JSON projection.
+/// `JobRunCancelResult` JSON projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobRunCancelResultProfile {
     /// The CLI result: the twelve shared fields, without attribution.

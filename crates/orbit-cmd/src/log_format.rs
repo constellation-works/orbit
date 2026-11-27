@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::Env;
+use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input;
-use orbit_core::OrbitError;
 use serde_json::Value;
 
 /// Target of the supervisor's per-line agent output events
@@ -261,7 +261,7 @@ pub fn resolve_log_path(override_path: Option<&Path>, env: &Env) -> Result<PathB
         return Ok(PathBuf::from(path));
     }
     orbit_common::observability::logging::global_jsonl_log_path(
-        &orbit_core::composition::composition_env(),
+        &orbit_core::app::host::composition_env(),
     )
     .map_err(|err| OrbitError::InvalidInput(format!("cannot resolve global JSONL log path: {err}")))
 }

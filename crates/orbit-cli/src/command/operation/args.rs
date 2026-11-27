@@ -25,11 +25,11 @@
 use clap::builder::{PossibleValue, PossibleValuesParser};
 use clap::error::ErrorKind;
 use clap::{Arg, ArgAction, ArgMatches, Command, FromArgMatches, Subcommand};
+use orbit_common::OrbitError;
 use orbit_common::governance::operation::{
     CliAction, CliArgKind, CliBinding, CliConstraint, EnumValue, OperationSpec, OperationVerb,
     ParamSpec, ParamType, alternatives,
 };
-use orbit_core::OrbitError;
 use serde_json::{Map, Value};
 
 /// One parsed operation invocation: which verb and its tool input.

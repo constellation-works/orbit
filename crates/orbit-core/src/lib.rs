@@ -1,44 +1,24 @@
 //! Directional application operations, adapters, bootstrap, and composition
 //! over the `orbit-runtime` kernel.
 //!
-//! This is the library crate that assembles all subsystems into the
-//! [`OrbitRuntime`] — the single entry point used by the CLI, Web, and
-//! `orbit-cmd` adapters. Composition loads resolved config and joins bootstrap,
+//! This crate assembles all subsystems into the `OrbitRuntime` and owns the
+//! use cases. Composition loads resolved config and joins bootstrap,
 //! application operations, adapters, and the runtime kernel.
 //!
-//! # Role
-//! Depends on the lower Orbit crates (never on `orbit-cmd`). Consumed by
-//! `orbit-cmd`, `orbit-cli`, and `orbit-web`; neutral
-//! kernels below this layer do not import from `orbit-core`.
+//! # Public face
+//! The crate exports three things: [`app`], one module per subject; [`Core`],
+//! the opaque handle composition returns for one opened workspace; and
+//! [`Error`]. A surface builds an app's `Command`, passes it with its `Core`
+//! to that app's `exec`, which runs through the chokepoint that authorizes and
+//! audits it, and renders the `Outcome`. A type or function a surface or
+//! `orbit-cmd` names is re-exported from the app that owns its subject.
 //!
-//! Shared use cases live in [`application`]. Tool-host and engine-host protocol
-//! translation lives in [`adapter`]. The runtime kernel is the `orbit-runtime`
-//! crate, which owns mechanisms and cannot import application or adapter
-//! modules; [`runtime`] re-exports it and defines [`OrbitRuntime`], which owns
-//! the kernel. The kernel never calls an application method: a mechanism
-//! that needs a use case's answer takes it as an argument, and a flow that
-//! needs both lives here.
-//!
-//! A converted surface holds a [`Core`] instead of the runtime and calls an
-//! app in [`app`]: one `exec(&core, command)` per subject, each run through
-//! the chokepoint that authorizes and audits the command.
-//!
-//! # Root re-export policy (ORB-10016)
-//! Every root `pub use` below is justified by a real import in a consumer
-//! crate (`orbit-cli`, `orbit-web`, `orbit-cmd`), except `GlobalSearchParams`,
-//! which the `orbit-core` runtime integration test imports because its owning
-//! module `application::search` is `pub(crate)`. Anything else must be
-//! imported from its owning module (`orbit_core::application::…`,
-//! `orbit_core::runtime::…`) or its owning crate (`orbit_common`,
-//! `orbit_store`, `orbit_engine`).
-//!
-//! # Key exports
-//! - [`OrbitRuntime`] — fully initialized runtime; wraps stores, policy, tools, and event bus
-//! - [`ActorIdentity`] — actor identity for audit trail attribution
-//! - [`OrbitError`] — re-exported from `orbit-common::types` for CLI-layer convenience
-//! - `application::*` — coordinated use cases and their DTOs
-//! - `adapter::*` — command, tool-host, and engine-host protocol translation
-//! - `skill_catalog` — re-exported skill store for CLI skill lookup
+//! Shared use cases live in `application`, protocol translation in
+//! `adapter`, and the runtime kernel is the `orbit-runtime` crate, which
+//! `runtime` re-exports inside this crate beside the `OrbitRuntime` that owns
+//! it. The kernel never calls an application method: a mechanism that needs
+//! a use case's answer takes it as an argument, and a flow that needs both
+//! lives here. These modules are crate-private in a shipped build.
 //!
 //! # Dependency direction
 //! orbit-common, orbit-store, orbit-policy, orbit-tools, orbit-search, orbit-engine
@@ -58,16 +38,55 @@
 #[cfg(test)]
 orbit_common::isolate_test_process!();
 
+// `adapter`, `application`, `bootstrap`, `composition` and `runtime` are
+// crate-private in a shipped build and public under the dev-only
+// `test-support` feature, so integration fixtures can seed and inspect them.
+// A shipped build has no such consumer, so an item only a fixture reaches is
+// unused there; a `test-support` build still reports a dead crate-private
+// item.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
 pub mod adapter;
+
+#[cfg(not(feature = "test-support"))]
+#[allow(dead_code, unused_imports)]
+pub(crate) mod adapter;
 pub mod app;
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
 pub mod application;
+
+#[cfg(not(feature = "test-support"))]
+#[allow(dead_code, unused_imports)]
+pub(crate) mod application;
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
 pub mod bootstrap;
+
+#[cfg(not(feature = "test-support"))]
+#[allow(dead_code, unused_imports)]
+pub(crate) mod bootstrap;
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
 pub mod composition;
+
+#[cfg(not(feature = "test-support"))]
+#[allow(dead_code, unused_imports)]
+pub(crate) mod composition;
 
 #[path = "metrics/mod.rs"]
 pub(crate) mod metric;
 
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
 pub mod runtime;
+
+#[cfg(not(feature = "test-support"))]
+#[allow(dead_code, unused_imports)]
+pub(crate) mod runtime;
 
 /// Hooks for tests in crates that depend on `orbit-core`, behind the
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
@@ -142,6 +161,8 @@ pub mod test_support {
     pub use crate::runtime::{
         with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
     };
+    /// The engine crate, for a fixture that drives an engine mechanism directly.
+    pub use orbit_engine as fixture_engine;
     pub use orbit_engine::test_support::with_cli_supervision_clock;
     /// The store crate, for a fixture that seeds or inspects rows directly.
     pub use orbit_store as fixture_store;
@@ -256,79 +277,40 @@ pub mod test_support {
     }
 }
 
-pub use orbit_store::skill_store as skill_catalog;
-pub use orbit_store::{InvocationInsertParams, InvocationQuery, InvocationRecord};
-
-// Command-layer types the CLI names in its clap surfaces.
-pub use application::contracts::{DrainEntryPoint, PullSettlementEntry};
-pub use application::distributed::WorkspacePullRequest;
-pub use application::job::{
-    AutoDrainRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest,
-    DrainWindowExtensionRequest, DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry,
-    PipelineWaitStatus, ShipModeResolutionProfile, ShipRunRequest,
-};
-pub use application::routines::seed::{
-    RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
-};
-// Kept for the orbit-core runtime integration test: `application::search` is
-// `pub(crate)`, so an integration test cannot name `GlobalSearchParams` through
-// its owning module.
-pub use application::backlog_forecast::BacklogForecastHistory;
-pub use application::search::{
-    GlobalSearchKind, GlobalSearchParams, SearchRequest, SearchRequestProfile,
-};
-pub use application::task::LockContentionReport;
-pub use application::workflow::{CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode};
-pub use application::workspace_auto::FleetReadinessFacts;
-pub use application::workspace_auto::{IDLE_WITH_WORK_DAYS, IdleWithWork};
-pub use application::workspace_live_runs::workspace_live_run_ids;
-pub use application::workspace_sync::{
-    ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,
-    reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
-};
-/// The per-tier pool overrides `submit_workspace_auto_run` takes.
-pub use orbit_config::ComplexityCrewPools;
-pub use orbit_config::TaskTypeDefinition;
-pub use orbit_runtime::context::ActorIdentity;
-pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
-// Shared domain types (owned by orbit-common) that the CLI and dashboard
-// render or construct.
-pub use application::auto_tasks::AutoTaskAddParams;
 /// The opaque handle a surface holds for one opened workspace.
 pub use composition::Core;
 /// What an app's `exec` returns when a command fails.
 pub use orbit_common::OrbitError as Error;
-pub use orbit_common::security::redaction::redact_sensitive_env_text;
-pub use orbit_common::{NotFoundKind, OrbitError};
-pub use orbit_store::{
-    AuditEventFilter, AuditEventInsertParams, AuditToolAggregate, AuditToolModelAggregate,
-    V2AuditEventFilter,
+
+// Crate-private shorthands the modules below name as `crate::…`.
+pub(crate) use application::backlog_forecast::BacklogForecastHistory;
+pub(crate) use application::contracts::DrainEntryPoint;
+pub(crate) use application::distributed::WorkspacePullRequest;
+pub(crate) use application::job::{
+    AutoDrainRequest, CatalogReferenceLayer, DrainAdmissionsStopRequest,
+    DrainWindowExtensionRequest, DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry,
+    PipelineWaitStatus, ShipModeResolutionProfile, ShipRunRequest,
 };
-pub use orbit_types::task::{
-    DEFAULT_TASK_LIST_LIMIT, ExternalRef, Task, TaskComplexity, TaskCreateStatus, TaskPriority,
-    TaskStatus, TaskType,
+pub(crate) use application::routines::seed::RoutineSeedIdentity;
+pub(crate) use application::search::{GlobalSearchKind, SearchRequest, SearchRequestProfile};
+pub(crate) use application::workflow::{
+    CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode,
 };
-pub use orbit_types::telemetry::incident::{
-    DOCTOR_FINDINGS_MESSAGE_PREFIX, FailureClass, FailureIncident, FailureIncidentQuery,
-    FailureIncidentReport, IncidentEventRef, JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL,
-    PropagationLink, is_failure_only_diagnostic_surface,
-};
-pub use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
-pub use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType};
-pub use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
-// Landed-delivery diff stats behind the dashboard's Metrics diff trend.
-pub use orbit_store::contract::LandedDiffStats;
-pub use runtime::OrbitRuntime;
-pub use runtime::engine::ResolvedCrewProjection;
+pub(crate) use application::workspace_auto::FleetReadinessFacts;
+pub(crate) use application::workspace_auto::{IDLE_WITH_WORK_DAYS, IdleWithWork};
+pub(crate) use application::workspace_sync::reconcile_workspace_managed_artifacts;
+pub(crate) use orbit_common::security::redaction::redact_sensitive_env_text;
+pub(crate) use orbit_common::{NotFoundKind, OrbitError};
+pub(crate) use orbit_runtime::context::ActorIdentity;
+pub(crate) use orbit_store::V2AuditEventFilter;
+pub(crate) use orbit_store::skill_store as skill_catalog;
+pub(crate) use orbit_types::task::{DEFAULT_TASK_LIST_LIMIT, Task, TaskStatus};
+pub(crate) use orbit_types::telemetry::incident::FailureIncidentReport;
+pub(crate) use orbit_types::workflow::{JobRun, JobRunState, JobRunStep};
+pub(crate) use runtime::OrbitRuntime;
+pub(crate) use runtime::engine::ResolvedCrewProjection;
 
 use orbit_runtime::paths;
-
-/// Allow this production Orbit binary to re-execute itself as a pipeline
-/// worker. Call once from its `main` before it can submit any runs. Tests in
-/// other crates must install the `test-support` worker override instead.
-pub fn mark_process_as_pipeline_worker_binary() {
-    application::job::pipeline::mark_process_as_pipeline_worker_binary();
-}
 
 #[cfg(test)]
 #[path = "../tests/support/admission.rs"]

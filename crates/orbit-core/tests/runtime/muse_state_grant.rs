@@ -10,8 +10,9 @@
 
 use std::path::Path;
 
-use orbit_core::OrbitRuntime;
-use orbit_engine::{Dispatch, HostEnvironment};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_engine::Dispatch;
+use orbit_engine::HostEnvironment;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 
 const TEST: &str = "muse_state_grant::only_the_muse_lane_may_write_muse_state_roots";

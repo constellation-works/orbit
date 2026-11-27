@@ -1,6 +1,7 @@
 use clap::Args;
+use orbit_core::Core;
 use orbit_core::app::audit::{AuditListingColumns, AuditListingProfile, Command, Outcome, exec};
-use orbit_core::{AuditEventStatus, Core};
+use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, McpTransport};
 use serde_json::Value;
 

@@ -6,7 +6,7 @@
 //! [ORB-23198].
 
 use chrono::{DateTime, Utc};
-use orbit_core::DrainAdmissionsStopRequest;
+use orbit_core::application::job::DrainAdmissionsStopRequest;
 use orbit_engine::RunLifecycle;
 use orbit_types::workflow::ChildDispatchPhase;
 

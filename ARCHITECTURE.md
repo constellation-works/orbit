@@ -55,9 +55,9 @@ its serde shapes are persisted contracts.
 | [`orbit-runtime`](docs/architecture/orbit-runtime.md) | internal | Runtime kernel (`RuntimeKernel`), stores, event bus, audit, reservations, plugin host, host probes, and tool execution below application use cases. | common, config, engine, exec, policy, search, store, tools, types (dev: runtime) |
 | [`orbit-mcp`](docs/architecture/orbit-mcp.md) | internal | Model Context Protocol transport over rmcp (stdio, TCP listener, SSH proxy, federated mux, toolsets, and presentation). | common, registry, tools, types (dev: mcp) |
 | [`orbit-core`](docs/architecture/orbit-core.md) | internal | Directional application operations, protocol adapters, workspace bootstrap, metrics, and composition over `orbit-runtime`. | automation, clock, common, config, engine, exec, registry, runtime, search, store, tools, types (dev: core, policy) |
-| [`orbit-cmd`](docs/architecture/orbit-cmd.md) | internal | Shared command composition layer joining Core runtimes to machine-local Registry state for CLI and dashboard surfaces. | common, config, core, mcp, registry, store, tools, types |
-| [`orbit-web`](docs/architecture/orbit-web.md) | internal | Axum HTTP API, embedded dashboard assets, SSH tunnel connect/forwarding, and lease-intake transport. | auth, cmd, common, config, core, registry, types (dev: engine, store, web) |
-| [`orbit-cli`](docs/architecture/orbit-cli.md) | internal | Clap binary entry point (`orbit`), command dispatch, plugin CLI groups, audit middleware, and output formatting. | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
+| [`orbit-cmd`](docs/architecture/orbit-cmd.md) | internal | Shared command composition layer joining Core runtimes to machine-local Registry state for CLI and dashboard surfaces. | common, config, core, mcp, registry, runtime, store, tools, types |
+| [`orbit-web`](docs/architecture/orbit-web.md) | internal | Axum HTTP API, embedded dashboard assets, SSH tunnel connect/forwarding, and lease-intake transport. | auth, cmd, common, config, core, registry, types (dev: web) |
+| [`orbit-cli`](docs/architecture/orbit-cli.md) | internal | Clap binary entry point (`orbit`), command dispatch, plugin CLI groups, audit middleware, and output formatting. | cmd, common, config, core, mcp, registry, types, web (dev: exec, tools) |
 
 `desktop/` is the Tauri shell, a separate Cargo workspace outside this graph that depends on
 no workspace crate.
@@ -72,8 +72,14 @@ Edge rules the guard enforces beyond the table:
   guard.
 - **CLI has no `orbit-auth` edge**, normal or dev; credential code reaches the binary only
   through `orbit-web`.
-- **Other dev-edges** (Web → Engine/Store, CLI → Engine/Exec/Tools) exist for isolated HTTP
-  fixtures and the sandbox broker integration test.
+- **Surfaces reach a workspace only through `orbit-core`'s apps.** `orbit-core` exports
+  `app`, `Core` and `Error` and nothing else, and `orbit-cli` and `orbit-web` have no edge,
+  normal or dev, to `orbit-runtime`, `orbit-store` or `orbit-engine`, so a surface that names
+  the runtime, the store or the engine does not compile. Their fixtures reach those crates
+  through `orbit-core`'s `test-support` feature.
+- **Composition names the kernel.** `orbit-cmd` → `orbit-runtime` exists because `orbit-cmd`
+  implements the kernel's workspace-catalog trait and resolves roots before a workspace opens.
+- **Other dev-edges** (CLI → Exec/Tools) exist for the sandbox broker integration test.
 - Dependencies declared in `[workspace.dependencies]` are inherited in member manifests with
   `workspace = true`.
 

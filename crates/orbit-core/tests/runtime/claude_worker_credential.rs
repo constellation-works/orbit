@@ -6,8 +6,11 @@
 //! macOS only: the requirement is the host's, and only macOS requires it.
 #![cfg(target_os = "macos")]
 
+use orbit_common::OrbitError;
+use orbit_core::app::run::{CompletionPolicy, ShipMode};
+use orbit_core::application::distributed::WorkspacePullRequest;
 use orbit_core::application::job::{JobRunListParams, SubmissionKind};
-use orbit_core::{CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, WorkspacePullRequest};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
@@ -22,7 +25,7 @@ const REMEDY_MARK: &str = "setup-token";
 
 fn submit(runtime: &OrbitRuntime, allowed: &[String]) -> Result<(), OrbitError> {
     runtime
-        .submit_workspace_auto_run(orbit_core::AutoDrainRequest {
+        .submit_workspace_auto_run(orbit_core::application::job::AutoDrainRequest {
             for_seconds: Some(600),
             max_active_leaf_runs: Some(1),
             completion: CompletionPolicy::Review,

@@ -18,7 +18,7 @@ pub(super) fn refuse_plugin_child_cli(
     audit_meta: &Option<command::operation::CommandMeta>,
     resolved: &Resolved,
     env: &orbit_common::Env,
-) -> Result<(), orbit_core::OrbitError> {
+) -> Result<(), orbit_common::OrbitError> {
     let Ok(root) = resolved.generation_root() else {
         return Ok(());
     };
@@ -28,7 +28,7 @@ pub(super) fn refuse_plugin_child_cli(
             Some(subcommand) => format!("{} {subcommand}", meta.command),
             None => meta.command.clone(),
         });
-    orbit_core::adapter::command::refuse_plugin_child_cli_command(env, root, invocation.as_deref())
+    orbit_core::app::plugin::refuse_plugin_child_cli_command(env, root, invocation.as_deref())
 }
 
 /// Render what the command returned, or report why it failed.
@@ -90,7 +90,7 @@ pub(super) fn finish_command(
 /// one, and otherwise the sink's mode — `--format json` on a command with no
 /// `--json` flag of its own still gets a machine-readable failure.
 pub(super) fn print_error(
-    error: &orbit_core::OrbitError,
+    error: &orbit_common::OrbitError,
     sink: &OutputSink,
     tool_run_json_output: Option<bool>,
 ) {
@@ -103,8 +103,8 @@ pub(super) fn print_error(
     }
 
     match error {
-        orbit_core::OrbitError::InvalidInput(message)
-        | orbit_core::OrbitError::InvalidInputDiagnostic { message, .. }
+        orbit_common::OrbitError::InvalidInput(message)
+        | orbit_common::OrbitError::InvalidInputDiagnostic { message, .. }
             if message.starts_with("unknown config key '") =>
         {
             eprintln!("error: {error}");
@@ -113,7 +113,7 @@ pub(super) fn print_error(
             }
             eprintln!("List valid keys with `orbit config keys`.");
         }
-        orbit_core::OrbitError::DecisionRefused { code, message }
+        orbit_common::OrbitError::DecisionRefused { code, message }
             if code.as_str() == "request_not_found" =>
         {
             eprintln!("error: {message}");

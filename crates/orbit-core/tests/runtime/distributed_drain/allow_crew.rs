@@ -202,7 +202,7 @@ fn an_unknown_or_blank_restriction_refuses_before_the_probe() {
         let refused = pair
             .follower
             .submit_workspace_pull_run(
-                orbit_core::WorkspacePullRequest {
+                orbit_core::application::distributed::WorkspacePullRequest {
                     selector: &selector,
                     for_seconds: Some(60),
                     max_active_leaf_runs: None,

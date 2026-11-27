@@ -3,7 +3,8 @@
 //! the host's size and admit thresholds.
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use orbit_core::OrbitRuntime;
+use orbit_common::OrbitError;
+use orbit_core::runtime::OrbitRuntime;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -24,7 +25,7 @@ fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliver
             // age retention. Seed them in one transaction, without live workers.
             runtime.sqlite_store().unwrap().with_transaction(|tx| {
                 let db = tx.connection();
-                let store = |error: rusqlite::Error| orbit_core::OrbitError::Store(error.to_string());
+                let store = |error: rusqlite::Error| OrbitError::Store(error.to_string());
                 let mut run = db.prepare(
                     "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, \
                          scheduled_at, created_at, finished_at) \
@@ -125,7 +126,7 @@ fn delivery(
         .unwrap()
         .with_transaction(|tx| {
             let db = tx.connection();
-            let store = |error: rusqlite::Error| orbit_core::OrbitError::Store(error.to_string());
+            let store = |error: rusqlite::Error| OrbitError::Store(error.to_string());
             db.execute(
                 "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, \
                      scheduled_at, created_at, finished_at) \

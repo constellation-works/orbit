@@ -116,7 +116,7 @@ impl CohortCell for Cell {
     }
 }
 
-fn parse_filters(q: &TaskTokensQuery) -> Result<Filters, orbit_core::OrbitError> {
+fn parse_filters(q: &TaskTokensQuery) -> Result<Filters, orbit_common::OrbitError> {
     let cohort = CohortFilters::parse(
         q.outcome.as_deref(),
         q.complexity.as_deref(),
@@ -126,7 +126,7 @@ fn parse_filters(q: &TaskTokensQuery) -> Result<Filters, orbit_core::OrbitError>
         "all" => false,
         "implement" => true,
         other => {
-            return Err(orbit_core::OrbitError::InvalidInput(format!(
+            return Err(orbit_common::OrbitError::InvalidInput(format!(
                 "unknown scope '{other}': expected all or implement"
             )));
         }
@@ -182,7 +182,7 @@ fn task_token_trend(
     runtime: &Core,
     range: &DiagnosticsRange,
     filters: &Filters,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let cohort_window = CohortWindowData::load(runtime, range, &filters.cohort, true)?;
     let totals: BTreeMap<String, TaskTokenTotals> =
         if cohort_window.in_window.is_empty() && cohort_window.lead_rows.is_empty() {

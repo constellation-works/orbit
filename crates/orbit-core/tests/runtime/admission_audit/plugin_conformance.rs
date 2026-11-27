@@ -8,10 +8,10 @@ use orbit_types::plugin::PLUGIN_DIR_NAME;
 
 use super::plugin_fixture::PluginFixture;
 use crate::scenarios::Outcome;
-use orbit_core::OrbitRuntime;
 use orbit_core::application::plugin::{
     PluginAddOptions, PluginTestOptions, PluginTestReport, install_plugin, test_plugin_dir,
 };
+use orbit_core::runtime::OrbitRuntime;
 
 /// The libtest test these scenario rows run inside. A nested Seatbelt lane
 /// refuses the plugin backend's own sandbox, so both rows defer under this

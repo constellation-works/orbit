@@ -37,7 +37,7 @@ impl Pair {
 
     /// `orbit run history`: the reconciling list, then the settlement of
     /// what it left orphaned.
-    fn run_history(&self) -> Vec<orbit_core::PullSettlementEntry> {
+    fn run_history(&self) -> Vec<orbit_core::application::contracts::PullSettlementEntry> {
         self.follower
             .list_job_runs(JobRunListParams::default())
             .expect("reconciling history");

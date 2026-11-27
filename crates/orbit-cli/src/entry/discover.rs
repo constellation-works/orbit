@@ -85,15 +85,15 @@ fn plugin_root_override() -> Option<std::path::PathBuf> {
 /// does not use. Any failure below that is this host's plugin problem, not
 /// this command's: the built-in CLI must stay usable, so it is logged and
 /// the groups are simply absent (§4.9).
-fn plugin_cli_groups(env: &Env) -> Vec<orbit_core::adapter::command::PluginCliGroup> {
+fn plugin_cli_groups(env: &Env) -> Vec<orbit_core::app::plugin::PluginCliGroup> {
     let Ok(root) = generation_root(env, plugin_root_override().as_deref()) else {
         return Vec::new();
     };
     if !root.join("plugins").is_dir() {
         return Vec::new();
     }
-    match orbit_core::adapter::command::host_plugin_cli_groups(
-        orbit_core::composition::store_opener(),
+    match orbit_core::app::plugin::host_plugin_cli_groups(
+        orbit_core::app::workspace::store_opener(),
         &root,
     ) {
         Ok(groups) => groups,
@@ -114,7 +114,7 @@ fn plugin_cli_groups(env: &Env) -> Vec<orbit_core::adapter::command::PluginCliGr
 /// `main` and the help goldens both build it here, so a golden pins the help
 /// the binary prints rather than the bare derive.
 pub(super) fn cli_command(
-    groups: &[orbit_core::adapter::command::PluginCliGroup],
+    groups: &[orbit_core::app::plugin::PluginCliGroup],
     env: &Env,
 ) -> Command {
     // Grouped rows share one description column per template derived from the
@@ -130,7 +130,7 @@ pub(super) fn cli_command(
 
 /// Assemble the root command with the width selected for its output sink.
 fn cli_command_with_width(
-    groups: &[orbit_core::adapter::command::PluginCliGroup],
+    groups: &[orbit_core::app::plugin::PluginCliGroup],
     term_width: u16,
 ) -> Command {
     // Clap's own help text (flag descriptions, about, command lists,

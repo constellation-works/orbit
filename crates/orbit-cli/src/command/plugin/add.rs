@@ -1,6 +1,6 @@
 use clap::Args;
 use orbit_core::Core;
-use orbit_core::adapter::command::PluginAddOptions;
+use orbit_core::app::plugin::PluginAddOptions;
 use orbit_core::app::plugin::{Command, Outcome, exec};
 
 use crate::command::{CommandOut, ExecuteCore, Payload};

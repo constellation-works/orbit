@@ -14,15 +14,24 @@ use crate::Core;
 use crate::app::exec::Caller;
 use crate::application::contracts::ToolInvocationPort;
 use crate::application::plugin::{
-    PluginAddOptions, PluginAddResult, PluginDoctorResult, PluginEnableOptions, PluginEnableResult,
-    PluginMigrateRequest, PluginRemoveOptions, PluginSecretStatus, PluginSummary,
-    PluginSyncOutcome, PluginTestOptions, PluginTestReport, PluginUpgradeOptions,
-    PluginUpgradeResult, PluginValidationReport, migrate_plugin_sidecars,
+    PluginAddResult, PluginDoctorResult, PluginEnableResult, PluginSyncOutcome, PluginTestReport,
+    PluginValidationReport, migrate_plugin_sidecars,
 };
-use crate::runtime::plugin::secrets::PluginSecretValue;
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
 pub use dashboard::{DashboardScope, DashboardToggle, PanelRead};
+
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::adapter::command::{
+    HostPluginMcpCache, HostPluginMcpSurface, MAX_PLUGIN_SECRET_BYTES, PluginAddOptions,
+    PluginCliGroup, PluginCliVerb, PluginEnableOptions, PluginMigrateRequest,
+    PluginPermissionChange, PluginRemoveOptions, PluginSecretStatus, PluginSecretValue,
+    PluginSeedOutcome, PluginSkillLink, PluginSummary, PluginSummaryJsonProfile, PluginTestOptions,
+    PluginTestValidationGate, PluginUpgradeOptions, PluginUpgradeResult,
+    execute_global_plugin_tool, host_plugin_cli_groups, host_plugin_rows, plugin_summary_json,
+    refuse_plugin_child_cli_command, refuse_plugin_child_remote_callback,
+};
+pub use crate::application::plugin::load_sidecar_manifest;
 
 /// One plugin command, shared by the surfaces that invoke it.
 pub enum Command<'a> {

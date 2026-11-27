@@ -34,7 +34,7 @@ fn resumed_fixture() -> Resumed {
         "[workflow]\nfinal_recovery_crews = [\"fixture\"]",
     );
     std::fs::write(&config, text).unwrap();
-    f.runtime = orbit_core::OrbitRuntime::from_roots(
+    f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &f._root.path().join("global"),
         &f.repo.join(".orbit"),
     )

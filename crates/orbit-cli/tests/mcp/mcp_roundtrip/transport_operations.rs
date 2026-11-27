@@ -281,8 +281,8 @@ fn seeded_run(
     job: &str,
     state: &str,
     input: Value,
-) -> orbit_core::OrbitRuntime {
-    let runtime = orbit_core::OrbitRuntime::from_roots(
+) -> orbit_core::runtime::OrbitRuntime {
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &workspace.home.join(".orbit"),
         &workspace.work.join(".orbit"),
     )
@@ -583,7 +583,7 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
         );
         let waited = runtime.wait_pipeline_runs(&[id], 10, 1, None).unwrap();
         assert!(
-            waited.results[0].status == orbit_core::PipelineWaitStatus::Success,
+            waited.results[0].status == orbit_core::application::job::PipelineWaitStatus::Success,
             "fixture worker must finish before handoff"
         );
         cleanup.armed = false;
@@ -706,7 +706,7 @@ fn review_reset_requires_an_operator_and_audits_cli_and_mcp_decisions() {
     let task = client.call_tool_ok("orbit_task_add", json!({"title":"Review reset proof","description":"Disposable review lineage","complexity":"low","model":"codex"}));
     let id = task["id"].as_str().unwrap();
     drop(client);
-    let runtime = orbit_core::OrbitRuntime::from_roots(
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &workspace.home.join(".orbit"),
         &workspace.work.join(".orbit"),
     )

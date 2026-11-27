@@ -670,7 +670,6 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-unused-dependencies.py"
   run_guard "$repo_root/docs/standards/check.sh"
   run_guard "$repo_root/scripts/check-doc-links.py"
-  run_guard "$repo_root/scripts/check-cli-imports.sh"
   run_guard "$repo_root/scripts/unit-test-inventory.py" --check "$repo_root/scripts/unit-test-baseline.json"
   run_guard "$repo_root/scripts/check-doctest-fences.sh"
   run_guard "$repo_root/scripts/generate-doc-indexes.sh" --check

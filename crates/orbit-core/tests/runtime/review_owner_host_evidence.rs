@@ -4,7 +4,7 @@
 
 use std::os::unix::fs::PermissionsExt;
 
-use orbit_core::TaskStatus;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{HostEvidenceReason, REVIEW_GATE_ARTIFACT, ReviewCertificate};
 use serde_json::{Value, json};
 

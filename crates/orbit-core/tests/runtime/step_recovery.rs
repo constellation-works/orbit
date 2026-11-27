@@ -22,7 +22,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use orbit_common::OrbitError;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
 use orbit_engine::{
     DispatchError, ResolvedActivityTools, ResolvedCliExecutor, StepRecoveryDecisionRead,

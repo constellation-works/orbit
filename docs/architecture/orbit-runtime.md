@@ -18,7 +18,7 @@ Runtime kernel: `RuntimeKernel`, stores, engine handles, event bus, audit, claim
 ## Dependencies
 
 - Depends on (internal, production): `orbit-common`, `orbit-config`, `orbit-engine`, `orbit-exec`, `orbit-policy`, `orbit-search`, `orbit-store`, `orbit-tools`, `orbit-types`.
-- Depended on by: `orbit-core`.
+- Depended on by: `orbit-core`, `orbit-cmd`.
 
 Enforced by `scripts/check-dependency-direction.sh`; table in `ARCHITECTURE.md`.
 

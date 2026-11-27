@@ -940,7 +940,7 @@ fn run_show_reports_the_failed_step_before_a_later_skip() {
         .expect("seed cascade audit event");
     }
 
-    let runtime = orbit_core::OrbitRuntime::from_roots(
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
         &fixture.work.join(".orbit"),
     )
@@ -979,7 +979,7 @@ fn run_show_reports_the_failed_step_before_a_later_skip() {
         4242,
         Default::default(),
     );
-    let failure = orbit_engine::Dispatch::run_deterministic(
+    let failure = orbit_core::test_support::fixture_engine::Dispatch::run_deterministic(
         &runtime,
         "pipeline_success_guard",
         &serde_json::json!({}),
@@ -1175,7 +1175,7 @@ fn run_show_failed_leaf_uses_root_cause_and_current_task_status() {
         return;
     }
     use orbit_core::application::task::TaskAddParams;
-    use orbit_core::{TaskComplexity, TaskStatus, TaskType};
+    use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
     use orbit_types::workflow::{ChildDispatch, PipelineState};
 
     let fixture = Fixture::terminal();

@@ -43,8 +43,9 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use futures_core::Stream;
-use orbit_core::application::change_watch::{RunStateStamp, TaskChangeStamp};
-use orbit_core::{Core, TaskStatus};
+use orbit_core::Core;
+use orbit_core::app::run::{RunStateStamp, TaskChangeStamp};
+use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
@@ -393,7 +394,7 @@ pub(super) async fn stream_events(
             stream_workspace_changes(&runtime, &state, resume, &tx);
         });
     if let Err(e) = spawned {
-        return server_error(orbit_core::OrbitError::Execution(format!(
+        return server_error(orbit_common::OrbitError::Execution(format!(
             "start change stream: {e}"
         )));
     }
@@ -404,7 +405,7 @@ pub(super) async fn stream_events(
         .body(Body::from_stream(ReceiverSseStream { rx }))
     {
         Ok(response) => response,
-        Err(e) => server_error(orbit_core::OrbitError::Execution(format!(
+        Err(e) => server_error(orbit_common::OrbitError::Execution(format!(
             "build SSE response: {e}"
         ))),
     }

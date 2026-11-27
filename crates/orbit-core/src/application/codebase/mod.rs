@@ -445,8 +445,8 @@ pub(super) fn test_mark_absent_row_with_lookup(
 
 /// Rank files that changed alongside `path` in landed tasks. Related queries
 /// always use file paths, independently of the analytics rollup. Use facts
-/// from [`OrbitRuntime::codebase_related_scan`] for the same window to include
-/// delivery-run evidence; [`OrbitRuntime::codebase_scan`] contains receipts only.
+/// from `OrbitRuntime::codebase_related_scan` for the same window to include
+/// delivery-run evidence; `OrbitRuntime::codebase_scan` contains receipts only.
 pub fn codebase_related(
     facts: &CodebaseFacts,
     query: &CodebaseQuery,

@@ -1,8 +1,9 @@
-//! The runtime kernel, re-exported from `orbit-runtime`, and the public
+//! The runtime kernel, re-exported from `orbit-runtime`, and the
 //! [`OrbitRuntime`] that wraps it.
 //!
-//! `crate::runtime::…` and `orbit_core::runtime::…` paths resolve to the
-//! kernel crate's items. [`OrbitRuntime`] owns a [`RuntimeKernel`] and
+//! `crate::runtime::…` paths resolve to the kernel crate's items; outside
+//! this crate they are reachable only under the dev-only `test-support`
+//! feature, as `orbit_core::runtime::…`. [`OrbitRuntime`] owns a [`RuntimeKernel`] and
 //! dereferences to it, so kernel methods are called on it directly, while
 //! application and adapter methods stay inherent on this crate's type. The
 //! kernel never calls them: a mechanism that needs a use case's answer takes
@@ -11,14 +12,17 @@
 mod builders;
 mod forwarders;
 
-#[cfg(test)]
-mod tests;
-
 use std::ops::{Deref, DerefMut};
 use std::sync::OnceLock;
 
 use orbit_common::Env;
+#[cfg(feature = "test-support")]
 pub use orbit_runtime::*;
+#[cfg(not(feature = "test-support"))]
+pub(crate) use orbit_runtime::*;
+
+#[cfg(test)]
+mod tests;
 
 /// The environment `main` captured, kept where runtimes and core operations
 /// resolve it.

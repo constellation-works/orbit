@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError};
 
-use orbit_core::runtime::WorkspaceRuntimeBinding;
+use orbit_core::app::workspace::WorkspaceRuntimeBinding;
 
 use super::super::{
     CheckoutFingerprint, RefreshFailure, RegistryFingerprint, RegistrySource, checkout_fingerprints,

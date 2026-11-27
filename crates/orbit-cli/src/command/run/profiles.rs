@@ -5,14 +5,11 @@ use std::fmt::Write as _;
 
 use chrono::{DateTime, Utc};
 use clap::Args;
+use orbit_common::OrbitError;
 use orbit_core::Core;
+use orbit_core::app::run::{AccuracySelection, ErrorSummary, ForecastAccuracy};
+use orbit_core::app::run::{BUILD_LIKE_CORES, BUILD_LIKE_MINUTES, ResourceProfile};
 use orbit_core::app::run::{Command, exec};
-use orbit_core::runtime::host_resource::accuracy::{
-    AccuracySelection, ErrorSummary, ForecastAccuracy,
-};
-use orbit_core::runtime::host_resource::profile::{
-    BUILD_LIKE_CORES, BUILD_LIKE_MINUTES, ResourceProfile,
-};
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, ExecuteCore, Payload};
@@ -76,7 +73,7 @@ impl ExecuteCore for RunProfilesArgs {
                 .map(|profile| serde_json::to_value(profile.as_ref()))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|error| {
-                    orbit_core::OrbitError::Execution(format!("encode resource profiles: {error}"))
+                    OrbitError::Execution(format!("encode resource profiles: {error}"))
                 })?,
         });
 
@@ -204,9 +201,8 @@ fn accuracy(
     use orbit_types::workflow::DrainPassOutcome;
 
     let report = exec(core, Command::accuracy(selection, report_at))?.value;
-    let doc = serde_json::to_value(&report).map_err(|error| {
-        orbit_core::OrbitError::Execution(format!("encode forecast accuracy: {error}"))
-    })?;
+    let doc = serde_json::to_value(&report)
+        .map_err(|error| OrbitError::Execution(format!("encode forecast accuracy: {error}")))?;
     let offsets = if wide {
         wide_offsets(&report)
     } else {

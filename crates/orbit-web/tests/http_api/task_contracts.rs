@@ -2,7 +2,9 @@ use super::support::{Fixture, Server, isolated};
 use axum::http::{HeaderValue, StatusCode, header};
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{OrbitRuntime, TaskStatus};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::test_support::fixture_store;
+use orbit_types::task::TaskStatus;
 use orbit_types::task::{
     ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME, TaskArtifact,
 };
@@ -14,7 +16,7 @@ use std::sync::Arc;
 
 const SECRET_CONTENT: &str = "TOP-SECRET-OUTSIDE-ARTIFACT-ROOT";
 
-fn seed_backlog_task(runtime: &OrbitRuntime, title: &str) -> orbit_core::Task {
+fn seed_backlog_task(runtime: &OrbitRuntime, title: &str) -> orbit_types::task::Task {
     runtime
         .add_task(TaskAddParams {
             title: title.to_string(),
@@ -25,7 +27,7 @@ fn seed_backlog_task(runtime: &OrbitRuntime, title: &str) -> orbit_core::Task {
         .expect("seed backlog task")
 }
 
-fn seed_task_with_artifact(runtime: &OrbitRuntime) -> orbit_core::Task {
+fn seed_task_with_artifact(runtime: &OrbitRuntime) -> orbit_types::task::Task {
     seed_task_with_artifact_payload(
         runtime,
         "subdir/file.json",
@@ -39,7 +41,7 @@ fn seed_task_with_artifact_payload(
     path: &str,
     media_type: &str,
     content: Vec<u8>,
-) -> orbit_core::Task {
+) -> orbit_types::task::Task {
     let task = runtime
         .add_task(TaskAddParams {
             title: "Artifact task".to_string(),
@@ -418,7 +420,7 @@ fn seed_task_with_status(
     runtime: &OrbitRuntime,
     title: &str,
     status: TaskStatus,
-) -> orbit_core::Task {
+) -> orbit_types::task::Task {
     runtime
         .add_task(TaskAddParams {
             title: title.to_string(),
@@ -682,7 +684,7 @@ fn delivery_attention_survives_unrelated_run_history() {
     isolated(
         "task_contracts::delivery_attention_survives_unrelated_run_history",
         || {
-            use orbit_core::JobRunState;
+            use orbit_types::workflow::JobRunState;
             let fixture = Fixture::new();
             let seed_task = |title: &str| {
                 fixture
@@ -803,9 +805,9 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
     isolated(
         "task_contracts::delivery_attention_flags_failed_review_and_omits_healthy",
         || {
-            use orbit_core::{JobRun, JobRunState};
             use orbit_types::task::ExternalRef;
             use orbit_types::workflow::PipelineState;
+            use orbit_types::workflow::{JobRun, JobRunState};
 
             let fixture = Fixture::new();
             let runtime = fixture.runtime.clone();
@@ -910,8 +912,8 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
                 base - chrono::Duration::hours(4),
             );
             {
-                use orbit_engine::RunLifecycle;
-                use orbit_engine::TaskAutomationUpdate;
+                use orbit_core::test_support::fixture_engine::RunLifecycle;
+                use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
                 use orbit_types::task::TaskHistoryEntry;
                 let entry = |at: chrono::DateTime<chrono::Utc>, event: &str, note: Value| {
                     TaskHistoryEntry {
@@ -1230,8 +1232,8 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
             // A legacy bundle can predate write-time selector validation. Seed
             // that persisted input here; the public HTTP read must canonicalize
             // aliases and omit declarations escaping the workspace.
-            let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-                &orbit_store::maintenance::task_registry::task_registry_path(&fixture.global),
+            let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+                &fixture_store::maintenance::task_registry::task_registry_path(&fixture.global),
             )
             .unwrap();
             let binding = registry.find_task_binding(&active.id).unwrap().unwrap();
@@ -1248,7 +1250,7 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
                         .sqlite_store()
                         .unwrap()
                         .reserve_task_reservation(
-                            &orbit_store::contract::TaskReservationReserveParams {
+                            &fixture_store::contract::TaskReservationReserveParams {
                                 workspace_orbit_dir: runtime
                                     .paths()
                                     .orbit_dir
@@ -1276,12 +1278,12 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
                 tx.connection().execute(
                     "UPDATE task_reservations SET expires_at = '2000-01-01T00:00:00Z' WHERE reservation_id = ?1",
                     [expired["reservation_id"].as_str().unwrap()],
-                ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                ).map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                 Ok(())
             }).unwrap();
             let server = fixture.counted_task_server();
             let registry_connection = rusqlite::Connection::open(
-                orbit_store::maintenance::task_registry::task_registry_path(&fixture.global),
+                fixture_store::maintenance::task_registry::task_registry_path(&fixture.global),
             )
             .unwrap();
             let version = |connection: &rusqlite::Connection| {
@@ -1445,7 +1447,7 @@ fn task_locks_matches_shared_listing_and_excludes_non_holding_contenders() {
             // A deterministic boundary trap: the GET must complete while the
             // partition is exclusively held. A boundary-entering read cannot.
             let partition = binding.canonical_path.parent().unwrap();
-            orbit_common::fs::io::with_exclusive_file_lock::<_, orbit_core::OrbitError, _>(
+            orbit_common::fs::io::with_exclusive_file_lock::<_, orbit_common::OrbitError, _>(
                 &partition.join("task-commit"),
                 "HTTP observational regression",
                 || {
@@ -1750,8 +1752,8 @@ fn task_locks_paced_history_probe() {
         let template = seed(TaskStatus::Done, "Historical template");
         let holder = seed(TaskStatus::InProgress, "Active holder");
         seed(TaskStatus::Review, "Review holder");
-        let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-            &orbit_store::maintenance::task_registry::task_registry_path(&fixture.global),
+        let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+            &fixture_store::maintenance::task_registry::task_registry_path(&fixture.global),
         )
         .unwrap();
         let template_path = registry
@@ -1808,7 +1810,7 @@ fn task_locks_paced_history_probe() {
         let reserved = runtime
             .sqlite_store()
             .unwrap()
-            .reserve_task_reservation(&orbit_store::contract::TaskReservationReserveParams {
+            .reserve_task_reservation(&fixture_store::contract::TaskReservationReserveParams {
                 workspace_orbit_dir: fixture.work.display().to_string(),
                 workspace_id: Some("ws_http_fixture".into()),
                 task_ids: vec![holder.id],

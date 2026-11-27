@@ -7,7 +7,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::{DedupePolicy, auto_task_tag};
 use tempfile::tempdir_in;
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 
 use super::interval_params;
 

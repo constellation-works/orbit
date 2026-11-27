@@ -12,13 +12,20 @@ impl TaskPrForge for OpenPublication {
     fn open_pull_requests(
         &self,
         _: &Path,
-    ) -> Result<Vec<ForgePullRequest>, orbit_core::OrbitError> {
+    ) -> Result<Vec<ForgePullRequest>, orbit_common::OrbitError> {
         Ok(Vec::new()) // Recorded PRs must also be observed individually.
     }
-    fn authenticated_login(&self, _: &Path) -> Result<String, orbit_core::OrbitError> {
+
+    fn authenticated_login(&self, _: &Path) -> Result<String, orbit_common::OrbitError> {
         unreachable!()
     }
-    fn close_pull_request(&self, _: &Path, _: u64, _: &str) -> Result<(), orbit_core::OrbitError> {
+
+    fn close_pull_request(
+        &self,
+        _: &Path,
+        _: u64,
+        _: &str,
+    ) -> Result<(), orbit_common::OrbitError> {
         unreachable!()
     }
 }
@@ -96,7 +103,7 @@ fn published_repair_drop(use_pull: bool) {
             acceptance_criteria: vec!["Logging fixed".into()],
             plan: "Repair logging".into(),
             context_files: vec!["file:logging.txt".into()],
-            complexity: orbit_core::TaskComplexity::Medium,
+            complexity: orbit_types::task::TaskComplexity::Medium,
             status: Some(TaskStatus::Backlog),
             ..Default::default()
         })
@@ -247,7 +254,7 @@ fn refused_unpublished_repair_releases_after_worktree_restoration() {
                 acceptance_criteria: vec!["Logging fixed".into()],
                 plan: "Repair logging".into(),
                 context_files: vec!["file:logging.txt".into()],
-                complexity: orbit_core::TaskComplexity::Medium,
+                complexity: orbit_types::task::TaskComplexity::Medium,
                 status: Some(TaskStatus::Backlog),
                 ..Default::default()
             })

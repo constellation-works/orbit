@@ -19,7 +19,7 @@ pub fn refuse_cli_callback_workspace(
     selector: &str,
 ) -> Result<(), OrbitError> {
     let Some(identity) =
-        resolve_plugin_callback(&orbit_core::composition::composition_env(), global_root)?
+        resolve_plugin_callback(&orbit_core::app::host::composition_env(), global_root)?
     else {
         return Ok(());
     };

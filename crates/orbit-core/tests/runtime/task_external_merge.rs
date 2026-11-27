@@ -8,12 +8,12 @@ mod pr_supersession;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_core::TaskStatus;
 use orbit_core::application::task::EXTERNAL_MERGE_SETTLED_EVENT;
 use orbit_core::runtime::task_pr_forge::ForgePullRequest;
 use orbit_store::contract::HandoffObservation;
 use orbit_store::contract::{ClaimInvocation, ClaimMutation, ExecutionClaimPhase};
 use orbit_types::task::ExternalRef;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{HandoffDelivery, LandingAttemptState, LandingStartState};
 use serde_json::json;

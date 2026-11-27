@@ -6,8 +6,8 @@
 mod admitted_scope;
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{Task, TaskComplexity, TaskStatus};
 use orbit_store::contract::TaskDocumentUpdateParams;
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
 use super::{Workspace, runtime_at};

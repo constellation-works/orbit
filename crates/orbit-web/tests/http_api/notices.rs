@@ -1,8 +1,9 @@
 //! `GET /api/notices`: complete aggregate reads and retained-history visibility.
 
 use chrono::{Duration, Utc};
+use orbit_common::OrbitError;
 use orbit_core::application::notice::{NoticeCaller, NoticePostRequest, NoticeSelector};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::record::NoticeKind;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workspace::{WorkspaceCheckout, WorkspaceStatus};

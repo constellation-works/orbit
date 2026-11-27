@@ -1,4 +1,4 @@
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use serde_json::Value;
 
 pub(super) fn serialize<T: serde::Serialize>(value: &T) -> Result<Value, OrbitError> {

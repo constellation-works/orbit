@@ -10,12 +10,13 @@ use crate::state::{DashboardState, WsCore};
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Json, Response};
+use orbit_core::Core;
 use orbit_core::app::task::{self, Command, DashboardAction, DashboardWrite, Outcome};
-use orbit_core::application::task::{TaskAddParams, TaskUpdateAuthority, TaskUpdateParams};
-use orbit_core::{Core, TaskComplexity};
+use orbit_core::app::task::{TaskAddParams, TaskUpdateAuthority, TaskUpdateParams};
 use orbit_types::identity::{
     agent_family_from_cli, all_agent_families, infer_agent_family_from_model,
 };
+use orbit_types::task::TaskComplexity;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -57,8 +58,8 @@ impl WebTaskMutationMeta {
 /// mapping it had when these handlers were written inline: a refused mutation
 /// is the caller's problem, a failed render is the server's.
 enum TaskMutationFailure {
-    Mutation(orbit_core::OrbitError),
-    Render(orbit_core::OrbitError),
+    Mutation(orbit_common::OrbitError),
+    Render(orbit_common::OrbitError),
 }
 
 /// Run one dashboard write on the current blocking worker, through the task
@@ -68,7 +69,7 @@ pub(in crate::api) fn run_audited_web_task_mutation(
     core: &Core,
     meta: WebTaskMutationMeta,
     action: DashboardAction,
-) -> Result<Outcome, orbit_core::OrbitError> {
+) -> Result<Outcome, orbit_common::OrbitError> {
     let WebTaskMutationMeta {
         verb,
         target_id,

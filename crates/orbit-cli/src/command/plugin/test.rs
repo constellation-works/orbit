@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use clap::Args;
 use orbit_common::Env;
 use orbit_core::Core;
-use orbit_core::adapter::command::{PluginTestOptions, PluginTestValidationGate};
 use orbit_core::app::plugin::{Command, Outcome, exec};
+use orbit_core::app::plugin::{PluginTestOptions, PluginTestValidationGate};
 use serde_json::json;
 
 use crate::command::{Block, CommandOut, Payload};

@@ -17,7 +17,7 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_core::Stream;
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_core::app::lease::{self, Command, LeaseNoticeFeed, Outcome};
 use serde::Deserialize;
 use serde_json::{Value, json};

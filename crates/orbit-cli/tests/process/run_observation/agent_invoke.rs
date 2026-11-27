@@ -420,17 +420,19 @@ fn agent_effort_is_recorded_after_resolution_and_survives_configuration_changes(
     }
     let runtime = fixture.registered_runtime();
     runtime
-        .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
-            agent_execution_id: None,
-            job_run_id: "historical-effort".into(),
-            activity_id: "implement_one".into(),
-            agent: "codex".into(),
-            provider: Some("codex".into()),
-            account: None,
-            model: Some("gpt-6-sol".into()),
-            task_ids: vec![],
-            trace: Default::default(),
-        })
+        .insert_invocation_trace_record(
+            &orbit_core::test_support::fixture_store::InvocationInsertParams {
+                agent_execution_id: None,
+                job_run_id: "historical-effort".into(),
+                activity_id: "implement_one".into(),
+                agent: "codex".into(),
+                provider: Some("codex".into()),
+                account: None,
+                model: Some("gpt-6-sol".into()),
+                task_ids: vec![],
+                trace: Default::default(),
+            },
+        )
         .unwrap();
     for (tool, input) in [(
         "orbit.agents.scorecard",

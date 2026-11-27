@@ -1,6 +1,7 @@
 //! `ci_red` and `friction_untriaged` at the public `orbit.attention` boundary.
-use orbit_core::OrbitRuntime;
+
 use orbit_core::adapter::command::ToolEntryPoint;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};

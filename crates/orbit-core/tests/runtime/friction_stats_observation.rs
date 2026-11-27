@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use orbit_common::fs::io::{FileLockProbe, probe_file_lock, with_exclusive_file_lock};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{OrbitRuntime, TaskStatus};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_store::maintenance::task_registry::task_workspaces_dir;
+use orbit_types::task::TaskStatus;
 use serde_json::json;
 
 const CONFIG: &str =
@@ -91,7 +92,7 @@ fn friction_stats_reads_a_decided_commit_without_waiting_for_its_bundle_writer()
     );
     let settled = runtime.list_task_metadata().unwrap();
     let observed = runtime.observe_task_metadata().unwrap();
-    let projection = |tasks: &[orbit_core::Task]| {
+    let projection = |tasks: &[orbit_types::task::Task]| {
         tasks
             .iter()
             .map(|task| (task.id.clone(), task.status, task.implemented_by.clone()))

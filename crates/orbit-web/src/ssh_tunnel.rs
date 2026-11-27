@@ -35,7 +35,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 /// Delay between readiness probes.
 pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(250);

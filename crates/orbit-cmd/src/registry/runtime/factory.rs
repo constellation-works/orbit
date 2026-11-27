@@ -1,11 +1,11 @@
 use super::selection::*;
 use super::*;
 
-use orbit_core::ActorIdentity;
-use orbit_core::adapter::command::host_plugin_rows;
-use orbit_core::composition::{
+use orbit_core::app::plugin::host_plugin_rows;
+use orbit_core::app::workspace::{
     WorkspaceAuthorityAdoption, adopt_workspace_layout_authority, verify_workspace_layout_authority,
 };
+use orbit_runtime::context::ActorIdentity;
 use orbit_types::plugin::InstalledPlugin;
 
 /// The layered runtime configuration file, read from both `global_root` and
@@ -114,8 +114,9 @@ impl RegisteredRuntimeStamp {
     /// shared_root)` in Core's composition, where a registered checkout's
     /// shared root is its own `.orbit` directory.
     pub fn read(global_root: &Path, checkout: &WorkspaceCheckout) -> Self {
-        let host_plugins = host_plugin_rows(orbit_core::composition::store_opener(), global_root)
-            .unwrap_or_default();
+        let host_plugins =
+            host_plugin_rows(orbit_core::app::workspace::store_opener(), global_root)
+                .unwrap_or_default();
         Self::read_with_host_plugins(global_root, checkout, host_plugins)
     }
 
@@ -173,7 +174,7 @@ impl RegisteredRuntimeFactory {
         workspace: &orbit_core::Core,
         session: orbit_core::app::Session,
     ) -> orbit_core::Core {
-        orbit_core::composition::core_for_request(workspace, session)
+        orbit_core::app::workspace::core_for_request(workspace, session)
     }
 
     /// Bootstrap the hidden detached worker with lock-only bounded recovery.
@@ -218,8 +219,8 @@ impl RegisteredRuntimeFactory {
         root_override: Option<&Path>,
     ) -> Result<Option<ResolvedOrbitRoots>, OrbitError> {
         let hint = workspace_root_hint(cwd);
-        orbit_core::runtime::try_resolve_initialized_roots_with_hint(
-            &orbit_core::composition::composition_env(),
+        orbit_runtime::try_resolve_initialized_roots_with_hint(
+            &orbit_core::app::host::composition_env(),
             cwd,
             root_override,
             hint.as_ref(),
@@ -234,8 +235,8 @@ impl RegisteredRuntimeFactory {
         cwd: &Path,
         raw: &str,
     ) -> Result<Option<PathBuf>, OrbitError> {
-        orbit_core::runtime::initialized_explicit_workspace_root(
-            &orbit_core::composition::composition_env(),
+        orbit_runtime::initialized_explicit_workspace_root(
+            &orbit_core::app::host::composition_env(),
             raw,
             cwd,
         )
@@ -250,8 +251,8 @@ impl RegisteredRuntimeFactory {
         cwd: &Path,
     ) -> Result<Option<ResolvedOrbitRoots>, OrbitError> {
         let hint = workspace_root_hint(cwd);
-        orbit_core::runtime::try_resolve_initialized_cwd_roots_with_hint(
-            &orbit_core::composition::composition_env(),
+        orbit_runtime::try_resolve_initialized_cwd_roots_with_hint(
+            &orbit_core::app::host::composition_env(),
             cwd,
             hint.as_ref(),
         )
@@ -656,7 +657,7 @@ impl RegisteredRuntimeFactory {
             if root_override.is_some() {
                 None
             } else {
-                managed_workspace_selector_from_env(&orbit_core::composition::composition_env())
+                managed_workspace_selector_from_env(&orbit_core::app::host::composition_env())
             }
         });
         let Some(selector) = selector else {
@@ -667,11 +668,11 @@ impl RegisteredRuntimeFactory {
             // before; the error surfaces from the re-read once roots resolve.
             let preloaded = match root_override {
                 Some(_) => None,
-                None => orbit_core::runtime::resolve_global_root(
-                    &orbit_core::composition::composition_env(),
-                )
-                .and_then(|global_root| RuntimeOpenInputs::read(&global_root))
-                .ok(),
+                None => {
+                    orbit_runtime::resolve_global_root(&orbit_core::app::host::composition_env())
+                        .and_then(|global_root| RuntimeOpenInputs::read(&global_root))
+                        .ok()
+                }
             };
             let hint = preloaded
                 .as_ref()
@@ -936,7 +937,7 @@ pub fn workspace_runtime_binding(
     workspace: &Workspace,
     checkout: &WorkspaceCheckout,
 ) -> Result<WorkspaceRuntimeBinding, OrbitError> {
-    orbit_core::runtime::workspace_runtime_binding(workspace, checkout)
+    orbit_runtime::workspace_runtime_binding(workspace, checkout)
 }
 
 /// The `Core` of a one-command process, attributed to `actor`.

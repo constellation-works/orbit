@@ -88,7 +88,7 @@ pub(in crate::api) async fn diagnostics_completions(
 fn completion_trend(
     runtime: &Core,
     range: &DiagnosticsRange,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let dates = run_read(
         runtime,
         RunCommand::task_terminal_dates(TrendWindow::read_since_with_day_lead(range)),

@@ -159,7 +159,7 @@ impl CohortCell for Cell {
     }
 }
 
-fn parse_filters(q: &TurnsToEditQuery) -> Result<Filters, orbit_core::OrbitError> {
+fn parse_filters(q: &TurnsToEditQuery) -> Result<Filters, orbit_common::OrbitError> {
     let cohort = CohortFilters::parse(
         q.outcome.as_deref(),
         q.complexity.as_deref(),
@@ -205,7 +205,7 @@ fn turns_to_edit_trend(
     runtime: &Core,
     range: &DiagnosticsRange,
     filters: &Filters,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let cohort_window = CohortWindowData::load(runtime, range, &filters.cohort, false)?;
     let (first_by_task, truncated) = if cohort_window.in_window.is_empty() {
         (HashMap::new(), false)

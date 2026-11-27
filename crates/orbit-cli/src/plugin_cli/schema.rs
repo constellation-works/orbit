@@ -25,7 +25,7 @@
 //! positional being swallowed as the flag's value.
 
 use clap::{Arg, ArgAction, ArgMatches, builder::PossibleValuesParser};
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_types::plugin::derive_plugin_cli_flag;
 use serde_json::{Map, Value};
 

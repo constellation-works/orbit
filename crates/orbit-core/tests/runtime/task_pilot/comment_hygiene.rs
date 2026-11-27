@@ -7,8 +7,8 @@
 //! missing/malformed evidence.
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{Task, TaskStatus};
 use orbit_store::contract::TaskCreateParams;
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::task::{TaskArtifact, TaskType};
 use serde_json::{Value, json};
 

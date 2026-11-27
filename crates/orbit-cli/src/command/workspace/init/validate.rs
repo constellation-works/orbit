@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_bytes;
-use orbit_core::{
-    OrbitError, RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
+use orbit_core::app::routine::{
+    RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
 };
 use orbit_types::identity::canonicalize_workspace_id;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry};

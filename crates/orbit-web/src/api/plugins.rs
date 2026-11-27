@@ -20,10 +20,11 @@ use std::path::Path as FsPath;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
+use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{DASHBOARD_PLUGIN_DISABLE, DASHBOARD_PLUGIN_ENABLE};
-use orbit_core::adapter::command::{self, PluginSummary};
+use orbit_core::Core;
 use orbit_core::app::plugin::{Command, DashboardScope, DashboardToggle, Outcome, exec};
-use orbit_core::{Core, OrbitError};
+use orbit_core::app::plugin::{PluginSummary, PluginSummaryJsonProfile, plugin_summary_json};
 use serde_json::{Value, json};
 
 use super::routines::{action_capability, authorization_denied};
@@ -41,7 +42,7 @@ pub(super) async fn list_plugins(
     match blocking("list plugins", move || exec(&core, Command::List)).await {
         Ok(Outcome::Listed(plugins)) => Json(Value::Array({
             let home =
-                orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
+                orbit_common::fs::path::home_dir(&orbit_core::app::host::composition_env()).ok();
             plugins
                 .iter()
                 .map(|plugin| {
@@ -110,7 +111,7 @@ async fn mutate_plugin(
     match result {
         Ok(Ok(Outcome::DashboardToggled(Some(summary)))) => {
             let home =
-                orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
+                orbit_common::fs::path::home_dir(&orbit_core::app::host::composition_env()).ok();
             Json(json!({"plugin": plugin_to_json(&summary, home.as_deref())})).into_response()
         }
         Ok(Ok(Outcome::DashboardToggled(None))) => {
@@ -124,23 +125,23 @@ async fn mutate_plugin(
     }
 }
 
-fn plugin_write_error(error: orbit_core::OrbitError) -> Response {
+fn plugin_write_error(error: orbit_common::OrbitError) -> Response {
     match error {
-        orbit_core::OrbitError::AuthorizationDenied(denial) => authorization_denied(*denial),
-        orbit_core::OrbitError::NotFound { id, .. } => not_found(format!("plugin not found: {id}")),
-        orbit_core::OrbitError::PluginDisabledOnHost { plugin } => (
+        orbit_common::OrbitError::AuthorizationDenied(denial) => authorization_denied(*denial),
+        OrbitError::NotFound { id, .. } => not_found(format!("plugin not found: {id}")),
+        orbit_common::OrbitError::PluginDisabledOnHost { plugin } => (
             StatusCode::CONFLICT,
             Json(json!({"code": "PluginDisabledOnHost", "error": format!("plugin '{plugin}' is disabled on this host; enable it on the host first")})),
         ).into_response(),
-        orbit_core::OrbitError::PolicyDenied(message) => (
+        orbit_common::OrbitError::PolicyDenied(message) => (
             StatusCode::CONFLICT,
             Json(json!({"code": "plugin_refused", "error": message})),
         ).into_response(),
-        orbit_core::OrbitError::InvalidInput(message) => (
+        orbit_common::OrbitError::InvalidInput(message) => (
             StatusCode::BAD_REQUEST,
             Json(json!({"code": "plugin_refused", "error": message})),
         ).into_response(),
-        orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => (
+        orbit_common::OrbitError::InvalidInputDiagnostic { message, .. } => (
             StatusCode::BAD_REQUEST,
             Json(json!({"code": "plugin_refused", "error": message})),
         ).into_response(),
@@ -183,7 +184,7 @@ pub(super) async fn read_panel(
         .await
     {
         Ok(served) => Json((*served.body).clone()).into_response(),
-        Err(orbit_core::OrbitError::NotFound { id, .. }) => not_found(id),
+        Err(orbit_common::OrbitError::NotFound { id, .. }) => not_found(id),
         Err(error) => super::map_runtime_error(error),
     }
 }
@@ -215,9 +216,9 @@ fn bounded_panel_response(output: Value) -> Value {
 /// host paths, so they are `~`-abbreviated like the workspace listing rather
 /// than disclosing the home directory.
 pub(super) fn plugin_to_json(summary: &PluginSummary, home: Option<&FsPath>) -> Value {
-    command::plugin_summary_json(
+    plugin_summary_json(
         summary,
-        command::PluginSummaryJsonProfile::Http {
+        PluginSummaryJsonProfile::Http {
             home,
             host_orbit_version: env!("CARGO_PKG_VERSION"),
         },

@@ -4,8 +4,8 @@ use std::path::Path;
 use clap::{Args, Subcommand};
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::Env;
-use orbit_core::OrbitError;
-use orbit_core::application::routines::{
+use orbit_common::OrbitError;
+use orbit_core::app::routine::{
     ClockHealth, ClockStatus, ClockUnitInspection, ClockUnitVerdict, clock_status,
     inspect_clock_unit, set_clock_cadence, set_clock_enabled,
 };

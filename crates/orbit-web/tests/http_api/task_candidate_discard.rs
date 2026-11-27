@@ -1,8 +1,9 @@
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{JobRunState, JobTargetType, TaskStatus};
-use orbit_engine::RunLifecycle;
-use orbit_engine::TaskAutomationUpdate;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::PipelineState;
+use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, error_code, isolated, run_step, save_record_step};

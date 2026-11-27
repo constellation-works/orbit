@@ -1,6 +1,6 @@
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
+use orbit_core::app::host::PLAYWRIGHT_VERSION;
 use orbit_core::app::host::browser_kit::{KitProblem, KitStatus, VerifyReport};
-use orbit_core::bootstrap::browser_kit::PLAYWRIGHT_VERSION;
 
 pub(super) fn to_json(value: &impl serde::Serialize) -> Result<serde_json::Value, OrbitError> {
     serde_json::to_value(value)

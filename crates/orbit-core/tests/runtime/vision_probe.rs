@@ -7,8 +7,8 @@
 #[cfg(unix)]
 mod outcomes {
     use chrono::Utc;
-    use orbit_core::OrbitRuntime;
     use orbit_core::application::vision_probe::VisionProbeResult;
+    use orbit_core::runtime::OrbitRuntime;
     use orbit_core::test_support::{
         RUN_ID_PLACEHOLDER, install_substitute_pipeline_worker, pipeline_worker_observer_completed,
     };
@@ -192,8 +192,9 @@ mod outcomes {
     }
 }
 
+use orbit_common::OrbitError;
 use orbit_core::application::job::JobRunListParams;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
 use tempfile::TempDir;
 
 /// The shipped canary job, so a submitted probe run resolves in the fixture.

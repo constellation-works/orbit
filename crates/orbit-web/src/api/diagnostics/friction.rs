@@ -4,7 +4,7 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::Core;
-use orbit_core::runtime::audit::run_logs::HTTP_PREVIEW_MAX_BYTES;
+use orbit_core::app::run::HTTP_PREVIEW_MAX_BYTES;
 use serde::Deserialize;
 use serde::de::{self, Deserializer, IgnoredAny, Visitor};
 use serde_json::{Value, json};
@@ -134,7 +134,7 @@ fn diagnostics_friction_from_v2_audit(
     runtime: &Core,
     month: &str,
     limit: usize,
-) -> Result<Vec<Value>, orbit_core::OrbitError> {
+) -> Result<Vec<Value>, orbit_common::OrbitError> {
     validate_year_month(month)?;
     if limit == 0 {
         return Ok(Vec::new());

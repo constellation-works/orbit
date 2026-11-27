@@ -161,7 +161,7 @@ fn collect_denial_rows(
     rows
 }
 
-fn sqlite_denial_row(event: &orbit_core::AuditEvent) -> DenialRow {
+fn sqlite_denial_row(event: &orbit_types::telemetry::AuditEvent) -> DenialRow {
     let kind = sqlite_denial_kind(event);
     let arguments_json = parse_arguments_json(event.arguments_json.as_deref());
     let diagnostics = sqlite_denial_diagnostics(event, kind, arguments_json.as_ref());
@@ -177,7 +177,7 @@ fn sqlite_denial_row(event: &orbit_core::AuditEvent) -> DenialRow {
     }
 }
 
-fn sqlite_denial_kind(event: &orbit_core::AuditEvent) -> &'static str {
+fn sqlite_denial_kind(event: &orbit_types::telemetry::AuditEvent) -> &'static str {
     let tool_name = event.tool_name.as_deref().unwrap_or("");
     if tool_name.starts_with("fs.") {
         "fs"
@@ -187,7 +187,7 @@ fn sqlite_denial_kind(event: &orbit_core::AuditEvent) -> &'static str {
 }
 
 fn sqlite_denial_profile(
-    event: &orbit_core::AuditEvent,
+    event: &orbit_types::telemetry::AuditEvent,
     kind: &str,
     arguments_json: Option<&Value>,
 ) -> String {
@@ -204,7 +204,7 @@ fn sqlite_denial_profile(
 }
 
 fn sqlite_denial_target(
-    event: &orbit_core::AuditEvent,
+    event: &orbit_types::telemetry::AuditEvent,
     kind: &str,
     arguments_json: Option<&Value>,
 ) -> String {
@@ -277,7 +277,7 @@ fn v2_denial_diagnostics(kind: &str, profile: &str, target: &str) -> DenialDiagn
 }
 
 fn sqlite_denial_diagnostics(
-    event: &orbit_core::AuditEvent,
+    event: &orbit_types::telemetry::AuditEvent,
     kind: &str,
     arguments_json: Option<&Value>,
 ) -> DenialDiagnostics {
@@ -336,7 +336,7 @@ fn sqlite_denial_diagnostics(
     }
 }
 
-fn is_task_lock_reserve_denial(event: &orbit_core::AuditEvent) -> bool {
+fn is_task_lock_reserve_denial(event: &orbit_types::telemetry::AuditEvent) -> bool {
     event.command != "authorization"
         && !is_capability_denial_evidence(event)
         && (event.tool_name.as_deref() == Some("orbit.task.locks.reserve")
@@ -345,7 +345,7 @@ fn is_task_lock_reserve_denial(event: &orbit_core::AuditEvent) -> bool {
 
 // Legacy entry-point evidence repeats AuthorizationDenial's message. It must
 // not be labelled as contention/protocol merely because of its tool name.
-fn is_capability_denial_evidence(event: &orbit_core::AuditEvent) -> bool {
+fn is_capability_denial_evidence(event: &orbit_types::telemetry::AuditEvent) -> bool {
     event.error_message.as_deref().is_some_and(|message| {
         message.starts_with("operation '")
             && message.contains(" requires the `")

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use axum::extract::State;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::FleetReadinessFacts;
+use orbit_core::app::workspace::FleetReadinessFacts;
 use serde_json::{Value, json};
 
 use super::super::blocking;
@@ -33,7 +33,7 @@ pub(in crate::api) async fn list_fleet_drains(State(state): State<DashboardState
         let items = fan_out(entries.len(), |index| {
             fleet_drain_row(&pinned, &entries[index], &facts)
         });
-        Ok::<_, orbit_core::OrbitError>(json!({"items": items}))
+        Ok::<_, orbit_common::OrbitError>(json!({"items": items}))
     })
     .await
     {
@@ -66,7 +66,7 @@ fn fleet_drain_row(
     let readiness = if entry.active {
         pinned
             .runtime_for(&entry.id)
-            .map_err(|error| orbit_core::OrbitError::Execution(format!("{error:?}")))
+            .map_err(|error| orbit_common::OrbitError::Execution(format!("{error:?}")))
             .and_then(|runtime| {
                 let (payload, owner_machine) =
                     run_read(&runtime, RunCommand::fleet_readiness(facts))?;

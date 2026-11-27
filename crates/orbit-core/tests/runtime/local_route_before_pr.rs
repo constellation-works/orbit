@@ -5,13 +5,16 @@
 //! ship mode automatic delivery uses. Submitting `task_local_pipeline` still
 //! fails closed with the same refusal, on a local workspace and on a PR one.
 
+use orbit_common::OrbitError;
+use orbit_core::app::run::ShipMode;
 use orbit_core::application::plugin::{PluginAddOptions, install_plugin};
 use orbit_core::application::review::review_switches;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{OrbitError, OrbitRuntime, ShipMode, TaskComplexity, TaskStatus};
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -60,7 +63,7 @@ fn seed_with_tags(runtime: &OrbitRuntime, title: &str, tags: &[&str]) -> String 
             tags: tags.iter().map(ToString::to_string).collect(),
             complexity: TaskComplexity::Medium,
             context_files: vec!["dir:.".into()],
-            task_type: Some(orbit_core::TaskType::Chore),
+            task_type: Some(orbit_types::task::TaskType::Chore),
             status: Some(TaskStatus::Backlog),
             ..Default::default()
         })

@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_common::test_env;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::OrbitRuntimeRoots;
 use orbit_mcp::federated::{Destination, FederatedMcpHost, SshDestinationProbe};
 use orbit_types::tool::ToolSessionContext;

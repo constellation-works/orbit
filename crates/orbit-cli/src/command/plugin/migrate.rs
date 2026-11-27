@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use orbit_core::Core;
-use orbit_core::adapter::command::PluginMigrateRequest;
+use orbit_core::app::plugin::PluginMigrateRequest;
 use orbit_core::app::plugin::{Command, Outcome, exec};
 use serde_json::json;
 

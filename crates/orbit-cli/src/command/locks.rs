@@ -5,9 +5,10 @@ use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 use crate::output::common::table::{Column, Table};
 use crate::parse::parse_duration_seconds;
 use clap::Args;
+use orbit_common::OrbitError;
 use orbit_common::governance::task::TaskVerb;
+use orbit_core::Core;
 use orbit_core::app::task::{Command, exec};
-use orbit_core::{Core, OrbitError};
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 
@@ -200,7 +201,10 @@ fn granted_summary(result: &Value) -> String {
 }
 
 /// One line stating what the numbers mean for dispatch.
-fn contention_summary(report: &orbit_core::LockContentionReport, limit: usize) -> String {
+fn contention_summary(
+    report: &orbit_core::app::task::LockContentionReport,
+    limit: usize,
+) -> String {
     if report.pending() == 0 {
         return "no pending tasks to analyze".to_string();
     }

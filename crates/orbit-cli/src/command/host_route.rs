@@ -13,11 +13,11 @@ use std::path::{Path, PathBuf};
 
 use orbit_cmd::hosts::{self, HostWorkspaceRoute, TaskIdRoute};
 use orbit_common::Env;
+use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{CallerCapabilities, CallerEnvelope};
 use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::task::TaskVerb;
-use orbit_core::OrbitError;
-use orbit_core::application::task::TaskArtifactRead;
+use orbit_core::app::task::TaskArtifactRead;
 use orbit_mcp::McpSessionAuthority;
 use orbit_mcp::federated::{MachineQualifiedSelector, is_id_routed_tool};
 use orbit_registry::hosts::HostEntry;
@@ -95,7 +95,7 @@ pub(crate) fn preflight(
             None
         };
         if let Some(destination) = destination {
-            orbit_core::adapter::command::refuse_plugin_child_remote_callback(
+            orbit_core::app::plugin::refuse_plugin_child_remote_callback(
                 env,
                 resolved.generation_root()?,
                 &args.name,
@@ -187,7 +187,7 @@ pub(crate) fn preflight(
             if let Commands::Tool(tool) = &cli.command
                 && let ToolSubcommand::Run(args) = &tool.command
             {
-                orbit_core::adapter::command::refuse_plugin_child_remote_callback(
+                orbit_core::app::plugin::refuse_plugin_child_remote_callback(
                     env,
                     resolved.generation_root()?,
                     &args.name,

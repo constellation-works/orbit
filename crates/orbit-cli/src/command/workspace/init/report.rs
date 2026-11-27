@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_cmd::agent_rules::{InjectionAction, InjectionOutcome, inject_agent_rules};
 use orbit_common::Env;
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_types::workspace::WorkspaceCheckoutRole;
 use serde_json::{Value, json};
 
@@ -100,7 +100,7 @@ pub(super) fn collect_init_report(
 
     let allocator = match options.task_id_start {
         Some(start) => {
-            let outcome = orbit_core::bootstrap::task_migration::seed_task_id_start(
+            let outcome = orbit_core::app::workspace::seed_task_id_start(
                 global_root,
                 init_result.task_prefix.as_deref(),
                 start,

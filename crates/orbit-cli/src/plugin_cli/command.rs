@@ -14,9 +14,9 @@
 use std::sync::OnceLock;
 
 use clap::{Arg, ArgMatches, Command};
+use orbit_common::OrbitError;
 use orbit_common::process::shell::quote_posix_arg;
-use orbit_core::OrbitError;
-use orbit_core::adapter::command::{PluginCliGroup, PluginCliVerb};
+use orbit_core::app::plugin::{PluginCliGroup, PluginCliVerb};
 use serde_json::json;
 
 use super::schema::{DerivedArg, clap_arg, derive_args, input_from_matches};

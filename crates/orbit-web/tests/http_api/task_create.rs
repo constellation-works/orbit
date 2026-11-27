@@ -1,6 +1,7 @@
 //! Public proposed-only capture, retry and live authority guarantees.
 use super::support::{Fixture, Server, error_code, isolated, json_ok};
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_core::test_support::fixture_store;
 use orbit_types::workspace::WorkspaceCheckoutRole;
 use serde_json::{Value, json};
 
@@ -76,8 +77,12 @@ fn edit_registry(
     orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
 }
 
-fn task_registry(fixture: &Fixture) -> orbit_store::maintenance::task_registry::TaskRegistryStore {
-    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+fn task_registry(
+    fixture: &Fixture,
+) -> fixture_store::maintenance::task_registry::TaskRegistryStore {
+    use orbit_core::test_support::fixture_store::maintenance::task_registry::{
+        TaskRegistryStore, task_registry_path,
+    };
     TaskRegistryStore::open(&task_registry_path(&fixture.global)).unwrap()
 }
 
@@ -192,12 +197,12 @@ fn receipt_recovery_requires_committed_matching_identity_and_reuses_reservation(
             body["request_id"] = json!("interrupted-proposal");
             let mut input: orbit_core::application::task::ProposedTaskInput =
                 serde_json::from_value(body.clone()).unwrap();
-            input.task_type = Some(orbit_core::TaskType::Chore);
+            input.task_type = Some(orbit_types::task::TaskType::Chore);
             let digest =
                 orbit_common::security::release::sha256_hex(&serde_json::to_vec(&input).unwrap());
             let id = registry.allocate_task_id("ws_http_fixture").unwrap();
             let connection = rusqlite::Connection::open(
-                orbit_store::maintenance::task_registry::task_registry_path(&fixture.global),
+                fixture_store::maintenance::task_registry::task_registry_path(&fixture.global),
             )
             .unwrap();
             connection
@@ -254,7 +259,7 @@ fn receipt_recovery_requires_committed_matching_identity_and_reuses_reservation(
             // A contradictory owner binding must fail closed as well.
             registry
                 .register_workspace(
-                    orbit_store::maintenance::task_registry::RegisterWorkspaceParams {
+                    fixture_store::maintenance::task_registry::RegisterWorkspaceParams {
                         partition_id: "ws_other_owner".into(),
                         slug: "other".into(),
                         repo_fingerprint: None,
@@ -365,14 +370,14 @@ fn proposed_creation_is_atomic_and_receipt_survives_mutation_and_restart() {
             fixture.seed_run(
                 "proposal-projection",
                 "fixture",
-                orbit_core::JobRunState::Success,
+                orbit_types::workflow::JobRunState::Success,
             );
             fixture
                 .runtime
                 .force_update_task_with_identity(
                     id,
                     TaskUpdateParams {
-                        status: Some(orbit_core::TaskStatus::Review),
+                        status: Some(orbit_types::task::TaskStatus::Review),
                         job_run_id: Some(Some("proposal-projection".into())),
                         ..Default::default()
                     },

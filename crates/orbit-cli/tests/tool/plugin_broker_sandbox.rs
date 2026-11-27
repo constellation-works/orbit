@@ -796,9 +796,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 #[cfg(target_os = "linux")]
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 #[cfg(target_os = "linux")]
-use orbit_engine::{PluginBrokerRun, RunLifecycle};
+use orbit_core::test_support::fixture_engine::{PluginBrokerRun, RunLifecycle};
 #[cfg(target_os = "linux")]
 use orbit_tools::plugin::BrokeredCaller;
 #[cfg(target_os = "linux")]

@@ -4,9 +4,10 @@
 use std::path::Path;
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{ActorIdentity, OrbitRuntime};
-use orbit_engine::RunLifecycle;
-use orbit_engine::TaskAutomationUpdate;
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
 use orbit_types::task::{
     DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, TaskArtifact, TaskStatus,
 };

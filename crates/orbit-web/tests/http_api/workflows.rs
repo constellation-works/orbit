@@ -1,15 +1,17 @@
 use super::support::{Fixture, Server, error_code, isolated, json_ok};
 use chrono::Utc;
-use orbit_core::JobRunState::{Cancelled, Failed, Pending, Running, Success};
-use orbit_core::TaskPriority::{High, Low, Medium};
-use orbit_core::TaskStatus::{Backlog, InProgress, Proposed};
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
-use orbit_core::{JobRun, JobRunState, Task, TaskComplexity, TaskPriority, TaskStatus};
+use orbit_core::test_support::fixture_store;
+use orbit_types::task::TaskPriority::{High, Low, Medium};
+use orbit_types::task::TaskStatus::{Backlog, InProgress, Proposed};
+use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus};
+use orbit_types::workflow::JobRunState::{Cancelled, Failed, Pending, Running, Success};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BaselineRedHold, ChildDispatch, PipelineState,
 };
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 macro_rules! wf_test {
@@ -161,7 +163,7 @@ wf_test!(
             [(
                 "claim-in-flight".into(),
                 in_flight_task.id.clone(),
-                orbit_store::contract::ExecutionClaimPhase::Running,
+                fixture_store::contract::ExecutionClaimPhase::Running,
             )],
         );
         let server = fixture.server(false);
@@ -176,7 +178,7 @@ wf_test!(
             [(
                 "claim-held-alone".into(),
                 held_task.id.clone(),
-                orbit_store::contract::ExecutionClaimPhase::Running,
+                fixture_store::contract::ExecutionClaimPhase::Running,
             )],
         );
         let refused = server.send(
@@ -570,7 +572,7 @@ fn run_state(fixture: &Fixture, run_id: &str) -> JobRunState {
 wf_test!(
     queued_only_cancel_refuses_a_window_that_started_after_the_card_rendered,
     {
-        use orbit_store::contract::AuditEventFilter;
+        use orbit_core::test_support::fixture_store::contract::AuditEventFilter;
         use orbit_types::workflow::JobRunStartOutcome;
         let fixture = Fixture::new();
         let server = fixture.server(true);
@@ -760,7 +762,7 @@ wf_test!(
             .runtime
             .sqlite_store()
             .unwrap()
-            .acquire_workspace_claim(&orbit_store::contract::WorkspaceClaimAcquireParams {
+            .acquire_workspace_claim(&fixture_store::contract::WorkspaceClaimAcquireParams {
                 workspace_orbit_dir: fixture
                     .runtime
                     .paths()
@@ -1069,11 +1071,11 @@ fn readiness_task(
 // Return `task` to the backlog under a red-base hold, the status change and history note a delivery that met a red base leaves.
 fn hold_for_red_base(fixture: &Fixture, task: &str, hold: &BaselineRedHold) {
     let runtime = &fixture.runtime;
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(&runtime.global_root()),
+    let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+        &fixture_store::maintenance::task_registry::task_registry_path(&runtime.global_root()),
     )
     .unwrap();
-    orbit_store::compose::workspace_coordinated_backends(
+    fixture_store::compose::workspace_coordinated_backends(
         registry,
         runtime.workspace_id().unwrap(),
         runtime.sqlite_store().unwrap(),
@@ -1083,7 +1085,7 @@ fn hold_for_red_base(fixture: &Fixture, task: &str, hold: &BaselineRedHold) {
     .history
     .update_task_history(
         task,
-        orbit_store::contract::TaskHistoryUpdateParams {
+        fixture_store::contract::TaskHistoryUpdateParams {
             actor: "system".into(),
             status: Some(Backlog),
             status_event: Some(BASELINE_RED_HOLD_EVENT.into()),

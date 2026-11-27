@@ -128,10 +128,7 @@ fn assemble(
         today: chrono::Utc::now().date_naive(),
         workspace,
         bundled_bwrap_installed: cfg!(target_os = "linux")
-            && std::fs::symlink_metadata(
-                orbit_core::bootstrap::linux_sandbox_host::BUNDLED_BWRAP_PATH,
-            )
-            .is_ok(),
+            && std::fs::symlink_metadata(orbit_core::app::host::BUNDLED_BWRAP_PATH).is_ok(),
         probe_timeout: converge::probe_timeout_from_env(env),
     })
 }

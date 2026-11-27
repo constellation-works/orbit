@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
 use orbit_common::test_env;
-use orbit_core::OrbitRuntime;
 use orbit_core::application::job::JobRunListParams;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::workflow::JobRun;
 use serde_json::Value;
 use tempfile::TempDir;

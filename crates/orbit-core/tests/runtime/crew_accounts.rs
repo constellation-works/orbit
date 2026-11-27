@@ -9,10 +9,10 @@
 //! drain runs.
 
 use chrono::{Duration, Utc};
-use orbit_core::TaskStatus;
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
 use orbit_store::contract::InvocationInsertParams;
+use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::{InvocationTrace, ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{
     PROVIDER_FAILURE_HOLD_EVENT, PROVIDER_FAILURE_HOLD_MARKER, ProviderFailureClass,

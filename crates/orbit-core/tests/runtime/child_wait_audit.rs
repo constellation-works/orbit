@@ -31,9 +31,10 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_core::runtime::JobRuns;
-use orbit_core::{FailureClass, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
+use orbit_types::telemetry::incident::FailureClass;
 use orbit_types::telemetry::incident::classify;
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};

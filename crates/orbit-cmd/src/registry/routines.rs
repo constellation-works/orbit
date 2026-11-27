@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_core::application::routines::{
+use orbit_core::app::routine::{
     DiscoveredWorkspaces, RoutineLoadError, RoutineMachineIdentity, RoutineStatusReport,
     RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
 };
@@ -109,7 +109,7 @@ type CheckoutOpener = fn(
     &Path,
     &orbit_types::workspace::Workspace,
     &orbit_types::workspace::WorkspaceCheckout,
-) -> Result<orbit_core::composition::Opening, OrbitError>;
+) -> Result<orbit_core::app::workspace::Opening, OrbitError>;
 
 /// Change tokens over the shared audit database's routine rows, split by how
 /// a caller should react to them.
@@ -240,10 +240,8 @@ fn discover_registered_name_collision_peers(
         if selected_orbit_dirs.contains(&canonical_orbit_dir) {
             continue;
         }
-        if !orbit_core::application::routines::declares_any_routine_name(
-            &checkout.orbit_dir,
-            routine_names,
-        ) {
+        if !orbit_core::app::routine::declares_any_routine_name(&checkout.orbit_dir, routine_names)
+        {
             continue;
         }
         match open(global_root, workspace, checkout) {
@@ -334,7 +332,7 @@ pub fn routine_status_store_fingerprint(global_root: &Path) -> Option<RoutineSto
     if !database.exists() {
         return None;
     }
-    orbit_core::composition::store_opener()
+    orbit_core::app::workspace::store_opener()
         .open_read_only(&database)
         .and_then(|store| store.read()?.routine().state_fingerprint())
         .ok()
@@ -360,8 +358,8 @@ fn routine_statuses_with_workspace_filter(
         elapsed_ms = started.elapsed().as_millis(),
         "routine status environment loaded"
     );
-    orbit_core::application::routines::routine_statuses_with_providers(
-        orbit_core::composition::store_opener(),
+    orbit_core::app::routine::routine_statuses_with_providers(
+        orbit_core::app::workspace::store_opener(),
         global_root,
         environment.local_machine(),
         &environment,
@@ -376,11 +374,11 @@ pub fn run_sweep(
     workspace_selector: Option<&str>,
 ) -> Result<SweepOutcome, OrbitError> {
     let global_root =
-        workspace_registry::global_orbit_dir(&orbit_core::composition::composition_env())?;
+        workspace_registry::global_orbit_dir(&orbit_core::app::host::composition_env())?;
     let environment = RegistryRoutineEnvironment::load(&global_root, workspace_selector)?;
-    orbit_core::application::routines::run_sweep(
-        orbit_core::composition::store_opener(),
-        &orbit_core::composition::composition_env(),
+    orbit_core::app::routine::run_sweep(
+        orbit_core::app::workspace::store_opener(),
+        &orbit_core::app::host::composition_env(),
         options,
         environment.local_machine(),
         &environment,
@@ -394,9 +392,9 @@ pub fn run_sweep_at(
     workspace_selector: Option<&str>,
 ) -> Result<SweepOutcome, OrbitError> {
     let environment = RegistryRoutineEnvironment::load(global_root, workspace_selector)?;
-    orbit_core::application::routines::run_sweep_pass(
-        orbit_core::composition::store_opener(),
-        orbit_core::application::routines::SweepContext::production(global_root, &environment),
+    orbit_core::app::routine::run_sweep_pass(
+        orbit_core::app::workspace::store_opener(),
+        orbit_core::app::routine::SweepContext::production(global_root, &environment),
         options,
         environment.local_machine(),
     )

@@ -8,7 +8,11 @@ use super::task_support::test_runtime;
 // Rewrite only receipt rows to model bytes persisted by an older process or
 // notes edited independently of their typed authority. Read them back through
 // the public runtime and store APIs below.
-fn rewrite_receipt(runtime: &orbit_core::OrbitRuntime, id: &str, change: impl Fn(&mut Value)) {
+fn rewrite_receipt(
+    runtime: &orbit_core::runtime::OrbitRuntime,
+    id: &str,
+    change: impl Fn(&mut Value),
+) {
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
     let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root())).unwrap();
     let path = registry

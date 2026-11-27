@@ -4,9 +4,10 @@
 
 use std::sync::Arc;
 
+use orbit_core::Core;
+use orbit_core::app::codebase::TaskRiskinessModel;
 use orbit_core::app::run::Command;
-use orbit_core::application::codebase::TaskRiskinessModel;
-use orbit_core::{AuditEvent, Core};
+use orbit_types::telemetry::AuditEvent;
 use orbit_types::telemetry::audit_event_base_json;
 use serde_json::{Value, json};
 

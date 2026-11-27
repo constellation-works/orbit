@@ -60,8 +60,8 @@ pub struct LeafHydrationRequest {
     /// Observe claims that already hold evidence too, so an identical replay
     /// is confirmed and a differing one is reported as a conflict.
     pub recheck: bool,
-    /// Most claims to observe; [`DEFAULT_LEAF_HYDRATION_LIMIT`] when `None`,
-    /// at most [`MAX_LEAF_HYDRATION_LIMIT`].
+    /// Most claims to observe; `DEFAULT_LEAF_HYDRATION_LIMIT` when `None`,
+    /// at most `MAX_LEAF_HYDRATION_LIMIT`.
     pub limit: Option<usize>,
     /// Continue after this claim: skip every selected claim up to and
     /// including it, in the newest-first selection. Pass the previous

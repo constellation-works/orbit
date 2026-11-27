@@ -10,13 +10,14 @@ use std::path::PathBuf;
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::agents::{AgentRole, Owner, Problem};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{JobRun, JobRunState, TaskStatus};
+use orbit_types::task::TaskStatus;
 use orbit_types::task::{
     DESCRIPTION_DOCUMENT, DefectSeverity, RegressionClassification, RegressionEscape,
     RegressionNature, SeveritySource, TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME,
     TaskComplexity, TaskEventRowV2, TaskOrigin, TaskRelation, TaskRelationType,
     task_fields_updated_note,
 };
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -118,9 +119,11 @@ pub(super) fn sited_regression(
 
 pub(super) fn bundle_dir(fixture: &Fixture, task_id: &str) -> PathBuf {
     let partition = fixture.runtime.workspace_id().unwrap();
-    orbit_store::maintenance::task_registry::task_workspaces_dir(&fixture.global)
-        .join(partition)
-        .join(task_id)
+    orbit_core::test_support::fixture_store::maintenance::task_registry::task_workspaces_dir(
+        &fixture.global,
+    )
+    .join(partition)
+    .join(task_id)
 }
 
 /// Append one history row to a disposable fixture task, as a lifecycle writer
@@ -247,8 +250,8 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
     isolated(
         "agents::implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cost",
         || {
-            use orbit_core::InvocationInsertParams;
             use orbit_core::application::agents::{AgentQuery, agent_detail, agent_scorecard};
+            use orbit_core::test_support::fixture_store::InvocationInsertParams;
             use orbit_types::telemetry::InvocationTrace;
             let fixture = Fixture::new();
             let now = Utc::now();
@@ -479,8 +482,8 @@ fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
     isolated(
         "agents::implementers_report_cost_coverage_without_averaging_priced_attempts",
         || {
-            use orbit_core::InvocationInsertParams;
             use orbit_core::application::agents::{AgentQuery, agent_detail, agent_scorecard};
+            use orbit_core::test_support::fixture_store::InvocationInsertParams;
             use orbit_types::telemetry::InvocationTrace;
             let fixture = Fixture::new();
             let now = Utc::now();
@@ -739,8 +742,8 @@ fn implementer_counts_default_to_managed_tasks_and_show_interactive_work_per_cre
     isolated(
         "agents::implementer_counts_default_to_managed_tasks_and_show_interactive_work_per_crew",
         || {
-            use orbit_core::InvocationInsertParams;
             use orbit_core::application::agents::{AgentQuery, agent_scorecard};
+            use orbit_core::test_support::fixture_store::InvocationInsertParams;
             use orbit_types::telemetry::InvocationTrace;
             let fixture = Fixture::new();
             let now = Utc::now();

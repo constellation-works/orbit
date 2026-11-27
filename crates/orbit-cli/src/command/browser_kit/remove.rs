@@ -1,7 +1,7 @@
 use clap::Args;
 use orbit_common::Env;
+use orbit_core::app::host::KitLayout;
 use orbit_core::app::host::browser_kit;
-use orbit_core::bootstrap::browser_kit::KitLayout;
 use serde_json::json;
 
 use crate::command::{CommandOut, Payload, require_confirmation};

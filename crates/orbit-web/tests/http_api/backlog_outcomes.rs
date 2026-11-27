@@ -3,8 +3,11 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
-use orbit_store::contract::StoredBacklogForecast;
-use orbit_store::contract::{InvocationInsertParams, TaskHistoryUpdateParams};
+use orbit_core::test_support::fixture_store;
+use orbit_core::test_support::fixture_store::contract::StoredBacklogForecast;
+use orbit_core::test_support::fixture_store::contract::{
+    InvocationInsertParams, TaskHistoryUpdateParams,
+};
 use orbit_types::task::{TaskComment, TaskComplexity, TaskEnvelopeV2, TaskEventRowV2, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};
@@ -38,8 +41,8 @@ fn dated_task_with(
         .unwrap()
         .id
         .to_string();
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
+    let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+        &fixture_store::maintenance::task_registry::task_registry_path(
             &fixture.runtime.global_root(),
         ),
     )
@@ -976,7 +979,7 @@ fn invocation_model(
                     "UPDATE invocations SET ts = ?1 WHERE job_run_id = ?2",
                     (end.to_rfc3339(), &run),
                 )
-                .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                .map_err(|e| orbit_common::OrbitError::Store(e.to_string()))?;
             Ok(())
         })
         .unwrap();
@@ -1138,8 +1141,8 @@ fn age_task_metadata(
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 ) {
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
+    let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+        &fixture_store::maintenance::task_registry::task_registry_path(
             &fixture.runtime.global_root(),
         ),
     )
@@ -1173,13 +1176,13 @@ fn age_task_metadata(
 }
 
 fn append_terminal_comment(fixture: &Fixture, id: &str) {
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
+    let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+        &fixture_store::maintenance::task_registry::task_registry_path(
             &fixture.runtime.global_root(),
         ),
     )
     .unwrap();
-    orbit_store::compose::workspace_coordinated_backends(
+    fixture_store::compose::workspace_coordinated_backends(
         registry,
         fixture.runtime.workspace_id().unwrap(),
         fixture.runtime.sqlite_store().unwrap(),

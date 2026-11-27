@@ -99,9 +99,9 @@ fn in_isolated_child_with_provider_paths(test: &str) -> bool {
     false
 }
 
-pub(super) fn open_runtime(fixture: &Fixture) -> orbit_core::OrbitRuntime {
+pub(super) fn open_runtime(fixture: &Fixture) -> orbit_core::runtime::OrbitRuntime {
     use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
-    use orbit_core::ActorIdentity;
+    use orbit_core::runtime::context::ActorIdentity;
 
     let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&fixture.repo, Some(&fixture.root))
         .unwrap();
@@ -188,7 +188,7 @@ fn append_global_config(fixture: &Fixture, toml: &str) {
 /// evaluate the consumer until it settles; the review task it minted, if any.
 pub(super) fn land_and_evaluate(
     fixture: &Fixture,
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     content: &str,
 ) -> Option<String> {
     land_tasks_and_evaluate(fixture, runtime, content, &[])
@@ -198,7 +198,7 @@ pub(super) fn land_and_evaluate(
 /// unattributed one when there are none.
 pub(super) fn land_tasks_and_evaluate(
     fixture: &Fixture,
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     content: &str,
     task_ids: &[String],
 ) -> Option<String> {
@@ -1246,8 +1246,8 @@ fn historical_timing_spellings_keep_task_commands_and_config_writes_usable() {
 /// spelling and write a file the previous release can still read.
 #[test]
 fn doctor_timing_alias_rewrite_preserves_policy_and_legacy_readability() {
-    use orbit_core::OrbitRuntime;
     use orbit_core::app::doctor::DoctorCommands;
+    use orbit_core::runtime::OrbitRuntime;
     const TEST: &str = "review_after_landing_cli::doctor_timing_alias_rewrite_preserves_policy_and_legacy_readability";
     if !in_isolated_child(TEST) {
         return;

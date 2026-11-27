@@ -1,4 +1,4 @@
-use orbit_core::adapter::command::ToolInfo;
+use orbit_core::app::tool::ToolInfo;
 use orbit_types::tool::ToolParam;
 
 pub(super) fn tool_status(tool: &ToolInfo) -> &'static str {

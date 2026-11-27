@@ -1,8 +1,10 @@
+use orbit_core::test_support::fixture_store;
 use std::collections::BTreeSet;
 use std::fs;
 
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{OrbitRuntime, TaskStatus};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_types::task::TaskStatus;
 use orbit_types::task::{Task, TaskType};
 use orbit_types::workspace::WorkspaceCheckout;
 use serde_json::{Value, json};
@@ -446,8 +448,8 @@ fn grouped_task_sections_share_one_index_freshness_validation() {
             // An out-of-band envelope edit leaves the index stale. The next
             // grouped request takes the unbatched fallback and answers from
             // the envelope: the retagged task no longer matches the tag filter.
-            let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-                &orbit_store::maintenance::task_registry::task_registry_path(&fixture.global),
+            let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+                &fixture_store::maintenance::task_registry::task_registry_path(&fixture.global),
             )
             .unwrap();
             let binding = registry.find_task_binding(&mover.id).unwrap().unwrap();

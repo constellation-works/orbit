@@ -1,8 +1,8 @@
 //! CLI rendering for task artifacts; declaration and execution are registry-derived.
 
 use crate::command::{CommandOut, Payload};
-use orbit_core::OrbitError;
-use orbit_core::application::task::TaskArtifactRead;
+use orbit_common::OrbitError;
+use orbit_core::app::task::TaskArtifactRead;
 use serde_json::Value;
 use std::path::Path;
 

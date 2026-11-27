@@ -309,7 +309,7 @@ pub fn agent_detail(
     )
 }
 
-/// [`agent_detail`] with an effort selection: a wire effort name,
+/// `agent_detail` with an effort selection: a wire effort name,
 /// `provider_default` or `unknown`, narrowing to one model-and-effort row.
 pub fn agent_detail_with_effort(
     facts: &AgentFacts,

@@ -1002,7 +1002,9 @@ fn attach_passed_command(
     };
     owner
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+            "human:operator",
+        ))
         .update_task_with_identity(
             &leaf.task,
             orbit_core::application::task::TaskUpdateParams {

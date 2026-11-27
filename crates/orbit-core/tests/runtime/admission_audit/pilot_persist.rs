@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::engine_support::runtime_with_workspace_config;
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::runtime::OrbitRuntime;
 
 const MATERIAL_DETAIL: &str = "task meaning or dependency evidence changed after preparation";
 
