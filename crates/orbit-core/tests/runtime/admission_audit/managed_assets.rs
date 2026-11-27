@@ -62,8 +62,7 @@ mod artifacts {
 
         let runtime =
             OrbitRuntime::from_roots(&global_root, &workspace_root).expect("build runtime");
-        let error = runtime
-            .remove_stale_definition_artifacts()
+        let error = remove_stale_definition_artifacts(&runtime)
             .expect_err("a traversing manifest key must be refused");
         assert!(
             error.to_string().contains("not a safe managed asset path"),
@@ -103,9 +102,7 @@ mod artifacts {
             let runtime =
                 OrbitRuntime::from_roots(&global_root, &workspace_root).expect("rebuild runtime");
             assert_eq!(
-                runtime
-                    .remove_stale_definition_artifacts()
-                    .expect("retire pass"),
+                remove_stale_definition_artifacts(&runtime).expect("retire pass"),
                 0,
                 "a symlinked artifact is not removed"
             );
@@ -126,6 +123,7 @@ use sha2::{Digest, Sha256};
 use tempfile::tempdir_in;
 
 use orbit_config::ConfigSeed;
+use orbit_core::app::doctor::{inspect_definition_artifacts, remove_stale_definition_artifacts};
 use orbit_core::app::routine::RoutineSeedIdentity;
 use orbit_core::bootstrap::init::{InitOptions, InitResult, init_workspace_at_root};
 use orbit_core::runtime::OrbitRuntime;
@@ -344,7 +342,7 @@ fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
         std::fs::write(catalog.join(format!("{name}.yaml")), &old).expect("stale copy again");
         add_managed_manifest_entry(&catalog, name, &old);
     }
-    use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactProvenance};
+    use orbit_core::app::doctor::{ArtifactCondition, ArtifactProvenance};
     use orbit_core::application::workspace_sync::{
         ManagedArtifactOutcome, ManagedArtifactScope, reconcile_workspace_managed_artifacts,
     };
@@ -381,9 +379,7 @@ fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
         std::fs::write(job_catalog.join(format!("{name}.yaml")), content).unwrap();
         add_managed_manifest_entry(&job_catalog, name, &retired_job);
     }
-    let health = runtime
-        .inspect_definition_artifacts()
-        .expect("doctor diagnoses legacy copies");
+    let health = inspect_definition_artifacts(&runtime).expect("doctor diagnoses legacy copies");
     let preview = reconcile_workspace_managed_artifacts(&global, &workspace, None, "main", true)
         .expect("preview local copy refresh");
     for (directory, name) in [
@@ -614,8 +610,7 @@ fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
         std::fs::create_dir_all(&blocked_dest_target).unwrap();
         symlink(&blocked_dest_target, &retired_activities_dir).unwrap();
 
-        let edge_health = runtime
-            .inspect_definition_artifacts()
+        let edge_health = inspect_definition_artifacts(&runtime)
             .expect("doctor diagnoses unsafe legacy workspace paths");
         let shipped_findings: Vec<_> = edge_health
             .iter()

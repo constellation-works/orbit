@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: "orbit attention: one read-only, filterable, federated view of everything waiting on an operator, with a stateless delta cursor for callers"
 tags: [operator-attention, operator-ux, decision-channel, federated-mcp]
-paths: ["crates/orbit-core/src/application/attention/**", "crates/orbit-common/src/governance/**", "crates/orbit-cli/src/command/**", "crates/orbit-mcp/src/federated/**"]
+paths: ["crates/orbit-core/src/app/attention/**", "crates/orbit-common/src/governance/**", "crates/orbit-cli/src/command/**", "crates/orbit-mcp/src/federated/**"]
 related_features: [human-decision-channel, federated-mcp, host-registry, distributed-drain, mcp-session-context]
 related_artifacts: [ORB-21164, ORB-21165]
 ---

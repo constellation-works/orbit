@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 
 use tempfile::tempdir_in;
 
-use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactHealth, ArtifactKind};
+use orbit_core::app::doctor::{
+    ArtifactCondition, ArtifactHealth, ArtifactKind, inspect_definition_artifacts,
+    remove_stale_definition_artifacts,
+};
 use orbit_core::runtime::OrbitRuntime;
 
 use orbit_common::security::release::sha256_hex;
@@ -93,7 +96,7 @@ fn activity_catalog_health_reports_unreadable_directories() {
             }
             error => panic!("expected a traversal failure: {error}"),
         };
-        let report = runtime.inspect_definition_artifacts().expect("doctor scan");
+        let report = inspect_definition_artifacts(&runtime).expect("doctor scan");
         let findings = &health_of(&report, ArtifactKind::Activity).findings;
         let fault = findings
             .iter()
@@ -116,9 +119,7 @@ fn activity_catalog_health_reports_unreadable_directories() {
             permissions.mode()
         );
         runtime.v2_activity_catalog().expect("loading recovers");
-        let report = runtime
-            .inspect_definition_artifacts()
-            .expect("doctor recovers");
+        let report = inspect_definition_artifacts(&runtime).expect("doctor recovers");
         assert!(
             health_of(&report, ArtifactKind::Activity)
                 .findings
@@ -133,7 +134,7 @@ fn activity_catalog_health_reports_unreadable_directories() {
     runtime
         .v2_activity_catalog()
         .expect("absent catalogs are permitted");
-    let report = runtime.inspect_definition_artifacts().expect("doctor scan");
+    let report = inspect_definition_artifacts(&runtime).expect("doctor scan");
     assert!(
         health_of(&report, ArtifactKind::Activity)
             .findings
@@ -176,7 +177,7 @@ fn activity_catalog_health_matches_runtime_duplicate_admission() {
         }
 
         let catalog = runtime.v2_activity_catalog();
-        let report = runtime.inspect_definition_artifacts().expect("doctor scan");
+        let report = inspect_definition_artifacts(&runtime).expect("doctor scan");
         let findings = &health_of(&report, ArtifactKind::Activity).findings;
         if case == "same-root" {
             match catalog.expect_err("even shadowed lower-layer duplicates block loading") {
@@ -291,7 +292,7 @@ fn stale_workspace_activity_is_isolated_and_reported() {
     );
 
     // Doctor names the same file, error and remedy.
-    let report = runtime.inspect_definition_artifacts().expect("doctor scan");
+    let report = inspect_definition_artifacts(&runtime).expect("doctor scan");
     let findings = &health_of(&report, ArtifactKind::Activity).findings;
     let fault = findings
         .iter()
@@ -575,9 +576,7 @@ fn doctor_retirement_confines_linked_and_regular_skill_assets() {
     .expect("write retired provenance");
 
     assert_eq!(
-        runtime
-            .remove_stale_definition_artifacts()
-            .expect("doctor retirement pass"),
+        remove_stale_definition_artifacts(&runtime).expect("doctor retirement pass"),
         2,
         "only confined files may leave the catalog"
     );
@@ -599,9 +598,8 @@ fn doctor_retirement_confines_linked_and_regular_skill_assets() {
         .as_object()
         .expect("remaining provenance");
     assert_eq!(remaining.len(), linked_targets.len());
-    let report = runtime
-        .inspect_definition_artifacts()
-        .expect("doctor still reports skipped assets");
+    let report =
+        inspect_definition_artifacts(&runtime).expect("doctor still reports skipped assets");
     let findings = &health_of(&report, ArtifactKind::Skill).findings;
     for (name, link, external_path, body) in &linked_targets {
         assert!(
@@ -637,9 +635,7 @@ fn doctor_retirement_confines_linked_and_regular_skill_assets() {
         );
     }
     assert_eq!(
-        runtime
-            .remove_stale_definition_artifacts()
-            .expect("second doctor pass"),
+        remove_stale_definition_artifacts(&runtime).expect("second doctor pass"),
         0
     );
 }
@@ -772,9 +768,7 @@ fn activity_catalog_scan_confines_links_cycles_and_special_files() {
     .expect("write global root activity");
 
     let refused = [&final_link, &dir_link, &cycle, &fifo];
-    let report = runtime
-        .inspect_definition_artifacts()
-        .expect("doctor scan finishes");
+    let report = inspect_definition_artifacts(&runtime).expect("doctor scan finishes");
     let findings = &health_of(&report, ArtifactKind::Activity).findings;
     for path in refused {
         let finding = findings

@@ -36,6 +36,12 @@
 //! fields ([`doctor_row_json`]). Repairs stay on [`DoctorCommands`] and are
 //! never part of the report.
 
+mod activity_catalog;
+
+mod artifact;
+
+mod artifact_diagnosis;
+
 mod automation;
 
 mod browser_kit;
@@ -91,10 +97,13 @@ use serde::Serialize;
 use super::exec::{self, App, Operation};
 use crate::Core;
 use crate::OrbitRuntime;
-use crate::application::health::artifact::ArtifactFinding;
 use crate::bootstrap::linux_sandbox_host::BwrapProbeOutcome;
 
 pub use crate::application::automation::AttemptPinCleanup;
+pub use artifact::{
+    ArtifactCondition, ArtifactFinding, ArtifactHealth, ArtifactKind, ArtifactProvenance,
+    inspect_definition_artifacts, remove_stale_definition_artifacts,
+};
 use automation::*;
 use command::*;
 pub use command::{

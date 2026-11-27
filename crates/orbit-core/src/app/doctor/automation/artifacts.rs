@@ -3,8 +3,6 @@
 
 use std::collections::BTreeSet;
 
-use crate::application::health::artifact::ArtifactCondition;
-
 use crate::app::doctor::*;
 
 /// Task relation/dependency targets that no longer resolve to a registered
@@ -83,7 +81,7 @@ pub(in crate::app::doctor) fn doctor_check_task_relations(
 pub(in crate::app::doctor) fn doctor_check_definition_artifacts(
     runtime: &OrbitRuntime,
 ) -> Vec<WorkspaceDoctorResult> {
-    let report = match runtime.inspect_definition_artifacts() {
+    let report = match inspect_definition_artifacts(runtime) {
         Ok(report) => report,
         Err(error) => {
             return vec![actionable_check(

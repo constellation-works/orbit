@@ -97,7 +97,6 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `agent_corpus.rs` | `app::agent` | above task |
 | `agents` | `app::agent` | above task |
 | `application_authority.rs` | `app::auto_task` | above task |
-| `attention` | `app::attention` | above task |
 | `audit_event.rs` | `app::audit` | above task |
 | `audit_event` | `app::audit` | above task |
 | `auto_tasks` | `app::auto_task` | above task |
@@ -113,7 +112,6 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `executor.rs` | `unit::executor` | leaf |
 | `experiment` | `app::experiment` | above task |
 | `gc` | `app::gc` | above task |
-| `health` | `app::doctor` | above task |
 | `host_labels.rs` | `unit::host_labels` | leaf |
 | `job` | `app::run`; its `crew_pools` module goes to `unit::crew_pool` (between task and run) | 2 |
 | `landing` | `unit::landing` | above task |

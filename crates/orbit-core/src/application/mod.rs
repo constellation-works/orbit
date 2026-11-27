@@ -5,14 +5,14 @@
 //! and root bootstrap live outside this module.
 //!
 //! - Tasks, jobs, and delivery: `task`, `task_bundle`, `job`, `workflow`,
-//!   `landing`, `review`, `attention`, `notice`, `operator_input`.
+//!   `landing`, `review`, `notice`, `operator_input`.
 //! - Automation: `auto_tasks`, `automation`, `workspace_auto`,
 //!   `sweep_filing`, `seeding_policy`.
 //! - Agents and runs: `agents`, `executor`, `agent_corpus`, `crew_memory`,
 //!   `evolution`, `experiment`, `resident`, `vision_probe`, `statistics`.
 //! - Plugins and skills: `plugin`, `skill`, `tool_name_migration`.
 //! - Workspace and host: `workspace`, `codebase`, `config`, `distributed`,
-//!   `pull_drain`, `host_labels`, `health`, `gc`, `change_watch`,
+//!   `pull_drain`, `host_labels`, `gc`, `change_watch`,
 //!   `managed_assets`.
 //! - Policy, search, and audit: `application_authority`, `audit_event`,
 //!   `contracts`, `admission`, `search`, `backlog_forecast`,
@@ -23,7 +23,6 @@ pub(crate) mod admission;
 pub(crate) mod agent_corpus;
 pub mod agents;
 mod application_authority;
-pub mod attention;
 pub mod audit_event;
 pub mod auto_tasks;
 pub mod automation;
@@ -38,7 +37,6 @@ pub mod evolution;
 pub(crate) mod executor;
 pub mod experiment;
 pub mod gc;
-pub mod health;
 pub(crate) mod host_labels;
 pub mod job;
 pub mod landing;

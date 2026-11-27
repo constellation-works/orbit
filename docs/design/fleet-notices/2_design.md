@@ -62,7 +62,7 @@ needed: every crate below already depends on the ones it would call.
 | Fixed limits | `crates/orbit-core/src/application/notice/limits.rs` |
 | CLI | registry-derived `orbit notice`; `crates/orbit-cli/src/command/notice/` holds the CLI-only flag folding and `crates/orbit-cli/src/output/notice.rs` holds the rendering |
 | Dashboard banner and view | `crates/orbit-web` (`assets/dashboard/js/notices.js`, `css/notices.css`) |
-| Attention kind `notice_open` | `crates/orbit-core/src/application/attention/notice_sources.rs` |
+| Attention kind `notice_open` | `crates/orbit-core/src/app/attention/notice_sources.rs` |
 
 The core service is one set of functions over a runtime handle. The tool handlers, the CLI, the
 dashboard, the brief builder and the attention adapter all call it, so they cannot disagree about

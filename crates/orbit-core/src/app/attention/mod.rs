@@ -11,6 +11,31 @@
 //! that call runs the flow.
 //!
 //! [`Command::Wait`] polls the same read under a session's wait grant.
+//!
+//! The read itself is local scopes, source derivation and the destination
+//! side of federation. Filters, the cursor and the public page live with the
+//! operation in `orbit_common::governance::attention`, so the federated
+//! aggregator applies the same rules once over every host.
+
+mod drain_keeper_sources;
+
+mod host;
+
+mod notice_sources;
+
+mod provider_sources;
+
+mod query;
+
+mod routine_sources;
+
+mod runtime_sources;
+
+mod sources;
+
+mod wait;
+
+mod wait_grant;
 
 use orbit_common::OrbitError;
 use orbit_common::governance::attention::AttentionVerb;
@@ -20,7 +45,13 @@ use super::exec::{self, App, Operation};
 use super::tool_call;
 pub use super::tool_call::Input;
 use crate::Core;
-pub use crate::application::attention::{AttentionWaitOutcome, AttentionWaitStatus};
+use query::{
+    ATTENTION_AGE_BUMP_HOURS, ATTENTION_CI_CACHE_SECONDS, ATTENTION_RUN_STUCK_AFTER_MINUTES,
+    ATTENTION_RUN_WINDOW_HOURS, ATTENTION_SOURCE_TIMEOUT_SECONDS,
+};
+pub(crate) use wait::wait_for_attention_delta;
+pub use wait::{AttentionWaitOutcome, AttentionWaitStatus};
+pub(crate) use wait_grant::AttentionWaitScope;
 
 /// What the attention app can be asked to do.
 pub enum Command {
@@ -95,19 +126,14 @@ impl App for AttentionApp {
                     let resident_scope =
                         runtime.resident_cycle_attention_scope(caller.run_id.as_deref());
                     let mint = input.get("wait_grant").and_then(Value::as_bool) == Some(true);
-                    crate::application::attention::attention_query(
-                        runtime,
-                        input,
-                        &caller.session,
-                        resident_scope.as_ref(),
-                    )
-                    .and_then(|response| {
-                        if mint {
-                            crate::application::attention::with_wait_grant(runtime, response)
-                        } else {
-                            Ok(response)
-                        }
-                    })
+                    query::attention_query(runtime, input, &caller.session, resident_scope.as_ref())
+                        .and_then(|response| {
+                            if mint {
+                                wait_grant::with_wait_grant(runtime, response)
+                            } else {
+                                Ok(response)
+                            }
+                        })
                 },
             )?),
             Command::Wait {

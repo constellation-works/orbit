@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: "Design of orbit attention: derived-view architecture, code placement, tool and CLI surface, configuration, relationship to existing reads, and implementation slices"
 tags: [operator-attention, operator-ux]
-paths: ["crates/orbit-core/src/application/attention/**", "crates/orbit-types/src/tool/attention.rs", "crates/orbit-common/src/governance/**", "crates/orbit-cli/src/command/**", "crates/orbit-mcp/src/federated/**"]
+paths: ["crates/orbit-core/src/app/attention/**", "crates/orbit-types/src/tool/attention.rs", "crates/orbit-common/src/governance/**", "crates/orbit-cli/src/command/**", "crates/orbit-mcp/src/federated/**"]
 related_features: [operator-attention, human-decision-channel, federated-mcp, host-registry, distributed-drain]
 related_artifacts: [ORB-21164, ORB-21171]
 ---
@@ -85,7 +85,7 @@ needed, which the slice verifies before it merges.
 |---|---|
 | `AttentionItem`, `AttentionKind`, `AttentionSeverity`, `AttentionNext`, `AttentionEnvelope`, `AttentionCursorStatus` types | `crates/orbit-types/src/tool/attention.rs`, re-exported by the existing `tool` domain |
 | The operation spec: tool `orbit.attention`, CLI `orbit attention`, filter params, description | `crates/orbit-common/src/governance/attention/registry.rs` (operations-as-data; no clap or runtime types) |
-| Derivation, folding, severity, local multi-workspace aggregation and the candidate read | `crates/orbit-core/src/application/attention/` (`sources/` for task and shared item/subject reads; `runtime_sources.rs` for runs and claims; `provider_sources.rs` for CI; `notice_sources.rs` for notices, friction and residents; `routine_sources.rs` for breakers; `drain_keeper_sources.rs` for standing drain; `host.rs` for host health) |
+| Derivation, folding, severity, local multi-workspace aggregation and the candidate read | `crates/orbit-core/src/app/attention/` (`sources/` for task and shared item/subject reads; `runtime_sources.rs` for runs and claims; `provider_sources.rs` for CI; `notice_sources.rs` for notices, friction and residents; `routine_sources.rs` for breakers; `drain_keeper_sources.rs` for standing drain; `host.rs` for host health) |
 | Filters, cursor codec and fingerprint, and the public page (ordering, delta, limit, cursor minting) | `crates/orbit-common/src/governance/attention/` (`filter.rs`, `cursor.rs`, `page.rs`), beside the operation spec, so the local derivation and the federated aggregator apply one implementation |
 | Default `orbit doctor` workspace checks for `host_unhealthy` | `WorkspaceCatalog::attention_doctor_checks`, implemented by the registry catalog in `orbit-cmd` (Core cannot call the doctor directly) |
 | Tool registration, MCP read-only annotation, scope | the operation spec's `mcp_scope: WorkspaceRequired` for a bound session; `crates/orbit-tools/src/mcp/annotations.rs` lists `orbit.attention` as `READ_ONLY` |
@@ -140,7 +140,7 @@ default; the keys load with a deprecation warning and are ignored until 2026-12-
 | `fanout_budget_seconds` | `20` | Outer deadline for a cross-host call |
 | `per_workspace_item_cap` | `200` | Items kept per workspace |
 
-The eight former keys are now fixed constants in code (for example `ATTENTION_CURSOR_TTL_HOURS` in `crates/orbit-common/src/governance/attention/cursor.rs` and the `ATTENTION_*` constants in `crates/orbit-core/src/application/attention/query.rs`); [ORB-22808] left each key loading with a deprecation warning and ignored until 2026-12-08. No setting is changed by querying attention, and there is no supported `attention.<key>` readback of an effective value.
+The eight former keys are now fixed constants in code (for example `ATTENTION_CURSOR_TTL_HOURS` in `crates/orbit-common/src/governance/attention/cursor.rs` and the `ATTENTION_*` constants in `crates/orbit-core/src/app/attention/query.rs`); [ORB-22808] left each key loading with a deprecation warning and ignored until 2026-12-08. No setting is changed by querying attention, and there is no supported `attention.<key>` readback of an effective value.
 
 Slice 1 consumed cursor TTL, severity thresholds and item caps from the former settings; slices 2–4 consume the remaining fixed values for runtime, provider and fan-out behaviour.
 
