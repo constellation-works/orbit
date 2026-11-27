@@ -7,7 +7,7 @@ import * as taskShared from './task-shared.js';
 import { closeTaskPane, filterTasks, focusTaskRow, openTaskPage, revealTaskRow, selectTask, stopRowInteraction } from './task-nav.js';
 import { taskDetailState, taskDrainSignature, taskDrainState } from './task-data.js';
 import { buildTaskDetail, buildTaskDetailPlaceholder, detailFeedbackSignature } from './task-detail.js';
-import { osReadoutNote, osReadoutText } from './task-lifecycle.js';
+import { buildHostPill } from './task-lifecycle.js';
 import { buildCrewUpdateControl } from './task-status-controls.js';
 import { fixPrSignature, fixPrState, pilotSignature, recoverySignature, refreshFixPrControls, taskPullRequestNumber, triageSignature } from './task-agent-actions.js';
 import { crewOptionsSignature, feedbackSignature } from './task-crew.js';
@@ -21,11 +21,7 @@ import { decisionAnswerSignature, refreshDecisionAnswerFeedback, retainDecisionN
 // selector displays without touching the editor holding that draft.
 function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   retireClosedDecisionCards(wrap, readinessTask);
-  for (const readout of wrap.querySelectorAll(".task-os-readout")) {
-    readout.textContent = osReadoutText(task);
-    const note = readout.parentNode && readout.parentNode.querySelector(".info-hint-text");
-    if (note) note.textContent = osReadoutNote(task);
-  }
+  refreshDraftHostPill(wrap, task);
   refreshDraftCrewControl(wrap, task, context);
   refreshDraftComplexityControl(wrap, readinessTask, context);
   refreshFixPrControls(wrap, task, context);
@@ -55,6 +51,24 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
     parent.removeChild(current);
   }
   refreshBlockedByRow(wrap, readinessTask, drain, context);
+}
+
+// Retained details preserve their editor nodes while the task projection is
+// refreshed. Reconcile the adjacent host chip in place, creating it when a
+// requirement appears and removing it when the requirement returns to Any.
+function refreshDraftHostPill(wrap, task) {
+  const controls = wrap.querySelector(".task-meta-block .task-levers-controls");
+  if (!controls) return;
+  const current = controls.querySelector(".task-chip-host");
+  const updated = buildHostPill(task);
+  if (current && updated) {
+    controls.replaceChild(updated, current);
+  } else if (current) {
+    current.remove();
+  } else if (updated) {
+    const risk = controls.querySelector(".task-chip-risk");
+    controls.insertBefore(updated, risk);
+  }
 }
 
 // The drain read lands after the detail is shown, so the Blocked by row is

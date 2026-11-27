@@ -53,12 +53,8 @@ export function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
       ...(crew ? [crew] : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })]),
     ]));
   }
-  if (osReadoutText(task).toLowerCase() !== "any") {
-    controls.appendChild(el("span", { class: "task-chip task-chip-host", title: "Runs on" }, [
-      el("span", { class: "visually-hidden", text: "Runs on: " }),
-      buildOsReadout(task),
-    ]));
-  }
+  const hostPill = buildHostPill(task);
+  if (hostPill) controls.appendChild(hostPill);
   const risk = buildRiskChip(task);
   if (risk) controls.appendChild(risk);
   levers.appendChild(controls);
@@ -383,6 +379,17 @@ function buildOsReadout(task) {
   const readout = el("span", { class: "value" }, [el("span", { class: "task-os-readout", text: osReadoutText(task) })]);
   readout.appendChild(infoHint(osReadoutNote(task)));
   return readout;
+}
+
+// A host pill appears only for a constrained task. Keep it shared between the
+// initial detail and retained-draft refresh so both render the same value and
+// explanatory hint.
+export function buildHostPill(task) {
+  if (osReadoutText(task).toLowerCase() === "any") return null;
+  return el("span", { class: "task-chip task-chip-host", title: "Runs on" }, [
+    el("span", { class: "visually-hidden", text: "Runs on: " }),
+    buildOsReadout(task),
+  ]);
 }
 
 // ORB-12516: a pulled task's run lives in the executing machine's own job
