@@ -2,7 +2,7 @@
 // keyboard navigation around it.
 
 import { el, escCloseButton, getWorkspace, hostWriteRefusal, makeCopyButton, syncNodes } from './common.js';
-import { $, isSmallViewport, PHONE_SHEET_QUERY, taskState } from './task-shared.js';
+import { $, isSmallViewport, isTaskPaneCovered, PHONE_SHEET_QUERY, syncTaskPaneCovered, taskPaneFloors, tasksContentWidth, taskState } from './task-shared.js';
 import * as taskShared from './task-shared.js';
 import { closeTaskPane, filterTasks, focusTaskRow, openTaskPage, revealTaskRow, selectTask, stopRowInteraction } from './task-nav.js';
 import { taskDetailState, taskDrainSignature, taskDrainState } from './task-data.js';
@@ -217,7 +217,8 @@ export function renderTaskPane(filtered, context) {
   // STD-07 R43: a task opened beside the list at a wider width hides when the
   // window narrows to one column, leaving the list with its row marked; a task
   // opened while the list was covered (or as a full page) stays shown.
-  const open = nodes.length > 0 && (!isSmallViewport() || Boolean(taskState.taskPageId) || taskState.paneOpenedCovered);
+  const covered = isTaskPaneCovered();
+  const open = nodes.length > 0 && (!covered || Boolean(taskState.taskPageId) || taskState.paneOpenedCovered);
   pane.hidden = !open;
   const main = $("tasks-main");
   if (main) {
@@ -225,6 +226,7 @@ export function renderTaskPane(filtered, context) {
     main.classList.toggle("task-page-mode", open && Boolean(taskState.taskPageId));
   }
   syncPaneChrome(open);
+  syncResizerAria();
   if (taskState.focusPaneTitle && open) {
     taskState.focusPaneTitle = false;
     focusPaneHeading();
@@ -284,9 +286,9 @@ function buildListTaskDetail(t, drafts, existing, context) {
 }
 function buildPaneHead(task, pinned, context) {
   const page = taskState.taskPageId === task.id;
-  // Previous and next step through the list while it is covered (760px and
-  // below) and are not rendered while the list is visible beside the pane.
-  const showNav = !page && !pinned && isSmallViewport();
+  // Previous and next step through the list while it is covered (small or
+  // medium one-column) and are not rendered while the list is visible beside the pane.
+  const showNav = !page && !pinned && isTaskPaneCovered();
   const { rows, index } = showNav ? listTaskPosition(task) : { rows: [], index: -1 };
   const hasPrev = showNav && index > 0;
   const hasNext = showNav && index >= 0 && index < rows.length - 1;
@@ -377,7 +379,7 @@ const PANE_WIDTH_DEFAULT = 42;
 const PANE_WIDTH_MIN = 25;
 const PANE_WIDTH_MAX = 70;
 let paneWidth = PANE_WIDTH_DEFAULT;
-let sheetOpen = false;
+let chromeMode = "none";
 let sheetInert = [];
 
 function isEditableTarget(target) {
@@ -430,7 +432,7 @@ function moveTaskSelection(step, { focusButton = null } = {}) {
   const taskId = next ? taskIdOfRow(next) : null;
   if (!taskId) return false;
   selectTask(taskId, taskState.paneContext, { workspace: next.dataset.workspace, replaceHistory: true });
-  if (!isSmallViewport()) revealTaskRow(taskId);
+  if (!isTaskPaneCovered()) revealTaskRow(taskId);
   if (focusButton) {
     const button = $("task-detail-body")?.querySelector?.(focusButton);
     if (button && !button.disabled) button.focus({ preventScroll: true });
@@ -441,41 +443,80 @@ function moveTaskSelection(step, { focusButton = null } = {}) {
   return true;
 }
 
-// At phone width the open task covers the entire viewport (header, list and
-// bottom bar). Make every sibling up to document.body inert while it is open.
+// While the task covers the list:
+// - At small (<=760px), the task covers the entire viewport (header, list and
+//   bottom bar), so every sibling up to document.body becomes inert.
+// - At medium one-column (>760px and content below list+gap+pane minimum), the
+//   task covers the list inside the header and icon rail, so only the list and
+//   controls inside #tasks-main become inert while header and rail stay active.
 function syncPaneChrome(open) {
   const pane = $("task-detail-pane");
   if (!pane) return;
-  const sheet = open && isSmallViewport() && !pane.closest?.(".tab-pane:not(.active)");
-  if (sheet === sheetOpen) return;
-  sheetOpen = sheet;
-  if (sheet) {
+  const activeTab = !pane.closest?.(".tab-pane:not(.active)");
+  const nextMode = !open || !activeTab ? "none"
+    : isSmallViewport() ? "small-sheet"
+    : isTaskPaneCovered() && !taskState.taskPageId ? "medium-covered"
+    : "none";
+  if (nextMode === chromeMode) return;
+  const prevMode = chromeMode;
+  chromeMode = nextMode;
+  if (nextMode === "small-sheet") {
     pane.setAttribute("role", "dialog");
     pane.setAttribute("aria-modal", "true");
     pane.setAttribute("aria-labelledby", "task-pane-title");
-  } else if (typeof pane.removeAttribute === "function") {
-    pane.removeAttribute("role");
-    pane.removeAttribute("aria-modal");
-    pane.removeAttribute("aria-labelledby");
+    setSheetInert(pane, document.body);
+  } else {
+    if (typeof pane.removeAttribute === "function") {
+      pane.removeAttribute("role");
+      pane.removeAttribute("aria-modal");
+      pane.removeAttribute("aria-labelledby");
+    }
+    if (nextMode === "medium-covered") {
+      setSheetInert(pane, $("tasks-main"));
+    } else {
+      setSheetInert(null, null);
+    }
   }
-  setSheetInert(sheet ? pane : null);
-  if (sheet) focusPaneHeading();
+  if (nextMode !== "none" && prevMode === "none") focusPaneHeading();
 }
 
-function setSheetInert(pane) {
+function setSheetInert(pane, stopAt) {
   for (const node of sheetInert) node.inert = false;
   sheetInert = [];
-  for (let node = pane; node && node.parentElement && node !== document.body; node = node.parentElement) {
+  if (!pane || !stopAt) return;
+  for (let node = pane; node && node.parentElement; node = node.parentElement) {
     for (const sibling of node.parentElement.children) {
       if (sibling === node || sibling.inert || sibling.tagName === "SCRIPT" || sibling.tagName === "DIALOG") continue;
       sibling.inert = true;
       sheetInert.push(sibling);
     }
+    if (node.parentElement === stopAt || node.parentElement === document.body) break;
   }
 }
 
-function clampPaneWidth(value) {
-  return Math.min(PANE_WIDTH_MAX, Math.max(PANE_WIDTH_MIN, value));
+function paneWidthBounds() {
+  const width = tasksContentWidth();
+  if (!(width > 0)) return { min: PANE_WIDTH_MIN, max: PANE_WIDTH_MAX };
+  const { listMin, paneMin, gap } = taskPaneFloors();
+  const min = Math.max(PANE_WIDTH_MIN, (paneMin / width) * 100);
+  const max = Math.min(PANE_WIDTH_MAX, ((width - listMin - gap) / width) * 100);
+  return max < min ? { min, max: min } : { min, max };
+}
+
+function clampPaneWidth(value, { live = false } = {}) {
+  const bounds = live ? paneWidthBounds() : { min: PANE_WIDTH_MIN, max: PANE_WIDTH_MAX };
+  return Math.min(bounds.max, Math.max(bounds.min, value));
+}
+
+function syncResizerAria() {
+  const resizer = $("task-pane-resizer");
+  if (!resizer) return;
+  const { min, max } = paneWidthBounds();
+  const effective = Math.round(Math.min(max, Math.max(min, paneWidth)));
+  resizer.setAttribute("aria-valuemin", String(Math.round(min)));
+  resizer.setAttribute("aria-valuemax", String(Math.round(max)));
+  resizer.setAttribute("aria-valuenow", String(effective));
+  resizer.setAttribute("aria-valuetext", `Detail pane ${effective}% of the width`);
 }
 
 // The width is a per-viewer presentation preference: storage that is missing
@@ -498,15 +539,11 @@ function savePaneWidth() {
   }
 }
 
-function applyPaneWidth(value) {
-  paneWidth = Math.round(clampPaneWidth(value) * 10) / 10;
+function applyPaneWidth(value, { live = false } = {}) {
+  paneWidth = Math.round(clampPaneWidth(value, { live }) * 10) / 10;
   const main = $("tasks-main");
   if (main) main.style.setProperty("--task-pane-width", `${paneWidth}%`);
-  const resizer = $("task-pane-resizer");
-  if (resizer) {
-    resizer.setAttribute("aria-valuenow", String(Math.round(paneWidth)));
-    resizer.setAttribute("aria-valuetext", `Detail pane ${Math.round(paneWidth)}% of the width`);
-  }
+  syncResizerAria();
 }
 
 // The separator between the list and the pane: drag it, or focus it and use
@@ -533,7 +570,7 @@ function wirePaneResizer() {
     main.classList.add("task-pane-resizing");
   });
   resizer.addEventListener("pointermove", (event) => {
-    if (dragging === event.pointerId) applyPaneWidth(widthAt(event.clientX));
+    if (dragging === event.pointerId) applyPaneWidth(widthAt(event.clientX), { live: true });
   });
   const finish = (event) => {
     if (dragging !== event.pointerId) return;
@@ -549,15 +586,17 @@ function wirePaneResizer() {
   });
   resizer.addEventListener("keydown", (event) => {
     if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const { min, max } = paneWidthBounds();
+    const current = Math.min(max, Math.max(min, paneWidth));
     const step = event.shiftKey ? 10 : 2;
     let next = null;
-    if (event.key === "ArrowLeft") next = paneWidth + step;
-    else if (event.key === "ArrowRight") next = paneWidth - step;
-    else if (event.key === "Home") next = PANE_WIDTH_MIN;
-    else if (event.key === "End") next = PANE_WIDTH_MAX;
+    if (event.key === "ArrowLeft") next = current + step;
+    else if (event.key === "ArrowRight") next = current - step;
+    else if (event.key === "Home") next = min;
+    else if (event.key === "End") next = max;
     if (next == null) return;
     event.preventDefault();
-    applyPaneWidth(next);
+    applyPaneWidth(next, { live: true });
     savePaneWidth();
   });
 }
@@ -595,10 +634,30 @@ export function wireTaskPane(context) {
     event.preventDefault();
     closeTaskPane(taskState.paneContext || context, { forget: true });
   });
-  // Crossing 760px swaps two-line rows, prev/next buttons, and R43 pane
-  // visibility in one render pass, and releases the sheet when leaving Tasks.
+  // Crossing either the container-width one-column threshold or 760px updates
+  // two-line rows, prev/next buttons, R43 pane visibility, inert scope and
+  // resizer bounds in one pass.
+  let lastCovered = syncTaskPaneCovered();
+  const handleLayoutChange = () => {
+    const covered = syncTaskPaneCovered();
+    syncResizerAria();
+    if (covered !== lastCovered) {
+      lastCovered = covered;
+      if (taskState.paneContext) taskShared.rerender(taskState.paneContext);
+      else syncPaneChrome(!pane.hidden);
+    }
+  };
+  if (typeof ResizeObserver === "function") {
+    const resize = new ResizeObserver(handleLayoutChange);
+    const main = $("tasks-main");
+    if (main) resize.observe(main);
+    const col = main?.closest?.(".main-col");
+    if (col) resize.observe(col);
+  }
   try {
     window.matchMedia(PHONE_SHEET_QUERY).addEventListener("change", () => {
+      lastCovered = syncTaskPaneCovered();
+      syncResizerAria();
       if (taskState.paneContext) taskShared.rerender(taskState.paneContext);
       else syncPaneChrome(!pane.hidden);
     });
@@ -606,7 +665,10 @@ export function wireTaskPane(context) {
     /* no media queries: the pane stays a side pane */
   }
   // After the router has switched destinations for the same navigation.
-  const syncChromeAfterNav = () => setTimeout(() => syncPaneChrome(!pane.hidden), 0);
+  const syncChromeAfterNav = () => setTimeout(() => {
+    syncTaskPaneCovered();
+    syncPaneChrome(!pane.hidden);
+  }, 0);
   window.addEventListener("hashchange", syncChromeAfterNav);
   window.addEventListener("popstate", syncChromeAfterNav);
 }

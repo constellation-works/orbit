@@ -1,7 +1,7 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters.
 
 import { ALL_WORKSPACES_TOKEN, captureWorkspaceVisit, getSelectedWorkspaces, getWorkspace, isWorkspaceListReady, onWorkspaceChange, onWorkspaceNamesChange, panelCanRender, persistScopeToUrl, rememberWorkspace, setSelectedWorkspaces, setWorkspace, el, fetchJson, isAggregateView, copyText, workspaceCatalogEntries, workspaceColor, workspaceDisplayName } from './common.js';
-import { $, taskState, onDecisionAnswered, rerender, taskList, activeStatusSet, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskDetailPath, taskDispatchIdentity, isSelectedTask, isSmallViewport, isTaskPaneVisible, STATUS_LABELS } from './task-shared.js';
+import { $, taskState, onDecisionAnswered, rerender, taskList, activeStatusSet, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskDetailPath, taskDispatchIdentity, isSelectedTask, isTaskPaneCovered, isTaskPaneVisible, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
 import { humanCrewFor, isOpenTask, isMyWorkTask, loadAggregateCrews, myWorkCrewNames } from './task-crew.js';
@@ -181,7 +181,7 @@ export function revealTaskRow(taskId, block = "nearest") {
 export function selectTask(taskId, context, { anchor = null, workspace = null, replaceHistory = false } = {}) {
   const body = $("tasks-body");
   const top = anchor && typeof anchor.getBoundingClientRect === "function" ? anchor.getBoundingClientRect().top : null;
-  const covered = isSmallViewport();
+  const covered = isTaskPaneCovered();
   const wasVisible = isTaskPaneVisible();
   const push = covered && !wasVisible && !replaceHistory;
   if (push) {
@@ -219,7 +219,7 @@ export function closeTaskPane(context, { forget = false } = {}) {
   const active = document.activeElement;
   const focusWasInPane = !active || active === document.body || Boolean(pane && pane.contains && pane.contains(active));
   const row = findTaskRow(taskId);
-  const top = !isSmallViewport() && row && typeof row.getBoundingClientRect === "function" ? row.getBoundingClientRect().top : null;
+  const top = !isTaskPaneCovered() && row && typeof row.getBoundingClientRect === "function" ? row.getBoundingClientRect().top : null;
   const popSheetHistory = Boolean(window.history.state?.orbitTaskSheet) && typeof window.history?.back === "function";
   const savedScroll = taskState.sheetReturn?.scrollTop ?? null;
   taskState.paneOpenedCovered = false;
@@ -306,7 +306,7 @@ function leaveTaskPage(context) {
   if (!taskId) return;
   const fromList = Boolean(taskState.taskPageReturn && taskState.taskPageReturn.id === taskId);
   exitTaskPageState();
-  if (!fromList && isSmallViewport()) taskState.paneOpenedCovered = false;
+  if (!fromList && isTaskPaneCovered()) taskState.paneOpenedCovered = false;
   if (!taskState.pinnedExternalTask && filterTasks(taskList(context), context).some((task) => task.id === taskId)) {
     taskState.selectedTaskId = taskId;
   }
@@ -657,7 +657,7 @@ export function applyTasksHashQuery(query, context, page = null) {
     if (wasOpen && !fromPage) {
       taskState.listRestore = { id: previousOpen, scrollTop: savedScroll };
     }
-  } else if (isSmallViewport()) {
+  } else if (isTaskPaneCovered()) {
     if (!taskState.paneOpenedCovered) {
       const body = $("tasks-body");
       taskState.sheetReturn = { id: open, scrollTop: body ? body.scrollTop : 0 };

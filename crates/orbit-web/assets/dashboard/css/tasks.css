@@ -834,6 +834,12 @@ main.tasks-layout > .controls {
    one-column breakpoint below and ~1571px the dock narrows and widens with
    the viewport instead of pinning. */
 main.tasks-layout {
+  /* Measured minimums shared with task-shared.js / task-pane.js so CSS and
+     script decide one-column vs side-by-side from one source. */
+  --task-list-min: 380px;
+  --task-pane-min: 370px;
+  --task-pane-gap: 12px;
+  position: relative;
   grid-template-columns: minmax(0, 1fr) clamp(320px, 28%, 440px);
   grid-template-rows: auto minmax(0, 1fr);
   row-gap: 0;
@@ -882,7 +888,7 @@ main.tasks-layout.task-pane-open > .tasks-dock > #side-dock { display: none; }
      a long list still takes the rest of the pane through its own track. The
      dock route keeps the stretch: it bounds the Drain pane for its own
      scroll. The task page keeps it for its single pane. */
-  main.tasks-layout:not(.dock-route):not(.task-page-mode) { align-content: start; }
+  main.tasks-layout:not(.dock-route):not(.task-page-mode):not(.task-pane-open) { align-content: start; }
   .tasks-dock { display: contents; }
   .tasks-dock > #side-dock { display: none; }
   /* An explicit dock route (`dock=` in the hash) shows the
@@ -1031,14 +1037,35 @@ main.tasks-layout.task-pane-open #tasks-notices > * { pointer-events: auto; box-
 
 /* The task pane: the list, a resizer, then the selected task's detail at the
    operator's remembered share of the width (`--task-pane-width`, set from
-   task-pane.js), kept wide enough to read and narrow enough to leave a list.
+   task-pane.js), kept at or above the measured list and pane minimums.
    Important because shell.css stacks every `main` grid below 1000px. */
-main.tasks-layout.task-pane-open {
+main.tasks-layout.task-pane-open:not(.task-pane-covered) {
   grid-template-columns:
-    minmax(0, 1fr) 12px
-    clamp(320px, var(--task-pane-width, 42%), max(320px, calc(100% - 380px))) !important;
+    minmax(var(--task-list-min), 1fr) var(--task-pane-gap)
+    clamp(var(--task-pane-min), var(--task-pane-width, 42%), max(var(--task-pane-min), calc(100% - var(--task-list-min) - var(--task-pane-gap)))) !important;
   grid-template-rows: auto minmax(0, 1fr);
   column-gap: 0;
+}
+/* One-column Tasks view above 760px: content width is below list minimum +
+   resizer gap + pane minimum (synced onto `.task-pane-covered` from these
+   same custom properties by task-shared.js). The task covers the list inside
+   the header and icon rail while keeping the list's scroll intact behind it. */
+@media (min-width: 761px) {
+  main.tasks-layout.task-pane-open.task-pane-covered:not(.task-page-mode) {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  main.tasks-layout.task-pane-open.task-pane-covered:not(.task-page-mode) > .task-pane-resizer {
+    display: none;
+  }
+  main.tasks-layout.task-pane-open.task-pane-covered:not(.task-page-mode) > :is(.controls, .col-tasks) {
+    visibility: hidden;
+  }
+  main.tasks-layout.task-pane-open.task-pane-covered:not(.task-page-mode) > .task-detail-pane {
+    position: absolute;
+    inset: var(--space-16) var(--space-20);
+    z-index: 20;
+  }
 }
 /* The bar heads the list column; the resizer and the task start at the top,
    level with it. */

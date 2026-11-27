@@ -1,8 +1,26 @@
-// The navigation keeps an expand button in a narrow strip. Like the Tasks
-// dock, its contents slide before the grid column changes once; the two
-// preferences are independent. The phone bottom bar has no collapse control.
+// Navigation rail mode and collapse state across width tiers:
+// - Wide (>=1316px): 200px labelled rail by default; collapsing switches to the
+//   56px icon rail and moves the scope pickers to the header, remembered per
+//   browser in localStorage.
+// - Medium (761px..1315px): 56px icon rail by default with scope pickers in the
+//   header; toggling expands the labelled rail as a transient overlay over the
+//   content without shifting layout (closed by Esc, outside click or resize).
+// - Small (<=760px): bottom bar replaces the rail; the toggle is withdrawn.
 const RAIL_COLLAPSED_PREFS_KEY = "orbit.dashboard.railCollapsed";
-const RAIL_SLIDE_FALLBACK_MS = 260;
+const PHONE_QUERY = "(max-width: 760px)";
+const MEDIUM_QUERY = "(min-width: 761px) and (max-width: 1315px)";
+const VIEWS_TABS = new Set(["diagnostics", "analytics", "operations", "config"]);
+
+const modeListeners = new Set();
+let currentState = {
+  phone: false,
+  medium: false,
+  wideCollapsed: false,
+  overlayOpen: false,
+  iconMode: false,
+  scopeInHeader: false,
+};
+let closeOverlayImpl = () => {};
 
 function loadRailCollapsedPref() {
   try {
@@ -20,30 +38,104 @@ function saveRailCollapsedPref(collapsed) {
   }
 }
 
-/// Restore the navigation preference and wire its button, without a shortcut.
+/// True while the desktop/medium rail shows icons without inline labels.
+export function isRailIconMode() {
+  return currentState.iconMode;
+}
+
+/// True while host and workspace pickers live in the header row.
+export function isScopeInHeader() {
+  return currentState.scopeInHeader;
+}
+
+/// True while the medium-width rail is temporarily expanded over content.
+export function isRailOverlayOpen() {
+  return currentState.overlayOpen;
+}
+
+/// Close the medium overlay rail if open.
+export function closeRailOverlay(options) {
+  closeOverlayImpl(options);
+}
+
+/// Subscribe to rail mode, overlay or scope-placement changes.
+export function onRailModeChange(listener) {
+  modeListeners.add(listener);
+  return () => modeListeners.delete(listener);
+}
+
+function notifyModeListeners() {
+  for (const listener of modeListeners) listener({ ...currentState });
+}
+
+/// Restore the navigation preference and wire its toggle, without a shortcut.
 export function initRailToggle() {
   const rail = document.getElementById("navigation-rail");
   const button = document.getElementById("rail-toggle");
-  const host = document.getElementById("host-block");
-  const tabs = document.getElementById("tabs");
+  const foot = rail?.querySelector(".rail-foot");
   const shell = rail?.closest(".shell");
   if (!shell || !button) return;
-  const slideTarget = tabs || host;
-  const phone = window.matchMedia("(max-width: 760px)");
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const phone = window.matchMedia(PHONE_QUERY);
+  const medium = window.matchMedia(MEDIUM_QUERY);
   let rememberedCollapsed = loadRailCollapsedPref();
-  let cancelPendingSlide = null;
+  let overlayOpen = false;
   let toggleHadFocus = false;
 
-  function syncRailControls(collapsed) {
-    button.setAttribute("aria-expanded", String(!collapsed));
-    button.setAttribute("aria-label", collapsed ? "Show navigation" : "Hide navigation");
-    // Keep focus on the surviving button before withdrawing its neighbours.
-    if (collapsed && rail.contains(document.activeElement)) button.focus();
-    for (const content of rail.querySelectorAll(".rail-host, .rail-workspace, .tabs, .rail-foot, #host-block, .rail-conn, .clock-zone")) {
-      content.inert = collapsed;
+  function syncTabAttributes(iconMode) {
+    for (const tab of rail.querySelectorAll(".rail-group > .tab")) {
+      const hasViews = VIEWS_TABS.has(tab.dataset.tab);
+      if (tab.id !== "rail-drain") {
+        if (iconMode) {
+          const label = tab.querySelector(".rail-label")?.textContent?.trim();
+          if (label) tab.title = label;
+        } else {
+          tab.removeAttribute("title");
+        }
+      }
+      if (hasViews) {
+        if (iconMode) {
+          tab.setAttribute("aria-haspopup", "true");
+          if (!tab.hasAttribute("aria-expanded")) tab.setAttribute("aria-expanded", "false");
+        } else {
+          tab.removeAttribute("aria-haspopup");
+          tab.removeAttribute("aria-expanded");
+        }
+      }
     }
-    if (phone.matches && (document.activeElement === button || toggleHadFocus)) {
+  }
+
+  function applyRailState() {
+    const isPhone = phone.matches;
+    const isMedium = !isPhone && medium.matches;
+    if (!isMedium) overlayOpen = false;
+    const wideCollapsed = !isPhone && !isMedium && rememberedCollapsed;
+    const iconMode = !isPhone && (wideCollapsed || (isMedium && !overlayOpen));
+    const scopeInHeader = isPhone || isMedium || wideCollapsed;
+
+    currentState = {
+      phone: isPhone,
+      medium: isMedium,
+      wideCollapsed,
+      overlayOpen: isMedium && overlayOpen,
+      iconMode,
+      scopeInHeader,
+    };
+
+    shell.classList.toggle("rail-collapsed", wideCollapsed);
+    shell.classList.toggle("rail-icon-mode", iconMode);
+    shell.classList.toggle("rail-overlay-open", currentState.overlayOpen);
+
+    button.setAttribute("aria-expanded", String(!iconMode));
+    button.setAttribute("aria-label", iconMode ? "Show navigation" : "Hide navigation");
+
+    if (foot) {
+      if (iconMode && foot.contains(document.activeElement)) button.focus();
+      foot.inert = iconMode;
+    }
+
+    syncTabAttributes(iconMode);
+
+    if (isPhone && (document.activeElement === button || toggleHadFocus)) {
       requestAnimationFrame(() => {
         if (phone.matches) {
           const target = document.querySelector(".phone-nav [aria-current='page']") || document.getElementById("phone-more-open");
@@ -52,61 +144,16 @@ export function initRailToggle() {
       });
       toggleHadFocus = false;
     }
+
+    notifyModeListeners();
   }
 
-  function afterRailSlide(done) {
-    let timer = 0;
-    const cancel = () => {
-      slideTarget?.removeEventListener("transitionend", onEnd);
-      window.clearTimeout(timer);
-      cancelPendingSlide = null;
-    };
-    const finish = () => {
-      cancel();
-      done();
-    };
-    const onEnd = (event) => {
-      if (event.target === slideTarget && event.propertyName === "opacity") finish();
-    };
-    slideTarget?.addEventListener("transitionend", onEnd);
-    timer = window.setTimeout(finish, RAIL_SLIDE_FALLBACK_MS);
-    cancelPendingSlide = cancel;
-  }
-
-  function setRailCollapsed(collapsed) {
-    if (phone.matches || collapsed === rememberedCollapsed) return;
-    cancelPendingSlide?.();
-    rememberedCollapsed = collapsed;
-    saveRailCollapsedPref(collapsed);
-    syncRailControls(collapsed);
-    shell.classList.remove("rail-leaving", "rail-entering");
-    if (collapsed) {
-      const settle = () => {
-        shell.classList.remove("rail-leaving");
-        shell.classList.add("rail-collapsed");
-      };
-      if (reducedMotion.matches) settle();
-      else {
-        shell.classList.add("rail-leaving");
-        afterRailSlide(settle);
-      }
-      return;
-    }
-    shell.classList.remove("rail-collapsed");
-    if (!reducedMotion.matches && slideTarget) {
-      shell.classList.add("rail-entering");
-      void getComputedStyle(slideTarget).opacity;
-      shell.classList.remove("rail-entering");
-    }
-  }
-
-  function restoreRailLayout() {
-    cancelPendingSlide?.();
-    shell.classList.remove("rail-leaving", "rail-entering");
-    const collapsed = rememberedCollapsed && !phone.matches;
-    syncRailControls(collapsed);
-    shell.classList.toggle("rail-collapsed", collapsed);
-  }
+  closeOverlayImpl = ({ restoreFocus = false } = {}) => {
+    if (!overlayOpen) return;
+    overlayOpen = false;
+    applyRailState();
+    if (restoreFocus && !phone.matches) button.focus();
+  };
 
   button.addEventListener("focus", () => { toggleHadFocus = true; });
   button.addEventListener("blur", () => {
@@ -114,7 +161,37 @@ export function initRailToggle() {
     // Retain that focus only until the phone layout chooses a visible target.
     if (!phone.matches) toggleHadFocus = false;
   });
-  restoreRailLayout();
-  button.addEventListener("click", () => setRailCollapsed(!rememberedCollapsed));
-  phone.addEventListener("change", restoreRailLayout);
+
+  button.addEventListener("click", () => {
+    if (phone.matches) return;
+    if (medium.matches) {
+      overlayOpen = !overlayOpen;
+      applyRailState();
+      return;
+    }
+    rememberedCollapsed = !rememberedCollapsed;
+    saveRailCollapsedPref(rememberedCollapsed);
+    applyRailState();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.defaultPrevented || !overlayOpen) return;
+    const hostDetail = document.getElementById("host-detail");
+    if (hostDetail && !hostDetail.hidden) return;
+    if (event.target?.closest?.("dialog[open], [role='dialog']:not([hidden])")) return;
+    event.preventDefault();
+    closeRailOverlay({ restoreFocus: true });
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (!overlayOpen) return;
+    if (rail.contains(event.target)) return;
+    const hostDetail = document.getElementById("host-detail");
+    if (hostDetail && !hostDetail.hidden && hostDetail.contains(event.target)) return;
+    closeRailOverlay();
+  });
+
+  applyRailState();
+  phone.addEventListener("change", applyRailState);
+  medium.addEventListener("change", applyRailState);
 }
