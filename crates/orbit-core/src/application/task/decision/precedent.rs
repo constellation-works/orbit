@@ -466,7 +466,10 @@ impl OrbitRuntime {
                     }) {
                         continue;
                     }
-                    digests.push(self.task_corpus_digest_at_revision(revision, &dependency));
+                    digests.push(
+                        crate::app::port::TaskCorpus { rt: self }
+                            .task_corpus_digest_at_revision(revision, &dependency),
+                    );
                 }
             }
         }

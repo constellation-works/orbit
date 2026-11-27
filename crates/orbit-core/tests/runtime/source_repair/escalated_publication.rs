@@ -1008,6 +1008,260 @@ fn layered_classic_and_ruleset_checks_refuse_requeue_until_every_check_passes() 
     );
 }
 
+/// Conflicting pipeline publications guide to a source-repair route that the
+/// source run's state, task status, and rework policy actually admit, or
+/// explain why source repair is unavailable and name the discard exit.
+fn conflicting_publications_guide_to_admissible_source_repair_or_discard() {
+    let set_review = |fixture: &Fixture| {
+        orbit_core::test_support::EngineHost::new(&fixture.runtime)
+            .apply_task_automation_update(
+                &fixture.task,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Review),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    let set_terminal_without_receipt = |fixture: &mut Fixture, state_kind: JobRunState| {
+        let mut run_state = fixture
+            .runtime
+            .read_run_state(&fixture.source.run_id)
+            .unwrap()
+            .unwrap();
+        run_state.failure_activity_checkpoint = None;
+        fixture
+            .runtime
+            .write_run_state(&fixture.source.run_id, &run_state)
+            .unwrap();
+        fixture.source.state = state_kind;
+        published_owner::save_run(fixture, &fixture.source);
+    };
+
+    // 1. Conflicting Success in Review -> inspect + submit WITH unmet_acceptance and policy_digest.
+    {
+        let (mut fixture, _, _) = escalated_completion_fixture();
+        set_terminal_without_receipt(&mut fixture, JobRunState::Success);
+        set_review(&fixture);
+        let forge = green_forge(&mut fixture);
+        forge.set_conflicting(true);
+
+        let error = super::handoff_requeue::plain_backlog(&fixture, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("conflicts with its base")
+                && error.contains("explicit source repair")
+                && error.contains(&fixture.source.run_id)
+                && error.contains("`orbit.run` action `resume`")
+                && error.contains("`unmet_acceptance`")
+                && error.contains("`policy_digest`")
+                && error.contains("--discard-candidate"),
+            "unexpected Success/Review conflict refusal: {error}"
+        );
+        assert!(
+            !error.contains("unset"),
+            "Success/Review must not tell operator to leave rework fields unset: {error}"
+        );
+        assert!(
+            !error.contains("orbit task requeue"),
+            "Review refusal must not suggest blocked-only requeue: {error}"
+        );
+        let reader = orbit_common::source_repair_reader_text(&error).unwrap();
+        assert!(
+            reader.line.contains("unmet_acceptance and policy_digest"),
+            "reader line must name rework fields: {}",
+            reader.line
+        );
+
+        let inspected = fixture
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", fixture.request("inspect"))
+            .unwrap();
+        let digest = inspected["policy_digest"]
+            .as_str()
+            .expect("Success inspect returns policy_digest")
+            .to_string();
+        assert!(!digest.is_empty());
+
+        let missing_rework = fixture.submit(inspected["binding"].clone());
+        let submit_err = fixture
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", missing_rework)
+            .unwrap_err()
+            .to_string();
+        assert!(submit_err.contains("unmet_acceptance"), "{submit_err}");
+
+        let mut with_rework = fixture.submit(inspected["binding"].clone());
+        with_rework["source_repair"]["diagnosis"] =
+            json!("Rebase the published branch onto main to resolve the conflict.");
+        with_rework["source_repair"]["unmet_acceptance"] =
+            json!("PR #17 conflicts with base main on the published head.");
+        with_rework["source_repair"]["policy_digest"] = json!(digest);
+        let admitted = fixture
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", with_rework)
+            .unwrap();
+        assert_eq!(admitted["retry_source_run_id"], fixture.source.run_id);
+        assert_eq!(
+            fixture.runtime.get_task(&fixture.task).unwrap().status,
+            TaskStatus::InProgress
+        );
+    }
+
+    // 2. Conflicting Success in Blocked -> source repair unavailable; discard is the route.
+    {
+        let (mut fixture, _, _) = escalated_completion_fixture();
+        set_terminal_without_receipt(&mut fixture, JobRunState::Success);
+        let forge = green_forge(&mut fixture);
+        forge.set_conflicting(true);
+
+        for entry_error in [
+            refused(&fixture, false, "Success/Blocked requeue"),
+            super::handoff_requeue::plain_backlog(&fixture, false)
+                .unwrap_err()
+                .to_string(),
+        ] {
+            assert!(
+                entry_error.contains("conflicts with its base")
+                    && entry_error.contains("is unavailable")
+                    && entry_error.contains("--discard-candidate"),
+                "unexpected Success/Blocked refusal: {entry_error}"
+            );
+            assert!(
+                !entry_error.contains("action `inspect`"),
+                "Success/Blocked must not instruct unavailable inspect/submit: {entry_error}"
+            );
+            let reader = orbit_common::source_repair_reader_text(&entry_error).unwrap();
+            assert!(
+                reader.line.contains("unavailable") && reader.line.contains("discard"),
+                "reader line must explain unavailability and discard: {}",
+                reader.line
+            );
+        }
+
+        let inspect_err = fixture
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", fixture.request("inspect"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            inspect_err.contains("task status does not allow source repair"),
+            "{inspect_err}"
+        );
+        let discarded = requeue(&fixture, true).unwrap();
+        assert_eq!(discarded["status"], "backlog");
+    }
+
+    // 3. Conflicting Cancelled in Review -> field-free inspect + submit.
+    {
+        let (mut fixture, _, _) = escalated_completion_fixture();
+        set_terminal_without_receipt(&mut fixture, JobRunState::Cancelled);
+        set_review(&fixture);
+        let forge = green_forge(&mut fixture);
+        forge.set_conflicting(true);
+
+        let error = super::handoff_requeue::plain_backlog(&fixture, false)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("conflicts with its base")
+                && error.contains("leaving `unmet_acceptance` and `policy_digest` unset")
+                && error.contains("--discard-candidate"),
+            "unexpected Cancelled/Review conflict refusal: {error}"
+        );
+        assert!(
+            !error.contains("orbit task requeue"),
+            "Review refusal must not suggest blocked-only requeue: {error}"
+        );
+
+        let inspected = fixture
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", fixture.request("inspect"))
+            .unwrap();
+        assert!(inspected["policy_digest"].is_null(), "{inspected}");
+        let admitted = fixture
+            .runtime
+            .run_tool_as_human(
+                "orbit.workflow.run.resume",
+                fixture.submit(inspected["binding"].clone()),
+            )
+            .unwrap();
+        assert_eq!(admitted["retry_source_run_id"], fixture.source.run_id);
+        assert_eq!(
+            fixture.runtime.get_task(&fixture.task).unwrap().status,
+            TaskStatus::InProgress
+        );
+    }
+
+    // 4. Conflicting Cancelled in Blocked -> source repair unavailable; discard is the route.
+    {
+        let (mut fixture, _, _) = escalated_completion_fixture();
+        set_terminal_without_receipt(&mut fixture, JobRunState::Cancelled);
+        let forge = green_forge(&mut fixture);
+        forge.set_conflicting(true);
+
+        let error = refused(&fixture, false, "Cancelled/Blocked requeue");
+        assert!(
+            error.contains("conflicts with its base")
+                && error.contains("is unavailable")
+                && error.contains("--discard-candidate"),
+            "unexpected Cancelled/Blocked refusal: {error}"
+        );
+        assert!(
+            !error.contains("action `inspect`"),
+            "Cancelled/Blocked must not instruct unavailable inspect/submit: {error}"
+        );
+        let inspect_err = fixture
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", fixture.request("inspect"))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            inspect_err.contains("task status does not allow source repair"),
+            "{inspect_err}"
+        );
+    }
+
+    // 5. Conflicting kept-inline Failed in Blocked -> inspect + submit WITH rework fields.
+    {
+        let (mut fixture, _, _) = escalated_completion_fixture();
+        let forge = green_forge(&mut fixture);
+        forge.set_conflicting(true);
+
+        let error = refused(&fixture, false, "Failed/Blocked requeue");
+        assert!(
+            error.contains("conflicts with its base")
+                && error.contains("`unmet_acceptance`")
+                && error.contains("`policy_digest`")
+                && !error.contains("unset"),
+            "unexpected Failed/Blocked conflict refusal: {error}"
+        );
+
+        let inspected = fixture
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", fixture.request("inspect"))
+            .unwrap();
+        let digest = inspected["policy_digest"]
+            .as_str()
+            .expect("kept-inline Failed inspect returns policy_digest")
+            .to_string();
+        let mut with_rework = fixture.submit(inspected["binding"].clone());
+        with_rework["source_repair"]["unmet_acceptance"] =
+            json!("PR #17 conflicts with base main on the published head.");
+        with_rework["source_repair"]["policy_digest"] = json!(digest);
+        let admitted = fixture
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", with_rework)
+            .unwrap();
+        assert_eq!(admitted["retry_source_run_id"], fixture.source.run_id);
+        assert_eq!(
+            fixture.runtime.get_task(&fixture.task).unwrap().status,
+            TaskStatus::InProgress
+        );
+    }
+}
+
 crate::scenario_table!(
     escalated_publication_scenarios,
     an_escalated_publication_with_green_checks_is_requeued_onto_its_pull_request,
@@ -1021,5 +1275,6 @@ crate::scenario_table!(
     live_run_refusal_and_next_step_name_cancel,
     succeeded_review_publication_is_requeued_preserving_repair_budget,
     combined_specification_edit_and_backlog_move_refuses_a_no_receipt_publication,
-    repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_checks
+    repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_checks,
+    conflicting_publications_guide_to_admissible_source_repair_or_discard
 );

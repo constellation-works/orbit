@@ -10,6 +10,7 @@ use orbit_store::AuditEventInsertParams;
 use orbit_types::telemetry::AuditEventStatus;
 
 use crate::app::exec::Operation;
+use crate::app::exec::operation::AuditRole;
 use crate::{Core, Error};
 
 /// An invocation audit guard held across a streaming command until the stream
@@ -72,10 +73,20 @@ impl AuditGuard {
             tool_name: self.operation.recorded_tool_name.clone(),
             target_type: self.operation.target_type.map(ToOwned::to_owned),
             target_id: self.operation.target_id.clone(),
-            role: self
-                .operation
-                .audit_role
-                .map_or_else(|| runtime.actor().audit_role().to_string(), str::to_owned),
+            role: match &self.operation.audit_role {
+                Some(AuditRole::Fixed(role)) => (*role).to_string(),
+                Some(AuditRole::ToolRun {
+                    input,
+                    agent,
+                    model,
+                }) => crate::adapter::command::dry_run_audit_role_label(
+                    env,
+                    input,
+                    agent.as_deref(),
+                    model.as_deref(),
+                ),
+                None => runtime.actor().audit_role().to_string(),
+            },
             status: self.status,
             exit_code: self.exit_code,
             duration_ms: self.start.elapsed().as_millis() as i64,

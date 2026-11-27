@@ -1669,13 +1669,10 @@ fi
 # [ORB-23015]: it reads tasks and their crew source back, so task show's
 # assignment readout and the provider-limit gate's experiment-pool check go
 # only through `TaskExperimentPort`, which `experiment` implements on
-# `OrbitRuntime`. `agent_corpus` sits outside the order but above `task`
-# [ORB-23421]: it reads decision rules, task history and tasks back, and reads
-# blobs through `task::base_revision`, so task's decision-answer append,
-# precedent digest and final-recovery appends go only through `TaskCorpusPort`,
-# which `agent_corpus` implements on `OrbitRuntime` in `agent_corpus.rs` by
-# forwarding to its inherent methods.
-task_upper_modules='experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident|agent_corpus'
+# `OrbitRuntime`. `app::agent` reads decision rules, task history and tasks back,
+# and reads blobs through `task::base_revision`. Task reaches it only through
+# `TaskCorpusPort`, implemented on `app::agent::TaskPort` and bound in `app::port`.
+task_upper_modules='experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
@@ -1688,7 +1685,12 @@ if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident, experiment and agent_corpus through its task ports, and must not name tag_instructions or backlog_forecast"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident and experiment through its task ports, and must not name tag_instructions or backlog_forecast"
+  fail=1
+fi
+
+if ! super_chains_into "$app_src" task 'crate::app::agent' named-path; then
+  echo "orbit-core task must reach app::agent only through task::TaskCorpusPort bound in app::port"
   fail=1
 fi
 
@@ -1837,15 +1839,19 @@ if dependency_matches -n 'crate::application::experiment\b' \
   fail=1
 fi
 
-# Experiment readout consumes agent facts; agents must not reach back into
+# Experiment readout consumes agent facts; `app::agent` must not reach back into
 # experiment by path or by an inherent OrbitRuntime method it owns.
+if [[ ! -d "$core_src/app/agent" ]]; then
+  echo "dependency scan path missing: $core_src/app/agent" >&2
+  exit 1
+fi
 if dependency_matches -n 'crate::application::experiment\b' \
-  "$app_src/agents" -g '*.rs' -g '!**/tests/**' ||
+  "$core_src/app/agent" -g '*.rs' -g '!**/tests/**' ||
   dependency_matches -n -U 'crate::application::\{[^}]*\bexperiment\b' \
-    "$app_src/agents" -g '*.rs' -g '!**/tests/**' ||
-  ! inherent_calls_into "$app_src" agents experiment '' '' ||
-  ! super_chains_into "$app_src" agents experiment; then
-  echo "orbit-core agents must not name experiment or call its inherent methods"
+    "$core_src/app/agent" -g '*.rs' -g '!**/tests/**' ||
+  ! inherent_calls_into "$core_src/app" agent experiment '' '' "$app_src" ||
+  ! super_chains_into "$core_src/app" agent 'crate::application::experiment' named-path; then
+  echo "orbit-core app::agent must not name experiment or call its inherent methods"
   fail=1
 fi
 

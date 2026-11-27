@@ -2,7 +2,7 @@
 
 use chrono::{Duration, Utc};
 use orbit_config::TaskTypeDefinition;
-use orbit_core::application::agents::{
+use orbit_core::app::agent::{
     AgentQuery, AgentRole, agent_by_type_scorecard, agent_detail, agent_scorecard,
 };
 use orbit_core::application::task::TaskAddParams;
@@ -157,7 +157,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                     }
                 }
             }
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let card = agent_scorecard(
                 &facts,
                 AgentRole::Implementers,
@@ -202,7 +202,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                     ),
                 );
             }
-            let next = fixture.runtime.agent_scan().unwrap();
+            let next = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let card = agent_scorecard(
                 &next,
                 AgentRole::Implementers,
@@ -269,10 +269,12 @@ fn implementers_pool_sparse_tiers_without_amplifying_single_task_outliers() {
             let fixture = Fixture::new();
             let now = Utc::now();
             let query = AgentQuery::parse(Some("30d"), None).unwrap();
-            let empty = fixture
-                .runtime
-                .agent_role_scorecard(AgentRole::Implementers, &query)
-                .unwrap();
+            let empty = orbit_core::app::agent::agent_role_scorecard(
+                &fixture.runtime,
+                AgentRole::Implementers,
+                &query,
+            )
+            .unwrap();
             assert_eq!(empty["rows"], json!([]));
             for (crew, complexity, tasks) in [
                 ("dense", TaskComplexity::Low, 40),
@@ -340,10 +342,12 @@ fn implementers_pool_sparse_tiers_without_amplifying_single_task_outliers() {
                     }
                 }
             }
-            let card = fixture
-                .runtime
-                .agent_role_scorecard(AgentRole::Implementers, &query)
-                .unwrap();
+            let card = orbit_core::app::agent::agent_role_scorecard(
+                &fixture.runtime,
+                AgentRole::Implementers,
+                &query,
+            )
+            .unwrap();
             for crew in ["sparse", "unknown"] {
                 let r = row(&card, crew);
                 let expectation = as_f64(&r["expected"]["review_rejects"]);
@@ -427,7 +431,7 @@ fn by_type_cells_classify_n_and_shrink_empty_cells_to_the_crew_mean() {
                 tags: vec!["audit-work".into()],
                 paths: Vec::new(),
             }];
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let card = agent_by_type_scorecard(&facts, &query, &types, std::time::Duration::ZERO);
             assert_eq!(card["types"][0]["name"], "review", "{card}");
             let cells = card["cells"].as_array().unwrap();
@@ -527,7 +531,7 @@ fn implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outco
     isolated(
         "agents_implementers::implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outcomes",
         || {
-            use orbit_core::application::agents::Owner;
+            use orbit_core::app::agent::Owner;
 
             let fixture = Fixture::new();
             let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
@@ -543,7 +547,7 @@ fn implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outco
                     ),
                 );
             }
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let before = agent_scorecard(
                 &facts,
                 AgentRole::Implementers,
@@ -573,7 +577,7 @@ fn implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outco
                 RegressionNature::DefectInNew,
                 RegressionEscape::NoTest,
             );
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             assert!(
                 facts.charges().iter().all(|charge| charge.task_id != tagged
                     || charge.owner != Owner::Role(AgentRole::Implementers)),
@@ -604,7 +608,7 @@ fn implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outco
             landed_with_tags(&fixture, "jrun-verified-no-diff", "solo", Vec::new());
             let late = landed_with_tags(&fixture, "jrun-late-tag", "solo", Vec::new());
             retag(&fixture, &late, vec!["no-diff-expected".to_string()]);
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let card = agent_scorecard(
                 &facts,
                 AgentRole::Implementers,
@@ -676,10 +680,11 @@ fn implementers_review_terms_ignore_review_coverage() {
                     }
                 }
             }
-            let export = fixture
-                .runtime
-                .agent_per_task_export(&AgentQuery::parse(Some("30d"), Some(1)).unwrap())
-                .unwrap();
+            let export = orbit_core::app::agent::per_task_export(
+                &fixture.runtime,
+                &AgentQuery::parse(Some("30d"), Some(1)).unwrap(),
+            )
+            .unwrap();
             for (crew, reviewed) in [("dense", 64), ("sparse", 32), ("unreviewed", 0)] {
                 let count: u64 = export["tasks"]
                     .as_array()
@@ -808,13 +813,12 @@ fn two_reviewed_deliveries_do_not_move_the_raw_score() {
                     }
                 }
             }
-            let card = fixture
-                .runtime
-                .agent_role_scorecard(
-                    AgentRole::Implementers,
-                    &AgentQuery::parse(Some("30d"), Some(1)).unwrap(),
-                )
-                .unwrap();
+            let card = orbit_core::app::agent::agent_role_scorecard(
+                &fixture.runtime,
+                AgentRole::Implementers,
+                &AgentQuery::parse(Some("30d"), Some(1)).unwrap(),
+            )
+            .unwrap();
             assert_eq!(card["review_min_support"], 30);
             let reviewed = row(&card, "reviewed");
             assert_eq!(reviewed["reviewed_units"], 2);
@@ -867,10 +871,12 @@ fn a_defect_both_review_layers_report_counts_once() {
                     &[site],
                 );
             }
-            let card = fixture
-                .runtime
-                .agent_role_scorecard(AgentRole::Implementers, &query)
-                .unwrap();
+            let card = orbit_core::app::agent::agent_role_scorecard(
+                &fixture.runtime,
+                AgentRole::Implementers,
+                &query,
+            )
+            .unwrap();
             let both = row(&card, "both");
             assert_eq!(both["counts"]["review_rejects"], 1, "{both}");
             assert_eq!(
@@ -950,7 +956,7 @@ fn same_file_regressions_require_defect_overlap_across_scorecard_consumers() {
             let matrix = json_ok(server.get(&format!(
                 "/api/agents/implementers/by-type?{WS}&window=30d&min_support=1"
             )));
-            let export = fixture.runtime.agent_per_task_export(&query).unwrap();
+            let export = orbit_core::app::agent::per_task_export(&fixture.runtime, &query).unwrap();
             let mean = cases.iter().map(|case| case.3 as f64).sum::<f64>() / cases.len() as f64;
             for (crew, _, _, expected) in cases {
                 let headline = row(&card, crew);
@@ -1046,10 +1052,12 @@ fn delivery_review_regressions_rank_crews_without_pre_landing_review() {
             );
             // No task has a pre-landing review: the delivery-review finding
             // is the only review evidence, and it must reach the score.
-            let card = fixture
-                .runtime
-                .agent_role_scorecard(AgentRole::Implementers, &query)
-                .unwrap();
+            let card = orbit_core::app::agent::agent_role_scorecard(
+                &fixture.runtime,
+                AgentRole::Implementers,
+                &query,
+            )
+            .unwrap();
             assert!(
                 card["terms"]
                     .as_array()
@@ -1087,7 +1095,7 @@ fn delivery_review_regressions_rank_crews_without_pre_landing_review() {
                     RegressionEscape::NoTest,
                 );
             }
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let card = agent_scorecard(
                 &facts,
                 AgentRole::Implementers,

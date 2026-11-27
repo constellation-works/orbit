@@ -32,7 +32,10 @@ use serde_json::Value;
 pub use self::migrate::MigrateStatus;
 
 use super::exec::{self, App, Operation};
-use crate::application::agents::{ClaimedEffortBackfill, DispatchEffortBackfill};
+use crate::app::agent::{
+    ClaimedEffortBackfill, DispatchEffortBackfill, backfill_claimed_leaf_effort,
+    backfill_dispatch_effort,
+};
 use crate::application::codebase::DiffStatsBackfill;
 use crate::application::job::TaskCrewBackfill;
 use crate::application::seeding_policy::SeedingPolicyExclusions;
@@ -490,10 +493,10 @@ impl<'a> App for WorkspaceApp<'a> {
                 Outcome::TaskCrewBackfill(runtime.backfill_admitted_task_crews()?)
             }
             Command::BackfillDispatchEffort => {
-                Outcome::DispatchEffortBackfill(runtime.backfill_dispatch_effort()?)
+                Outcome::DispatchEffortBackfill(backfill_dispatch_effort(runtime)?)
             }
             Command::BackfillClaimedEffort => {
-                Outcome::ClaimedEffortBackfill(runtime.backfill_claimed_leaf_effort()?)
+                Outcome::ClaimedEffortBackfill(backfill_claimed_leaf_effort(runtime)?)
             }
         })
     }

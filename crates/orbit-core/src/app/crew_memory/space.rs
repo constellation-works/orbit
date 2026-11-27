@@ -86,7 +86,7 @@ pub(super) fn crew_memory_vocabulary(
     }
     own_names.extend(own.iter().map(|key| key.as_str().to_lowercase()));
     MemoryLintVocabulary {
-        scorecard_terms: crate::application::agents::scorecard_term_vocabulary()
+        scorecard_terms: crate::app::agent::scorecard_term_vocabulary()
             .into_iter()
             .filter(|term| term.contains(['_', ' ']))
             .map(str::to_string)

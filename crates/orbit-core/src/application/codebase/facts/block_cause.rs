@@ -12,14 +12,14 @@ use orbit_store::contract::{ClaimSettlementKind, ExecutionClaimPhase};
 
 use crate::OrbitRuntime;
 use crate::application::distributed::LeafSettlement;
-pub(in crate::application) use crate::application::task::{
+pub(crate) use crate::application::task::{
     SettledFailure, actor_kind, classify_block, entry_marks_run,
 };
 
 /// Every failed claim's settlement, by task, for `claim_failed` entries
 /// written before their note named the cause. An owner whose claims cannot
 /// be read classifies those entries as unclassified rather than failing.
-pub(in crate::application) fn failed_claim_settlements(
+pub(crate) fn failed_claim_settlements(
     runtime: &OrbitRuntime,
 ) -> BTreeMap<String, Vec<SettledFailure>> {
     let settlements = runtime
@@ -33,7 +33,7 @@ pub(in crate::application) fn failed_claim_settlements(
 
 /// [`failed_claim_settlements`] of settlements already read. A typed
 /// handoff is never a failure, whatever its claim's phase now.
-pub(in crate::application) fn failed_claim_settlements_of(
+pub(crate) fn failed_claim_settlements_of(
     settlements: &[LeafSettlement],
 ) -> BTreeMap<String, Vec<SettledFailure>> {
     let mut by_task: BTreeMap<String, Vec<SettledFailure>> = BTreeMap::new();

@@ -8,3 +8,4 @@ Version history of [STD-08](STD-08.md). Adopting repos pin the `version:` in its
 - **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).
 - **v4 (2026-11-26):** R11: a value STD-05 keeps out of storage is recorded as a digest, a redacted form or a placeholder (ORB-28599).
 - **Editorial (2026-11-27, version unchanged):** existing lines in `why.md` and `CHANGELOG.md` that quoted a person's chat words now record them as facts (the role or owner, the date, the decision), with the raw words kept in the scribe entries and tasks (scribe standard-29).
+- **Editorial (2026-11-27, version unchanged):** R10's rationale describes the inline-JSON worktree error as past behaviour and states what the error carries now (ORB-29361).

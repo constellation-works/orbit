@@ -20,8 +20,8 @@ use super::pipeline::{PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD};
 use super::{RunOwnerLiveness, run_owner_liveness, running_run_has_verified_owner};
 use crate::OrbitRuntime;
 use crate::application::contracts::{
-    AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
-    OwnerSourceIdentityRefusal, RetryKey,
+    AutoEffortSubject, ConflictSourceRepairRoute, CreationCrewAssignment, CrewCandidate,
+    CrewPoolDraw, InspectionPool, OwnerSourceIdentityRefusal, RetryKey,
 };
 use crate::application::task::{
     DeliveryCompletion, NativePublicationIdentity, TaskJobPort, TaskRow,
@@ -277,6 +277,13 @@ impl TaskJobPort for OrbitRuntime {
         task: &Task,
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
         self.escalated_publication_requeue_record(task)
+    }
+
+    fn conflict_source_repair_route(
+        &self,
+        task: &Task,
+    ) -> Result<ConflictSourceRepairRoute, OrbitError> {
+        self.pipeline_conflict_source_repair_route(task)
     }
 
     fn preservation_append(

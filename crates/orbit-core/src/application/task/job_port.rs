@@ -31,8 +31,8 @@ use serde_json::Value;
 
 use super::TaskRow;
 use crate::application::contracts::{
-    AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
-    OwnerSourceIdentityRefusal, RetryKey,
+    AutoEffortSubject, ConflictSourceRepairRoute, CreationCrewAssignment, CrewCandidate,
+    CrewPoolDraw, InspectionPool, OwnerSourceIdentityRefusal, RetryKey,
 };
 
 /// The crew pools an admitting pipeline captured, as task code names them.
@@ -267,6 +267,13 @@ pub(in crate::application) trait TaskJobPort {
         &self,
         task: &Task,
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError>;
+
+    /// How explicit source repair can resolve a conflicting pipeline
+    /// publication from `task`'s current status and source run state.
+    fn conflict_source_repair_route(
+        &self,
+        task: &Task,
+    ) -> Result<ConflictSourceRepairRoute, OrbitError>;
 
     /// The preservation record to append for `entry`, or `None` when an
     /// identical record is already on `task`.

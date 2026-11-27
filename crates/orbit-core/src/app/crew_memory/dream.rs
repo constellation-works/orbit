@@ -26,8 +26,8 @@ use super::space::crew_memory_vocabulary;
 use super::validate::strip_score_blind_tokens;
 use super::{MemoryKey, MemoryLintVocabulary, memory_key};
 use crate::OrbitRuntime;
-use crate::application::agents::memory_evidence::{
-    EvidenceSection, ModelEvidence, implementer_units_by_model, model_evidence,
+use crate::app::agent::{
+    EvidenceSection, ModelEvidence, agent_scan, implementer_units_by_model, model_evidence,
 };
 use crate::application::task::{TaskAddParams, TaskRecordUpdateParams, TaskRecords};
 
@@ -92,7 +92,7 @@ pub(crate) fn crew_memory_dream(rt: &OrbitRuntime) -> Result<Value, OrbitError> 
     // bundle in the workspace once for each model.
     let dreaming_tasks = rt.list_tasks_by_tags(&[CREW_MEMORY_DREAM_TAG.to_string()])?;
     let no_revision = settle_dreaming_tasks(rt, now, &dreaming_tasks)?;
-    let facts = rt.agent_scan()?;
+    let facts = agent_scan(rt)?;
     let mut minted = Vec::new();
     let mut skipped = Vec::new();
     let mut below_support = Vec::new();

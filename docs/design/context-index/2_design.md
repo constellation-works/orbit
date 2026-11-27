@@ -370,7 +370,7 @@ The pilot is where selectors are set, and it explores with an agent to set them.
 
 It runs first in **shadow mode**: candidates are computed and recorded with the pilot's assessment but not shown to the pilot. That costs nothing and gives, for every piloted task, the index's answer beside the pilot's and, once the task lands, beside the truth.
 
-Why this consumer first: its benefit is already measured. The pilot scorecard grades `context_files_after` against the landed files (recall, precision, F1) and reports cost per assessment and median pilot run duration ([agent-scorecards design](../agent-scorecards/2_design.md), [pilots.rs](../../../crates/orbit-core/src/application/agents/roles/pilots.rs)). A useful hint shows up there as higher recall or a cheaper pilot run, with precision no worse.
+Why this consumer first: its benefit is already measured. The pilot scorecard grades `context_files_after` against the landed files (recall, precision, F1) and reports cost per assessment and median pilot run duration ([agent-scorecards design](../agent-scorecards/2_design.md), [pilots.rs](../../../crates/orbit-core/src/app/agent/role/pilots.rs)). A useful hint shows up there as higher recall or a cheaper pilot run, with precision no worse.
 
 ### 8.2 Stage 2 (gated): pre-fill without the pilot
 

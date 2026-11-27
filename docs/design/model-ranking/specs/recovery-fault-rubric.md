@@ -29,7 +29,7 @@ Sources inspected at `31bd63f3e7e4cb10fc51216907bc33231e09950e`:
   precedence. No cited case establishes that ordering alone caused a disagreement.
 - [Ranking design §5.2](../2_design.md#52-fault-on-final-recoveries) suspends a
   season above 20% disagreement until the rubric is fixed. The current
-  [ranking measure definition](../../../../crates/orbit-core/src/application/agents/rank/measures.rs)
+  [ranking measure definition](../../../../crates/orbit-core/src/app/agent/rank/measures.rs)
   leaves final recovery uncomputed; the suspension is an audit finding, not
   evidence that a runtime ranking switch has been applied.
 - `recovery-fault-audit.json` on ORB-25349, audited 2026-11-16, carries prior

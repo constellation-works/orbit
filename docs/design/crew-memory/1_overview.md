@@ -51,7 +51,7 @@ Slices M1–M4 were built and M5 concluded with no difference. M1 provided the s
 | Write validation: caps, provenance, lint | `crates/orbit-core/src/app/crew_memory/validate.rs` | [ORB-23113] |
 | Memory key and the one write path | `crates/orbit-core/src/app/crew_memory/key.rs`, `space.rs` | [ORB-23113] |
 | Memory overlay, receipt capture and dispatch resolution | `crates/orbit-core/src/application/experiment/definition.rs`, `crates/orbit-core/src/application/experiment/capture.rs`, `crates/orbit-core/src/application/experiment/overlay.rs`, `crates/orbit-core/src/app/crew_memory/delivery.rs`, `crates/orbit-engine/src/activity_job/cli_runner/envelope.rs` | [ORB-23114] |
-| Evidence pack from the scorecards | `crates/orbit-core/src/application/agents/memory_evidence.rs` | [ORB-23115] |
+| Evidence pack from the scorecards | `crates/orbit-core/src/app/agent/memory_evidence.rs` | [ORB-23115] |
 | Weekly dreaming routine | `crates/orbit-core/src/app/crew_memory/dream.rs` | [ORB-23115] |
 | Run-bound agent tools (`orbit.memory.show`, `write`, `propose`; unlisted and ungrantable) | `crates/orbit-common/src/governance/memory.rs`, `crates/orbit-core/src/app/crew_memory/agent.rs` | [ORB-23115] |
 | Proposal read (review surface removed; open proposals lapse after four weeks) | `crates/orbit-core/src/app/crew_memory/proposal.rs` | [ORB-23116] |

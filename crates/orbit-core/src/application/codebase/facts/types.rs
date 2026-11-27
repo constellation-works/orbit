@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub(in crate::application) use crate::application::task::{Anchor, BlockCause};
+pub(crate) use crate::application::task::{Anchor, BlockCause};
 
 /// Infrastructure causes, in the order the dashboard lists them.
 pub(in crate::application::codebase) const INFRA_CAUSES: &[&str] = &[

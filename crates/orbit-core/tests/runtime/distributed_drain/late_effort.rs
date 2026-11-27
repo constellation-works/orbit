@@ -4,7 +4,7 @@
 //! accepted for a claim the owner holds no settlement record for.
 
 use super::*;
-use orbit_core::application::agents::ClaimedEffortOutcome;
+use orbit_core::app::agent::ClaimedEffortOutcome;
 use orbit_types::identity::ReasoningEffort;
 
 /// A pulled attempt whose follower settled it (an operator cancel releases
@@ -210,9 +210,7 @@ fn a_followers_late_report_moves_a_settled_attempt_out_of_effort_unknown() {
 
     record_follower_launch(&pair, &leaf, ReasoningEffort::High);
     let rows_before = owner_coordination_rows(&pair);
-    let report = pair
-        .follower
-        .backfill_claimed_leaf_effort()
+    let report = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower)
         .expect("follower backfill");
     let added: Vec<_> = owner_coordination_rows(&pair)
         .into_iter()
@@ -239,9 +237,7 @@ fn a_followers_late_report_moves_a_settled_attempt_out_of_effort_unknown() {
     assert_eq!(reports, [sent]);
 
     let before = owner_state(&pair);
-    let again = pair
-        .follower
-        .backfill_claimed_leaf_effort()
+    let again = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower)
         .expect("second backfill");
     assert_eq!(
         (again.examined, again.recorded, again.replayed),
@@ -343,11 +339,11 @@ fn a_late_report_disagreeing_with_a_held_effort_is_refused_and_counted() {
     let pair = Pair::with_crews(&[Some("sol")]);
     let (leaf, _) = settled_without_effort(&pair);
     record_follower_launch(&pair, &leaf, ReasoningEffort::High);
-    let first = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    let first = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower).unwrap();
     assert_eq!(first.recorded, 1, "{first:#?}");
     record_follower_launch(&pair, &leaf, ReasoningEffort::Low);
     let before = owner_state(&pair);
-    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    let report = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower).unwrap();
     assert_eq!(
         (report.examined, report.recorded, report.conflicting),
         (1, 0, 1),
@@ -365,7 +361,7 @@ fn a_leaf_without_a_follower_record_stays_unknown_and_is_counted() {
     let pair = Pair::with_crews(&[Some("sol")]);
     settled_without_effort(&pair);
     let before = owner_state(&pair);
-    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    let report = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower).unwrap();
     assert_eq!(
         (report.examined, report.recorded, report.effort_unknown),
         (1, 0, 1),
@@ -393,7 +389,7 @@ fn an_owner_that_predates_the_report_refuses_it_without_changing_state() {
     *pair.wire.predates_late_effort.lock().unwrap() = true;
     let owner_before = owner_state(&pair);
     let follower_before = pair.follower_jobs.local_pull_admissions().unwrap();
-    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    let report = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower).unwrap();
     assert_eq!(
         (report.examined, report.recorded, report.owner_unsupported),
         (2, 0, 2),
@@ -430,7 +426,7 @@ fn another_rpc_refusal_is_refused_without_changing_state() {
     *pair.wire.late_effort_rpc_refusal.lock().unwrap() =
         Some((-32603, "internal error".to_string()));
     let owner_before = owner_state(&pair);
-    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    let report = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower).unwrap();
     assert_eq!(
         (
             report.examined,
@@ -455,7 +451,7 @@ fn a_connection_failure_remains_owner_unreachable() {
     *pair.wire.unreachable.lock().unwrap() = true;
     let owner_before = owner_state(&pair);
     let follower_before = pair.follower_jobs.local_pull_admissions().unwrap();
-    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    let report = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower).unwrap();
     assert_eq!(
         (report.examined, report.recorded, report.owner_unreachable),
         (1, 0, 1),
@@ -514,7 +510,7 @@ fn a_late_report_for_a_claim_without_a_settlement_record_is_recorded() {
         "a refused report changes nothing"
     );
 
-    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    let report = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower).unwrap();
     assert_eq!(
         (report.examined, report.recorded, report.refused),
         (1, 1, 0),
@@ -528,7 +524,7 @@ fn a_late_report_for_a_claim_without_a_settlement_record_is_recorded() {
     );
 
     let before = owner_state(&pair);
-    let again = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    let again = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower).unwrap();
     assert_eq!(
         (again.recorded, again.replayed, again.models_replayed),
         (0, 1, 1),
@@ -549,7 +545,7 @@ fn a_late_model_report_fills_an_absent_model_and_never_overwrites_one() {
         "the settlement recorded neither"
     );
     record_follower_launch_on(&pair, &leaf, ReasoningEffort::High, "model-fixture");
-    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    let report = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower).unwrap();
     assert_eq!(
         (report.recorded, report.models_recorded),
         (1, 1),
@@ -610,7 +606,7 @@ fn a_replayed_crewless_report_can_be_enriched_with_its_crew() {
     );
 
     set_follower_run_crew(&pair, &leaf, "luna");
-    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    let report = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower).unwrap();
     assert_eq!(
         (report.replayed, report.models_replayed),
         (1, 1),
@@ -690,7 +686,7 @@ fn a_re_crewed_task_keys_each_late_attempt_to_its_reported_crew() {
     set_follower_run_crew(&pair, &second_leaf, "opus");
     record_follower_launch_on(&pair, &second_leaf, ReasoningEffort::High, "model-opus");
 
-    let report = pair.follower.backfill_claimed_leaf_effort().unwrap();
+    let report = orbit_core::app::agent::backfill_claimed_leaf_effort(&pair.follower).unwrap();
     assert_eq!(
         (report.examined, report.recorded, report.models_recorded),
         (2, 2, 2),
@@ -738,9 +734,8 @@ fn late_report(pair: &Pair, claim: &str, leaf: &str, crew: Option<&str>, model: 
 
 /// The crews the owner's live model ranking lists under `model`.
 fn owner_rank_crews(pair: &Pair, model: &str) -> Vec<Value> {
-    let query =
-        orbit_core::application::agents::RankQuery::parse(None, None, None, None, true).unwrap();
-    let rank = pair.wire.owner.agent_rank(&query).expect("owner rank");
+    let query = orbit_core::app::agent::RankQuery::parse(None, None, None, None, true).unwrap();
+    let rank = orbit_core::app::agent::rank(&pair.wire.owner, &query).expect("owner rank");
     rank["rows"]
         .as_array()
         .unwrap()
