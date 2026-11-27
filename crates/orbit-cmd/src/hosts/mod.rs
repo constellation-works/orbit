@@ -1,34 +1,24 @@
-//! `orbit host`: the operator's registered remote hosts [ORB-14448].
+//! The host app's reads that need `orbit-mcp` or a workspace runtime, and
+//! host routing [ORB-14448].
 //!
-//! Joins the Registry's host file to the federated MCP probe. Each entry
-//! caches only what never changes on a host (`machine_id`, `task_prefix`) plus
-//! the operator's name, SSH target and optional offline acknowledgement.
-//! Reachability, version, protocol and
-//! workspaces are read live from the host whenever a command asks, and never
-//! written back. The local workspace projection reuses unchanged registry bytes
-//! and machine validation context in one bounded process-local slot; every read
-//! still checks path safety, readability and current contents. The CLI and the
-//! dashboard both call these operations, so
-//! validation and writes have one implementation.
+//! `orbit_core::app::host` owns the host commands and their two ports. This
+//! module implements them: [`Probe`] over the federated MCP probe session,
+//! and [`PullDrains`] over each replica checkout's runtime, opened read-only.
+//! Routing a task id or a `--host` selector to a registered host stays here
+//! too, because it opens the federated client.
 
-mod dependents;
-mod doctor;
-mod list;
-mod mutate;
 mod probe;
 mod remote;
 mod route;
 
-use std::path::PathBuf;
+use std::path::Path;
 
-use serde::Serialize;
+use orbit_common::OrbitError;
+use orbit_core::app::host::{HostRow, Ports, Probe, ProbedHost, PullDrainDependent, PullDrains};
+use orbit_registry::hosts::HostEntry;
+use orbit_types::workflow::JobRunState;
+use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 
-pub use dependents::dependents_of;
-pub use doctor::doctor_hosts_row;
-pub use list::{list_hosts, list_registered_hosts, show_host, show_registered_host};
-pub use mutate::{
-    HostChange, HostChangeEntry, add_host, remove_host, rename_host, set_host_offline,
-};
 pub use probe::local_host_facts;
 pub use route::{
     HostWorkspaceRoute, TaskIdRoute, host_ssh_target, local_mirror_workspace, pull_selector,
@@ -36,101 +26,85 @@ pub use route::{
     task_prefix_remote,
 };
 
-// Shared with the sibling modules through `super::`.
-use dependents::{host_dependents, replica_owners};
-use list::require_local;
-use probe::{in_parallel, local_binary_version};
-use remote::{remote_row, remote_workspace, skew_fields};
+static PROBE: FederatedProbe = FederatedProbe;
 
-/// One host as `orbit host list` and `show` report it.
-#[derive(Debug, Clone, Serialize)]
-pub struct HostRow {
-    /// The host name.
-    pub name: String,
-    pub machine_id: String,
-    /// `None` for the local host, which is never reached over SSH.
-    pub ssh: Option<String>,
-    /// The task prefix, retained as optional for JSON compatibility.
-    pub task_prefix: Option<String>,
-    /// This installation, read in-process.
-    pub local: bool,
-    /// Retained for JSON compatibility; always false.
-    pub legacy: bool,
-    /// Whether the live probe answered; `None` when no probe ran.
-    pub reachable: Option<bool>,
-    /// The active offline acknowledgement, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub offline: Option<orbit_types::identity::HostOffline>,
-    /// Why the live probe produced no facts for this host.
-    pub error: Option<HostProbeError>,
-    pub binary_version: Option<String>,
-    pub protocol_fingerprint: Option<String>,
-    /// The host's operating system: this machine's own, a registered entry's
-    /// recorded OS, or what a live probe reported. Unknown for an entry
-    /// registered before discovery reported it and not yet probed.
-    pub host_os: Option<String>,
-    /// Set when the host's version or protocol differs from this machine's.
-    pub skew: bool,
-    /// Which of `binary_version` and `protocol_fingerprint` differ.
-    pub skew_fields: Vec<&'static str>,
-    pub workspaces: Vec<HostWorkspace>,
+static PULL_DRAINS: RegisteredPullDrains = RegisteredPullDrains;
+
+/// The live probe, over the federated MCP probe session.
+struct FederatedProbe;
+
+impl Probe for FederatedProbe {
+    fn remote_row(&self, target: &HostEntry, caller_machine_id: &str, probe: bool) -> HostRow {
+        remote::remote_row(target, caller_machine_id, probe)
+    }
+
+    fn probe_ssh(&self, ssh: &str, caller_machine_id: &str) -> Result<ProbedHost, OrbitError> {
+        let live = probe::probe_ssh(ssh, caller_machine_id)?;
+        let facts = live.facts;
+        Ok(ProbedHost {
+            skew_fields: remote::skew_fields(&facts),
+            workspaces: live
+                .workspaces
+                .iter()
+                .map(|workspace| remote::remote_workspace(workspace, &facts.machine_id))
+                .collect(),
+            machine_id: facts.machine_id,
+            machine_name: facts.machine_name,
+            task_prefix: facts.task_prefix,
+            binary_version: facts.binary_version,
+            protocol_fingerprint: facts.protocol_fingerprint,
+            host_os: facts.host_os,
+        })
+    }
 }
 
-/// The class and detail of a failed live probe.
-#[derive(Debug, Clone, Serialize)]
-pub struct HostProbeError {
-    pub code: String,
-    /// What happened, without `code` repeated in front of it.
-    pub message: String,
+/// The pull-drain read, over each replica checkout's runtime.
+struct RegisteredPullDrains;
+
+impl PullDrains for RegisteredPullDrains {
+    fn pull_drains(
+        &self,
+        global_root: &Path,
+        workspace: &Workspace,
+        checkout: &WorkspaceCheckout,
+    ) -> Vec<PullDrainDependent> {
+        let runtime = match crate::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout_read_only(
+            global_root,
+            workspace,
+            checkout,
+        ) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                tracing::warn!(%error, workspace = %workspace.id, "cannot inspect pull drains");
+                return Vec::new();
+            }
+        };
+        let mut drains = Vec::new();
+        for state in [JobRunState::Running, JobRunState::Pending] {
+            let runs = runtime.list_job_runs(orbit_core::application::job::JobRunListParams {
+                job_id: Some(orbit_core::application::contracts::PULL_DRAIN_JOB.to_string()),
+                state: Some(state),
+                ..Default::default()
+            });
+            match runs {
+                Ok(runs) => drains.extend(runs.into_iter().map(|run| PullDrainDependent {
+                    workspace_id: workspace.id.clone(),
+                    run_id: run.run_id,
+                    state: run.state.to_string(),
+                })),
+                Err(error) => {
+                    tracing::warn!(%error, workspace = %workspace.id, "cannot list pull drains");
+                }
+            }
+        }
+        drains
+    }
 }
 
-/// One workspace checkout on a host, with its role there.
-#[derive(Debug, Clone, Serialize)]
-pub struct HostWorkspace {
-    pub id: String,
-    pub name: String,
-    /// `owner`, or `replica` of `owner_machine_id`.
-    pub role: &'static str,
-    pub owner_machine_id: Option<String>,
-    pub status: String,
-}
-
-/// `orbit host list`.
-#[derive(Debug, Clone, Serialize)]
-pub struct HostList {
-    pub host_file: PathBuf,
-    /// Retained for JSON compatibility; always false.
-    pub legacy: bool,
-    /// The local host first, then every remote sorted by name.
-    pub hosts: Vec<HostRow>,
-}
-
-/// `orbit host show`.
-#[derive(Debug, Clone, Serialize)]
-pub struct HostDetail {
-    #[serde(flatten)]
-    pub host: HostRow,
-    /// What on this machine routes to the host. Absent for the local host.
-    pub dependents: Option<HostDependents>,
-}
-
-/// Everything on this machine that loses its route if a host goes away.
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct HostDependents {
-    pub replica_checkouts: Vec<ReplicaDependent>,
-    pub pull_drains: Vec<PullDrainDependent>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReplicaDependent {
-    pub workspace_id: String,
-    pub workspace_name: String,
-    pub repo_root: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PullDrainDependent {
-    pub workspace_id: String,
-    pub run_id: String,
-    pub state: String,
+/// The host app's ports, as a surface passes them to `orbit_core::app::host`.
+pub fn ports() -> Ports<'static> {
+    Ports {
+        probe: &PROBE,
+        pull_drains: &PULL_DRAINS,
+    }
 }

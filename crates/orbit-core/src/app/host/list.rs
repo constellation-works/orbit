@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use orbit_common::OrbitError;
-use orbit_registry::hosts::{HostRegistry, ResolvedHost, hosts_path, load_host_registry};
+use orbit_registry::hosts::{
+    HostEntry, HostRegistry, ResolvedHost, hosts_path, load_host_registry,
+};
 use orbit_registry::workspace_registry::{
     WorkspaceRegistryMachineContext, find_workspace_by_id, parse_workspace_registry,
     registry_file_fingerprint, registry_path_for,
@@ -14,25 +16,34 @@ use orbit_registry::{MachineIdentity, inspect_machine_identity};
 use orbit_types::workspace::WorkspaceCheckoutRole;
 
 use super::dependents::host_dependents;
-use super::probe::{in_parallel, local_binary_version, local_protocol_fingerprint};
-use super::remote::remote_row;
-use super::{HostDetail, HostList, HostRow, HostWorkspace};
+use super::{
+    HostDetail, HostList, HostRow, HostWorkspace, Ports, in_parallel, local_binary_version,
+    local_protocol_fingerprint,
+};
 
 /// `orbit host list`.
-pub fn list_hosts(global_root: &Path, probe: bool) -> Result<HostList, OrbitError> {
-    list_registered_hosts(&load_host_registry(global_root)?, probe)
+pub fn list_hosts(
+    ports: Ports<'_>,
+    global_root: &Path,
+    probe: bool,
+) -> Result<HostList, OrbitError> {
+    list_registered_hosts(ports, &load_host_registry(global_root)?, probe)
 }
 
 /// [`list_hosts`] over an already loaded host file. The dashboard keeps its
 /// last valid load and lists from it while a newer file fails to load.
-pub fn list_registered_hosts(registry: &HostRegistry, probe: bool) -> Result<HostList, OrbitError> {
+pub fn list_registered_hosts(
+    ports: Ports<'_>,
+    registry: &HostRegistry,
+    probe: bool,
+) -> Result<HostList, OrbitError> {
     let global_root = registry.global_root();
     let local = require_local(registry)?;
     let mut hosts = vec![local_row(global_root, local)];
     let mut remotes = registry.hosts().entries().iter().collect::<Vec<_>>();
     remotes.sort_by_key(|target| target.name.to_ascii_lowercase());
     hosts.extend(in_parallel(&remotes, |target| {
-        remote_row(target, &local.id, probe)
+        ports.probe.remote_row(target, &local.id, probe)
     }));
     Ok(HostList {
         host_file: hosts_path(global_root),
@@ -43,12 +54,17 @@ pub fn list_registered_hosts(registry: &HostRegistry, probe: bool) -> Result<Hos
 
 /// One host by name or `machine_id`, probed as in [`list_hosts`], with what
 /// on this machine depends on it.
-pub fn show_host(global_root: &Path, selector: &str) -> Result<HostDetail, OrbitError> {
-    show_registered_host(&load_host_registry(global_root)?, selector)
+pub fn show_host(
+    ports: Ports<'_>,
+    global_root: &Path,
+    selector: &str,
+) -> Result<HostDetail, OrbitError> {
+    show_registered_host(ports, &load_host_registry(global_root)?, selector)
 }
 
 /// [`show_host`] over an already loaded host file.
 pub fn show_registered_host(
+    ports: Ports<'_>,
     registry: &HostRegistry,
     selector: &str,
 ) -> Result<HostDetail, OrbitError> {
@@ -60,18 +76,49 @@ pub fn show_registered_host(
             dependents: None,
         },
         ResolvedHost::Entry(entry) => HostDetail {
-            host: remote_row(entry, &local.id, true),
-            dependents: Some(host_dependents(global_root, &entry.machine_id)?),
+            host: ports.probe.remote_row(entry, &local.id, true),
+            dependents: Some(host_dependents(
+                ports.pull_drains,
+                global_root,
+                &entry.machine_id,
+            )?),
         },
     })
 }
 
-pub(super) fn require_local(registry: &HostRegistry) -> Result<&MachineIdentity, OrbitError> {
+/// This machine's identity in the host file, or the refusal to run `orbit init`.
+pub fn require_local(registry: &HostRegistry) -> Result<&MachineIdentity, OrbitError> {
     registry.local().ok_or_else(|| {
         OrbitError::InvalidInput(
             "this machine has no [machine] identity yet; run `orbit init` first".to_string(),
         )
     })
+}
+
+/// A registered remote host's row from its stored fields alone, before any
+/// live probe.
+pub fn entry_row(target: &HostEntry) -> HostRow {
+    HostRow {
+        name: target.name.clone(),
+        machine_id: target.machine_id.clone(),
+        ssh: Some(target.ssh.clone()),
+        task_prefix: Some(target.task_prefix.clone()),
+        local: false,
+        legacy: false,
+        reachable: None,
+        offline: target
+            .offline
+            .as_ref()
+            .filter(|mark| mark.active_at(chrono::Utc::now()))
+            .cloned(),
+        error: None,
+        binary_version: None,
+        protocol_fingerprint: None,
+        host_os: target.host_os.map(|os| os.as_str().to_string()),
+        skew: false,
+        skew_fields: Vec::new(),
+        workspaces: Vec::new(),
+    }
 }
 
 fn local_row(global_root: &Path, identity: &MachineIdentity) -> HostRow {

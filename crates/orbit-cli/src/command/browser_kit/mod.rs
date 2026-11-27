@@ -1,6 +1,6 @@
 //! `orbit config browser-kit` — the headless browser kit workers check UIs with.
 //!
-//! Each subcommand calls `orbit_cmd::browser_kit` and opens no workspace
+//! Each subcommand calls `orbit_core::app::host::browser_kit` and opens no workspace
 //! runtime: the kit belongs to the host user, not to a repository.
 
 mod command;

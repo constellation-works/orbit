@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_core::app::host::{local_binary_version, local_protocol_fingerprint};
 use orbit_mcp::federated::{
     DEFAULT_PROBE_TIMEOUT, DEFAULT_ROUTED_DELIVERY_TIMEOUT, Destination, DestinationProbe,
     SshDestinationProbe,
@@ -37,14 +38,6 @@ pub fn local_host_facts(global_root: &Path, machine_id: &str) -> HostFacts {
     }
 }
 
-pub(super) fn local_binary_version() -> &'static str {
-    orbit_core::application::distributed::owner_binary_version()
-}
-
-pub(super) fn local_protocol_fingerprint() -> &'static str {
-    orbit_store::contract::distributed_drain_protocol_fingerprint()
-}
-
 /// Open the session federated serve uses (`ssh -T -- <target> orbit mcp
 /// serve --remote-caller-machine-id <local id>`) within the federated probe
 /// budget and read the host's discovery envelope. Read-only, with ordinary
@@ -64,31 +57,6 @@ pub(super) fn probe_ssh(ssh: &str, caller_machine_id: &str) -> Result<LiveHost, 
     Ok(LiveHost {
         facts: snapshot.host,
         workspaces: snapshot.workspaces,
-    })
-}
-
-/// Run `probe` over every item at once, each within its own budget, so one
-/// unreachable host never holds the others. Results keep the input order.
-pub(super) fn in_parallel<T, R>(items: &[T], probe: impl Fn(&T) -> R + Sync) -> Vec<R>
-where
-    T: Sync,
-    R: Send,
-{
-    std::thread::scope(|scope| {
-        let handles = items
-            .iter()
-            .map(|item| {
-                let probe = &probe;
-                scope.spawn(move || probe(item))
-            })
-            .collect::<Vec<_>>();
-        handles
-            .into_iter()
-            .map(|handle| match handle.join() {
-                Ok(result) => result,
-                Err(panic) => std::panic::resume_unwind(panic),
-            })
-            .collect()
     })
 }
 

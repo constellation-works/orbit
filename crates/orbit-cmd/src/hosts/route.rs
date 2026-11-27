@@ -19,7 +19,7 @@ use orbit_registry::hosts::{
 };
 use orbit_registry::workspace_registry::{load_registry_from_read_only, registry_path_for};
 
-use super::require_local;
+use orbit_core::app::host::require_local;
 
 /// Where a call that addresses one task by id goes.
 #[derive(Debug, Clone, PartialEq, Eq)]

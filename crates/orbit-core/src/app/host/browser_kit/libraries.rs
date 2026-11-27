@@ -16,9 +16,9 @@ use std::time::Duration;
 
 use super::host::{find_on_path, run_interactive, run_probe, run_streaming};
 use super::install::LibraryOutcome;
+use crate::bootstrap::browser_kit::KitLayout;
 use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
 use orbit_common::{Env, OrbitError};
-use orbit_core::bootstrap::browser_kit::KitLayout;
 
 const PROBE_DEADLINE: Duration = Duration::from_secs(60);
 /// Packages a server without fonts needs so Chromium does not crash in

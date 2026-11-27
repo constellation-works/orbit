@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use clap::Args;
-use orbit_cmd::hosts;
+use orbit_core::app::host::Command;
 
-use super::support::change_payload;
+use super::support::run;
 use crate::command::CommandOut;
 
 #[derive(Args)]
@@ -21,9 +21,9 @@ pub struct HostAddArgs {
 }
 
 pub(super) fn execute(args: HostAddArgs, global_root: &Path) -> CommandOut {
-    change_payload(hosts::add_host(
-        global_root,
-        &args.ssh_target,
-        args.name.as_deref(),
-    )?)
+    run(Command::Add {
+        global_root: global_root.to_path_buf(),
+        ssh: args.ssh_target,
+        name: args.name,
+    })
 }

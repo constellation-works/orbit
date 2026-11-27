@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_HOST_EDIT;
 use orbit_common::{HostRegistryCode, OrbitError};
+use orbit_core::app::host;
 use orbit_registry::hosts::validated_host_root;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -130,7 +131,11 @@ pub(super) async fn list_hosts(
                 None => failure("internal_error", "host file not loaded".into(), None),
             });
         };
-        let list = orbit_cmd::hosts::list_registered_hosts(&snapshot.registry, query.probe)?;
+        let list = host::list_registered_hosts(
+            orbit_cmd::hosts::ports(),
+            &snapshot.registry,
+            query.probe,
+        )?;
         let mut body = to_json(&list)?;
         if let Some(object) = body.as_object_mut() {
             object.insert("generation".into(), json!(snapshot.generation));
@@ -158,7 +163,8 @@ pub(super) async fn show_host(
                 None => failure("internal_error", "host file not loaded".into(), None),
             });
         };
-        let detail = orbit_cmd::hosts::show_registered_host(&snapshot.registry, &host)?;
+        let detail =
+            host::show_registered_host(orbit_cmd::hosts::ports(), &snapshot.registry, &host)?;
         Ok(Json(to_json(&detail)?).into_response())
     })
     .await
@@ -178,7 +184,7 @@ pub(super) async fn add_host(
             .as_deref()
             .map(str::trim)
             .filter(|name| !name.is_empty());
-        let change = orbit_cmd::hosts::add_host(&root, &body.ssh, name)?;
+        let change = host::add_host(orbit_cmd::hosts::ports(), &root, &body.ssh, name)?;
         Ok((StatusCode::CREATED, Json(to_json(&change)?)).into_response())
     })
     .await
@@ -193,7 +199,7 @@ pub(super) async fn rename_host(
     let root = state.global_root().to_path_buf();
     host_blocking("host rename", move || {
         let root = validated_host_root(&root)?;
-        let change = orbit_cmd::hosts::rename_host(&root, &host, &body.name)?;
+        let change = host::rename_host(&root, &host, &body.name)?;
         Ok(Json(to_json(&change)?).into_response())
     })
     .await
@@ -213,14 +219,15 @@ pub(super) async fn remove_host(
     let root = state.global_root().to_path_buf();
     host_blocking("host remove", move || {
         let root = validated_host_root(&root)?;
-        match orbit_cmd::hosts::remove_host(&root, &host, query.force) {
+        match host::remove_host(orbit_cmd::hosts::ports(), &root, &host, query.force) {
             Ok(change) => Ok(Json(to_json(&change)?).into_response()),
             Err(error) if error.host_registry_code() == Some(HostRegistryCode::HostInUse) => {
-                let dependents = orbit_cmd::hosts::dependents_of(&root, &host)
-                    .ok()
-                    .flatten()
-                    .map(|dependents| to_json(&dependents))
-                    .transpose()?;
+                let dependents =
+                    host::dependents_of(orbit_cmd::hosts::ports().pull_drains, &root, &host)
+                        .ok()
+                        .flatten()
+                        .map(|dependents| to_json(&dependents))
+                        .transpose()?;
                 Ok(failure(
                     host_error_code(&error),
                     error.to_string(),

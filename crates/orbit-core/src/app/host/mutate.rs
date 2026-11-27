@@ -9,8 +9,10 @@ use orbit_registry::hosts::{HostEntry, ResolvedHost, load_host_registry, validat
 use orbit_types::identity::{HostOffline, validate_machine_name};
 use serde::Serialize;
 
-use super::probe::{LiveHost, probe_ssh};
-use super::{HostDependents, HostRow, host_dependents, remote_row, require_local};
+use super::{
+    HostDependents, HostRow, Ports, ProbedHost, entry_row, host_dependents, local_binary_version,
+    require_local,
+};
 
 /// What one `orbit host` mutation wrote.
 #[derive(Debug, Clone, Serialize)]
@@ -59,6 +61,7 @@ impl From<HostEntry> for HostChangeEntry {
 /// Probe `ssh`, validate the would-be entry, and register it. Writes nothing
 /// on the remote and nothing here unless every check passes.
 pub fn add_host(
+    ports: Ports<'_>,
     global_root: &Path,
     ssh: &str,
     name: Option<&str>,
@@ -66,15 +69,14 @@ pub fn add_host(
     validate_ssh_target(ssh)?;
     let registry = load_host_registry(global_root)?;
     let local = require_local(&registry)?;
-    let live = probe_ssh(ssh, &local.id).map_err(|error| match error {
+    let live = ports.probe.probe_ssh(ssh, &local.id).map_err(|error| match error {
         OrbitError::UnreachableDestination(message) => OrbitError::UnreachableDestination(format!(
             "{message}; check that `ssh {ssh}` logs in without a prompt and that `orbit` is on \
              the remote PATH"
         )),
         other => other,
     })?;
-    let facts = &live.facts;
-    if facts.machine_id == local.id {
+    if live.machine_id == local.id {
         return Err(OrbitError::host_registry(
             HostRegistryCode::HostIsLocal,
             format!(
@@ -88,17 +90,17 @@ pub fn add_host(
         .hosts()
         .entries()
         .iter()
-        .find(|entry| entry.machine_id == facts.machine_id)
+        .find(|entry| entry.machine_id == live.machine_id)
     {
         return Err(OrbitError::host_registry(
             HostRegistryCode::HostExists,
             format!(
                 "{} is already registered as '{}' (ssh {}); use `orbit host rename` to rename it",
-                facts.machine_id, existing.name, existing.ssh
+                live.machine_id, existing.name, existing.ssh
             ),
         ));
     }
-    let Some(task_prefix) = facts.task_prefix.clone() else {
+    let Some(task_prefix) = live.task_prefix.clone() else {
         return Err(too_old(ssh, &live));
     };
     if task_prefix == local.task_prefix {
@@ -108,24 +110,21 @@ pub fn add_host(
                 "'{ssh}' is {}, a different machine, but it mints task ids with this machine's \
                  own prefix {task_prefix}. A task id must name exactly one host, and a prefix is \
                  fixed when `orbit init` runs, so that host cannot be registered here",
-                facts.machine_id
+                live.machine_id
             ),
         ));
     }
     let name = match name {
         Some(name) => name.trim().to_string(),
-        None => facts
-            .machine_name
-            .clone()
-            .unwrap_or_else(|| ssh.to_string()),
+        None => live.machine_name.clone().unwrap_or_else(|| ssh.to_string()),
     };
     validate_machine_name(&name)?;
     let entry = HostEntry {
         name,
-        machine_id: facts.machine_id.clone(),
+        machine_id: live.machine_id.clone(),
         ssh: ssh.to_string(),
         task_prefix,
-        host_os: facts.host_os,
+        host_os: live.host_os,
         offline: None,
     };
     let mut entries = registry.hosts().entries().to_vec();
@@ -177,7 +176,7 @@ pub fn set_host_offline(
             .map(|until| until.with_timezone(&Utc));
         Some(HostOffline {
             reason: reason.trim().to_string(),
-            set_by: os_login_name(&orbit_core::composition::composition_env())
+            set_by: os_login_name(&crate::composition::composition_env())
                 .unwrap_or_else(|| local.name.clone()),
             since: Utc::now(),
             until,
@@ -248,6 +247,7 @@ pub fn rename_host(
 /// Remove a remote entry. Refused while a local replica checkout or a pull
 /// drain routes to the host, unless `force`.
 pub fn remove_host(
+    ports: Ports<'_>,
     global_root: &Path,
     selector: &str,
     force: bool,
@@ -264,7 +264,7 @@ pub fn remove_host(
         ResolvedHost::Entry(entry) => HostChangeEntry::from(entry.clone()),
     };
     let machine_id = &removed.machine_id;
-    let dependents = host_dependents(global_root, machine_id)?;
+    let dependents = host_dependents(ports.pull_drains, global_root, machine_id)?;
     if !dependents.is_empty() && !force {
         return Err(OrbitError::host_registry(
             HostRegistryCode::HostInUse,
@@ -293,18 +293,14 @@ pub fn remove_host(
     })
 }
 
-fn remote_row_from(entry: &HostEntry, live: LiveHost) -> HostRow {
-    let mut row = remote_row(entry, "", false);
+fn remote_row_from(entry: &HostEntry, live: ProbedHost) -> HostRow {
+    let mut row = entry_row(entry);
     row.reachable = Some(true);
-    row.skew_fields = super::skew_fields(&live.facts);
-    row.skew = !row.skew_fields.is_empty();
-    row.binary_version = live.facts.binary_version;
-    row.protocol_fingerprint = live.facts.protocol_fingerprint;
-    row.workspaces = live
-        .workspaces
-        .iter()
-        .map(|workspace| super::remote_workspace(workspace, &entry.machine_id))
-        .collect();
+    row.skew = !live.skew_fields.is_empty();
+    row.skew_fields = live.skew_fields;
+    row.binary_version = live.binary_version;
+    row.protocol_fingerprint = live.protocol_fingerprint;
+    row.workspaces = live.workspaces;
     row
 }
 
@@ -322,8 +318,8 @@ fn name_hint(error: OrbitError, hint: &str) -> OrbitError {
     }
 }
 
-fn too_old(ssh: &str, live: &LiveHost) -> OrbitError {
-    let message = match live.facts.binary_version.as_deref() {
+fn too_old(ssh: &str, live: &ProbedHost) -> OrbitError {
+    let message = match live.binary_version.as_deref() {
         Some(version) => format!(
             "'{ssh}' runs Orbit {version} but reported no task prefix; run `orbit init` on it \
              so it has a [machine] identity, then rerun"
@@ -331,7 +327,7 @@ fn too_old(ssh: &str, live: &LiveHost) -> OrbitError {
         None => format!(
             "'{ssh}' runs an Orbit that predates host identity (it reports no version or task \
              prefix); upgrade it to {} or later, then rerun",
-            super::local_binary_version()
+            local_binary_version()
         ),
     };
     OrbitError::host_registry(HostRegistryCode::HostTooOld, message)

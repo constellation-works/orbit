@@ -3,11 +3,11 @@
 
 use std::path::PathBuf;
 
-use orbit_common::{Env, OrbitError};
-use orbit_core::bootstrap::browser_kit::{
+use crate::bootstrap::browser_kit::{
     KitInspection, KitLayout, PIXEL_HELPER_PACKAGE, PIXEL_HELPER_VERSION, PLAYWRIGHT_VERSION,
     WORKER_ENV_NAMES,
 };
+use orbit_common::{Env, OrbitError};
 use serde::Serialize;
 
 use super::host::{find_on_path, require_host_operator};

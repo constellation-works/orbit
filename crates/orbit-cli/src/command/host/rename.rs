@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use clap::Args;
-use orbit_cmd::hosts;
+use orbit_core::app::host::Command;
 
-use super::support::change_payload;
+use super::support::run;
 use crate::command::CommandOut;
 
 #[derive(Args)]
@@ -17,5 +17,9 @@ pub struct HostRenameArgs {
 }
 
 pub(super) fn execute(args: HostRenameArgs, global_root: &Path) -> CommandOut {
-    change_payload(hosts::rename_host(global_root, &args.host, &args.new_name)?)
+    run(Command::Rename {
+        global_root: global_root.to_path_buf(),
+        host: args.host,
+        new_name: args.new_name,
+    })
 }
