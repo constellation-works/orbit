@@ -247,6 +247,14 @@ extensions:
           "path-injection",
           "manual",
         ]
+      # Task bundle files: ancestors may be symlinked (e.g. macOS /var), while
+      # the bundle directory itself and the leaf file must not be symlinks.
+      - [
+          "orbit_store::driver::file::task_bundle::bundle_io::validated_bundle_file_path",
+          "ReturnValue",
+          "path-injection",
+          "manual",
+        ]
   - addsTo:
       pack: codeql/rust-all
       extensible: barrierGuardModel
