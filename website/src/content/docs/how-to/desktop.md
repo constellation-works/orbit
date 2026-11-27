@@ -8,9 +8,9 @@ The Orbit desktop app is a native window and tray icon around the
 background, and notifies you when a task needs review or a run fails on any of
 your hosts.
 
-It is not the [MCP Apps control center](/how-to/mcp-apps/), which runs inside an
-MCP client, or the [Claude Code mod](/how-to/claude-code/), which draws in the
-terminal.
+The [MCP Apps control center](/how-to/mcp-apps/) runs inside an MCP client.
+The [Claude Code mod](/how-to/claude-code/) adds dashboard links to assistant
+replies.
 
 ## Install
 

@@ -21,7 +21,7 @@ the bundled `orbit-setup` and `orbit-orchestrate` skills.
 
 <ul class="orbit-index">
   <li><a href="/how-to/dashboard/"><span class="orbit-index-title">Dashboard</span><span class="orbit-index-desc">Approve and ship tasks, follow runs, run a drain and read analytics in a browser.</span></a></li>
-  <li><a href="/how-to/claude-code/"><span class="orbit-index-title">Claude Code mod</span><span class="orbit-index-desc">Act on tasks and follow runs inside Claude Code.</span></a></li>
+  <li><a href="/how-to/claude-code/"><span class="orbit-index-title">Claude Code mod</span><span class="orbit-index-desc">Open tasks and runs from assistant replies.</span></a></li>
   <li><a href="/how-to/desktop/"><span class="orbit-index-title">Desktop app</span><span class="orbit-index-desc">Run the dashboard in a native window with a tray and notifications.</span></a></li>
   <li><a href="/how-to/mcp-apps/"><span class="orbit-index-title">MCP Apps control center</span><span class="orbit-index-desc">Open the control center, a task or a run from an MCP client.</span></a></li>
 </ul>

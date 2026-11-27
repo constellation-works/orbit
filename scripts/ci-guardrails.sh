@@ -20,7 +20,7 @@ for workflow in "${workflow_files[@]}"; do
 done
 
 # Modes: the default full run (`make ci`); --fast (`make ci-fast`); the offline
-# file/metadata-only --static (`make ci-guards`); and the two
+# static checks (`make ci-guards`); and the two
 # parts of the split hosted workflow (.github/workflows/ci.yml). --checks runs
 # formatting, production Clippy, documentation, an Apple-target type-check
 # and the supply-chain gate.
@@ -496,7 +496,7 @@ skipped() {
     case "$name" in
       check-workflow-action-pins.sh | check-desktop-ui.sh | smoke-plugin-install.sh)
         # Network checks, Node behavior tests and scratch installations stay
-        # in --fast/full mode, outside the file/metadata-only lane.
+        # in --fast/full mode, outside the static lane.
         return 0
         ;;
     esac
@@ -708,6 +708,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/check-dashboard-css-literals.py"
   run_guard "$repo_root/scripts/check-dashboard-last-item-stretch.py"
   run_guard "$repo_root/scripts/sync-plugin-skills.sh" --check
+  run_guard node "$repo_root/plugin/hooks/mod/tests/linkify.mjs"
   run_guard "$repo_root/scripts/smoke-plugin-install.sh"
 
   # Fixture self-tests that assert no elapsed time or timeout and touch no real

@@ -1,102 +1,54 @@
 # Orbit mod for Claude Code
 
-The Orbit plugin's hooks module. In Claude Code it shows the workspace's
-tasks around the prompt and lets you act on them without leaving the
-session. Other agents load the plugin's skills and MCP server and ignore
-this folder.
+The mod links task and run IDs in assistant replies to the Orbit dashboard.
+It rewrites the displayed Markdown and leaves the stored transcript intact.
+IDs in code, URLs and existing links stay as written.
 
-## What it draws
+At session start it reads the local registry with
+`orbit host list --no-probe --json` and the dashboard origin with
+`orbit config get machine.web.public_url --scope global --json`. The two reads
+have a two-second timeout each. The registry includes local and remote prefixes
+stored on this machine. If the read fails, run links still work. Open a new
+session to pick up registry or address changes.
 
-- **Band**, above the prompt. Shows running, blocked, review, backlog and
-  proposed counts, and the task this session is working on. While a ship
-  is in flight, it shows the ship's position in the PR pipeline. The first
-  blocked task gets **Open** and **Rescue here** buttons. Below 80 columns,
-  or with `band` set to `compact`, the band is a single line.
-- **Status line**: the ship in flight (`orbit ⇡ ORB-12 · review 7/12`),
-  else the active task (`orbit ◉ ORB-12 · in-progress`), else the blocked
-  count when there is one.
-- **Toasts**: a task moves to blocked, review or done, or a ship lands.
-- **Orbit pane**, with three tabs:
-  - **Board.** One lane per status. Pick a card to see its acceptance
-    criteria and the actions its status allows. Each lane shows at most
-    20 cards; `/orbit-board <id>` includes the selected card in that window
-    and opens its lane. Folding that lane clears its selection:
-    - proposed: approve, reject
-    - backlog: ship, work here
-    - in-progress: track the run
-    - review: accept to done
-    - blocked: rescue here
-  - **Ship.** First a preflight checks that the task is in backlog, its
-    dependencies are done, no other ship is running, and its files are
-    free of other tasks' locks (`orbit run readiness`). Then
-    `orbit run ship` launches a coordinator. The view follows its recorded
-    child dispatches to the task's `task_pr_pipeline` run for the 12-step
-    track, retrying while delivery is waiting to start. The coordinator's
-    terminal state decides whether the ship landed, failed, was held awaiting
-    review evidence, or was skipped; each ends tracking. On desktop
-    and VS Code the trajectory is drawn as an SVG. Only steps finished with
-    a successful outcome count as completed (●). Failed or error outcomes
-    show ✗ at the failed step; held, cancelled, or unrecognized finishes
-    show a stopped step (■). Skipped steps show ↷ and do not add to the
-    completed count. A later start or finish replaces that step's earlier state.
-- **Task cards.** A prompt that mentions a known task id, such as
-  `ORB-123`, carries that task's card (status, priority, criteria) as
-  context.
-- **Commit trailer.** While the session works a task (after **Work here**,
-  **Rescue here**, or an `orbit_task_update` to in-progress), a Bash
-  `git commit` gains `--trailer 'Task: <id>'`. Only a command that starts
-  with `git commit` counts (after `;`, `&&`, `|`, `(` or a newline, including
-  a backslash continuation after a separator). Conditions such as `if`,
-  `elif`, `while` and `until`, and negation with `!`, also allow a commit.
-  Heredoc bodies, `git commit-tree` and quoted text such as
-  `--grep="git commit"` are left alone, as is a commit that already has a
-  trailer or uses `--amend`.
+Task links use `/t/<id>` and the dashboard resolves the prefix. Run links use
+`/r/<id>` and open a run on the machine serving the dashboard. The default
+origin is `http://localhost:7878`. Set `machine.web.public_url` to the actual
+origin when using a remote dashboard or another port.
 
-Approve runs as soon as you press it. Accept, reject and ship ask for
-confirmation first. **Work here** and **Rescue here** submit a prompt to
-this session. Nothing the mod does dispatches work by itself.
+## Verification
 
-## Commands
-
-| Command | Does |
-|---|---|
-| `/orbit-board [id]` | Opens the board, with the task selected when an id is given |
-| `/orbit-ship [id]` | Opens the ship view, with the task's preflight when an id is given |
-| `/orbit-band` | Shows or hides the band |
-
-## Options
-
-Set these in the plugin's settings (`/plugin`, then Orbit, then configure).
-
-| Option | Default | Meaning |
-|---|---|---|
-| `ownerHost` | empty | SSH host that owns this workspace, for a checkout that is a replica or isn't registered on this machine. Reads and writes then run `orbit` there over `ssh -o BatchMode=yes`. Empty falls back to the hosts Orbit's federated MCP uses (registered with `orbit host add` in `~/.orbit/hosts.toml`); with several, the first that answers for the workspace. |
-| `refreshMinutes` | 3 | How often the band refreshes. It also refreshes after a turn that ends at least 30 s after the last read. |
-| `band` | `on` | `on`, `compact` (always one line), or `off` |
-| `commitTrailer` | true | Add the `Task:` trailer to commits made while working a task |
-
-## How it reads Orbit
-
-Every read and write is an `orbit` CLI call scoped with `--workspace`.
-The mod looks for the binary on `PATH`, then in `~/.orbit/bin`. It finds
-the workspace with `orbit workspace show --format json` run in the
-session's directory:
-
-- An owner checkout is read locally.
-- A replica, or an unregistered checkout whose git root is named after a
-  workspace, is read through `ownerHost`, or through the federated MCP's
-  destinations when `ownerHost` is empty.
-
-## Developing
+Run the pure Markdown cases with Node 22.18 or later from the repository root.
 
 ```bash
-cd plugin
-claude plugin validate .
-claude plugin test .
+node plugin/hooks/mod/tests/linkify.mjs
+claude plugin validate plugin
 ```
 
-The tests in `tests/` answer `orbit` with a fake workspace and drive the
-band and pane on the terminal and desktop surfaces. Every function that
-takes `$` lives in `register.tsx`, because the engine follows `$` only
-into functions declared in the same file. `model.ts` and `cli.ts` are
-pure. `views/` draws from plain data and an `Actions` table.
+`make ci-guards` runs the Node cases without Claude Code.
+
+### Manual Claude Code QA
+
+1. Load the base plugin and the candidate in separate sessions in the same
+   initialized test workspace. For the terminal, use
+   `claude --plugin-dir /path/to/checkout/plugin`. On each available Claude
+   surface, ask for a reply with a task ID from the local registry, one with a
+   registered remote prefix, `STD-12`, and a known run ID. Ask for the same IDs
+   in a fenced command and one already linked in Markdown. Use a known task
+   and run for click-through.
+2. Check that the candidate draws prose IDs as links with the original labels.
+   Open the local and remote task links and confirm the dashboard selects the
+   right task and host. Open the run link and confirm it selects the run on
+   the serving machine. The unknown prefix, code and pre-existing link should
+   be unchanged. Capture the same transcript and prompt area before and after
+   in each supported theme. Check that the band, status entry and slash
+   commands are gone.
+3. Start fresh sessions with an unset and a configured
+   `machine.web.public_url`. Check for the local and configured origins,
+   respectively. With a test CLI that fails the host list but serves the
+   configured origin, check that run links still use that origin and task IDs
+   stay plain. Record the commands at startup and leave the session idle past
+   the former three-minute poll. Expect one host-list read and one config read,
+   with no later mod commands.
+4. Open a fresh session outside an initialized workspace. Check that Claude
+   still receives the session-start workspace setup guidance.
