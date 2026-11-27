@@ -13,6 +13,37 @@ use orbit_engine::PluginBrokerHandle;
 
 use super::{Confined, Node, ResolvedFsProfile, fs, wait_for};
 
+const OUTER: &str = "claimed_review_bridge_sandbox::cleanup::abrupt_fixture";
+const ROOT_ENV: &str = "ORBIT_CLAIMED_REVIEW_CLEANUP_ROOT";
+/// The error the fault-injecting broker returns from sandbox authentication.
+const INJECTED: &str = "injected broker bind failure";
+/// Locks the blocked provider and its descendant hold while they run. Exit
+/// closes a process's descriptors and releases its lock, so a free lock
+/// proves its holder is gone, through Bubblewrap's PID namespace and new
+/// session, which put the descendant in no group of ours, as under Seatbelt.
+const HOLDERS: [&str; 2] = ["provider.lock", "descendant.lock"];
+
+// The descendant takes its lock and acknowledges that it is running before
+// the provider takes its own and writes readiness. Both then block on a
+// signal, with no timing load. The case directory is the last argument, so
+// the program runs inline or as the script `Confined::spawn` confines.
+const BLOCKED_PROVIDER: &str = r#"import fcntl, os, signal, subprocess, sys
+case = sys.argv[-1]
+child = subprocess.Popen([sys.executable, '-c',
+    'import fcntl, signal, sys\n'
+    'held = open(sys.argv[1], "w")\n'
+    'fcntl.flock(held, fcntl.LOCK_EX)\n'
+    'print("ready", flush=True)\n'
+    'signal.pause()\n',
+    os.path.join(case, 'descendant.lock')], stdout=subprocess.PIPE)
+assert child.stdout.readline() == b'ready\n'
+held = open(os.path.join(case, 'provider.lock'), 'w')
+fcntl.flock(held, fcntl.LOCK_EX)
+with open(os.path.join(case, 'ready'), 'w') as marker:
+    marker.write('ready')
+signal.pause()
+"#;
+
 /// Sandbox launchers create a group led by the returned child's PID. Own it
 /// before registration, broker binding or any readiness assertion can fail.
 pub(super) struct ProviderChild {
@@ -85,36 +116,32 @@ impl Drop for ProviderChild {
     }
 }
 
-const OUTER: &str = "claimed_review_bridge_sandbox::cleanup::abrupt_fixture";
-const ROOT_ENV: &str = "ORBIT_CLAIMED_REVIEW_CLEANUP_ROOT";
-/// The error the fault-injecting broker returns from sandbox authentication.
-const INJECTED: &str = "injected broker bind failure";
-/// Locks the blocked provider and its descendant hold while they run. Exit
-/// closes a process's descriptors and releases its lock, so a free lock
-/// proves its holder is gone, through Bubblewrap's PID namespace and new
-/// session, which put the descendant in no group of ours, as under Seatbelt.
-const HOLDERS: [&str; 2] = ["provider.lock", "descendant.lock"];
+/// A broker that records the sandbox it authenticates. With `fail`, it
+/// waits until the provider and its descendant run, then refuses: fault
+/// injection into the bridge fixture's own `Confined::spawn`, after its
+/// sandbox launch and worker registration and before it returns.
+struct InjectedBroker {
+    socket: PathBuf,
+    case: PathBuf,
+    fail: bool,
+    pid: AtomicU32,
+}
 
-// The descendant takes its lock and acknowledges that it is running before
-// the provider takes its own and writes readiness. Both then block on a
-// signal, with no timing load. The case directory is the last argument, so
-// the program runs inline or as the script `Confined::spawn` confines.
-const BLOCKED_PROVIDER: &str = r#"import fcntl, os, signal, subprocess, sys
-case = sys.argv[-1]
-child = subprocess.Popen([sys.executable, '-c',
-    'import fcntl, signal, sys\n'
-    'held = open(sys.argv[1], "w")\n'
-    'fcntl.flock(held, fcntl.LOCK_EX)\n'
-    'print("ready", flush=True)\n'
-    'signal.pause()\n',
-    os.path.join(case, 'descendant.lock')], stdout=subprocess.PIPE)
-assert child.stdout.readline() == b'ready\n'
-held = open(os.path.join(case, 'provider.lock'), 'w')
-fcntl.flock(held, fcntl.LOCK_EX)
-with open(os.path.join(case, 'ready'), 'w') as marker:
-    marker.write('ready')
-signal.pause()
-"#;
+impl PluginBrokerHandle for InjectedBroker {
+    fn socket_path(&self) -> &Path {
+        &self.socket
+    }
+
+    fn bind_sandbox(&self, sandbox_pid: u32) -> Result<(), OrbitError> {
+        self.pid.store(sandbox_pid, Ordering::SeqCst);
+        if !self.fail {
+            return Ok(());
+        }
+        wait_for(&self.case.join("ready"), FIXTURE_STEP_DEADLINE);
+        assert_holders_running(&self.case);
+        Err(OrbitError::Execution(INJECTED.to_string()))
+    }
+}
 
 fn raw_provider(case: &Path) -> ProviderChild {
     ProviderChild::new(
@@ -334,33 +361,6 @@ fn ready_provider_transfers_to_supervision_and_returns_its_report() {
     );
     assert_reaped(pid);
     assert_group_gone(pid);
-}
-
-/// A broker that records the sandbox it authenticates. With `fail`, it
-/// waits until the provider and its descendant run, then refuses: fault
-/// injection into the bridge fixture's own `Confined::spawn`, after its
-/// sandbox launch and worker registration and before it returns.
-struct InjectedBroker {
-    socket: PathBuf,
-    case: PathBuf,
-    fail: bool,
-    pid: AtomicU32,
-}
-
-impl PluginBrokerHandle for InjectedBroker {
-    fn socket_path(&self) -> &Path {
-        &self.socket
-    }
-
-    fn bind_sandbox(&self, sandbox_pid: u32) -> Result<(), OrbitError> {
-        self.pid.store(sandbox_pid, Ordering::SeqCst);
-        if !self.fail {
-            return Ok(());
-        }
-        wait_for(&self.case.join("ready"), FIXTURE_STEP_DEADLINE);
-        assert_holders_running(&self.case);
-        Err(OrbitError::Execution(INJECTED.to_string()))
-    }
 }
 
 #[test]

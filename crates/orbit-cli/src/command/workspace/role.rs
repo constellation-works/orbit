@@ -36,6 +36,23 @@ pub struct WorkspaceRoleArgs {
     owner: Option<String>,
 }
 
+impl ExecuteCore for WorkspaceRoleArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::RoleAssigned(assignment) = exec(
+            core,
+            Command::Role {
+                workspace: self.workspace,
+                role: self.role.into(),
+                owner: self.owner,
+            },
+        )?
+        else {
+            unreachable!("workspace role returned an unrelated outcome");
+        };
+        Ok(Payload::detail(role_json(&assignment), role_text(&assignment)).into())
+    }
+}
+
 fn role_json(assignment: &RoleAssignment) -> serde_json::Value {
     json!({
         "workspace_id": assignment.workspace_id,
@@ -55,22 +72,5 @@ fn role_text(assignment: &RoleAssignment) -> String {
             "workspace '{}' local role set to {}",
             assignment.workspace_id, assignment.role
         ),
-    }
-}
-
-impl ExecuteCore for WorkspaceRoleArgs {
-    fn execute(self, core: &Core) -> CommandOut {
-        let Outcome::RoleAssigned(assignment) = exec(
-            core,
-            Command::Role {
-                workspace: self.workspace,
-                role: self.role.into(),
-                owner: self.owner,
-            },
-        )?
-        else {
-            unreachable!("workspace role returned an unrelated outcome");
-        };
-        Ok(Payload::detail(role_json(&assignment), role_text(&assignment)).into())
     }
 }

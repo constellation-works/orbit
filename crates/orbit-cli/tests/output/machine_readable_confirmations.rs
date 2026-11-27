@@ -200,6 +200,39 @@ fail_activation() {{
     }
 }
 
+#[cfg(unix)]
+impl Fixture {
+    fn clock_unit_path(&self) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            self.home.join("Library/LaunchAgents/com.orbit.sweep.plist")
+        } else {
+            self.home.join(".config/systemd/user/orbit-sweep.timer")
+        }
+    }
+
+    fn assert_native_cadence(&self, cadence: u64) {
+        let unit = fs::read_to_string(self.clock_unit_path()).expect("read installed clock unit");
+        let expected = if cfg!(target_os = "macos") {
+            format!("<integer>{cadence}</integer>")
+        } else {
+            format!("OnUnitActiveSec={cadence}s")
+        };
+        assert!(unit.lines().any(|line| line.trim() == expected), "{unit}");
+    }
+
+    fn clock_manager_commands(&self) -> Vec<String> {
+        fs::read_to_string(self.home.join(".fake-clock-commands"))
+            .expect("read fake manager commands")
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn set_clock_cadence(&self, cadence: &str) -> Value {
+        self.json_with_fake_clock_manager(&["clock", "set", "--cadence-seconds", cadence, "--json"])
+    }
+}
+
 fn fixture_orbit(work: &Path, home: &Path) -> Command {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
@@ -289,39 +322,6 @@ fn config_path_and_set_print_json_documents() {
     assert_eq!(set["scope"], "global");
     let value = fixture.json(&["config", "get", "retention.audit_days", "--format", "json"]);
     assert_eq!(value["value"], 45);
-}
-
-#[cfg(unix)]
-impl Fixture {
-    fn clock_unit_path(&self) -> PathBuf {
-        if cfg!(target_os = "macos") {
-            self.home.join("Library/LaunchAgents/com.orbit.sweep.plist")
-        } else {
-            self.home.join(".config/systemd/user/orbit-sweep.timer")
-        }
-    }
-
-    fn assert_native_cadence(&self, cadence: u64) {
-        let unit = fs::read_to_string(self.clock_unit_path()).expect("read installed clock unit");
-        let expected = if cfg!(target_os = "macos") {
-            format!("<integer>{cadence}</integer>")
-        } else {
-            format!("OnUnitActiveSec={cadence}s")
-        };
-        assert!(unit.lines().any(|line| line.trim() == expected), "{unit}");
-    }
-
-    fn clock_manager_commands(&self) -> Vec<String> {
-        fs::read_to_string(self.home.join(".fake-clock-commands"))
-            .expect("read fake manager commands")
-            .lines()
-            .map(str::to_owned)
-            .collect()
-    }
-
-    fn set_clock_cadence(&self, cadence: &str) -> Value {
-        self.json_with_fake_clock_manager(&["clock", "set", "--cadence-seconds", cadence, "--json"])
-    }
 }
 
 #[cfg(unix)]

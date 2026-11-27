@@ -71,23 +71,6 @@ impl RoutineCommand {
     }
 }
 
-fn selected_global_root(
-    root_override: Option<&Path>,
-    env: &Env,
-    resolved: &Resolved,
-) -> Result<std::path::PathBuf, OrbitError> {
-    let has_env_override = env
-        .orbit_root()
-        .and_then(OsStr::to_str)
-        .is_some_and(|root| !root.trim().is_empty());
-    if root_override.is_some() || has_env_override {
-        let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
-        return RegisteredRuntimeFactory::resolve_roots_for_cwd(&cwd, root_override)
-            .map(|roots| roots.global_root);
-    }
-    resolved.global_orbit_dir().map(Path::to_path_buf)
-}
-
 #[derive(Subcommand)]
 pub enum RoutineSubcommand {
     /// List routines with toggles, next-due, and last fire, optionally for one workspace
@@ -126,4 +109,21 @@ impl RoutineSubcommand {
             Self::Init(args) => args.execute_without_runtime(global_root),
         }
     }
+}
+
+fn selected_global_root(
+    root_override: Option<&Path>,
+    env: &Env,
+    resolved: &Resolved,
+) -> Result<std::path::PathBuf, OrbitError> {
+    let has_env_override = env
+        .orbit_root()
+        .and_then(OsStr::to_str)
+        .is_some_and(|root| !root.trim().is_empty());
+    if root_override.is_some() || has_env_override {
+        let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
+        return RegisteredRuntimeFactory::resolve_roots_for_cwd(&cwd, root_override)
+            .map(|roots| roots.global_root);
+    }
+    resolved.global_orbit_dir().map(Path::to_path_buf)
 }

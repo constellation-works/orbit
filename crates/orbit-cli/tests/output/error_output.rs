@@ -87,6 +87,9 @@ impl Fixture {
     }
 }
 
+/// An argv clap rejects, and the environment it runs under.
+type UsageCase<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
+
 fn orbit_command(
     cwd: &Path,
     home: &Path,
@@ -406,9 +409,6 @@ fn friction_mutations_with_malformed_id_or_invalid_field_return_invalid_input_an
         assert_eq!(error["code"], "invalid_input", "{args:?}: {error}");
     }
 }
-
-/// An argv clap rejects, and the environment it runs under.
-type UsageCase<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
 
 #[test]
 fn a_usage_error_in_json_mode_is_a_json_object_and_exits_2() {

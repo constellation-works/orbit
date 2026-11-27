@@ -18,6 +18,117 @@ use crate::isolated_cli_fixture::Fixture;
 const SETTINGS_FILE: &str = ".orbit-auto-task-settings.json";
 const MANIFEST_FILE: &str = ".orbit-managed-assets.json";
 
+const RUN_FAILURE: &str = "run-failure-patterns";
+
+const DELIVERY_TRIGGER: &str = concat!(
+    r#"{"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"#,
+    r#""coverage":"landed_code_review_v1","max_items":20,"retries":0}"#,
+);
+
+const UNRELATED_TRIGGER: &str = concat!(
+    r#"{"branch":"unrelated-delivery","threshold":1,"max_wait_minutes":60,"#,
+    r#""coverage":"landed_code_review_v1","max_items":20,"retries":0}"#,
+);
+
+/// Foreground `run_job_v2_from_yaml` refuses auto-task steps. Submit the job
+/// the way an operator does, and let this process's substitute worker execute
+/// the detached run until the step parks.
+const AUTO_TASK_JOB_WORKER: &str = "auto_task_settings_cli::execute_submitted_auto_task_job";
+
+const AUTO_TASK_WORKER_RUN_ENV: &str = "ORBIT_TEST_AUTO_TASK_RUN";
+
+/// How long a submitted auto-task step may take to park before the fixture
+/// terminates its worker.
+const AUTO_TASK_PARK_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Records the worker's own PID before `exec`, so the fixture knows the
+/// identity of the child it launched even if the worker stalls before it
+/// claims its run (the run records a PID only on that claim).
+const AUTO_TASK_WORKER_LAUNCH: &str = r#"echo $$ > "$0.tmp" && mv "$0.tmp" "$0" && exec "$@""#;
+
+/// Kills and reaps an unrelated bystander process on drop.
+struct Bystander(std::process::Child);
+
+impl Drop for Bystander {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Owns the detached substitute worker of one submitted run. Termination is
+/// bound to the PID the launched worker recorded for itself, never to a
+/// command-line pattern, so it cannot signal another run's worker. Dropping the
+/// guard (including on unwind) terminates and reaps that worker.
+struct AutoTaskWorkerGuard<'a> {
+    runtime: &'a orbit_core::OrbitRuntime,
+    run_id: String,
+    pid_file: PathBuf,
+}
+
+impl AutoTaskWorkerGuard<'_> {
+    /// The launched worker's PID, once it has recorded one.
+    fn worker_pid(&self, wait: Duration) -> Option<u32> {
+        let deadline = Instant::now() + wait;
+        loop {
+            let recorded = fs::read_to_string(&self.pid_file)
+                .ok()
+                .and_then(|pid| pid.trim().parse().ok());
+            if let Some(pid) = recorded {
+                return Some(pid);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// SIGKILL the worker's process group if this process has not reaped it
+    /// yet, then wait for the launch observer to reap it. Returns whether the
+    /// worker is reaped. Idempotent, and never panics (it also runs while
+    /// unwinding).
+    fn terminate_and_reap(&self) -> bool {
+        let Some(pid) = self.worker_pid(Duration::from_secs(10)) else {
+            return false;
+        };
+        let workspace = &self.runtime.paths().repo_root;
+        let reaped = || {
+            orbit_core::test_support::pipeline_worker_observer_completed(
+                workspace,
+                &self.run_id,
+                pid,
+            )
+        };
+        // Until the observer reaps the child, its PID cannot be reused, so
+        // these signals can only reach the worker this fixture launched. The
+        // worker is its own session (and group) leader, so the group signal
+        // also ends anything it spawned.
+        if !reaped() {
+            // SAFETY: `pid` is this run's unreaped child; SIGKILL only ends it
+            // and its own process group.
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+            }
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !reaped() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        true
+    }
+}
+
+impl Drop for AutoTaskWorkerGuard<'_> {
+    fn drop(&mut self) {
+        self.terminate_and_reap();
+    }
+}
+
 fn definition_path(fixture: &Fixture, name: &str) -> PathBuf {
     let shown = fixture.json(&["auto-task", "show", name, "--json"]);
     PathBuf::from(shown["definition_source"]["path"].as_str().unwrap())
@@ -699,10 +810,6 @@ fn stale_run_failure_contract_holds_mint_and_adopt_preserves_customizations() {
     assert_eq!(minted["title"], "[auto-task] Operator security title");
 }
 
-const RUN_FAILURE: &str = "run-failure-patterns";
-const DELIVERY_TRIGGER: &str = r#"{"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0}"#;
-const UNRELATED_TRIGGER: &str = r#"{"branch":"unrelated-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0}"#;
-
 /// Job-step admission, a condition fire and a due delivery all hold a stale
 /// run-failure body with the manual mint's error, and mint again once that
 /// body carries the bundled contract. An unrelated definition keeps minting.
@@ -1058,16 +1165,6 @@ fn runtime_roots(fixture: &Fixture) -> (PathBuf, PathBuf) {
     )
 }
 
-/// Kills and reaps an unrelated bystander process on drop.
-struct Bystander(std::process::Child);
-
-impl Drop for Bystander {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 fn process_alive(pid: u32) -> bool {
     // SAFETY: signal 0 only probes for the process; nothing is delivered.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
@@ -1169,17 +1266,6 @@ fn stalled_auto_task_worker_is_terminated_and_reaped_on_timeout_and_unwind() {
     );
 }
 
-/// Foreground `run_job_v2_from_yaml` refuses auto-task steps. Submit the job
-/// the way an operator does, and let this process's substitute worker execute
-/// the detached run until the step parks.
-const AUTO_TASK_JOB_WORKER: &str = "auto_task_settings_cli::execute_submitted_auto_task_job";
-
-const AUTO_TASK_WORKER_RUN_ENV: &str = "ORBIT_TEST_AUTO_TASK_RUN";
-
-/// How long a submitted auto-task step may take to park before the fixture
-/// terminates its worker.
-const AUTO_TASK_PARK_TIMEOUT: Duration = Duration::from_secs(90);
-
 fn install_auto_task_job_worker(global: &Path, workspace: &Path) {
     orbit_common::test_env::assert_child_test_exists(AUTO_TASK_JOB_WORKER);
     let exe = std::env::current_exe().unwrap_or_else(|error| panic!("test exe: {error}"));
@@ -1202,11 +1288,6 @@ fn install_auto_task_job_worker(global: &Path, workspace: &Path) {
         ],
     );
 }
-
-/// Records the worker's own PID before `exec`, so the fixture knows the
-/// identity of the child it launched even if the worker stalls before it
-/// claims its run (the run records a PID only on that claim).
-const AUTO_TASK_WORKER_LAUNCH: &str = r#"echo $$ > "$0.tmp" && mv "$0.tmp" "$0" && exec "$@""#;
 
 fn auto_task_worker_pid_file(global: &Path, run_id: &str) -> PathBuf {
     global.join(format!("{run_id}.auto-task-worker.pid"))
@@ -1283,10 +1364,11 @@ fn submit_auto_task_job<'a>(
             Some("test"),
         )
         .unwrap_or_else(|error| panic!("{job} ({auto_task}) submit: {error}"));
+    let pid_file = auto_task_worker_pid_file(global, &submitted.run_id);
     AutoTaskWorkerGuard {
         runtime,
-        pid_file: auto_task_worker_pid_file(global, &submitted.run_id),
         run_id: submitted.run_id,
+        pid_file,
     }
 }
 
@@ -1321,79 +1403,6 @@ fn await_auto_task_park(
         run.state,
         worker_log(runtime, run_id)
     );
-}
-
-/// Owns the detached substitute worker of one submitted run. Termination is
-/// bound to the PID the launched worker recorded for itself, never to a
-/// command-line pattern, so it cannot signal another run's worker. Dropping the
-/// guard (including on unwind) terminates and reaps that worker.
-struct AutoTaskWorkerGuard<'a> {
-    runtime: &'a orbit_core::OrbitRuntime,
-    run_id: String,
-    pid_file: PathBuf,
-}
-
-impl AutoTaskWorkerGuard<'_> {
-    /// The launched worker's PID, once it has recorded one.
-    fn worker_pid(&self, wait: Duration) -> Option<u32> {
-        let deadline = Instant::now() + wait;
-        loop {
-            let recorded = fs::read_to_string(&self.pid_file)
-                .ok()
-                .and_then(|pid| pid.trim().parse().ok());
-            if let Some(pid) = recorded {
-                return Some(pid);
-            }
-            if Instant::now() >= deadline {
-                return None;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    /// SIGKILL the worker's process group if this process has not reaped it
-    /// yet, then wait for the launch observer to reap it. Returns whether the
-    /// worker is reaped. Idempotent, and never panics (it also runs while
-    /// unwinding).
-    fn terminate_and_reap(&self) -> bool {
-        let Some(pid) = self.worker_pid(Duration::from_secs(10)) else {
-            return false;
-        };
-        let workspace = &self.runtime.paths().repo_root;
-        let reaped = || {
-            orbit_core::test_support::pipeline_worker_observer_completed(
-                workspace,
-                &self.run_id,
-                pid,
-            )
-        };
-        // Until the observer reaps the child, its PID cannot be reused, so
-        // these signals can only reach the worker this fixture launched. The
-        // worker is its own session (and group) leader, so the group signal
-        // also ends anything it spawned.
-        if !reaped() {
-            // SAFETY: `pid` is this run's unreaped child; SIGKILL only ends it
-            // and its own process group.
-            unsafe {
-                libc::kill(pid as libc::pid_t, libc::SIGKILL);
-                libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-            }
-        }
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !reaped() {
-            if Instant::now() >= deadline {
-                return false;
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-        true
-    }
-}
-
-impl Drop for AutoTaskWorkerGuard<'_> {
-    fn drop(&mut self) {
-        self.terminate_and_reap();
-    }
 }
 
 /// The park text, once this process has reaped the substitute worker.

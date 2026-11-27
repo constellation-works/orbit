@@ -20,6 +20,23 @@ use crate::isolated_cli_fixture::Fixture;
 const CONSUMER: &str = "delivery-code-review";
 const REVIEW_CREW: &str = "sonnet";
 
+struct DoctorOutput {
+    rows: Value,
+    review_row: Value,
+    success: bool,
+    exit_code: Option<i32>,
+    stderr: String,
+}
+
+impl DoctorOutput {
+    fn diagnostics(&self) -> String {
+        format!(
+            "doctor JSON/check statuses: {}; exit code: {:?}; stderr: {}",
+            self.rows, self.exit_code, self.stderr
+        )
+    }
+}
+
 /// Runtime writes, as well as CLI writes, belong in an isolated child. Returns
 /// true inside that child; the parent asserts the child passed.
 pub(super) fn in_isolated_child(test: &str) -> bool {
@@ -293,23 +310,6 @@ pub(super) fn commit(fixture: &Fixture, content: &str) -> SourceRevision {
     SourceRevision {
         commit: git(fixture, &["rev-parse", "HEAD"]),
         tree: git(fixture, &["rev-parse", "HEAD^{tree}"]),
-    }
-}
-
-struct DoctorOutput {
-    rows: Value,
-    review_row: Value,
-    success: bool,
-    exit_code: Option<i32>,
-    stderr: String,
-}
-
-impl DoctorOutput {
-    fn diagnostics(&self) -> String {
-        format!(
-            "doctor JSON/check statuses: {}; exit code: {:?}; stderr: {}",
-            self.rows, self.exit_code, self.stderr
-        )
     }
 }
 

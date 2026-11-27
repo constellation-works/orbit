@@ -1,5 +1,9 @@
 //! Human rendering of `orbit config show`: aligned label, value, state and description rows, fitted to the terminal width.
 
+/// Minimum columns a description column must leave before aligned wrapping
+/// gives way to a shallower hanging indent.
+const CONFIG_SHOW_MIN_TRAILING: usize = 24;
+
 /// Aligned configuration text with trailing-prose boundaries supplied by its producer.
 /// Offsets refer to UTF-8 line starts; columns count characters, as the formatter does.
 #[derive(Debug, Default)]
@@ -29,10 +33,6 @@ impl std::fmt::Write for ConfigShow {
         Ok(())
     }
 }
-
-/// Minimum columns a description column must leave before aligned wrapping
-/// gives way to a shallower hanging indent.
-const CONFIG_SHOW_MIN_TRAILING: usize = 24;
 
 /// Fit `config show` text to `width` columns. Lines that fit are left exactly
 /// as written, so aligned columns survive. A longer line wraps its trailing

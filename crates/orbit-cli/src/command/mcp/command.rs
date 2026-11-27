@@ -14,6 +14,14 @@ use crate::entry::resolved::Resolved;
 use super::listen::ListenArgs;
 use super::setup::{InitArgs, RemoveArgs};
 
+/// Contract detail behind the `orbit mcp serve` flags lives in the installed
+/// Orbit skill; help keeps the safety rule and a pointer to it.
+const SERVE_CONTRACT_HELP: &str = "\
+Omit `--operator` for any server an agent launches: without it a session holds agent \
+capability only.\n\
+Mode, authority, workspace binding, attribution, role and toolset rules: installed Orbit \
+skill `references/tool-surface-mcp-serve.md` (Serving MCP).";
+
 #[derive(Args)]
 #[command(
     about = "Register MCP client integrations and run the MCP server",
@@ -73,14 +81,6 @@ pub enum ServeMode {
     /// host registered with `orbit host add`.
     Federated,
 }
-
-/// Contract detail behind the `orbit mcp serve` flags lives in the installed
-/// Orbit skill; help keeps the safety rule and a pointer to it.
-const SERVE_CONTRACT_HELP: &str = "\
-Omit `--operator` for any server an agent launches: without it a session holds agent \
-capability only.\n\
-Mode, authority, workspace binding, attribution, role and toolset rules: installed Orbit \
-skill `references/tool-surface-mcp-serve.md` (Serving MCP).";
 
 #[derive(Args)]
 #[command(

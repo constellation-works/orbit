@@ -47,6 +47,17 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
+/// Scenario-row table: each entry is a scenario function whose own name is
+/// its recorded row label.
+macro_rules! rows {
+    ($($f:ident),+ $(,)?) => { run_rows(&[$((stringify!($f), $f as fn())),+]) };
+}
+
+#[cfg(unix)]
+macro_rules! bool_rows {
+    ($($f:ident),+ $(,)?) => { run_bool_rows(&[$((stringify!($f), $f as fn() -> bool)),+]) };
+}
+
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Synthetic Claude worker credential for stub providers on macOS [ORB-15154].
 /// Not a real token. The guard refuses `claude` unless this name is both in
@@ -58,6 +69,9 @@ const SNAPSHOT_RELATIVE_PATH: &str = "tests/snapshots/mcp_tools_list.json";
 /// The SSH session marker every remote-originated scenario presents.
 const SSH_ENV: (&str, &str) = ("SSH_CONNECTION", "192.0.2.8 43100 198.51.100.2 22");
 
+/// The one `workspace` description every advertised selector uses.
+const SHARED_WORKSPACE_DESCRIPTION: &str = "Workspace selector from orbit_workspace_list.";
+
 // ---------------------------------------------------------------------------
 // Fixture: an initialized Orbit workspace fully isolated from ~/.orbit.
 // ---------------------------------------------------------------------------
@@ -66,77 +80,6 @@ struct McpWorkspace {
     _temp: TempDir,
     home: PathBuf,
     work: PathBuf,
-}
-
-/// Write an executable no-op named `name` into `bin`, standing in for an agent
-/// CLI during detection. Tests that dispatch overwrite it with a response
-/// fixture before starting the server.
-fn plant_agent_cli_stub(bin: &Path, name: &str) {
-    std::fs::create_dir_all(bin).expect("create stub CLI directory");
-    let stub = bin.join(name);
-    std::fs::write(&stub, "#!/bin/sh\nexit 0\n").expect("write stub agent CLI");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
-            .expect("mark the stub agent CLI executable");
-    }
-}
-
-/// Admit the synthetic credential in the workspace pass list when present;
-/// that list replaces the global list seeded by init.
-fn admit_fixture_claude_worker_token(workspace: &McpWorkspace) {
-    let workspace_config = workspace.work.join(".orbit").join("config.toml");
-    let global_config = workspace.home.join(".orbit").join("config.toml");
-    let path = if workspace_config.is_file() {
-        workspace_config
-    } else {
-        global_config
-    };
-    let raw = std::fs::read_to_string(&path).unwrap_or_default();
-    let updated = ensure_pass_contains(&raw, FIXTURE_CLAUDE_WORKER_TOKEN_ENV);
-    if updated != raw {
-        std::fs::write(&path, updated).expect("write fixture claude worker pass list");
-    }
-}
-
-fn ensure_pass_contains(config: &str, name: &str) -> String {
-    let mut document: toml_edit::DocumentMut = config.parse().expect("fixture config TOML");
-    let mut pass = document
-        .get("execution")
-        .and_then(|execution| execution.get("env"))
-        .and_then(|env| env.get("pass"))
-        .and_then(toml_edit::Item::as_array)
-        .cloned()
-        .unwrap_or_else(|| {
-            [
-                "HOME",
-                "PATH",
-                "CODEX_HOME",
-                "TMPDIR",
-                "USER",
-                "__CF_USER_TEXT_ENCODING",
-            ]
-            .into_iter()
-            .collect()
-        });
-    if pass.iter().any(|entry| entry.as_str() == Some(name)) {
-        return config.to_string();
-    }
-    // Init may seed a compact array without a trailing comma; edit TOML rather
-    // than splicing text that only works for the global multiline template.
-    pass.push(name);
-    document["execution"]["env"]["pass"] = toml_edit::value(pass);
-    document.to_string()
-}
-
-/// `PATH` with the fixture's stub directory first, so agent detection sees the
-/// stubs regardless of what the host has installed.
-fn stub_first_path(bin: &Path) -> std::ffi::OsString {
-    let inherited = std::env::var_os("PATH").unwrap_or_default();
-    let mut entries = vec![bin.to_path_buf()];
-    entries.extend(std::env::split_paths(&inherited));
-    std::env::join_paths(entries).expect("join PATH entries")
 }
 
 impl McpWorkspace {
@@ -462,46 +405,6 @@ spec:
     }
 }
 
-/// Run a fixture CLI command in its already-isolated child process and keep
-/// both streams in the failure report. The caller can inspect stdout/stderr.
-fn orbit_ok(command: &mut Command) -> std::process::Output {
-    let output = command.output().expect("run fixture orbit CLI");
-    assert_command_succeeded("orbit CLI", &output);
-    output
-}
-
-/// `orbit <args>` at an explicit checkout/home pair; the run must succeed.
-fn cli_ok(work: &Path, home: &Path, args: &[&str]) -> std::process::Output {
-    orbit_ok(McpWorkspace::orbit_command(work, home).args(args))
-}
-
-/// `orbit <args>` at an explicit checkout/home pair, success not asserted.
-fn cli(work: &Path, home: &Path, args: &[&str]) -> std::process::Output {
-    McpWorkspace::orbit_command(work, home)
-        .args(args)
-        .output()
-        .expect("run fixture orbit CLI")
-}
-
-/// `orbit tool run <tool> --input <input>` at a checkout; must succeed.
-fn tool_ok_at(work: &Path, home: &Path, tool: &str, input: Value) -> std::process::Output {
-    cli_ok(
-        work,
-        home,
-        &["tool", "run", tool, "--input", &input.to_string()],
-    )
-}
-
-/// A command's stdout as text.
-fn stdout(output: &std::process::Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
-/// A command's stderr as text.
-fn stderr(output: &std::process::Output) -> String {
-    String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
 /// Spawn with all three streams piped, guarded so the child dies with the test.
 trait SpawnPiped {
     fn spawn_piped(&mut self) -> ChildGuard;
@@ -518,196 +421,12 @@ impl SpawnPiped for Command {
     }
 }
 
-/// The tool objects inside a `tools/list` response envelope.
-fn tools_array(listed: &Value) -> &Vec<Value> {
-    listed["result"]["tools"].as_array().expect("tools array")
-}
-
-/// One advertised tool object inside a listed tools array, by name.
-fn find_tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
-    tools
-        .iter()
-        .find(|tool| tool["name"] == name)
-        .unwrap_or_else(|| panic!("{name} is advertised"))
-}
-
-/// The advertised tool names inside a `tools/list` response envelope.
-fn tool_names(listed: &Value) -> Vec<&str> {
-    tools_array(listed)
-        .iter()
-        .map(|tool| tool["name"].as_str().expect("tool name"))
-        .collect()
-}
-
-/// `orbit audit list <args> --json` in this workspace, parsed.
-fn audit_rows(workspace: &McpWorkspace, args: &[&str]) -> Value {
-    let mut full = vec!["audit", "list"];
-    full.extend_from_slice(args);
-    full.push("--json");
-    stdout_json(&workspace.run_ok(&full))
-}
-
-/// One audit aggregate row: `COUNT(*)` plus `cols` text columns, by position.
-fn audit_tuple(conn: &Connection, sql: &str, cols: usize) -> (i64, Vec<Option<String>>) {
-    conn.query_row(sql, [], |row| {
-        let mut values = Vec::with_capacity(cols);
-        for i in 1..=cols {
-            values.push(row.get::<_, Option<String>>(i)?);
-        }
-        Ok((row.get::<_, i64>(0)?, values))
-    })
-    .expect("audit aggregate row")
-}
-
-/// Create a task through the CLI `tool run` surface; returns its id.
-fn add_task_cli(workspace: &McpWorkspace, title: &str, description: &str) -> String {
-    let output = workspace.tool_ok(
-        "orbit.task.add",
-        json!({
-            "title": title, "description": description, "workspace": workspace.work,
-            "complexity": "low", "model": "codex",
-        }),
-    );
-    id_of(&stdout_json(&output))
-}
-
-/// Plant the same agent script under both provider names the fixture's
-/// default crew might have frozen at init.
-fn plant_both_providers(workspace: &McpWorkspace, script: &str) {
-    for provider in ["codex", "claude"] {
-        plant_agent_cli_stub(&McpWorkspace::stub_bin_dir(&workspace.home), provider);
-        std::fs::write(
-            McpWorkspace::stub_bin_dir(&workspace.home).join(provider),
-            script,
-        )
-        .unwrap();
-    }
-}
-
-/// The one `workspace` description every advertised selector uses.
-const SHARED_WORKSPACE_DESCRIPTION: &str = "Workspace selector from orbit_workspace_list.";
-
-/// Assert a bound session advertises `tool`'s workspace selector as optional.
-fn assert_selector_optional<C>(client: &mut McpClient<C>, tool: &str) {
-    let listed = client.tools_list();
-    let description = tool_workspace_description(&listed, tool);
-    assert_eq!(
-        description, SHARED_WORKSPACE_DESCRIPTION,
-        "workspace selectors share one description"
-    );
-    let schema = find_tool(tools_array(&listed), tool);
-    assert!(
-        schema["inputSchema"]["required"]
-            .as_array()
-            .is_none_or(|required| !required.iter().any(|field| field == "workspace")),
-        "a bound session must advertise {tool}'s selector as optional: {schema}"
-    );
-}
-
-/// A command's stdout parsed as JSON.
-fn stdout_json(output: &std::process::Output) -> Value {
-    serde_json::from_slice(&output.stdout).expect("parse CLI JSON output")
-}
-
-/// The `id` of a created record.
-fn id_of(value: &Value) -> String {
-    value["id"].as_str().expect("task id").to_string()
-}
-
-/// Whether a structured tool error's `message` contains `needle`.
-fn message_contains(value: &Value, needle: &str) -> bool {
-    value["message"]
-        .as_str()
-        .is_some_and(|message| message.contains(needle))
-}
-
-#[track_caller]
-fn assert_message_parts(error: &Value, parts: &[&str]) {
-    for part in parts {
-        assert!(message_contains(error, part), "missing {part:?}: {error}");
-    }
-}
-
-/// A public response collection must contain the exact field value.
-#[track_caller]
-fn assert_record_field(value: &Value, collection: &str, field: &str, expected: Value) {
-    assert!(
-        array_of(value, collection)
-            .iter()
-            .any(|row| row[field] == expected),
-        "{collection} must contain {field}={expected}: {value}"
-    );
-}
-
-/// The array at `key` of a JSON object.
-fn array_of<'a>(value: &'a Value, key: &str) -> &'a Vec<Value> {
-    value[key]
-        .as_array()
-        .unwrap_or_else(|| panic!("{key} array: {value}"))
-}
-
-/// Assert a scenario spawned no SSH: the stub's invocation log is absent/empty.
-fn assert_no_ssh(ssh_log: &Path, why: &str) {
-    assert!(
-        !ssh_log.exists()
-            || std::fs::read_to_string(ssh_log)
-                .expect("read ssh log")
-                .is_empty(),
-        "{why}"
-    );
-}
-
-/// A fixture path as UTF-8 text.
-fn utf8(path: &Path) -> &str {
-    path.to_str().expect("utf8 fixture path")
-}
-
 /// One named scenario row: its recorded label and its check.
 type Row = (&'static str, fn());
+
 /// One named scenario row whose coverage can be unavailable on this host.
 #[cfg(unix)]
 type BoolRow = (&'static str, fn() -> bool);
-
-/// Run named scenario rows, recording each pass under its own label so a
-/// failure still names the case and QA rows keep their pinned labels.
-fn run_rows(rows: &[Row]) {
-    for (name, check) in rows {
-        run_case(name, check);
-    }
-}
-
-fn run_case(name: &str, check: impl FnOnce()) {
-    let _ = writeln!(std::io::stderr(), "scenario: {name}");
-    check();
-    orbit_common::test_env::record_scenario_pass(name);
-}
-
-/// Rows whose coverage can be unavailable on this host (`false`): the pass
-/// is recorded only when the row actually ran.
-#[cfg(unix)]
-fn run_bool_rows(rows: &[BoolRow]) {
-    for (name, check) in rows {
-        tracing::info!(case = name, "MCP contract row");
-        if check() {
-            orbit_common::test_env::record_scenario_pass(name);
-        } else {
-            let _ = writeln!(
-                std::io::stderr(),
-                "SKIP: {name}: host permits writes to the read-only fixture"
-            );
-        }
-    }
-}
-
-/// Scenario-row table: each entry is a scenario function whose own name is
-/// its recorded row label.
-macro_rules! rows {
-    ($($f:ident),+ $(,)?) => { run_rows(&[$((stringify!($f), $f as fn())),+]) };
-}
-#[cfg(unix)]
-macro_rules! bool_rows {
-    ($($f:ident),+ $(,)?) => { run_bool_rows(&[$((stringify!($f), $f as fn() -> bool)),+]) };
-}
 
 // ---------------------------------------------------------------------------
 // Minimal JSON-RPC client over the server's newline-delimited byte stream —
@@ -894,6 +613,289 @@ impl<C> McpClient<C> {
         let error = self.call_tool_err(name, arguments.clone());
         assert_eq!(error["code"], code, "{name} {arguments}: {error}");
         error
+    }
+}
+
+/// Write an executable no-op named `name` into `bin`, standing in for an agent
+/// CLI during detection. Tests that dispatch overwrite it with a response
+/// fixture before starting the server.
+fn plant_agent_cli_stub(bin: &Path, name: &str) {
+    std::fs::create_dir_all(bin).expect("create stub CLI directory");
+    let stub = bin.join(name);
+    std::fs::write(&stub, "#!/bin/sh\nexit 0\n").expect("write stub agent CLI");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+            .expect("mark the stub agent CLI executable");
+    }
+}
+
+/// Admit the synthetic credential in the workspace pass list when present;
+/// that list replaces the global list seeded by init.
+fn admit_fixture_claude_worker_token(workspace: &McpWorkspace) {
+    let workspace_config = workspace.work.join(".orbit").join("config.toml");
+    let global_config = workspace.home.join(".orbit").join("config.toml");
+    let path = if workspace_config.is_file() {
+        workspace_config
+    } else {
+        global_config
+    };
+    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    let updated = ensure_pass_contains(&raw, FIXTURE_CLAUDE_WORKER_TOKEN_ENV);
+    if updated != raw {
+        std::fs::write(&path, updated).expect("write fixture claude worker pass list");
+    }
+}
+
+fn ensure_pass_contains(config: &str, name: &str) -> String {
+    let mut document: toml_edit::DocumentMut = config.parse().expect("fixture config TOML");
+    let mut pass = document
+        .get("execution")
+        .and_then(|execution| execution.get("env"))
+        .and_then(|env| env.get("pass"))
+        .and_then(toml_edit::Item::as_array)
+        .cloned()
+        .unwrap_or_else(|| {
+            [
+                "HOME",
+                "PATH",
+                "CODEX_HOME",
+                "TMPDIR",
+                "USER",
+                "__CF_USER_TEXT_ENCODING",
+            ]
+            .into_iter()
+            .collect()
+        });
+    if pass.iter().any(|entry| entry.as_str() == Some(name)) {
+        return config.to_string();
+    }
+    // Init may seed a compact array without a trailing comma; edit TOML rather
+    // than splicing text that only works for the global multiline template.
+    pass.push(name);
+    document["execution"]["env"]["pass"] = toml_edit::value(pass);
+    document.to_string()
+}
+
+/// `PATH` with the fixture's stub directory first, so agent detection sees the
+/// stubs regardless of what the host has installed.
+fn stub_first_path(bin: &Path) -> std::ffi::OsString {
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    let mut entries = vec![bin.to_path_buf()];
+    entries.extend(std::env::split_paths(&inherited));
+    std::env::join_paths(entries).expect("join PATH entries")
+}
+
+/// Run a fixture CLI command in its already-isolated child process and keep
+/// both streams in the failure report. The caller can inspect stdout/stderr.
+fn orbit_ok(command: &mut Command) -> std::process::Output {
+    let output = command.output().expect("run fixture orbit CLI");
+    assert_command_succeeded("orbit CLI", &output);
+    output
+}
+
+/// `orbit <args>` at an explicit checkout/home pair; the run must succeed.
+fn cli_ok(work: &Path, home: &Path, args: &[&str]) -> std::process::Output {
+    orbit_ok(McpWorkspace::orbit_command(work, home).args(args))
+}
+
+/// `orbit <args>` at an explicit checkout/home pair, success not asserted.
+fn cli(work: &Path, home: &Path, args: &[&str]) -> std::process::Output {
+    McpWorkspace::orbit_command(work, home)
+        .args(args)
+        .output()
+        .expect("run fixture orbit CLI")
+}
+
+/// `orbit tool run <tool> --input <input>` at a checkout; must succeed.
+fn tool_ok_at(work: &Path, home: &Path, tool: &str, input: Value) -> std::process::Output {
+    cli_ok(
+        work,
+        home,
+        &["tool", "run", tool, "--input", &input.to_string()],
+    )
+}
+
+/// A command's stdout as text.
+fn stdout(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// A command's stderr as text.
+fn stderr(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// The tool objects inside a `tools/list` response envelope.
+fn tools_array(listed: &Value) -> &Vec<Value> {
+    listed["result"]["tools"].as_array().expect("tools array")
+}
+
+/// One advertised tool object inside a listed tools array, by name.
+fn find_tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
+    tools
+        .iter()
+        .find(|tool| tool["name"] == name)
+        .unwrap_or_else(|| panic!("{name} is advertised"))
+}
+
+/// The advertised tool names inside a `tools/list` response envelope.
+fn tool_names(listed: &Value) -> Vec<&str> {
+    tools_array(listed)
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name"))
+        .collect()
+}
+
+/// `orbit audit list <args> --json` in this workspace, parsed.
+fn audit_rows(workspace: &McpWorkspace, args: &[&str]) -> Value {
+    let mut full = vec!["audit", "list"];
+    full.extend_from_slice(args);
+    full.push("--json");
+    stdout_json(&workspace.run_ok(&full))
+}
+
+/// One audit aggregate row: `COUNT(*)` plus `cols` text columns, by position.
+fn audit_tuple(conn: &Connection, sql: &str, cols: usize) -> (i64, Vec<Option<String>>) {
+    conn.query_row(sql, [], |row| {
+        let mut values = Vec::with_capacity(cols);
+        for i in 1..=cols {
+            values.push(row.get::<_, Option<String>>(i)?);
+        }
+        Ok((row.get::<_, i64>(0)?, values))
+    })
+    .expect("audit aggregate row")
+}
+
+/// Create a task through the CLI `tool run` surface; returns its id.
+fn add_task_cli(workspace: &McpWorkspace, title: &str, description: &str) -> String {
+    let output = workspace.tool_ok(
+        "orbit.task.add",
+        json!({
+            "title": title, "description": description, "workspace": workspace.work,
+            "complexity": "low", "model": "codex",
+        }),
+    );
+    id_of(&stdout_json(&output))
+}
+
+/// Plant the same agent script under both provider names the fixture's
+/// default crew might have frozen at init.
+fn plant_both_providers(workspace: &McpWorkspace, script: &str) {
+    for provider in ["codex", "claude"] {
+        plant_agent_cli_stub(&McpWorkspace::stub_bin_dir(&workspace.home), provider);
+        std::fs::write(
+            McpWorkspace::stub_bin_dir(&workspace.home).join(provider),
+            script,
+        )
+        .unwrap();
+    }
+}
+
+/// Assert a bound session advertises `tool`'s workspace selector as optional.
+fn assert_selector_optional<C>(client: &mut McpClient<C>, tool: &str) {
+    let listed = client.tools_list();
+    let description = tool_workspace_description(&listed, tool);
+    assert_eq!(
+        description, SHARED_WORKSPACE_DESCRIPTION,
+        "workspace selectors share one description"
+    );
+    let schema = find_tool(tools_array(&listed), tool);
+    assert!(
+        schema["inputSchema"]["required"]
+            .as_array()
+            .is_none_or(|required| !required.iter().any(|field| field == "workspace")),
+        "a bound session must advertise {tool}'s selector as optional: {schema}"
+    );
+}
+
+/// A command's stdout parsed as JSON.
+fn stdout_json(output: &std::process::Output) -> Value {
+    serde_json::from_slice(&output.stdout).expect("parse CLI JSON output")
+}
+
+/// The `id` of a created record.
+fn id_of(value: &Value) -> String {
+    value["id"].as_str().expect("task id").to_string()
+}
+
+/// Whether a structured tool error's `message` contains `needle`.
+fn message_contains(value: &Value, needle: &str) -> bool {
+    value["message"]
+        .as_str()
+        .is_some_and(|message| message.contains(needle))
+}
+
+#[track_caller]
+fn assert_message_parts(error: &Value, parts: &[&str]) {
+    for part in parts {
+        assert!(message_contains(error, part), "missing {part:?}: {error}");
+    }
+}
+
+/// A public response collection must contain the exact field value.
+#[track_caller]
+fn assert_record_field(value: &Value, collection: &str, field: &str, expected: Value) {
+    assert!(
+        array_of(value, collection)
+            .iter()
+            .any(|row| row[field] == expected),
+        "{collection} must contain {field}={expected}: {value}"
+    );
+}
+
+/// The array at `key` of a JSON object.
+fn array_of<'a>(value: &'a Value, key: &str) -> &'a Vec<Value> {
+    value[key]
+        .as_array()
+        .unwrap_or_else(|| panic!("{key} array: {value}"))
+}
+
+/// Assert a scenario spawned no SSH: the stub's invocation log is absent/empty.
+fn assert_no_ssh(ssh_log: &Path, why: &str) {
+    assert!(
+        !ssh_log.exists()
+            || std::fs::read_to_string(ssh_log)
+                .expect("read ssh log")
+                .is_empty(),
+        "{why}"
+    );
+}
+
+/// A fixture path as UTF-8 text.
+fn utf8(path: &Path) -> &str {
+    path.to_str().expect("utf8 fixture path")
+}
+
+/// Run named scenario rows, recording each pass under its own label so a
+/// failure still names the case and QA rows keep their pinned labels.
+fn run_rows(rows: &[Row]) {
+    for (name, check) in rows {
+        run_case(name, check);
+    }
+}
+
+fn run_case(name: &str, check: impl FnOnce()) {
+    let _ = writeln!(std::io::stderr(), "scenario: {name}");
+    check();
+    orbit_common::test_env::record_scenario_pass(name);
+}
+
+/// Rows whose coverage can be unavailable on this host (`false`): the pass
+/// is recorded only when the row actually ran.
+#[cfg(unix)]
+fn run_bool_rows(rows: &[BoolRow]) {
+    for (name, check) in rows {
+        tracing::info!(case = name, "MCP contract row");
+        if check() {
+            orbit_common::test_env::record_scenario_pass(name);
+        } else {
+            let _ = writeln!(
+                std::io::stderr(),
+                "SKIP: {name}: host permits writes to the read-only fixture"
+            );
+        }
     }
 }
 

@@ -7,6 +7,17 @@ use serde_json::Value;
 
 use crate::output::common::color::Domain;
 
+/// Which columns the caller filtered on, and so must keep even when the filter
+/// left them carrying a single value.
+#[derive(Clone, Copy, Default)]
+pub(super) struct TaskTableFilters {
+    pub(super) status: bool,
+    pub(super) priority: bool,
+    pub(super) task_type: bool,
+    pub(super) runs_on: bool,
+    pub(super) scheduled: bool,
+}
+
 /// Legacy bare `commented` history entries duplicate the authoritative Comments
 /// list, so human-facing history rendering omits them (ORB-10311). Raw JSON/MCP
 /// history projections keep every event for backward compatibility.
@@ -64,17 +75,6 @@ pub(super) fn task_write_json(written: Written) -> (Value, orbit_core::Task) {
         warn_unresolved_crew(doc);
     }
     (document, task)
-}
-
-/// Which columns the caller filtered on, and so must keep even when the filter
-/// left them carrying a single value.
-#[derive(Clone, Copy, Default)]
-pub(super) struct TaskTableFilters {
-    pub(super) status: bool,
-    pub(super) priority: bool,
-    pub(super) task_type: bool,
-    pub(super) runs_on: bool,
-    pub(super) scheduled: bool,
 }
 
 /// Build the list view for `orbit task list` from the tool's task records.

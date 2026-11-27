@@ -46,6 +46,14 @@ const HEADING_WIDTH: usize = 28;
 const MAX_LABEL_WIDTH: usize = 32;
 const MAX_VALUE_WIDTH: usize = 20;
 
+/// `state` of the derived `execution.env.inherit` invariant: it is not a
+/// settable key, so it is neither set, defaulted, nor unset.
+const DERIVED_STATE: &str = "derived";
+
+/// Text-view state for `machine.id` and `machine.task_prefix`. They are
+/// identity facts `orbit init` writes once, not settings in the Machine table.
+const IDENTITY_STATE: &str = "identity";
+
 /// One rendered setting line.
 struct Row {
     label: String,
@@ -106,6 +114,44 @@ impl Layout {
             out.push_str(note);
         }
         let _ = writeln!(out);
+    }
+}
+
+struct SectionRows {
+    section: ConfigSection,
+    rows: Vec<Row>,
+    /// Appended to the section heading, for the execution security warning.
+    heading_suffix: String,
+    hidden_advanced: usize,
+}
+
+struct CrewRow {
+    name: String,
+    /// `true` / `false`: every crew row carries its effective enabled state.
+    enabled: String,
+    layer: String,
+    provider: String,
+    model: String,
+    effort: String,
+    tags: String,
+    description: String,
+    /// `env` entries (`NAME` / `NAME=SOURCE`, names only), empty when none.
+    env: String,
+    /// Which `workflow.*` keys point at this crew.
+    annotation: String,
+}
+
+impl CrewRow {
+    fn cells(&self) -> [String; 7] {
+        [
+            self.name.clone(),
+            self.enabled.clone(),
+            self.layer.clone(),
+            self.provider.clone(),
+            self.model.clone(),
+            self.effort.clone(),
+            self.tags.clone(),
+        ]
     }
 }
 
@@ -332,24 +378,8 @@ fn write_sections(
     }
 }
 
-/// `state` of the derived `execution.env.inherit` invariant: it is not a
-/// settable key, so it is neither set, defaulted, nor unset.
-const DERIVED_STATE: &str = "derived";
-
-/// Text-view state for `machine.id` and `machine.task_prefix`. They are
-/// identity facts `orbit init` writes once, not settings in the Machine table.
-const IDENTITY_STATE: &str = "identity";
-
 fn is_show_identity_key(key: &str) -> bool {
     matches!(key, "machine.id" | "machine.task_prefix")
-}
-
-struct SectionRows {
-    section: ConfigSection,
-    rows: Vec<Row>,
-    /// Appended to the section heading, for the execution security warning.
-    heading_suffix: String,
-    hidden_advanced: usize,
 }
 
 fn clone_row(row: &Row) -> Row {
@@ -420,13 +450,13 @@ fn effective_rows(
         sections.push(SectionRows {
             section: *section,
             rows,
-            hidden_advanced,
             heading_suffix: if *section == ConfigSection::Execution && workspace_present {
                 "          ⚠ workspace file present: global execution values are ignored"
                     .to_string()
             } else {
                 String::new()
             },
+            hidden_advanced,
         });
     }
     (identity, sections)
@@ -480,8 +510,8 @@ fn scoped_rows(
         sections.push(SectionRows {
             section: *section,
             rows,
-            hidden_advanced,
             heading_suffix: String::new(),
+            hidden_advanced,
         });
     }
     (identity, sections)
@@ -597,36 +627,6 @@ fn write_crews(out: &mut ConfigShow, values: &[EffectiveConfigValue], section: &
     }
 }
 
-struct CrewRow {
-    name: String,
-    /// `true` / `false`: every crew row carries its effective enabled state.
-    enabled: String,
-    layer: String,
-    provider: String,
-    model: String,
-    effort: String,
-    tags: String,
-    description: String,
-    /// `env` entries (`NAME` / `NAME=SOURCE`, names only), empty when none.
-    env: String,
-    /// Which `workflow.*` keys point at this crew.
-    annotation: String,
-}
-
-impl CrewRow {
-    fn cells(&self) -> [String; 7] {
-        [
-            self.name.clone(),
-            self.enabled.clone(),
-            self.layer.clone(),
-            self.provider.clone(),
-            self.model.clone(),
-            self.effort.clone(),
-            self.tags.clone(),
-        ]
-    }
-}
-
 /// One row per crew, folded from the per-field `crews.<name>.<field>` values.
 fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
     let referenced = |key: &str| {
@@ -686,6 +686,7 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
                 annotation.push("human crew: operator work, never dispatched");
             }
             CrewRow {
+                name,
                 enabled: cell("enabled"),
                 layer: layers.join("+"),
                 provider: if human {
@@ -706,7 +707,6 @@ fn crew_table(values: &[EffectiveConfigValue]) -> Vec<CrewRow> {
                     .map(|(value, _)| value.clone())
                     .unwrap_or_default(),
                 annotation: annotation.join(", "),
-                name,
             }
         })
         .collect()

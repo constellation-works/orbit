@@ -18,61 +18,6 @@ use std::process::Command;
 use orbit_common::test_env;
 use tempfile::{TempDir, tempdir_in};
 
-/// Build a fixture Git command without inherited repository or Orbit authority.
-/// Apply deliberate fixture environment settings after calling this helper.
-pub(crate) fn command() -> Command {
-    let mut git = Command::new("git");
-    test_env::clear_inherited_authority(|name| {
-        git.env_remove(name);
-    });
-    git
-}
-
-/// Create `path` and initialize it as a Git repository on branch `main`,
-/// whatever the host's `init.defaultBranch`, because `workspace init` records
-/// the checked-out branch as the workspace base branch.
-///
-/// Git location variables outrank `current_dir`. A managed run can export
-/// them, and leaving them set makes `git init` update the enclosing
-/// repository instead of the fixture.
-pub(crate) fn init(path: &Path) {
-    initialize(path, Some("main"));
-}
-
-fn initialize(path: &Path, branch: Option<&str>) {
-    std::fs::create_dir_all(path).expect("create fixture checkout");
-    let mut git = command();
-    git.args(["init", "--quiet"]);
-    if let Some(branch) = branch {
-        git.arg(format!("--initial-branch={branch}"));
-    }
-    let output = git.current_dir(path).output().expect("spawn git init");
-    assert!(
-        output.status.success(),
-        "git init failed in fixture checkout {}: {}",
-        path.display(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-/// Run Git inside a fixture, checking success and returning trimmed stdout.
-/// Inherited repository and Orbit authority are scrubbed by [`command`].
-pub(crate) fn run(path: &Path, args: &[&str]) -> String {
-    let output = command()
-        .args(args)
-        .current_dir(path)
-        .output()
-        .expect("run fixture git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed in {}:\nstdout:\n{}\nstderr:\n{}",
-        path.display(),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_owned()
-}
-
 enum SeedCommit<'a> {
     Readme(&'a str),
     Empty(&'a str),
@@ -168,24 +113,6 @@ impl<'a> SeededRepo<'a> {
     }
 }
 
-/// Make `path` a Git checkout whose ordinary lookup cannot climb to an
-/// ancestor workspace.
-///
-/// The empty `config.toml` is an initialized Orbit root with no crew pool.
-/// Walk-up stops at it, so a command such as `task list` answers from this
-/// checkout. Callers that run `workspace init` use [`init`] alone: bootstrap
-/// already stops at the Git root, and a pre-existing config would collide
-/// with init.
-///
-/// Some test binaries include this module only for [`init`].
-#[allow(dead_code)]
-pub(crate) fn seal_lookup_boundary(path: &Path) {
-    init(path);
-    let orbit = path.join(".orbit");
-    std::fs::create_dir_all(&orbit).expect("create fixture orbit dir");
-    std::fs::write(orbit.join("config.toml"), "").expect("write fixture lookup boundary");
-}
-
 /// A disposable home and a work directory that is its own Git repository.
 ///
 /// Root discovery stops at `work` even when the temp directory sits inside
@@ -218,4 +145,77 @@ impl WorkCheckout {
         seal_lookup_boundary(&work);
         Self { temp, home, work }
     }
+}
+
+/// Build a fixture Git command without inherited repository or Orbit authority.
+/// Apply deliberate fixture environment settings after calling this helper.
+pub(crate) fn command() -> Command {
+    let mut git = Command::new("git");
+    test_env::clear_inherited_authority(|name| {
+        git.env_remove(name);
+    });
+    git
+}
+
+/// Create `path` and initialize it as a Git repository on branch `main`,
+/// whatever the host's `init.defaultBranch`, because `workspace init` records
+/// the checked-out branch as the workspace base branch.
+///
+/// Git location variables outrank `current_dir`. A managed run can export
+/// them, and leaving them set makes `git init` update the enclosing
+/// repository instead of the fixture.
+pub(crate) fn init(path: &Path) {
+    initialize(path, Some("main"));
+}
+
+fn initialize(path: &Path, branch: Option<&str>) {
+    std::fs::create_dir_all(path).expect("create fixture checkout");
+    let mut git = command();
+    git.args(["init", "--quiet"]);
+    if let Some(branch) = branch {
+        git.arg(format!("--initial-branch={branch}"));
+    }
+    let output = git.current_dir(path).output().expect("spawn git init");
+    assert!(
+        output.status.success(),
+        "git init failed in fixture checkout {}: {}",
+        path.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Run Git inside a fixture, checking success and returning trimmed stdout.
+/// Inherited repository and Orbit authority are scrubbed by [`command`].
+pub(crate) fn run(path: &Path, args: &[&str]) -> String {
+    let output = command()
+        .args(args)
+        .current_dir(path)
+        .output()
+        .expect("run fixture git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed in {}:\nstdout:\n{}\nstderr:\n{}",
+        path.display(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// Make `path` a Git checkout whose ordinary lookup cannot climb to an
+/// ancestor workspace.
+///
+/// The empty `config.toml` is an initialized Orbit root with no crew pool.
+/// Walk-up stops at it, so a command such as `task list` answers from this
+/// checkout. Callers that run `workspace init` use [`init`] alone: bootstrap
+/// already stops at the Git root, and a pre-existing config would collide
+/// with init.
+///
+/// Some test binaries include this module only for [`init`].
+#[allow(dead_code)]
+pub(crate) fn seal_lookup_boundary(path: &Path) {
+    init(path);
+    let orbit = path.join(".orbit");
+    std::fs::create_dir_all(&orbit).expect("create fixture orbit dir");
+    std::fs::write(orbit.join("config.toml"), "").expect("write fixture lookup boundary");
 }

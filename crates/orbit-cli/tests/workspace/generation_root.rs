@@ -25,6 +25,74 @@ use tempfile::tempdir;
 
 const FOREIGN_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+#[cfg(unix)]
+struct ReadOnlyDir {
+    path: PathBuf,
+}
+
+#[cfg(unix)]
+impl ReadOnlyDir {
+    fn enter(path: PathBuf) -> Self {
+        fs::create_dir_all(&path).expect("create directory to freeze");
+        chmod(&path, 0o555);
+        Self { path }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ReadOnlyDir {
+    fn drop(&mut self) {
+        chmod(&self.path, 0o755);
+    }
+}
+
+struct PreflightTrees {
+    _temp: tempfile::TempDir,
+    home: PathBuf,
+    work: PathBuf,
+    scratch: PathBuf,
+    home_orbit: PathBuf,
+    workspace_orbit: PathBuf,
+    /// Workspace path the child reports. Process cwd is physical, so a fixture
+    /// created through macOS `/var` (a symlink to `/private/var`) is discovered
+    /// as `/private/var/.../work/.orbit`. Override and home paths stay as given.
+    discovered_workspace_orbit: PathBuf,
+}
+
+impl PreflightTrees {
+    fn new(initialize_workspace: bool) -> Self {
+        let temp = tempdir().expect("fixture tempdir");
+        let home = temp.path().join("home");
+        let work = temp.path().join("work");
+        let scratch = temp.path().join("scratch");
+        fs::create_dir_all(&home).expect("create home");
+        crate::git_repo::init(&work);
+        fs::create_dir_all(&scratch).expect("create scratch");
+        let home_orbit = home.join(".orbit");
+        fs::create_dir_all(&home_orbit).expect("create home orbit");
+        let workspace_orbit = work.join(".orbit");
+        if initialize_workspace {
+            fs::create_dir_all(&workspace_orbit).expect("create workspace orbit");
+            // No `root` key: discovery must keep this directory rather than
+            // redirecting at a configured path.
+            fs::write(workspace_orbit.join("config.toml"), "# fixture workspace\n")
+                .expect("workspace config");
+        }
+        let discovered_workspace_orbit = fs::canonicalize(&work)
+            .unwrap_or_else(|error| panic!("canonicalize work {}: {error}", work.display()))
+            .join(".orbit");
+        Self {
+            _temp: temp,
+            home,
+            work,
+            scratch,
+            home_orbit,
+            workspace_orbit,
+            discovered_workspace_orbit,
+        }
+    }
+}
+
 #[test]
 fn parent_relative_root_opens_the_same_store_as_its_absolute_path() {
     let temp = tempdir().expect("fixture tempdir");
@@ -429,27 +497,6 @@ fn orbit(work: &Path, home: &Path) -> assert_cmd::Command {
 }
 
 #[cfg(unix)]
-struct ReadOnlyDir {
-    path: PathBuf,
-}
-
-#[cfg(unix)]
-impl ReadOnlyDir {
-    fn enter(path: PathBuf) -> Self {
-        fs::create_dir_all(&path).expect("create directory to freeze");
-        chmod(&path, 0o555);
-        Self { path }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for ReadOnlyDir {
-    fn drop(&mut self) {
-        chmod(&self.path, 0o755);
-    }
-}
-
-#[cfg(unix)]
 fn chmod(path: &Path, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
     let mut permissions = fs::metadata(path)
@@ -706,53 +753,6 @@ fn init_with_root_ignores_a_foreign_pin_on_home_orbit() {
     assert_generation_record(&scratch);
     let home_record = fs::read_to_string(home_orbit.join(".generation.lock")).expect("home pin");
     assert_eq!(home_record, format!("1:{FOREIGN_DIGEST}\n"));
-}
-
-struct PreflightTrees {
-    _temp: tempfile::TempDir,
-    home: PathBuf,
-    work: PathBuf,
-    scratch: PathBuf,
-    home_orbit: PathBuf,
-    workspace_orbit: PathBuf,
-    /// Workspace path the child reports. Process cwd is physical, so a fixture
-    /// created through macOS `/var` (a symlink to `/private/var`) is discovered
-    /// as `/private/var/.../work/.orbit`. Override and home paths stay as given.
-    discovered_workspace_orbit: PathBuf,
-}
-
-impl PreflightTrees {
-    fn new(initialize_workspace: bool) -> Self {
-        let temp = tempdir().expect("fixture tempdir");
-        let home = temp.path().join("home");
-        let work = temp.path().join("work");
-        let scratch = temp.path().join("scratch");
-        fs::create_dir_all(&home).expect("create home");
-        crate::git_repo::init(&work);
-        fs::create_dir_all(&scratch).expect("create scratch");
-        let home_orbit = home.join(".orbit");
-        fs::create_dir_all(&home_orbit).expect("create home orbit");
-        let workspace_orbit = work.join(".orbit");
-        if initialize_workspace {
-            fs::create_dir_all(&workspace_orbit).expect("create workspace orbit");
-            // No `root` key: discovery must keep this directory rather than
-            // redirecting at a configured path.
-            fs::write(workspace_orbit.join("config.toml"), "# fixture workspace\n")
-                .expect("workspace config");
-        }
-        let discovered_workspace_orbit = fs::canonicalize(&work)
-            .unwrap_or_else(|error| panic!("canonicalize work {}: {error}", work.display()))
-            .join(".orbit");
-        Self {
-            _temp: temp,
-            home,
-            work,
-            scratch,
-            home_orbit,
-            workspace_orbit,
-            discovered_workspace_orbit,
-        }
-    }
 }
 
 fn preflight_output(

@@ -31,6 +31,11 @@ const LONG_TITLE: &str = "Terminal tables are borderless with a one-line row inv
 const SHORTENING_HINT: &str =
     "Table details shortened. Use --format plain or --json for full output.";
 
+struct OverflowFixture {
+    stdout: String,
+    stderr: String,
+}
+
 #[test]
 fn task_list_renders_one_line_per_task() {
     let workspace = workspace();
@@ -1125,11 +1130,6 @@ fn all_fixed_overflow_warns_and_keeps_identifiers_whole() {
         "piped plain output stays tab-separated and untruncated: {}",
         plain.stdout
     );
-}
-
-struct OverflowFixture {
-    stdout: String,
-    stderr: String,
 }
 
 fn render_overflow_fixture(case: &str) -> OverflowFixture {

@@ -51,10 +51,25 @@ use serde_json::Value;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+
+macro_rules! contract {
+    ($name:ident, $($f:ident),+ $(,)?) => {
+        #[test]
+        fn $name() {
+            if !isolated_run_observation(concat!("run_observation::", stringify!($name))) {
+                return;
+            }
+            run_rows(&[$((stringify!($f), $f as fn())),+]);
+        }
+    };
+}
+
 const STALE_RUNNING: &str = "jrun-20260920-0100";
 const STALE_PENDING: &str = "jrun-20260920-0200";
 const FAILED: &str = "jrun-20260920-0300";
+
 struct CalmHost;
+
 impl orbit_core::runtime::host_resource::HostResourceProbe for CalmHost {
     fn sample(
         &self,
@@ -76,115 +91,7 @@ impl orbit_core::runtime::host_resource::HostResourceProbe for CalmHost {
         }
     }
 }
-fn isolated_run_observation(test: &str) -> bool {
-    const MARKER: &str = "ORBIT_TEST_SECURITY_SWEEP_CHILD";
-    if std::env::var(MARKER).as_deref() == Ok(test) {
-        return true;
-    }
-    let home = tempfile::tempdir().unwrap();
-    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
-    test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    command
-        .args(["--exact", test, "--nocapture", "--test-threads=1"])
-        .env(MARKER, test)
-        .env("HOME", home.path())
-        .env("USERPROFILE", home.path())
-        .current_dir(home.path());
-    let logs = tempfile::tempdir().unwrap();
-    let output = test_env::run_child_test(&mut command, test, logs.path());
-    test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
-    false
-}
-fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
-    let fixture = Fixture::init();
-    let runtime = fixture.runtime();
-    for source in [Some("workspace"), None] {
-        let id = format!("jrun-cli-security-{}", source.unwrap_or("historical"));
-        let now = chrono::Utc::now().to_rfc3339();
-        fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,finished_at,created_at) VALUES (?1,?2,'dependabot_alert_sweep_pipeline',1,'success',?3,?3,?3,?3)", params![id, fixture.workspace_id(), now]).unwrap();
-        let mut state = fixture.empty_state(&runtime, &id, "dependabot_alert_sweep_pipeline");
-        let mut output = serde_json::json!({"filed_count": 1, "min_severity": "high", "excluded_below_min_severity": [{"family": "dependabot", "number": 71, "severity": "moderate"}, {"family": "code_scanning", "alert_number": 81, "security_severity": "moderate"}]});
-        if let Some(source) = source {
-            output["min_severity_source"] = serde_json::json!(source);
-        }
-        state.record_pipeline_output("file", output);
-        runtime.write_run_state(&id, &state).unwrap();
-        let text = fixture.show_text(&id);
-        contains(&text, "filed=1");
-        contains(
-            &text,
-            &format!("min_severity=high ({})", source.unwrap_or("unavailable")),
-        );
-        assert!(
-            text.contains("2 (dependabot #71, code_scanning #81)"),
-            "successful sweeps must expose excluded alerts (2026-10-06/07 incident): {text}"
-        );
-    }
-}
-fn shipped_security_job_uses_the_fixed_floor_unless_run_input_overrides_it() {
-    let fixture = Fixture::init();
-    let case_table = serde_json::json!({"cases": [["", null, "moderate", "built-in"], ["", "min_severity=critical", "critical", "input"]]});
-    for case in case_table["cases"].as_array().unwrap() {
-        let (config, input, floor, source) = (
-            case[0].as_str().unwrap(),
-            case[1].as_str(),
-            case[2].as_str().unwrap(),
-            case[3].as_str().unwrap(),
-        );
-        fs::write(fixture.work.join(".orbit/config.toml"), config).unwrap();
-        let mut command = fixture.orbit();
-        command.args(["run", "job", "dependabot_alert_sweep_pipeline", "--json"]);
-        if source == "built-in" {
-            command.arg("--wait");
-        }
-        if let Some(input) = input {
-            command.args(["--input", input]);
-        }
-        command.timeout(std::time::Duration::from_secs(30));
-        let result = command.output().unwrap();
-        assert!(
-            result.status.success(),
-            "stdout={} stderr={}",
-            String::from_utf8_lossy(&result.stdout),
-            String::from_utf8_lossy(&result.stderr)
-        );
-        let submitted: Value = serde_json::from_slice(&result.stdout).unwrap();
-        if source != "built-in" {
-            let runtime = fixture.registered_runtime();
-            let waited = runtime
-                .wait_pipeline_runs(
-                    &[submitted["run_id"]
-                        .as_str()
-                        .expect("submitted sweep")
-                        .to_string()],
-                    30,
-                    1,
-                    None,
-                )
-                .expect("wait for the actual CLI-submitted security sweep");
-            assert_eq!(waited.results.len(), 1);
-            assert_eq!(
-                waited.results[0].status,
-                orbit_core::PipelineWaitStatus::Success
-            );
-        }
-        let shown = fixture.json(&[
-            "run",
-            "show",
-            submitted["run_id"].as_str().unwrap(),
-            "--json",
-        ]);
-        let expected_json =
-            serde_json::json!({"min_severity": floor, "min_severity_source": source});
-        assert_fields(&shown["pipeline_state"]["pipeline"]["file"], expected_json);
-        assert_eq!(
-            fs::read_to_string(fixture.work.join(".orbit/config.toml")).unwrap(),
-            config
-        );
-    }
-}
+
 struct Fixture {
     _temp: Option<tempfile::TempDir>,
     home: PathBuf,
@@ -483,6 +390,144 @@ impl Fixture {
             .unwrap_or_else(|_| panic!("{args:?} stderr is not one JSON error: {stderr}"))
     }
 }
+
+fn isolated_run_observation(test: &str) -> bool {
+    const MARKER: &str = "ORBIT_TEST_SECURITY_SWEEP_CHILD";
+    if std::env::var(MARKER).as_deref() == Ok(test) {
+        return true;
+    }
+    let home = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(MARKER, test)
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path());
+    let logs = tempfile::tempdir().unwrap();
+    let output = test_env::run_child_test(&mut command, test, logs.path());
+    test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
+    false
+}
+
+fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
+    let fixture = Fixture::init();
+    let runtime = fixture.runtime();
+    for source in [Some("workspace"), None] {
+        let id = format!("jrun-cli-security-{}", source.unwrap_or("historical"));
+        let now = chrono::Utc::now().to_rfc3339();
+        fixture
+            .db()
+            .execute(
+                "INSERT INTO job_runs \
+                 (run_id,workspace_id,job_id,attempt,state,scheduled_at,\
+                  started_at,finished_at,created_at) \
+                 VALUES (?1,?2,'dependabot_alert_sweep_pipeline',1,'success',?3,?3,?3,?3)",
+                params![id, fixture.workspace_id(), now],
+            )
+            .unwrap();
+        let mut state = fixture.empty_state(&runtime, &id, "dependabot_alert_sweep_pipeline");
+        let mut output = serde_json::json!({
+            "filed_count": 1,
+            "min_severity": "high",
+            "excluded_below_min_severity": [
+                {"family": "dependabot", "number": 71, "severity": "moderate"},
+                {
+                    "family": "code_scanning",
+                    "alert_number": 81,
+                    "security_severity": "moderate",
+                }
+            ]
+        });
+        if let Some(source) = source {
+            output["min_severity_source"] = serde_json::json!(source);
+        }
+        state.record_pipeline_output("file", output);
+        runtime.write_run_state(&id, &state).unwrap();
+        let text = fixture.show_text(&id);
+        contains(&text, "filed=1");
+        contains(
+            &text,
+            &format!("min_severity=high ({})", source.unwrap_or("unavailable")),
+        );
+        assert!(
+            text.contains("2 (dependabot #71, code_scanning #81)"),
+            "successful sweeps must expose excluded alerts (2026-10-06/07 incident): {text}"
+        );
+    }
+}
+
+fn shipped_security_job_uses_the_fixed_floor_unless_run_input_overrides_it() {
+    let fixture = Fixture::init();
+    let case_table = serde_json::json!({
+        "cases": [
+            ["", null, "moderate", "built-in"],
+            ["", "min_severity=critical", "critical", "input"],
+        ]
+    });
+    for case in case_table["cases"].as_array().unwrap() {
+        let (config, input, floor, source) = (
+            case[0].as_str().unwrap(),
+            case[1].as_str(),
+            case[2].as_str().unwrap(),
+            case[3].as_str().unwrap(),
+        );
+        fs::write(fixture.work.join(".orbit/config.toml"), config).unwrap();
+        let mut command = fixture.orbit();
+        command.args(["run", "job", "dependabot_alert_sweep_pipeline", "--json"]);
+        if source == "built-in" {
+            command.arg("--wait");
+        }
+        if let Some(input) = input {
+            command.args(["--input", input]);
+        }
+        command.timeout(std::time::Duration::from_secs(30));
+        let result = command.output().unwrap();
+        assert!(
+            result.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let submitted: Value = serde_json::from_slice(&result.stdout).unwrap();
+        if source != "built-in" {
+            let runtime = fixture.registered_runtime();
+            let waited = runtime
+                .wait_pipeline_runs(
+                    &[submitted["run_id"]
+                        .as_str()
+                        .expect("submitted sweep")
+                        .to_string()],
+                    30,
+                    1,
+                    None,
+                )
+                .expect("wait for the actual CLI-submitted security sweep");
+            assert_eq!(waited.results.len(), 1);
+            assert_eq!(
+                waited.results[0].status,
+                orbit_core::PipelineWaitStatus::Success
+            );
+        }
+        let shown = fixture.json(&[
+            "run",
+            "show",
+            submitted["run_id"].as_str().unwrap(),
+            "--json",
+        ]);
+        let expected_json =
+            serde_json::json!({"min_severity": floor, "min_severity_source": source});
+        assert_fields(&shown["pipeline_state"]["pipeline"]["file"], expected_json);
+        assert_eq!(
+            fs::read_to_string(fixture.work.join(".orbit/config.toml")).unwrap(),
+            config
+        );
+    }
+}
+
 fn canonical(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -568,15 +613,7 @@ fn assert_fields(value: &Value, expected: Value) {
 fn assert_cap(report: &Value, expected: Value) {
     assert_fields(cap(report), expected);
 }
-macro_rules! contract {
-    ($name:ident, $($f:ident),+ $(,)?) => {
-        #[test]
-        fn $name() {
-            if !isolated_run_observation(concat!("run_observation::", stringify!($name))) { return; }
-            run_rows(&[$((stringify!($f), $f as fn())),+]);
-        }
-    };
-}
+
 fn run_rows(rows: &[(&str, fn())]) {
     for (name, check) in rows {
         tracing::info!(case = name, "CLI contract row");

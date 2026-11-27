@@ -38,62 +38,6 @@ pub struct ClockTickArgs {
     pub verbose: bool,
 }
 
-fn report_is_noteworthy(action: &str) -> bool {
-    matches!(
-        action,
-        "fired" | "retry_fired" | "baselined" | "error" | "minted"
-    )
-}
-
-fn format_routine_report_line(report: &RoutineSweepReport) -> String {
-    let mut line = format!("{} ({}): {}", report.routine, report.source, report.action);
-    append_report_details(&mut line, &report.reason, &report.slot);
-    if let Some(run_id) = &report.run_id {
-        line.push_str(&format!(" — run {run_id}"));
-    }
-    if !report.batch.is_empty() {
-        line.push_str(&format!(" — batch [{}]", format_batch(&report.batch)));
-    }
-    line
-}
-
-/// `key (reason)` per batch member, in admission order.
-pub(crate) fn format_batch(batch: &[BatchMember]) -> String {
-    batch
-        .iter()
-        .map(|member| format!("{} ({})", member.key, member.reason))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn format_external_merge_settlement_line(report: &ExternalMergeSweepReport) -> String {
-    format!(
-        "{} ({}): settled — PR #{}",
-        report.task_id, report.source, report.pr_number
-    )
-}
-
-fn format_auto_task_report_line(report: &AutoTaskSweepReport) -> String {
-    let mut line = format!(
-        "{} ({}, auto-task): {}",
-        report.name, report.source, report.action
-    );
-    append_report_details(&mut line, &report.reason, &report.slot);
-    if let Some(task_id) = &report.task_id {
-        line.push_str(&format!(" — task {task_id}"));
-    }
-    line
-}
-
-fn append_report_details(line: &mut String, reason: &Option<String>, slot: &Option<String>) {
-    if let Some(reason) = reason {
-        line.push_str(&format!(" — {reason}"));
-    }
-    if let Some(slot) = slot {
-        line.push_str(&format!(" — slot {slot}"));
-    }
-}
-
 impl ClockTickArgs {
     pub fn execute_without_runtime(
         self,
@@ -203,6 +147,62 @@ impl ClockTickArgs {
             ));
         }
         lines
+    }
+}
+
+fn report_is_noteworthy(action: &str) -> bool {
+    matches!(
+        action,
+        "fired" | "retry_fired" | "baselined" | "error" | "minted"
+    )
+}
+
+fn format_routine_report_line(report: &RoutineSweepReport) -> String {
+    let mut line = format!("{} ({}): {}", report.routine, report.source, report.action);
+    append_report_details(&mut line, &report.reason, &report.slot);
+    if let Some(run_id) = &report.run_id {
+        line.push_str(&format!(" — run {run_id}"));
+    }
+    if !report.batch.is_empty() {
+        line.push_str(&format!(" — batch [{}]", format_batch(&report.batch)));
+    }
+    line
+}
+
+/// `key (reason)` per batch member, in admission order.
+pub(crate) fn format_batch(batch: &[BatchMember]) -> String {
+    batch
+        .iter()
+        .map(|member| format!("{} ({})", member.key, member.reason))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_external_merge_settlement_line(report: &ExternalMergeSweepReport) -> String {
+    format!(
+        "{} ({}): settled — PR #{}",
+        report.task_id, report.source, report.pr_number
+    )
+}
+
+fn format_auto_task_report_line(report: &AutoTaskSweepReport) -> String {
+    let mut line = format!(
+        "{} ({}, auto-task): {}",
+        report.name, report.source, report.action
+    );
+    append_report_details(&mut line, &report.reason, &report.slot);
+    if let Some(task_id) = &report.task_id {
+        line.push_str(&format!(" — task {task_id}"));
+    }
+    line
+}
+
+fn append_report_details(line: &mut String, reason: &Option<String>, slot: &Option<String>) {
+    if let Some(reason) = reason {
+        line.push_str(&format!(" — {reason}"));
+    }
+    if let Some(slot) = slot {
+        line.push_str(&format!(" — slot {slot}"));
     }
 }
 

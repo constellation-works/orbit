@@ -11,48 +11,14 @@ use std::time::Duration;
 use orbit_common::test_env;
 use serde_json::{Value, json};
 
-fn event(message: &str, level: &str, target: &str) -> String {
-    json!({
-        "timestamp": "2026-10-07T07:00:00Z",
-        "level": level,
-        "target": target,
-        "fields": {"message": message},
-    })
-    .to_string()
-}
-
-fn append(path: &Path, bytes: &[u8]) {
-    OpenOptions::new()
-        .append(true)
-        .open(path)
-        .unwrap()
-        .write_all(bytes)
-        .unwrap();
-}
-
 /// How long a follower may take to emit an appended record. The wait ends as
 /// soon as the record arrives; the ceiling only bounds a missing one. A fixed
 /// five seconds was exceeded by the CLI's own startup on a saturated host.
 const RECORD_WAIT: Duration = Duration::from_secs(60);
 
-/// `orbit log tail --path <path>` in an isolated home, with no streaming flags.
-fn tail_command(fixture: &crate::git_repo::WorkCheckout, path: &Path) -> Command {
-    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
-    test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    command
-        .current_dir(&fixture.work)
-        .env("HOME", &fixture.home)
-        .env("USERPROFILE", &fixture.home)
-        .env_remove("ORBIT_FORMAT")
-        .env_remove("ORBIT_LOG_PATH")
-        .env("NO_COLOR", "1")
-        .args(["log", "tail"])
-        .arg("--path")
-        .arg(path);
-    command
-}
+// A few MiB of fixture data exercise the production bound without a stress
+// workload or an operator-configurable override of the memory safeguard.
+const RECORD_LIMIT: usize = 1024 * 1024;
 
 struct Follower {
     child: Child,
@@ -133,6 +99,44 @@ impl Drop for Follower {
     }
 }
 
+fn event(message: &str, level: &str, target: &str) -> String {
+    json!({
+        "timestamp": "2026-10-07T07:00:00Z",
+        "level": level,
+        "target": target,
+        "fields": {"message": message},
+    })
+    .to_string()
+}
+
+fn append(path: &Path, bytes: &[u8]) {
+    OpenOptions::new()
+        .append(true)
+        .open(path)
+        .unwrap()
+        .write_all(bytes)
+        .unwrap();
+}
+
+/// `orbit log tail --path <path>` in an isolated home, with no streaming flags.
+fn tail_command(fixture: &crate::git_repo::WorkCheckout, path: &Path) -> Command {
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(&fixture.work)
+        .env("HOME", &fixture.home)
+        .env("USERPROFILE", &fixture.home)
+        .env_remove("ORBIT_FORMAT")
+        .env_remove("ORBIT_LOG_PATH")
+        .env("NO_COLOR", "1")
+        .args(["log", "tail"])
+        .arg("--path")
+        .arg(path);
+    command
+}
+
 #[test]
 fn follow_rotation_drains_archive_then_preserves_filters_and_partial_records() {
     for json in [true, false] {
@@ -211,10 +215,6 @@ fn one_shot_tail(fixture: &crate::git_repo::WorkCheckout, path: &Path) -> Output
         .output()
         .expect("log tail output")
 }
-
-// A few MiB of fixture data exercise the production bound without a stress
-// workload or an operator-configurable override of the memory safeguard.
-const RECORD_LIMIT: usize = 1024 * 1024;
 
 fn padded_event(message: &str, bytes: usize) -> String {
     let record = event(message, "WARN", "orbit.test");

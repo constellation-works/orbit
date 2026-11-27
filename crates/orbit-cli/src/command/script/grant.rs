@@ -56,22 +56,6 @@ pub struct ScriptGrantArgs {
     pub cpu_quota: Option<u32>,
 }
 
-fn parse_script_memory_max(value: &str) -> Result<u64, String> {
-    orbit_config::MemoryLimit::parse(value)
-        .and_then(orbit_config::MemoryLimit::byte_count)
-        .ok_or_else(|| {
-            format!(
-                "invalid memory size `{value}` (want a positive byte count with an optional \
-                 K, M, G or T suffix)"
-            )
-        })
-}
-
-fn parse_script_network(value: &str) -> Result<ScriptNetwork, String> {
-    ScriptNetwork::parse(value)
-        .ok_or_else(|| format!("unknown network `{value}` (want `none`, `https` or `any`)"))
-}
-
 impl ScriptGrantArgs {
     pub(super) fn execute(self, core: &Core) -> CommandOut {
         let result = exec(
@@ -180,4 +164,20 @@ impl ScriptGrantArgs {
         }
         Ok(Payload::detail(doc, text).into())
     }
+}
+
+fn parse_script_memory_max(value: &str) -> Result<u64, String> {
+    orbit_config::MemoryLimit::parse(value)
+        .and_then(orbit_config::MemoryLimit::byte_count)
+        .ok_or_else(|| {
+            format!(
+                "invalid memory size `{value}` (want a positive byte count with an optional \
+                 K, M, G or T suffix)"
+            )
+        })
+}
+
+fn parse_script_network(value: &str) -> Result<ScriptNetwork, String> {
+    ScriptNetwork::parse(value)
+        .ok_or_else(|| format!("unknown network `{value}` (want `none`, `https` or `any`)"))
 }

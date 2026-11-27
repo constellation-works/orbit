@@ -124,6 +124,250 @@ time.sleep(600)
 connection.execute("COMMIT")
 "#;
 
+/// The production connection's busy timeout. The next open must stay behind
+/// the holder's runtime lock longer than this rather than spend it on SQLite.
+#[cfg(target_os = "linux")]
+const STORE_BUSY_BUDGET: Duration =
+    Duration::from_millis(orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS as u64);
+
+/// One runtime, two modes selected by `ORBIT_FIXTURE_LOCK_MODE`. `hold` keeps
+/// the write lock until released. `acquire` records that it started and then
+/// takes the lock with the production busy timeout. The inherited flock stays
+/// open until the process exits.
+#[cfg(target_os = "linux")]
+const LOCK_BUDGET_RUNTIME: &str = r#"#!/usr/bin/env python3
+import os, sqlite3, sys, time
+mode = os.environ["ORBIT_FIXTURE_LOCK_MODE"]
+db = os.environ["ORBIT_FIXTURE_DB"]
+if mode == "hold":
+    ready = os.environ["ORBIT_FIXTURE_READY"]
+    release = os.environ["ORBIT_FIXTURE_RELEASE"]
+    released = os.environ["ORBIT_FIXTURE_RELEASED"]
+    connection = sqlite3.connect(db, isolation_level=None, timeout=0)
+    connection.execute("BEGIN EXCLUSIVE")
+    connection.execute("CREATE TABLE IF NOT EXISTS held(x INTEGER)")
+    with open(ready, "w") as handle:
+        handle.write(str(os.getpid()))
+    while not os.path.exists(release):
+        time.sleep(0.05)
+    connection.execute("COMMIT")
+    with open(released, "w") as handle:
+        handle.write("released")
+elif mode == "acquire":
+    open(os.environ["ORBIT_FIXTURE_ENTERED"], "w").close()
+    connection = sqlite3.connect(
+        db, timeout=float(os.environ["ORBIT_FIXTURE_BUSY_TIMEOUT"])
+    )
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError as error:
+        raise SystemExit(2 if "locked" in str(error) else 1)
+    connection.execute("ROLLBACK")
+    open(os.environ["ORBIT_FIXTURE_ACQUIRED"], "w").close()
+else:
+    sys.exit(1)
+"#;
+
+/// The reviewer's side: the calls an agent makes through the built `orbit`,
+/// plus raw broker requests no `orbit` would send.
+const PROVIDER: &str = r#"import json, os, socket, struct, subprocess, sys, time
+orbit, mode, task = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def wait_for_file(path, seconds):
+    deadline = time.time() + seconds
+    while not os.path.exists(path) and time.time() < deadline:
+        time.sleep(0.05)
+    return os.path.exists(path)
+
+# Registration writes the follower store before this provider may open it.
+start = os.environ.get('ORBIT_FIXTURE_PROVIDER_START')
+if start and not wait_for_file(start, 180):
+    sys.stderr.write('timed out waiting for %s\n' % start)
+    sys.exit(1)
+
+MANIFEST, REPORT = 'review-manifest.json', 'review-report.json'
+
+def run(argv, env=None, cwd=None):
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=300, env=env, cwd=cwd)
+    report = {'code': result.returncode, 'stderr': result.stderr[-4000:]}
+    if result.returncode == 0:
+        try:
+            report['output'] = json.loads(result.stdout)
+        except ValueError:
+            report['stdout'] = result.stdout[-4000:]
+    return report
+
+def tool(name, payload, env=None, cwd=None):
+    return run([orbit, 'tool', 'run', name, '--input', json.dumps(payload)], env, cwd)
+
+def artifact(action, payload, env=None, cwd=None):
+    return tool('orbit.task.artifact', dict(payload, action=action), env, cwd)
+
+def with_broker(socket_path):
+    env = dict(os.environ)
+    env['ORBIT_PLUGIN_BROKER'] = socket_path
+    return env
+
+def mcp(calls, cwd=None, env=None):
+    server = subprocess.Popen([orbit, 'mcp', 'serve'], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd, env=env)
+    def send(message):
+        server.stdin.write(json.dumps(message) + '\n')
+        server.stdin.flush()
+    def answer(ident):
+        while True:
+            line = server.stdout.readline()
+            if not line:
+                return {'error': server.stderr.read()[-4000:]}
+            message = json.loads(line)
+            if message.get('id') == ident:
+                return message
+    send({'jsonrpc': '2.0', 'id': 0, 'method': 'initialize', 'params': {
+        'protocolVersion': '2025-06-18', 'capabilities': {},
+        'clientInfo': {'name': 'reviewer', 'version': '0'}}})
+    answer(0)
+    send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+    results = []
+    for ident, call in enumerate(calls, 1):
+        # A family call names its action: (family, action, arguments).
+        name, arguments = call[0], call[-1]
+        if len(call) == 3:
+            arguments = dict(arguments, action=call[1])
+        send({'jsonrpc': '2.0', 'id': ident, 'method': 'tools/call',
+              'params': {'name': name, 'arguments': arguments}})
+        response = answer(ident)
+        result = response.get('result', {})
+        if result.get('isError') or 'error' in response:
+            results.append({'error': response})
+        else:
+            results.append(result.get('structuredContent'))
+    server.stdin.close()
+    server.wait(timeout=60)
+    return results
+
+def raw_artifact(action, payload):
+    return raw('orbit.task.artifact', dict(payload, action=action))
+
+def raw(tool_name, payload):
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connection.connect(os.environ['ORBIT_PLUGIN_BROKER'])
+    body = json.dumps({'schema_version': 1, 'tool': tool_name, 'input': payload,
+        'cwd': os.getcwd(), 'workspace': None, 'entry_point': 'cli',
+        'dry_run': False}).encode()
+    connection.sendall(struct.pack('>I', len(body)) + body)
+    def exactly(count):
+        data = b''
+        while len(data) < count:
+            chunk = connection.recv(count - len(data))
+            if not chunk:
+                raise EOFError('broker closed')
+            data += chunk
+        return data
+    length = struct.unpack('>I', exactly(4))[0]
+    return json.loads(exactly(length))
+
+report = {}
+if mode == 'running':
+    scratch, lose, stale_seen, pinned, selector, nested, mcp_done, mcp_checked = sys.argv[4:12]
+    def wait(path):
+        if not wait_for_file(path, 180):
+            sys.stderr.write('timed out waiting for %s\n' % path)
+            sys.exit(1)
+    def readable(path):
+        try:
+            with open(path) as handle:
+                handle.read()
+            return True
+        except OSError:
+            return False
+    report['known_hosts_readable'] = readable(os.path.expanduser('~/.ssh/known_hosts'))
+    report['private_key_readable'] = readable(os.path.expanduser('~/.ssh/id_ed25519'))
+    report['direct_ssh'] = run(['ssh', '-T', '--', 'isolated-owner', 'orbit mcp serve'])
+    get = {'id': task, 'path': MANIFEST}
+    report['stale_manifest'] = artifact('get', get)
+    open(stale_seen, 'w').close()
+    wait(pinned)
+    report['cli_get'] = artifact('get', get)
+    put = {'id': task, 'path': REPORT, 'source_path': os.path.join(scratch, 'report.json')}
+    mcp_put = dict(put, source_path=os.path.join(scratch, 'mcp-report.json'))
+    report['mcp_get'], report['mcp_put'] = mcp([('orbit_task_artifact', 'get', get),
+                                                ('orbit_task_artifact', 'put', mcp_put)])
+    # The host checks the owner's bytes before any CLI put replaces them.
+    open(mcp_done, 'w').close()
+    wait(mcp_checked)
+    source = lambda name: dict(put, source_path=os.path.join(scratch, name + '.json'))
+    evidence = [REPORT, 'review-report-history.json', 'review-evidence-hold.json',
+                'review-evidence-ci.json', 'review-evidence-ci.log']
+    report['evidence_reads'] = {path: artifact('get', {'id': task, 'path': path})
+                                for path in evidence}
+    report['evidence_mcp_reads'] = dict(zip(evidence, mcp([
+        ('orbit_task_artifact', 'get', {'id': task, 'path': path}) for path in evidence])))
+    names = ['wrong_path', 'gate_record', 'cross_task', 'stale_report', 'symlink', 'oversize',
+             'task_show', 'unlisted', 'other_owner']
+    report['mcp_refusals'] = dict(zip(names, mcp([
+        ('orbit_task_artifact', 'get', {'id': task, 'path': 'review-evidence-unnamed.log'}),
+        ('orbit_task_artifact', 'get', {'id': task, 'path': 'review-gate.json'}),
+        ('orbit_task_artifact', 'get', {'id': 'TSO-999', 'path': MANIFEST}),
+        ('orbit_task_artifact', 'put', source('stale')),
+        ('orbit_task_artifact', 'put', source('link')),
+        ('orbit_task_artifact', 'put', source('oversize')),
+        ('orbit_task_show', {'id': task}),
+        ('orbit_task_update', {'id': task, 'status': 'done'}),
+        ('orbit_task_artifact', 'get', dict(get, workspace='another-owner/ws_other')),
+    ])))
+    # From a subdirectory, naming the owner's selector explicitly.
+    named = dict(get, workspace=selector)
+    report['nested_cli_get'] = artifact('get', named, cwd=nested)
+    report['nested_mcp_get'] = mcp([('orbit_task_artifact', 'get', named)], cwd=nested)[0]
+    report['nested_cli_put'] = artifact('put', dict(put, workspace=selector),
+                                    cwd=nested)
+    report['cli_put'] = artifact('put', put)
+    report['cli_put_replay'] = artifact('put', put)
+    open(lose, 'w').close()
+    report['lost_put'] = artifact('put', put)
+    report['retry_put'] = artifact('put', put)
+    report['wrong_path'] = artifact('get', {'id': task, 'path': 'review-evidence-unnamed.log'})
+    report['cross_task'] = artifact('get', {'id': 'TSO-999', 'path': MANIFEST})
+    report['cross_task_evidence'] = artifact('get', {'id': 'TSO-999', 'path': 'review-evidence-ci.json'})
+    for name in ('stale', 'link', 'oversize'):
+        key = {'stale': 'stale_report', 'link': 'symlink', 'oversize': 'oversize'}[name]
+        report[key] = artifact('put', dict(put, source_path=os.path.join(scratch, name + '.json')))
+    report['task_show'] = tool('orbit.task.show', {'id': task})
+    report['unlisted'] = tool('orbit.task.update', {'id': task, 'status': 'done'})
+    content = __import__('base64').b64encode(open(os.path.join(scratch, 'report.json'), 'rb').read()).decode()
+    report['forged'] = {
+        'claim_override': raw_artifact('put', {'id': task, 'path': REPORT,
+            'content_base64': content, 'claim_id': 'forged-claim'}),
+        'workspace_override': raw_artifact('get', {'id': task, 'path': MANIFEST,
+            'workspace': 'another-owner/ws_other'}),
+        'certificate_path': raw_artifact('put', {'id': task,
+            'path': 'review-certificate.json', 'content_base64': content}),
+        'other_task': raw_artifact('put', {'id': 'TSO-999', 'path': REPORT,
+            'content_base64': content}),
+        'unrelated_tool': raw('orbit.task.update', {'id': task, 'status': 'done'}),
+        'source_path': raw_artifact('put', {'id': task, 'path': REPORT,
+            'source_path': '/etc/passwd'}),
+    }
+elif mode == 'calls':
+    scratch = sys.argv[4]
+    get = {'id': task, 'path': MANIFEST}
+    put = {'id': task, 'path': REPORT, 'source_path': os.path.join(scratch, 'report.json')}
+    report['cli_get'] = artifact('get', get)
+    report['cli_put'] = artifact('put', put)
+    report['mcp_get'], report['mcp_put'] = mcp([('orbit_task_artifact', 'get', get),
+                                                ('orbit_task_artifact', 'put', put)])
+else:
+    get = {'id': task, 'path': MANIFEST}
+    report['finished'] = artifact('get', get)
+    report['other_activity'] = artifact('get', get,
+        with_broker(os.environ['ORBIT_TEST_IMPLEMENTER_BROKER']))
+    report['broker_gone'] = artifact('get', get,
+        with_broker(os.environ['ORBIT_TEST_DEAD_BROKER']))
+    report['broker_gone_mcp'] = mcp([('orbit_task_artifact', 'get', get)],
+        env=with_broker(os.environ['ORBIT_TEST_DEAD_BROKER']))[0]
+print(json.dumps(report))
+"#;
+
 /// One Orbit machine: its own home, global root and registered checkout.
 struct Node {
     home: PathBuf,
@@ -209,6 +453,243 @@ impl Node {
         )
         .expect("machine identity")
         .process_machine_id
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct KillChildOnDrop(Child);
+
+#[cfg(target_os = "linux")]
+impl Drop for KillChildOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct KillPidOnDrop(u32);
+
+#[cfg(target_os = "linux")]
+impl Drop for KillPidOnDrop {
+    fn drop(&mut self) {
+        let _ = Command::new("kill")
+            .args(["-KILL", &self.0.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+/// Exclusive flock shared with the owner runtime the ssh stand-in execs.
+///
+/// Acquiring it means that process has exited, including when SIGKILL was
+/// pending on an uninterruptible write. The guard must be dropped before the
+/// next ssh session: that session blocks on the same file.
+struct OwnerRuntimeLock {
+    file: fs::File,
+}
+
+impl OwnerRuntimeLock {
+    fn acquire(base: &Path) -> Self {
+        let path = base.join("owner-runtime.lock");
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            // Flock token shared with the stand-in wrapper. Keep the inode;
+            // truncating is not part of taking the lock.
+            .truncate(false)
+            .mode(0o600)
+            .open(&path)
+            .unwrap_or_else(|error| panic!("open {}: {error}", path.display()));
+        let started = Instant::now();
+        loop {
+            // SAFETY: `file` is a live descriptor owned here. `LOCK_NB` returns
+            // instead of blocking, so the hang guard below can fire.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Self { file };
+            }
+            let error = std::io::Error::last_os_error();
+            assert!(
+                error.raw_os_error() == Some(libc::EWOULDBLOCK)
+                    || error.raw_os_error() == Some(libc::EAGAIN),
+                "lock {}: {error}",
+                path.display()
+            );
+            assert!(
+                started.elapsed() < orbit_common::test_env::FIXTURE_STEP_DEADLINE,
+                "owner runtime still holds {} after its session ended",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for OwnerRuntimeLock {
+    fn drop(&mut self) {
+        // SAFETY: `file` is the descriptor acquired above and still owned here.
+        // Closing it would release the flock too; unlocking first makes the
+        // reason visible next to the wait in `acquire`.
+        unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
+/// The leaf's owner route, built for each brokered call as the claimed
+/// worker's production route is. Dropping the route when the call returns
+/// closes its SSH session, so the owner runtime exits before the fixture
+/// opens the owner store.
+struct PerCallOwnerRoute<F>(F);
+
+impl<F> orbit_tools::OwnerCoordinator for PerCallOwnerRoute<F>
+where
+    F: Fn() -> FederatedMcpHost + Send + Sync,
+{
+    fn call(
+        &self,
+        name: &str,
+        input: Value,
+        session: ToolSessionContext,
+    ) -> Result<Value, orbit_common::OrbitError> {
+        orbit_tools::OwnerCoordinator::call(&(self.0)(), name, input, session)
+    }
+}
+
+/// The reviewer provider, confined as a managed launch confines it.
+struct Confined {
+    child: ProviderChild,
+}
+
+impl Confined {
+    #[allow(clippy::too_many_arguments)]
+    fn spawn(
+        runner: &OrbitRuntime,
+        follower: &Node,
+        profile: &ResolvedFsProfile,
+        provider: &Path,
+        args: &[&str],
+        brokers: &[&dyn PluginBrokerHandle],
+        extra_env: &[(&str, String)],
+    ) -> Self {
+        let mut argv = vec![
+            provider.display().to_string(),
+            env!("CARGO_BIN_EXE_orbit").to_string(),
+        ];
+        argv.extend(args.iter().map(ToString::to_string));
+        let mut env = runner.agent_subprocess_environment(&[]);
+        env.push((
+            "ORBIT_PLUGIN_BROKER".to_string(),
+            brokers[0].socket_path().display().to_string(),
+        ));
+        env.push(("ORBIT_WORKER_CONTEXT_REQUIRED".to_string(), "1".to_string()));
+        let start_signal = provider_start_signal(&follower.work);
+        env.push((
+            "ORBIT_FIXTURE_PROVIDER_START".to_string(),
+            start_signal.display().to_string(),
+        ));
+        env.extend(
+            extra_env
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), value.clone())),
+        );
+        let prepared = prepare_plugin_mask(&follower.global()).expect("plugin mask");
+        let confined = Self::launch(profile, &argv, &env, &follower.work, prepared);
+        let pid = confined.child.id();
+        // What the step runner records for the provider it just spawned.
+        // The provider waits on `start_signal` before it opens the follower
+        // store, so these writes finish first.
+        RuntimeHost::register_worker_process(runner, pid).expect("record the worker");
+        RuntimeHost::register_worker_pid_namespace(runner, pid).expect("record the namespace");
+        for broker in brokers {
+            broker.bind_sandbox(pid).expect("authenticate the sandbox");
+        }
+        fs::write(&start_signal, "").expect("release the confined provider");
+        confined
+    }
+
+    #[cfg(target_os = "linux")]
+    fn launch(
+        profile: &ResolvedFsProfile,
+        argv: &[String],
+        env: &[(String, String)],
+        cwd: &Path,
+        prepared: orbit_core::runtime::plugin::sandbox_mask::PreparedPluginMask,
+    ) -> Self {
+        let mask = orbit_exec::LinuxBwrapMask {
+            sentinel: prepared.sentinel,
+            targets: prepared.trees,
+            files: Vec::new(),
+        };
+        let plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
+            &orbit_common::Env::capture(),
+            profile,
+            &orbit_exec::LinuxBwrapCommand {
+                program: "/usr/bin/python3",
+                args: argv,
+                cwd: Some(cwd),
+                managed_worktree: false,
+            },
+            Vec::new(),
+            Some(&mask),
+        )
+        .expect("compile the agent sandbox");
+        let child = orbit_exec::spawn_under_linux_bwrap(orbit_exec::LinuxBwrapSpawnRequest {
+            plan: &plan,
+            env,
+            cwd: Some(cwd),
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+        })
+        .expect("spawn real sandbox");
+        Self {
+            child: ProviderChild::new(child),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn launch(
+        profile: &ResolvedFsProfile,
+        argv: &[String],
+        env: &[(String, String)],
+        cwd: &Path,
+        prepared: orbit_core::runtime::plugin::sandbox_mask::PreparedPluginMask,
+    ) -> Self {
+        let mut profile_text = orbit_exec::compile_macos_sandbox_profile(
+            &orbit_common::Env::capture(),
+            profile,
+            "codex",
+        )
+        .expect("compile profile");
+        orbit_exec::append_macos_subpath_mask(&mut profile_text, &prepared.trees);
+        let child = orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
+            profile_text: &profile_text,
+            program: "/usr/bin/python3",
+            args: argv,
+            env,
+            cwd: Some(cwd),
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+            inherited_fds: &[],
+        })
+        .expect("spawn real sandbox");
+        Self {
+            child: ProviderChild::new(child),
+        }
+    }
+
+    /// Wait for the provider and return its report.
+    fn finish(self) -> Value {
+        let output = self.child.supervise();
+        assert!(
+            output.success,
+            "sandbox provider: {}\n{}",
+            output.stdout, output.stderr
+        );
+        serde_json::from_str(&output.stdout)
+            .unwrap_or_else(|error| panic!("provider report: {error}\n{}", output.stdout))
     }
 }
 
@@ -505,12 +986,6 @@ fn wait_for_holder(ready: &Path, session: &mut Child) -> u32 {
     }
 }
 
-/// The production connection's busy timeout. The next open must stay behind
-/// the holder's runtime lock longer than this rather than spend it on SQLite.
-#[cfg(target_os = "linux")]
-const STORE_BUSY_BUDGET: Duration =
-    Duration::from_millis(orbit_common::storage::sqlite::DEFAULT_BUSY_TIMEOUT_MS as u64);
-
 #[cfg(target_os = "linux")]
 fn probe_owner_store(db: &Path, timeout_secs: &str) -> i32 {
     let status = Command::new("/usr/bin/python3")
@@ -550,44 +1025,6 @@ fn wait_until_owner_store_released(db: &Path, holder: u32) -> bool {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
-
-/// One runtime, two modes selected by `ORBIT_FIXTURE_LOCK_MODE`. `hold` keeps
-/// the write lock until released. `acquire` records that it started and then
-/// takes the lock with the production busy timeout. The inherited flock stays
-/// open until the process exits.
-#[cfg(target_os = "linux")]
-const LOCK_BUDGET_RUNTIME: &str = r#"#!/usr/bin/env python3
-import os, sqlite3, sys, time
-mode = os.environ["ORBIT_FIXTURE_LOCK_MODE"]
-db = os.environ["ORBIT_FIXTURE_DB"]
-if mode == "hold":
-    ready = os.environ["ORBIT_FIXTURE_READY"]
-    release = os.environ["ORBIT_FIXTURE_RELEASE"]
-    released = os.environ["ORBIT_FIXTURE_RELEASED"]
-    connection = sqlite3.connect(db, isolation_level=None, timeout=0)
-    connection.execute("BEGIN EXCLUSIVE")
-    connection.execute("CREATE TABLE IF NOT EXISTS held(x INTEGER)")
-    with open(ready, "w") as handle:
-        handle.write(str(os.getpid()))
-    while not os.path.exists(release):
-        time.sleep(0.05)
-    connection.execute("COMMIT")
-    with open(released, "w") as handle:
-        handle.write("released")
-elif mode == "acquire":
-    open(os.environ["ORBIT_FIXTURE_ENTERED"], "w").close()
-    connection = sqlite3.connect(
-        db, timeout=float(os.environ["ORBIT_FIXTURE_BUSY_TIMEOUT"])
-    )
-    try:
-        connection.execute("BEGIN IMMEDIATE")
-    except sqlite3.OperationalError as error:
-        raise SystemExit(2 if "locked" in str(error) else 1)
-    connection.execute("ROLLBACK")
-    open(os.environ["ORBIT_FIXTURE_ACQUIRED"], "w").close()
-else:
-    sys.exit(1)
-"#;
 
 /// After the stand-in is killed, its runtime still holds the owner write lock.
 /// A next owner open must not start through the busy budget; after releasing
@@ -690,31 +1127,6 @@ fn next_owner_open_waits_out_a_lock_held_past_the_busy_budget() {
         acquired.exists(),
         "the next runtime took the write lock after the holder exited"
     );
-}
-
-#[cfg(target_os = "linux")]
-struct KillChildOnDrop(Child);
-
-#[cfg(target_os = "linux")]
-impl Drop for KillChildOnDrop {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-#[cfg(target_os = "linux")]
-struct KillPidOnDrop(u32);
-
-#[cfg(target_os = "linux")]
-impl Drop for KillPidOnDrop {
-    fn drop(&mut self) {
-        let _ = Command::new("kill")
-            .args(["-KILL", &self.0.to_string()])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1468,61 +1880,6 @@ fn sandbox_fixture() {
     assert!(!before.1, "the bridge never records a certificate");
 }
 
-/// Exclusive flock shared with the owner runtime the ssh stand-in execs.
-///
-/// Acquiring it means that process has exited, including when SIGKILL was
-/// pending on an uninterruptible write. The guard must be dropped before the
-/// next ssh session: that session blocks on the same file.
-struct OwnerRuntimeLock {
-    file: fs::File,
-}
-
-impl OwnerRuntimeLock {
-    fn acquire(base: &Path) -> Self {
-        let path = base.join("owner-runtime.lock");
-        let file = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            // Flock token shared with the stand-in wrapper. Keep the inode;
-            // truncating is not part of taking the lock.
-            .truncate(false)
-            .mode(0o600)
-            .open(&path)
-            .unwrap_or_else(|error| panic!("open {}: {error}", path.display()));
-        let started = Instant::now();
-        loop {
-            // SAFETY: `file` is a live descriptor owned here. `LOCK_NB` returns
-            // instead of blocking, so the hang guard below can fire.
-            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
-                return Self { file };
-            }
-            let error = std::io::Error::last_os_error();
-            assert!(
-                error.raw_os_error() == Some(libc::EWOULDBLOCK)
-                    || error.raw_os_error() == Some(libc::EAGAIN),
-                "lock {}: {error}",
-                path.display()
-            );
-            assert!(
-                started.elapsed() < orbit_common::test_env::FIXTURE_STEP_DEADLINE,
-                "owner runtime still holds {} after its session ended",
-                path.display()
-            );
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-}
-
-impl Drop for OwnerRuntimeLock {
-    fn drop(&mut self) {
-        // SAFETY: `file` is the descriptor acquired above and still owned here.
-        // Closing it would release the flock too; unlocking first makes the
-        // reason visible next to the wait in `acquire`.
-        unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
-    }
-}
-
 /// Let the owner's reservation for `claim_id` run out: its window is moved,
 /// in the owner's own store, to one that closed a minute ago. Returns the
 /// claim as the owner's console, read at the real clock, then reports it.
@@ -1581,26 +1938,6 @@ fn elapse_reservation(owner: &OrbitRuntime, claim_id: &str, base: &Path) -> Valu
     assert_eq!(elapsed["reservation"]["expires_at"], expired.as_str());
     assert_eq!(elapsed["reservation"]["expired"], true, "{elapsed}");
     elapsed
-}
-
-/// The leaf's owner route, built for each brokered call as the claimed
-/// worker's production route is. Dropping the route when the call returns
-/// closes its SSH session, so the owner runtime exits before the fixture
-/// opens the owner store.
-struct PerCallOwnerRoute<F>(F);
-
-impl<F> orbit_tools::OwnerCoordinator for PerCallOwnerRoute<F>
-where
-    F: Fn() -> FederatedMcpHost + Send + Sync,
-{
-    fn call(
-        &self,
-        name: &str,
-        input: Value,
-        session: ToolSessionContext,
-    ) -> Result<Value, orbit_common::OrbitError> {
-        orbit_tools::OwnerCoordinator::call(&(self.0)(), name, input, session)
-    }
 }
 
 /// A refused MCP call: an error answer that names `cause`.
@@ -1683,340 +2020,3 @@ fn provider_start_signal(work: &Path) -> PathBuf {
         NEXT.fetch_add(1, Ordering::Relaxed)
     ))
 }
-
-/// The reviewer provider, confined as a managed launch confines it.
-struct Confined {
-    child: ProviderChild,
-}
-
-impl Confined {
-    #[allow(clippy::too_many_arguments)]
-    fn spawn(
-        runner: &OrbitRuntime,
-        follower: &Node,
-        profile: &ResolvedFsProfile,
-        provider: &Path,
-        args: &[&str],
-        brokers: &[&dyn PluginBrokerHandle],
-        extra_env: &[(&str, String)],
-    ) -> Self {
-        let mut argv = vec![
-            provider.display().to_string(),
-            env!("CARGO_BIN_EXE_orbit").to_string(),
-        ];
-        argv.extend(args.iter().map(ToString::to_string));
-        let mut env = runner.agent_subprocess_environment(&[]);
-        env.push((
-            "ORBIT_PLUGIN_BROKER".to_string(),
-            brokers[0].socket_path().display().to_string(),
-        ));
-        env.push(("ORBIT_WORKER_CONTEXT_REQUIRED".to_string(), "1".to_string()));
-        let start_signal = provider_start_signal(&follower.work);
-        env.push((
-            "ORBIT_FIXTURE_PROVIDER_START".to_string(),
-            start_signal.display().to_string(),
-        ));
-        env.extend(
-            extra_env
-                .iter()
-                .map(|(key, value)| ((*key).to_string(), value.clone())),
-        );
-        let prepared = prepare_plugin_mask(&follower.global()).expect("plugin mask");
-        let confined = Self::launch(profile, &argv, &env, &follower.work, prepared);
-        let pid = confined.child.id();
-        // What the step runner records for the provider it just spawned.
-        // The provider waits on `start_signal` before it opens the follower
-        // store, so these writes finish first.
-        RuntimeHost::register_worker_process(runner, pid).expect("record the worker");
-        RuntimeHost::register_worker_pid_namespace(runner, pid).expect("record the namespace");
-        for broker in brokers {
-            broker.bind_sandbox(pid).expect("authenticate the sandbox");
-        }
-        fs::write(&start_signal, "").expect("release the confined provider");
-        confined
-    }
-
-    #[cfg(target_os = "linux")]
-    fn launch(
-        profile: &ResolvedFsProfile,
-        argv: &[String],
-        env: &[(String, String)],
-        cwd: &Path,
-        prepared: orbit_core::runtime::plugin::sandbox_mask::PreparedPluginMask,
-    ) -> Self {
-        let mask = orbit_exec::LinuxBwrapMask {
-            sentinel: prepared.sentinel,
-            targets: prepared.trees,
-            files: Vec::new(),
-        };
-        let plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
-            &orbit_common::Env::capture(),
-            profile,
-            &orbit_exec::LinuxBwrapCommand {
-                program: "/usr/bin/python3",
-                args: argv,
-                cwd: Some(cwd),
-                managed_worktree: false,
-            },
-            Vec::new(),
-            Some(&mask),
-        )
-        .expect("compile the agent sandbox");
-        let child = orbit_exec::spawn_under_linux_bwrap(orbit_exec::LinuxBwrapSpawnRequest {
-            plan: &plan,
-            env,
-            cwd: Some(cwd),
-            stdin: Stdio::null(),
-            stdout: Stdio::piped(),
-            stderr: Stdio::piped(),
-        })
-        .expect("spawn real sandbox");
-        Self {
-            child: ProviderChild::new(child),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn launch(
-        profile: &ResolvedFsProfile,
-        argv: &[String],
-        env: &[(String, String)],
-        cwd: &Path,
-        prepared: orbit_core::runtime::plugin::sandbox_mask::PreparedPluginMask,
-    ) -> Self {
-        let mut profile_text = orbit_exec::compile_macos_sandbox_profile(
-            &orbit_common::Env::capture(),
-            profile,
-            "codex",
-        )
-        .expect("compile profile");
-        orbit_exec::append_macos_subpath_mask(&mut profile_text, &prepared.trees);
-        let child = orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
-            profile_text: &profile_text,
-            program: "/usr/bin/python3",
-            args: argv,
-            env,
-            cwd: Some(cwd),
-            stdin: Stdio::null(),
-            stdout: Stdio::piped(),
-            stderr: Stdio::piped(),
-            inherited_fds: &[],
-        })
-        .expect("spawn real sandbox");
-        Self {
-            child: ProviderChild::new(child),
-        }
-    }
-
-    /// Wait for the provider and return its report.
-    fn finish(self) -> Value {
-        let output = self.child.supervise();
-        assert!(
-            output.success,
-            "sandbox provider: {}\n{}",
-            output.stdout, output.stderr
-        );
-        serde_json::from_str(&output.stdout)
-            .unwrap_or_else(|error| panic!("provider report: {error}\n{}", output.stdout))
-    }
-}
-
-/// The reviewer's side: the calls an agent makes through the built `orbit`,
-/// plus raw broker requests no `orbit` would send.
-const PROVIDER: &str = r#"import json, os, socket, struct, subprocess, sys, time
-orbit, mode, task = sys.argv[1], sys.argv[2], sys.argv[3]
-
-def wait_for_file(path, seconds):
-    deadline = time.time() + seconds
-    while not os.path.exists(path) and time.time() < deadline:
-        time.sleep(0.05)
-    return os.path.exists(path)
-
-# Registration writes the follower store before this provider may open it.
-start = os.environ.get('ORBIT_FIXTURE_PROVIDER_START')
-if start and not wait_for_file(start, 180):
-    sys.stderr.write('timed out waiting for %s\n' % start)
-    sys.exit(1)
-
-MANIFEST, REPORT = 'review-manifest.json', 'review-report.json'
-
-def run(argv, env=None, cwd=None):
-    result = subprocess.run(argv, capture_output=True, text=True, timeout=300, env=env, cwd=cwd)
-    report = {'code': result.returncode, 'stderr': result.stderr[-4000:]}
-    if result.returncode == 0:
-        try:
-            report['output'] = json.loads(result.stdout)
-        except ValueError:
-            report['stdout'] = result.stdout[-4000:]
-    return report
-
-def tool(name, payload, env=None, cwd=None):
-    return run([orbit, 'tool', 'run', name, '--input', json.dumps(payload)], env, cwd)
-
-def artifact(action, payload, env=None, cwd=None):
-    return tool('orbit.task.artifact', dict(payload, action=action), env, cwd)
-
-def with_broker(socket_path):
-    env = dict(os.environ)
-    env['ORBIT_PLUGIN_BROKER'] = socket_path
-    return env
-
-def mcp(calls, cwd=None, env=None):
-    server = subprocess.Popen([orbit, 'mcp', 'serve'], stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd, env=env)
-    def send(message):
-        server.stdin.write(json.dumps(message) + '\n')
-        server.stdin.flush()
-    def answer(ident):
-        while True:
-            line = server.stdout.readline()
-            if not line:
-                return {'error': server.stderr.read()[-4000:]}
-            message = json.loads(line)
-            if message.get('id') == ident:
-                return message
-    send({'jsonrpc': '2.0', 'id': 0, 'method': 'initialize', 'params': {
-        'protocolVersion': '2025-06-18', 'capabilities': {},
-        'clientInfo': {'name': 'reviewer', 'version': '0'}}})
-    answer(0)
-    send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
-    results = []
-    for ident, call in enumerate(calls, 1):
-        # A family call names its action: (family, action, arguments).
-        name, arguments = call[0], call[-1]
-        if len(call) == 3:
-            arguments = dict(arguments, action=call[1])
-        send({'jsonrpc': '2.0', 'id': ident, 'method': 'tools/call',
-              'params': {'name': name, 'arguments': arguments}})
-        response = answer(ident)
-        result = response.get('result', {})
-        if result.get('isError') or 'error' in response:
-            results.append({'error': response})
-        else:
-            results.append(result.get('structuredContent'))
-    server.stdin.close()
-    server.wait(timeout=60)
-    return results
-
-def raw_artifact(action, payload):
-    return raw('orbit.task.artifact', dict(payload, action=action))
-
-def raw(tool_name, payload):
-    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    connection.connect(os.environ['ORBIT_PLUGIN_BROKER'])
-    body = json.dumps({'schema_version': 1, 'tool': tool_name, 'input': payload,
-        'cwd': os.getcwd(), 'workspace': None, 'entry_point': 'cli',
-        'dry_run': False}).encode()
-    connection.sendall(struct.pack('>I', len(body)) + body)
-    def exactly(count):
-        data = b''
-        while len(data) < count:
-            chunk = connection.recv(count - len(data))
-            if not chunk:
-                raise EOFError('broker closed')
-            data += chunk
-        return data
-    length = struct.unpack('>I', exactly(4))[0]
-    return json.loads(exactly(length))
-
-report = {}
-if mode == 'running':
-    scratch, lose, stale_seen, pinned, selector, nested, mcp_done, mcp_checked = sys.argv[4:12]
-    def wait(path):
-        if not wait_for_file(path, 180):
-            sys.stderr.write('timed out waiting for %s\n' % path)
-            sys.exit(1)
-    def readable(path):
-        try:
-            with open(path) as handle:
-                handle.read()
-            return True
-        except OSError:
-            return False
-    report['known_hosts_readable'] = readable(os.path.expanduser('~/.ssh/known_hosts'))
-    report['private_key_readable'] = readable(os.path.expanduser('~/.ssh/id_ed25519'))
-    report['direct_ssh'] = run(['ssh', '-T', '--', 'isolated-owner', 'orbit mcp serve'])
-    get = {'id': task, 'path': MANIFEST}
-    report['stale_manifest'] = artifact('get', get)
-    open(stale_seen, 'w').close()
-    wait(pinned)
-    report['cli_get'] = artifact('get', get)
-    put = {'id': task, 'path': REPORT, 'source_path': os.path.join(scratch, 'report.json')}
-    mcp_put = dict(put, source_path=os.path.join(scratch, 'mcp-report.json'))
-    report['mcp_get'], report['mcp_put'] = mcp([('orbit_task_artifact', 'get', get),
-                                                ('orbit_task_artifact', 'put', mcp_put)])
-    # The host checks the owner's bytes before any CLI put replaces them.
-    open(mcp_done, 'w').close()
-    wait(mcp_checked)
-    source = lambda name: dict(put, source_path=os.path.join(scratch, name + '.json'))
-    evidence = [REPORT, 'review-report-history.json', 'review-evidence-hold.json',
-                'review-evidence-ci.json', 'review-evidence-ci.log']
-    report['evidence_reads'] = {path: artifact('get', {'id': task, 'path': path})
-                                for path in evidence}
-    report['evidence_mcp_reads'] = dict(zip(evidence, mcp([
-        ('orbit_task_artifact', 'get', {'id': task, 'path': path}) for path in evidence])))
-    names = ['wrong_path', 'gate_record', 'cross_task', 'stale_report', 'symlink', 'oversize',
-             'task_show', 'unlisted', 'other_owner']
-    report['mcp_refusals'] = dict(zip(names, mcp([
-        ('orbit_task_artifact', 'get', {'id': task, 'path': 'review-evidence-unnamed.log'}),
-        ('orbit_task_artifact', 'get', {'id': task, 'path': 'review-gate.json'}),
-        ('orbit_task_artifact', 'get', {'id': 'TSO-999', 'path': MANIFEST}),
-        ('orbit_task_artifact', 'put', source('stale')),
-        ('orbit_task_artifact', 'put', source('link')),
-        ('orbit_task_artifact', 'put', source('oversize')),
-        ('orbit_task_show', {'id': task}),
-        ('orbit_task_update', {'id': task, 'status': 'done'}),
-        ('orbit_task_artifact', 'get', dict(get, workspace='another-owner/ws_other')),
-    ])))
-    # From a subdirectory, naming the owner's selector explicitly.
-    named = dict(get, workspace=selector)
-    report['nested_cli_get'] = artifact('get', named, cwd=nested)
-    report['nested_mcp_get'] = mcp([('orbit_task_artifact', 'get', named)], cwd=nested)[0]
-    report['nested_cli_put'] = artifact('put', dict(put, workspace=selector),
-                                    cwd=nested)
-    report['cli_put'] = artifact('put', put)
-    report['cli_put_replay'] = artifact('put', put)
-    open(lose, 'w').close()
-    report['lost_put'] = artifact('put', put)
-    report['retry_put'] = artifact('put', put)
-    report['wrong_path'] = artifact('get', {'id': task, 'path': 'review-evidence-unnamed.log'})
-    report['cross_task'] = artifact('get', {'id': 'TSO-999', 'path': MANIFEST})
-    report['cross_task_evidence'] = artifact('get', {'id': 'TSO-999', 'path': 'review-evidence-ci.json'})
-    for name in ('stale', 'link', 'oversize'):
-        key = {'stale': 'stale_report', 'link': 'symlink', 'oversize': 'oversize'}[name]
-        report[key] = artifact('put', dict(put, source_path=os.path.join(scratch, name + '.json')))
-    report['task_show'] = tool('orbit.task.show', {'id': task})
-    report['unlisted'] = tool('orbit.task.update', {'id': task, 'status': 'done'})
-    content = __import__('base64').b64encode(open(os.path.join(scratch, 'report.json'), 'rb').read()).decode()
-    report['forged'] = {
-        'claim_override': raw_artifact('put', {'id': task, 'path': REPORT,
-            'content_base64': content, 'claim_id': 'forged-claim'}),
-        'workspace_override': raw_artifact('get', {'id': task, 'path': MANIFEST,
-            'workspace': 'another-owner/ws_other'}),
-        'certificate_path': raw_artifact('put', {'id': task,
-            'path': 'review-certificate.json', 'content_base64': content}),
-        'other_task': raw_artifact('put', {'id': 'TSO-999', 'path': REPORT,
-            'content_base64': content}),
-        'unrelated_tool': raw('orbit.task.update', {'id': task, 'status': 'done'}),
-        'source_path': raw_artifact('put', {'id': task, 'path': REPORT,
-            'source_path': '/etc/passwd'}),
-    }
-elif mode == 'calls':
-    scratch = sys.argv[4]
-    get = {'id': task, 'path': MANIFEST}
-    put = {'id': task, 'path': REPORT, 'source_path': os.path.join(scratch, 'report.json')}
-    report['cli_get'] = artifact('get', get)
-    report['cli_put'] = artifact('put', put)
-    report['mcp_get'], report['mcp_put'] = mcp([('orbit_task_artifact', 'get', get),
-                                                ('orbit_task_artifact', 'put', put)])
-else:
-    get = {'id': task, 'path': MANIFEST}
-    report['finished'] = artifact('get', get)
-    report['other_activity'] = artifact('get', get,
-        with_broker(os.environ['ORBIT_TEST_IMPLEMENTER_BROKER']))
-    report['broker_gone'] = artifact('get', get,
-        with_broker(os.environ['ORBIT_TEST_DEAD_BROKER']))
-    report['broker_gone_mcp'] = mcp([('orbit_task_artifact', 'get', get)],
-        env=with_broker(os.environ['ORBIT_TEST_DEAD_BROKER']))[0]
-print(json.dumps(report))
-"#;

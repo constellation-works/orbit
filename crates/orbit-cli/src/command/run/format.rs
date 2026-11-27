@@ -7,14 +7,8 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
-/// One text vocabulary for readiness payloads and recorded drain waits.
-/// Persisted reason codes and JSON projections remain unchanged.
-pub(crate) fn waiting_reason(reason: &str) -> &str {
-    match reason {
-        "dependency_not_done" => "unmet_dependency",
-        other => other,
-    }
-}
+/// `CatalogReferenceLayer::layer` for a definition this binary ships.
+const SHIPPED_CATALOG_LAYER: &str = "shipped";
 
 /// Text-only blocker details. Statuses are read once per command; older
 /// checkpoints and unavailable tasks still render the IDs they recorded.
@@ -137,6 +131,18 @@ impl WaitingTaskFormatter {
     }
 }
 
+/// The tasks holding each selector a run is waiting on, keyed by selector.
+pub(crate) type LockHolders = std::collections::BTreeMap<String, Vec<String>>;
+
+/// One text vocabulary for readiness payloads and recorded drain waits.
+/// Persisted reason codes and JSON projections remain unchanged.
+pub(crate) fn waiting_reason(reason: &str) -> &str {
+    match reason {
+        "dependency_not_done" => "unmet_dependency",
+        other => other,
+    }
+}
+
 pub(crate) fn format_root_cause_lines(causes: &[RunFailureCause]) -> Vec<String> {
     causes
         .iter()
@@ -227,9 +233,6 @@ pub(crate) fn format_duration(value: Option<u64>) -> String {
         _ => format!("{hours}h {minutes}m {seconds}s"),
     }
 }
-
-/// The tasks holding each selector a run is waiting on, keyed by selector.
-pub(crate) type LockHolders = std::collections::BTreeMap<String, Vec<String>>;
 
 pub(crate) fn format_waiting_line(
     run_state: JobRunState,
@@ -528,9 +531,6 @@ pub(crate) fn format_backlog_exclusion_lines(state: Option<&PipelineState>) -> V
     output.extend(lines);
     output
 }
-
-/// `CatalogReferenceLayer::layer` for a definition this binary ships.
-const SHIPPED_CATALOG_LAYER: &str = "shipped";
 
 /// One line per catalog reference, naming the layer that resolved it.
 ///

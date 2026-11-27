@@ -13,6 +13,9 @@ use crate::command::{CommandOut, ExecuteCore, Payload};
 
 use super::support::audit_event_to_json;
 
+/// Most callback rows `audit show` lists for one entry.
+const CALLBACK_DISPLAY_LIMIT: usize = 100;
+
 #[derive(Args)]
 pub struct AuditShowArgs {
     /// Audit event ID
@@ -195,9 +198,6 @@ fn write_application_audit(out: &mut String, application: &ApplicationInvocation
         write_field(out, "Refused:", refused_text(refused));
     }
 }
-
-/// Most callback rows `audit show` lists for one entry.
-const CALLBACK_DISPLAY_LIMIT: usize = 100;
 
 /// Callback rows of this entry, oldest first. An empty page is omitted. The
 /// newest `CALLBACK_DISPLAY_LIMIT` rows are listed; when there are more, the

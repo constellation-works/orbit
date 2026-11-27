@@ -19,6 +19,13 @@ const LOGICAL_WORKSPACE_ID: &str = "ws_orbit";
 const RUNTIME_WORKSPACE_ID: &str = "ws_orbit-5c61b3";
 const RECOVERY_RUNTIME_WORKSPACE_ID: &str = "ws_orbit-recovery";
 
+#[derive(Debug, PartialEq, Eq)]
+struct RepositoryState {
+    head: String,
+    status: String,
+    remotes: String,
+}
+
 #[test]
 fn operator_workflow_is_network_free_labelled_and_fail_closed() {
     let temp = tempdir().expect("tempdir");
@@ -1071,13 +1078,6 @@ fn corrupt_current_snapshot(root: &Path, bare: &Path, task_id: &str) {
         &checkout,
         &["push", "--force", "origin", "HEAD:refs/heads/main"],
     );
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct RepositoryState {
-    head: String,
-    status: String,
-    remotes: String,
 }
 
 fn repository_state(repo: &Path) -> RepositoryState {

@@ -23,6 +23,11 @@ use super::schema::{DerivedArg, clap_arg, derive_args, input_from_matches};
 use crate::command::tool::ToolRunArgs;
 use crate::command::{CommandOut, Payload};
 
+/// Longest summary a listing shows for a plugin group or verb. It stays below
+/// the longest built-in root row (68 characters), so a plugin row never
+/// outgrows the built-in rows.
+const SUMMARY_MAX_CHARS: usize = 60;
+
 /// One parsed `orbit <ns> <verb>` invocation, already reduced to the tool
 /// call it performs.
 pub struct PluginGroupInvocation {
@@ -78,11 +83,6 @@ pub(crate) fn augment(command: Command, groups: &[PluginCliGroup]) -> Command {
     }
     command
 }
-
-/// Longest summary a listing shows for a plugin group or verb. It stays below
-/// the longest built-in root row (68 characters), so a plugin row never
-/// outgrows the built-in rows.
-const SUMMARY_MAX_CHARS: usize = 60;
 
 fn group_command(group: &PluginCliGroup) -> Command {
     let mut command = Command::new(group.namespace.clone())

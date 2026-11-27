@@ -16,6 +16,17 @@ use orbit_types::identity::Crew;
 use super::agent_detect::DetectedAgents;
 use super::prompt_stdin;
 
+const AGENT_FAMILY_LABELS: [&str; 8] = [
+    "Claude CLI",
+    "Codex CLI",
+    "Antigravity CLI",
+    "Gemini CLI",
+    "Grok CLI",
+    "Copilot CLI",
+    "Muse Code CLI",
+    "Ollama CLI",
+];
+
 pub trait Prompter {
     fn message(&mut self, text: &str) -> io::Result<()>;
     fn prompt(&mut self, prompt: &str) -> io::Result<String>;
@@ -129,17 +140,6 @@ fn yes_by_default(input: &str) -> bool {
     let trimmed = input.trim();
     trimmed.is_empty() || trimmed.eq_ignore_ascii_case("y") || trimmed.eq_ignore_ascii_case("yes")
 }
-
-const AGENT_FAMILY_LABELS: [&str; 8] = [
-    "Claude CLI",
-    "Codex CLI",
-    "Antigravity CLI",
-    "Gemini CLI",
-    "Grok CLI",
-    "Copilot CLI",
-    "Muse Code CLI",
-    "Ollama CLI",
-];
 
 fn agent_families(detected: &DetectedAgents) -> impl Iterator<Item = (&'static str, bool)> {
     AGENT_FAMILY_LABELS.into_iter().zip([

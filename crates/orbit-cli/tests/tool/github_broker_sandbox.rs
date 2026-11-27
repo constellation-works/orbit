@@ -25,6 +25,34 @@ const CHILD: &str = "ORBIT_GITHUB_BROKER_FIXTURE";
 /// A host token the agent's environment must not carry.
 const HOST_TOKEN: &str = "ghp_host_token_never_in_the_sandbox";
 
+/// Needs the host account's config, like the real `gh`: without
+/// `~/.config/gh/hosts.yml` it prints the login prompt.
+const GH_STUB: &str = concat!(
+    "#!/bin/sh\n",
+    "[ -f \"$HOME/.config/gh/hosts.yml\" ] || ",
+    "{ echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4; }\n",
+    "printf '[{\"databaseId\":7,\"number\":3,\"workflowName\":\"CI\",",
+    "\"displayTitle\":\"fixture\",\"status\":\"completed\",\"conclusion\":\"success\",",
+    "\"event\":\"push\",\"headBranch\":\"main\",\"headSha\":\"abc123\",",
+    "\"url\":\"https://example.invalid/run/7\"}]\\n'\n",
+);
+
+const PROVIDER: &str = r#"import json, os, subprocess, sys
+orbit = sys.argv[1]
+def run(argv):
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    report = {'code': result.returncode, 'stderr': result.stderr}
+    if result.returncode == 0:
+        report['output'] = json.loads(result.stdout)
+    return report
+print(json.dumps({
+    'gh_config_visible': os.path.exists(os.path.expanduser('~/.config/gh/hosts.yml')),
+    'tokens': sorted(name for name in ('GH_TOKEN', 'GITHUB_TOKEN') if name in os.environ),
+    'direct_gh': run(['gh', 'run', 'list']),
+    'tool': run([orbit, 'tool', 'run', 'github.run.list', '--input', '{}']),
+}))
+"#;
+
 #[test]
 fn github_reads_from_a_confined_worker_run_on_the_host() {
     let probe = orbit_exec::probe_bwrap();
@@ -241,26 +269,3 @@ fn sandbox_fixture() {
     assert_eq!(brokered_rows.len(), 1, "{rows:?}");
     assert_eq!(brokered_rows[0].task_id.as_deref(), Some("TST-GH"));
 }
-
-/// Needs the host account's config, like the real `gh`: without
-/// `~/.config/gh/hosts.yml` it prints the login prompt.
-const GH_STUB: &str = r#"#!/bin/sh
-[ -f "$HOME/.config/gh/hosts.yml" ] || { echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4; }
-printf '[{"databaseId":7,"number":3,"workflowName":"CI","displayTitle":"fixture","status":"completed","conclusion":"success","event":"push","headBranch":"main","headSha":"abc123","url":"https://example.invalid/run/7"}]\n'
-"#;
-
-const PROVIDER: &str = r#"import json, os, subprocess, sys
-orbit = sys.argv[1]
-def run(argv):
-    result = subprocess.run(argv, capture_output=True, text=True, timeout=30)
-    report = {'code': result.returncode, 'stderr': result.stderr}
-    if result.returncode == 0:
-        report['output'] = json.loads(result.stdout)
-    return report
-print(json.dumps({
-    'gh_config_visible': os.path.exists(os.path.expanduser('~/.config/gh/hosts.yml')),
-    'tokens': sorted(name for name in ('GH_TOKEN', 'GITHUB_TOKEN') if name in os.environ),
-    'direct_gh': run(['gh', 'run', 'list']),
-    'tool': run([orbit, 'tool', 'run', 'github.run.list', '--input', '{}']),
-}))
-"#;

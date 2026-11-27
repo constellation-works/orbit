@@ -157,7 +157,7 @@ impl<V: OperationVerb> FromArgMatches for Invocation<V> {
                 sub_matches,
             ));
         }
-        Ok(Invocation { input, spec })
+        Ok(Invocation { spec, input })
     }
 
     fn update_from_arg_matches(&mut self, matches: &ArgMatches) -> Result<(), clap::Error> {

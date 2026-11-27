@@ -20,12 +20,6 @@ const DEFAULT_HISTORY_LIMIT: usize = 50;
 /// The ERROR column's cap, counting the ellipsis, so one row stays scannable.
 const ERROR_MAX_CHARS: usize = 60;
 
-// Use the wire-state parser rather than Clap's enum help, which includes
-// implementation notes from the persisted domain type.
-fn parse_run_state(raw: &str) -> Result<JobRunState, String> {
-    raw.parse()
-}
-
 #[derive(Args)]
 #[command(
     after_help = "ROLE says how a run was submitted: top-level directly, child by a parent run.\nJSON shapes, ROLE markers and how --incidents and --failures fold runs: installed orbit-orchestrate skill `references/run-debugging-history.md`.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --state failed --incidents\n  orbit run history --state failed --failures\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
@@ -85,6 +79,12 @@ impl ExecuteCore for RunHistoryArgs {
             self.failures,
         )
     }
+}
+
+// Use the wire-state parser rather than Clap's enum help, which includes
+// implementation notes from the persisted domain type.
+fn parse_run_state(raw: &str) -> Result<JobRunState, String> {
+    raw.parse()
 }
 
 pub(crate) fn run_history_payload(

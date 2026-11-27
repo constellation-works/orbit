@@ -67,17 +67,6 @@ pub trait ExecuteCore {
     fn execute(self, core: &Core) -> CommandOut;
 }
 
-/// Require the standard non-interactive confirmation flag before an
-/// irreversible CLI operation proceeds.
-pub(crate) fn require_confirmation(confirm: bool, action: &str) -> Result<(), OrbitError> {
-    if confirm {
-        return Ok(());
-    }
-    Err(OrbitError::InvalidInput(format!(
-        "{action} is irreversible; pass --confirm to proceed"
-    )))
-}
-
 // Grouped `--help` sections come from the row tables in `help.rs`, attached in `entry/discover.rs`.
 #[derive(Parser)]
 #[command(name = "orbit")]
@@ -168,4 +157,15 @@ pub enum Commands {
     // Compatibility spelling of `orbit clock tick`.
     #[command(hide = true)]
     Sweep(sweep::SweepCommand),
+}
+
+/// Require the standard non-interactive confirmation flag before an
+/// irreversible CLI operation proceeds.
+pub(crate) fn require_confirmation(confirm: bool, action: &str) -> Result<(), OrbitError> {
+    if confirm {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "{action} is irreversible; pass --confirm to proceed"
+    )))
 }

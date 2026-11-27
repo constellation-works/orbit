@@ -11,6 +11,31 @@ use std::path::PathBuf;
 
 use orbit_common::Env;
 
+/// Snapshot of which agent CLIs are available. Orbit executes agent activities
+/// through the CLI agent path only [ORB-10801], so a detected provider CLI is
+/// what makes a provider usable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetectedAgents {
+    pub claude_cli: bool,
+    pub codex_cli: bool,
+    pub gemini_cli: bool,
+    /// Antigravity CLI (`agy`). Distinct from the legacy `gemini` binary:
+    /// `agy` is the current Google terminal agent, while `gemini` remains the
+    /// enterprise/API-key Gemini CLI. [ORB-11299]
+    pub antigravity_cli: bool,
+    pub grok_cli: bool,
+    /// The standalone `copilot` CLI (npm `@github/copilot`). The retired
+    /// `gh-copilot` gh extension is deliberately not probed: it is a shell
+    /// command *suggester*, not an agent, and Orbit never dispatches to it.
+    /// [ORB-10946]
+    pub copilot_cli: bool,
+    /// Muse Code, Meta's terminal coding agent, whose launcher is `muse`.
+    /// A detected `muse` is evidence of the Muse execution lane only; the
+    /// model it runs is a separate crew choice. [ORB-16577]
+    pub muse_cli: bool,
+    pub ollama_cli: bool,
+}
+
 /// Returns true when an executable named `name` is found on `PATH`. Walks the
 /// process `PATH` manually (no extra crate dep).
 fn binary_on_path(name: &str, env: &Env) -> bool {
@@ -53,31 +78,6 @@ fn is_executable_file(path: &std::path::Path) -> bool {
     std::fs::metadata(path)
         .map(|m| m.is_file())
         .unwrap_or(false)
-}
-
-/// Snapshot of which agent CLIs are available. Orbit executes agent activities
-/// through the CLI agent path only [ORB-10801], so a detected provider CLI is
-/// what makes a provider usable.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct DetectedAgents {
-    pub claude_cli: bool,
-    pub codex_cli: bool,
-    pub gemini_cli: bool,
-    /// Antigravity CLI (`agy`). Distinct from the legacy `gemini` binary:
-    /// `agy` is the current Google terminal agent, while `gemini` remains the
-    /// enterprise/API-key Gemini CLI. [ORB-11299]
-    pub antigravity_cli: bool,
-    pub grok_cli: bool,
-    /// The standalone `copilot` CLI (npm `@github/copilot`). The retired
-    /// `gh-copilot` gh extension is deliberately not probed: it is a shell
-    /// command *suggester*, not an agent, and Orbit never dispatches to it.
-    /// [ORB-10946]
-    pub copilot_cli: bool,
-    /// Muse Code, Meta's terminal coding agent, whose launcher is `muse`.
-    /// A detected `muse` is evidence of the Muse execution lane only; the
-    /// model it runs is a separate crew choice. [ORB-16577]
-    pub muse_cli: bool,
-    pub ollama_cli: bool,
 }
 
 /// Probe the host `PATH` and return a [`DetectedAgents`] snapshot.

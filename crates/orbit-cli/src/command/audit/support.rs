@@ -5,6 +5,15 @@ use serde_json::{Value, json};
 use crate::output::common::color::{Domain, cell};
 use crate::output::common::table::{Column, Table};
 
+/// Which columns the caller filtered on, so a column the filter made
+/// informationally uniform still stays on screen.
+#[derive(Clone, Copy, Default)]
+pub(super) struct AuditListFilters {
+    pub(super) status: bool,
+    pub(super) role: bool,
+    pub(super) tool: bool,
+}
+
 pub(super) fn audit_event_to_json(event: &AuditEvent) -> Value {
     let mut value = audit_event_base_json(event);
     // ORB-10890: named `self_reported_*` rather than `actor` precisely so
@@ -25,15 +34,6 @@ pub(super) fn audit_tool_filter(tool: Option<String>) -> Option<String> {
         Some((_, action)) => action.operation.to_string(),
         None => tool,
     })
-}
-
-/// Which columns the caller filtered on, so a column the filter made
-/// informationally uniform still stays on screen.
-#[derive(Clone, Copy, Default)]
-pub(super) struct AuditListFilters {
-    pub(super) status: bool,
-    pub(super) role: bool,
-    pub(super) tool: bool,
 }
 
 /// The audit log's list view.

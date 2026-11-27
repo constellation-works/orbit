@@ -25,6 +25,18 @@ impl ExecuteCore for RunTraceArgs {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct TraceTree {
+    pub(crate) roots: Vec<TraceNode>,
+    pub(crate) orphans: Vec<TraceNode>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TraceNode {
+    pub(crate) event: RunAuditEvent,
+    pub(crate) children: Vec<TraceNode>,
+}
+
 fn run_trace_payload(core: &Core, run_id: Option<&str>) -> CommandOut {
     let (run, events) = exec(core, Command::trace(run_id))?.value;
     let tree = build_trace_tree(&events);
@@ -53,18 +65,6 @@ fn run_trace_payload(core: &Core, run_id: Option<&str>) -> CommandOut {
         text.pop();
     }
     Ok(Payload::detail(doc, text).into())
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TraceTree {
-    pub(crate) roots: Vec<TraceNode>,
-    pub(crate) orphans: Vec<TraceNode>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TraceNode {
-    pub(crate) event: RunAuditEvent,
-    pub(crate) children: Vec<TraceNode>,
 }
 
 fn build_trace_tree(events: &[RunAuditEvent]) -> TraceTree {

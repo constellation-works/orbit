@@ -1,6 +1,51 @@
 //! Positive production-stdio proofs with disposable records and deterministic jobs.
 use super::*;
 
+/// Cancel a fixture pipeline run on drop, including when an assertion unwinds.
+/// Dropping the MCP server does not reach the detached worker.
+struct DrainCleanup<'a> {
+    workspace: &'a McpWorkspace,
+    run_id: String,
+    armed: bool,
+}
+
+impl Drop for DrainCleanup<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut command = McpWorkspace::orbit_command(&self.workspace.work, &self.workspace.home);
+        command.args(["run", "cancel", self.run_id.as_str(), "--confirm"]);
+        // Production cancellation waits for the verified owner to exit. Keep
+        // cleanup bounded without a second panic during assertion unwinding.
+        let output = orbit_common::process::run_bounded_capped(
+            &mut command,
+            test_env::FIXTURE_STEP_DEADLINE,
+            64 * 1024,
+        );
+        if !matches!(&output, Ok(output) if output.status.success()) {
+            tracing::warn!(?output, "drain fixture cleanup failed");
+        }
+    }
+}
+
+/// Retain a bound identity before deleting the registry so even the failing
+/// pre-fix regression cannot leak a worker or signal a reused PID.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct DeletedCwdWorkerCleanup(orbit_common::process::signal::BoundProcess);
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for DeletedCwdWorkerCleanup {
+    fn drop(&mut self) {
+        let _ = self.0.signal(libc::SIGTERM);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.0.is_alive().unwrap_or(false) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = self.0.signal(libc::SIGKILL);
+    }
+}
+
 fn stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
@@ -1576,34 +1621,6 @@ fn artifact_and_auto_task_stdio_contracts() {
     }
 }
 
-/// Cancel a fixture pipeline run on drop, including when an assertion unwinds.
-/// Dropping the MCP server does not reach the detached worker.
-struct DrainCleanup<'a> {
-    workspace: &'a McpWorkspace,
-    run_id: String,
-    armed: bool,
-}
-
-impl Drop for DrainCleanup<'_> {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let mut command = McpWorkspace::orbit_command(&self.workspace.work, &self.workspace.home);
-        command.args(["run", "cancel", self.run_id.as_str(), "--confirm"]);
-        // Production cancellation waits for the verified owner to exit. Keep
-        // cleanup bounded without a second panic during assertion unwinding.
-        let output = orbit_common::process::run_bounded_capped(
-            &mut command,
-            test_env::FIXTURE_STEP_DEADLINE,
-            64 * 1024,
-        );
-        if !matches!(&output, Ok(output) if output.status.success()) {
-            tracing::warn!(?output, "drain fixture cleanup failed");
-        }
-    }
-}
-
 /// `stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain`
 /// starts this same 24h `orbit_workflow` action `auto` drain. The worker is detached
 /// into its own session, so dropping the MCP server does not stop it. A run
@@ -1731,23 +1748,6 @@ fn a_fixture_auto_drain_worker_exits_when_its_cwd_is_deleted() {
             );
             std::thread::sleep(Duration::from_millis(20));
         }
-    }
-}
-
-/// Retain a bound identity before deleting the registry so even the failing
-/// pre-fix regression cannot leak a worker or signal a reused PID.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-struct DeletedCwdWorkerCleanup(orbit_common::process::signal::BoundProcess);
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl Drop for DeletedCwdWorkerCleanup {
-    fn drop(&mut self) {
-        let _ = self.0.signal(libc::SIGTERM);
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while self.0.is_alive().unwrap_or(false) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        let _ = self.0.signal(libc::SIGKILL);
     }
 }
 

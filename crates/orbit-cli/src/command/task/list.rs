@@ -43,10 +43,10 @@ pub(super) fn render(input: &Map<String, Value>, value: Value, view: ListView) -
     // made it uniform.
     let filtered = TaskTableFilters {
         status: status_filtered,
-        scheduled: input.get("scheduled").and_then(Value::as_bool) == Some(true),
         priority: input.contains_key("priority"),
         task_type: input.contains_key("type"),
         runs_on: input.contains_key("runs_on"),
+        scheduled: input.get("scheduled").and_then(Value::as_bool) == Some(true),
     };
 
     let mut table = task_table(&tasks, view.full, filtered);

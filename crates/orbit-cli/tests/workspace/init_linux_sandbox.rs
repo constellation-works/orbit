@@ -24,11 +24,14 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let work = temp.path().join("work");
+        let bin = temp.path().join("bin");
         let fixture = Self {
-            home: temp.path().join("home"),
-            work: temp.path().join("work"),
-            bin: temp.path().join("bin"),
             _temp: temp,
+            home,
+            work,
+            bin,
         };
         fs::create_dir_all(&fixture.home).unwrap();
         fs::create_dir_all(&fixture.bin).unwrap();

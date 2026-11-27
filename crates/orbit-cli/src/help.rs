@@ -17,6 +17,263 @@
 
 use clap::{Command, Id};
 
+/// Extra columns a continuation sits under the line it continues, when that
+/// line is itself indented.
+const HANG_INDENT: usize = 2;
+
+/// Fewest columns an aligned explanation needs to wrap into readable phrases.
+/// A shared description column that leaves less than this stacks the block's
+/// explanations under their commands instead of wrapping them a word per line.
+const MIN_EXPLANATION_WIDTH: usize = 24;
+
+/// Spaces before a grouped row.
+const GROUP_INDENT: usize = 2;
+/// Minimum spaces between the longest name and its description.
+const GROUP_GAP: usize = 2;
+
+const RUN_WORKFLOWS: &[GroupedRow] = &[
+    (
+        "auto",
+        "Drain the workspace backlog for a window; --stop ends new admissions",
+    ),
+    (
+        "ship",
+        "Ship backlog or explicitly selected tasks through the gated task pipeline",
+    ),
+    (
+        "task-pilot",
+        "Preflight proposed/backlog tasks and persist validated selectors",
+    ),
+    ("job", "Run an arbitrary job by ID"),
+];
+
+const RUN_AUDITS: &[GroupedRow] = &[
+    (
+        "history",
+        "Show recent job runs filtered by job, task, state or time",
+    ),
+    (
+        "show",
+        "Show structured state and step summary for a job run",
+    ),
+    ("logs", "Print raw stdout/stderr captured for a job run"),
+    ("events", "Show audit events recorded for a job run"),
+    ("trace", "Show audit event parent/child trace for a job run"),
+    (
+        "settlements",
+        "Show failure and release settlements claimed leaves sent this owner",
+    ),
+    (
+        "settlements-hydrate",
+        "Keep settled leaf run evidence from its follower (operator)",
+    ),
+];
+
+const RUN_MAINTENANCE: &[GroupedRow] = &[
+    ("cancel", "Cancel a pending or running job run"),
+    ("concurrency", "Retune a running drain's admission ceiling"),
+    (
+        "extend",
+        "Lengthen a running drain's window, and optionally retune it",
+    ),
+    (
+        "readiness",
+        "Explain why backlog tasks are waiting in auto-drain",
+    ),
+    (
+        "profiles",
+        "Show what each kind of delivery costs on this host, minute by minute",
+    ),
+];
+
+const TASK_TASKS: &[GroupedRow] = &[
+    ("add", "Create a new task"),
+    (
+        "update",
+        "Update task fields; `--approve` takes the next approval step",
+    ),
+    ("repilot", "Explicitly request one new pilot assessment"),
+    ("archive", "Archive a task"),
+    ("list", "List tasks with optional filters"),
+    (
+        "eligible",
+        "List backlog/proposed tasks that collide with no in-flight work",
+    ),
+    (
+        "show",
+        "Show one task in detail, by ID, across registered workspaces",
+    ),
+    ("artifact", "Manage task artifact files"),
+];
+
+const TASK_HEALTH: &[GroupedRow] = &[
+    (
+        "lint",
+        "Lint tasks for context-file and acceptance-criteria problems",
+    ),
+    (
+        "flow",
+        "Show filed-vs-closed rates over time — is the backlog draining?",
+    ),
+    (
+        "locks",
+        "Inspect, reserve, and release the file locks that gate dispatch",
+    ),
+    (
+        "review-reset",
+        "Reset one review lineage budget with an audited reason",
+    ),
+    (
+        "reconcile-review",
+        "Validate and review a recovered delivery's changed merged head",
+    ),
+    (
+        "retry-handoff",
+        "Retry a stopped authorized handoff through normal owner landing",
+    ),
+    (
+        "recover-claim",
+        "Recover a live claim to a lifecycle-valid status with an audited reason",
+    ),
+    (
+        "revoke-handoff",
+        "Revoke a handoff's completion authority with an audited reason",
+    ),
+    (
+        "requeue",
+        "Requeue a blocked task onto its published candidate",
+    ),
+    (
+        "recheck-blocked",
+        "Requeue tasks whose infrastructure block has cleared",
+    ),
+    (
+        "settle-merged",
+        "Settle tasks whose delivery pull request merged outside Orbit",
+    ),
+];
+
+const TASK_BUNDLES: &[GroupedRow] = &[
+    (
+        "export",
+        "Export task bundles to a portable tar.zst archive",
+    ),
+    ("import", "Import task bundles from a tar.zst archive"),
+    (
+        "publication",
+        "Publish, inspect, diagnose, or restore task snapshots",
+    ),
+    (
+        "reindex",
+        "Rebuild the registry index from on-disk task bundles",
+    ),
+];
+
+const ROOT_SETUP: &[GroupedRow] = &[
+    ("init", "Initialize the global Orbit root (~/.orbit)"),
+    ("workspace", "Manage workspaces"),
+    ("config", "Show or update Orbit configuration"),
+    ("host", "Register and inspect remote Orbit hosts"),
+    ("plugin", "Install and manage Orbit plugins"),
+    (
+        "migrate",
+        "Apply or inspect pending .orbit layout/schema migrations",
+    ),
+    (
+        "update",
+        "Install a published Orbit release and converge to it",
+    ),
+];
+
+const ROOT_WORK: &[GroupedRow] = &[
+    ("task", "Create, update, and manage tasks"),
+    ("friction", "Report, list, and triage friction records"),
+    ("search", "Search tasks and frictions"),
+];
+
+const ROOT_OPERATE: &[GroupedRow] = &[
+    ("run", "Run workflows, drain the backlog, and inspect runs"),
+    ("job", "Define, list, and manage job workflows"),
+    (
+        "script",
+        "Grant and inspect workspace scripts a job step may run",
+    ),
+    ("notice", "Post, close and list fleet notices"),
+    (
+        "tool",
+        "Manage and run Orbit tools, including external MCP plugins",
+    ),
+    ("gc", "Inspect and explicitly reap Orbit-managed garbage"),
+];
+
+const ROOT_OBSERVE: &[GroupedRow] = &[
+    ("attention", "List what waits on an operator"),
+    ("audit", "Query the audit event log"),
+    ("log", "Tail the unified Orbit log feed"),
+    (
+        "doctor",
+        "Diagnose workspace health, provider CLIs, and filesystem access",
+    ),
+];
+
+const ROOT_ANALYTICS: &[GroupedRow] = &[
+    ("agents", "Score agents by model and recorded effort"),
+    (
+        "codebase",
+        "Rank the repository paths that are risky for agents to change",
+    ),
+];
+
+const ROOT_SCHEDULER: &[GroupedRow] = &[
+    (
+        "clock",
+        "Inspect, control, and manually tick the machine scheduler",
+    ),
+    (
+        "routine",
+        "Inspect and control scheduled routines on this machine",
+    ),
+    ("auto-task", "Define recurring auto-task templates"),
+    (
+        "automation",
+        "Explain what condition-triggered routines and auto-tasks would match",
+    ),
+];
+
+const ROOT_SERVICES: &[GroupedRow] = &[
+    (
+        "mcp",
+        "Register MCP client integrations and run the MCP server",
+    ),
+    ("web", "Run the Orbit dashboard"),
+];
+
+const ROOT_ADVANCED: &[GroupedRow] = &[
+    (
+        "application",
+        "Consent to scoped application calls and manage credentials",
+    ),
+    (
+        "decision",
+        "List, show and answer human decision requests on held work",
+    ),
+    (
+        "evolution",
+        "Record and inspect capability gaps and their measured costs",
+    ),
+    (
+        "experiment",
+        "Define, run and conclude experiments over agent treatments",
+    ),
+    (
+        "resident",
+        "Grant, narrow and inspect resident orchestrator mandates",
+    ),
+];
+
+/// One grouped row: the command spelling and its short help.
+type GroupedRow = (&'static str, &'static str);
+
 /// Long help always puts argument descriptions on separate lines in clap.
 /// Render the inherited options as a compact reference instead, ahead of any
 /// existing footer. Root help remains the source of their full descriptions.
@@ -76,15 +333,6 @@ pub(crate) fn hang_wrap_footers(mut command: Command, width: usize) -> Command {
     }
     command
 }
-
-/// Extra columns a continuation sits under the line it continues, when that
-/// line is itself indented.
-const HANG_INDENT: usize = 2;
-
-/// Fewest columns an aligned explanation needs to wrap into readable phrases.
-/// A shared description column that leaves less than this stacks the block's
-/// explanations under their commands instead of wrapping them a word per line.
-const MIN_EXPLANATION_WIDTH: usize = 24;
 
 /// Wrap the lines of `text` that are wider than `width` at word boundaries.
 /// Lines that fit are left exactly as written, so aligned columns survive. A
@@ -381,254 +629,6 @@ fn hang_wrap_line(line: &str, width: usize) -> String {
     lines.push(current);
     lines.join("\n")
 }
-
-/// Spaces before a grouped row.
-const GROUP_INDENT: usize = 2;
-/// Minimum spaces between the longest name and its description.
-const GROUP_GAP: usize = 2;
-
-/// One grouped row: the command spelling and its short help.
-type GroupedRow = (&'static str, &'static str);
-
-const RUN_WORKFLOWS: &[GroupedRow] = &[
-    (
-        "auto",
-        "Drain the workspace backlog for a window; --stop ends new admissions",
-    ),
-    (
-        "ship",
-        "Ship backlog or explicitly selected tasks through the gated task pipeline",
-    ),
-    (
-        "task-pilot",
-        "Preflight proposed/backlog tasks and persist validated selectors",
-    ),
-    ("job", "Run an arbitrary job by ID"),
-];
-
-const RUN_AUDITS: &[GroupedRow] = &[
-    (
-        "history",
-        "Show recent job runs filtered by job, task, state or time",
-    ),
-    (
-        "show",
-        "Show structured state and step summary for a job run",
-    ),
-    ("logs", "Print raw stdout/stderr captured for a job run"),
-    ("events", "Show audit events recorded for a job run"),
-    ("trace", "Show audit event parent/child trace for a job run"),
-    (
-        "settlements",
-        "Show failure and release settlements claimed leaves sent this owner",
-    ),
-    (
-        "settlements-hydrate",
-        "Keep settled leaf run evidence from its follower (operator)",
-    ),
-];
-
-const RUN_MAINTENANCE: &[GroupedRow] = &[
-    ("cancel", "Cancel a pending or running job run"),
-    ("concurrency", "Retune a running drain's admission ceiling"),
-    (
-        "extend",
-        "Lengthen a running drain's window, and optionally retune it",
-    ),
-    (
-        "readiness",
-        "Explain why backlog tasks are waiting in auto-drain",
-    ),
-    (
-        "profiles",
-        "Show what each kind of delivery costs on this host, minute by minute",
-    ),
-];
-
-const TASK_TASKS: &[GroupedRow] = &[
-    ("add", "Create a new task"),
-    (
-        "update",
-        "Update task fields; `--approve` takes the next approval step",
-    ),
-    ("repilot", "Explicitly request one new pilot assessment"),
-    ("archive", "Archive a task"),
-    ("list", "List tasks with optional filters"),
-    (
-        "eligible",
-        "List backlog/proposed tasks that collide with no in-flight work",
-    ),
-    (
-        "show",
-        "Show one task in detail, by ID, across registered workspaces",
-    ),
-    ("artifact", "Manage task artifact files"),
-];
-
-const TASK_HEALTH: &[GroupedRow] = &[
-    (
-        "lint",
-        "Lint tasks for context-file and acceptance-criteria problems",
-    ),
-    (
-        "flow",
-        "Show filed-vs-closed rates over time — is the backlog draining?",
-    ),
-    (
-        "locks",
-        "Inspect, reserve, and release the file locks that gate dispatch",
-    ),
-    (
-        "review-reset",
-        "Reset one review lineage budget with an audited reason",
-    ),
-    (
-        "reconcile-review",
-        "Validate and review a recovered delivery's changed merged head",
-    ),
-    (
-        "retry-handoff",
-        "Retry a stopped authorized handoff through normal owner landing",
-    ),
-    (
-        "recover-claim",
-        "Recover a live claim to a lifecycle-valid status with an audited reason",
-    ),
-    (
-        "revoke-handoff",
-        "Revoke a handoff's completion authority with an audited reason",
-    ),
-    (
-        "requeue",
-        "Requeue a blocked task onto its published candidate",
-    ),
-    (
-        "recheck-blocked",
-        "Requeue tasks whose infrastructure block has cleared",
-    ),
-    (
-        "settle-merged",
-        "Settle tasks whose delivery pull request merged outside Orbit",
-    ),
-];
-
-const TASK_BUNDLES: &[GroupedRow] = &[
-    (
-        "export",
-        "Export task bundles to a portable tar.zst archive",
-    ),
-    ("import", "Import task bundles from a tar.zst archive"),
-    (
-        "publication",
-        "Publish, inspect, diagnose, or restore task snapshots",
-    ),
-    (
-        "reindex",
-        "Rebuild the registry index from on-disk task bundles",
-    ),
-];
-
-const ROOT_SETUP: &[GroupedRow] = &[
-    ("init", "Initialize the global Orbit root (~/.orbit)"),
-    ("workspace", "Manage workspaces"),
-    ("config", "Show or update Orbit configuration"),
-    ("host", "Register and inspect remote Orbit hosts"),
-    ("plugin", "Install and manage Orbit plugins"),
-    (
-        "migrate",
-        "Apply or inspect pending .orbit layout/schema migrations",
-    ),
-    (
-        "update",
-        "Install a published Orbit release and converge to it",
-    ),
-];
-
-const ROOT_WORK: &[GroupedRow] = &[
-    ("task", "Create, update, and manage tasks"),
-    ("friction", "Report, list, and triage friction records"),
-    ("search", "Search tasks and frictions"),
-];
-
-const ROOT_OPERATE: &[GroupedRow] = &[
-    ("run", "Run workflows, drain the backlog, and inspect runs"),
-    ("job", "Define, list, and manage job workflows"),
-    (
-        "script",
-        "Grant and inspect workspace scripts a job step may run",
-    ),
-    ("notice", "Post, close and list fleet notices"),
-    (
-        "tool",
-        "Manage and run Orbit tools, including external MCP plugins",
-    ),
-    ("gc", "Inspect and explicitly reap Orbit-managed garbage"),
-];
-
-const ROOT_OBSERVE: &[GroupedRow] = &[
-    ("attention", "List what waits on an operator"),
-    ("audit", "Query the audit event log"),
-    ("log", "Tail the unified Orbit log feed"),
-    (
-        "doctor",
-        "Diagnose workspace health, provider CLIs, and filesystem access",
-    ),
-];
-
-const ROOT_ANALYTICS: &[GroupedRow] = &[
-    ("agents", "Score agents by model and recorded effort"),
-    (
-        "codebase",
-        "Rank the repository paths that are risky for agents to change",
-    ),
-];
-
-const ROOT_SCHEDULER: &[GroupedRow] = &[
-    (
-        "clock",
-        "Inspect, control, and manually tick the machine scheduler",
-    ),
-    (
-        "routine",
-        "Inspect and control scheduled routines on this machine",
-    ),
-    ("auto-task", "Define recurring auto-task templates"),
-    (
-        "automation",
-        "Explain what condition-triggered routines and auto-tasks would match",
-    ),
-];
-
-const ROOT_SERVICES: &[GroupedRow] = &[
-    (
-        "mcp",
-        "Register MCP client integrations and run the MCP server",
-    ),
-    ("web", "Run the Orbit dashboard"),
-];
-
-const ROOT_ADVANCED: &[GroupedRow] = &[
-    (
-        "application",
-        "Consent to scoped application calls and manage credentials",
-    ),
-    (
-        "decision",
-        "List, show and answer human decision requests on held work",
-    ),
-    (
-        "evolution",
-        "Record and inspect capability gaps and their measured costs",
-    ),
-    (
-        "experiment",
-        "Define, run and conclude experiments over agent treatments",
-    ),
-    (
-        "resident",
-        "Grant, narrow and inspect resident orchestrator mandates",
-    ),
-];
 
 /// Display width of a row name in terminal columns (character count is the
 /// portable approximation; names are ASCII and descriptions use single-column

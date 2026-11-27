@@ -13,6 +13,19 @@
 use colored::Colorize;
 use comfy_table::{Attribute, Cell, Color as TableColor};
 
+/// How a call site tags a value: with a [`Role`] outright when it knows the
+/// meaning, or with the [`Domain`] the value came from when the mapping table
+/// should decide.
+///
+/// Both spellings exist because both cases are real. `"Workspace healthy."` is
+/// a sentence whose role is `Ok` and which belongs to no vocabulary; a task's
+/// `status` belongs to `TaskStatus` and must get whatever role that table says,
+/// so that adding a status stays a one-line edit in [`role_for`].
+pub trait Tag {
+    /// The role this tag assigns to `value`.
+    fn role_of(self, value: &str) -> Role;
+}
+
 /// The closed set of semantic roles a domain value can carry.
 /// See `docs/design/terminal-interface/specs/color-and-styling.md` (ADR-0308).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -23,6 +36,38 @@ pub enum Role {
     Active,
     Muted,
     Neutral,
+}
+
+impl Role {
+    pub fn table_color(self) -> Option<TableColor> {
+        match self {
+            Role::Ok => Some(TableColor::Green),
+            Role::Warn => Some(TableColor::Yellow),
+            Role::Error => Some(TableColor::Red),
+            Role::Active => Some(TableColor::Cyan),
+            Role::Muted | Role::Neutral => None,
+        }
+    }
+
+    pub fn line_color(self) -> Option<colored::Color> {
+        match self {
+            Role::Ok => Some(colored::Color::Green),
+            Role::Warn => Some(colored::Color::Yellow),
+            Role::Error => Some(colored::Color::Red),
+            Role::Active => Some(colored::Color::Cyan),
+            Role::Muted | Role::Neutral => None,
+        }
+    }
+
+    pub fn is_dim(self) -> bool {
+        matches!(self, Role::Muted)
+    }
+}
+
+impl Tag for Role {
+    fn role_of(self, _value: &str) -> Role {
+        self
+    }
 }
 
 /// The domain vocabularies this crate colors. Distinguishes values that read
@@ -36,6 +81,12 @@ pub enum Domain {
     JobState,
     DoctorStatus,
     AuditStatus,
+}
+
+impl Tag for Domain {
+    fn role_of(self, value: &str) -> Role {
+        role_for(self, value)
+    }
 }
 
 /// The single value-to-role mapping covering every domain vocabulary in the
@@ -74,57 +125,6 @@ pub fn role_for(domain: Domain, value: &str) -> Role {
 
         // TaskType carries no role today; every value renders neutral.
         _ => Neutral,
-    }
-}
-
-impl Role {
-    pub fn table_color(self) -> Option<TableColor> {
-        match self {
-            Role::Ok => Some(TableColor::Green),
-            Role::Warn => Some(TableColor::Yellow),
-            Role::Error => Some(TableColor::Red),
-            Role::Active => Some(TableColor::Cyan),
-            Role::Muted | Role::Neutral => None,
-        }
-    }
-
-    pub fn line_color(self) -> Option<colored::Color> {
-        match self {
-            Role::Ok => Some(colored::Color::Green),
-            Role::Warn => Some(colored::Color::Yellow),
-            Role::Error => Some(colored::Color::Red),
-            Role::Active => Some(colored::Color::Cyan),
-            Role::Muted | Role::Neutral => None,
-        }
-    }
-
-    pub fn is_dim(self) -> bool {
-        matches!(self, Role::Muted)
-    }
-}
-
-/// How a call site tags a value: with a [`Role`] outright when it knows the
-/// meaning, or with the [`Domain`] the value came from when the mapping table
-/// should decide.
-///
-/// Both spellings exist because both cases are real. `"Workspace healthy."` is
-/// a sentence whose role is `Ok` and which belongs to no vocabulary; a task's
-/// `status` belongs to `TaskStatus` and must get whatever role that table says,
-/// so that adding a status stays a one-line edit in [`role_for`].
-pub trait Tag {
-    /// The role this tag assigns to `value`.
-    fn role_of(self, value: &str) -> Role;
-}
-
-impl Tag for Role {
-    fn role_of(self, _value: &str) -> Role {
-        self
-    }
-}
-
-impl Tag for Domain {
-    fn role_of(self, value: &str) -> Role {
-        role_for(self, value)
     }
 }
 

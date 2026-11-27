@@ -11,6 +11,48 @@ mod inherited_pipes {
     const SERVER: &str = "server_readiness::inherited_pipes::server_child";
     const HOLDER: &str = "server_readiness::inherited_pipes::pipe_holder_child";
 
+    // Rescue a broken implementation without leaving a blocked reader or helper
+    // behind. Successful execution cancels this timer immediately; it never
+    // waits for the watchdog's deadline or relies on host timing to order events.
+    struct Watchdog {
+        done: mpsc::Sender<()>,
+        rescue: Option<std::thread::JoinHandle<bool>>,
+    }
+
+    impl Watchdog {
+        fn new(holder: &UnixStream) -> Self {
+            let (done, completion) = mpsc::channel();
+            let mut release = holder.try_clone().unwrap();
+            let rescue = std::thread::spawn(move || {
+                if completion.recv_timeout(Duration::from_secs(3)).is_err() {
+                    let _ = release.write_all(b"q");
+                    true
+                } else {
+                    false
+                }
+            });
+            Self {
+                done,
+                rescue: Some(rescue),
+            }
+        }
+
+        fn finish(mut self) -> bool {
+            self.done.send(()).unwrap();
+            self.rescue.take().unwrap().join().unwrap()
+        }
+    }
+
+    impl Drop for Watchdog {
+        fn drop(&mut self) {
+            // Join even if an assertion before finish unwinds the fixture.
+            let _ = self.done.send(());
+            if let Some(rescue) = self.rescue.take() {
+                let _ = rescue.join();
+            }
+        }
+    }
+
     #[test]
     fn reaped_server_output_has_a_deadline_and_drop_cleans_its_descendant() {
         for kind in [Announcement::Dashboard, Announcement::Mcp] {
@@ -96,48 +138,6 @@ mod inherited_pipes {
             0,
             "fixture-owned holder survived teardown"
         );
-    }
-
-    // Rescue a broken implementation without leaving a blocked reader or helper
-    // behind. Successful execution cancels this timer immediately; it never
-    // waits for the watchdog's deadline or relies on host timing to order events.
-    struct Watchdog {
-        done: mpsc::Sender<()>,
-        rescue: Option<std::thread::JoinHandle<bool>>,
-    }
-
-    impl Watchdog {
-        fn new(holder: &UnixStream) -> Self {
-            let (done, completion) = mpsc::channel();
-            let mut release = holder.try_clone().unwrap();
-            let rescue = std::thread::spawn(move || {
-                if completion.recv_timeout(Duration::from_secs(3)).is_err() {
-                    let _ = release.write_all(b"q");
-                    true
-                } else {
-                    false
-                }
-            });
-            Self {
-                done,
-                rescue: Some(rescue),
-            }
-        }
-
-        fn finish(mut self) -> bool {
-            self.done.send(()).unwrap();
-            self.rescue.take().unwrap().join().unwrap()
-        }
-    }
-
-    impl Drop for Watchdog {
-        fn drop(&mut self) {
-            // Join even if an assertion before finish unwinds the fixture.
-            let _ = self.done.send(());
-            if let Some(rescue) = self.rescue.take() {
-                let _ = rescue.join();
-            }
-        }
     }
 
     fn fixture(kind: Announcement) -> (tempfile::TempDir, BoundServer, UnixStream) {

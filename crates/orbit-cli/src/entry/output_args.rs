@@ -13,6 +13,14 @@ pub(super) const JSON_ARG_ID: &str = "json";
 /// Clap id and long name of the global plain-form header switch.
 const HEADER_ARG_ID: &str = "header";
 
+/// Flags selecting the historical machine-readable output rung.
+///
+/// `--ops` is here alongside `--json` because it is the same rung wearing a
+/// different name: on `task list` and `job list` it selects a narrower record
+/// shape and has always forced JSON. Leaving it out would make
+/// `orbit task list --ops` render a table on a terminal.
+const LEGACY_JSON_ARG_IDS: [&str; 2] = [JSON_ARG_ID, "ops"];
+
 /// The global `--format`, declared exactly once for the whole CLI.
 ///
 /// Installed beside [`json_arg`] throughout the assembled command tree,
@@ -141,14 +149,6 @@ fn requested_format(matches: &ArgMatches) -> Option<FormatArg> {
         }
     }
 }
-
-/// Flags selecting the historical machine-readable output rung.
-///
-/// `--ops` is here alongside `--json` because it is the same rung wearing a
-/// different name: on `task list` and `job list` it selects a narrower record
-/// shape and has always forced JSON. Leaving it out would make
-/// `orbit task list --ops` render a table on a terminal.
-const LEGACY_JSON_ARG_IDS: [&str; 2] = [JSON_ARG_ID, "ops"];
 
 /// Whether `--json` or a command's `--ops` boolean was set at any level.
 ///

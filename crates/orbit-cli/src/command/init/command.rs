@@ -19,6 +19,10 @@ use serde_json::json;
 use crate::command::{CommandOut, CommandOutput, Payload};
 use crate::entry::resolved::Resolved;
 
+const MAX_MACHINE_NAME_ATTEMPTS: usize = 4;
+
+const MAX_TASK_PREFIX_ATTEMPTS: usize = 4;
+
 #[derive(Args)]
 #[command(
     about = "Initialize the global Orbit root (~/.orbit)",
@@ -231,6 +235,79 @@ impl InitCommand {
     }
 }
 
+/// The machine identity as `orbit init` reports it.
+struct IdentityReport {
+    outcome: &'static str,
+    name: String,
+    id: String,
+    task_prefix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InitOutput {
+    skills_root: &'static str,
+    refreshed_skill_files: usize,
+    created_skills_symlink: bool,
+    config_path: &'static str,
+    created_config: bool,
+    refreshed_default_activities: usize,
+    retired_default_activities: usize,
+    refreshed_default_jobs: usize,
+    retired_default_jobs: usize,
+    managed_asset_warnings: Vec<String>,
+    refreshed_default_executors: usize,
+    refreshed_default_policies: usize,
+    workspace_seeds: Vec<WorkspaceSeed>,
+    #[cfg(target_os = "linux")]
+    linux_sandbox: LinuxSandboxReadiness,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum LinuxSandboxStatus {
+    Ready,
+    Skipped,
+    NotReady,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct LinuxSandboxReadiness {
+    status: LinuxSandboxStatus,
+    reason: String,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxSandboxReadiness {
+    fn skipped(reason: &str) -> Self {
+        Self {
+            status: LinuxSandboxStatus::Skipped,
+            reason: reason.to_string(),
+        }
+    }
+
+    fn report(&self) {
+        if self.status == LinuxSandboxStatus::NotReady {
+            eprintln!(
+                "warning: Linux sandbox is not ready: {}; initialization continues. \
+                 Fix the cause named in the warning, then retry \
+                 `orbit init --host-prerequisites-only`. linux-bwrap dispatch stays blocked \
+                 until `orbit doctor providers` reports the sandbox ready.",
+                self.reason
+            );
+        } else {
+            eprintln!("Linux sandbox: {}", self.reason);
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+struct ReportedInitPaths {
+    skills_root: &'static str,
+    config_path: &'static str,
+}
+
 fn resolve_global_root(
     root_override: Option<&Path>,
     resolved: &Resolved,
@@ -424,14 +501,6 @@ fn ensure_machine_identity_for_init(
     })
 }
 
-/// The machine identity as `orbit init` reports it.
-struct IdentityReport {
-    outcome: &'static str,
-    name: String,
-    id: String,
-    task_prefix: String,
-}
-
 fn prompt_machine_name() -> Result<String, OrbitError> {
     let default = os_hostname();
     let prompt = match default.as_deref() {
@@ -444,8 +513,6 @@ fn prompt_machine_name() -> Result<String, OrbitError> {
         prompt_stdin::read_trimmed_line(prompt, output).map_err(prompt_io_to_orbit)
     })
 }
-
-const MAX_MACHINE_NAME_ATTEMPTS: usize = 4;
 
 fn collect_machine_name<W, F>(
     prompt: &str,
@@ -483,8 +550,6 @@ where
         prompt_stdin::PROMPT_REMEDY
     )))
 }
-
-const MAX_TASK_PREFIX_ATTEMPTS: usize = 4;
 
 fn prompt_task_prefix() -> Result<String, OrbitError> {
     let stderr = crate::output::common::sink::stderr();
@@ -608,71 +673,6 @@ fn init_payload(
         doc
     };
     Payload::detail(doc, text).into()
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct InitOutput {
-    skills_root: &'static str,
-    refreshed_skill_files: usize,
-    created_skills_symlink: bool,
-    config_path: &'static str,
-    created_config: bool,
-    refreshed_default_activities: usize,
-    retired_default_activities: usize,
-    refreshed_default_jobs: usize,
-    retired_default_jobs: usize,
-    managed_asset_warnings: Vec<String>,
-    refreshed_default_executors: usize,
-    refreshed_default_policies: usize,
-    workspace_seeds: Vec<WorkspaceSeed>,
-    #[cfg(target_os = "linux")]
-    linux_sandbox: LinuxSandboxReadiness,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-enum LinuxSandboxStatus {
-    Ready,
-    Skipped,
-    NotReady,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-struct LinuxSandboxReadiness {
-    status: LinuxSandboxStatus,
-    reason: String,
-}
-
-#[cfg(target_os = "linux")]
-impl LinuxSandboxReadiness {
-    fn skipped(reason: &str) -> Self {
-        Self {
-            status: LinuxSandboxStatus::Skipped,
-            reason: reason.to_string(),
-        }
-    }
-
-    fn report(&self) {
-        if self.status == LinuxSandboxStatus::NotReady {
-            eprintln!(
-                "warning: Linux sandbox is not ready: {}; initialization continues. \
-                 Fix the cause named in the warning, then retry \
-                 `orbit init --host-prerequisites-only`. linux-bwrap dispatch stays blocked \
-                 until `orbit doctor providers` reports the sandbox ready.",
-                self.reason
-            );
-        } else {
-            eprintln!("Linux sandbox: {}", self.reason);
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-struct ReportedInitPaths {
-    skills_root: &'static str,
-    config_path: &'static str,
 }
 
 fn reported_init_paths(root_override: Option<&Path>, env: &Env) -> ReportedInitPaths {

@@ -11,28 +11,6 @@ use orbit_registry::workspace_registry;
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
 
-fn isolated_child(test: &str) -> bool {
-    const CHILD: &str = "ORBIT_TEST_TEARDOWN_RETRY_CHILD";
-    if std::env::var_os(CHILD).is_some() {
-        return false;
-    }
-    let home = tempdir().expect("isolated child home");
-    let mut command = Command::new(std::env::current_exe().expect("test binary"));
-    test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    let output = command
-        .args(["--exact", test, "--nocapture", "--test-threads=1"])
-        .env(CHILD, "1")
-        .env("HOME", home.path())
-        .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .output()
-        .expect("isolated teardown retry fixture");
-    test_env::assert_child_test_passed(test, output.status, &output.stdout, &output.stderr);
-    true
-}
-
 struct Fixture {
     _temp: TempDir,
     home: PathBuf,
@@ -199,20 +177,6 @@ impl Fixture {
     }
 }
 
-fn cli(cwd: &Path, home: &Path, args: &[&str]) -> assert_cmd::assert::Assert {
-    let mut command = cargo_bin_cmd!("orbit");
-    test_env::clear_inherited_authority(|name| {
-        command.env_remove(name);
-    });
-    command
-        .current_dir(cwd)
-        .env("HOME", home)
-        .env("USERPROFILE", home)
-        .env("ORBIT_OPERATOR", "1")
-        .args(args);
-    command.assert()
-}
-
 struct ReadOnlyDir {
     path: PathBuf,
     original: fs::Permissions,
@@ -232,6 +196,42 @@ impl Drop for ReadOnlyDir {
     fn drop(&mut self) {
         fs::set_permissions(&self.path, self.original.clone()).expect("restore permissions");
     }
+}
+
+fn isolated_child(test: &str) -> bool {
+    const CHILD: &str = "ORBIT_TEST_TEARDOWN_RETRY_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        return false;
+    }
+    let home = tempdir().expect("isolated child home");
+    let mut command = Command::new(std::env::current_exe().expect("test binary"));
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        .env(CHILD, "1")
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .current_dir(home.path())
+        .output()
+        .expect("isolated teardown retry fixture");
+    test_env::assert_child_test_passed(test, output.status, &output.stdout, &output.stderr);
+    true
+}
+
+fn cli(cwd: &Path, home: &Path, args: &[&str]) -> assert_cmd::assert::Assert {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    command
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("ORBIT_OPERATOR", "1")
+        .args(args);
+    command.assert()
 }
 
 #[test]

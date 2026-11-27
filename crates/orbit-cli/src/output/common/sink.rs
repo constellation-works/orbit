@@ -85,10 +85,6 @@ impl SinkEnv {
     }
 }
 
-fn read_var(value: Option<&OsStr>) -> Option<String> {
-    value.and_then(OsStr::to_str).map(ToOwned::to_owned)
-}
-
 /// Everything a renderer is allowed to know about its destination, resolved
 /// once per invocation.
 #[derive(Clone, Copy, Debug)]
@@ -298,6 +294,10 @@ impl OutputSink {
     pub fn apply_color_policy(&self) {
         colored::control::set_override(self.color_allowed);
     }
+}
+
+fn read_var(value: Option<&OsStr>) -> Option<String> {
+    value.and_then(OsStr::to_str).map(ToOwned::to_owned)
 }
 
 // Return the literal first-line prefix and its display width. ANSI SGR sequences

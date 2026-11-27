@@ -133,6 +133,23 @@ impl RoutineRuns {
     }
 }
 
+impl Drop for RoutineRuns {
+    fn drop(&mut self) {
+        if let Err(error) = self.settle() {
+            // An unconfirmed worker must never lose its roots. Preserve them
+            // and fail the case, without a second panic during an unwind.
+            let path = self.temp.take().map(TempDir::keep);
+            let _ = writeln!(
+                std::io::stderr(),
+                "fixture cleanup failed; retained {path:?}: {error}"
+            );
+            if !std::thread::panicking() {
+                panic!("fixture workers did not settle: {error}");
+            }
+        }
+    }
+}
+
 fn settle_run(runtime: &OrbitRuntime, id: &str) -> Result<JobRun, String> {
     let deadline = Instant::now() + test_env::FIXTURE_STEP_DEADLINE;
     let mut cancelled = false;
@@ -161,22 +178,5 @@ fn settle_run(runtime: &OrbitRuntime, id: &str) -> Result<JobRun, String> {
         // After cancellation, allow its confirmed process termination to be
         // observed on the next pass; this is not a second unbounded wait.
         std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-impl Drop for RoutineRuns {
-    fn drop(&mut self) {
-        if let Err(error) = self.settle() {
-            // An unconfirmed worker must never lose its roots. Preserve them
-            // and fail the case, without a second panic during an unwind.
-            let path = self.temp.take().map(TempDir::keep);
-            let _ = writeln!(
-                std::io::stderr(),
-                "fixture cleanup failed; retained {path:?}: {error}"
-            );
-            if !std::thread::panicking() {
-                panic!("fixture workers did not settle: {error}");
-            }
-        }
     }
 }

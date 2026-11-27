@@ -47,59 +47,6 @@ impl ExecuteCore for RunEventsArgs {
     }
 }
 
-fn run_events_payload(
-    core: &Core,
-    run_id: Option<&str>,
-    step_id: Option<&str>,
-    event_type: Option<&str>,
-    read: RunRead,
-) -> CommandOut {
-    let (run, events) = exec(core, Command::events(run_id, step_id, event_type, read))?.value;
-    let doc = json!({
-        "run_id": run.run_id,
-        "job_id": run.job_id,
-        "events": events.iter().map(RunAuditEvent::json_with_step_id).collect::<Vec<_>>(),
-    });
-
-    use crate::output::common::table::{Column, Table};
-    // `orbit run trace <run_id>` prints each event's untruncated payload.
-    let mut table = Table::new(vec![
-        Column::new("TS").fixed(),
-        Column::new("STEP").fixed(),
-        Column::new("EVENT_TYPE").fixed(),
-        Column::new("SUMMARY"),
-    ])
-    .empty_message("no audit events recorded");
-    for event in &events {
-        use comfy_table::Cell;
-        table.add_row(vec![
-            Cell::new(format_timestamp(event.timestamp)),
-            Cell::new(event.step_id.as_deref().unwrap_or("-")),
-            Cell::new(event.event_type.as_deref().unwrap_or("-")),
-            Cell::new(summarize_audit_event(event)),
-        ]);
-    }
-    Ok(Payload::detail_table(doc, table).into())
-}
-
-/// The plain-text summary of one audit event: the typed body decoded once
-/// from the event type and raw payload, then rendered.
-pub(crate) fn summarize_audit_event(event: &RunAuditEvent) -> String {
-    RunEventSummaryBody::decode(event.event_type.as_deref(), &event.raw).render()
-}
-
-/// Decodes one payload field leniently: a missing, null or wrong-typed value
-/// is absent, and the event's other fields are kept.
-fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: DeserializeOwned,
-{
-    Ok(Value::deserialize(deserializer)
-        .ok()
-        .and_then(|value| T::deserialize(value).ok()))
-}
-
 #[derive(Default, Deserialize)]
 struct RunStartedFields {
     #[serde(default, deserialize_with = "lenient")]
@@ -337,6 +284,59 @@ impl RunEventSummaryBody {
             Self::Unknown(f) => join_present(&[("", shown(&f.body_kind))]),
         }
     }
+}
+
+fn run_events_payload(
+    core: &Core,
+    run_id: Option<&str>,
+    step_id: Option<&str>,
+    event_type: Option<&str>,
+    read: RunRead,
+) -> CommandOut {
+    let (run, events) = exec(core, Command::events(run_id, step_id, event_type, read))?.value;
+    let doc = json!({
+        "run_id": run.run_id,
+        "job_id": run.job_id,
+        "events": events.iter().map(RunAuditEvent::json_with_step_id).collect::<Vec<_>>(),
+    });
+
+    use crate::output::common::table::{Column, Table};
+    // `orbit run trace <run_id>` prints each event's untruncated payload.
+    let mut table = Table::new(vec![
+        Column::new("TS").fixed(),
+        Column::new("STEP").fixed(),
+        Column::new("EVENT_TYPE").fixed(),
+        Column::new("SUMMARY"),
+    ])
+    .empty_message("no audit events recorded");
+    for event in &events {
+        use comfy_table::Cell;
+        table.add_row(vec![
+            Cell::new(format_timestamp(event.timestamp)),
+            Cell::new(event.step_id.as_deref().unwrap_or("-")),
+            Cell::new(event.event_type.as_deref().unwrap_or("-")),
+            Cell::new(summarize_audit_event(event)),
+        ]);
+    }
+    Ok(Payload::detail_table(doc, table).into())
+}
+
+/// The plain-text summary of one audit event: the typed body decoded once
+/// from the event type and raw payload, then rendered.
+pub(crate) fn summarize_audit_event(event: &RunAuditEvent) -> String {
+    RunEventSummaryBody::decode(event.event_type.as_deref(), &event.raw).render()
+}
+
+/// Decodes one payload field leniently: a missing, null or wrong-typed value
+/// is absent, and the event's other fields are kept.
+fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    Ok(Value::deserialize(deserializer)
+        .ok()
+        .and_then(|value| T::deserialize(value).ok()))
 }
 
 /// Decodes the typed fields from an object payload; a payload that is not an

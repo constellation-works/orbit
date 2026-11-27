@@ -223,15 +223,6 @@ impl ToolRunArgs {
     }
 }
 
-fn trimmed_string_field(value: &Value, key: &str) -> Option<String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 impl ToolRunArgs {
     pub(crate) fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
         // A tool invocation owns only the ledger key produced by this call.
@@ -347,6 +338,15 @@ impl ToolRunArgs {
         )?;
         shape.render_tool_run_output(output)
     }
+}
+
+fn trimmed_string_field(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn local_tool_session_context(

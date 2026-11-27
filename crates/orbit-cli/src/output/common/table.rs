@@ -139,13 +139,6 @@ pub struct Table {
     trailing_notices: Vec<String>,
 }
 
-/// Build a table whose columns are all plain left-aligned text. Commands with
-/// numeric, duration, identifier, or path columns should describe them with
-/// [`Column`] and [`Table::new`] instead.
-pub fn build_table(headers: &[&str]) -> Table {
-    Table::new(headers.iter().map(|header| Column::new(header)).collect())
-}
-
 impl Table {
     /// Build a table from explicit column policies.
     pub fn new(columns: Vec<Column>) -> Self {
@@ -519,6 +512,13 @@ pub(crate) struct Rendered {
     pub(crate) notices: Vec<String>,
     /// A cell was shortened or a column was hidden to fit the sink.
     pub(crate) truncated: bool,
+}
+
+/// Build a table whose columns are all plain left-aligned text. Commands with
+/// numeric, duration, identifier, or path columns should describe them with
+/// [`Column`] and [`Table::new`] instead.
+pub fn build_table(headers: &[&str]) -> Table {
+    Table::new(headers.iter().map(|header| Column::new(header)).collect())
 }
 
 fn cell_at(row: &[Cell], index: usize) -> Cell {

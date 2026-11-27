@@ -23,10 +23,12 @@ struct Qa {
 impl Qa {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let repo = temp.path().join("repo");
         let qa = Self {
-            home: temp.path().join("home"),
-            repo: temp.path().join("repo"),
             _temp: temp,
+            home,
+            repo,
         };
         fs::create_dir_all(&qa.home).unwrap();
         git_repo::init(&qa.repo);

@@ -38,12 +38,15 @@ impl TwoAuthorities {
         let current = orbit_core::composition::compiled_compatibility()
             .workspace_layout
             .version;
+        let authority_a = protected.home.join(".orbit");
+        let authority_b = foreign.home.join(".orbit");
+        let workspace_root = protected.work.join(".orbit");
         let fixture = Self {
-            authority_a: protected.home.join(".orbit"),
-            authority_b: foreign.home.join(".orbit"),
-            workspace_root: protected.work.join(".orbit"),
             protected,
             foreign,
+            authority_a,
+            authority_b,
+            workspace_root,
             current,
             old_layout: current - 1,
         };

@@ -17,6 +17,133 @@ use crate::command::log::tail::{
 // runner can take seconds just to schedule the follower thread.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
+struct FollowWorker {
+    output_rx: mpsc::Receiver<String>,
+    ready_rx: mpsc::Receiver<()>,
+    stop_tx: mpsc::Sender<()>,
+    reached_rx: Option<mpsc::Receiver<()>>,
+    resume_tx: Option<mpsc::Sender<()>>,
+    handle: Option<JoinHandle<io::Result<()>>>,
+}
+
+impl FollowWorker {
+    fn wait_until_paused(&self) {
+        self.reached_rx
+            .as_ref()
+            .expect("follower was spawned with an initial-read pause")
+            .recv_timeout(HANDSHAKE_TIMEOUT)
+            .expect("initial reader paused");
+    }
+
+    fn resume_initial_read(&mut self) {
+        self.resume_tx
+            .take()
+            .expect("initial reader has not been resumed")
+            .send(())
+            .expect("resume initial reader");
+    }
+
+    fn wait_until_ready(&self) {
+        self.ready_rx
+            .recv_timeout(HANDSHAKE_TIMEOUT)
+            .expect("follower established its initial offset");
+    }
+
+    fn recv_timeout(&self, timeout: Duration) -> Result<String, mpsc::RecvTimeoutError> {
+        self.output_rx.recv_timeout(timeout)
+    }
+
+    fn collect_through(&mut self, needle: &str) -> String {
+        let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
+        let mut output = String::new();
+        while Instant::now() < deadline {
+            match self.recv_timeout(Duration::from_millis(50)) {
+                Ok(chunk) => {
+                    output.push_str(&chunk);
+                    if output.lines().any(|line| line.contains(needle)) {
+                        return output;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.panic_on_disconnected_output(needle, &output);
+                }
+            }
+        }
+        panic!("follow output did not contain {needle}: {output}");
+    }
+
+    fn panic_on_disconnected_output(&mut self, needle: &str, output: &str) -> ! {
+        let Some(handle) = self.handle.take() else {
+            panic!("follower output channel disconnected before emitting {needle}: {output}");
+        };
+        match handle.join() {
+            Ok(Ok(())) => {
+                panic!("follower exited cleanly before emitting {needle}: {output}");
+            }
+            Ok(Err(error)) => {
+                panic!("follower failed before emitting {needle}: {error}: {output}");
+            }
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("non-string panic");
+                panic!("follower thread panicked before emitting {needle}: {message}: {output}");
+            }
+        }
+    }
+
+    fn finish(&mut self) {
+        let _ = self.stop_tx.send(());
+        self.join();
+    }
+
+    fn join(&mut self) {
+        self.handle
+            .take()
+            .expect("follower handle is present")
+            .join()
+            .expect("follower thread did not panic")
+            .expect("follower exited cleanly");
+    }
+}
+
+impl Drop for FollowWorker {
+    fn drop(&mut self) {
+        // Disconnect a still-paused initial reader before joining it.
+        self.resume_tx.take();
+        let _ = self.stop_tx.send(());
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+struct TeeWriter {
+    tx: mpsc::Sender<String>,
+}
+
+impl TeeWriter {
+    fn new(tx: mpsc::Sender<String>) -> Self {
+        Self { tx }
+    }
+}
+
+impl Write for TeeWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if let Ok(text) = std::str::from_utf8(buf) {
+            let _ = self.tx.send(text.to_string());
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 fn write_fixture(path: &Path, lines: &[String]) {
     let mut content = String::new();
     for line in lines {
@@ -142,132 +269,5 @@ fn spawn_follower_with_args(
         reached_rx,
         resume_tx,
         handle: Some(handle),
-    }
-}
-
-struct FollowWorker {
-    output_rx: mpsc::Receiver<String>,
-    ready_rx: mpsc::Receiver<()>,
-    stop_tx: mpsc::Sender<()>,
-    reached_rx: Option<mpsc::Receiver<()>>,
-    resume_tx: Option<mpsc::Sender<()>>,
-    handle: Option<JoinHandle<io::Result<()>>>,
-}
-
-impl FollowWorker {
-    fn wait_until_paused(&self) {
-        self.reached_rx
-            .as_ref()
-            .expect("follower was spawned with an initial-read pause")
-            .recv_timeout(HANDSHAKE_TIMEOUT)
-            .expect("initial reader paused");
-    }
-
-    fn resume_initial_read(&mut self) {
-        self.resume_tx
-            .take()
-            .expect("initial reader has not been resumed")
-            .send(())
-            .expect("resume initial reader");
-    }
-
-    fn wait_until_ready(&self) {
-        self.ready_rx
-            .recv_timeout(HANDSHAKE_TIMEOUT)
-            .expect("follower established its initial offset");
-    }
-
-    fn recv_timeout(&self, timeout: Duration) -> Result<String, mpsc::RecvTimeoutError> {
-        self.output_rx.recv_timeout(timeout)
-    }
-
-    fn collect_through(&mut self, needle: &str) -> String {
-        let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
-        let mut output = String::new();
-        while Instant::now() < deadline {
-            match self.recv_timeout(Duration::from_millis(50)) {
-                Ok(chunk) => {
-                    output.push_str(&chunk);
-                    if output.lines().any(|line| line.contains(needle)) {
-                        return output;
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.panic_on_disconnected_output(needle, &output);
-                }
-            }
-        }
-        panic!("follow output did not contain {needle}: {output}");
-    }
-
-    fn panic_on_disconnected_output(&mut self, needle: &str, output: &str) -> ! {
-        let Some(handle) = self.handle.take() else {
-            panic!("follower output channel disconnected before emitting {needle}: {output}");
-        };
-        match handle.join() {
-            Ok(Ok(())) => {
-                panic!("follower exited cleanly before emitting {needle}: {output}");
-            }
-            Ok(Err(error)) => {
-                panic!("follower failed before emitting {needle}: {error}: {output}");
-            }
-            Err(payload) => {
-                let message = payload
-                    .downcast_ref::<&str>()
-                    .copied()
-                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-                    .unwrap_or("non-string panic");
-                panic!("follower thread panicked before emitting {needle}: {message}: {output}");
-            }
-        }
-    }
-
-    fn finish(&mut self) {
-        let _ = self.stop_tx.send(());
-        self.join();
-    }
-
-    fn join(&mut self) {
-        self.handle
-            .take()
-            .expect("follower handle is present")
-            .join()
-            .expect("follower thread did not panic")
-            .expect("follower exited cleanly");
-    }
-}
-
-impl Drop for FollowWorker {
-    fn drop(&mut self) {
-        // Disconnect a still-paused initial reader before joining it.
-        self.resume_tx.take();
-        let _ = self.stop_tx.send(());
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-
-struct TeeWriter {
-    tx: mpsc::Sender<String>,
-}
-
-impl TeeWriter {
-    fn new(tx: mpsc::Sender<String>) -> Self {
-        Self { tx }
-    }
-}
-
-impl Write for TeeWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if let Ok(text) = std::str::from_utf8(buf) {
-            let _ = self.tx.send(text.to_string());
-        }
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
     }
 }

@@ -49,6 +49,91 @@ impl JobRunArgs {
     }
 }
 
+#[derive(Args)]
+#[command(after_help = "Examples:\n  orbit job replay jrun-task_auto_pipeline-20260505T061300.000")]
+pub struct JobReplayArgs {
+    /// Source job run ID to replay from step 0.
+    pub run_id: String,
+    /// Workspace claim token held by this caller.
+    #[arg(long)]
+    pub claim_token: Option<String>,
+}
+
+impl ExecuteCore for JobReplayArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let source_run_id = self.run_id;
+        let result = exec(
+            core,
+            Command::replay(&source_run_id, self.claim_token.as_deref()),
+        )?
+        .value;
+        let doc = json!({
+            "run_id": result.run_id,
+            "source_run_id": source_run_id,
+            "job_name": result.job_name,
+            "success": result.success,
+            "message": result.message,
+            "pipeline": result.pipeline,
+            "events_emitted": result.events_emitted,
+        });
+        let mut lines = vec![format!(
+            "run_id={};replayed_from={};job={};success={};events={}",
+            result.run_id, source_run_id, result.job_name, result.success, result.events_emitted,
+        )];
+        if let Some(msg) = &result.message {
+            lines.push(format!("message: {msg}"));
+        }
+        lines.push(format!(
+            "pipeline: {}",
+            serde_json::to_string_pretty(&result.pipeline).unwrap_or_default()
+        ));
+        let payload = Payload::detail(doc, lines.join("\n"));
+        if !result.success {
+            return Ok(payload.with_exit_code(1).into());
+        }
+        Ok(payload.into())
+    }
+}
+
+#[derive(Args)]
+#[command(
+    after_help = "Examples:\n  orbit job resume jrun-20260704-0710\n  orbit job resume jrun-20260704-0710 --wait\n\nSubmits a new linked run to a detached worker and returns its run ID.\nCompleted top-level checkpoints are reused. Use `orbit run show <RUN_ID>`\nto inspect it, or `--wait` to block and exit with its terminal outcome."
+)]
+pub struct JobResumeArgs {
+    /// Source job run ID to resume from its persisted step checkpoints.
+    pub run_id: String,
+    #[command(flatten)]
+    pub(super) wait: WaitArgs,
+}
+
+impl ExecuteCore for JobResumeArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let timeout_seconds = self.wait.timeout_seconds()?;
+        let result = exec(core, Command::resume_job(&self.run_id, timeout_seconds))?.value;
+        let invoke = result.invoke;
+        if let Some((entry, expired)) = result.waited {
+            render_wait(&invoke, &entry, expired)
+        } else {
+            let receipt =
+                ResumeSubmissionReceipt::new(&invoke, &self.run_id, ResumeSubmissionProfile::Cli);
+            render_resume_submission(&invoke, &receipt)
+        }
+    }
+}
+
+#[derive(Args)]
+pub struct JobRunPipelineWorkerArgs {
+    /// Persisted run ID to claim and execute.
+    pub run_id: String,
+}
+
+impl ExecuteCore for JobRunPipelineWorkerArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        exec(core, Command::pipeline_worker(&self.run_id))?;
+        Ok(CommandOutput::Silent)
+    }
+}
+
 fn render_submission(invoke: &PipelineInvokeResult) -> CommandOut {
     let state = invoke.submission_state();
     let doc = json!({
@@ -146,78 +231,6 @@ fn single_line(value: &str) -> String {
     value.replace(['\n', '\r'], " ")
 }
 
-#[derive(Args)]
-#[command(after_help = "Examples:\n  orbit job replay jrun-task_auto_pipeline-20260505T061300.000")]
-pub struct JobReplayArgs {
-    /// Source job run ID to replay from step 0.
-    pub run_id: String,
-    /// Workspace claim token held by this caller.
-    #[arg(long)]
-    pub claim_token: Option<String>,
-}
-
-impl ExecuteCore for JobReplayArgs {
-    fn execute(self, core: &Core) -> CommandOut {
-        let source_run_id = self.run_id;
-        let result = exec(
-            core,
-            Command::replay(&source_run_id, self.claim_token.as_deref()),
-        )?
-        .value;
-        let doc = json!({
-            "run_id": result.run_id,
-            "source_run_id": source_run_id,
-            "job_name": result.job_name,
-            "success": result.success,
-            "message": result.message,
-            "pipeline": result.pipeline,
-            "events_emitted": result.events_emitted,
-        });
-        let mut lines = vec![format!(
-            "run_id={};replayed_from={};job={};success={};events={}",
-            result.run_id, source_run_id, result.job_name, result.success, result.events_emitted,
-        )];
-        if let Some(msg) = &result.message {
-            lines.push(format!("message: {msg}"));
-        }
-        lines.push(format!(
-            "pipeline: {}",
-            serde_json::to_string_pretty(&result.pipeline).unwrap_or_default()
-        ));
-        let payload = Payload::detail(doc, lines.join("\n"));
-        if !result.success {
-            return Ok(payload.with_exit_code(1).into());
-        }
-        Ok(payload.into())
-    }
-}
-
-#[derive(Args)]
-#[command(
-    after_help = "Examples:\n  orbit job resume jrun-20260704-0710\n  orbit job resume jrun-20260704-0710 --wait\n\nSubmits a new linked run to a detached worker and returns its run ID.\nCompleted top-level checkpoints are reused. Use `orbit run show <RUN_ID>`\nto inspect it, or `--wait` to block and exit with its terminal outcome."
-)]
-pub struct JobResumeArgs {
-    /// Source job run ID to resume from its persisted step checkpoints.
-    pub run_id: String,
-    #[command(flatten)]
-    pub(super) wait: WaitArgs,
-}
-
-impl ExecuteCore for JobResumeArgs {
-    fn execute(self, core: &Core) -> CommandOut {
-        let timeout_seconds = self.wait.timeout_seconds()?;
-        let result = exec(core, Command::resume_job(&self.run_id, timeout_seconds))?.value;
-        let invoke = result.invoke;
-        if let Some((entry, expired)) = result.waited {
-            render_wait(&invoke, &entry, expired)
-        } else {
-            let receipt =
-                ResumeSubmissionReceipt::new(&invoke, &self.run_id, ResumeSubmissionProfile::Cli);
-            render_resume_submission(&invoke, &receipt)
-        }
-    }
-}
-
 /// CLI adapter for the shared run projection used by run history.
 ///
 /// History keeps the historical contract of exposing only the claimed worker
@@ -252,19 +265,6 @@ pub(crate) fn cli_job_run_to_json_with_activity_provenance(
             ..JobRunProjectionEvidence::default()
         },
     )
-}
-
-#[derive(Args)]
-pub struct JobRunPipelineWorkerArgs {
-    /// Persisted run ID to claim and execute.
-    pub run_id: String,
-}
-
-impl ExecuteCore for JobRunPipelineWorkerArgs {
-    fn execute(self, core: &Core) -> CommandOut {
-        exec(core, Command::pipeline_worker(&self.run_id))?;
-        Ok(CommandOutput::Silent)
-    }
 }
 
 fn build_job_run_input(pairs: &[String]) -> Result<Value, OrbitError> {
