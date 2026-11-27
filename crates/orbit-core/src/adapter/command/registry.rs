@@ -69,102 +69,6 @@ impl OrbitRuntime {
         self.list_tools_with_inactive(true)
     }
 
-    fn list_tools_with_inactive(
-        &self,
-        include_inactive: bool,
-    ) -> Result<Vec<ToolInfo>, OrbitError> {
-        let registry_schemas = if include_inactive {
-            self.tool_registry().all_schemas()
-        } else {
-            self.tool_registry().schemas()
-        };
-        let stored_tools = self
-            .stores()
-            .host_store()
-            .read()
-            .and_then(|snapshot| snapshot.tool().list())?;
-
-        let mut tools: Vec<ToolInfo> = registry_schemas
-            .into_iter()
-            // A run-bound tool is served only to the managed runs that may
-            // call it; no operator listing shows it.
-            .filter(|schema| !self.tool_registry().is_run_bound(&schema.name))
-            .map(|schema| {
-                let stored = stored_tools.iter().find(|s| s.name == schema.name);
-                let enabled = stored.is_none_or(|s| s.enabled);
-                let active = self.tool_registry().is_active(&schema.name);
-                let input_schema = self.tool_registry().get_input_schema(&schema.name);
-                let mcp_toolset = self.tool_registry().mcp_toolset(&schema.name);
-                ToolInfo {
-                    name: schema.name.clone(),
-                    description: schema.description.clone(),
-                    enabled,
-                    active,
-                    builtin: schema.builtin,
-                    parameters: schema.parameters,
-                    input_schema,
-                    mcp_toolset,
-                }
-            })
-            .collect();
-
-        // Add external tools that are in the store but not yet in the registry
-        for stored in &stored_tools {
-            if !stored.builtin && !tools.iter().any(|t| t.name == stored.name) {
-                tools.push(stored_external_tool_info(stored));
-            }
-        }
-
-        tools.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(tools)
-    }
-
-    pub(crate) fn show_tool(&self, name: &str) -> Result<ToolInfo, OrbitError> {
-        self.tool_registry().refuse_family_operation_name(name)?;
-        let schema = self
-            .tool_registry()
-            .get_schema(name)
-            .filter(|_| !self.tool_registry().is_run_bound(name));
-        let Some(schema) = schema else {
-            // Disabled external tools are deliberately absent from the executable
-            // registry. Their persisted catalog entry remains inspectable, using
-            // the same active/enabled distinction as list_all_tools.
-            if let Some(stored) = self
-                .stores()
-                .host_store()
-                .read()
-                .and_then(|snapshot| snapshot.tool().get(name))?
-                && !stored.builtin
-                && !stored.enabled
-                && !stored.path.is_empty()
-            {
-                return Ok(stored_external_tool_info(&stored));
-            }
-            return Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()));
-        };
-
-        let stored = self
-            .stores()
-            .host_store()
-            .read()
-            .and_then(|snapshot| snapshot.tool().get(name))?;
-        let enabled = stored.is_none_or(|s| s.enabled);
-        let active = self.tool_registry().is_active(&schema.name);
-        let input_schema = self.tool_registry().get_input_schema(&schema.name);
-        let mcp_toolset = self.tool_registry().mcp_toolset(&schema.name);
-
-        Ok(ToolInfo {
-            name: schema.name,
-            description: schema.description,
-            enabled,
-            active,
-            builtin: schema.builtin,
-            parameters: schema.parameters,
-            input_schema,
-            mcp_toolset,
-        })
-    }
-
     pub fn add_tool(
         &self,
         name: &str,
@@ -295,6 +199,52 @@ impl OrbitRuntime {
         self.set_tool_enabled_state(name, false)
     }
 
+    pub(crate) fn show_tool(&self, name: &str) -> Result<ToolInfo, OrbitError> {
+        self.tool_registry().refuse_family_operation_name(name)?;
+        let schema = self
+            .tool_registry()
+            .get_schema(name)
+            .filter(|_| !self.tool_registry().is_run_bound(name));
+        let Some(schema) = schema else {
+            // Disabled external tools are deliberately absent from the executable
+            // registry. Their persisted catalog entry remains inspectable, using
+            // the same active/enabled distinction as list_all_tools.
+            if let Some(stored) = self
+                .stores()
+                .host_store()
+                .read()
+                .and_then(|snapshot| snapshot.tool().get(name))?
+                && !stored.builtin
+                && !stored.enabled
+                && !stored.path.is_empty()
+            {
+                return Ok(stored_external_tool_info(&stored));
+            }
+            return Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()));
+        };
+
+        let stored = self
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.tool().get(name))?;
+        let enabled = stored.is_none_or(|s| s.enabled);
+        let active = self.tool_registry().is_active(&schema.name);
+        let input_schema = self.tool_registry().get_input_schema(&schema.name);
+        let mcp_toolset = self.tool_registry().mcp_toolset(&schema.name);
+
+        Ok(ToolInfo {
+            name: schema.name,
+            description: schema.description,
+            enabled,
+            active,
+            builtin: schema.builtin,
+            parameters: schema.parameters,
+            input_schema,
+            mcp_toolset,
+        })
+    }
+
     pub(crate) fn ensure_tool_agent_facing(&self, name: &str) -> Result<(), OrbitError> {
         self.ensure_tool_agent_facing_with_context(name, &ToolContext::default())
     }
@@ -344,6 +294,56 @@ impl OrbitRuntime {
             return Err(self.plugin_disabled_in_workspace(namespace));
         }
         Ok(())
+    }
+
+    fn list_tools_with_inactive(
+        &self,
+        include_inactive: bool,
+    ) -> Result<Vec<ToolInfo>, OrbitError> {
+        let registry_schemas = if include_inactive {
+            self.tool_registry().all_schemas()
+        } else {
+            self.tool_registry().schemas()
+        };
+        let stored_tools = self
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.tool().list())?;
+
+        let mut tools: Vec<ToolInfo> = registry_schemas
+            .into_iter()
+            // A run-bound tool is served only to the managed runs that may
+            // call it; no operator listing shows it.
+            .filter(|schema| !self.tool_registry().is_run_bound(&schema.name))
+            .map(|schema| {
+                let stored = stored_tools.iter().find(|s| s.name == schema.name);
+                let enabled = stored.is_none_or(|s| s.enabled);
+                let active = self.tool_registry().is_active(&schema.name);
+                let input_schema = self.tool_registry().get_input_schema(&schema.name);
+                let mcp_toolset = self.tool_registry().mcp_toolset(&schema.name);
+                ToolInfo {
+                    name: schema.name.clone(),
+                    description: schema.description.clone(),
+                    enabled,
+                    active,
+                    builtin: schema.builtin,
+                    parameters: schema.parameters,
+                    input_schema,
+                    mcp_toolset,
+                }
+            })
+            .collect();
+
+        // Add external tools that are in the store but not yet in the registry
+        for stored in &stored_tools {
+            if !stored.builtin && !tools.iter().any(|t| t.name == stored.name) {
+                tools.push(stored_external_tool_info(stored));
+            }
+        }
+
+        tools.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(tools)
     }
 
     fn plugin_disabled_in_workspace(&self, plugin: &str) -> OrbitError {
