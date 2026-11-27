@@ -62,7 +62,10 @@ pub fn confine_workspace_cwd(
     }
 
     Err(OrbitError::InvalidInput(format!(
-        "{field} '{requested}' is outside workspace '{workspace_id}' checkout '{}'",
+        "{field} '{requested}' is outside workspace '{workspace_id}' checkout '{}'; \
+         pass an absolute directory inside that checkout or under its linked worktrees \
+         in .orbit/state/worktrees/, or run from the registered workspace whose checkout \
+         holds the path",
         checkout.display()
     )))
 }

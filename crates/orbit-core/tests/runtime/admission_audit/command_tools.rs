@@ -246,6 +246,10 @@ fn assert_outside_workspace(error: OrbitError, runtime: &OrbitRuntime) -> String
         message.contains("working_directory"),
         "refusal must name the field: {message}"
     );
+    assert!(
+        message.contains("inside that checkout") && message.contains("worktrees"),
+        "refusal must name the accepted form: {message}"
+    );
     message
 }
 
