@@ -583,7 +583,7 @@ fn tool_management_subcommands_persist_admin_audit_role_regardless_of_actor() {
 }
 
 #[test]
-fn dry_run_audit_role_matches_tool_run_actor_role_precedence() {
+fn dry_run_audit_role_matches_audit_role_label_precedence() {
     let root = tempfile::tempdir().expect("fixture");
     let home = root.path().join("home");
     let work = root.path().join("work");
@@ -602,7 +602,7 @@ fn dry_run_audit_role_matches_tool_run_actor_role_precedence() {
         command
     };
 
-    // 1. Input `model` outranks `--model` flag and `ORBIT_AGENT_*` env.
+    // 1. With an envelope, `--model` outranks input `model` and `ORBIT_AGENT_*` env.
     enveloped()
         .args([
             "tool",
@@ -656,6 +656,21 @@ fn dry_run_audit_role_matches_tool_run_actor_role_precedence() {
         .assert()
         .success();
 
+    // 6. Without an envelope, input `model` outranks an explicit `--model` flag.
+    fixture_orbit(&work, &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--dry-run",
+            "--model",
+            "gemini",
+            "--input",
+            r#"{"title":"Dry run","description":"Input model","complexity":"low","model":"grok"}"#,
+        ])
+        .assert()
+        .success();
+
     let conn = rusqlite::Connection::open_with_flags(
         home.join(".orbit/orbit.db"),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -678,12 +693,13 @@ fn dry_run_audit_role_matches_tool_run_actor_role_precedence() {
     assert_eq!(
         rows,
         [
-            ("orbit.task.add".to_string(), "grok".to_string()),
+            ("orbit.task.add".to_string(), "gemini".to_string()),
             ("orbit.task.list".to_string(), "gemini".to_string()),
             ("orbit.task.list".to_string(), "claude".to_string()),
             ("orbit.task.list".to_string(), "codex".to_string()),
             ("orbit.task.list".to_string(), "agent".to_string()),
+            ("orbit.task.add".to_string(), "grok".to_string()),
         ],
-        "dry-run invocation rows must follow input > flags > ORBIT_AGENT_* > agent"
+        "dry-run rows must follow audit_role_label precedence"
     );
 }

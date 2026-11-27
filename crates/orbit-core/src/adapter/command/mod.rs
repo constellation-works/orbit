@@ -15,6 +15,7 @@ pub use orbit_tools::tool_suggestions;
 
 #[cfg(unix)]
 pub(crate) use dispatch::RunDispatch;
+pub(crate) use dispatch::mark_tool_audit_recorded;
 #[cfg(unix)]
 pub use dispatch::{
     ClaimedOwnerCall, ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable,
@@ -26,7 +27,6 @@ pub use dispatch::{
     refuse_plugin_child_remote_callback, take_tool_audit_recorded, tool_suggestion_context,
     trusted_mcp_audit_context,
 };
-pub(crate) use dispatch::{dry_run_audit_role_label, mark_tool_audit_recorded};
 pub use plugin::{
     HostPluginMcpCache, HostPluginMcpSurface, MAX_PLUGIN_SECRET_BYTES, PluginAddOptions,
     PluginCliGroup, PluginCliVerb, PluginEnableOptions, PluginMigrateRequest,

@@ -242,33 +242,6 @@ fn audit_role_label_with_env(
     finalize_audit_role_label(agent, model)
 }
 
-/// Resolve the audit `role` label for `orbit tool run --dry-run`.
-///
-/// Matches `tool_run_actor_role` precedence: tool-input `model` identity,
-/// then explicit `--agent`/`--model` flags, then `ORBIT_AGENT_*` env,
-/// falling back to `"agent"`.
-pub(crate) fn dry_run_audit_role_label(
-    env: &Env,
-    input: &Value,
-    agent_override: Option<&str>,
-    model_override: Option<&str>,
-) -> String {
-    let (input_agent, input_model) = read_input_identity(input);
-    let flag_agent = trimmed_non_blank(agent_override);
-    let flag_model = trimmed_non_blank(model_override);
-    let (agent, model) = if input_agent.is_some() || input_model.is_some() {
-        (input_agent, input_model)
-    } else if flag_agent.is_some() || flag_model.is_some() {
-        (flag_agent, flag_model)
-    } else {
-        (
-            env_non_blank(env.orbit_agent_name()),
-            env_non_blank(env.orbit_agent_model()),
-        )
-    };
-    finalize_audit_role_label(agent, model)
-}
-
 /// Resolve the audit role with the MCP trust boundary applied. Standalone MCP
 /// calls are always `unverified`; an authenticated managed envelope may use
 /// only its engine-provided identity and never caller JSON/flags.
