@@ -238,7 +238,7 @@ jobs:
       - name: Run portable process-boundary tests
         run: |
           python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked update:: --test process
-          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cmd -p orbit-cli --locked --lib update::tests::converge::
+          python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-core -p orbit-cli --locked --lib app::update::tests::converge::
           python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked run_observation:: --test process
           python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked web_serve_handover:: --test process
           python3 scripts/test-qa-full-sweep.py --native-execution-dir .orbit/tmp/macos-native-execution --record-native-command cargo test --no-fail-fast -p orbit-cli --locked mcp_roundtrip::upgrade:: --test mcp
