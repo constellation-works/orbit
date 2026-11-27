@@ -74,6 +74,7 @@ export function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   if (hostPill) controls.appendChild(hostPill);
   const risk = buildRiskChip(task);
   if (risk) controls.appendChild(risk);
+  fitTaskLevers(controls);
   levers.appendChild(controls);
   if (showsEditor("tags")) levers.appendChild(el("div", { class: "task-levers-tags" }, [editor("tags")]));
 
@@ -83,6 +84,57 @@ export function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const delivery = buildDeliveryCard(task, drain, context, { editor, showsEditor });
   if (delivery) head.appendChild(delivery);
   return head;
+}
+
+// Fit against the pane, not the viewport. Reconsider every stage from the
+// natural row when the pane or its contents change, so widening restores it.
+function fitTaskLevers(controls) {
+  const help = infoHint("");
+  help.classList.add("task-levers-help");
+  help.setAttribute("role", "img");
+  controls.appendChild(help);
+  const stages = ["short", "dot", "hide-risk", "hide-host"];
+  let frame = 0;
+  const fit = () => {
+    frame = 0;
+    if (!controls.isConnected) return;
+    controls.dataset.fit = "full";
+    const crew = controls.querySelector(".task-crew-select");
+    const fullCrew = crew?.selectedOptions?.[0]?.textContent || controls.querySelector(".task-chip-crew")?.textContent.trim() || "";
+    const complexity = controls.querySelector(".task-complexity-select")?.selectedOptions?.[0]?.textContent || "";
+    const host = controls.querySelector(".task-os-readout")?.textContent || "";
+    const risk = controls.querySelector(".task-chip-risk")?.getAttribute("aria-label") || "";
+    const text = [complexity && `Complexity: ${complexity}`, `Crew: ${fullCrew}`, host && `Runs on: ${host}`, risk].filter(Boolean).join("\n");
+    const note = help.querySelector(".info-hint-text");
+    if (note.textContent !== text) note.textContent = text;
+    help.setAttribute("aria-label", text);
+    for (const stage of stages) {
+      if (controls.scrollWidth <= controls.clientWidth) break;
+      controls.dataset.fit = stage;
+    }
+  };
+  const schedule = () => {
+    if (!frame) frame = requestAnimationFrame(fit);
+  };
+  controls.addEventListener("change", schedule);
+  const mutations = new MutationObserver(schedule);
+  mutations.observe(controls, { childList: true, subtree: true, characterData: true });
+  requestAnimationFrame(() => {
+    if (!controls.isConnected) return;
+    if (typeof ResizeObserver === "function") {
+      const resize = new ResizeObserver(() => {
+        if (!controls.isConnected) {
+          resize.disconnect();
+          mutations.disconnect();
+          return;
+        }
+        schedule();
+      });
+      resize.observe(controls);
+    }
+    document.fonts?.ready.then(schedule);
+    schedule();
+  });
 }
 
 // Native select auto-sizing follows its widest option in some browsers. Size

@@ -147,6 +147,7 @@ export function buildRiskChip(task) {
     el("span", { class: "risk-value", text: valueText(riskiness) }),
   ]);
   const hint = el("span", { class: "task-risk-hint" }, [chip, tooltip]);
+  hint.dataset.riskiness = riskinessSignature(task);
   const show = () => hint.classList.remove("dismissed");
   chip.addEventListener("focus", show);
   chip.addEventListener("click", show);
