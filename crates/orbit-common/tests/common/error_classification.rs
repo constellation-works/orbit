@@ -332,6 +332,28 @@ fn source_repair_reader_conflict_and_rework_lines_name_the_working_route() {
         "source repair refused: pull request #17 conflicts with its base. Resolve the conflict with explicit source repair (inspect, then submit)."
     );
 
+    let rework_conflict = "invalid input: source repair refused: pull request #17 conflicts with \
+         its base. Nothing was changed. Resolve the conflict with explicit source repair on run \
+         `jrun-1`: `orbit.run` action `resume` with `source_repair` action `inspect`, then \
+         `submit` with `request_key`, `diagnosis`, `unmet_acceptance`, and `policy_digest`.";
+    let shown =
+        orbit_common::source_repair_reader_text(rework_conflict).expect("rework conflict refusal");
+    assert_eq!(
+        shown.line,
+        "source repair refused: pull request #17 conflicts with its base. Resolve the conflict with explicit source repair (inspect, then submit with unmet_acceptance and policy_digest)."
+    );
+
+    let unavailable_conflict = "invalid input: source repair refused: pull request #17 conflicts \
+         with its base. Nothing was changed. A requeue cannot resume a conflicting pull request, \
+         and explicit source repair on run `jrun-1` is unavailable while this task is `blocked` \
+         for a `success` run.";
+    let shown = orbit_common::source_repair_reader_text(unavailable_conflict)
+        .expect("unavailable conflict refusal");
+    assert_eq!(
+        shown.line,
+        "source repair refused: pull request #17 conflicts with its base. Explicit source repair is unavailable in this state; discard the candidate to rerun fresh."
+    );
+
     let rework = "job validation failed: source repair refused: publication rework fields do not \
          authorize this source state; resubmit without unmet_acceptance and policy_digest, which \
          apply only to a successful or kept inline publication";

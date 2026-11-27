@@ -1063,12 +1063,31 @@ positively confirms the base branch configures no required status checks):
 
 A pull request that conflicts with its base is refused by both entry points, and
 by a `block_triage` decision's requeue answer, whatever else holds; waiting does
-not clear it. Resolve the conflict with explicit source repair on the publishing
-run (`orbit.run` action `resume`, `source_repair` `inspect`, then `submit` the
-returned binding with a `request_key` and a `diagnosis`, without
-`unmet_acceptance` or `policy_digest`: only a `success` or kept-inline `failed`
-source takes them, and any other source refuses them). The started repair supersedes an
-open requeue decision and keeps the candidate.
+not clear it. Whether explicit source repair on the publishing run
+(`orbit.run` action `resume`, `source_repair` `inspect`, then `submit` the
+returned binding with a `request_key` and a `diagnosis` naming the conflict)
+is admitted, and which fields it requires, depends on both the task's status
+and the source run's state:
+
+- **Status prerequisites:** in `review`, source repair admits `held`
+  (`review_decision_pending`), `cancelled`, `success`, and kept-inline `failed`
+  publications. In `blocked`, source repair admits only a `held`
+  (`review_decision_pending`) or kept-inline `failed` source (and supersedes an
+  open requeue decision while keeping the candidate). Normally bound `success`
+  and `cancelled` runs fail the source-repair status gate while the task is
+  `blocked` (and `blocked` cannot transition back to `review`), so discard the
+  candidate with `orbit task update <task-id> --status backlog
+  --discard-candidate` (or `orbit task requeue <task-id> --discard-candidate`)
+  to close the pull request and implement fresh.
+- **Field prerequisites (`unmet_acceptance` and `policy_digest`):** a `held`
+  (`review_decision_pending`) or `cancelled` source returns `policy_digest:
+  null` on `inspect` and refuses rework fields on `submit`, so leave
+  `unmet_acceptance` and `policy_digest` unset. A `success` or kept-inline
+  `failed` source (`review_completion_failure` or `landing_review_failure`)
+  returns a `policy_digest` on `inspect` and requires both `unmet_acceptance`
+  evidence on the published candidate and that inspected `policy_digest` on
+  `submit` (pass `"adopt_retained_edits": true` on `inspect` if a kept-inline
+  `failed` run left uncommitted edits in its checkout).
 
 Both entry points apply the same publication authentication, preserve PR repair
 attempts, and cannot authorize repair or renew an expired completion deadline.

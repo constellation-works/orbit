@@ -74,7 +74,7 @@ pub fn source_repair_reader_text(stored: &str) -> Option<SourceRepairReaderText>
     let sentence = if !cut && cause_already_guides(&raw) {
         ensure_period(cause)
     } else {
-        format!("{} {}", ensure_period(cause), next_step(&raw))
+        format!("{} {}", ensure_period(cause), next_step(&raw, after))
     };
     let line = collapse_ws(&format!("{PREFIX}{sentence}"));
     Some(SourceRepairReaderText {
@@ -133,7 +133,7 @@ fn cause_already_guides(raw: &str) -> bool {
         || lower.contains("inspect it explicitly")
 }
 
-fn next_step(raw: &str) -> &'static str {
+fn next_step(raw: &str, after: &str) -> &'static str {
     let cause = raw.to_ascii_lowercase();
     if cause.contains("specification changed") || cause.contains("no longer implements") {
         return "Discard the candidate to rerun fresh.";
@@ -163,7 +163,23 @@ fn next_step(raw: &str) -> &'static str {
     }
     if cause.contains("conflicts with its base") {
         // A requeue refuses a conflicting pull request, so waiting for the
-        // conflict to clear never ends: source repair resolves it.
+        // conflict to clear never ends. Follow the route the source admits.
+        let full = after.to_ascii_lowercase();
+        if full.contains("explicit source repair") && full.contains("is unavailable") {
+            return concat!(
+                "Explicit source repair is unavailable in this state; ",
+                "discard the candidate to rerun fresh.",
+            );
+        }
+        if full.contains("unmet_acceptance")
+            && full.contains("policy_digest")
+            && !full.contains("unset")
+        {
+            return concat!(
+                "Resolve the conflict with explicit source repair ",
+                "(inspect, then submit with unmet_acceptance and policy_digest).",
+            );
+        }
         return "Resolve the conflict with explicit source repair (inspect, then submit).";
     }
     if cause.contains("rework fields do not authorize") {

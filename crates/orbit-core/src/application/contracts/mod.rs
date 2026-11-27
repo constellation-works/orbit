@@ -14,6 +14,9 @@
 //! They are owned by the `orbit-clock` crate and re-exported here [ORB-22688].
 
 mod claimed_leaf;
+
+mod conflict_repair;
+
 mod crew_draw;
 mod distributed_gate;
 mod drain_entry;
@@ -35,6 +38,7 @@ mod schedule_display;
 mod tool_invocation;
 
 pub use claimed_leaf::{ClaimedLeafStage, DrainClaimedLeaf};
+pub(crate) use conflict_repair::ConflictSourceRepairRoute;
 pub(crate) use crew_draw::{
     AutoEffortSubject, CreationCrewAssignment, CrewCandidate, CrewPoolDraw,
     INSPECTION_CREW_UNAVAILABLE, InspectionPool, PROVIDER_LIMIT_REASSIGNMENT_PREFIX,
