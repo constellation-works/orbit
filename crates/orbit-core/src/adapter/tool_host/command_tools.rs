@@ -1,7 +1,8 @@
-use crate::Core;
-use crate::app::run::{self, Command};
 use orbit_common::OrbitError;
 use serde_json::Value;
+
+use crate::Core;
+use crate::app::remote_command::{self, Command, Outcome};
 
 pub(super) fn exec(
     core: &Core,
@@ -9,5 +10,13 @@ pub(super) fn exec(
     agent: Option<String>,
     model: Option<String>,
 ) -> Result<Value, OrbitError> {
-    run::exec(core, Command::remote_command(input, agent, model)).map(|outcome| outcome.value)
+    remote_command::exec(
+        core,
+        Command::Exec {
+            input,
+            agent,
+            model,
+        },
+    )
+    .map(Outcome::into_value)
 }

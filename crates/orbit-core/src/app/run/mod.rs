@@ -5,8 +5,6 @@ mod auto;
 
 mod catalog;
 
-mod command;
-
 mod dashboard_drain;
 
 mod detail;
