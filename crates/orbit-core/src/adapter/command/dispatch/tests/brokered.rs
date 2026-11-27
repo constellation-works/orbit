@@ -31,6 +31,42 @@ use crate::runtime::plugin::broker::{
 };
 use crate::runtime::plugin::secrets::{PluginSecretStore, PluginSecretValue};
 
+const RUN_ID: &str = "jrun-broker-run";
+
+const RUN_TASK: &str = "ORB-RUN-1";
+
+/// Correlation the request and this process's environment claim. The run
+/// record, not either of these, decides what the backend and audit row see.
+const DECOY_TASK: &str = "ORB-DECOY-9";
+
+const DECOY_RUN: &str = "jrun-decoy";
+
+/// Echo the envelope back, so a test reads the call context the backend got.
+const ECHO_BACKEND: &str =
+    "#!/bin/sh\ninput=$(cat)\nprintf '{\"ok\":true,\"output\":{\"envelope\":%s}}\\n' \"$input\"\n";
+
+/// Rotate `refresh_token` from the version the call was delivered.
+const ROTATING_BACKEND: &str = r##"#!/bin/sh
+input=$(cat)
+version=$(printf '%s' "$input" | sed -n 's/.*"refresh_token":{"value":"[^"]*","version":"\([^"]*\)".*/\1/p')
+printf '{"ok":true,"output":{"rotated":true},"secret_updates":{"refresh_token":{"value":"rotated-token-7d1","expected_version":"%s"}}}\n' "$version"
+"##;
+
+/// Fail with the listener's retryable `busy` code, which only the listener
+/// may send.
+const LISTENER_CODE_BACKEND: &str = r#"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"ok":false,"error":{"code":"plugin_broker_busy","message":"x","retryable":true}}'
+"#;
+
+/// A stand-in `gh` that, like the real one, needs the host account's config:
+/// without `~/.config/gh/hosts.yml` it prints the login prompt. Its one run's
+/// title is the directory it ran in.
+const GH_STUB: &str = r#"#!/bin/sh
+[ -f "$HOME/.config/gh/hosts.yml" ] || { echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4; }
+printf '[{"databaseId":7,"number":3,"workflowName":"CI","displayTitle":"%s","status":"completed","conclusion":"success","event":"push","headBranch":"main","headSha":"abc123","url":"https://example.invalid/run/7"}]\n' "$(pwd -P)"
+"#;
+
 /// A sandboxed caller's MCP call: a family action is called through its
 /// family, whose operation the broker then carries.
 trait FamilyDispatch {
@@ -60,39 +96,6 @@ impl FamilyDispatch for OrbitRuntime {
         )
     }
 }
-
-const RUN_ID: &str = "jrun-broker-run";
-const RUN_TASK: &str = "ORB-RUN-1";
-/// Correlation the request and this process's environment claim. The run
-/// record, not either of these, decides what the backend and audit row see.
-const DECOY_TASK: &str = "ORB-DECOY-9";
-const DECOY_RUN: &str = "jrun-decoy";
-
-/// Echo the envelope back, so a test reads the call context the backend got.
-const ECHO_BACKEND: &str =
-    "#!/bin/sh\ninput=$(cat)\nprintf '{\"ok\":true,\"output\":{\"envelope\":%s}}\\n' \"$input\"\n";
-
-/// Rotate `refresh_token` from the version the call was delivered.
-const ROTATING_BACKEND: &str = r##"#!/bin/sh
-input=$(cat)
-version=$(printf '%s' "$input" | sed -n 's/.*"refresh_token":{"value":"[^"]*","version":"\([^"]*\)".*/\1/p')
-printf '{"ok":true,"output":{"rotated":true},"secret_updates":{"refresh_token":{"value":"rotated-token-7d1","expected_version":"%s"}}}\n' "$version"
-"##;
-
-/// Fail with the listener's retryable `busy` code, which only the listener
-/// may send.
-const LISTENER_CODE_BACKEND: &str = r#"#!/bin/sh
-cat >/dev/null
-printf '%s\n' '{"ok":false,"error":{"code":"plugin_broker_busy","message":"x","retryable":true}}'
-"#;
-
-/// A stand-in `gh` that, like the real one, needs the host account's config:
-/// without `~/.config/gh/hosts.yml` it prints the login prompt. Its one run's
-/// title is the directory it ran in.
-const GH_STUB: &str = r#"#!/bin/sh
-[ -f "$HOME/.config/gh/hosts.yml" ] || { echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4; }
-printf '[{"databaseId":7,"number":3,"workflowName":"CI","displayTitle":"%s","status":"completed","conclusion":"success","event":"push","headBranch":"main","headSha":"abc123","url":"https://example.invalid/run/7"}]\n' "$(pwd -P)"
-"#;
 
 struct Fixture {
     // Dropped first, so HOME and the decoys are restored before the tree goes.
@@ -255,16 +258,6 @@ struct Serving {
     runtime: OrbitRuntime,
 }
 
-fn serve(fixture: &Fixture, run: PluginBrokerRun) -> Serving {
-    let runtime = fixture.runtime();
-    let dispatch = Arc::new(RunDispatch::new(runtime.clone(), run));
-    let broker = PluginBroker::start(&fixture.global_root, RUN_ID, dispatch).expect("start broker");
-    broker.bind_anchor(PeerAnchor::Ancestor(
-        process_start_key(std::process::id()).expect("own start key"),
-    ));
-    Serving { broker, runtime }
-}
-
 impl Serving {
     /// Send one §4.3 request and return the broker's response, framed by
     /// hand so the wire format itself is under test.
@@ -290,6 +283,68 @@ impl Serving {
             .list_audit_events(None, Some(tool.to_string()), None, None, 10)
             .expect("audit events")
     }
+}
+
+/// The sandbox's view of a served run: `.orbit` is read-only for the nested
+/// caller, as the cycle's `--ro-bind` makes it, and writable only while the
+/// broker's host process runs a call.
+struct HostWritableOrbit {
+    dispatch: RunDispatch,
+    orbit_dir: PathBuf,
+}
+
+impl HostWritableOrbit {
+    fn set_mode(orbit_dir: &Path, mode: u32) {
+        std::fs::set_permissions(
+            orbit_dir,
+            std::os::unix::fs::PermissionsExt::from_mode(mode),
+        )
+        .expect("chmod .orbit");
+    }
+}
+
+impl BrokerDispatch for HostWritableOrbit {
+    fn call(
+        &self,
+        request: BrokerRequest,
+        peer_pid: u32,
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<Value, OrbitError> {
+        self.call_with_action_key(request, peer_pid, cancelled).0
+    }
+
+    fn call_with_action_key(
+        &self,
+        request: BrokerRequest,
+        peer_pid: u32,
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    ) -> (Result<Value, OrbitError>, Option<String>) {
+        Self::set_mode(&self.orbit_dir, 0o755);
+        let result = self
+            .dispatch
+            .call_with_action_key(request, peer_pid, cancelled);
+        Self::set_mode(&self.orbit_dir, 0o555);
+        result
+    }
+}
+
+/// Restores `.orbit` so the fixture's tree can be removed, however a test ends.
+struct RestoreOrbitMode(PathBuf);
+
+impl Drop for RestoreOrbitMode {
+    fn drop(&mut self) {
+        HostWritableOrbit::set_mode(&self.0, 0o755);
+    }
+}
+
+fn serve(fixture: &Fixture, run: PluginBrokerRun) -> Serving {
+    let runtime = fixture.runtime();
+    let dispatch = Arc::new(RunDispatch::new(runtime.clone(), run));
+    let broker = PluginBroker::start(&fixture.global_root, RUN_ID, dispatch).expect("start broker");
+    broker.bind_anchor(PeerAnchor::Ancestor(
+        process_start_key(std::process::id()).expect("own start key"),
+    ));
+    Serving { broker, runtime }
 }
 
 fn request(tool: &str, input: Value, cwd: &Path) -> Value {
@@ -808,58 +863,6 @@ fn a_sandboxed_resident_ship_is_decided_by_the_cycle_guard_on_the_host() {
         "the grant admits the ship: {error}"
     );
     assert!(error.contains("ORB-1"), "{error}");
-}
-
-/// The sandbox's view of a served run: `.orbit` is read-only for the nested
-/// caller, as the cycle's `--ro-bind` makes it, and writable only while the
-/// broker's host process runs a call.
-struct HostWritableOrbit {
-    dispatch: RunDispatch,
-    orbit_dir: PathBuf,
-}
-
-impl HostWritableOrbit {
-    fn set_mode(orbit_dir: &Path, mode: u32) {
-        std::fs::set_permissions(
-            orbit_dir,
-            std::os::unix::fs::PermissionsExt::from_mode(mode),
-        )
-        .expect("chmod .orbit");
-    }
-}
-
-impl BrokerDispatch for HostWritableOrbit {
-    fn call(
-        &self,
-        request: BrokerRequest,
-        peer_pid: u32,
-        cancelled: Arc<std::sync::atomic::AtomicBool>,
-    ) -> Result<Value, OrbitError> {
-        self.call_with_action_key(request, peer_pid, cancelled).0
-    }
-
-    fn call_with_action_key(
-        &self,
-        request: BrokerRequest,
-        peer_pid: u32,
-        cancelled: Arc<std::sync::atomic::AtomicBool>,
-    ) -> (Result<Value, OrbitError>, Option<String>) {
-        Self::set_mode(&self.orbit_dir, 0o755);
-        let result = self
-            .dispatch
-            .call_with_action_key(request, peer_pid, cancelled);
-        Self::set_mode(&self.orbit_dir, 0o555);
-        result
-    }
-}
-
-/// Restores `.orbit` so the fixture's tree can be removed, however a test ends.
-struct RestoreOrbitMode(PathBuf);
-
-impl Drop for RestoreOrbitMode {
-    fn drop(&mut self) {
-        HostWritableOrbit::set_mode(&self.0, 0o755);
-    }
 }
 
 /// A sandboxed cycle's landing and move to `done` read the forge with the host's

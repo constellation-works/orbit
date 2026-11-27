@@ -21,33 +21,9 @@ const PROMPT_SECRET: &str = "agy-tenant-42-authorization-bearer-zzz";
 const SUCCESS_ENVELOPE: &str =
     r#"{\"schemaVersion\":1,\"status\":\"success\",\"result\":{\"edited\":true},\"error\":null}"#;
 
-fn fake_agy(dir: &Path, body: &str, argv_path: &Path, stdin_path: &Path) -> PathBuf {
-    let program = dir.join("agy");
-    // After each run Orbit reads agy's quota with `--print /usage` through the same
-    // launcher. That query is not a model turn: answer it without recording argv or
-    // stdin, so the run's own invocation is what the assertions read.
-    let script = format!(
-        r#"#!/bin/sh
-case " $* " in
-  *" /usage "*) exit 1 ;;
-esac
-: > '{argv}'
-for arg in "$@"; do printf '%s\n' "$arg" >> '{argv}'; done
-cat > '{stdin}'
-{body}
-"#,
-        argv = argv_path.display(),
-        stdin = stdin_path.display(),
-    );
-    std::fs::write(&program, script).expect("write fake agy");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod fake agy");
-    }
-    program
-}
+/// The injected print-timeout is the runtime minus the 30 s margin, so a 31 s
+/// activity gives `agy` a 1 s budget and provider exhaustion is reachable.
+const SHORT_PRINT_TIMEOUT_SPEC_SECONDS: u64 = 31;
 
 struct Harness {
     _dir: tempfile::TempDir,
@@ -90,6 +66,34 @@ impl Harness {
     fn stdin(&self) -> String {
         std::fs::read_to_string(&self.stdin_path).expect("fake agent recorded stdin")
     }
+}
+
+fn fake_agy(dir: &Path, body: &str, argv_path: &Path, stdin_path: &Path) -> PathBuf {
+    let program = dir.join("agy");
+    // After each run Orbit reads agy's quota with `--print /usage` through the same
+    // launcher. That query is not a model turn: answer it without recording argv or
+    // stdin, so the run's own invocation is what the assertions read.
+    let script = format!(
+        r#"#!/bin/sh
+case " $* " in
+  *" /usage "*) exit 1 ;;
+esac
+: > '{argv}'
+for arg in "$@"; do printf '%s\n' "$arg" >> '{argv}'; done
+cat > '{stdin}'
+{body}
+"#,
+        argv = argv_path.display(),
+        stdin = stdin_path.display(),
+    );
+    std::fs::write(&program, script).expect("write fake agy");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod fake agy");
+    }
+    program
 }
 
 fn antigravity_resource() -> ExecutorResource {
@@ -363,10 +367,6 @@ fn progress_only_success_body() -> &'static str {
 printf '%s\n' '{"event":"progress","message":"Background command still running"}'
 printf '%s\n' '{"event":"result","result":{"conversation_id":"c1","status":"SUCCESS","response":"Background command still running; waiting for it to finish.","usage":{"total_tokens":17}}}'"#
 }
-
-/// The injected print-timeout is the runtime minus the 30 s margin, so a 31 s
-/// activity gives `agy` a 1 s budget and provider exhaustion is reachable.
-const SHORT_PRINT_TIMEOUT_SPEC_SECONDS: u64 = 31;
 
 /// [ORB-14683] `agy` at its print-timeout exits 0 with a `SUCCESS` wrapper of
 /// progress text. That is a spent provider budget, never completion.

@@ -8,6 +8,56 @@ use crate::runtime::tool_exec::populate_filesystem_policy_context;
 use orbit_tools::ToolContext;
 use tempfile::TempDir;
 
+struct GitRuntimeFixture {
+    _root: TempDir,
+    runtime: OrbitRuntime,
+    repo_root: PathBuf,
+    unrelated: PathBuf,
+}
+
+impl GitRuntimeFixture {
+    fn new() -> Self {
+        let root = tempfile::tempdir().expect("tempdir");
+        let global_root = root.path().join("global");
+        let repo_root = root.path().join("repo");
+        let unrelated = root.path().join("unrelated");
+        std::fs::create_dir_all(&global_root).expect("global");
+        std::fs::create_dir_all(repo_root.join(".orbit")).expect("workspace");
+        std::fs::create_dir_all(&unrelated).expect("unrelated");
+
+        git(&repo_root, &["init", "-b", "agent-main"]);
+        git(&repo_root, &["config", "user.name", "Orbit Test"]);
+        git(
+            &repo_root,
+            &["config", "user.email", "orbit-test@example.com"],
+        );
+        git(&repo_root, &["config", "commit.gpgsign", "false"]);
+        std::fs::write(repo_root.join("README.md"), "init\n").expect("write");
+        git(&repo_root, &["add", "README.md"]);
+        git(&repo_root, &["commit", "-m", "init"]);
+
+        git(&unrelated, &["init", "-b", "other"]);
+        git(&unrelated, &["config", "user.name", "Orbit Test"]);
+        git(
+            &unrelated,
+            &["config", "user.email", "orbit-test@example.com"],
+        );
+        git(&unrelated, &["config", "commit.gpgsign", "false"]);
+        std::fs::write(unrelated.join("other.txt"), "other\n").expect("write unrelated");
+        git(&unrelated, &["add", "other.txt"]);
+        git(&unrelated, &["commit", "-m", "unrelated"]);
+
+        let runtime = OrbitRuntime::from_roots(&global_root, &repo_root.join(".orbit"))
+            .expect("build runtime");
+        Self {
+            _root: root,
+            runtime,
+            repo_root,
+            unrelated,
+        }
+    }
+}
+
 /// A source-inspection slot is a standalone repository, so it never shares the
 /// runtime's common Git directory. [ORB-13800] It is still this repository's
 /// pinned checkout, so registered tools run there; a repository merely planted
@@ -169,56 +219,6 @@ fn inspection_slot(slot: &Path, source_git_dir: &Path, revision: &str) -> PathBu
     );
     git(&checkout, &["checkout", "--quiet", "--detach", revision]);
     canonical(&checkout)
-}
-
-struct GitRuntimeFixture {
-    _root: TempDir,
-    runtime: OrbitRuntime,
-    repo_root: PathBuf,
-    unrelated: PathBuf,
-}
-
-impl GitRuntimeFixture {
-    fn new() -> Self {
-        let root = tempfile::tempdir().expect("tempdir");
-        let global_root = root.path().join("global");
-        let repo_root = root.path().join("repo");
-        let unrelated = root.path().join("unrelated");
-        std::fs::create_dir_all(&global_root).expect("global");
-        std::fs::create_dir_all(repo_root.join(".orbit")).expect("workspace");
-        std::fs::create_dir_all(&unrelated).expect("unrelated");
-
-        git(&repo_root, &["init", "-b", "agent-main"]);
-        git(&repo_root, &["config", "user.name", "Orbit Test"]);
-        git(
-            &repo_root,
-            &["config", "user.email", "orbit-test@example.com"],
-        );
-        git(&repo_root, &["config", "commit.gpgsign", "false"]);
-        std::fs::write(repo_root.join("README.md"), "init\n").expect("write");
-        git(&repo_root, &["add", "README.md"]);
-        git(&repo_root, &["commit", "-m", "init"]);
-
-        git(&unrelated, &["init", "-b", "other"]);
-        git(&unrelated, &["config", "user.name", "Orbit Test"]);
-        git(
-            &unrelated,
-            &["config", "user.email", "orbit-test@example.com"],
-        );
-        git(&unrelated, &["config", "commit.gpgsign", "false"]);
-        std::fs::write(unrelated.join("other.txt"), "other\n").expect("write unrelated");
-        git(&unrelated, &["add", "other.txt"]);
-        git(&unrelated, &["commit", "-m", "unrelated"]);
-
-        let runtime = OrbitRuntime::from_roots(&global_root, &repo_root.join(".orbit"))
-            .expect("build runtime");
-        Self {
-            _root: root,
-            runtime,
-            repo_root,
-            unrelated,
-        }
-    }
 }
 
 fn cwd_context(

@@ -225,8 +225,8 @@ fn without_a_pilot_empty_context_work_is_admitted_only_alone() {
         &runtime,
         Seed {
             title: "side effects only",
-            context_files: Some(&[]),
             tags: &["no-diff-expected"],
+            context_files: Some(&[]),
             ..Seed::default()
         },
     )
@@ -416,8 +416,8 @@ fn an_operator_waiver_admits_unprepared_work_like_ready_work() {
         &runtime,
         Seed {
             title: "other host",
-            context_files: Some(&[]),
             tags: &[other_os],
+            context_files: Some(&[]),
             ..Seed::default()
         },
     )

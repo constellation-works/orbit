@@ -41,25 +41,6 @@ use crate::runtime::tool_exec::CapabilityEnforcement;
 use super::audit::{AuditContext, brokered_agent_identity, brokered_role_label};
 use super::execute::{BrokeredAudit, ToolEntryPoint};
 
-/// The action a resident cycle's brokered built-in runs on the tool host.
-fn brokered_resident_action(tool: &str, input: &Value) -> Option<OrbitBuiltinAction> {
-    match tool {
-        BROKERED_RESIDENT_SHIP_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Ship)),
-        BROKERED_RESIDENT_RAISE_TOOL => Some(OrbitBuiltinAction::Decision(DecisionVerb::Raise)),
-        BROKERED_RESIDENT_LAND_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Land)),
-        BROKERED_RESIDENT_REFRESH_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Refresh)),
-        BROKERED_RESIDENT_REPILOT_TOOL => Some(OrbitBuiltinAction::Task(TaskVerb::Repilot)),
-        BROKERED_RESIDENT_REQUEUE_TOOL => Some(OrbitBuiltinAction::Task(TaskVerb::Requeue)),
-        BROKERED_RESIDENT_RESUME_DELIVERY_TOOL => {
-            Some(OrbitBuiltinAction::Task(TaskVerb::ResumeDelivery))
-        }
-        _ if is_brokered_resident_completion(tool, input) => {
-            Some(OrbitBuiltinAction::Task(TaskVerb::Update))
-        }
-        _ => None,
-    }
-}
-
 /// Executes a broker's requests for the one run it serves.
 pub(crate) struct RunDispatch {
     runtime: OrbitRuntime,
@@ -429,5 +410,24 @@ impl BrokerDispatch for RunDispatch {
             None
         };
         (result, action_key)
+    }
+}
+
+/// The action a resident cycle's brokered built-in runs on the tool host.
+fn brokered_resident_action(tool: &str, input: &Value) -> Option<OrbitBuiltinAction> {
+    match tool {
+        BROKERED_RESIDENT_SHIP_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Ship)),
+        BROKERED_RESIDENT_RAISE_TOOL => Some(OrbitBuiltinAction::Decision(DecisionVerb::Raise)),
+        BROKERED_RESIDENT_LAND_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Land)),
+        BROKERED_RESIDENT_REFRESH_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Refresh)),
+        BROKERED_RESIDENT_REPILOT_TOOL => Some(OrbitBuiltinAction::Task(TaskVerb::Repilot)),
+        BROKERED_RESIDENT_REQUEUE_TOOL => Some(OrbitBuiltinAction::Task(TaskVerb::Requeue)),
+        BROKERED_RESIDENT_RESUME_DELIVERY_TOOL => {
+            Some(OrbitBuiltinAction::Task(TaskVerb::ResumeDelivery))
+        }
+        _ if is_brokered_resident_completion(tool, input) => {
+            Some(OrbitBuiltinAction::Task(TaskVerb::Update))
+        }
+        _ => None,
     }
 }

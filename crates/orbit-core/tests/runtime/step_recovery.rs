@@ -100,10 +100,11 @@ fn fixture() -> Fixture {
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "seed"]);
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
+    let root_path = root.path().to_path_buf();
     Fixture {
-        root: root.path().to_path_buf(),
-        repo,
         _root: root,
+        root: root_path,
+        repo,
         runtime,
     }
 }

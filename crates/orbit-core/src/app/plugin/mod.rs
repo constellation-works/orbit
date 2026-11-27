@@ -157,14 +157,6 @@ impl From<Error> for crate::Error {
     }
 }
 
-/// Authorize, audit and run one plugin command.
-pub fn exec(core: &Core, command: Command<'_>) -> Result<Outcome, crate::Error> {
-    match command {
-        Command::DashboardToggle(toggle) => dashboard::exec(core, toggle),
-        command => exec::run::<PluginApp<'_>>(core, command),
-    }
-}
-
 struct PluginApp<'a>(std::marker::PhantomData<&'a ()>);
 
 impl<'a> App for PluginApp<'a> {
@@ -359,5 +351,13 @@ impl<'a> App for PluginApp<'a> {
             Outcome::Diagnosed { issues, .. } => i32::from(*issues > 0),
             _ => 0,
         }
+    }
+}
+
+/// Authorize, audit and run one plugin command.
+pub fn exec(core: &Core, command: Command<'_>) -> Result<Outcome, crate::Error> {
+    match command {
+        Command::DashboardToggle(toggle) => dashboard::exec(core, toggle),
+        command => exec::run::<PluginApp<'_>>(core, command),
     }
 }

@@ -14,6 +14,76 @@ use crate::application::test_support::{
     runtime_with_workspace_config, runtime_with_workspace_layout, seed_executor,
 };
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const CODEX_WORKSPACE_WRITE: &str = "[execution.codex]\nsandbox = \"workspace-write\"\n";
+
+/// Host state a workspace-write Codex run must not reach, the runtime stores
+/// it must, and the two non-registered cwds it runs from. [ORB-14538]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct CodexSideRootFixture {
+    root: std::path::PathBuf,
+    worktree: std::path::PathBuf,
+    protected: Vec<std::path::PathBuf>,
+    granted: Vec<std::path::PathBuf>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl CodexSideRootFixture {
+    fn new(runtime: &crate::OrbitRuntime) -> Self {
+        let canonical = |path: &std::path::Path| path.canonicalize().expect("canonical root");
+        let orbit = canonical(&runtime.paths().orbit_dir);
+        let global = canonical(&runtime.paths().global_dir);
+        let file = |path: std::path::PathBuf| {
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
+            std::fs::write(&path, "host").expect("write fixture file");
+            path
+        };
+        let worktree = orbit.join("state/worktrees/orbit-jrun-codex-side-roots");
+        let recovery = orbit.join("state/recovery-checkouts/orbit-jrun-codex-side-roots");
+        for checkout in [&worktree, &recovery] {
+            std::fs::create_dir_all(checkout.join(".orbit/tmp")).expect("create checkout");
+        }
+        for store in [
+            "tasks",
+            "frictions",
+            "state/audit",
+            "state/logs",
+            "state/job-runs",
+        ] {
+            std::fs::create_dir_all(orbit.join(store)).expect("workspace store");
+        }
+        for store in ["tasks", "state/audit", "state/logs", "cache"] {
+            std::fs::create_dir_all(global.join(store)).expect("global store");
+        }
+        let protected = vec![
+            file(orbit.join("config.toml")),
+            file(orbit.join("auto_tasks/nightly.yaml")),
+            file(orbit.join("routines/sweep.yaml")),
+            file(orbit.join("resources/crew.yaml")),
+            file(orbit.join("state/worktrees/orbit-jrun-other/src/lib.rs")),
+            file(global.join("bin/orbit")),
+            file(global.join("config.toml")),
+            file(global.join("workspaces.json")),
+            file(global.join("resources/crew.yaml")),
+        ];
+        let granted = vec![
+            orbit.join("tasks/ORB-1.yaml"),
+            orbit.join("state/job-runs/run.yaml"),
+            global.join("tasks/ORB-1.yaml"),
+            global.join("cache/artifact"),
+        ];
+        let root = orbit_exec::physical_with_missing_tail(
+            runtime.paths().repo_root.parent().expect("fixture root"),
+        );
+        Self {
+            root,
+            worktree,
+            protected,
+            granted,
+        }
+    }
+}
+
 /// Whether the last `file-write*` clause rooted inside `fixture` allows
 /// `path`. Temp fixtures sit beneath the compiler's host scratch allows
 /// (`/tmp`, `/private/var/folders`), which never cover a real `~/.orbit`.
@@ -397,76 +467,6 @@ fn undeclared_sandbox_still_resolves_to_none_on_every_os() {
                 resolved.is_none(),
                 "{provider} on {target_os} declared no sandbox: {resolved:?}"
             );
-        }
-    }
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-const CODEX_WORKSPACE_WRITE: &str = "[execution.codex]\nsandbox = \"workspace-write\"\n";
-
-/// Host state a workspace-write Codex run must not reach, the runtime stores
-/// it must, and the two non-registered cwds it runs from. [ORB-14538]
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-struct CodexSideRootFixture {
-    root: std::path::PathBuf,
-    worktree: std::path::PathBuf,
-    protected: Vec<std::path::PathBuf>,
-    granted: Vec<std::path::PathBuf>,
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl CodexSideRootFixture {
-    fn new(runtime: &crate::OrbitRuntime) -> Self {
-        let canonical = |path: &std::path::Path| path.canonicalize().expect("canonical root");
-        let orbit = canonical(&runtime.paths().orbit_dir);
-        let global = canonical(&runtime.paths().global_dir);
-        let file = |path: std::path::PathBuf| {
-            std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
-            std::fs::write(&path, "host").expect("write fixture file");
-            path
-        };
-        let worktree = orbit.join("state/worktrees/orbit-jrun-codex-side-roots");
-        let recovery = orbit.join("state/recovery-checkouts/orbit-jrun-codex-side-roots");
-        for checkout in [&worktree, &recovery] {
-            std::fs::create_dir_all(checkout.join(".orbit/tmp")).expect("create checkout");
-        }
-        for store in [
-            "tasks",
-            "frictions",
-            "state/audit",
-            "state/logs",
-            "state/job-runs",
-        ] {
-            std::fs::create_dir_all(orbit.join(store)).expect("workspace store");
-        }
-        for store in ["tasks", "state/audit", "state/logs", "cache"] {
-            std::fs::create_dir_all(global.join(store)).expect("global store");
-        }
-        let protected = vec![
-            file(orbit.join("config.toml")),
-            file(orbit.join("auto_tasks/nightly.yaml")),
-            file(orbit.join("routines/sweep.yaml")),
-            file(orbit.join("resources/crew.yaml")),
-            file(orbit.join("state/worktrees/orbit-jrun-other/src/lib.rs")),
-            file(global.join("bin/orbit")),
-            file(global.join("config.toml")),
-            file(global.join("workspaces.json")),
-            file(global.join("resources/crew.yaml")),
-        ];
-        let granted = vec![
-            orbit.join("tasks/ORB-1.yaml"),
-            orbit.join("state/job-runs/run.yaml"),
-            global.join("tasks/ORB-1.yaml"),
-            global.join("cache/artifact"),
-        ];
-        let root = orbit_exec::physical_with_missing_tail(
-            runtime.paths().repo_root.parent().expect("fixture root"),
-        );
-        Self {
-            root,
-            worktree,
-            protected,
-            granted,
         }
     }
 }

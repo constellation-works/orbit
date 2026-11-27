@@ -52,6 +52,106 @@ const CHILD_TEST: &str = "render_resolved_sandboxes_in_a_pinned_environment";
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 const CASES: &[&str] = &["leaf_worker", "reviewer", "redirected_global_runtime_store"];
 
+/// Kills and reaps the renderer however the parent leaves.
+struct ChildGuard(std::process::Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+struct Fixture {
+    root: PathBuf,
+    runtime: OrbitRuntime,
+    worktree: PathBuf,
+    inspection: PathBuf,
+}
+
+impl Fixture {
+    fn create(root: &Path) -> Self {
+        let root = root.canonicalize().expect("canonical root");
+        let global = root.join("home/.orbit");
+        let repo = root.join("repo");
+        let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-golden");
+        let inspection = root.join("inspection");
+        for dir in [
+            &global,
+            &worktree.join("src"),
+            &inspection.join("src"),
+            &root.join("runtime"),
+        ] {
+            std::fs::create_dir_all(dir).expect("fixture dir");
+        }
+        // Present, so the Linux mask binds `/dev/null` over it.
+        std::fs::write(global.join("clock.env"), "").expect("clock credentials");
+        let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).expect("runtime");
+        for provider in ["claude", "codex"] {
+            seed_linux_executor(&runtime, provider);
+        }
+        Self {
+            root,
+            runtime,
+            worktree,
+            inspection,
+        }
+    }
+
+    fn render(&self, case: &str) -> String {
+        let (provider, fs_profile, cwd) = match case {
+            "leaf_worker" => ("codex", Some("implementer"), &self.worktree),
+            "reviewer" => ("claude", Some("reviewer"), &self.inspection),
+            "redirected_global_runtime_store" => {
+                let outside = self.root.join("outside");
+                std::fs::create_dir_all(&outside).expect("redirect target");
+                let cache = self.runtime.paths().global_dir.join("cache");
+                let _ = std::fs::remove_dir(&cache);
+                std::os::unix::fs::symlink(&outside, &cache).expect("redirect the host cache");
+                ("codex", Some("implementer"), &self.worktree)
+            }
+            other => panic!("unknown case {other}"),
+        };
+        let sandbox = self
+            .runtime
+            .resolve_executor_sandbox(provider, fs_profile, Some(cwd))
+            .expect("resolve sandbox")
+            .expect("a Linux executor resolves a sandbox");
+        let mut lines = vec![
+            format!("provider: {provider}"),
+            format!("fs_profile: {}", sandbox.fs_profile.name),
+            format!("cwd: {}", cwd.display()),
+            format!("managed_worktree: {}", sandbox.managed_worktree),
+            "read:".to_string(),
+        ];
+        lines.extend(
+            sandbox
+                .fs_profile
+                .read
+                .iter()
+                .map(|rule| format!("  {rule}")),
+        );
+        lines.push("modify:".to_string());
+        lines.extend(
+            sandbox
+                .fs_profile
+                .modify
+                .iter()
+                .map(|rule| format!("  {rule}")),
+        );
+        lines.push("runtime write authority:".to_string());
+        lines.extend(
+            sandbox
+                .runtime_write_authority
+                .iter()
+                .map(|grant| format!("  {}", grant.path.display())),
+        );
+        lines.push("bwrap:".to_string());
+        lines.extend(bwrap_lines(&sandbox, cwd));
+        normalize(&self.root, &(lines.join("\n") + "\n"))
+    }
+}
+
 #[test]
 fn resolved_linux_sandboxes_match_their_goldens() {
     // Under `/tmp` so the scratch-anchor mounts render the same on every host
@@ -154,16 +254,6 @@ fn run_child(root: &Path, output: &Path) {
     orbit_common::test_env::assert_child_test_passed(CHILD_TEST, status, stdout, stderr);
 }
 
-/// Kills and reaps the renderer however the parent leaves.
-struct ChildGuard(std::process::Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 fn golden_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sandbox_profile_goldens/linux")
 }
@@ -196,96 +286,6 @@ fn golden_matches(name: &str, actual: &str) -> bool {
         }
     }
     false
-}
-
-struct Fixture {
-    root: PathBuf,
-    runtime: OrbitRuntime,
-    worktree: PathBuf,
-    inspection: PathBuf,
-}
-
-impl Fixture {
-    fn create(root: &Path) -> Self {
-        let root = root.canonicalize().expect("canonical root");
-        let global = root.join("home/.orbit");
-        let repo = root.join("repo");
-        let worktree = repo.join(".orbit/state/worktrees/orbit-jrun-golden");
-        let inspection = root.join("inspection");
-        for dir in [
-            &global,
-            &worktree.join("src"),
-            &inspection.join("src"),
-            &root.join("runtime"),
-        ] {
-            std::fs::create_dir_all(dir).expect("fixture dir");
-        }
-        // Present, so the Linux mask binds `/dev/null` over it.
-        std::fs::write(global.join("clock.env"), "").expect("clock credentials");
-        let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).expect("runtime");
-        for provider in ["claude", "codex"] {
-            seed_linux_executor(&runtime, provider);
-        }
-        Self {
-            root,
-            runtime,
-            worktree,
-            inspection,
-        }
-    }
-
-    fn render(&self, case: &str) -> String {
-        let (provider, fs_profile, cwd) = match case {
-            "leaf_worker" => ("codex", Some("implementer"), &self.worktree),
-            "reviewer" => ("claude", Some("reviewer"), &self.inspection),
-            "redirected_global_runtime_store" => {
-                let outside = self.root.join("outside");
-                std::fs::create_dir_all(&outside).expect("redirect target");
-                let cache = self.runtime.paths().global_dir.join("cache");
-                let _ = std::fs::remove_dir(&cache);
-                std::os::unix::fs::symlink(&outside, &cache).expect("redirect the host cache");
-                ("codex", Some("implementer"), &self.worktree)
-            }
-            other => panic!("unknown case {other}"),
-        };
-        let sandbox = self
-            .runtime
-            .resolve_executor_sandbox(provider, fs_profile, Some(cwd))
-            .expect("resolve sandbox")
-            .expect("a Linux executor resolves a sandbox");
-        let mut lines = vec![
-            format!("provider: {provider}"),
-            format!("fs_profile: {}", sandbox.fs_profile.name),
-            format!("cwd: {}", cwd.display()),
-            format!("managed_worktree: {}", sandbox.managed_worktree),
-            "read:".to_string(),
-        ];
-        lines.extend(
-            sandbox
-                .fs_profile
-                .read
-                .iter()
-                .map(|rule| format!("  {rule}")),
-        );
-        lines.push("modify:".to_string());
-        lines.extend(
-            sandbox
-                .fs_profile
-                .modify
-                .iter()
-                .map(|rule| format!("  {rule}")),
-        );
-        lines.push("runtime write authority:".to_string());
-        lines.extend(
-            sandbox
-                .runtime_write_authority
-                .iter()
-                .map(|grant| format!("  {}", grant.path.display())),
-        );
-        lines.push("bwrap:".to_string());
-        lines.extend(bwrap_lines(&sandbox, cwd));
-        normalize(&self.root, &(lines.join("\n") + "\n"))
-    }
 }
 
 fn seed_linux_executor(runtime: &OrbitRuntime, provider: &str) {

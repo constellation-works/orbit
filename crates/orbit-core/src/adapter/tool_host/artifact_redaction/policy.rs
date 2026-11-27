@@ -13,39 +13,6 @@ use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use orbit_tools::OrbitBuiltinAction;
 
-#[derive(Clone, Copy)]
-pub(super) enum TextMode {
-    Free,
-    PathOnly,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct NestedArrayPolicy {
-    pub(super) array_key: &'static str,
-    pub(super) field_key: &'static str,
-    pub(super) field_alias: Option<&'static str>,
-    pub(super) mode: TextMode,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct NestedObjectPolicy {
-    pub(super) object_key: &'static str,
-    pub(super) free_text_fields: &'static [&'static str],
-    pub(super) free_text_arrays: &'static [&'static str],
-}
-
-pub(super) struct ActionPolicy {
-    /// A registry operation's parameter groups; each parameter is redacted
-    /// per its declared [`Redaction`] class, in declaration order.
-    pub(super) declared: &'static [&'static [ParamSpec]],
-    pub(super) free_text_fields: &'static [&'static str],
-    pub(super) free_text_arrays: &'static [&'static str],
-    pub(super) path_fields: &'static [&'static str],
-    pub(super) path_arrays: &'static [&'static str],
-    pub(super) nested_arrays: &'static [NestedArrayPolicy],
-    pub(super) nested_objects: &'static [NestedObjectPolicy],
-}
-
 const NO_REDACTION: ActionPolicy = ActionPolicy {
     declared: &[],
     free_text_fields: &[],
@@ -101,6 +68,39 @@ const AUTO_TASK_TEMPLATE: &[NestedObjectPolicy] = &[
         free_text_arrays: &["acceptance_criteria"],
     },
 ];
+
+#[derive(Clone, Copy)]
+pub(super) enum TextMode {
+    Free,
+    PathOnly,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct NestedArrayPolicy {
+    pub(super) array_key: &'static str,
+    pub(super) field_key: &'static str,
+    pub(super) field_alias: Option<&'static str>,
+    pub(super) mode: TextMode,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct NestedObjectPolicy {
+    pub(super) object_key: &'static str,
+    pub(super) free_text_fields: &'static [&'static str],
+    pub(super) free_text_arrays: &'static [&'static str],
+}
+
+pub(super) struct ActionPolicy {
+    /// A registry operation's parameter groups; each parameter is redacted
+    /// per its declared [`Redaction`] class, in declaration order.
+    pub(super) declared: &'static [&'static [ParamSpec]],
+    pub(super) free_text_fields: &'static [&'static str],
+    pub(super) free_text_arrays: &'static [&'static str],
+    pub(super) path_fields: &'static [&'static str],
+    pub(super) path_arrays: &'static [&'static str],
+    pub(super) nested_arrays: &'static [NestedArrayPolicy],
+    pub(super) nested_objects: &'static [NestedObjectPolicy],
+}
 
 /// Every builtin action must make an explicit redaction decision here.
 ///

@@ -34,6 +34,29 @@ use crate::application::test_support::runtime_with_workspace_config;
 /// recorded run's.
 const RECORDED_SWEEP: &str = include_str!("fixtures/ci_sweep_four_pilots_state.json");
 
+/// The gate's dispatch timeout and poll interval, as `task_gate_pipeline`
+/// passes them.
+const GATE_TIMEOUT_SECONDS: u64 = 14_400;
+
+const GATE_POLL_SECONDS: u64 = 3_600;
+
+/// A wait clock whose sleeps pass instantly, running `on_sleep` first.
+struct FakeClock<'a> {
+    elapsed: Cell<Duration>,
+    on_sleep: &'a dyn Fn(Duration),
+}
+
+impl PipelineWaitClock for FakeClock<'_> {
+    fn elapsed(&self) -> Duration {
+        self.elapsed.get()
+    }
+
+    fn sleep(&self, duration: Duration, _exits_seen: u64) {
+        (self.on_sleep)(self.elapsed.get());
+        self.elapsed.set(self.elapsed.get() + duration);
+    }
+}
+
 #[test]
 fn a_finished_ci_sweep_stores_child_summaries_and_no_resume_state() {
     let (_root, runtime, _) = runtime_with_workspace_config(None);
@@ -155,28 +178,6 @@ fn a_finished_ci_sweep_stores_child_summaries_and_no_resume_state() {
         lineage(&recorded),
         "child lineage survives"
     );
-}
-
-/// The gate's dispatch timeout and poll interval, as `task_gate_pipeline`
-/// passes them.
-const GATE_TIMEOUT_SECONDS: u64 = 14_400;
-const GATE_POLL_SECONDS: u64 = 3_600;
-
-/// A wait clock whose sleeps pass instantly, running `on_sleep` first.
-struct FakeClock<'a> {
-    elapsed: Cell<Duration>,
-    on_sleep: &'a dyn Fn(Duration),
-}
-
-impl PipelineWaitClock for FakeClock<'_> {
-    fn elapsed(&self) -> Duration {
-        self.elapsed.get()
-    }
-
-    fn sleep(&self, duration: Duration, _exits_seen: u64) {
-        (self.on_sleep)(self.elapsed.get());
-        self.elapsed.set(self.elapsed.get() + duration);
-    }
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {

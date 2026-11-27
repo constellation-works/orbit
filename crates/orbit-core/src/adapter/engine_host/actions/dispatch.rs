@@ -20,6 +20,13 @@ use crate::application::workspace_auto;
 
 use super::pipeline_actions::{invoke_and_wait, invoke_detached};
 
+/// [ORB-11187] This activity resolves the *workspace's* shipping defaults —
+/// mode and base branch. Completion authority is deliberately not among them:
+/// it is granted per invocation by an operator and reaches the pipelines through
+/// run input, so no workspace configuration can silently turn it on.
+const COMPLETION_IS_NEVER_WORKSPACE_RESOLVED: crate::application::workflow::CompletionPolicy =
+    crate::application::workflow::CompletionPolicy::Review;
+
 /// Whether `action` is dispatchable by this runtime — the capability probe
 /// behind `RuntimeHost::has_deterministic_action` [ORB-10385].
 pub(crate) fn is_deterministic_action_registered(action: &str) -> bool {
@@ -511,13 +518,6 @@ fn plugin_tool_call(
         .map(|outcome| outcome.value)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))
 }
-
-/// [ORB-11187] This activity resolves the *workspace's* shipping defaults —
-/// mode and base branch. Completion authority is deliberately not among them:
-/// it is granted per invocation by an operator and reaches the pipelines through
-/// run input, so no workspace configuration can silently turn it on.
-const COMPLETION_IS_NEVER_WORKSPACE_RESOLVED: crate::application::workflow::CompletionPolicy =
-    crate::application::workflow::CompletionPolicy::Review;
 
 fn resolve_workspace_ship_input(
     runtime: &OrbitRuntime,

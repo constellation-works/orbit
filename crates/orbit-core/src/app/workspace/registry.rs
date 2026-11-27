@@ -58,9 +58,10 @@ pub(super) fn show(core: &Core) -> Result<Shown, OrbitError> {
 
 fn seeding(global_root: &Path, orbit_dir: &Path) -> Result<Seeding, OrbitError> {
     let policies = workspace_seeding_policies(global_root, orbit_dir)?;
+    let left_out = SeedingPolicyExclusions::of(&policies);
     Ok(Seeding {
-        left_out: SeedingPolicyExclusions::of(&policies),
         policies,
+        left_out,
         preset: applied_workspace_preset(orbit_dir)?,
     })
 }

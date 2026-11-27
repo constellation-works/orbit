@@ -111,6 +111,127 @@ impl<'a> ClaimedReviewScope<'a> {
     }
 }
 
+impl ClaimedReviewScope<'_> {
+    /// Read the claimed task's artifact at `path` from the owner, whose claim
+    /// fence answers only while the claim is active.
+    fn read(
+        &self,
+        runtime: &OrbitRuntime,
+        path: &str,
+        model: Option<&Value>,
+        session: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        let mut input = json!({"id": self.task_id(), "path": path});
+        if let Some(model) = model {
+            input["model"] = model.clone();
+        }
+        runtime.route_worker_tool(GET, input, session)
+    }
+
+    /// The bytes of the owner's artifact at `path`, or `None` when it has none.
+    fn owner_bytes(
+        &self,
+        runtime: &OrbitRuntime,
+        path: &str,
+        session: &ToolSessionContext,
+    ) -> Result<Option<Vec<u8>>, OrbitError> {
+        match self.read(runtime, path, None, session.clone()) {
+            Ok(output) => artifact_bytes(&output, path).map(Some),
+            Err(error) if not_found(&error) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Whether the owner's current evidence hold names `path`: as a
+    /// requirement's result artifact, or as the log that result names for
+    /// that requirement. The names come from the owner's records only; an
+    /// absent or unreadable hold names nothing.
+    fn hold_names(
+        &self,
+        runtime: &OrbitRuntime,
+        path: &str,
+        session: &ToolSessionContext,
+    ) -> Result<bool, OrbitError> {
+        let Some(bytes) = self.owner_bytes(runtime, REVIEW_EVIDENCE_HOLD_ARTIFACT, session)? else {
+            return Ok(false);
+        };
+        let Ok(hold) = serde_json::from_slice::<ReviewEvidenceHold>(&bytes) else {
+            return Ok(false);
+        };
+        if hold.requirements.iter().any(|required| {
+            canonical_review_path_if_valid(&required.artifact).as_deref() == Some(path)
+        }) {
+            return Ok(true);
+        }
+        for required in &hold.requirements {
+            let Some(artifact_path) = canonical_review_path_if_valid(&required.artifact) else {
+                continue;
+            };
+            if !evidence_path(&artifact_path) {
+                continue;
+            }
+            let Some(bytes) = self.owner_bytes(runtime, &artifact_path, session)? else {
+                continue;
+            };
+            let Ok(evidence) = serde_json::from_slice::<ReviewExternalEvidence>(&bytes) else {
+                continue;
+            };
+            if canonical_review_path_if_valid(&evidence.log_artifact).as_deref() == Some(path)
+                && evidence.matches_requirement(required, &hold.candidate)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The manifest the owner returned must be the admitted attempt's: the
+    /// gate writes it once per attempt, so another attempt's manifest is stale.
+    fn check_manifest(&self, output: &Value) -> Result<(), OrbitError> {
+        let bytes = artifact_bytes(output, REVIEW_MANIFEST_ARTIFACT)?;
+        let manifest: ReviewManifest = serde_json::from_slice(&bytes).map_err(|error| {
+            OrbitError::Execution(format!("{REVIEW_MANIFEST_ARTIFACT} is unreadable: {error}"))
+        })?;
+        if manifest.attempt_id != self.attempt_id
+            || manifest.lineage_key != self.lineage_key
+            || !manifest.task_ids.iter().any(|id| id == self.task_id())
+        {
+            return Err(OrbitError::PolicyDenied(format!(
+                "claimed_review_bridge_refused: review_manifest_stale: the owner's manifest is \
+                 for attempt '{}', not the running attempt '{}'",
+                manifest.attempt_id, self.attempt_id
+            )));
+        }
+        Ok(())
+    }
+
+    /// A report must be the review contract's, for the running attempt. The
+    /// owner's attach validates the contract again; checking here keeps a
+    /// report for another attempt from reaching the owner at all.
+    fn check_report(&self, content: &[u8]) -> Result<(), OrbitError> {
+        let report = ReviewReport::parse(content).map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "{REVIEW_REPORT_ARTIFACT} does not match the review report contract: {error}"
+            ))
+        })?;
+        if report.schema_version != REVIEW_CONTRACT_VERSION {
+            return Err(OrbitError::InvalidInput(format!(
+                "{REVIEW_REPORT_ARTIFACT} has schema_version {}; the review report contract is \
+                 version {REVIEW_CONTRACT_VERSION}",
+                report.schema_version
+            )));
+        }
+        if report.attempt_id != self.attempt_id {
+            return Err(OrbitError::PolicyDenied(format!(
+                "claimed_review_bridge_refused: the report names attempt '{}', not the running \
+                 attempt '{}'",
+                report.attempt_id, self.attempt_id
+            )));
+        }
+        Ok(())
+    }
+}
+
 pub(super) fn denied(reason: &str) -> OrbitError {
     OrbitError::PolicyDenied(format!("claimed_review_bridge_refused: {reason}"))
 }
@@ -232,126 +353,5 @@ pub(super) fn artifact_bytes(output: &Value, path: &str) -> Result<Vec<u8>, Orbi
         _ => Err(OrbitError::Execution(format!(
             "the owner answered the {path} read without its bytes"
         ))),
-    }
-}
-
-impl ClaimedReviewScope<'_> {
-    /// Read the claimed task's artifact at `path` from the owner, whose claim
-    /// fence answers only while the claim is active.
-    fn read(
-        &self,
-        runtime: &OrbitRuntime,
-        path: &str,
-        model: Option<&Value>,
-        session: ToolSessionContext,
-    ) -> Result<Value, OrbitError> {
-        let mut input = json!({"id": self.task_id(), "path": path});
-        if let Some(model) = model {
-            input["model"] = model.clone();
-        }
-        runtime.route_worker_tool(GET, input, session)
-    }
-
-    /// The bytes of the owner's artifact at `path`, or `None` when it has none.
-    fn owner_bytes(
-        &self,
-        runtime: &OrbitRuntime,
-        path: &str,
-        session: &ToolSessionContext,
-    ) -> Result<Option<Vec<u8>>, OrbitError> {
-        match self.read(runtime, path, None, session.clone()) {
-            Ok(output) => artifact_bytes(&output, path).map(Some),
-            Err(error) if not_found(&error) => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
-
-    /// Whether the owner's current evidence hold names `path`: as a
-    /// requirement's result artifact, or as the log that result names for
-    /// that requirement. The names come from the owner's records only; an
-    /// absent or unreadable hold names nothing.
-    fn hold_names(
-        &self,
-        runtime: &OrbitRuntime,
-        path: &str,
-        session: &ToolSessionContext,
-    ) -> Result<bool, OrbitError> {
-        let Some(bytes) = self.owner_bytes(runtime, REVIEW_EVIDENCE_HOLD_ARTIFACT, session)? else {
-            return Ok(false);
-        };
-        let Ok(hold) = serde_json::from_slice::<ReviewEvidenceHold>(&bytes) else {
-            return Ok(false);
-        };
-        if hold.requirements.iter().any(|required| {
-            canonical_review_path_if_valid(&required.artifact).as_deref() == Some(path)
-        }) {
-            return Ok(true);
-        }
-        for required in &hold.requirements {
-            let Some(artifact_path) = canonical_review_path_if_valid(&required.artifact) else {
-                continue;
-            };
-            if !evidence_path(&artifact_path) {
-                continue;
-            }
-            let Some(bytes) = self.owner_bytes(runtime, &artifact_path, session)? else {
-                continue;
-            };
-            let Ok(evidence) = serde_json::from_slice::<ReviewExternalEvidence>(&bytes) else {
-                continue;
-            };
-            if canonical_review_path_if_valid(&evidence.log_artifact).as_deref() == Some(path)
-                && evidence.matches_requirement(required, &hold.candidate)
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    /// The manifest the owner returned must be the admitted attempt's: the
-    /// gate writes it once per attempt, so another attempt's manifest is stale.
-    fn check_manifest(&self, output: &Value) -> Result<(), OrbitError> {
-        let bytes = artifact_bytes(output, REVIEW_MANIFEST_ARTIFACT)?;
-        let manifest: ReviewManifest = serde_json::from_slice(&bytes).map_err(|error| {
-            OrbitError::Execution(format!("{REVIEW_MANIFEST_ARTIFACT} is unreadable: {error}"))
-        })?;
-        if manifest.attempt_id != self.attempt_id
-            || manifest.lineage_key != self.lineage_key
-            || !manifest.task_ids.iter().any(|id| id == self.task_id())
-        {
-            return Err(OrbitError::PolicyDenied(format!(
-                "claimed_review_bridge_refused: review_manifest_stale: the owner's manifest is \
-                 for attempt '{}', not the running attempt '{}'",
-                manifest.attempt_id, self.attempt_id
-            )));
-        }
-        Ok(())
-    }
-
-    /// A report must be the review contract's, for the running attempt. The
-    /// owner's attach validates the contract again; checking here keeps a
-    /// report for another attempt from reaching the owner at all.
-    fn check_report(&self, content: &[u8]) -> Result<(), OrbitError> {
-        let report = ReviewReport::parse(content).map_err(|error| {
-            OrbitError::InvalidInput(format!(
-                "{REVIEW_REPORT_ARTIFACT} does not match the review report contract: {error}"
-            ))
-        })?;
-        if report.schema_version != REVIEW_CONTRACT_VERSION {
-            return Err(OrbitError::InvalidInput(format!(
-                "{REVIEW_REPORT_ARTIFACT} has schema_version {}; the review report contract is \
-                 version {REVIEW_CONTRACT_VERSION}",
-                report.schema_version
-            )));
-        }
-        if report.attempt_id != self.attempt_id {
-            return Err(OrbitError::PolicyDenied(format!(
-                "claimed_review_bridge_refused: the report names attempt '{}', not the running \
-                 attempt '{}'",
-                report.attempt_id, self.attempt_id
-            )));
-        }
-        Ok(())
     }
 }

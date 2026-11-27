@@ -639,11 +639,12 @@ impl OwnerLocal {
             owner.sqlite_store().unwrap(),
             workspace_id.clone(),
         );
+        let follower = owner.clone().with_drain_owner_transport(wire.clone());
         let pair = Pair {
             _root: Arc::new(root),
-            follower: owner.clone().with_drain_owner_transport(wire.clone()),
             wire,
             owner_repo: repo.clone(),
+            follower,
             follower_repo: repo,
             follower_jobs: jobs,
             destination: json!({

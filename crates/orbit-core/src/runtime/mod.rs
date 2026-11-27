@@ -24,30 +24,6 @@ pub use orbit_runtime::*;
 /// resolve it.
 static CAPTURED_ENV: OnceLock<Env> = OnceLock::new();
 
-/// Keep the environment `main` captured with [`Env::capture`] for
-/// composition. The first snapshot is retained. A repeated call fails a
-/// debug assertion in debug builds; in release builds, it returns without
-/// replacing that snapshot.
-pub fn install_captured_env(env: Env) {
-    let installed = CAPTURED_ENV.set(env).is_ok();
-    debug_assert!(
-        installed,
-        "the process environment is captured once, in main"
-    );
-}
-
-/// The environment `main` captured, or `None` in a process that never ran
-/// `main`, such as a test binary.
-pub fn captured_env() -> Option<&'static Env> {
-    CAPTURED_ENV.get()
-}
-
-/// The environment captured by Orbit's entry point, or the current process
-/// environment for a process without an installed entry-point snapshot.
-pub(crate) fn process_env() -> Env {
-    captured_env().cloned().unwrap_or_else(Env::capture)
-}
-
 /// The fully initialized Orbit runtime: the [`RuntimeKernel`] plus the
 /// application and adapter operations defined on it in this crate.
 #[derive(Clone)]
@@ -85,4 +61,28 @@ impl OrbitRuntime {
     pub fn into_kernel(self) -> RuntimeKernel {
         self.kernel
     }
+}
+
+/// Keep the environment `main` captured with [`Env::capture`] for
+/// composition. The first snapshot is retained. A repeated call fails a
+/// debug assertion in debug builds; in release builds, it returns without
+/// replacing that snapshot.
+pub fn install_captured_env(env: Env) {
+    let installed = CAPTURED_ENV.set(env).is_ok();
+    debug_assert!(
+        installed,
+        "the process environment is captured once, in main"
+    );
+}
+
+/// The environment `main` captured, or `None` in a process that never ran
+/// `main`, such as a test binary.
+pub fn captured_env() -> Option<&'static Env> {
+    CAPTURED_ENV.get()
+}
+
+/// The environment captured by Orbit's entry point, or the current process
+/// environment for a process without an installed entry-point snapshot.
+pub(crate) fn process_env() -> Env {
+    captured_env().cloned().unwrap_or_else(Env::capture)
 }

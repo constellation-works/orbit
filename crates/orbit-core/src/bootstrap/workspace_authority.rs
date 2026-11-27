@@ -72,6 +72,23 @@ const AUTHORITY_LEDGER: &str = "state/generation-authorities.json";
 /// root. Its presence shows a root has served as an authority.
 const GENERATION_LOCK: &str = ".generation.lock";
 
+const RECORDED_REMEDY: &str = "Run the command under the generation authority its clients use \
+     (the same home directory, `--root` or ORBIT_ROOT), where admission waits for them to \
+     quiesce";
+
+const ADOPTION_REMEDY: &str = "Stop every orbit process that uses this workspace, under any \
+     home directory, `--root` or ORBIT_ROOT, then run `orbit migrate --adopt-authority \
+     <authority>` under the authority they use and re-run";
+
+const OTHER_AUTHORITY_REMEDY: &str = "Stop that authority's orbit processes that use this \
+     workspace and re-run; this process's authority cannot wait for them";
+
+const UNUSABLE_REMEDY: &str = "Orbit never replaces the record: restore it to name the \
+     generation authority this workspace's clients use, as `{\"authority\":\"<absolute \
+     path>\"}`, and re-run under that authority";
+
+const RETRY_REMEDY: &str = "Re-run the command";
+
 #[derive(Debug, Serialize, Deserialize)]
 struct AuthorityRecord {
     /// Canonical generation authority root whose participants use this
@@ -687,23 +704,6 @@ fn read_authority_record(shared_root: &Path) -> Result<Option<PathBuf>, String> 
         )),
     }
 }
-
-const RECORDED_REMEDY: &str = "Run the command under the generation authority its clients use \
-     (the same home directory, `--root` or ORBIT_ROOT), where admission waits for them to \
-     quiesce";
-
-const ADOPTION_REMEDY: &str = "Stop every orbit process that uses this workspace, under any \
-     home directory, `--root` or ORBIT_ROOT, then run `orbit migrate --adopt-authority \
-     <authority>` under the authority they use and re-run";
-
-const OTHER_AUTHORITY_REMEDY: &str = "Stop that authority's orbit processes that use this \
-     workspace and re-run; this process's authority cannot wait for them";
-
-const UNUSABLE_REMEDY: &str = "Orbit never replaces the record: restore it to name the \
-     generation authority this workspace's clients use, as `{\"authority\":\"<absolute \
-     path>\"}`, and re-run under that authority";
-
-const RETRY_REMEDY: &str = "Re-run the command";
 
 fn refused(
     shared_root: &Path,

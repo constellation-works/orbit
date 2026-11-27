@@ -30,6 +30,14 @@ pub(crate) const NOTICE_AGENT_TOOLS: &[&str] = &[
     "orbit.notice.close",
 ];
 
+/// Granted names whose disallow entries the implementer lifts, and covered
+/// grants it keeps denied because they are classified mutating.
+#[derive(Default)]
+struct GrantedDenyLifts {
+    lifted: BTreeSet<String>,
+    held_mutating: BTreeSet<String>,
+}
+
 /// Give the named notice activities the agent notice tools, even if a
 /// future baseline change drops them. Managed agents always may post and
 /// close their own notices [ORB-22808].
@@ -199,14 +207,6 @@ fn load_tasks(runtime: &OrbitRuntime, task_ids: &[String]) -> Result<Vec<Task>, 
             Ok(task)
         })
         .collect()
-}
-
-/// Granted names whose disallow entries the implementer lifts, and covered
-/// grants it keeps denied because they are classified mutating.
-#[derive(Default)]
-struct GrantedDenyLifts {
-    lifted: BTreeSet<String>,
-    held_mutating: BTreeSet<String>,
 }
 
 /// Classify every selected task's grant against the implementer's disallow

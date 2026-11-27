@@ -85,6 +85,24 @@ pub struct InitOptions {
     pub workspace_preset: Option<crate::application::workspace_preset::WorkspacePreset>,
 }
 
+#[derive(Debug, Clone)]
+struct InitTarget {
+    orbit_root: PathBuf,
+    skills_links_roots: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LinkResult {
+    pub linked_count: usize,
+    pub roots: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnlinkResult {
+    pub removed_count: usize,
+    pub cleaned_dirs: Vec<PathBuf>,
+}
+
 /// Ensures both global and workspace roots are bootstrapped.
 /// Global root gets config plus all globally scoped resource defaults.
 /// Workspace root gets only workspace-local layout and runtime state dirs.
@@ -424,12 +442,6 @@ pub(crate) fn global_skills_dir(global_root: &Path) -> PathBuf {
     global_root.join("skills")
 }
 
-#[derive(Debug, Clone)]
-struct InitTarget {
-    orbit_root: PathBuf,
-    skills_links_roots: Vec<PathBuf>,
-}
-
 fn resolve_init_target_from_root(orbit_root: &Path) -> InitTarget {
     let orbit_root = orbit_root.to_path_buf();
     let skills_links_base = orbit_root.parent().unwrap_or(orbit_root.as_path());
@@ -734,20 +746,6 @@ fn reap_stale_skill_links(
         changed = true;
     }
     Ok(changed)
-}
-
-// --- Public link/unlink API ---
-
-#[derive(Debug, Clone)]
-pub struct LinkResult {
-    pub linked_count: usize,
-    pub roots: Vec<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-pub struct UnlinkResult {
-    pub removed_count: usize,
-    pub cleaned_dirs: Vec<PathBuf>,
 }
 
 /// The task prefix a global root's task store has already minted ids under,

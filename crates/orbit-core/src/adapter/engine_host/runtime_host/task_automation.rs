@@ -155,15 +155,15 @@ fn apply_task_automation_update_under_lock(
                     .as_deref()
                     .map(orbit_common::security::redaction::redact_all),
                 status_decision: update.status_decision.clone(),
-                append_comments: update.append_comments.clone(),
                 append_history: update.append_history.clone(),
+                append_comments: update.append_comments.clone(),
                 expected_status: Some(vec![existing_task.status]),
                 ..StoreTaskUpdateParams::from(TaskUpdateParams {
-                    execution_summary: update.execution_summary.clone(),
                     plan: update.plan.clone(),
-                    context_files: update.context_files.clone(),
+                    execution_summary: update.execution_summary.clone(),
                     status: update.status,
                     job_run_id: update.job_run_id.clone().map(Some),
+                    context_files: update.context_files.clone(),
                     upsert_artifacts: update.upsert_artifacts.clone(),
                     ..Default::default()
                 })

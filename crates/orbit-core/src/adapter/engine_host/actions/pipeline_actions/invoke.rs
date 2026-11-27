@@ -15,6 +15,11 @@ use crate::OrbitRuntime;
 use crate::application::job::pipeline_actions::{gate_admission_stop, wait_success_status};
 use crate::application::job::{kept_candidate, kept_clause};
 
+/// A child the wait's expiry cancelled, with the candidate it kept.
+struct CancelledChild {
+    candidate: Option<Value>,
+}
+
 /// Submit a child v2 Job, link it durably, then block on its terminal state.
 ///
 /// [ORB-10971] Submission and waiting are two observable phases of one
@@ -279,11 +284,6 @@ fn child_is_live(runtime: &OrbitRuntime, child_run_id: &str) -> bool {
             true
         }
     }
-}
-
-/// A child the wait's expiry cancelled, with the candidate it kept.
-struct CancelledChild {
-    candidate: Option<Value>,
 }
 
 /// Settle a child the wait did not see finish, so the parent never ends with

@@ -9,27 +9,6 @@ use orbit_types::tool::ToolSessionContext;
 use super::super::audit::managed_run_context;
 use super::super::callback::read_activity_tool_policy_from_env;
 
-/// Resolve the activity grants relevant to recovery hints using the same
-/// trusted-envelope rule as dispatch. Unmanaged MCP sessions ignore process policy.
-pub fn tool_suggestion_context(
-    env: &orbit_common::Env,
-    entry_point: ToolEntryPoint,
-    session_context: ToolSessionContext,
-) -> ToolContext {
-    let policy = if entry_point != ToolEntryPoint::Mcp || managed_run_context(env) {
-        read_activity_tool_policy_from_env(env)
-    } else {
-        Default::default()
-    };
-    ToolContext {
-        env: env.clone(),
-        session_context,
-        allowed_tools: policy.allowed_tools,
-        tool_deny_policy: policy.deny_policy,
-        ..Default::default()
-    }
-}
-
 /// Where a tool invocation arrived from. Captured in the audit row so a single
 /// audit table can attribute tool calls back to their origin (CLI vs MCP).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +27,27 @@ impl ToolEntryPoint {
             ToolEntryPoint::Cli => "run",
             ToolEntryPoint::Mcp => "run-mcp",
         }
+    }
+}
+
+/// Resolve the activity grants relevant to recovery hints using the same
+/// trusted-envelope rule as dispatch. Unmanaged MCP sessions ignore process policy.
+pub fn tool_suggestion_context(
+    env: &orbit_common::Env,
+    entry_point: ToolEntryPoint,
+    session_context: ToolSessionContext,
+) -> ToolContext {
+    let policy = if entry_point != ToolEntryPoint::Mcp || managed_run_context(env) {
+        read_activity_tool_policy_from_env(env)
+    } else {
+        Default::default()
+    };
+    ToolContext {
+        env: env.clone(),
+        session_context,
+        allowed_tools: policy.allowed_tools,
+        tool_deny_policy: policy.deny_policy,
+        ..Default::default()
     }
 }
 
