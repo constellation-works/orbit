@@ -24,8 +24,13 @@
 //! uses the same per-attempt names and holds one lock across the replace and
 //! its recovery.
 
-#[cfg(target_os = "macos")]
+// Linux compiles the macOS bundle-swap module too, so Linux CodeQL extraction
+// analyzes it instead of skipping a production file. Only macOS calls into it.
 #[path = "install/mac.rs"]
+#[cfg_attr(
+    not(target_os = "macos"),
+    expect(dead_code, reason = "the macOS bundle swap runs only on macOS")
+)]
 mod mac;
 
 use std::ffi::{CString, OsStr, OsString};
@@ -229,7 +234,10 @@ struct StagedBytes {
 }
 
 impl StagedBytes {
-    #[cfg(target_os = "macos")]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        expect(dead_code, reason = "the macOS bundle swap runs only on macOS")
+    )]
     fn path(&self) -> &Path {
         &self.path
     }
