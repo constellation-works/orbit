@@ -1,6 +1,6 @@
 // Job catalogue operations [ORB-10875, ORB-10876].
 
-import { captureWorkspaceVisit, copyText, el, fetchJson, formatDayHeading, hostWriteRefusal, isAggregateView, postJson, requestPanel, relativeTime, setBadgeDescription } from './common.js';
+import { captureWorkspaceVisit, copyText, el, fetchJson, formatDayHeading, hostWriteRefusal, isAggregateView, postJson, requestPanel, relativeTime, setBadgeDescription, setRailCountText } from './common.js';
 
 import {
   $,
@@ -72,7 +72,8 @@ export function updateJobFailureBadges(failing) {
   const node = $("rail-count-jobs-failing");
   if (!node) return;
   node.hidden = jobs.length === 0;
-  node.textContent = jobs.length ? `${jobs.length} failing` : "";
+  if (jobs.length) setRailCountText(node, `${jobs.length} failing`, String(jobs.length));
+  else node.textContent = "";
   setBadgeDescription(node, jobs.length ? `${jobs.map(failureStreakSummary).join("; ")}. See Jobs › Catalogue.` : "");
 }
 

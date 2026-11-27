@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
     <title>orbit</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230A0A0A'/><g transform='translate(-0.883 -0.883) scale(0.3377)'><path d='M 82.00 49.47 A 32 32 0 1 1 50.53 18.00' fill='none' stroke='%23EDEDF0' stroke-width='13' stroke-linecap='round'/><circle cx='50' cy='50' r='10' fill='%23EDEDF0'/><circle cx='72.63' cy='27.37' r='12.5' fill='%236E9FFF'/></g></svg>">
@@ -24,6 +24,7 @@
             <path fill="#EDEDEF" transform="translate(0 1)" d="M35.26 17.24c-1.73 0-3.12-.52-4.18-1.56-1.05-1.05-1.58-2.45-1.58-4.2 0-1.72.53-3.1 1.6-4.14 1.07-1.05 2.45-1.58 4.16-1.58s3.09.53 4.14 1.58c1.07 1.04 1.6 2.42 1.6 4.14 0 1.75-.53 3.15-1.58 4.2-1.06 1.04-2.45 1.56-4.16 1.56Zm0-2.46c.86 0 1.55-.3 2.06-.9.52-.61.78-1.41.78-2.4 0-.98-.26-1.76-.78-2.36-.51-.6-1.2-.9-2.06-.9s-1.56.3-2.08.9c-.51.6-.76 1.38-.76 2.36 0 .99.25 1.79.76 2.4.52.6 1.22.9 2.08.9ZM43.65 17V6h2.58l.18 1.48c.32-.54.73-.95 1.24-1.24.52-.29 1.13-.44 1.84-.44.31 0 .59.03.84.08v2.74a5.5 5.5 0 0 0-.96-.08c-.82 0-1.49.23-2 .7-.5.45-.76 1.14-.76 2.06V17h-3Zm14.05.24c-.76 0-1.42-.15-1.98-.46a3.6 3.6 0 0 1-1.32-1.26L54.16 17h-2.54V1.8h3v5.46c.36-.45.8-.81 1.32-1.08a4 4 0 0 1 1.78-.38c1.46 0 2.64.53 3.52 1.58.9 1.04 1.34 2.41 1.34 4.1 0 1.72-.45 3.11-1.36 4.18-.9 1.05-2.07 1.58-3.52 1.58Zm-.68-2.48c.78 0 1.39-.3 1.84-.9.46-.6.7-1.39.7-2.38 0-.98-.24-1.76-.7-2.34-.45-.6-1.06-.9-1.84-.9-.77 0-1.38.3-1.84.9-.45.58-.68 1.36-.68 2.34 0 .99.23 1.78.68 2.38.46.6 1.07.9 1.84.9ZM65.12 17V6h3v11h-3Zm1.5-12.44c-.51 0-.94-.17-1.28-.5-.33-.34-.5-.76-.5-1.26s.17-.91.5-1.24c.34-.34.77-.52 1.28-.52s.93.18 1.26.52c.34.33.52.74.52 1.24s-.18.92-.52 1.26c-.33.33-.75.5-1.26.5ZM76.13 17.2c-1.25 0-2.22-.31-2.9-.94-.68-.64-1.02-1.58-1.02-2.82V8.48H70.3V6h1.92V3.34h3V6h3.02v2.48h-3.02v4.98c0 .45.1.76.3.94.2.17.55.26 1.04.26h1.6V17c-.28.07-.61.12-1 .16-.37.03-.72.04-1.04.04Z"></path>
             </svg>
           </div>
+          <div id="phone-scope" class="phone-scope"></div>
           <h1 class="crumb visually-hidden" id="topbar-crumb">Tasks</h1>
           <!-- Provider usage for the selected host, and one warning chip when a
                reading is elevated or worse. That chip opens the same detail as
@@ -48,17 +49,19 @@
           <span class="topbar-spacer"></span>
           <!-- Global search stays in the same place on every destination. -->
           <div class="topbar-task-actions" role="group" aria-label="Dashboard search and task actions">
-            <div class="task-search-wrap">
+            <button type="button" id="phone-search-open" class="action phone-search-open" aria-label="Search" aria-controls="task-search-wrap" aria-expanded="false"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M17 17l-3.6-3.6"/></svg></button>
+            <div class="task-search-wrap" id="task-search-wrap">
               <svg class="task-search-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="M17 17l-3.6-3.6"/></svg>
               <input type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="global-search-results" id="task-search" placeholder="Search tasks or run ID" autocomplete="off" spellcheck="false" aria-label="Search tasks by ID or title, or open a run ID" />
               <button type="button" id="task-search-clear" aria-label="Clear search">Clear</button>
+              <button type="button" id="phone-search-close" class="esc-close phone-search-close" aria-label="Close search">esc</button>
               <div id="global-search-popover" class="global-search-popover" hidden>
                 <div id="global-search-results" role="listbox" aria-label="Task results"></div>
                 <div id="global-search-status" class="global-search-status" role="status"></div>
                 <div id="global-search-unavailable" class="global-search-status global-search-unavailable" role="status"></div>
               </div>
             </div>
-            <button type="button" id="task-create-open" class="action primary" aria-haspopup="dialog" aria-controls="task-create-panel" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New task</button>
+            <button type="button" id="task-create-open" class="action primary" aria-label="New task" aria-haspopup="dialog" aria-controls="task-create-panel" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>New task</span></button>
           </div>
           <!-- Opt-in browser notifications for a drain end or a new hold while
                this tab is in the background; shown where notifications exist. -->
@@ -172,9 +175,8 @@
 
     <section class="tab-pane" data-tab="tasks">
       <main class="tasks-layout" id="tasks-main">
-        <!-- The filter bar heads the list column, level with the dock's tabs;
-             where the chips would wrap there but fit in fewer rows across
-             both columns, it spans the dock column too (log-tail.js). -->
+        <!-- The filter bar heads the list, spanning the dock too when that
+             makes room for the full labels (log-tail.js). -->
         <div class="controls">
           <div id="task-filter" role="group" aria-label="Filter tasks"></div>
           <!-- Shown only while the dock is collapsed (dock-toggle.js). -->
@@ -925,7 +927,14 @@
       </main>
     </section>
       </div>
+      <nav id="phone-nav" class="phone-nav" aria-label="Dashboard sections">
+        <button type="button" id="phone-more-open" class="tab" aria-controls="phone-more" aria-haspopup="dialog" aria-expanded="false"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/></svg><span class="rail-label">More</span></button>
+      </nav>
     </div>
+    <dialog id="phone-more" class="phone-more dialog-surface" aria-labelledby="phone-more-title">
+      <header><h2 id="phone-more-title">More</h2><button type="button" id="phone-more-close" class="esc-close" aria-label="Close navigation" autofocus>esc</button></header>
+      <nav id="phone-more-entries" aria-label="More sections"></nav>
+    </dialog>
     <!-- ORB-10972: always-on ambient line. Present on every tab, including the
          ones where the dock is not mounted; log-tail.js mirrors each event here
          as it arrives. This is what replaced the collapsed log panel. -->

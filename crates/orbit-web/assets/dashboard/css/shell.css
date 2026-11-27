@@ -49,10 +49,6 @@
     margin: 0;
   }
 }
-@media (max-width: 760px) {
-  .rail-toggle,
-  .rail .rail-toggle { display: none; }
-}
 @media (prefers-reduced-motion: reduce) {
   .rail > :not(.rail-toggle) { transition: none; }
 }
@@ -98,7 +94,7 @@
    and #diag-subtabs. In the rail the active entry is marked by its own
    background, so the sliding underline is suppressed here rather than
    removed from the router. */
-.rail .tab-indicator { display: none !important; }
+:is(.rail, .phone-more) .tab-indicator { display: none !important; }
 
 .rail-group { display: flex; flex-direction: column; gap: 1px; }
 
@@ -111,7 +107,7 @@
   padding: 0 var(--space-10) var(--space-4);
 }
 
-.rail .tab {
+:is(.rail, .phone-nav, .phone-more) .tab {
   display: flex;
   align-items: center;
   gap: var(--space-10);
@@ -129,18 +125,18 @@
   transition: background 0.15s ease, color 0.15s ease;
 }
 
-.rail .tab[hidden] { display: none; }
+:is(.rail, .phone-nav, .phone-more) .tab[hidden] { display: none; }
 
-.rail .tab:hover { color: var(--fg); background: var(--bg-hover); }
+:is(.rail, .phone-nav, .phone-more) .tab:hover { color: var(--fg); background: var(--bg-hover); }
 
-.rail .tab.active {
+:is(.rail, .phone-nav, .phone-more) .tab.active {
   background: var(--bg-selected);
   color: var(--fg-strong);
   font-weight: 500;
 }
-.rail .tab.active .rail-ico { color: var(--accent); }
+:is(.rail, .phone-nav, .phone-more) .tab.active .rail-ico { color: var(--accent); }
 
-.rail .rail-drain { text-decoration: none; }
+:is(.rail, .phone-nav, .phone-more) .rail-drain { text-decoration: none; }
 /* Above the Tasks dock breakpoint (`TASKS_ONE_COLUMN_QUERY` in log-tail.js),
    the dock sits beside the list and holds Drain, so the rail item is withdrawn.
    It stays in the DOM, and its reading still paints while hidden. */
@@ -203,7 +199,7 @@
 
 /* Two counts cannot share the fixed desktop rail width with a readable
    label. Keep the volume beside the label and the attention pill below it.
-   The horizontal mobile rail has intrinsic-width buttons and needs no wrap. */
+   The phone bar places the counts beside the label and icon. */
 @media (min-width: 761px) {
   /* Short windows: the rail itself does not scroll; selectors and foot stay
      put. When destination content exceeds the available height, the destination
@@ -253,8 +249,7 @@
   /* Views keep their 30px line and scroll out of the region; they never
      squash to fit it. */
   .rail-subtabs .subtab { flex: 0 0 auto; }
-  /* The fade cue the phone strips use, turned vertical: an edge fades
-     only while it hides more views (classes set by syncRailScrollCues). */
+  /* An edge fades only while it hides more views (syncRailScrollCues). */
   .rail-subtabs.has-overflow-end {
     -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent 100%);
     mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent 100%);
@@ -384,6 +379,7 @@
    rail: host above, workspace below. */
 .rail-host, .rail-workspace { display: flex; flex-direction: column; gap: var(--space-6); }
 .rail-host:not(:empty) { margin-bottom: var(--space-6); }
+.rail-workspace:is(:empty, .single-workspace) { display: none; }
 .rail-host .workspace-select,
 .rail-workspace .workspace-select {
   max-width: 100%;
@@ -704,183 +700,193 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   opacity: 0.55;
 }
 
-/* The notifications opt-in reads as on while pressed; the phone layout's
-   inline-flex must not reveal it where the browser has no notifications. */
+/* The notifications opt-in reads as on while pressed. */
 .notify-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent-hover); }
 .topbar .notify-btn[hidden] { display: none; }
 
-/* On phones the brand and Notify stay on the first row, Notify at the
-   trailing edge, the same place it occupies on every other view. Search takes
-   the next row, with New task while Tasks is open, so every control fits at
-   375px without the bar scrolling sideways. Scope pickers and navigation
-   keep their own rows below. */
+.phone-scope, .phone-nav, .phone-more,
+.topbar .phone-search-open, .topbar .phone-search-close, .rail-count-compact { display: none; }
+
 @media (max-width: 760px) {
+  :root { --phone-nav-height: calc(56px + env(safe-area-inset-bottom)); }
+  body { height: 100dvh; }
   .shell {
-    position: relative;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto minmax(0, 1fr);
-    grid-template-areas: "top" "rail" "main";
+    grid-template-rows: 48px minmax(0, 1fr) var(--phone-nav-height);
+    grid-template-areas: "top" "main" "bottom";
   }
-  .rail {
-    display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-    grid-template-rows: auto auto;
-    border-right: none;
-    border-bottom: 1px solid var(--hair);
-    overflow: hidden;
-    padding: var(--space-4) var(--space-8);
-    align-items: center;
-    gap: var(--space-2) var(--space-6);
-  }
-  .rail-brand svg { width: 64px; height: auto; }
-  .rail-host { grid-column: 1; grid-row: 1; min-width: 0; margin-bottom: 0; align-self: start; }
-  .rail-host .rail-scope-label { display: none; }
-  /* Phones keep the select and the Serving badge on one row. The host column
-     is wider than the workspace column so a host name fits beside the badge. */
-  .rail-host { flex-direction: row; align-items: center; gap: var(--space-4); }
-  .rail-host .host-picker-control { order: 1; flex: 1 1 0; min-width: 0; }
-  .rail-workspace { grid-column: 2; grid-row: 1; min-width: 0; align-self: start; }
-  .rail-host .workspace-select,
-  .rail-workspace .workspace-select { height: 30px; width: 100%; max-width: 100%; }
-  /* The host block, refresh line and UTC/Local control are desktop readings. */
-  .rail-foot { display: none; }
-  .rail .tabs {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    min-width: 0;
-    margin: 0;
-    padding: var(--space-2);
-    gap: var(--space-2);
-    scrollbar-width: none;
-  }
-  .rail .tabs::-webkit-scrollbar,
-  .rail .rail-subtabs::-webkit-scrollbar { display: none; }
-  .rail .tabs { cursor: grab; }
-  .rail .tabs.is-drag-scrolling,
-  .rail .tabs.is-drag-scrolling * { cursor: grabbing; user-select: none; }
-  .rail-group { display: contents; }
-  .rail-group-label { display: none; }
-  .rail .tab {
-    width: auto;
-    flex: 0 0 auto;
-    white-space: nowrap;
-    height: 44px;
-  }
-  .rail-label { flex: 0 1 auto; }
-  .rail .rail-subtabs {
-    flex: 0 0 auto;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    /* Keep the destination and any selected view visible together, including
-       views near the end of a long section such as Settings. */
-    max-width: calc(100vw - 28px - var(--active-tab-width, 140px));
-    overflow-x: auto;
-    margin: 0;
-    padding: 0 var(--space-4);
-    gap: var(--space-2);
-    scrollbar-width: none;
-  }
-  .rail-subtabs .subtab {
-    padding: 0 var(--space-10);
-    white-space: nowrap;
-    flex: 0 0 auto;
-  }
-  /* ORB-20479: a scrolled strip fades only toward hidden content, so a label
-     resting at an edge reads as overflow instead of a rendering glitch. */
-  .rail .tabs.has-overflow-end,
-  .rail .rail-subtabs.has-overflow-end {
-    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
-    mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent 100%);
-  }
-  .rail .tabs.has-overflow-start,
-  .rail .rail-subtabs.has-overflow-start {
-    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px);
-    mask-image: linear-gradient(to right, transparent 0, #000 16px);
-  }
-  .rail .tabs.has-overflow-start.has-overflow-end,
-  .rail .rail-subtabs.has-overflow-start.has-overflow-end {
-    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
-    mask-image: linear-gradient(to right, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
-  }
-  /* Free scrolling can rest mid-label; the fades above mark it as overflow,
-     while the router snaps the strip to an item start after every reveal. */
+  .shell > .rail { display: none; }
   .topbar {
-    flex-wrap: wrap;
-    height: auto;
-    padding: var(--space-4) var(--space-8);
+    height: 48px;
+    flex-wrap: nowrap;
+    padding: 0 max(var(--space-8), env(safe-area-inset-right)) 0 max(var(--space-8), env(safe-area-inset-left));
     gap: var(--space-6);
-    /* Clip a subpixel leftover instead of growing a sideways page scroll.
-       The Tasks row is sized to fit, so this does not hide a control. */
-    overflow-x: clip;
   }
-  .topbar :is(button, a):focus-visible { outline-offset: -2px; }
-  .topbar .rail-brand { order: 0; height: 34px; }
-  .topbar-spacer { display: block; order: 1; }
-  /* Notify stays on the first row. Global search, with task creation on
-     Tasks, takes its own row on every destination. */
-  .topbar .refresh-btn { order: 2; }
-  .topbar .topbar-task-actions {
-    order: 3;
-    flex: 1 1 100%;
-    min-width: 0;
-    max-width: 100%;
-    min-height: 44px;
-  }
-  .topbar .topbar-task-actions .task-search-wrap {
-    flex: 1 1 auto;
-    width: auto;
-    min-width: 0;
-  }
-  .topbar .topbar-task-actions #task-search { min-width: 0; }
-  /* ORB-28238: the scope note never takes room on phones. While inactive it
-     stays display:none; while active it is visually hidden (the same 1px
-     clipped pattern as .refresh-label below, so it stays in the
-     accessibility tree) and takes no layout room, so the tabs row below
-     never moves. The Pipeline panel's "Fleet-wide" badge states the scope
-     on screen. Desktop keeps reserving the space (visibility:hidden). */
-  .rail-workspace .workspace-scope-note.is-inactive { display: none; }
-  .rail-workspace .workspace-scope-note:not(.is-inactive) {
+  .topbar .topbar-spacer, .topbar .notify-btn { display: none; }
+  .topbar .rail-brand { width: 24px; padding: 0; overflow: hidden; }
+  .rail-brand svg { flex: none; }
+  .phone-scope { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; gap: var(--space-6); }
+  .phone-scope :is(.rail-host, .rail-workspace) { flex: 0 1 auto; min-width: 0; margin: 0; }
+  .phone-scope .rail-workspace.single-workspace { display: flex; }
+  .phone-scope .rail-scope-label, .phone-scope .host-picker-control > .badge { display: none; }
+  .phone-scope .workspace-select,
+  .phone-scope .host-picker-control .host-select { width: auto; max-width: 100%; height: 44px; text-overflow: ellipsis; }
+  .phone-scope .host-picker-control .host-select { flex: 0 1 auto; }
+  .phone-scope .workspace-select:focus-visible { outline-offset: -2px; }
+  .phone-scope .workspace-scope-note.is-inactive { display: none; }
+  .phone-scope .workspace-scope-note:not(.is-inactive) {
     position: absolute;
     width: 1px;
     height: 1px;
-    margin: -1px;
-    padding: 0;
     overflow: hidden;
     clip-path: inset(50%);
     white-space: nowrap;
-    border: 0;
   }
+
+  .topbar .topbar-task-actions { flex: none; gap: var(--space-6); }
+  .topbar .phone-search-open { display: inline-flex; }
+  .topbar :is(.phone-search-open, #task-create-open) svg { width: 18px; height: 18px; }
+  .topbar :is(.phone-search-open, #task-create-open) {
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 44px;
+    padding: 0;
+  }
+  .topbar #task-create-open > span { display: none; }
+  .topbar :is(button, a):focus-visible { outline-offset: -2px; }
+
+  .topbar .task-search-wrap { display: none; }
+  .topbar:has(.task-search-wrap.search-open) :is(.rail-brand, .phone-scope, #task-create-open, .phone-search-open) {
+    visibility: hidden;
+  }
+  .topbar .task-search-wrap.search-open {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-6);
+    padding: 0 max(var(--space-8), env(safe-area-inset-right)) 0 max(var(--space-8), env(safe-area-inset-left));
+    background: var(--bg-chrome);
+  }
+  .topbar .phone-search-close { display: inline-flex; flex: none; height: 44px; }
+  .topbar .task-search-wrap #task-search { grid-area: 1 / 1; height: 44px; min-width: 0; font-size: var(--text-lg); }
+  .topbar .task-search-icon { left: max(19px, calc(env(safe-area-inset-left) + 11px)); top: 15px; }
+  .topbar #task-search-clear { grid-area: 1 / 1; position: static; justify-self: end; z-index: 1; }
+  .topbar .global-search-popover {
+    top: calc(100% + var(--space-4));
+    left: max(var(--space-8), env(safe-area-inset-left));
+  }
+
+  .phone-nav {
+    grid-area: bottom;
+    position: fixed;
+    z-index: 25;
+    inset: auto 0 0;
+    height: var(--phone-nav-height);
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    border-top: 1px solid var(--hair);
+    background: var(--bg-chrome);
+  }
+  .phone-nav .tab {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, auto);
+    grid-template-areas: "icon icon" "name count";
+    place-content: center;
+    place-items: center;
+    gap: var(--space-2) var(--space-4);
+    height: 100%;
+    min-height: 44px;
+    min-width: 0;
+    padding: 0 var(--space-2);
+    font-size: var(--text-sm);
+  }
+  .phone-nav .tab > .rail-ico { grid-area: icon; }
+  .phone-nav .rail-label { grid-area: name; max-width: 100%; }
+  .phone-nav .rail-count { grid-area: count; margin: 0; font-size: var(--text-xs); }
+  .phone-nav .rail-count:empty { display: none; }
+  .phone-nav .rail-count-full { position: absolute; clip-path: inset(50%); }
+  .phone-nav .rail-count-compact { display: inline; }
+  .phone-nav .rail-count.alert {
+    position: absolute;
+    inset: var(--space-4) var(--space-4) auto auto;
+    line-height: 14px;
+    padding: 0 var(--space-4);
+  }
+  .phone-nav #rail-count-routine-failures { inset-inline: var(--space-4) auto; }
+  .phone-nav .rail-drain-state { color: var(--state-running); gap: 0; max-width: 100%; overflow: hidden; display: block; text-overflow: ellipsis; }
+  .phone-nav .rail-drain-state[hidden], .phone-nav .drain-dot { display: none; }
+  .phone-nav .rail-drain-state[data-drain-state="winding_down"], .phone-nav .rail-drain-state.held { color: var(--warn-fg); }
+  .phone-nav .rail-drain-state[data-drain-state="pulling"] { color: var(--accent); }
+  .phone-nav .rail-drain:has(.rail-drain-state:not([hidden])) .rail-ico { color: var(--state-running); }
+  .phone-nav .rail-drain:has(.rail-drain-state:is([data-drain-state="winding_down"], .held)) .rail-ico { color: var(--warn-fg); }
+  .phone-nav .rail-drain:has(.rail-drain-state[data-drain-state="pulling"]) .rail-ico { color: var(--accent); }
+  .phone-nav .tab:focus-visible, .phone-more :focus-visible { outline-offset: -2px; }
+  .shell:has(.tab-pane.active > main.dock-route):has(#side-dock[data-mode="drain"]) .phone-nav .tab[data-tab="tasks"] {
+    background: transparent;
+    color: var(--fg-soft);
+    font-weight: 400;
+  }
+  .shell:has(.tab-pane.active > main.dock-route):has(#side-dock[data-mode="drain"]) .phone-nav .tab[data-tab="tasks"] .rail-ico { color: var(--fg-dim); }
+  .shell:has(.tab-pane.active > main.dock-route):has(#side-dock[data-mode="drain"]) .phone-nav .rail-drain,
+  body:has(.phone-more .tab.active) #phone-more-open {
+    background: var(--bg-selected);
+    color: var(--fg-strong);
+    font-weight: 500;
+  }
+
+  .phone-more[open] {
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    inset: auto 0 var(--phone-nav-height);
+    width: 100%;
+    max-width: none;
+    max-height: calc(100dvh - var(--phone-nav-height) - 48px);
+    margin: 0;
+    padding: 0;
+    border-radius: var(--radius-panel) var(--radius-panel) 0 0;
+    overflow: hidden;
+  }
+  .phone-more > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--space-12);
+    border-bottom: 1px solid var(--hair);
+  }
+  .phone-more > header h2, .phone-health-heading { margin: 0; font-size: var(--text-md); font-weight: 600; }
+  .phone-more > header .esc-close { height: 44px; }
+  #phone-more-entries { overflow: auto; padding: var(--space-4) var(--space-8) var(--space-8); overscroll-behavior: contain; }
+  .phone-more .tab { min-height: 44px; }
+  .phone-health-heading { display: flex; align-items: center; min-height: 44px; padding-inline: var(--space-10); }
+  .phone-more .rail-subtabs {
+    display: flex;
+    flex-flow: row wrap;
+    padding: 0 var(--space-10);
+    gap: var(--space-4);
+    border-bottom: 0;
+  }
+  .phone-more .rail-subtabs .subtab {
+    flex: none;
+    width: auto;
+    height: 44px;
+    padding-inline: var(--space-8);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .phone-more .rail-subtabs.dimmed .subtab.active { background: transparent; color: var(--fg-soft); font-weight: 400; }
+
   /* Tighter readings keep all three in view at 375px. */
   .host-resource { gap: var(--space-6); padding: 0 var(--space-4); }
   .host-resource-bar { width: 20px; }
   .host-resource[data-resource="cpu"] { min-width: 9.75rem; }
   .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 6.5rem; }
-  .topbar .refresh-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    box-sizing: border-box;
-    height: 44px;
-    width: 44px;
-    padding: 0;
-  }
-  /* Keep the action name available to assistive tech. */
-  .refresh-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-  .rail .tabs .tab:focus-visible,
-  .rail .tabs .subtab:focus-visible { outline-offset: -2px; }
-  .subtab { white-space: nowrap; }
 }
 
 /* ORB-00030 multi-workspace: header selector + per-task workspace badge */

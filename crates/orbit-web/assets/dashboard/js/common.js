@@ -1090,6 +1090,15 @@ export function setBadgeDescription(node, text) {
   else host.removeAttribute("aria-description");
 }
 
+// The phone bar has room for the figure. Keep its full wording in the
+// accessible name and on the labelled rail.
+export function setRailCountText(node, full, compact) {
+  node.replaceChildren(
+    el("span", { class: "rail-count-full", text: full }),
+    el("span", { class: "rail-count-compact", text: compact, "aria-hidden": "true" }),
+  );
+}
+
 // A focusable "i" that shows an explanation on hover or keyboard focus, so a
 // fact reads as a short value and its caveat is one gesture away. The text
 // stays in the DOM (visually hidden until shown), so a screen reader reads it

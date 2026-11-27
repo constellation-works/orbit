@@ -37,7 +37,7 @@ function markWorkspaceSelectorScope(fleetWide) {
     select.classList.toggle("scope-ignored", fleetWide);
     select.title = fleetWide
       ? "Reliability is Fleet-wide; workspace does not apply"
-      : "Workspace";
+      : select.selectedOptions[0]?.textContent || "Workspace";
   }
   const note = $("workspace-scope-note");
   if (note) {
@@ -441,9 +441,6 @@ function scrollElementIntoRailView(element) {
 function revealActiveRailSelection() {
   const tab = document.querySelector(".rail .tab.active");
   if (!tab) return;
-  // Counts and web fonts can change this width after the route was selected.
-  // Recompute the space beside the destination before revealing its view.
-  $("tabs").style.setProperty("--active-tab-width", `${tab.offsetWidth}px`);
   const rail = tab.closest(".rail");
   const foot = rail.querySelector(".rail-foot");
   rail.style.setProperty("--rail-foot-height", `${foot?.offsetHeight || 0}px`);
@@ -451,11 +448,8 @@ function revealActiveRailSelection() {
   const subtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
   scrollElementIntoRailView(subtab);
   // On desktop the selected leaf takes precedence: revealing its parent can
-  // scroll it back behind the foot. Phones keep both nested strips in view.
-  if (!subtab || window.matchMedia("(max-width: 760px)").matches) {
-    scrollElementIntoRailView(tab);
-  }
-  for (const strip of document.querySelectorAll(".rail-subtabs:not(.dimmed)")) snapRailSubtabStrip(strip);
+  // scroll it back behind the foot.
+  if (!subtab) scrollElementIntoRailView(tab);
   syncRailScrollCues();
 }
 
@@ -468,7 +462,7 @@ function revealActiveRailSelection() {
 // compact rail is too short does the open list shrink to a whole number of
 // rows (never fewer than two), resting on a row boundary that keeps the active
 // view in sight so its edges never cut a label, and the destination column
-// scrolls past that. A list that fits, and the phone strips, are left alone.
+// scrolls past that. A list that fits is left alone.
 const RAIL_SUBTAB_MIN_ROWS = 2;
 function railSubtabsClipped(strip) {
   return strip.scrollHeight > strip.clientHeight + 1;
@@ -488,7 +482,6 @@ function fitRailSubtabRegion() {
   const rail = document.querySelector(".rail");
   rail?.classList.remove("rail-compact");
   for (const strip of document.querySelectorAll(".rail-subtabs")) strip.style.maxHeight = "";
-  if (window.matchMedia("(max-width: 760px)").matches) return;
   const largest = [...document.querySelectorAll(".rail-subtabs")]
     .reduce((best, strip) => (!best || strip.children.length > best.children.length ? strip : best), null);
   if (rail && largest && largest.children.length > RAIL_SUBTAB_MIN_ROWS && !railSubtabsFitWhenOpen(largest)) {
@@ -510,78 +503,13 @@ function fitRailSubtabRegion() {
   strip.scrollTop = first * step;
 }
 
-// ORB-20479: on phones the destination and its views share one scrolling row.
-// Each scrolled strip fades only toward hidden content, so an edge-resting
-// label reads as overflow instead of a rendering glitch.
+// Fade the edges of the desktop view list while it hides more entries.
 function syncRailScrollCues() {
-  const phone = window.matchMedia("(max-width: 760px)").matches;
-  for (const strip of document.querySelectorAll(".rail .tabs, .rail .rail-subtabs")) {
-    if (phone) {
-      const canScroll = strip.scrollWidth > strip.clientWidth + 1;
-      strip.classList.toggle("has-overflow-start", canScroll && strip.scrollLeft > 1);
-      strip.classList.toggle("has-overflow-end", canScroll && strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1);
-    } else if (strip.classList.contains("rail-subtabs")) {
-      // Desktop: the open destination's views scroll vertically on their own.
-      const canScroll = strip.scrollHeight > strip.clientHeight + 1;
-      strip.classList.toggle("has-overflow-start", canScroll && strip.scrollTop > 1);
-      strip.classList.toggle("has-overflow-end", canScroll && strip.scrollTop + strip.clientHeight < strip.scrollHeight - 1);
-    } else {
-      strip.classList.remove("has-overflow-start", "has-overflow-end");
-    }
+  for (const strip of document.querySelectorAll(".rail .rail-subtabs")) {
+    const canScroll = strip.scrollHeight > strip.clientHeight + 1;
+    strip.classList.toggle("has-overflow-start", canScroll && strip.scrollTop > 1);
+    strip.classList.toggle("has-overflow-end", canScroll && strip.scrollTop + strip.clientHeight < strip.scrollHeight - 1);
   }
-}
-
-// ORB-20479: after revealing the active view, hide any label the strip's left
-// edge cuts mid-word: scroll just past entries the edge already covers, so the
-// first visible label starts cleanly while the active view stays in sight. The
-// left fade then says the earlier views exist.
-function snapRailSubtabStrip(strip, focusedSubtab = null) {
-  if (!window.matchMedia("(max-width: 760px)").matches) return;
-  for (let guard = 0; guard < 16; guard += 1) {
-    if (strip.scrollWidth <= strip.clientWidth + 1) break;
-    const view = railStripVisibleSpan(strip);
-    const first = [...strip.querySelectorAll(".subtab")]
-      .find((btn) => btn.getBoundingClientRect().right > view.left + 0.5);
-    if (!first) break;
-    const rect = first.getBoundingClientRect();
-    if (rect.left >= view.left - 0.5) break;
-    // At the strip's end there is nowhere further to scroll: the fade cue
-    // carries the hidden views instead of a partial label pretending to fit.
-    const before = strip.scrollLeft;
-    if (first === focusedSubtab || (!focusedSubtab && first.classList.contains("active"))) {
-      strip.scrollLeft = Math.max(0, strip.scrollLeft + (rect.left - view.left));
-    } else {
-      const gap = parseFloat(getComputedStyle(strip).columnGap) || 0;
-      strip.scrollLeft += rect.right - view.left + gap;
-    }
-    if (strip.scrollLeft === before) break;
-  }
-  // ORB-20524: if the strip cannot scroll far enough, the outer row must
-  // still show the whole focused view.
-  if (focusedSubtab) {
-    const view = railStripVisibleSpan(strip);
-    const rect = focusedSubtab.getBoundingClientRect();
-    if (rect.left < view.left - 0.5 || rect.right > view.right + 0.5) {
-      scrollElementIntoRailView(focusedSubtab);
-    }
-  }
-}
-
-// ORB-20524: the strip's own box can extend past the phone's scrolled `#tabs`
-// row, so measure only the span every scrolling ancestor actually shows.
-function railStripVisibleSpan(strip) {
-  const box = strip.getBoundingClientRect();
-  let left = box.left;
-  let right = box.right;
-  for (let node = strip.parentElement; node && node !== document.body; node = node.parentElement) {
-    if (node.scrollWidth > node.clientWidth + 1 && getComputedStyle(node).overflowX !== "visible") {
-      const clip = node.getBoundingClientRect();
-      left = Math.max(left, clip.left);
-      right = Math.min(right, clip.right);
-    }
-    if (node.id === "tabs") break;
-  }
-  return { left, right };
 }
 
 function setActiveTabImpl(ctx, raw, opts = {}) {
@@ -745,11 +673,12 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     document.body.classList.remove("reliability-active");
     markWorkspaceSelectorScope(false);
   }
-  for (const tab of document.querySelectorAll(".tab")) {
+  for (const tab of document.querySelectorAll(".tab[data-tab]")) {
     const on = tab.dataset.tab === railKey;
     tab.classList.toggle("active", on);
     tab.setAttribute("aria-current", on ? "page" : "false");
   }
+  syncPhoneMoreSelection();
   for (const pane of document.querySelectorAll(".tab-pane")) {
     pane.classList.toggle("active", pane.dataset.tab === top);
   }
@@ -763,7 +692,6 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     indicator.style.display = "";
     indicator.style.width = `${activeTabEl.offsetWidth}px`;
     indicator.style.left = `${activeTabEl.offsetLeft}px`;
-    document.querySelector(".tabs").style.setProperty("--active-tab-width", `${activeTabEl.offsetWidth}px`);
   } else {
     indicator.style.display = "none";
   }
@@ -928,9 +856,10 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     hash = `#${top}`;
   }
   ctx.setResidentDetailId?.(top === "tasks" && residentRoute ? residentId : null);
+  syncDockNavigation();
   syncSkipLinkTarget();
   // Reveal the current destination on initial deep links and history changes,
-  // as well as clicks. Phone subtabs scroll within the space beside their tab.
+  // as well as clicks.
   // A repeated hash normalization must not undo intervening keyboard scrolling.
   const activeSubtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
   if (activeTabEl !== previousTab || activeSubtab !== previousSubtab) {
@@ -988,52 +917,83 @@ function navigateToRunImpl(ctx, runId, workspaceId = null) {
 // can move it when the dock rewrites the hash without the router.
 let routedHref = null;
 
-// Touch scrolls the rail's row natively; a mouse drags it. A press that barely
-// moves stays a click, and a real drag swallows the click it ends on, so
-// scrolling never changes the route.
-function enableRailDragScroll(row) {
-  const threshold = 4;
-  row.addEventListener("pointerdown", (down) => {
-    if (down.pointerType !== "mouse" || down.button !== 0) return;
-    const inner = down.target.closest(".rail-subtabs");
-    const strip = inner && inner.scrollWidth > inner.clientWidth + 1 ? inner : row;
-    if (strip.scrollWidth <= strip.clientWidth + 1) return;
-    let startLeft = null;
-    const move = (event) => {
-      const moved = event.clientX - down.clientX;
-      if (startLeft === null) {
-        if (Math.abs(moved) < threshold) return;
-        // Read here, not on press: pressing a part-hidden entry focuses it,
-        // and that focus can already have scrolled the row.
-        startLeft = strip.scrollLeft;
-        row.classList.add("is-drag-scrolling");
-      }
-      strip.scrollLeft = startLeft - moved;
-    };
-    const end = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", end);
-      window.removeEventListener("pointercancel", end);
-      if (startLeft === null) return;
-      row.classList.remove("is-drag-scrolling");
-      const swallow = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-      };
-      row.addEventListener("click", swallow, { capture: true, once: true });
-      // A release off the row fires no click, so don't eat the next real one.
-      setTimeout(() => row.removeEventListener("click", swallow, { capture: true }), 0);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", end);
-    window.addEventListener("pointercancel", end);
+// On phones the dock's Drain route has its own slot. The other dock views
+// belong to Tasks. The dock can change mode without rerouting the page.
+export function syncDockNavigation() {
+  const drain = $("rail-drain");
+  const tasks = document.querySelector(".tab[data-tab='tasks']");
+  if (!drain || !tasks) return;
+  const onTasks = tasks.classList.contains("active");
+  const onDrain = onTasks && drain.closest(".phone-nav") &&
+    $("tasks-main").classList.contains("dock-route") && $("side-dock").dataset.mode === "drain";
+  tasks.setAttribute("aria-current", onTasks && !onDrain ? "page" : "false");
+  drain.setAttribute("aria-current", onDrain ? "page" : "false");
+}
+
+function syncPhoneMoreSelection() {
+  const active = $("phone-more-entries")?.querySelector(".tab.active");
+  $("phone-more-open")?.setAttribute("aria-current", active ? "page" : "false");
+}
+
+// The phone placements reuse the rail nodes, so routing, counts, live state
+// and the native scope pickers have one owner at both widths.
+function initPhoneNavigation() {
+  const phone = window.matchMedia("(max-width: 760px)");
+  const scope = $("phone-scope");
+  const bar = $("phone-nav");
+  const sheet = $("phone-more");
+  const entries = $("phone-more-entries");
+  const more = $("phone-more-open");
+  const primary = ["tasks", "jobs", "diagnostics"];
+  const destinations = [...document.querySelectorAll(".rail .rail-group > .tab")];
+
+  const healthHeading = el("h3", { class: "phone-health-heading", text: "Health" });
+  const placements = [
+    [$("rail-host"), scope],
+    [$("rail-workspace"), scope],
+    ...destinations.flatMap((entry) => {
+      const inBar = primary.includes(entry.dataset.tab) || entry.id === "rail-drain";
+      const views = entry.nextElementSibling;
+      const placement = [[entry, inBar ? bar : entries]];
+      if (views?.classList.contains("rail-subtabs")) placement.push([views, entries]);
+      return placement;
+    }),
+  ].map(([node, target]) => {
+    const marker = document.createComment("Rail position");
+    node.before(marker);
+    return { node, target, marker };
   });
+  // Keep the views with their destination, including Health in the sheet.
+  function placeNavigation() {
+    if (!phone.matches && sheet.open) sheet.close();
+    const focused = document.activeElement;
+    for (const { node, target, marker } of placements) {
+      if (phone.matches) {
+        if (target === bar) more.before(node);
+        else target.append(node);
+      } else marker.after(node);
+      if (phone.matches && node.id === "diag-subtabs") node.before(healthHeading);
+    }
+    syncPhoneMoreSelection();
+    syncDockNavigation();
+    if (focused !== document.body && focused.getClientRects().length) focused.focus();
+  }
+
+  more.addEventListener("click", () => {
+    sheet.showModal();
+    more.setAttribute("aria-expanded", "true");
+  });
+  $("phone-more-close").addEventListener("click", () => sheet.close());
+  sheet.addEventListener("close", () => more.setAttribute("aria-expanded", "false"));
+  sheet.addEventListener("click", (event) => {
+    if (event.target.closest(".tab[data-tab], .subtab") || event.target === sheet) sheet.close();
+  });
+  placeNavigation();
+  phone.addEventListener("change", placeNavigation);
 }
 
 function initTabsImpl(ctx) {
-  // A late count on any preceding entry shifts the selection, even when the
-  // destination itself keeps its width. Observe entries as well as the row so
-  // those updates and font/viewport changes repair both nested scroll strips.
+  // Observe rail entries so late counts and viewport changes keep the selection in view.
   // Keyboard exploration takes precedence over the selection after a resize.
   const railLayout = new ResizeObserver(() => {
     revealActiveRailSelection();
@@ -1051,9 +1011,7 @@ function initTabsImpl(ctx) {
     event.preventDefault();
     main.focus();
   });
-  // Native focus scrolling can leave half a button outside the phone's
-  // overflow row when its centre is already visible. Reveal the whole entry
-  // on keyboard focus, without changing the route or moving focus elsewhere.
+  // Keep the header focus ring visible without scrolling the page.
   document.querySelector(".topbar")?.addEventListener("focusin", (event) => {
     if (event.target.matches("button:focus-visible, a:focus-visible")) {
       event.target.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -1062,20 +1020,14 @@ function initTabsImpl(ctx) {
   $("tabs")?.addEventListener("focusin", (event) => {
     if (event.target.matches('.tab, .subtab')) {
       scrollElementIntoRailView(event.target);
-      // ORB-20479: keyboard scrolling can rest a sub-view strip mid-label;
-      // snap the edge back to an item start and refresh the overflow fades.
-      // ORB-20524: a pointer press focuses before its click lands; snapping
-      // then would move the button away, so the route's reveal snaps instead.
-      const strip = event.target.closest(".rail-subtabs");
-      if (strip && event.target.matches(":focus-visible")) snapRailSubtabStrip(strip, event.target);
       syncRailScrollCues();
     }
   });
   // ORB-20479: keep the overflow fades truthful while the user scrolls.
-  for (const strip of document.querySelectorAll(".rail .tabs, .rail .rail-subtabs")) {
-    strip.addEventListener("scroll", () => syncRailScrollCues(), { passive: true });
+  for (const strip of document.querySelectorAll(".rail .rail-subtabs")) {
+    strip.addEventListener("scroll", syncRailScrollCues, { passive: true });
   }
-  if ($("tabs")) enableRailDragScroll($("tabs"));
+  initPhoneNavigation();
   for (const tab of document.querySelectorAll(".tab[data-tab]")) {
     tab.addEventListener("click", (event) => {
       if (tab.dataset.tab === "jobs" && event.target?.closest?.("#rail-count-jobs")) {

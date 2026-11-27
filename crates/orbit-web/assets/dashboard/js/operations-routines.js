@@ -1,6 +1,6 @@
 // Routine-definition and host clock operations [ORB-10875].
 
-import { captureWorkspaceVisit, el, fetchJson, isAggregateView, postJson, relativeTime, setBadgeDescription } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, isAggregateView, postJson, relativeTime, setBadgeDescription, setRailCountText } from './common.js';
 import { conditionStateLabel, renderAutomation } from './automation.js';
 import { createRoutineCatalogue, resetRoutineCatalogue } from './operations-routines-catalogue.js';
 import { closeRoutineEditors, routineEditButton, routineEditorElement } from './operations-routines-editor.js';
@@ -400,10 +400,11 @@ function paintRoutineFailureBadge(failures, { unavailable = false } = {}) {
   node.hidden = failures.length === 0 && !unavailable;
   node.dataset.stale = unavailable ? "true" : "false";
   if (failures.length) {
-    node.textContent = `${failures.length} routine${failures.length === 1 ? "" : "s"}${unavailable ? " (stale)" : ""}`;
+    const full = `${failures.length} routine${failures.length === 1 ? "" : "s"}${unavailable ? " (stale)" : ""}`;
+    setRailCountText(node, full, String(failures.length));
     setBadgeDescription(node, `${failures.map(routine => `${routine.name}: ${routineFailureText(routine)}`).join("; ")}. ${unavailable ? "The latest refresh failed, so this is the last known state. " : ""}See Automation › Routines.`);
   } else if (unavailable) {
-    node.textContent = "routines ?";
+    setRailCountText(node, "routines ?", "?");
     setBadgeDescription(node, "Routine failure status is unavailable: the read failed. It retries on the next refresh.");
   } else {
     node.textContent = "";

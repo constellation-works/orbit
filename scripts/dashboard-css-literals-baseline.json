@@ -61,7 +61,7 @@
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/shell.css": {
-      "colour_literals": 23,
+      "colour_literals": 15,
       "raw_font_sizes": 0
     },
     "crates/orbit-web/assets/dashboard/css/task-detail.css": {

@@ -9,7 +9,7 @@
 // and `setDockMode` for the router to select the Drain, Fleet, Notices, Residents or Log view.
 
 import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, isAggregateView, withHost } from './common.js';
-import { recordRoutedHref } from './router.js';
+import { recordRoutedHref, syncDockNavigation } from './router.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -139,6 +139,7 @@ function applyDockMode() {
   const modes = dockModes();
   const mode = shownDockMode();
   dock.dataset.mode = mode;
+  syncDockNavigation();
   for (const btn of document.querySelectorAll("#dock-mode-toggle .dock-seg")) {
     const on = btn.dataset.mode === mode;
     btn.hidden = !modes.includes(btn.dataset.mode);
@@ -305,7 +306,7 @@ export function setDockRouteShown(shown) {
 
 /// Place the filter bar, then level the active tab's first card with the
 /// first task block. The bar heads the list column, or spans the list and
-/// dock columns where that takes fewer rows (`placeTaskFilterBar`); either
+/// dock columns to make room for full labels (`placeTaskFilterBar`); either
 /// way the measurement below is relative to the dock's own top.
 /// `--tasks-dock-lead` on #tasks-dock is the room above #side-dock that
 /// takes, and tasks.css gives it to the fixed message area; the tab bar sits
@@ -340,66 +341,53 @@ export function alignTasksDock() {
   setLead(panel, "--tasks-list-lead", Math.max(0, -room));
 }
 
-// The filter bar spans the list and dock columns (`filter-spans` on
-// #tasks-main, tasks.css) only while the dock is beside the list and the
-// status chips would take more rows in the list column than across both
-// columns: the default chips wrapping at about 1024px while the space to
-// their right is empty. Where they fit the list column, the dock's tab bar
-// keeps its place level with them. The inputs are the chips' own widths and
-// the grid's column widths, none of which the placement changes, so the
-// decision is stable; a misjudged case wraps, it never overlaps.
+// Measure the full-label row even when the compact row is currently visible.
+// Both writes complete in the same frame, so there is no intermediate paint.
 function placeTaskFilterBar() {
   const main = $("tasks-main");
   const filter = $("task-filter");
-  const bar = filter?.parentElement;
+  const primary = filter?.querySelector(".task-filter-primary");
   const list = main?.querySelector(":scope > .col-tasks");
-  const dock = $("tasks-dock");
+  if (!main || !filter || !primary || !list || !filter.getClientRects().length) return;
+
+  filter.removeAttribute("data-compact");
+  const gap = parseFloat(getComputedStyle(primary).columnGap) || 0;
+  const chips = [...primary.children];
+  const required = chips.reduce((width, chip) => width + chip.getBoundingClientRect().width, 0)
+    + Math.max(0, chips.length - 1) * gap;
   const side = $("side-dock");
-  if (!main || !filter || !bar || !list || !dock) return;
+  const beside = side?.getClientRects().length && !main.classList.contains("dock-route");
   let spans = false;
-  const beside = side && dock.contains(side) && dock.getClientRects().length && side.getClientRects().length
-    && !main.classList.contains("task-pane-open");
   if (beside) {
-    const style = getComputedStyle(bar);
-    const inset = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
-    const listRect = list.getBoundingClientRect();
-    const narrow = listRect.width - inset;
-    const wide = dock.getBoundingClientRect().right - listRect.left - inset;
-    const gap = parseFloat(getComputedStyle(filter).columnGap) || 0;
-    const widths = filterItemWidths(filter);
-    spans = widths.length > 0 && wrappedRows(widths, gap, wide) < wrappedRows(widths, gap, narrow);
+    const { left, width } = list.getBoundingClientRect();
+    const wide = side.parentElement.getBoundingClientRect().right - left;
+    const optional = filter.querySelectorAll(":scope > .workspace-filter, :scope > .chip-group > .chip");
+    const widths = [required, ...[...optional].filter(node => node.getClientRects().length)
+      .map(node => node.getBoundingClientRect().width)];
+    spans = required <= wide && wrappedFilterRows(widths, gap, wide) < wrappedFilterRows(widths, gap, width);
+    // The primary group is one flex item. Count a full group wider than the
+    // list as needing more room even when there are no optional chips.
+    spans ||= required > width && required <= wide;
   }
   main.classList.toggle("filter-spans", spans);
+
+  const compact = required > filter.getBoundingClientRect().width;
+  filter.toggleAttribute("data-compact", compact);
+  for (const chip of filter.querySelectorAll(".chip[data-status]")) {
+    if (compact) chip.title = chip.querySelector(".chip-label").textContent;
+    else chip.removeAttribute("title");
+  }
 }
 
-// The rendered widths of #task-filter's flex items: the chips inside the
-// chip groups (which are `display: contents`), More and the workspace filter.
-// Hidden items (quiet chips behind a closed More) take no room.
-function filterItemWidths(filter) {
-  const widths = [];
-  const visit = (node) => {
-    for (const child of node.children) {
-      if (getComputedStyle(child).display === "contents") visit(child);
-      else if (child.getClientRects().length) widths.push(child.getBoundingClientRect().width);
-    }
-  };
-  visit(filter);
-  return widths;
-}
-
-// How many rows a wrapping flex row of these widths takes in `room` pixels:
-// each row takes items while they fit, as flex-wrap lays them out. A fit
-// within a twentieth of a pixel counts as a wrap: sub-pixel widths make it a
-// coin toss, and a wrongly predicted wrap costs at most a spanning bar.
-function wrappedRows(widths, gap, room) {
+function wrappedFilterRows(widths, gap, room) {
   let rows = 1;
-  let used = -gap;
+  let used = 0;
   for (const width of widths) {
-    if (used + gap + width > room - 0.05 && used > 0) {
+    if (used && used + gap + width > room) {
       rows += 1;
       used = width;
     } else {
-      used += gap + width;
+      used += (used ? gap : 0) + width;
     }
   }
   return rows;
@@ -449,6 +437,7 @@ function wireDockAlignment() {
   }
   for (const node of panel.children) resize.observe(node);
   for (const node of panel.querySelectorAll(":scope > header > *")) resize.observe(node);
+  document.fonts?.ready.then(queue);
   queue();
 }
 
