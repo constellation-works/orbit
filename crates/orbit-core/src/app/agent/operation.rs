@@ -1,6 +1,5 @@
 //! The agents registry flows: one scan per call, sliced by role and
-//! selection, and the recorded CI failures by cause. Each calls the runtime
-//! method its tool handler called before.
+//! selection, and the recorded CI failures by cause.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::agents::AgentsVerb;
@@ -8,9 +7,10 @@ use orbit_common::governance::operation::OperationInput;
 use orbit_types::tool::{McpTransport, ToolSessionContext};
 use serde_json::Value;
 
+use super::api::AgentDetailSurface;
+use super::{AgentQuery, AgentRole, CiFailureQuery, api, ci_failure};
 use crate::OrbitRuntime;
 use crate::app::tool_call::Caller;
-use crate::application::agents::{AgentDetailSurface, AgentQuery, AgentRole, CiFailureQuery};
 
 /// The surface a detail read names in its commands, from the caller's session.
 fn agent_detail_surface(session: &ToolSessionContext) -> AgentDetailSurface {
@@ -33,12 +33,15 @@ pub(super) fn dispatch(
 ) -> Result<Value, OrbitError> {
     match verb {
         AgentsVerb::CiFailures => {
-            return runtime.ci_failure_records(&CiFailureQuery::parse(
-                input.optional_string("window")?.as_deref(),
-                input.optional_string("until")?.as_deref(),
-                input.optional_string("task")?.as_deref(),
-                input.optional_string("class")?.as_deref(),
-            )?);
+            return ci_failure::ci_failure_records(
+                runtime,
+                &CiFailureQuery::parse(
+                    input.optional_string("window")?.as_deref(),
+                    input.optional_string("until")?.as_deref(),
+                    input.optional_string("task")?.as_deref(),
+                    input.optional_string("class")?.as_deref(),
+                )?,
+            );
         }
         AgentsVerb::Scorecard | AgentsVerb::Show => {}
     }
@@ -63,7 +66,7 @@ pub(super) fn dispatch(
                     "per_task cannot be combined with by_type".to_string(),
                 ));
             }
-            runtime.agent_per_task_export(&query)
+            api::per_task_export(runtime, &query)
         }
         AgentsVerb::Scorecard if by_type => {
             if role != AgentRole::Implementers {
@@ -71,13 +74,14 @@ pub(super) fn dispatch(
                     "by_type is only supported for implementers".to_string(),
                 ));
             }
-            runtime.agent_by_type_scorecard(&query)
+            api::by_type_scorecard(runtime, &query)
         }
-        AgentsVerb::Scorecard => runtime.agent_role_scorecard(role, &query),
+        AgentsVerb::Scorecard => api::agent_role_scorecard(runtime, role, &query),
         AgentsVerb::CiFailures => Err(OrbitError::Execution(
             "orbit.agents.ci_failures is answered before the role selection".to_string(),
         )),
-        AgentsVerb::Show => runtime.agent_role_detail_with_effort(
+        AgentsVerb::Show => api::agent_role_detail_with_effort(
+            runtime,
             role,
             &query,
             &input.required_string("crew")?,

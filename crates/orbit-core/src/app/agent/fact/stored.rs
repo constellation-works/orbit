@@ -1,0 +1,298 @@
+//! Per-task [`TaskFacts`] kept in the store between scans, so a scan reads
+//! only the history and comments of tasks that changed since the last one or
+//! are still open.
+//!
+//! A row is reused only for a terminal task with no open attempt span while it
+//! was written in [`FACTS_FORMAT_VERSION`] and its source still matches: the
+//! task's history stamp (its event and comment logs' length, modification time
+//! and file identity, taken without reading them) plus a digest of the task's
+//! other per-task inputs (its envelope fields, failed claim settlements,
+//! delivery runs and the pulled claims of this task, with the crews' known
+//! models that decide a pulled attempt's crew with them). A new history
+//! event, a comment, an envelope edit, a new run or a claim settlement
+//! therefore recomputes that task — and only that task: one task's new
+//! settlement must not stale every other row, or a busy fleet recomputes
+//! the whole workspace on every scan — and a format change recomputes
+//! every row instead of misreading it. The stamps are taken for every
+//! task in one pass when the rows load, before any read they label.
+//! Non-terminal tasks, tasks with an open span, and tasks the store cannot
+//! stamp or whose history or comments read failed are computed at every scan
+//! and never stored.
+//!
+//! Cross-task steps (`judge_rejects`, pilot assessment run attribution, landed
+//! diff lines, `mark_implementer_less_attempts` and attribution) run on every
+//! scan after the stored row is queued, so per-scan mutations never reach the
+//! stored row.
+//!
+//! The rows are a derived cache. Unreadable or unwritable rows only cost the
+//! reads they would have saved, and dropping the table rebuilds it on the
+//! next scan with identical facts.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+use chrono::{DateTime, Utc};
+use orbit_common::security::release::sha256_hex;
+use orbit_store::contract::AgentTaskFactsRow;
+use orbit_types::task::{Task, TaskHistoryEntry};
+
+use super::attempts::PulledClaimRunners;
+use super::model::{RunRecord, Runner, TaskFacts};
+use super::task::task_facts;
+use crate::OrbitRuntime;
+use crate::app::agent::record::block_cause;
+use crate::application::codebase::SettledFailure;
+
+/// Bump when [`TaskFacts`] or anything it serializes changes shape or
+/// meaning: every stored row is then recomputed and replaced. Version 1
+/// wrote a pulled attempt's `Some(None)` provider-default report as JSON
+/// `null` and read it back as no report [ORB-24640]; version 2 keeps the
+/// three states, and version-1 rows are recomputed from their settlement
+/// and history inputs instead of being reused. Version 3 stops keying a
+/// pulled attempt to a history crew whose known models exclude the model its
+/// crew-less late report names [ORB-24967]; version-2 rows hold that pairing
+/// and are recomputed. Version 4 keys each row's pulled-claim digest to the
+/// claims of its own task instead of every claim's, so version-3 sources
+/// never match again and their rows are recomputed once.
+pub(super) const FACTS_FORMAT_VERSION: u32 = 4;
+
+/// One task's facts during a scan, and whether they need writing back.
+pub(super) struct Entry {
+    pub(super) facts: TaskFacts,
+    /// What the facts were computed from; `None` when they must not be
+    /// stored.
+    source: Option<String>,
+    /// Computed in this scan, so the stored row is out of date.
+    pub(super) dirty: bool,
+}
+
+/// The workspace's stored rows, read once per scan, and the rows the scan
+/// will write back.
+pub(super) struct StoredFacts {
+    /// `None` when the rows could not be read: nothing is reused or written.
+    workspace_id: Option<String>,
+    /// The crews' known models as one digest, shared by the pulled-claim
+    /// digest of every task that has claims.
+    crew_models_digest: String,
+    /// Each listed task's history stamp, taken in one pass at load; a task
+    /// is absent when nothing can vouch for its logs.
+    stamps: BTreeMap<String, String>,
+    rows: HashMap<String, AgentTaskFactsRow>,
+    writes: Vec<AgentTaskFactsRow>,
+}
+
+impl StoredFacts {
+    pub(super) fn load(
+        runtime: &OrbitRuntime,
+        pulled: &PulledClaimRunners<'_>,
+        task_ids: &[String],
+    ) -> Self {
+        let loaded = runtime.workspace_id().and_then(|workspace_id| {
+            let rows = runtime
+                .sqlite_store()?
+                .read()?
+                .agent_fact()
+                .list(&workspace_id)?;
+            Ok((workspace_id, rows))
+        });
+        let (workspace_id, rows) = match loaded {
+            Ok((workspace_id, rows)) => (
+                Some(workspace_id),
+                rows.into_iter()
+                    .map(|row| (row.task_id.clone(), row))
+                    .collect(),
+            ),
+            Err(error) => {
+                tracing::warn!(%error, "agent scorecards: stored task facts unreadable; scanning every task");
+                (None, HashMap::new())
+            }
+        };
+        // One stamp pass for the whole scan: the per-task stamp re-checks
+        // the partition for a commit to recover every time, which a scan
+        // of thousands of tasks pays thousands of times.
+        let stamps = workspace_id
+            .as_ref()
+            .map(|_| runtime.task_history_stamps(task_ids))
+            .unwrap_or_default();
+        Self {
+            workspace_id,
+            crew_models_digest: sha256_hex(format!("{:?}", pulled.crew_models).as_bytes()),
+            stamps,
+            rows,
+            writes: Vec::new(),
+        }
+    }
+
+    /// The task's stored facts while they are current, else freshly computed.
+    pub(super) fn entry(
+        &self,
+        runtime: &OrbitRuntime,
+        task: &Task,
+        settlements: &[SettledFailure],
+        runs: &[RunRecord],
+        pulled: &PulledClaimRunners<'_>,
+        computed_at: DateTime<Utc>,
+    ) -> Entry {
+        let id = task.id.as_str();
+        // Only terminal tasks can have no open span; the stamps were taken
+        // at load, before any read they label.
+        let source = self
+            .workspace_id
+            .as_ref()
+            .filter(|_| task.status.is_terminal())
+            .and_then(|_| self.stamps.get(id))
+            .map(|stamp| {
+                format!(
+                    "{stamp}|{}",
+                    inputs_digest(task, settlements, runs, &self.pulled_digest_for(id, pulled))
+                )
+            });
+        if let Some(source) = &source
+            && let Some(row) = self.rows.get(id)
+            && row.format_version == FACTS_FORMAT_VERSION
+            && row.source == *source
+            && let Ok(facts) = serde_json::from_str::<TaskFacts>(&row.facts_json)
+            && has_no_open_span(&facts)
+        {
+            return Entry {
+                facts,
+                source: Some(source.clone()),
+                dirty: false,
+            };
+        }
+        let mut complete = true;
+        let history = runtime.get_task_history(id).unwrap_or_else(|error| {
+            complete = false;
+            tracing::warn!(task_id = %id, %error, "agent scorecards: task history unreadable");
+            Vec::new()
+        });
+        let comments = runtime.get_task_pilot_comments(id).unwrap_or_else(|error| {
+            complete = false;
+            tracing::warn!(task_id = %id, %error, "agent scorecards: task comments unreadable");
+            Vec::new()
+        });
+        let classify = |entry: &TaskHistoryEntry| block_cause(entry, &history, settlements);
+        let facts = task_facts(
+            task,
+            &history,
+            &comments,
+            runs,
+            pulled,
+            &classify,
+            computed_at,
+        );
+        let storeable = complete && has_no_open_span(&facts);
+        Entry {
+            facts,
+            source: source.filter(|_| storeable),
+            dirty: true,
+        }
+    }
+
+    /// The stamps taken at load, for a following scan of the same tasks
+    /// (the codebase scan inside a scorecard scan) to reuse instead of
+    /// stamping every log again. Taken before this scan's reads, they
+    /// label that scan's reads or something older, as stamps taken there
+    /// would.
+    pub(super) fn take_stamps(&mut self) -> BTreeMap<String, String> {
+        std::mem::take(&mut self.stamps)
+    }
+
+    /// Queue `entry` for writing when it changed and may be stored.
+    pub(super) fn keep(&mut self, id: &str, entry: &Entry) {
+        let Some(source) = entry.source.as_ref().filter(|_| entry.dirty) else {
+            return;
+        };
+        match serde_json::to_string(&entry.facts) {
+            Ok(facts_json) => self.writes.push(AgentTaskFactsRow {
+                task_id: id.to_string(),
+                format_version: FACTS_FORMAT_VERSION,
+                source: source.clone(),
+                facts_json,
+            }),
+            Err(error) => {
+                tracing::warn!(task_id = %id, %error, "agent scorecards: task facts not stored");
+            }
+        }
+    }
+
+    /// Write the queued rows and drop the rows of tasks the scan no longer
+    /// retained. Best effort: a read-only or busy store keeps its old rows.
+    pub(super) fn save<'a>(self, runtime: &OrbitRuntime, listed: impl Iterator<Item = &'a str>) {
+        let Some(workspace_id) = self.workspace_id else {
+            return;
+        };
+        let listed: BTreeSet<&str> = listed.collect();
+        let removed: Vec<String> = self
+            .rows
+            .into_keys()
+            .filter(|id| !listed.contains(id.as_str()))
+            .collect();
+        if self.writes.is_empty() && removed.is_empty() {
+            return;
+        }
+        let written = runtime.sqlite_store().and_then(|store| {
+            if store.is_read_only() {
+                return Ok(());
+            }
+            store.write(|tx| {
+                let repo = tx.agent_fact();
+                repo.put_many(&workspace_id, &self.writes)?;
+                repo.delete_many(&workspace_id, &removed)
+            })
+        });
+        if let Err(error) = written {
+            tracing::warn!(%error, "agent scorecards: task facts not stored; the next scan recomputes them");
+        }
+    }
+}
+
+impl StoredFacts {
+    /// A value that changes with the runners of this task's own pulled
+    /// claims and with the crews' known models, which decide a pulled
+    /// attempt's crew with them. Empty for a task no claim pulled: its
+    /// facts cannot read a claim runner, and a claim that settles later
+    /// for this task gives it an entry here, so the value changes then.
+    fn pulled_digest_for(&self, task_id: &str, pulled: &PulledClaimRunners<'_>) -> String {
+        let Some(claim_ids) = pulled.by_task.get(task_id) else {
+            return String::new();
+        };
+        if claim_ids.is_empty() {
+            return String::new();
+        }
+        let mut entries: Vec<(&str, &Runner)> = claim_ids
+            .iter()
+            .filter_map(|claim| pulled.by_claim.get(claim).map(|runner| (*claim, runner)))
+            .collect();
+        entries.sort_by_key(|(id, _)| *id);
+        sha256_hex(format!("{entries:?}|{}", self.crew_models_digest).as_bytes())
+    }
+}
+
+fn has_no_open_span(facts: &TaskFacts) -> bool {
+    facts.attempts.iter().all(|attempt| attempt.end.is_some())
+}
+
+/// The non-history inputs to [`task_facts`], as one value that changes with
+/// any of them.
+fn inputs_digest(
+    task: &Task,
+    settlements: &[SettledFailure],
+    runs: &[RunRecord],
+    pulled_digest: &str,
+) -> String {
+    let envelope = (
+        task.updated_at,
+        &task.title,
+        task.status,
+        &task.crew,
+        &task.task_type,
+        &task.tags,
+        &task.context_files,
+        task.complexity,
+        task.created_at,
+        &task.relations,
+        &task.external_refs,
+    );
+    let inputs = (envelope, settlements, runs, pulled_digest);
+    sha256_hex(format!("{inputs:?}").as_bytes())
+}

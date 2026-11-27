@@ -730,17 +730,17 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
         history
     );
 
-    let query = orbit_core::application::agents::AgentQuery::parse(Some("all"), Some(1)).unwrap();
-    let typed_scorecard = fixture
-        .runtime
-        .agent_role_scorecard(
-            orbit_core::application::agents::AgentRole::Reviewers,
-            &query,
-        )
-        .unwrap();
-    let typed_hands = fixture
-        .runtime
-        .task_handled_by(&fixture.runtime.get_task_row(&fixture.task_id).unwrap());
+    let query = orbit_core::app::agent::AgentQuery::parse(Some("all"), Some(1)).unwrap();
+    let typed_scorecard = orbit_core::app::agent::agent_role_scorecard(
+        &fixture.runtime,
+        orbit_core::app::agent::AgentRole::Reviewers,
+        &query,
+    )
+    .unwrap();
+    let typed_hands = orbit_core::app::agent::task_handled_by(
+        &fixture.runtime,
+        &fixture.runtime.get_task_row(&fixture.task_id).unwrap(),
+    );
     assert_eq!(
         typed_hands
             .iter()
@@ -763,21 +763,21 @@ fn uncovered_landings_succeed_and_exhausted_admissions_are_denied() {
         fixture.runtime.get_task_comments(&fixture.task_id).unwrap(),
         comments
     );
-    let legacy_scorecard = fixture
-        .runtime
-        .agent_role_scorecard(
-            orbit_core::application::agents::AgentRole::Reviewers,
-            &query,
-        )
-        .unwrap();
+    let legacy_scorecard = orbit_core::app::agent::agent_role_scorecard(
+        &fixture.runtime,
+        orbit_core::app::agent::AgentRole::Reviewers,
+        &query,
+    )
+    .unwrap();
     assert_eq!(
         typed_scorecard["rows"], legacy_scorecard["rows"],
         "typed and legacy facts preserve reviewer scoring and runtime"
     );
     assert_eq!(
-        fixture
-            .runtime
-            .task_handled_by(&fixture.runtime.get_task_row(&fixture.task_id).unwrap()),
+        orbit_core::app::agent::task_handled_by(
+            &fixture.runtime,
+            &fixture.runtime.get_task_row(&fixture.task_id).unwrap(),
+        ),
         typed_hands
     );
     for (landed_commit, reason) in [

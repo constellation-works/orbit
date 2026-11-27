@@ -8,7 +8,7 @@ use std::io::Write as _;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::application::agents::{AgentRole, Owner, Problem};
+use orbit_core::app::agent::{AgentRole, Owner, Problem};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_types::task::TaskStatus;
 use orbit_types::task::{
@@ -250,7 +250,7 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
     isolated(
         "agents::implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cost",
         || {
-            use orbit_core::application::agents::{AgentQuery, agent_detail, agent_scorecard};
+            use orbit_core::app::agent::{AgentQuery, agent_detail, agent_scorecard};
             use orbit_core::test_support::fixture_store::InvocationInsertParams;
             use orbit_types::telemetry::InvocationTrace;
             let fixture = Fixture::new();
@@ -344,7 +344,7 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
                 ids.push(id);
             }
             let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let card = agent_scorecard(
                 &facts,
                 AgentRole::Implementers,
@@ -429,7 +429,7 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
                     },
                 })
                 .unwrap();
-            let next_facts = fixture.runtime.agent_scan().unwrap();
+            let next_facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let detail = agent_detail(
                 &next_facts,
                 AgentRole::Implementers,
@@ -482,7 +482,7 @@ fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
     isolated(
         "agents::implementers_report_cost_coverage_without_averaging_priced_attempts",
         || {
-            use orbit_core::application::agents::{AgentQuery, agent_detail, agent_scorecard};
+            use orbit_core::app::agent::{AgentQuery, agent_detail, agent_scorecard};
             use orbit_core::test_support::fixture_store::InvocationInsertParams;
             use orbit_types::telemetry::InvocationTrace;
             let fixture = Fixture::new();
@@ -616,7 +616,7 @@ fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
             priced_cost(&fixture, "jrun-zero", 0.0, &zero);
 
             let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let card = agent_scorecard(
                 &facts,
                 AgentRole::Implementers,
@@ -705,7 +705,7 @@ fn implementers_report_cost_coverage_without_averaging_priced_attempts() {
                 unpriced_task.as_deref().unwrap(),
             );
             let next = agent_scorecard(
-                &fixture.runtime.agent_scan().unwrap(),
+                &orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap(),
                 AgentRole::Implementers,
                 &query,
                 std::time::Duration::ZERO,
@@ -742,7 +742,7 @@ fn implementer_counts_default_to_managed_tasks_and_show_interactive_work_per_cre
     isolated(
         "agents::implementer_counts_default_to_managed_tasks_and_show_interactive_work_per_crew",
         || {
-            use orbit_core::application::agents::{AgentQuery, agent_scorecard};
+            use orbit_core::app::agent::{AgentQuery, agent_scorecard};
             use orbit_core::test_support::fixture_store::InvocationInsertParams;
             use orbit_types::telemetry::InvocationTrace;
             let fixture = Fixture::new();
@@ -855,7 +855,7 @@ fn implementer_counts_default_to_managed_tasks_and_show_interactive_work_per_cre
                 Some(TaskStatus::InProgress),
             );
 
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let row = |execution: Option<&str>| {
                 let query = AgentQuery::parse(Some("30d"), Some(1))
                     .unwrap()
@@ -1234,16 +1234,15 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 RegressionEscape::Nondeterministic,
             );
 
-            let query =
-                orbit_core::application::agents::AgentQuery::parse(Some("30d"), Some(1)).unwrap();
-            let before_no_test = fixture.runtime.agent_scan().unwrap();
-            let implemented_before = orbit_core::application::agents::agent_scorecard(
+            let query = orbit_core::app::agent::AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let before_no_test = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
+            let implemented_before = orbit_core::app::agent::agent_scorecard(
                 &before_no_test,
                 AgentRole::Implementers,
                 &query,
                 std::time::Duration::ZERO,
             );
-            let strip_before = orbit_core::application::agents::agent_attribution(
+            let strip_before = orbit_core::app::agent::agent_attribution(
                 &before_no_test,
                 &query,
                 std::time::Duration::ZERO,
@@ -1257,7 +1256,7 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
             );
 
             // The runtime API: one owner per problem.
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let owner_of = |task: &str, problem: Problem| -> Vec<(Owner, Option<String>)> {
                 facts
                     .charges()
@@ -1372,7 +1371,7 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 "only the final run is credited"
             );
 
-            let implemented = orbit_core::application::agents::agent_scorecard(
+            let implemented = orbit_core::app::agent::agent_scorecard(
                 &facts,
                 AgentRole::Implementers,
                 &query,

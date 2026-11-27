@@ -95,8 +95,6 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | Entry | Destination | Order |
 |---|---|---|
 | `admission` | `unit::admission` | 7 |
-| `agent_corpus.rs` | `app::agent` | above task |
-| `agents` | `app::agent` | above task |
 | `application_authority.rs` | `app::auto_task` | above task |
 | `auto_tasks` | `app::auto_task` | above task |
 | `automation` | `app::automation` | 3 |

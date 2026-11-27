@@ -22,19 +22,19 @@ const PILOT_INVOCATION_LIMIT: usize = 1000;
 /// The pilot run behind an assessment: its id, the crew and model its
 /// activity recorded (either `None` when it recorded none) and how long it ran.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub(in crate::application) struct PilotRun {
-    pub(in crate::application) run_id: String,
-    pub(in crate::application) crew: Option<String>,
-    pub(in crate::application) model: Option<String>,
+pub(crate) struct PilotRun {
+    pub(crate) run_id: String,
+    pub(crate) crew: Option<String>,
+    pub(crate) model: Option<String>,
     /// The worker step that produced the receipt (`pilot`,
     /// `repair_pilot`, …), as invocations record it; `None` when the
     /// producing round cannot be identified.
-    pub(in crate::application) activity_id: Option<String>,
+    pub(crate) activity_id: Option<String>,
     /// Start to finish; `None` while it runs or when either is unrecorded.
-    pub(in crate::application) seconds: Option<f64>,
+    pub(crate) seconds: Option<f64>,
     /// Total tokens the run's recorded invocations spent; `None` when it
     /// recorded none or they could not be read in full.
-    pub(in crate::application) tokens: Option<u64>,
+    pub(crate) tokens: Option<u64>,
 }
 
 /// The slice of one invocation record pilot identity reads: its activity,
@@ -183,7 +183,7 @@ impl RunRecord {
 
 /// The workspace's task-pilot runs, read once per scan without their steps:
 /// what every receipt, held or clean, is attributed to.
-pub(in crate::application) struct PilotRuns {
+pub(crate) struct PilotRuns {
     runs: Vec<RunRecord>,
     steps: Vec<(String, String)>,
     /// Linked receipts resolve their run without scanning every record.
@@ -194,7 +194,7 @@ pub(in crate::application) struct PilotRuns {
 }
 
 impl PilotRuns {
-    pub(in crate::application) fn load(runtime: &OrbitRuntime) -> Self {
+    pub(crate) fn load(runtime: &OrbitRuntime) -> Self {
         let runs = runtime
             .stores()
             .jobs()
@@ -212,7 +212,7 @@ impl PilotRuns {
 
     /// Detail reads with linked receipts need only their recorded runs. A
     /// legacy receipt without a run id still needs the overlapping-run scan.
-    pub(in crate::application) fn load_for_receipts<'a>(
+    pub(crate) fn load_for_receipts<'a>(
         runtime: &OrbitRuntime,
         run_ids: impl Iterator<Item = Option<&'a str>>,
     ) -> Self {
@@ -284,7 +284,7 @@ impl PilotRuns {
     /// failed read as absent as before. Runs a receipt never names still
     /// cost their inputs; detail reads that loaded only their receipts'
     /// runs therefore skip this.
-    pub(in crate::application) fn prefetch_attribution_inputs(&self, runtime: &OrbitRuntime) {
+    pub(crate) fn prefetch_attribution_inputs(&self, runtime: &OrbitRuntime) {
         if self.prefetched.get() {
             return;
         }
@@ -377,7 +377,7 @@ impl PilotRuns {
 
     /// Explicit run ids win. Legacy receipts use a unique active run, or
     /// disambiguate overlapping runs by exact operation id in an apply report.
-    pub(in crate::application) fn attribute(
+    pub(crate) fn attribute(
         &self,
         runtime: &OrbitRuntime,
         task_id: &str,
