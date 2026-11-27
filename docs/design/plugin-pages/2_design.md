@@ -1,55 +1,27 @@
 ---
-title: "Spec: Plugin pages in the dashboard"
+title: Plugin Pages — Design
 owner: claude
 created_date: 2026-11-27
 updated_date: 2026-11-27
 last_validated: 2026-11-27
 status: Draft
-feature: plugins
-doc_role: spec
+feature: plugin-pages
+doc_role: design
 type: design
-summary: "Spec (proposed): a plugin ships a static web bundle that the dashboard serves in a sandboxed frame as a sub-tab under Plugins, reading data only through the plugin's own tools"
-tags: [plugins, plugin-pages, dashboard, orbit-web]
+summary: "Proposed design: the manifest key, the sandboxed frame and its policy, the postMessage bridge to a plugin's own tools, the Plugins sub-tabs and pages on other hosts"
+tags: [plugin-pages, plugins, dashboard, orbit-web]
+related_features: [plugins, user-interface, remote-access]
+related_artifacts: [ORB-29504]
 ---
 
-# Spec: Plugin pages in the dashboard
+# Plugin Pages — Design
 
-Status: a proposed mechanism for the plugin standard, draft for the operator's approval
-([ORB-29504]). Nothing here is built.
-Bearing: the [plugin standard](../1_scope.md) gives a plugin one manifest, one sandboxed
-backend, consented grants and audited tool calls. Its dashboard contribution is declarative:
-panels drawn by one generic renderer, and link tiles ([ORB-12738]). The
-[dashboard](../../user-interface/2_design.md) is static assets compiled into the binary and served
-under a policy that runs only its own scripts. Another host's dashboard API is reached through
-this one over an SSH tunnel ([ORB-14679]), and bytes that arrive that way are served so they
-cannot run on this dashboard's origin.
+This doc is the proposed design, draft for the operator's approval ([ORB-29504]). Nothing in it
+is built, so it describes what the first build makes true. The problem, the goal and the
+questions open for approval are in the [overview](./1_overview.md). The plugin manifest,
+grants and tool dispatch it builds on are the [plugin standard](../plugins/1_scope.md)'s.
 
-## Problem
-
-A plugin cannot show the operator anything a table does not fit.
-
-| Observed | Cause |
-|---|---|
-| Formation's roster view, mail log and status designs each end with a pane or a page to be built later, and have nowhere to put one. Scribe has no view outside the terminal | A panel is `kv`, `table`, `markdown` or `json` over one read-only tool. It cannot draw a tree, group a thread or lay out several reads on one screen |
-| A panel cannot be filtered. A mail log shows its default fifty rows and nothing else | The panel read passes the tool no input |
-| A plugin that wants its own screen links to a server it hosts itself | The link tile opens another port in a new browser tab. That port is not carried by `orbit web connect` or by the host picker, so the screen is missing wherever the dashboard is reached from another machine |
-| The Plugins tab is one list | The standard says plugins cannot add tabs, and `router.js` has one `plugins` entry |
-
-The standard excluded dashboard code on purpose: script from a plugin would run with the
-dashboard's origin and could call every `/api/*` route the operator's session can. That
-reason holds, and the design below keeps it.
-
-## Goal
-
-A plugin ships a page, and the operator opens it as a sub-tab under Plugins, on the local host
-or any host the dashboard reaches. The page draws whatever it wants and gets its data only by
-calling tools its own manifest names, through the same audited dispatch as every other tool
-call. Orbit runs no new process and needs no new runtime to serve it. Panels, links and the
-rest of the plugin standard are unchanged, and plugins still add no top-level destination.
-
-## Shape
-
-### The manifest
+## 1. The manifest
 
 ```yaml
 spec:
@@ -71,7 +43,7 @@ spec:
   the manifest digest. A load whose files do not match registers the page inactive with a
   diagnostic naming both digests, as a changed manifest does today (STD-05 §R21).
 
-### Serving
+## 2. Serving
 
 Orbit loads and hashes a page's files when the plugin loads and serves them from memory, so
 the bytes served are the bytes that were hashed.
@@ -101,7 +73,7 @@ What that gives:
 - **No way out of the frame.** Without the other sandbox tokens it cannot open a window,
   navigate the dashboard, submit a form or start a download.
 
-### The bridge
+## 3. The bridge
 
 The page talks to the dashboard by `postMessage`, and the dashboard talks to the server.
 
@@ -130,7 +102,7 @@ input)`, and a stylesheet with the dashboard's colours, type scale, spacing and 
 both themes. Using them is optional. They make a plugin's page look like the rest of the
 dashboard without copying its CSS, and their path carries the bridge version.
 
-### Surfaces
+## 4. Surfaces
 
 - **Plugins gets secondary tabs,** as Jobs has. **Installed** (`#plugins`, the default) is
   today's list. After it comes one tab per page of each plugin enabled in the selected
@@ -142,15 +114,15 @@ dashboard without copying its CSS, and their path carries the bridge version.
 - **Listings.** `GET /api/plugins`, `orbit plugin show` and the Installed list name each
   plugin's pages. The terminal interface lists them and draws none.
 
-### Other hosts
+## 5. Other hosts
 
 With another host selected, its pages are that host's plugins. Assets and calls travel through
-`/api/on/<host>/…` like every other read. The forwarder stamps its own policy on what it
+`/api/on/<host>/…` ([ORB-14679]) like every other read. The forwarder stamps its own policy on what it
 relays, whatever the remote sent. For the page asset route it stamps the page policy above and
 fixes the content type from the extension, so a remote page gets the same frame and no more.
 The kit is always this dashboard's own.
 
-### Why no server per plugin
+## 6. Why no server per plugin
 
 The first sketch had Orbit start a Node server for each plugin's page and show it in the tab.
 This design does not, for these reasons:
@@ -166,24 +138,46 @@ A plugin already has a server side: its backend executable, behind tools. Whatev
 server would compute, a tool can return. A plugin that wants its own server anyway keeps the
 link tile it has today.
 
-### Configuration
+## 7. Configuration
 
 No new key. A page shows when its plugin is enabled for the workspace, and enabling a plugin
 whose manifest has pages lists them in the consent prompt.
 
-## Non-goals
+## 8. Phasing
 
-- **Top-level destinations.** Pages live under Plugins. The rail's ten destinations stay
-  Orbit's.
-- **Changing what a panel is.** Panels keep one renderer and no input. A plugin whose data fits
-  a table should still use one, since it costs no bundle.
-- **Building pages.** No install-time build for a bundle and no dependency fetch. The consented
-  build the standard has is for the backend.
-- **The Scribe and Formation pages themselves.** Each needs a plugin manifest, read-only tools
-  over its CLI's JSON, and a bundle, designed in its own repository.
-- **Pages for task or run detail.** A plugin does not add sections to Orbit's own screens.
+1. **Local read-only pages.** The manifest key, validation, the bundle digest, the asset and
+   call routes, the frame, the bridge, the kit and the secondary tabs. Verified first against
+   the three browser engines. The plugin standard's dashboard section and its non-goal are
+   amended in the same change.
+2. **Pages on other hosts.** The forwarder's page policy, and the decision on a read-only call
+   from a dashboard without the operator session.
+3. **Actions.** A page may name mutating tools under a separate `actions` list. Each call
+   needs the operator session and a confirmation the dashboard draws outside the frame, naming
+   the plugin, the tool and the input, and is audited with the web session. Enabling such a
+   plugin asks consent for the list.
+4. **First pages.** A Formation page and a Scribe page, each from its own repository, once
+   their plugins exist.
 
-## Concerns and honest limitations
+## 9. Acceptance
+
+- Given a plugin whose manifest declares a page, the operator opens `#plugins/<ns>/<page>` and
+  sees the bundle's `index.html` drawn under the dashboard's strip, with no dashboard edit and
+  no process started.
+- Given a page that calls a declared read-only tool with input, the result reaches the page
+  and the call appears in the audit trail as a call to that tool.
+- Given a page that calls a tool its manifest does not list, a mutating tool, or another
+  plugin's tool, the call is refused and nothing runs.
+- Given a page script that fetches `/api/tasks`, reads the parent document or opens a window,
+  each attempt fails in the browser.
+- Given a bundle file changed on disk after install, the page is inactive with a diagnostic
+  naming both digests, and the rest of the plugin still works.
+- Given a manifest whose page names a mutating tool, has no `index.html` or exceeds the size
+  bound, `orbit plugin validate` refuses it by name.
+- Given another host selected, that host's page loads through the tunnel under the same frame
+  policy.
+- Given a plugin with panels and no pages, the Plugins tab behaves as it does today.
+
+## 10. Concerns & Honest Limitations
 
 - **The browser rules are not yet verified.** Whether `script-src 'self'` admits the bundle's
   own files in a frame with a unique origin, and whether module scripts and fonts load there
@@ -205,53 +199,8 @@ whose manifest has pages lists them in the consent prompt.
   it. The kit's path and the message's `v` are the contract, and a host that does not know a
   version refuses the page with a diagnostic.
 
-## Phasing
-
-1. **Local read-only pages.** The manifest key, validation, the bundle digest, the asset and
-   call routes, the frame, the bridge, the kit and the secondary tabs. Verified first against
-   the three browser engines. The plugin standard's dashboard section and its non-goal are
-   amended in the same change.
-2. **Pages on other hosts.** The forwarder's page policy, and the decision on a read-only call
-   from a dashboard without the operator session.
-3. **Actions.** A page may name mutating tools under a separate `actions` list. Each call
-   needs the operator session and a confirmation the dashboard draws outside the frame, naming
-   the plugin, the tool and the input, and is audited with the web session. Enabling such a
-   plugin asks consent for the list.
-4. **First pages.** A Formation page and a Scribe page, each from its own repository, once
-   their plugins exist.
-
-## Open questions
-
-1. **A static bundle, or a server per plugin?** This design recommends the bundle, for the
-   reasons in the table above. The cost is that a page cannot hold server-side state or push;
-   it asks its tools.
-2. **Actions in the first build, or after?** This design recommends after, as phase 3. A page
-   that can settle a request or close a room is plugin code acting with the operator's
-   authority, and the confirmation drawn outside the frame is what keeps that honest. The cost
-   of waiting is that the first Formation page reads and does not answer.
-
-## Acceptance (feature level)
-
-- Given a plugin whose manifest declares a page, the operator opens `#plugins/<ns>/<page>` and
-  sees the bundle's `index.html` drawn under the dashboard's strip, with no dashboard edit and
-  no process started.
-- Given a page that calls a declared read-only tool with input, the result reaches the page
-  and the call appears in the audit trail as a call to that tool.
-- Given a page that calls a tool its manifest does not list, a mutating tool, or another
-  plugin's tool, the call is refused and nothing runs.
-- Given a page script that fetches `/api/tasks`, reads the parent document or opens a window,
-  each attempt fails in the browser.
-- Given a bundle file changed on disk after install, the page is inactive with a diagnostic
-  naming both digests, and the rest of the plugin still works.
-- Given a manifest whose page names a mutating tool, has no `index.html` or exceeds the size
-  bound, `orbit plugin validate` refuses it by name.
-- Given another host selected, that host's page loads through the tunnel under the same frame
-  policy.
-- Given a plugin with panels and no pages, the Plugins tab behaves as it does today.
-
 ## Task References
 
-- [ORB-12738] — added the Plugins tab, the generic panel renderer and link tiles.
 - [ORB-14679] — added `/api/on/<host>/…` forwarding to another host's dashboard API.
 - [ORB-29504] — this design.
 
