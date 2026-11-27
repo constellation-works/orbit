@@ -25,6 +25,7 @@ mod ci_failures;
 pub(super) mod effort;
 mod effort_backfill;
 mod facts;
+mod hand_crews;
 mod hands;
 pub(crate) mod memory_evidence;
 mod query;

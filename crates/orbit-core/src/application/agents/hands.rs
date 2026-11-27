@@ -16,7 +16,9 @@
 //!
 //! Nothing here is stored on the task; the stored `created_by`,
 //! `planned_by`, `implemented_by` and `orchestrator` fields stay the
-//! dashboard's own.
+//! dashboard's own, with their crews named by [`super::hand_crews`]. Each
+//! hand's `crew` is a bare crew name: the recorded crew without its effort,
+//! else the one crew running the recorded model, else null.
 
 use std::collections::HashMap;
 
@@ -31,6 +33,7 @@ use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate};
 use serde_json::{Map, Value, json};
 
 use super::facts::{self, FindingState};
+use super::hand_crews::CrewNames;
 use super::records::is_operator_requeue;
 use super::roles::pilot_warnings;
 use crate::OrbitRuntime;
@@ -132,6 +135,12 @@ impl OrbitRuntime {
         hands.extend(self.reviewed_hands(row));
         hands.extend(self.recovered_hands(row));
         hands.sort_by_key(|hand| hand.at);
+        // The crew each hand shows: its recorded crew without the effort,
+        // else the one crew running its recorded model, else none.
+        let names = CrewNames::load(self);
+        for hand in &mut hands {
+            hand.crew = names.recorded(hand.crew.as_deref(), hand.model.as_deref());
+        }
         hands.iter().map(Hand::to_json).collect()
     }
 
