@@ -75,8 +75,9 @@ pub(super) fn doctor_check_orphan_task_stores(
         ));
         steps.push(
             "Restore access to the unreachable checkouts (remount the volume, repair directory \
-             permissions) and re-run `orbit doctor`; a populated partition is never deleted while \
-             a permission, I/O, or mount failure stops its checkout from being confirmed absent."
+             permissions) and re-run `orbit doctor`; repair deletes task bundles only when the \
+             checkout is absent beneath a populated, readable immediate parent directory (an \
+             empty, missing, or unreadable parent keeps the partition and its binding)."
                 .to_string(),
         );
     }
@@ -114,7 +115,8 @@ pub(super) fn doctor_check_orphan_task_stores(
         let bundle_note = if partitions.stale.is_empty() {
             ""
         } else {
-            " Populated stale partitions are deleted along with their task bundles."
+            " Populated stale partitions (checkouts absent beneath a populated, readable \
+             immediate parent) are deleted along with their task bundles."
         };
         steps.push(if steps.is_empty() {
             format!("Run `orbit doctor --fix-orphan-task-stores --confirm`.{bundle_note}")

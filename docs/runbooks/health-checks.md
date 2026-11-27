@@ -297,27 +297,29 @@ workspace-registry id in `~/.orbit/workspaces.json`: `orbit workspace init` pass
 all. Partition ownership is therefore always resolved through the task registry. A task-registry checkout claim is live while its recorded `repo_root`
 is present on disk; a catalog checkout supplies the same per-checkout evidence when `workspace init`
 has only a path-free task-registry registration. The shared external Orbit root (`--root
-<data-dir>`) is not used as checkout evidence because several checkouts may share it. A checkout
-that stats as plain absent (`ENOENT`) beneath a nearest existing ancestor that is a readable
-directory is reported as stale — including when an intermediate parent is missing or the parent
-is empty. A checkout whose stat fails any other way, or whose ancestors supply no readable
-directory, is reported as unreachable. Checkoutless
+<data-dir>`) is not used as checkout evidence because several checkouts may share it. A missing
+checkout beneath a populated, readable immediate parent is reported as stale. An unreadable path,
+a dangling checkout entry, an empty parent, or a missing parent is reported as unreachable.
+Checkoutless
 catalog entries and the synthetic `ws_unbound-data-dir` partition every `--root <data-dir>` write
 lands in remain claims. `orphan-task-stores` names each
 reported workspace id, its partition path, and its task-bundle count.
 
 **Evidence rule for deleting task bundles.** A partition that holds task bundles is deleted by the
-repair only when its bound checkout is *confirmed gone*: `repo_root` stats as plain absent, and
-walking up past the missing ancestors reaches a readable directory whose listing names no entry
-for the next path component down toward the checkout. A still-listed entry (for example a
-dangling symlink or a concurrent recreation) and any listing failure prevent the repair. Any
-other filesystem answer — `EACCES` from an unsearchable parent, `EIO` or
-`ENOTCONN` from a dropped mount, a path that resolves through a non-directory, a dangling or
-otherwise unreadable parent — classifies the
-binding as **unreachable**: the checkout may be intact behind the failure, so the partition is
-retained, reported with the failing path and error, and never deleted by
+repair only when its bound checkout is *confirmed gone*: `repo_root` stats as plain absent
+(`ENOENT`), and its **immediate parent directory** exists, can be fully listed, contains at least
+one other entry, and has no entry for the checkout. An empty immediate parent may be the directory
+exposed by an unmounted volume; a missing immediate parent may be a removed mount point. Neither
+confirms deletion, and doctor never walks farther up to infer absence from a higher ancestor. A
+still-listed entry (for example a dangling symlink or a concurrent recreation), any listing
+failure, or any other filesystem answer — `EACCES` from an unsearchable parent, `EIO` or
+`ENOTCONN` from a dropped mount, a path that resolves through a non-directory, a dangling parent
+symlink — classifies the
+binding as **unreachable**: the checkout may still exist on an offline volume or behind the
+failure, so the partition, its task bundles, and its registry binding are retained, reported with
+the failing path and error, and never deleted by
 `--fix-orphan-task-stores`. A partition with **no task bundles** carries nothing to recover, so the
-older rule still applies to it: any binding that is not a live claim reclaims the directory.
+older rule still applies to it: any binding that is not a live claim reclaims the empty directory.
 
 An unclaimed partition that **still holds task bundles** and has no checkout binding at all is
 likewise never deleted by the repair. On disk it is indistinguishable from a live checkout's
@@ -336,11 +338,11 @@ it must be run once per affected checkout.
 
 For an **unreachable** partition, restore access first — remount the volume, repair the directory
 permissions that hide the checkout — and re-run `orbit doctor`. A reachable checkout becomes a live
-claim again and the row clears itself. A checkout that stats as plain absent beneath a readable
-ancestor directory becomes a confirmed-stale binding, which the repair can then remove — including
-when an intermediate parent is missing or the parent is empty. Because bindings store no mount
-identity, restore mounted checkouts before running the repair: an unmounted volume's checkout is
-indistinguishable from a deleted one once a readable ancestor confirms the absence.
+claim again and the row clears itself. A checkout that is genuinely gone beneath a populated,
+readable immediate parent becomes a confirmed-stale binding, which the repair can then remove. A
+deleted checkout whose immediate parent is now empty or was also deleted stays unreachable so
+offline mounts are preserved; reclaim its task partition manually, or use
+`orbit workspace teardown` before deleting the checkout.
 
 For a partition whose binding is confirmed stale, the missing `repo_root` is the evidence that the
 checkout is gone. The confirmed repair removes that partition, including its task bundles, and
@@ -369,10 +371,11 @@ then the same repair. Skipping the repair after `workspace remove` leaves the bu
 and unreachable through workspace selectors.
 
 Do not use that repair for an unknown or unreachable populated partition; reindex or restore it
-first. Unreadable and missing mounts are preserved, but bindings contain paths rather than a
-persisted mount identity. A mount point that exposes other entries after unmounting can still be
-mistaken for a populated checkout parent. Remount before running the repair on a host with
-removable or network-mounted checkouts; directory contents alone cannot prove a volume is mounted.
+first. Empty and removed mount points are preserved, along with unreadable and dangling parents,
+but bindings contain paths rather than a persisted mount identity. A mount point that exposes
+other entries after unmounting can still be mistaken for a populated checkout parent. Remount
+before running the repair on a host with removable or network-mounted checkouts; directory
+contents alone cannot prove a volume is mounted.
 
 The repair deletes partition directories, so it refuses to run without `--confirm` before any
 other requested repair runs, leaving their repair targets unchanged. It resolves the
