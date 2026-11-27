@@ -20,11 +20,9 @@ mod inputs;
 mod runs;
 mod wire;
 
-pub(in crate::application) use evidence::{
-    Assessment, Contest, HeldWait, PilotEvidence, pilot_evidence,
-};
+pub(crate) use evidence::{Assessment, Contest, HeldWait, PilotEvidence, pilot_evidence};
 pub(super) use inputs::{PilotInputs, inputs};
-pub(in crate::application) use runs::{PilotRun, PilotRuns};
+pub(crate) use runs::{PilotRun, PilotRuns};
 
 /// The actor that writes task-pilot receipts.
 const PILOT_ACTOR: &str = "task-pilot";

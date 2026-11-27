@@ -4,7 +4,8 @@ mod add;
 mod artifact_export;
 pub mod artifact_put_result;
 mod automation_port;
-pub(in crate::application) mod base_revision;
+
+pub(crate) mod base_revision;
 mod baseline_hold;
 mod baseline_repair;
 pub(crate) mod batch_prepare;
@@ -95,7 +96,7 @@ pub use artifact_export::TaskArtifactRead;
 pub(in crate::application) use automation_port::{SourceGit, TaskAutomationPort};
 pub(crate) use baseline_hold::refresh_baseline_holds_step;
 pub use baseline_hold::{BASELINE_HOLD_REFRESH_JOB, BaselineHoldRefresh};
-pub(in crate::application) use block_cause::{
+pub(crate) use block_cause::{
     Anchor, BlockCause, SettledFailure, actor_kind, classify_block, entry_marks_run,
 };
 pub(crate) use blocked_recovery::{
@@ -109,7 +110,7 @@ pub(crate) use blocked_recovery::{
     BLOCKED_TASK_TRIAGED_EVENT, TriageCandidacy, TriageTarget, triage_candidacy,
 };
 pub use contention::LockContentionReport;
-pub(in crate::application) use corpus_port::TaskCorpusPort;
+pub(crate) use corpus_port::TaskCorpusPort;
 pub use decision::DecisionListProfile;
 #[cfg(feature = "test-support")]
 pub use decision::answer_checkpoint::with_decision_answer_checkpoint;

@@ -70,7 +70,7 @@ Nothing is implemented. The table maps each concern to where the design settles 
 | Where the output is used | [2_design.md §8](./2_design.md#8-where-the-output-is-used) | [task pilot](../task-pilot/1_scope.md), [pilot scorecard](../agent-scorecards/2_design.md), [locks/index.rs](../../../crates/orbit-runtime/src/stored/locks/index.rs) |
 | Core and plugin split; orbit-graph as the home | [2_design.md §1](./2_design.md#1-placement-a-plugin-with-three-generic-core-seams) | [plugins scope](../plugins/1_scope.md); Daniel's decision, [§14.1](./2_design.md#141-decided-by-daniel-2026-11-14) |
 | The eight recommendations | [2_design.md §9](./2_design.md#9-positions-on-the-eight-recommendations) | — |
-| Offline evaluation, with the option comparison | [2_design.md §10](./2_design.md#10-offline-evaluation) | orbit-graph `recommend` and `evaluate`, [pilots.rs](../../../crates/orbit-core/src/application/agents/roles/pilots.rs), the audit task-scope blob |
+| Offline evaluation, with the option comparison | [2_design.md §10](./2_design.md#10-offline-evaluation) | orbit-graph `recommend` and `evaluate`, [pilots.rs](../../../crates/orbit-core/src/app/agent/role/pilots.rs), the audit task-scope blob |
 | Downstream evaluation | [2_design.md §11](./2_design.md#11-downstream-evaluation) | The eval-harness replay design of [ORB-24839], [first_edit.rs](../../../crates/orbit-runtime/src/run/engine/first_edit.rs) |
 | Build order, decisions and open questions | [2_design.md §13](./2_design.md#13-build-order) and [§14](./2_design.md#14-decisions-and-open-questions) | — |
 | Deferred, not in the first version: tags and task type | [2_design.md §15](./2_design.md#15-deferred-tags-and-task-type) | Daniel's decision, [§14.1](./2_design.md#141-decided-by-daniel-2026-11-14) |

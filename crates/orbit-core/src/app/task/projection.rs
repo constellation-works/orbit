@@ -321,11 +321,11 @@ pub(super) fn task_detail_json(
         }
         // Detail-only: the piloted, reviewed and recovered hands read pilot
         // runs, the review ledger and recovery invocations.
-        let hands = runtime.task_handled_by(row);
+        let hands = crate::app::agent::task_handled_by(runtime, row);
         if !hands.is_empty() {
             object.insert("handled_by".to_string(), Value::Array(hands));
         }
-        let recorded_crews = runtime.task_recorded_crews(&row.task);
+        let recorded_crews = crate::app::agent::task_recorded_crews(runtime, &row.task);
         if !recorded_crews.is_empty() {
             object.insert("recorded_crews".to_string(), Value::Object(recorded_crews));
         }

@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: Implemented Agents dashboard view under Analytics; covers problem attribution, the shared score, per-role terms, the API, CLI and MCP contract, scan budget and delivery tracks.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents/**", "crates/orbit-core/src/application/codebase/pilot/**", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-core/src/application/codebase/facts/**", "crates/orbit-web/assets/dashboard/**"]
+paths: ["crates/orbit-core/src/app/agent/**", "crates/orbit-web/src/api/agents.rs", "crates/orbit-web/src/runtime_memo.rs", "crates/orbit-common/src/governance/agents.rs", "crates/orbit-cli/src/command/agents/**", "crates/orbit-core/src/application/codebase/pilot/**", "crates/orbit-core/src/application/codebase/lock_waits.rs", "crates/orbit-core/src/application/codebase/facts/**", "crates/orbit-web/assets/dashboard/**"]
 related_features: [user-interface, review-gate, finding-verification]
 related_artifacts: []
 ---
@@ -774,7 +774,7 @@ One `AgentFacts` scan per workspace serves all three roles and the attribution s
 It reads at most 90 days back. `all` is served as 90 days, so the scan stays bounded however old the workspace gets.
 
 Since [ORB-24423], per-task facts are also stored between scans in
-`crates/orbit-core/src/application/agents/facts/stored.rs`. A terminal task with
+`crates/orbit-core/src/app/agent/fact/stored.rs`. A terminal task with
 no open attempt can reuse its row only when the format, batched history/comment
 stamps, envelope, runs, failed settlements and its own pulled claims still match.
 Open tasks and unreadable sources are recomputed; cross-task judgment still runs
@@ -835,11 +835,11 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
 | Track | Scope | Delivery | Current seams |
 |---|---|---|---|
 | A | This design | Draft; no separate owner-approval record found | `docs/design/agent-scorecards/` |
-| B | Core scan, one-owner attribution, shared score, role registry and API | Landed [ORB-16952]; Orchestrators later removed by [ORB-23582] | `crates/orbit-core/src/application/agents/`, `crates/orbit-web/src/api/agents.rs` |
+| B | Core scan, one-owner attribution, shared score, role registry and API | Landed [ORB-16952]; Orchestrators later removed by [ORB-23582] | `crates/orbit-core/src/app/agent/`, `crates/orbit-web/src/api/agents.rs` |
 | C | Agents destination, routing and shared dashboard renderer | Landed [ORB-16953] | `crates/orbit-web/assets/dashboard/js/agents.js`, `crates/orbit-web/assets/dashboard/css/agents.css` |
-| D | Implementers role | Landed [ORB-16954]; original cost/tier panel removed by [ORB-17736] | `crates/orbit-core/src/application/agents/roles/implementers/` |
-| E | Reviewers role, false rejects, provisional banner and outcome panel | Landed [ORB-16955] | `crates/orbit-core/src/application/agents/roles/reviewers.rs`, `crates/orbit-web/assets/dashboard/js/agents-reviewers.js` |
-| F | Pilots role, pilot evidence and calibration panel | Landed [ORB-16956] | `crates/orbit-core/src/application/agents/roles/pilots.rs`, `crates/orbit-core/src/application/codebase/pilot/**`, `crates/orbit-web/assets/dashboard/js/agents-pilots.js` |
+| D | Implementers role | Landed [ORB-16954]; original cost/tier panel removed by [ORB-17736] | `crates/orbit-core/src/app/agent/role/implementer/` |
+| E | Reviewers role, false rejects, provisional banner and outcome panel | Landed [ORB-16955] | `crates/orbit-core/src/app/agent/role/reviewers.rs`, `crates/orbit-web/assets/dashboard/js/agents-reviewers.js` |
+| F | Pilots role, pilot evidence and calibration panel | Landed [ORB-16956] | `crates/orbit-core/src/app/agent/role/pilots.rs`, `crates/orbit-core/src/application/codebase/pilot/**`, `crates/orbit-web/assets/dashboard/js/agents-pilots.js` |
 | G | CLI and MCP scorecards | Landed [ORB-16957]; orchestrator aliases later removed by [ORB-23582] | `crates/orbit-cli/src/command/agents/`, `crates/orbit-tools/src/builtin/orbit/agents.rs` |
 
 ```

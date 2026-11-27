@@ -160,7 +160,7 @@ impl PullPeer for RoutedPullPeer<'_> {
         if let (Some(leaf), Some(object)) = (leaf, input.as_object_mut()) {
             let attribution = leaf_attribution(&leaf);
             let worktree = self.runtime.recorded_run_worktree(&leaf.run_id);
-            if let Some(effort) = self.runtime.leaf_reported_effort(&leaf) {
+            if let Some(effort) = crate::app::agent::leaf_reported_effort(self.runtime, &leaf) {
                 object.insert(
                     "reasoning_effort".into(),
                     Value::String(effort.unwrap_or_else(|| {

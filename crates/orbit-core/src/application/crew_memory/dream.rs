@@ -25,8 +25,8 @@ use sha2::{Digest, Sha256};
 use super::validate::strip_score_blind_tokens;
 use super::{MemoryKey, MemoryLintVocabulary, memory_key};
 use crate::OrbitRuntime;
-use crate::application::agents::memory_evidence::{
-    EvidenceSection, ModelEvidence, implementer_units_by_model, model_evidence,
+use crate::app::agent::{
+    EvidenceSection, ModelEvidence, agent_scan, implementer_units_by_model, model_evidence,
 };
 use crate::application::task::{TaskAddParams, TaskRecordUpdateParams, TaskRecords};
 
@@ -80,7 +80,7 @@ impl OrbitRuntime {
         // bundle in the workspace once for each model.
         let dreaming_tasks = self.list_tasks_by_tags(&[CREW_MEMORY_DREAM_TAG.to_string()])?;
         let no_revision = self.settle_dreaming_tasks(now, &dreaming_tasks)?;
-        let facts = self.agent_scan()?;
+        let facts = agent_scan(self)?;
         let mut minted = Vec::new();
         let mut skipped = Vec::new();
         let mut below_support = Vec::new();

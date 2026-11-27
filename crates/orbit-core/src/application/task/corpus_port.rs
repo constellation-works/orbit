@@ -2,10 +2,10 @@
 //!
 //! The corpus sits above `task`: it reads decision rules, task history and
 //! tasks back, so a direct call from here would close a cycle. This port is
-//! the way in: the corpus module implements it on
-//! [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds it.
-//! Task keeps owning its decision-answer, precedent and final-recovery
-//! writes; the corpus only proposes the history entries those writes carry.
+//! the way in: `app::agent` implements it on a struct holding the runtime,
+//! bound in `app::port`. Task keeps owning its decision-answer, precedent and
+//! final-recovery writes; the corpus only proposes the history entries those
+//! writes carry.
 
 use orbit_common::OrbitError;
 use orbit_types::task::{DecisionRequest, DecisionResolution, TaskHistoryEntry};
@@ -15,7 +15,7 @@ use super::decision_rules::{CorpusDigest, CorpusRuleDependency};
 
 /// The corpus reads and append proposals task code calls, implemented by
 /// the corpus module above `task`.
-pub(in crate::application) trait TaskCorpusPort {
+pub(crate) trait TaskCorpusPort {
     /// The corpus history entry a human decision answer carries in the same
     /// task-history update, when the answer earns one. Implemented by the
     /// corpus module.

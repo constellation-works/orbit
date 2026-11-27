@@ -110,7 +110,7 @@ impl Dispatch for EngineHost<'_> {
         run_id: &str,
         activity_name: &str,
     ) -> Result<Option<orbit_types::workflow::AgentCorpusInjection>, DispatchError> {
-        OrbitRuntime::agent_corpus_for_activity(self.runtime, run_id, activity_name)
+        crate::app::agent::agent_corpus_for_activity(self.runtime, run_id, activity_name)
             .map_err(DispatchError::CliInvocationPermanent)
     }
 

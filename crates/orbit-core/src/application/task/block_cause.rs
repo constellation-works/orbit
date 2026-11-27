@@ -49,15 +49,15 @@ const SETTLEMENT_MATCH_SECONDS: i64 = 300;
 /// A footprint entry: a workspace-relative path and whether it names a
 /// directory (`dir:` selector) rather than a file.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(in crate::application) struct Anchor {
-    pub(in crate::application) path: String,
-    pub(in crate::application) dir: bool,
+pub(crate) struct Anchor {
+    pub(crate) path: String,
+    pub(crate) dir: bool,
 }
 
 impl Anchor {
     /// Parse a context selector (`file:`, `dir:`, `symbol:`) or a bare
     /// reservation path. Module and command selectors carry no path.
-    pub(in crate::application) fn parse(raw: &str) -> Option<Self> {
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
         let raw = raw.trim();
         if raw.is_empty() {
             return None;
@@ -86,7 +86,7 @@ impl Anchor {
 
 /// Why a task entered `blocked`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::application) enum BlockCause {
+pub(crate) enum BlockCause {
     /// An infrastructure failure the run failure classification names; never
     /// counted against the task's files.
     Infra(&'static str),
@@ -108,7 +108,7 @@ pub(in crate::application) enum BlockCause {
 /// `claim_failed` note, or for an entry older than that note, from the
 /// claim's settlement record.
 #[derive(Debug, Clone)]
-pub(in crate::application) struct SettledFailure {
+pub(crate) struct SettledFailure {
     /// Set when the settlement was matched by time rather than read off the
     /// entry; the entry it explains is the nearest.
     settled_at: Option<DateTime<Utc>>,
@@ -121,7 +121,7 @@ pub(in crate::application) struct SettledFailure {
 impl SettledFailure {
     /// A failed claim's settlement as its settlement record reads, settled at
     /// `settled_at`; matched to the `claim_failed` entry nearest in time.
-    pub(in crate::application) fn from_settlement_record(
+    pub(crate) fn from_settlement_record(
         settled_at: DateTime<Utc>,
         evidence: String,
         failure_class: Option<ClaimFailureClass>,
@@ -140,7 +140,7 @@ impl SettledFailure {
 
 /// A history entry only a job run writes: worktree setup moving the task to
 /// `in-progress`, or a run outcome naming its run.
-pub(in crate::application) fn entry_marks_run(entry: &TaskHistoryEntry) -> bool {
+pub(crate) fn entry_marks_run(entry: &TaskHistoryEntry) -> bool {
     entry.event == "started"
         || entry.to_status == Some(TaskStatus::InProgress)
         || entry.note.as_deref().is_some_and(names_run)
@@ -189,7 +189,7 @@ fn settled_failure(
 /// Orbit automation (`system`, `system:*`), an unattributed write, or else a
 /// person (`human:<user>`, `operator`, an `ORBIT_ACTOR` label, or the
 /// machine of an operator's claim recovery).
-pub(in crate::application) fn actor_kind(by: &str) -> &'static str {
+pub(crate) fn actor_kind(by: &str) -> &'static str {
     let by = by.trim();
     if all_agent_families().contains(&by) {
         "agent"
@@ -206,7 +206,7 @@ pub(in crate::application) fn actor_kind(by: &str) -> &'static str {
 /// fields and, where no typed field names the cause, its note. The note of a
 /// run failure carries the run's `error_code` and error text, which the run
 /// failure classification reads.
-pub(in crate::application) fn classify_block(
+pub(crate) fn classify_block(
     entry: &TaskHistoryEntry,
     settlements: &[SettledFailure],
 ) -> BlockCause {

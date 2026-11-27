@@ -8,7 +8,7 @@
 //!   `landing`, `review`, `notice`, `operator_input`.
 //! - Automation: `auto_tasks`, `automation`, `workspace_auto`,
 //!   `sweep_filing`, `seeding_policy`.
-//! - Agents and runs: `agents`, `executor`, `agent_corpus`, `crew_memory`,
+//! - Agents and runs: `executor`, `crew_memory`,
 //!   `evolution`, `experiment`, `resident`, `vision_probe`, `statistics`.
 //! - Plugins and skills: `plugin`, `skill`, `tool_name_migration`.
 //! - Workspace and host: `workspace`, `codebase`, `config`, `distributed`,
@@ -20,8 +20,6 @@
 //! - `test_support` is compiled only for tests.
 
 pub(crate) mod admission;
-pub(crate) mod agent_corpus;
-pub mod agents;
 mod application_authority;
 pub mod audit_event;
 pub mod auto_tasks;

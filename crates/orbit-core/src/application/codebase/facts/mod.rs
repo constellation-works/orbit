@@ -20,11 +20,11 @@ mod lock_denial;
 mod scan;
 mod types;
 
-pub(in crate::application) use block_cause::{
+pub(crate) use block_cause::{
     SettledFailure, actor_kind, classify_block, failed_claim_settlements_of,
 };
 pub(super) use history::HistoryFacts;
 pub use scan::CodebaseFacts;
 pub(super) use scan::{ReservationFacts, TaskFacts, scan, scan_regressions};
 pub(super) use types::{ACTOR_KINDS, Block, INFRA_CAUSES};
-pub(in crate::application) use types::{Anchor, BlockCause};
+pub(crate) use types::{Anchor, BlockCause};

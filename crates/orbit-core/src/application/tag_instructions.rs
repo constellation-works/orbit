@@ -150,9 +150,9 @@ impl OrbitRuntime {
             }
         }
         for (activity, index) in self.tag_instruction_settings().agent_corpus() {
-            let injection = revision
-                .get()
-                .and_then(|revision| self.read_agent_corpus_at(activity, index, &revision));
+            let injection = revision.get().and_then(|revision| {
+                crate::app::agent::read_agent_corpus_at(self, activity, index, &revision)
+            });
             captured.agent_corpus.insert(activity.clone(), injection);
         }
         captured.revision = revision.resolved();

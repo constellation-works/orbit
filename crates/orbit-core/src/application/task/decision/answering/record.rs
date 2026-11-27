@@ -123,8 +123,8 @@ impl OrbitRuntime {
                         surface: None,
                         caller: None,
                     };
-                    let corpus_append =
-                        self.task_corpus_append_for_decision(&request, &resolution)?;
+                    let corpus_append = crate::app::port::TaskCorpus { rt: self }
+                        .task_corpus_append_for_decision(&request, &resolution)?;
                     Ok((resolution, entry, corpus_append))
                 };
                 let early = if rejects_blocked {

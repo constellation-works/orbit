@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_core::application::agents::AgentQuery;
+use orbit_core::app::agent::AgentQuery;
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
@@ -565,14 +565,13 @@ fn crew_analytics_leave_human_crew_tasks_out() {
             .unwrap();
         fx.update(json!({ "id": task, "status": "done" })).unwrap();
     }
-    let export = fx
-        .runtime
-        .agent_per_task_export(
-            &AgentQuery::parse(Some("all"), None)
-                .and_then(|query| query.with_execution(Some("all")))
-                .unwrap(),
-        )
-        .unwrap();
+    let export = orbit_core::app::agent::per_task_export(
+        &fx.runtime,
+        &AgentQuery::parse(Some("all"), None)
+            .and_then(|query| query.with_execution(Some("all")))
+            .unwrap(),
+    )
+    .unwrap();
     let scored = |task: &str| {
         export["tasks"]
             .as_array()

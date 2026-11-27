@@ -21,7 +21,7 @@ pub(super) use super::model::{
     CostSource, Observed, Outcome, ReviewableDenominator, TaskMemoryDelivery, TaskOutcome,
 };
 use crate::OrbitRuntime;
-use crate::application::agents::{self, ExecutionMode, task_execution_modes};
+use crate::app::agent::{self as agents, ExecutionMode, task_execution_modes};
 
 /// How long after landing a `regression_from` filing counts as an escape.
 pub(super) const REGRESSION_WINDOW_DAYS: i64 = 14;

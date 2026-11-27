@@ -11,9 +11,7 @@ use std::io::Write as _;
 use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::application::agents::{
-    AgentFacts, AgentQuery, AgentRole, Owner, Problem, agent_scorecard,
-};
+use orbit_core::app::agent::{AgentFacts, AgentQuery, AgentRole, Owner, Problem, agent_scorecard};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_types::task::TaskStatus;
 use orbit_types::task::{
@@ -664,7 +662,7 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
             filed_finding(&fixture, &review_job, "REJECTED", None);
 
             // Who each new problem counts against.
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let owners = |task: &str, problem: Problem| -> Vec<(Owner, Option<String>)> {
                 facts
                     .charges()
@@ -775,7 +773,10 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
                 None,
             );
             assert_eq!(
-                reviewers(&fixture.runtime.agent_scan().unwrap(), "90d")["rows"],
+                reviewers(
+                    &orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap(),
+                    "90d"
+                )["rows"],
                 scorecard["rows"],
                 "event plus comment counts once and preserves nearest-earlier-review scoring"
             );
@@ -793,7 +794,10 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
                 .join("\n");
             fs::write(comments_path, format!("{display}\n")).unwrap();
             assert_eq!(
-                reviewers(&fixture.runtime.agent_scan().unwrap(), "90d")["rows"],
+                reviewers(
+                    &orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap(),
+                    "90d"
+                )["rows"],
                 scorecard["rows"],
                 "typed failure facts survive a change to their display comment"
             );
@@ -877,7 +881,10 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
                     reviewed: &unrelated,
                 },
             );
-            let after_false = reviewers(&fixture.runtime.agent_scan().unwrap(), "90d");
+            let after_false = reviewers(
+                &orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap(),
+                "90d",
+            );
             assert_eq!(row(&after_false, "vega")["counts"]["false_rejects"], 2);
             assert!(raw(&after_false, "vega") < before, "{after_false}");
             let pending = task(&fixture, "reject not judged yet");
@@ -893,7 +900,10 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
                     reviewed: &rejected,
                 },
             );
-            let after_pending = reviewers(&fixture.runtime.agent_scan().unwrap(), "90d");
+            let after_pending = reviewers(
+                &orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap(),
+                "90d",
+            );
             assert_eq!(
                 row(&after_pending, "vega")["counts"]["findings_held"],
                 8,
@@ -913,7 +923,7 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
                 RegressionNature::DefectInNew,
                 RegressionEscape::ReviewMissed,
             );
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let missed = facts
                 .charges()
                 .iter()
@@ -1037,7 +1047,7 @@ fn reviewer_scorecard_judges_unverified_job_findings_by_task_outcome() {
             unverified_finding(&fixture, &nova, "open one", vec![]);
             unverified_finding(&fixture, &nova, "open two", vec![]);
 
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let scorecard = reviewers(&facts, "90d");
             assert_eq!(scorecard["status"], "ok", "{scorecard}");
             let sol = row(&scorecard, "sol");
@@ -1120,7 +1130,7 @@ fn reviewer_scorecard_attributes_review_job_units_to_filing_executor_effort() {
     isolated(
         "agents_reviewers::reviewer_scorecard_attributes_review_job_units_to_filing_executor_effort",
         || {
-            use orbit_core::application::agents::agent_attribution;
+            use orbit_core::app::agent::agent_attribution;
             use orbit_types::identity::ReasoningEffort::{High, Medium};
 
             let fixture = Fixture::new();
@@ -1185,7 +1195,7 @@ fn reviewer_scorecard_attributes_review_job_units_to_filing_executor_effort() {
             filed_finding(&fixture, &review_job, "CONFIRMED", Some("high"));
             filed_finding(&fixture, &review_job, "REJECTED", None);
 
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let scorecard = reviewers(&facts, "90d");
             assert_eq!(scorecard["status"], "ok", "{scorecard}");
             let by_label = |label: &str| {

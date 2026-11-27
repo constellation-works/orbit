@@ -128,7 +128,7 @@ Task history cannot rebuild a task's text. An `updated` event names the document
 The exact source is the run audit. Since 2026-10-29 ([ORB-20006]) every provider invocation records a `task_scope_blob_ref`: the "bounded, redacted task scope as delivered at dispatch, not a later mutable task projection" (`CliInvocationStarted`, `crates/orbit-types/src/workflow/activity_job/audit_envelope.rs:358-372`). The snapshot is built in this order:
 
 1. **Audit blob (preferred).** The task scope blob of the task's first `agent_implement` invocation gives title, description, acceptance criteria, selectors, type and tier exactly as the first implementer received them. Tags come from `tags_at` at that invocation's start.
-2. **History fallback.** When the blob is gone, use the current record if, and only if, no `updated` event after the first dispatch names the description or acceptance criteria (the test `spec_documents` already makes, `crates/orbit-core/src/application/agents/records.rs`). Selectors are the current ones minus every `context_files_widened` addition; tags come from `tags_at`.
+2. **History fallback.** When the blob is gone, use the current record if, and only if, no `updated` event after the first dispatch names the description or acceptance criteria (the test `spec_documents` already makes, `crates/orbit-core/src/app/agent/record.rs`). Selectors are the current ones minus every `context_files_widened` addition; tags come from `tags_at`.
 3. **Otherwise the task is not eligible.**
 
 The OS rule (§1.3) is a further refusal on top of these. It is applied to the snapshot's tags, the ones a candidate would copy, and not to the live record.

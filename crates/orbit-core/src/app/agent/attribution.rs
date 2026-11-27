@@ -1,0 +1,573 @@
+//! Who each problem counts against. Every problem the scan found gets
+//! exactly one owning role and the run charged, or a Not scored reason; the roles and the attribution strip read these charges, so
+//! the strip and the rankings always agree.
+//!
+//! A rework cause names its owner (spec, crew, or none for infrastructure
+//! and unrecorded causes), and a regression's escape names the safeguard
+//! that failed. A problem recorded on a task charges the implementation
+//! attempt whose span contains it, so a task that moved between crews
+//! charges each crew only for its own attempt. A `reject` the next run
+//! proved wrong is the reviewer's false reject, not the implementer's
+//! review reject.
+
+use std::collections::{BTreeMap, HashMap};
+
+use chrono::{DateTime, SecondsFormat, Utc};
+use orbit_types::task::{DefectSeverity, RegressionEscape, RegressionNature};
+use orbit_types::workflow::ReviewVerdict;
+use serde_json::{Map, Value, json};
+
+use super::fact::{Problem, Record, RegressionLink, Review, TaskFacts, filing_attempt};
+use super::record::{Cause, label};
+use super::role::pilots::{Graded, costly_charge_detail, wait_charge_detail};
+use super::{AgentFacts, AgentRole, WindowBounds};
+use crate::application::task::FindingVerdict;
+
+/// What a problem counts against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Owner {
+    /// One role: the row named by the charge's crew and model.
+    Role(AgentRole),
+    /// No agent is at fault, or nothing records which one; the reason is a
+    /// wire key such as `infrastructure` or an unscored escape.
+    NotScored(&'static str),
+}
+
+/// One problem and who it counts against.
+#[derive(Debug, Clone)]
+pub struct Charge {
+    /// The task the problem counts against; for a regression, the culprit.
+    pub task_id: String,
+    pub problem: Problem,
+    pub owner: Owner,
+    /// The charged row's crew. `None` when the owning run recorded none, and for Not scored.
+    pub crew: Option<String>,
+    /// The charged run's model; `None` when it recorded none.
+    pub model: Option<String>,
+    /// The charged job run, when one is known.
+    pub run_id: Option<String>,
+    /// When the problem was recorded.
+    pub at: DateTime<Utc>,
+    /// The time of the owner's unit of work, which decides the window the
+    /// problem falls in: the charged attempt's start for implementers, the settlement for reviewers, and
+    /// the problem itself when Not scored.
+    pub anchor: DateTime<Utc>,
+    pub detail: String,
+    /// The producing step or worker of the charged unit, as invocations
+    /// record it, when the unit identifies one (a pilot receipt's worker,
+    /// a review settlement's gate).
+    pub(super) activity_id: Option<String>,
+    /// The previous settlement on the task, for a review settlement's
+    /// charge: an invocation that ended by then produced the earlier round.
+    pub(super) after: Option<DateTime<Utc>>,
+    /// The regression link's severity, for a regression.
+    pub severity: Option<DefectSeverity>,
+    /// The defect sites the regression link names (`symbol:`, `file:` or
+    /// `dir:` selectors), for a regression; empty otherwise.
+    pub(super) sites: Vec<String>,
+    /// The effort the charged attempt's follower reported on its claim
+    /// settlement, in the shared encoding; the fallback when the owner holds
+    /// no invocation evidence of its own for the run.
+    pub(super) reported_effort: Option<Option<String>>,
+}
+
+impl Charge {
+    /// How much the charge counts in its term: a regression by its
+    /// severity's weight (critical 8 down to nit 0.25), anything else 1.
+    pub(super) fn severity_weight(&self) -> f64 {
+        self.severity.map_or(1.0, DefectSeverity::weight)
+    }
+}
+
+/// Landed credit for the implementation run whose candidate landed.
+#[derive(Debug, Clone)]
+pub struct Credit {
+    pub task_id: String,
+    pub crew: Option<String>,
+    pub model: Option<String>,
+    pub run_id: Option<String>,
+    /// Unit landed credit; retained for consumers of the scan's credits.
+    pub weight: i64,
+    /// When the task was done.
+    pub at: Option<DateTime<Utc>>,
+    /// The final implementation attempt's start.
+    pub anchor: DateTime<Utc>,
+    /// The effort the credited attempt's follower reported, as on [`Charge`].
+    pub(super) reported_effort: Option<Option<String>>,
+}
+
+/// A problem on `task` before its owner is decided.
+struct Draft<'a> {
+    task: &'a TaskFacts,
+    problem: Problem,
+    at: DateTime<Utc>,
+    detail: String,
+    severity: Option<DefectSeverity>,
+}
+
+impl Draft<'_> {
+    fn charge(
+        self,
+        owner: Owner,
+        crew: Option<String>,
+        model: Option<String>,
+        run_id: Option<String>,
+        anchor: DateTime<Utc>,
+    ) -> Charge {
+        Charge {
+            task_id: self.task.id.clone(),
+            problem: self.problem,
+            owner,
+            crew,
+            model,
+            run_id,
+            at: self.at,
+            anchor,
+            detail: self.detail,
+            activity_id: None,
+            after: None,
+            severity: self.severity,
+            sites: Vec::new(),
+            reported_effort: None,
+        }
+    }
+
+    fn not_scored(self, reason: &'static str) -> Charge {
+        let at = self.at;
+        self.charge(Owner::NotScored(reason), None, None, None, at)
+    }
+
+    /// A problem the task's specification caused: no agent role scores
+    /// task authorship, so it is Not scored.
+    fn spec(self) -> Charge {
+        self.not_scored("spec")
+    }
+
+    /// The implementation attempt at `index`, or Not scored when the task
+    /// has no attempt to charge. An attempt admitted as
+    /// `no-diff-expected` work is not implementation, and an attempt that
+    /// launched no implementer is no implementer unit, so their problems
+    /// charge no implementer row.
+    fn implementer(self, index: Option<usize>) -> Charge {
+        let Some(attempt) = index.and_then(|index| self.task.attempts.get(index)) else {
+            return self.not_scored("no_run");
+        };
+        if attempt.no_diff() {
+            return self.not_scored("no_diff_expected");
+        }
+        if !attempt.implementer {
+            return self.not_scored("no_implementer");
+        }
+        let runner = attempt.runner.clone();
+        let anchor = attempt.start;
+        let mut charge = self.charge(
+            Owner::Role(AgentRole::Implementers),
+            runner.crew,
+            runner.model,
+            runner.run_id,
+            anchor,
+        );
+        charge.reported_effort = runner.reported_effort;
+        charge
+    }
+
+    /// The review job attempt that filed the finding, or Not scored when no
+    /// review job is recorded as its filer.
+    fn review_job(self, filer: Option<(&TaskFacts, usize)>) -> Charge {
+        let Some(attempt) = filer.and_then(|(task, index)| task.attempts.get(index)) else {
+            return self.not_scored("no_review");
+        };
+        let runner = attempt.runner.clone();
+        let anchor = attempt.start;
+        let mut charge = self.charge(
+            Owner::Role(AgentRole::Reviewers),
+            runner.crew,
+            runner.model,
+            runner.run_id,
+            anchor,
+        );
+        charge.reported_effort = runner.reported_effort;
+        charge
+    }
+
+    /// The reviewer of `review`, or Not scored when no review settled.
+    fn reviewer(self, review: Option<&Review>) -> Charge {
+        let Some(review) = review else {
+            return self.not_scored("no_review");
+        };
+        let run_id = self
+            .task
+            .attempt_at(review.at)
+            .and_then(|index| self.task.attempts[index].runner.run_id.clone());
+        let after = self
+            .task
+            .reviews
+            .iter()
+            .filter(|earlier| earlier.at < review.at)
+            .map(|earlier| earlier.at)
+            .max();
+        let mut charge = self.charge(
+            Owner::Role(AgentRole::Reviewers),
+            review.reviewer.crew.clone(),
+            review.reviewer.model.clone(),
+            run_id,
+            review.at,
+        );
+        charge.activity_id.clone_from(&review.activity_id);
+        charge.after = after;
+        charge
+    }
+}
+
+/// Every problem in `tasks`, every regression against them and every pilot
+/// problem of their graded assessments, each with one owner, and the landed
+/// credit of each task's final run.
+pub(super) fn attribute(
+    tasks: &[TaskFacts],
+    regressions: &[RegressionLink],
+    pilots: &[Graded],
+) -> (Vec<Charge>, Vec<Credit>) {
+    let mut charges = Vec::new();
+    let mut credits = Vec::new();
+    for task in tasks {
+        for record in &task.records {
+            charges.push(record_charge(task, record));
+        }
+        for review in &task.reviews {
+            charges.extend(review_charge(task, review));
+            for finding in review.disposed() {
+                let charge = Draft {
+                    task,
+                    problem: Problem::DisposedFinding,
+                    at: review.at,
+                    detail: format!("review attempt {}: {}", review.attempt_id, finding.line),
+                    severity: None,
+                };
+                charges.push(charge.reviewer(Some(review)));
+            }
+        }
+        if task.landed
+            && let Some(attempt) = task
+                .final_attempt
+                .and_then(|index| task.attempts.get(index))
+                .filter(|attempt| !attempt.no_diff())
+        {
+            credits.push(Credit {
+                task_id: task.id.clone(),
+                crew: attempt.runner.crew.clone(),
+                model: attempt.runner.model.clone(),
+                run_id: attempt.runner.run_id.clone(),
+                weight: 1,
+                at: task.landed_at,
+                anchor: attempt.start,
+                reported_effort: attempt.runner.reported_effort.clone(),
+            });
+        }
+    }
+
+    let by_id: HashMap<&str, &TaskFacts> =
+        tasks.iter().map(|task| (task.id.as_str(), task)).collect();
+    for link in regressions {
+        // A culprit outside the scan has no work in any window.
+        let Some(task) = by_id.get(link.culprit.as_str()) else {
+            continue;
+        };
+        charges.push(regression_charge(task, link));
+    }
+    for task in tasks {
+        let Some((FindingVerdict::Rejected, at, _)) =
+            task.filed.as_ref().and_then(|filed| filed.verdict)
+        else {
+            continue;
+        };
+        let draft = Draft {
+            task,
+            problem: Problem::RejectedFinding,
+            at,
+            detail: "finding verification REJECTED this review-filed finding".to_string(),
+            severity: None,
+        };
+        charges.push(draft.review_job(filing_attempt(&by_id, task)));
+    }
+    for graded in pilots {
+        charges.extend(pilot_charges(graded));
+    }
+    charges.sort_by(|left, right| {
+        left.at
+            .cmp(&right.at)
+            .then(left.task_id.cmp(&right.task_id))
+    });
+    (charges, credits)
+}
+
+/// The owner of a problem the task's history or comments record.
+fn record_charge(task: &TaskFacts, record: &Record) -> Charge {
+    let draft = Draft {
+        task,
+        problem: record.problem,
+        at: record.at,
+        detail: record.detail.clone(),
+        severity: None,
+    };
+    match record.problem {
+        Problem::SpecEdit | Problem::CriteriaBlock | Problem::CriteriaEscalation => draft.spec(),
+        Problem::RepeatRun
+        | Problem::BlockedPr
+        | Problem::UnmergedPr
+        | Problem::OperatorRequeue => match record.cause {
+            Some(Cause::Spec) => draft.spec(),
+            Some(Cause::Crew) => {
+                let attempt = record.ended.or_else(|| task.attempt_at(record.at));
+                draft.implementer(attempt)
+            }
+            Some(Cause::Infrastructure) => draft.not_scored("infrastructure"),
+            Some(Cause::Other) | None => draft.not_scored("no_cause"),
+        },
+        Problem::FailedFix => {
+            let review = task
+                .reviews
+                .iter()
+                .rev()
+                .find(|review| review.at <= record.at);
+            draft.reviewer(review)
+        }
+        // Read from settlements, verdicts, relations and pilot grading, never
+        // from records.
+        Problem::ReviewReject
+        | Problem::ReviewFixes
+        | Problem::Regression
+        | Problem::DisposedFinding
+        | Problem::FalseReject
+        | Problem::RejectedFinding
+        | Problem::IncompleteReview
+        | Problem::CostlyMiss
+        | Problem::LockWait => draft.not_scored("no_cause"),
+    }
+}
+
+/// The problem a settled verdict records, if any: a `reject` or
+/// `accept_with_fixes` against the implementer whose candidate was reviewed,
+/// a false reject against the reviewer instead, and an `incomplete` against
+/// the reviewer unless infrastructure caused it.
+fn review_charge(task: &TaskFacts, review: &Review) -> Option<Charge> {
+    let problem = match review.verdict {
+        ReviewVerdict::Reject if review.false_reject() => Problem::FalseReject,
+        ReviewVerdict::Reject => Problem::ReviewReject,
+        ReviewVerdict::AcceptWithFixes => Problem::ReviewFixes,
+        ReviewVerdict::Incomplete => Problem::IncompleteReview,
+        ReviewVerdict::Accept => return None,
+    };
+    let draft = Draft {
+        task,
+        problem,
+        at: review.at,
+        detail: format!(
+            "review attempt {} settled {}",
+            review.attempt_id,
+            review.verdict.as_str()
+        ),
+        severity: None,
+    };
+    Some(match problem {
+        Problem::FalseReject => Draft {
+            detail: format!(
+                "review attempt {} settled reject; the next run changed none of the cited paths and the next review accepted",
+                review.attempt_id
+            ),
+            ..draft
+        }
+        .reviewer(Some(review)),
+        Problem::IncompleteReview if review.infrastructure => draft.not_scored("infrastructure"),
+        Problem::IncompleteReview => draft.reviewer(Some(review)),
+        _ => draft.implementer(task.attempt_at(review.at)),
+    })
+}
+
+/// The owner of a regression: its escape names the safeguard that failed.
+fn regression_charge(task: &TaskFacts, link: &RegressionLink) -> Charge {
+    let classification = &link.classification;
+    let draft = Draft {
+        task,
+        problem: Problem::Regression,
+        at: link.at,
+        detail: format!(
+            "{} regressed it (nature {}, escape {}, severity {} from {})",
+            link.regressing,
+            label(&classification.nature),
+            label(&classification.escape),
+            classification.severity.as_str(),
+            classification.severity_source.as_str(),
+        ),
+        severity: Some(classification.severity),
+    };
+    match classification.nature {
+        RegressionNature::MergeReintroduced => return draft.not_scored("merge_reintroduced"),
+        RegressionNature::ContractDrift => return draft.not_scored("contract_drift"),
+        RegressionNature::BrokeExisting
+        | RegressionNature::DefectInNew
+        | RegressionNature::Incomplete
+        | RegressionNature::Unclassified => {}
+    }
+    let mut charge = match classification.escape {
+        RegressionEscape::SpecAmbiguous => draft.spec(),
+        RegressionEscape::ReviewMissed => {
+            let accepted = task
+                .reviews
+                .iter()
+                .rev()
+                .find(|review| review.verdict.passed());
+            draft.reviewer(accepted)
+        }
+        RegressionEscape::NoTest => draft.implementer(task.final_attempt),
+        RegressionEscape::TestNotSelected => draft.not_scored("test_not_selected"),
+        RegressionEscape::PlatformOnly => draft.not_scored("platform_only"),
+        RegressionEscape::Nondeterministic => draft.not_scored("nondeterministic"),
+        RegressionEscape::Unclassified => draft.not_scored("unclassified"),
+    };
+    charge.sites.clone_from(&classification.sites);
+    charge
+}
+
+/// An assessment's costly misses and the lock waits it caused, charged to
+/// the pilot run behind it in the window of the assessment.
+fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
+    let charge = move |problem, at, detail| {
+        let run = graded.run.as_ref();
+        Charge {
+            task_id: graded.task_id.clone(),
+            problem,
+            owner: Owner::Role(AgentRole::Pilots),
+            crew: run.and_then(|run| run.crew.clone()),
+            model: run.and_then(|run| run.model.clone()),
+            run_id: graded.run_id(),
+            at,
+            anchor: graded.at,
+            detail,
+            activity_id: run.and_then(|run| run.activity_id.clone()),
+            after: None,
+            severity: None,
+            sites: Vec::new(),
+            reported_effort: None,
+        }
+    };
+    let misses = graded.costly.iter().map(move |(path, contest)| {
+        charge(
+            Problem::CostlyMiss,
+            contest.at,
+            costly_charge_detail(path, contest),
+        )
+    });
+    let waits = graded
+        .waits
+        .iter()
+        .map(move |wait| charge(Problem::LockWait, wait.started_at, wait_charge_detail(wait)));
+    misses.chain(waits)
+}
+
+/// The window's problems by owner, with Not scored by reason and each
+/// role's problems by row.
+pub(super) fn strip(facts: &AgentFacts, window: WindowBounds) -> Value {
+    let mut owners: BTreeMap<AgentRole, u64> =
+        AgentRole::ALL.iter().map(|role| (*role, 0)).collect();
+    let mut rows: BTreeMap<
+        AgentRole,
+        BTreeMap<super::effort::ModelEffortKey, (u64, std::collections::BTreeSet<String>)>,
+    > = BTreeMap::new();
+    let mut reasons: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut total = 0;
+    for charge in facts
+        .charges
+        .iter()
+        .filter(|charge| window.admits(charge.anchor))
+    {
+        total += 1;
+        match charge.owner {
+            Owner::Role(role) => {
+                *owners.entry(role).or_default() += 1;
+                // A rejected finding charges the review job that filed it,
+                // whose executor invocation performed the filing; other
+                // reviewer charges are gate reviewers' own invocations.
+                let activity = match role {
+                    AgentRole::Implementers => super::effort::MainActivity::Implement,
+                    AgentRole::Reviewers if charge.problem == Problem::RejectedFinding => {
+                        super::effort::MainActivity::ReviewJob
+                    }
+                    AgentRole::Reviewers => super::effort::MainActivity::Review,
+                    AgentRole::Pilots => super::effort::MainActivity::Pilot,
+                };
+                let effort = super::effort::main_invocation_effort(
+                    facts,
+                    super::effort::MainInvocationUnit {
+                        run_id: charge.run_id.as_deref(),
+                        activity,
+                        task_id: Some(&charge.task_id),
+                        model: charge.model.as_deref(),
+                        activity_id: charge.activity_id.as_deref(),
+                        after: charge.after,
+                        until: charge
+                            .activity_id
+                            .as_ref()
+                            .filter(|_| matches!(activity, super::effort::MainActivity::Review))
+                            .map(|_| charge.anchor),
+                        reported: charge.reported_effort.as_ref(),
+                        crew: charge.crew.as_deref(),
+                    },
+                );
+                let entry = rows
+                    .entry(role)
+                    .or_default()
+                    .entry(super::effort::model_effort_key(
+                        charge.model.as_deref(),
+                        effort,
+                    ))
+                    .or_default();
+                entry.0 += 1;
+                if let Some(crew) = &charge.crew {
+                    entry.1.insert(crew.clone());
+                }
+            }
+            Owner::NotScored(reason) => *reasons.entry(reason).or_default() += 1,
+        }
+    }
+    let mut owner_counts: Map<String, Value> = owners
+        .iter()
+        .map(|(role, count)| (role.as_str().to_string(), json!(count)))
+        .collect();
+    owner_counts.insert(
+        "not_scored".into(),
+        json!({
+            "count": reasons.values().sum::<u64>(),
+            "reasons": reasons,
+        }),
+    );
+    let charged: Map<String, Value> = AgentRole::ALL
+        .iter()
+        .map(|role| {
+            let mut list: Vec<_> = rows.remove(role).unwrap_or_default().into_iter().collect();
+            list.sort_by(|left, right| (right.1).0.cmp(&(left.1).0).then(left.0.cmp(&right.0)));
+            (
+                role.as_str().to_string(),
+                list.into_iter()
+                    .map(|((model, effort), (problems, crews))| {
+                        json!({
+                            "crew": crews.first(),
+                            "crews": crews,
+                            "model": model,
+                            "reasoning_effort": effort,
+                            "effort_label": super::effort::effort_label(&effort),
+                            "label": super::effort::row_label(&model, &effort),
+                            "problems": problems,
+                        })
+                    })
+                    .collect(),
+            )
+        })
+        .collect();
+    json!({
+        "since": window.since().to_rfc3339_opts(SecondsFormat::Secs, true),
+        "until": window.reported_until().to_rfc3339_opts(SecondsFormat::Secs, true),
+        "total": total,
+        "owners": owner_counts,
+        "charged": charged,
+    })
+}

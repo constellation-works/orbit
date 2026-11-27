@@ -651,38 +651,26 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=False)
 
     def test_task_reaches_agent_corpus_only_through_its_port(self):
-        # [ORB-23421] Task called the corpus's decision-append, digest and
-        # recovery-append inherent methods directly, closing a task <->
-        # agent_corpus cycle: the corpus reads decision rules, task history
-        # and tasks back. One detector per call: the guard's chains stop at
-        # the first hit.
+        # [ORB-23421] Task must reach the agent corpus (now in `app::agent`)
+        # only through `TaskCorpusPort` bound in `app::port`: the corpus reads
+        # decision rules, task history and tasks back, so a direct path into
+        # `app::agent` would close a cycle.
         for rows in (
-            [("task/decision/answering.rs", "use crate::application::agent_corpus::Probe;\n")],
-            [("task/probe.rs", "use crate::application::{\n    agent_corpus::Probe,\n};\n")],
-            [("task/mod.rs", "use super::agent_corpus::Probe;\n"),
-             ("task/decision/probe.rs", "use super::super::super::{agent_corpus::Probe};\n")],
+            [("task/decision/answering.rs", "use crate::app::agent::Probe;\n")],
+            [("task/probe.rs", "use crate::app::{\n    agent::Probe,\n};\n")],
+            [("task/mod.rs", "use super::super::app::agent::Probe;\n"),
+             ("task/decision/probe.rs", "use super::super::super::super::app::{agent::Probe};\n")],
         ):
             self.check_rows(rows, rejected=True)
-        self.check_rows([
-            ("task/decision/answering.rs",
-             "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
-             "        self.fresh_corpus_method();\n    }\n}\n"),
-        ], rejected=True, shared={
-            "agent_corpus.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn fresh_corpus_method(&self) {}\n}\n"})
         self.check_files({
             "task/corpus_port.rs":
-                "pub(in crate::application) trait TaskCorpusPort {\n"
+                "pub(crate) trait TaskCorpusPort {\n"
                 "    fn task_corpus_append_for_decision(&self);\n}\n",
             "task/decision/answering.rs":
                 "use crate::application::task::TaskCorpusPort;\n"
                 "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
-                "        self.task_corpus_append_for_decision();\n    }\n}\n",
-            "agent_corpus.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn decision_corpus_append(&self) {}\n}\n"
-                "impl TaskCorpusPort for OrbitRuntime {\n"
-                "    fn task_corpus_append_for_decision(&self) {\n"
-                "        self.decision_corpus_append();\n    }\n}\n",
+                "        crate::app::port::TaskCorpus { rt: self }.task_corpus_append_for_decision();\n"
+                "    }\n}\n",
         }, rejected=False)
 
     def test_lower_modules_cannot_reach_the_forecast(self):
@@ -1262,26 +1250,33 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_agents_cannot_reach_experiment(self):
         # One batch per detector, as in the forecast shim rows above.
+        core_src = self.root / "crates/orbit-core/src"
         self.check_rows([
-            ("agents/facts/scan.rs", "use crate::application::experiment::Probe;\n"),
-        ], rejected=True)
+            ("app/agent/facts/scan.rs", "use crate::application::experiment::Probe;\n"),
+        ], rejected=True, base=core_src)
         self.check_rows([
-            ("agents/facts/scan.rs", "use crate::application::{experiment::Probe};\n"),
-        ], rejected=True)
+            ("app/agent/facts/scan.rs", "use crate::application::{experiment::Probe};\n"),
+        ], rejected=True, base=core_src)
         self.check_rows([
-            ("agents/facts/scan.rs", "use super::super::super::experiment::Probe;\n"),
-            ("agents/facts/scan.rs", "use super::super::super::{experiment::Probe};\n"),
-            ("agents/mod.rs", "use super::experiment::Probe;\n"),
-        ], rejected=True)
+            ("app/agent/facts/scan.rs",
+             "use super::super::super::super::application::experiment::Probe;\n"),
+            ("app/agent/facts/scan.rs",
+             "use super::super::super::super::application::{experiment::Probe};\n"),
+            ("app/agent/mod.rs", "use super::super::application::experiment::Probe;\n"),
+        ], rejected=True, base=core_src)
         self.check_files({
-            "experiment/readout.rs": "impl OrbitRuntime {\n    pub(crate) fn experiment_probe(&self) {}\n}\n",
-            "agents/facts/scan.rs": "fn scan(runtime: &OrbitRuntime) { runtime.experiment_probe(); }\n",
-        }, rejected=True)
+            "application/experiment/readout.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn experiment_probe(&self) {}\n}\n",
+            "app/agent/facts/scan.rs":
+                "fn scan(runtime: &OrbitRuntime) { runtime.experiment_probe(); }\n",
+        }, rejected=True, base=core_src)
         self.check_files({
-            "experiment/readout.rs": "use crate::application::agents::Probe;\n",
-            "codebase/diff_stats.rs": "impl OrbitRuntime {\n    pub(crate) fn landed_task_lines_changed(&self) {}\n}\n",
-            "agents/facts/scan.rs": "fn scan(runtime: &OrbitRuntime) { runtime.landed_task_lines_changed(); }\n",
-        }, rejected=False)
+            "application/experiment/readout.rs": "use crate::app::agent::Probe;\n",
+            "application/codebase/diff_stats.rs":
+                "impl OrbitRuntime {\n    pub(crate) fn landed_task_lines_changed(&self) {}\n}\n",
+            "app/agent/facts/scan.rs":
+                "fn scan(runtime: &OrbitRuntime) { runtime.landed_task_lines_changed(); }\n",
+        }, rejected=False, base=core_src)
 
     def test_forecast_cannot_reach_sweep_filing(self):
         self.check_import("backlog_forecast/probe.rs",
@@ -1495,7 +1490,8 @@ class RelativeImportTests(unittest.TestCase):
         ("application/automation/probe.rs", 2, "review"),
         ("application/distributed/probe.rs", 2, "experiment"),
         ("application/distributed/probe.rs", 2, "pull_drain"),
-        ("application/agents/probe.rs", 2, "experiment"),
+        ("app/agent/probe.rs", 3, "application::experiment"),
+        ("application/task/probe.rs", 3, "app::agent"),
         ("application/review/probe.rs", 2, "codebase"),
         ("application/review/probe.rs", 2, "landing"),
         ("application/backlog_forecast/probe.rs", 2, "codebase"),

@@ -6,7 +6,7 @@ use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_core::application::agents::{AgentQuery, AgentRole, agent_detail, agent_scorecard};
+use orbit_core::app::agent::{AgentQuery, AgentRole, agent_detail, agent_scorecard};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::test_support::fixture_store::InvocationInsertParams;
 use orbit_types::task::TaskComplexity;
@@ -69,7 +69,7 @@ fn term<'a>(detail: &'a Value, key: &str) -> &'a Value {
 }
 
 fn scorecard(fixture: &Fixture, window: &str) -> Value {
-    let facts = fixture.runtime.agent_scan().unwrap();
+    let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
     let query = AgentQuery::parse(Some(window), Some(1)).unwrap();
     agent_scorecard(&facts, AgentRole::Pilots, &query, StdDuration::ZERO)
 }
@@ -647,7 +647,7 @@ fn pilots_grade_each_crew_against_landed_diffs() {
                 "the larger lift ranks higher"
             );
 
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
             let detail = agent_detail(
                 &facts,
@@ -921,7 +921,7 @@ fn pilots_charge_wasted_reservations_costly_misses_and_calibrate_tiers() {
             assert_eq!(b["counts"]["lock_wait_hours"], 0);
             assert_eq!(b["counts"]["costly_misses"], 0);
 
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
             let detail = agent_detail(
                 &facts,
@@ -1369,7 +1369,7 @@ fn pilots_settle_held_warnings_from_history() {
                 "provisional terms stay out of the score: {warden}"
             );
 
-            let facts = fixture.runtime.agent_scan().unwrap();
+            let facts = orbit_core::app::agent::agent_scan(&fixture.runtime).unwrap();
             let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
             let detail = agent_detail(
                 &facts,

@@ -828,7 +828,13 @@ impl OrbitRuntime {
         let corpus_appends = plan
             .infra
             .as_ref()
-            .map(|infra| self.task_corpus_appends_for_recovery(&task.id, infra, "escalated"))
+            .map(|infra| {
+                crate::app::port::TaskCorpus { rt: self }.task_corpus_appends_for_recovery(
+                    &task.id,
+                    infra,
+                    "escalated",
+                )
+            })
             .transpose()?
             .unwrap_or_default();
         let append_comments = if raised.is_some() {
