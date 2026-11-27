@@ -492,6 +492,7 @@ fn pilot_hold_classification(hold: &PilotAdmissionHold) -> &'static str {
         PilotAdmissionHold::AlreadyLanded => "pilot_already_landed",
         PilotAdmissionHold::OperatorValidation(_) => "operator_validation",
         PilotAdmissionHold::HostOperational(_) => "host_operational",
+        PilotAdmissionHold::FootprintUnresolved(_) => "pilot_footprint_unresolved",
         PilotAdmissionHold::NativeOs(_) => "native_os",
     }
 }

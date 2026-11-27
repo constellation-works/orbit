@@ -22,6 +22,11 @@ pub(crate) enum PilotAdmissionHold {
     AlreadyLanded,
     OperatorValidation(OperatorValidationHold),
     HostOperational(HostOperationalHold),
+    /// The latest assessment carries the host's `footprint_unresolved`
+    /// marker: the pilot could not establish the task's lock footprint, so
+    /// whatever selectors it holds are not verified. Holds like a duplicate
+    /// finding; the text names the unread evidence.
+    FootprintUnresolved(String),
     /// Reported only while the task's `os:` tags miss a required OS or the
     /// pilot required this owner's machine. It holds a host by
     /// [`NativeOsHold::wait_on`], so a capable host may still start the task.
@@ -84,6 +89,7 @@ impl PilotAdmissionHold {
             Self::OperatorValidation(_)
                 | Self::NativeOs(_)
                 | Self::HostOperational(_)
+                | Self::FootprintUnresolved(_)
                 | Self::Duplicate
                 | Self::AlreadyLanded
         )
@@ -91,12 +97,13 @@ impl PilotAdmissionHold {
 
     /// Answers a decision request for this hold may offer.
     ///
-    /// Duplicate and already-landed findings resolve only through a verdict
-    /// that overrides the finding. `evaluated` does not, so it is not offered:
-    /// an operator who chose it would spend the request and leave the hold.
+    /// Duplicate, already-landed and unresolved-footprint findings resolve
+    /// only through a verdict that overrides the finding. `evaluated` does
+    /// not, so it is not offered: an operator who chose it would spend the
+    /// request and leave the hold.
     pub(crate) fn decision_request_answers(&self) -> Vec<DecisionAnswer> {
         match self {
-            Self::Duplicate | Self::AlreadyLanded => {
+            Self::Duplicate | Self::AlreadyLanded | Self::FootprintUnresolved(_) => {
                 PilotAdmissionVerdict::finding_override_decision_answers()
             }
             _ => PilotAdmissionVerdict::decision_answers(),
@@ -105,14 +112,16 @@ impl PilotAdmissionHold {
 
     /// Whether `verdict` records a resolution for this hold.
     ///
-    /// A duplicate or already-landed finding accepts only an overriding
-    /// verdict, and a stale assessment accepts none: only a new pilot
+    /// A duplicate, already-landed or unresolved-footprint finding accepts
+    /// only an overriding verdict, and a stale assessment accepts none: only a new pilot
     /// resolves it. Every other hold keeps the answers it already accepted;
     /// evidence rules for `evaluated` still run when that comment is applied.
     pub(crate) fn accepts_decision_answer(&self, verdict: PilotAdmissionVerdict) -> bool {
         match self {
             Self::StaleAssessment(_) => false,
-            Self::Duplicate | Self::AlreadyLanded => verdict.overrides_findings(),
+            Self::Duplicate | Self::AlreadyLanded | Self::FootprintUnresolved(_) => {
+                verdict.overrides_findings()
+            }
             _ => true,
         }
     }

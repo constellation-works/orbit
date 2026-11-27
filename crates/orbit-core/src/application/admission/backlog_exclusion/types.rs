@@ -105,6 +105,11 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// The latest applied pilot assessment identifies duplicate work. Only a
     /// newer clear assessment or an explicit operator decision releases it.
     PilotDuplicate,
+    /// The latest applied pilot assessment could not establish the task's
+    /// lock footprint, so its selectors are not verified. Only a newer
+    /// assessment with a bounded footprint or an explicit operator decision
+    /// releases it.
+    PilotFootprintUnresolved,
     /// Description or acceptance criteria changed after the assessment.
     PilotAssessmentStale,
     /// The latest applied pilot assessment identifies work already landed.

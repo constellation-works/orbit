@@ -136,6 +136,9 @@ impl OrbitRuntime {
                     self.record_operator_validation_hold(&task.id, &hold)?;
                     admission_holds.insert(task.id.clone(), hold.detail());
                 }
+                Some(PilotAdmissionHold::FootprintUnresolved(detail)) => {
+                    admission_holds.insert(task.id.clone(), detail);
+                }
                 Some(PilotAdmissionHold::NativeOs(hold)) => {
                     if let Some(wait) = hold.wait_on(task, request.os, machine_id) {
                         admission_holds.insert(task.id.clone(), wait);
@@ -259,6 +262,7 @@ impl OrbitRuntime {
                     Some(PilotAdmissionHold::StaleAssessment(detail)) => Ok(Some(detail)),
                     Some(PilotAdmissionHold::HostOperational(hold)) => Ok(Some(hold.detail())),
                     Some(PilotAdmissionHold::OperatorValidation(hold)) => Ok(Some(hold.detail())),
+                    Some(PilotAdmissionHold::FootprintUnresolved(detail)) => Ok(Some(detail)),
                     Some(PilotAdmissionHold::NativeOs(hold)) => {
                         Ok(hold.wait_on(task, request.os, machine_id))
                     }

@@ -323,7 +323,7 @@ impl OrbitRuntime {
                         )
                     } else {
                         format!(
-                            "`{answer_id}` does not resolve a duplicate or already-landed pilot hold; nothing was applied and the request stays open"
+                            "`{answer_id}` does not resolve a duplicate, already-landed or unresolved-footprint pilot hold; nothing was applied and the request stays open"
                         )
                     };
                     return Err(OrbitError::decision_refused(

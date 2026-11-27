@@ -168,6 +168,18 @@ pub(super) fn footprint_hold(assessment: &Value) -> Option<&Value> {
         .find(|finding| declares_unresolved_footprint(finding, &gaps))
 }
 
+/// The host-stamped footprint marker in an applied assessment. Unlike
+/// [`footprint_hold`], this ignores the pilot's own unmarked declarations:
+/// only the apply boundary writes the marker, so admission of an already
+/// approved task acts on it alone.
+pub(super) fn footprint_marker(assessment: &Value) -> Option<&Value> {
+    assessment
+        .get("utility_warnings")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|finding| finding.get("hold").and_then(Value::as_str) == Some(FOOTPRINT_UNRESOLVED))
+}
+
 /// The assessment's `evidence_gaps` as plain strings, for the unread-source
 /// declaration check the apply boundary also makes.
 fn assessment_evidence_gaps(assessment: &Value) -> Vec<String> {

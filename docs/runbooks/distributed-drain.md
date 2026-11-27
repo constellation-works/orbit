@@ -317,9 +317,9 @@ nothing. A newer assessment supersedes the decision; a `selectors` or
 lane grants relevant tools. An operator decision releases admission only; task
 prose never grants tools.
 
-The same trusted path releases a `pilot_duplicate` or `pilot_already_landed`
-hold with `clear` or `approve-anyway`, recorded as a typed decision on a
-`pilot_admission_decided` history event. Only typed decisions count: an
+The same trusted path releases a `pilot_duplicate`, `pilot_already_landed` or
+`pilot_footprint_unresolved` hold with `clear` or `approve-anyway`, recorded as
+a typed decision on a `pilot_admission_decided` history event. Only typed decisions count: an
 operator comment carrying that header alone, or a
 `[drain-approval-held:<classification>]` marker in a pilot's history note,
 decides nothing, including text an older binary wrote before typed decisions.

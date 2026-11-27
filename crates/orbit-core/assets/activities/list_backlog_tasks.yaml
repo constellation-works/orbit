@@ -22,6 +22,11 @@ spec:
     `task-pilot-admission: approve-anyway` or `task-pilot-admission: clear`.
     A later assessment supersedes that operator decision; ordinary edits and
     agent comments do not release the hold.
+    A host `footprint_unresolved` finding in the latest applied assessment, which
+    the pilot records when it could not establish the task's lock footprint,
+    withholds the task the same way as `pilot_footprint_unresolved`. A newer
+    assessment without the finding, or the same operator decision, releases it;
+    an advisory warning without that finding holds nothing.
     A current operator-reserved validation requirement withholds admission as
     `operator_validation_handoff`, naming its criterion and tool. The pilot
     persists an `operator_validation_held` history event and typed audit.
@@ -191,6 +196,7 @@ spec:
                 - unassessed_complexity
                 - pilot_duplicate
                 - pilot_already_landed
+                - pilot_footprint_unresolved
                 - operator_validation_handoff
                 - native_os_required
                 - pr_forge_remote_missing

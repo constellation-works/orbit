@@ -806,6 +806,77 @@ fn human_pilot_decisions_release_only_the_current_assessment() {
     }
 }
 
+/// A pilot that applied a partial file selector and could not read the
+/// evidence that bounds the footprint. Apply stamps the host marker.
+fn assess_unresolved_footprint(workspace: &Workspace, task: &Task) {
+    assess_with(
+        workspace,
+        task,
+        None,
+        "selectors",
+        json!({
+            "confidence": "medium",
+            "evidence_gaps": [
+                "predecessor ledger artifact unreadable under the pilot's read authority"
+            ],
+            "utility_warnings": [{
+                "text": "Footprint unresolved: the predecessor ledger was unread.",
+                "holds_promotion": true,
+            }],
+        }),
+    );
+}
+
+fn an_unresolved_footprint_holds_a_backlog_task_until_a_bounded_assessment_or_decision() {
+    let (workspace, task) = fresh_backlog();
+    assert_admission(&workspace, &task, None);
+    assess_unresolved_footprint(&workspace, &task);
+    assert_admission(&workspace, &task, Some("pilot_footprint_unresolved"));
+
+    // An advisory warning alone is not the marker and holds nothing.
+    assess_with(
+        &workspace,
+        &task,
+        None,
+        "selectors",
+        json!({"utility_warnings": [{
+            "text": "Optional adjacent cleanup outside this task.",
+            "holds_promotion": false,
+        }]}),
+    );
+    assert_admission(&workspace, &task, None);
+
+    // A newer assessment with a bounded file-plus-directory footprint
+    // replaces the holding receipt.
+    assess_unresolved_footprint(&workspace, &task);
+    assert_admission(&workspace, &task, Some("pilot_footprint_unresolved"));
+    workspace.commit_file("docs/guide.md", "guide\n", "add guide");
+    assess_with(
+        &workspace,
+        &task,
+        None,
+        "selectors",
+        json!({"context_files_after": ["file:README.md", "dir:docs"]}),
+    );
+    assert_admission(&workspace, &task, None);
+}
+
+fn an_operator_decision_releases_only_the_current_unresolved_footprint() {
+    for decision in ["approve-anyway", "clear"] {
+        let (workspace, task) = fresh_backlog();
+        let comment = format!("task-pilot-admission: {decision}\nReviewed the footprint.");
+        // A decision made before the assessment cannot release a future one.
+        human_comment(&workspace, &task, comment.clone());
+        assess_unresolved_footprint(&workspace, &task);
+        agent_comment(&workspace, &task, comment.clone());
+        assert_admission(&workspace, &task, Some("pilot_footprint_unresolved"));
+        human_comment(&workspace, &task, comment);
+        assert_admission(&workspace, &task, None);
+        assess_unresolved_footprint(&workspace, &task);
+        assert_admission(&workspace, &task, Some("pilot_footprint_unresolved"));
+    }
+}
+
 fn human_approved_validation_task(workspace: &Workspace, criterion: &str) -> Task {
     human_approved_validation_task_with_tools(workspace, criterion, vec![])
 }
@@ -2105,7 +2176,9 @@ crate::scenario_table!(
     legacy_host_operational_receipt_is_backfilled_once_and_tracks_its_material,
     legacy_note_only_host_operational_handoff_is_recovered_and_not_recorded_again,
     latest_pilot_finding_holds_backlog_until_a_clear_assessment,
-    human_pilot_decisions_release_only_the_current_assessment
+    human_pilot_decisions_release_only_the_current_assessment,
+    an_unresolved_footprint_holds_a_backlog_task_until_a_bounded_assessment_or_decision,
+    an_operator_decision_releases_only_the_current_unresolved_footprint
 );
 
 crate::scenario_table!(
