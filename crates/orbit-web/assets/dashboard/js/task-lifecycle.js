@@ -5,7 +5,7 @@ import { el, infoHint } from './common.js';
 import { elapsedLabel } from './task-runtime.js';
 import { buildExecutionProvenance, formatExecutionLocation } from './distributed.js';
 import { absTimeNode, canMutateTask, pullRequestLink, taskRunHref } from './task-shared.js';
-import { explicitCrewValue, resolvedCrewName } from './task-crew.js';
+import { crewReferenceBase, explicitCrewValue, resolvedCrewName } from './task-crew.js';
 import { buildRiskChip } from './task-riskiness.js';
 import { buildCrewUpdateControl, buildStatusUpdateControl } from './task-status-controls.js';
 import { buildRelationRow, drainDependencyIds, relationTargets } from './task-relations.js';
@@ -181,50 +181,68 @@ const REVIEW_VERDICTS = {
 
 const present = (value) => value != null && value !== "";
 
+// A hand's tooltip subject: its crew name with the recorded model beside it,
+// else the raw record when the stored attribution establishes no crew.
+function handSubject(crew, model, raw) {
+  if (crew) return present(model) && model !== crew ? `${crew} (${model})` : crew;
+  return present(model) ? String(model) : String(raw || "");
+}
+
 // The stored hands, each at the time it is known by: the creator and a
 // planner at creation, the implementer at the task's first start. The
 // creator merges with the orchestrator when they are one actor: the same
-// model, since no creator crew is recorded.
+// model, since no creator crew is recorded. Every visible name is the crew the
+// detail's `recorded_crews` establishes for that field; a field it omits
+// shows its action alone, never the stored provider or model label.
 function storedHands(task) {
   const created = Date.parse(task.created_at);
   const hands = [];
   const people = Object.fromEntries(TASK_PEOPLE_FIELDS);
+  const crews = task.recorded_crews || {};
   const merged = present(task.created_by_model) && present(task.orchestrator)
     && task.created_by_model === task.orchestrator_model;
+  const hand = (field, crew, extra) => ({ name: crew ? String(crew) : "", key: crew ? String(crew) : String(task[field] || ""), ...extra });
   if (present(task.created_by)) {
+    const crew = crews.orchestrator || crews.created_by;
     hands.push(merged
-      ? { verbs: [TASK_HAND_VERBS.created_by, TASK_HAND_VERBS.orchestrator], name: String(task.orchestrator), model: task.created_by_model, family: task.created_by, at: created,
-          title: `Created and orchestrated by ${task.orchestrator} (${task.created_by_model})` }
-      : { verbs: [TASK_HAND_VERBS.created_by], name: String(task.created_by_model || task.created_by), model: task.created_by_model, family: task.created_by, at: created,
-          title: `${people.created_by} ${task.created_by_model || task.created_by}` });
+      ? hand("created_by", crew, { verbs: [TASK_HAND_VERBS.created_by, TASK_HAND_VERBS.orchestrator], model: task.created_by_model, family: task.created_by, at: created,
+          title: `Created and orchestrated by ${handSubject(crew, task.created_by_model, task.orchestrator)}` })
+      : hand("created_by", crews.created_by, { verbs: [TASK_HAND_VERBS.created_by], model: task.created_by_model, family: task.created_by, at: created,
+          title: `${people.created_by} ${handSubject(crews.created_by, task.created_by_model, task.created_by)}` }));
   }
   if (present(task.planned_by)) {
-    hands.push({ verbs: [TASK_HAND_VERBS.planned_by], name: String(task.planned_by), at: created, title: `${people.planned_by} ${task.planned_by}` });
+    hands.push(hand("planned_by", crews.planned_by, { verbs: [TASK_HAND_VERBS.planned_by], family: task.planned_by, at: created,
+      title: `${people.planned_by} ${handSubject(crews.planned_by, null, task.planned_by)}` }));
   }
   if (present(task.implemented_by)) {
-    hands.push({ verbs: [TASK_HAND_VERBS.implemented_by], name: String(task.implemented_by), at: Date.parse(task.started_at), implemented: true,
-      title: `${people.implemented_by} ${task.implemented_by}` });
+    hands.push(hand("implemented_by", crews.implemented_by, { verbs: [TASK_HAND_VERBS.implemented_by], family: task.implemented_by, at: Date.parse(task.started_at), implemented: true,
+      title: `${people.implemented_by} ${handSubject(crews.implemented_by, null, task.implemented_by)}` }));
   }
   if (present(task.orchestrator) && !(merged && present(task.created_by))) {
-    const model = present(task.orchestrator_model) ? ` (${task.orchestrator_model})` : "";
-    hands.push({ verbs: [TASK_HAND_VERBS.orchestrator], name: String(task.orchestrator), model: task.orchestrator_model, at: Infinity,
-      title: `${people.orchestrator} ${task.orchestrator}${model}` });
+    hands.push(hand("orchestrator", crews.orchestrator || crewReferenceBase(task.orchestrator), { verbs: [TASK_HAND_VERBS.orchestrator], model: task.orchestrator_model, at: Infinity,
+      title: `${people.orchestrator} ${handSubject(crews.orchestrator || crewReferenceBase(task.orchestrator), task.orchestrator_model)}` }));
   }
   return hands;
 }
 
 // The detail read's `handled_by`: who piloted, reviewed and recovered the
-// task, each from a durable record, oldest first.
+// task, each from a durable record, oldest first. The server names the crew;
+// the one human a hand may show without a crew is an operator, and an
+// unrecorded hand shows its action alone.
 function derivedHands(task) {
   const list = Array.isArray(task.handled_by) ? task.handled_by : [];
-  return list.map((hand) => ({
-    verbs: [hand.verb],
-    name: String(hand.crew || hand.model || hand.actor || "unrecorded"),
-    model: hand.model,
-    family: hand.family,
-    at: Date.parse(hand.at),
-    occurrence: hand,
-  }));
+  return list.map((hand) => {
+    const name = hand.crew ? crewReferenceBase(hand.crew) : hand.actor === "operator" ? "operator" : "";
+    return {
+      verbs: [hand.verb],
+      name,
+      key: name || String(hand.actor || hand.model || ""),
+      model: hand.model,
+      family: hand.family,
+      at: Date.parse(hand.at),
+      occurrence: hand,
+    };
+  });
 }
 
 function handTime(at) {
@@ -257,7 +275,7 @@ function orderedHands(task) {
   const groups = [];
   for (const hand of ordered) {
     const last = groups[groups.length - 1];
-    if (last && hand.occurrence && last.occurrences.length && last.name === hand.name && last.verbs.join() === hand.verbs.join()) {
+    if (last && hand.occurrence && last.occurrences.length && last.key === hand.key && last.verbs.join() === hand.verbs.join()) {
       last.occurrences.push(hand.occurrence);
       continue;
     }
@@ -271,16 +289,18 @@ function buildHandsChain(task) {
     const count = group.occurrences.length;
     const verb = group.verbs.join(" · ") + (count > 1 ? ` ×${count}` : "");
     const title = group.title || [
-      `${group.name}${present(group.model) && group.model !== group.name ? ` (${group.model})` : ""} ${group.verbs.join(" · ")}`,
+      `${handSubject(group.name, group.model, group.key)} ${group.verbs.join(" · ")}`.trim(),
       ...group.occurrences.map(occurrenceLine),
     ].join("\n");
+    // A hand with no established crew shows its action alone.
     const hand = el("span", { class: "task-hand", title }, [
-      el("span", { class: "task-hand-name", text: group.name }),
-      el("span", { class: "task-hand-verb", text: ` ${verb}` }),
+      ...(group.name ? [el("span", { class: "task-hand-name", text: group.name })] : []),
+      el("span", { class: "task-hand-verb", text: group.name ? ` ${verb}` : verb }),
     ]);
+    // The colour follows the recorded provider or model, never the label.
     const family = AGENT_FAMILIES.find((agent) => agent === group.family)
       || AGENT_FAMILIES.find((agent) =>
-        [group.name, group.model].some((value) => present(value) && String(value).toLowerCase().includes(agent)));
+        [group.family, group.model, group.name].some((value) => present(value) && String(value).toLowerCase().includes(agent)));
     if (family) hand.dataset.agent = family;
     return hand;
   });

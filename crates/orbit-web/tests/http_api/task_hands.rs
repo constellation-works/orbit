@@ -223,3 +223,114 @@ fn task_detail_attributes_the_producing_pilot_activity() {
         },
     );
 }
+
+/// Stored attribution names a crew only when the record establishes one: a
+/// model one crew runs, or a crew reference. A provider-level label, a
+/// reassignment and a qualified pilot draw never put a provider, model or
+/// `@effort` in the row.
+#[test]
+fn task_detail_names_recorded_crews_for_stored_attribution() {
+    isolated(
+        "task_hands::task_detail_names_recorded_crews_for_stored_attribution",
+        || {
+            let fixture = Fixture::new();
+            let add = |title: &str, agent: &str, model: &str, crew: &str| {
+                fixture
+                    .runtime
+                    .add_task_with_identity(
+                        TaskAddParams {
+                            title: title.into(),
+                            description: "Stored attribution crews.".into(),
+                            status: Some(TaskStatus::Backlog),
+                            crew: Some(crew.into()),
+                            orchestrator: Some("opus".into()),
+                            plan: "Plan.".into(),
+                            ..Default::default()
+                        },
+                        Some(agent.into()),
+                        Some(model.into()),
+                    )
+                    .unwrap()
+            };
+            let set = |id: &str, planned: &str, implemented: &str| {
+                fixture
+                    .runtime
+                    .force_update_task_with_identity(
+                        id,
+                        TaskUpdateParams {
+                            planned_by: Some(Some(planned.into())),
+                            implemented_by: Some(Some(implemented.into())),
+                            ..Default::default()
+                        },
+                        None,
+                        None,
+                    )
+                    .unwrap();
+            };
+            // Created on a model exactly one crew runs, planned by a qualified
+            // crew reference, implemented under a provider-level label, and
+            // reassigned to another crew since.
+            let mixed = add("Mixed formats", "codex", "gpt-6.2-sol", "luna");
+            set(&mixed.id, "muse-spark@high", "claude");
+            // An unknown creator model and a provider label name no crew; the
+            // full model id one crew runs does.
+            let legacy = add("Legacy labels", "claude", "claude-unknown-model", "sol");
+            set(&legacy.id, "claude", "gpt-6.2-sol");
+            // A qualified pilot draw shows its bare crew name.
+            let at = Utc::now() - Duration::minutes(5);
+            pilot_run(
+                &fixture,
+                "jrun-task-hands-qualified",
+                "muse-spark",
+                "muse-spark-1.3",
+                at - Duration::minutes(2),
+                at + Duration::minutes(1),
+            );
+            let mut state = fixture
+                .runtime
+                .read_run_state("jrun-task-hands-qualified")
+                .unwrap()
+                .unwrap();
+            state.activity_crew_draws.clear();
+            state.activity_crew_draws.insert(
+                "workflow.purpose_crews.task_pilot".into(),
+                ActivityCrewDraw {
+                    crew: "muse-spark@high".into(),
+                    source: "workflow.purpose_crews.task_pilot".into(),
+                    eligible_pool: vec![],
+                    auto_effort: None,
+                },
+            );
+            fixture
+                .runtime
+                .write_run_state("jrun-task-hands-qualified", &state)
+                .unwrap();
+            pilot_receipt(
+                &fixture,
+                &mixed.id,
+                at,
+                Some("jrun-task-hands-qualified"),
+                &[],
+                &["file:src/pilot.rs"],
+            );
+
+            let server = fixture.server(false);
+            let detail = |id: &str| {
+                json_ok(server.get(&format!("/api/tasks/{id}?workspace=ws_http_fixture")))
+            };
+            let mixed = detail(&mixed.id);
+            assert_eq!(
+                mixed["recorded_crews"],
+                json!({"created_by": "sol", "planned_by": "muse-spark", "orchestrator": "opus"}),
+                "{mixed}"
+            );
+            assert_eq!(mixed["handled_by"][0]["crew"], "muse-spark", "{mixed}");
+            let legacy = detail(&legacy.id);
+            assert_eq!(
+                legacy["recorded_crews"],
+                json!({"implemented_by": "sol", "orchestrator": "opus"}),
+                "{legacy}"
+            );
+        },
+    );
+}

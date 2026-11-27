@@ -281,7 +281,9 @@ pub(super) fn task_riskiness_json(model: Option<&TaskRiskinessModel>, task: &Tas
 /// `why_stuck`. A task with a linked run carries `job_run_worktree`: the
 /// run's recorded branch and worktree path on its execution machine. A task
 /// that was piloted, reviewed or recovered carries `handled_by`: those hands
-/// in time order, each derived from a durable record. Every task carries
+/// in time order, each derived from a durable record, and `recorded_crews`
+/// names the crew each stored attribution field (`created_by`, `planned_by`,
+/// `implemented_by`, `orchestrator`) establishes. Every task carries
 /// `riskiness`, as its list row does, and an active triage/recovery binding
 /// carries `active_triage` on both surfaces. A task assigned to a human crew
 /// carries `human_crew` (`{name, description}`) on both surfaces and on every
@@ -322,6 +324,10 @@ pub(super) fn task_detail_json(
         let hands = runtime.task_handled_by(row);
         if !hands.is_empty() {
             object.insert("handled_by".to_string(), Value::Array(hands));
+        }
+        let recorded_crews = runtime.task_recorded_crews(&row.task);
+        if !recorded_crews.is_empty() {
+            object.insert("recorded_crews".to_string(), Value::Object(recorded_crews));
         }
         if include_candidate {
             match runtime.task_has_discardable_candidate(&row.task) {

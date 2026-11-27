@@ -22,6 +22,8 @@ mod api;
 mod attribution;
 mod candidates;
 mod ci_failures;
+
+mod crew_name;
 pub(super) mod effort;
 mod effort_backfill;
 mod facts;
