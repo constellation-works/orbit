@@ -2,13 +2,16 @@
 
 use super::status;
 use crate::OrbitRuntime;
-use crate::application::resident::{RESIDENT_CYCLE_ROUTINE_TARGET, ResidentRoutineStatusPort};
+use crate::application::resident::RESIDENT_CYCLE_ROUTINE_TARGET;
 
-impl ResidentRoutineStatusPort for OrbitRuntime {
-    fn disabled_resident_cycle_routine_name(&self) -> Option<String> {
-        let report = status::checkout_routine_statuses(self).ok()?;
+pub(crate) struct ResidentRoutineStatus<'a>(pub(crate) &'a OrbitRuntime);
+
+impl ResidentRoutineStatus<'_> {
+    pub(crate) fn disabled_cycle_routine_name(&self) -> Option<String> {
+        let rt = self.0;
+        let report = status::checkout_routine_statuses(rt).ok()?;
         let canonical = |path: &std::path::Path| std::fs::canonicalize(path).ok();
-        let orbit_dir = canonical(&self.paths().orbit_dir)?;
+        let orbit_dir = canonical(&rt.paths().orbit_dir)?;
         report
             .statuses
             .iter()

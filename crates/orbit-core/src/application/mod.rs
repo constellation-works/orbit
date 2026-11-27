@@ -6,7 +6,7 @@
 //!
 //! - Tasks, jobs, and delivery: `task`, `task_bundle`, `job`, `workflow`,
 //!   `landing`, `review`, `attention`, `notice`, `operator_input`.
-//! - Automation: `auto_tasks`, `routines`, `automation`, `workspace_auto`,
+//! - Automation: `auto_tasks`, `automation`, `workspace_auto`,
 //!   `sweep_filing`, `seeding_policy`.
 //! - Agents and runs: `agents`, `executor`, `agent_corpus`, `crew_memory`,
 //!   `evolution`, `experiment`, `resident`, `vision_probe`, `statistics`.
@@ -49,7 +49,6 @@ pub mod plugin;
 pub(crate) mod pull_drain;
 pub mod resident;
 pub mod review;
-pub mod routines;
 pub(crate) mod search;
 pub mod seeding_policy;
 pub mod skill;

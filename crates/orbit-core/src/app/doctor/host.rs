@@ -11,7 +11,7 @@ use orbit_common::{Env, OrbitError};
 use orbit_types::identity::CrewEnvVar;
 
 use super::{OrphanTaskStoreRemoval, WorkspaceDoctorResult};
-use crate::application::routines::RoutineStatusReport;
+use crate::app::routine::RoutineStatusReport;
 use crate::bootstrap::browser_kit::{KitInspection, KitLayout};
 
 /// What the doctor reads from the host through the composition tier.

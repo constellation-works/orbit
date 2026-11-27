@@ -3,8 +3,8 @@
 
 use std::time::Instant;
 
-use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
-use orbit_core::application::routines::{
+use orbit_core::app::routine::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
+use orbit_core::app::routine::{
     RoutineMachineIdentity, SweepOptions, routine_statuses_with_providers,
 };
 use orbit_types::workspace::{Workspace as WorkspaceRecord, WorkspaceStatus};

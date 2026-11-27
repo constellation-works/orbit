@@ -6,12 +6,12 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_types::workspace::Workspace;
 
-use super::super::clock::load_clock_settings;
 use super::super::loader::{DiscoveredWorkspaces, RoutineLoadError};
 use super::SweepOptions;
 use crate::OrbitRuntime;
 use crate::application::contracts::PullSettlementOutcome;
 use crate::runtime::host_signal::{HostSignalProbe, ScheduledShutdown};
+use orbit_clock::load_clock_settings;
 
 /// Load the `clock.env` values any discovered workspace's effective
 /// `execution.env.pass` lists or a crew's `env` reads. A refused or

@@ -4,8 +4,9 @@
 use orbit_common::OrbitError;
 
 use super::Statuses;
+use super::status::toggle_listed_routine;
+use super::{RoutineEditOutcome, RoutineEditRefusal};
 use crate::OrbitRuntime;
-use crate::application::routines::{RoutineEditOutcome, RoutineEditRefusal, toggle_listed_routine};
 
 /// Routine names are selected host-wide, but the audit row is recorded under
 /// the workspace the runtime is bound to (the `--workspace` selection, else

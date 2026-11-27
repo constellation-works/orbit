@@ -64,7 +64,7 @@ pub(super) fn unsafe_preservation_component(
     Ok(None)
 }
 
-pub(in crate::application) fn preserve_modified_retired_asset(
+pub(crate) fn preserve_modified_retired_asset(
     active_dir: &Path,
     asset_kind: &str,
     layout: ManagedAssetLayout,

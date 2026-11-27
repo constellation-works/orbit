@@ -62,7 +62,7 @@ pub(crate) use guard::{
     ResidentActionTicket, ResidentCallAdmission, ResidentCallClass,
     clear_failed_resident_action_key,
 };
-pub(in crate::application) use routine_status_port::ResidentRoutineStatusPort;
+pub(crate) use routine_status_port::ResidentRoutineStatusPort;
 pub use steps::{RESIDENT_CYCLE_LEASE_MINUTES, resident_cycle_id};
 
 pub(crate) use view::{ResidentView, resident_mandate_from_artifact};

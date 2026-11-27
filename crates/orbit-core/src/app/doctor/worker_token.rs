@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::OrbitRuntime;
-use crate::application::routines::{ClockUnitVerdict, inspect_clock_unit};
+use crate::app::routine::{ClockUnitVerdict, inspect_clock_unit};
 use orbit_common::security::operator_env::{CLOCK_ENV_FILE_NAME, clock_env_file_names};
 use orbit_config::{ConfigRoots, ResolvedConfig};
 

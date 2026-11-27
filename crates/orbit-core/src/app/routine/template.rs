@@ -12,12 +12,12 @@ use orbit_types::workflow::RoutineDefinition;
 use orbit_automation::routines::loader::ROUTINES_DIR;
 
 use super::materialize::write_confined_routine;
-use super::rewrite_enabled_line;
 use super::seed::{
     BASE_BRANCH_PLACEHOLDER, DEFAULT_ROUTINE_FILES, OWNER_MACHINE_PLACEHOLDER,
     RETIRED_ROUTINE_FILES, ROUTINE_NAME_PLACEHOLDER, RoutineSeedIdentity,
     SUPERSEDED_ROUTINE_TEMPLATES,
 };
+use super::status::rewrite_enabled_line;
 use crate::application::managed_assets::{
     MANAGED_ASSET_MANIFEST_FILE, ManagedAssetAction, ManagedAssetLayout, ManagedAssetOutcome,
     ManagedAssetReconcileMode, ManagedAssetReconciliation, RoutineAssetProvenance,

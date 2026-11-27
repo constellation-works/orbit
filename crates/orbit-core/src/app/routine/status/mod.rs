@@ -12,23 +12,22 @@ mod report;
 mod toggle;
 
 use super::RoutineMachineIdentity;
-use super::due::{next_occurrence, parse_cron};
 use super::loader::{
     DiscoveredWorkspaces, LoadedRoutine, OwnerOnlyRoutine, RetiredRoutine, RoutineLoadError,
     RoutineWorkspaceProvider, apply_peer_name_collisions, collect_host_routines,
 };
 use crate::OrbitRuntime;
-pub use crate::application::contracts::ScheduleDisplayState;
+use crate::application::contracts::ScheduleDisplayState;
 use crate::application::store_opener::StoreOpener;
 pub(crate) use checkout::{
     checkout_edit_report, checkout_routine_statuses, toggle_checkout_routine,
 };
 use chrono::{DateTime, Local, Utc};
-pub use display::{
-    FireField, RoutineFailureStreak, RoutineField, RoutineStatus, breaker_json, project_fire,
-};
+use display::RoutineFailureStreak;
+pub use display::{FireField, RoutineField, RoutineStatus, project_fire};
 pub use fires::recent_fires;
 pub use orbit_automation::routines::breaker::{BreakerTrialPhase, breaker_trial_status};
+use orbit_automation::routines::due::{next_occurrence, parse_cron};
 use orbit_automation::routines::sweep::duplicate_ownership_skipped;
 use orbit_common::OrbitError;
 use orbit_store::Store;
@@ -44,8 +43,7 @@ use std::collections::HashSet;
 use std::path::Path;
 pub use toggle::{
     RoutineBreakerAction, RoutineBreakerOutcome, control_listed_routine_breaker, pause_routine,
-    resume_routine, routine_breaker_events, select_listed_routine, set_routine_enabled,
-    toggle_listed_routine,
+    resume_routine, routine_breaker_events, set_routine_enabled, toggle_listed_routine,
 };
 pub(crate) use toggle::{
     next_scheduled_occurrence, rewrite_enabled_line, select_listed_routine_for_target,

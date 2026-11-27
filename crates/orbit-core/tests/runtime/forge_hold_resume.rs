@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
-use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions};
+use orbit_core::app::routine::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
+use orbit_core::app::routine::{RoutineMachineIdentity, SweepOptions};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
 use orbit_core::runtime::OrbitRuntime;

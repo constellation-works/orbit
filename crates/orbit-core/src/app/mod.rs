@@ -53,6 +53,8 @@ pub mod notice;
 
 pub mod plugin;
 
+pub(crate) mod port;
+
 pub mod remote_command;
 
 pub mod resident;

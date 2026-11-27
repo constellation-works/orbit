@@ -542,9 +542,8 @@ A seventeenth pass (ORB-22688) made the first structural cut of the serial `orbi
 library that the sixteenth pass named. The host's sweep clock (`routines/clock`: unit
 rendering and install, pause and resume, cadence, convergence, inspection and health), its
 `clock.toml` settings, the tick budget `TICK_DEADLINE` and the three unit templates moved
-into a new `orbit-clock` crate. It names only `orbit-common`. Core re-exports it at
-`application::routines::clock` and the settings through `application::contracts`, so no
-consumer changed. `orbit-automation` re-exports the tick budget, so the constant still has
+into a new `orbit-clock` crate. It names only `orbit-common`. Core re-exports the clock operations through
+`app::routine` and shared settings through `application::contracts`. `orbit-automation` re-exports the tick budget, so the constant still has
 one definition. The 19 clock unit tests moved with their code, unchanged.
 
 Conditions: base `edadacb73` against the same tree with this change, the full selection
@@ -2350,7 +2349,7 @@ The [orbit-config audit delivery](../dev/reviews/unit-test-audit-orbit-config-de
 - `crates/orbit-store/src/driver/sqlite/host/schema/tests/ledger/registry.rs::task_registry_schema_prefix_goldens` (criterion 3, persisted-schema safety): the same per-prefix golden for the task registry's own ledger (`task_index/schema/tests/registry_schema.golden`), a separate SQLite file the store-open boundary never builds. Adoption, the `user_version` fence and newer-registry decisions use the public registry boundary in `tests/store/task_registry_ledger.rs`.
 
 - `the_hold_includes_the_horizon_and_a_later_instant_admits` (criterion 1), beside `crates/orbit-runtime/src/host/signal.rs`. One table pins the horizon arithmetic: equality holds, one second later admits, and a past timestamp holds. The pull and local drain tests, and the sweep test below, place the schedule with `Utc::now()` at minute granularity, so they cannot pin the one-second boundary without a race [ORB-15796].
-- `crates/orbit-core/src/application/routines/tests/sweep.rs::a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires` (criterion 2). The public `test_support::run_sweep_at` hardcodes the default host-signal probe, so a crate-root test cannot place a shutdown on either side of the horizon. The test drives `run_sweep_pass` with a `SweepContext` that injects the clock and a 30-minute horizon, and asserts the tick skips at the horizon and fires one minute past it. A hardcoded 180 would still hold that far side [ORB-15796].
+- `crates/orbit-core/src/app/routine/tests/sweep.rs::a_shutdown_inside_the_hold_horizon_skips_the_sweep_and_one_beyond_it_fires` (criterion 2). The public `test_support::run_sweep_at` hardcodes the default host-signal probe, so a crate-root test cannot place a shutdown on either side of the horizon. The test drives `run_sweep_pass` with a `SweepContext` that injects the clock and a 30-minute horizon, and asserts the tick skips at the horizon and fires one minute past it. A hardcoded 180 would still hold that far side [ORB-15796].
 
 - `schema` in `crates/orbit-runtime/src/stored/recovery_authority/tests/mod.rs` (criterion 3, persisted-authority safety): exercises adoption from a frozen pre-ledger SQL fixture across the shipped certificate and optional binding shapes, preserving each existing SQLite table definition and row, and checks newer-schema writer/read-only/refusal decisions and WAL sidecar retention after those opens close. Host authority is private and cannot be seeded or opened directly through the public leaf runtime API without weakening its trust boundary. Mutable cases re-execute in isolated children.
 

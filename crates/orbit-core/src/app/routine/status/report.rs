@@ -1,7 +1,7 @@
 use super::*;
 
 use super::fires::{FIRE_HISTORY_LIMIT, automation_fires, fire_history, newest_fire};
-use crate::application::routines::template::is_seeded_routine_file;
+use crate::app::routine::template::is_seeded_routine_file;
 
 /// Everything `orbit routine list` renders.
 #[derive(Debug)]
@@ -104,7 +104,7 @@ pub fn routine_statuses_with_providers(
     let started = std::time::Instant::now();
     // Status is observation: it opens the existing store read-only and fails
     // with the setup remedy when the store is absent (STD-01 R31).
-    let store = super::super::open_existing_routine_store(opener, global_root)?;
+    let store = crate::app::routine::store::open_existing_routine_store(opener, global_root)?;
     tracing::debug!(
         elapsed_ms = started.elapsed().as_millis(),
         "routine status store opened"

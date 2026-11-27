@@ -183,7 +183,7 @@ All run budgets in Orbit config, auto-task definitions, job/activity assets, wor
 ## Auto-task definitions are evaluated by the host tick, not fired by a routine
 
 **Recorded:** 2026-09-12 · [ORB-12237]
-**Code anchors:** `crates/orbit-core/src/application/auto_tasks/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-core/src/application/routines/sweep/tick.rs`
+**Code anchors:** `crates/orbit-core/src/application/auto_tasks/scheduler.rs::run_auto_task_scheduler_at`, `crates/orbit-core/src/app/routine/sweep/tick.rs`
 
 ### Context
 

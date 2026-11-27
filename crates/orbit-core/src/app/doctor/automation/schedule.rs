@@ -54,7 +54,7 @@ fn stale_routine_message(
     global_root: &std::path::Path,
     host: &dyn Host,
 ) -> Result<Option<String>, OrbitError> {
-    use crate::application::routines::{minimum_cron_interval, parse_cron};
+    use crate::app::routine::{minimum_cron_interval, parse_cron};
 
     // A missing scheduler store has no fires to judge; doctor must not reach the
     // status read, which now refuses to create it (STD-01 R31).
