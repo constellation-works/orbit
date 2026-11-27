@@ -103,7 +103,7 @@ fn pull_drains_in(
     };
     let mut drains = Vec::new();
     for state in [JobRunState::Running, JobRunState::Pending] {
-        let runs = core.runtime().list_job_runs(JobRunListParams {
+        let runs = core.runtime().list_job_runs_observed(JobRunListParams {
             job_id: Some(PULL_DRAIN_JOB.to_string()),
             state: Some(state),
             ..Default::default()

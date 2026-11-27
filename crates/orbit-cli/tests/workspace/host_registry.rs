@@ -373,7 +373,42 @@ fn host_list_show_rename_and_remove_report_live_state_and_dependents() {
         init["owner_host"], "primary",
         "replica init names the owner's host entry: {init}"
     );
+    // A stale running pull must remain stored as running, and an older layout
+    // marker must not be advanced by either dependent-inspection path.
+    let config: serde_yaml::Value = serde_yaml::from_slice(
+        &fs::read(replica.join(".orbit/config.yaml")).expect("replica config"),
+    )
+    .expect("parse replica config");
+    let workspace_id = config["workspace_id"].as_str().expect("workspace id");
+    let db = rusqlite::Connection::open(fleet.local.home.join(".orbit/orbit.db"))
+        .expect("open host store");
+    db.execute(
+        "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, input_json, \
+         scheduled_at, started_at, created_at, pid) VALUES \
+         ('jrun-host-stale', ?1, 'workspace_pull_pipeline', 1, 'running', '{}', \
+         '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z', '2020-01-01T00:00:00Z', 99999999)",
+        [workspace_id],
+    )
+    .expect("seed stale pull run");
+    let marker = replica.join(".orbit/state/layout.version");
+    fs::write(&marker, "8\n").expect("rewind layout marker");
+    let assert_observational = || {
+        assert_eq!(fs::read_to_string(&marker).expect("layout marker"), "8\n");
+        let state: String = db
+            .query_row(
+                "SELECT state FROM job_runs WHERE run_id = 'jrun-host-stale'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("pull run state");
+        assert_eq!(state, "running");
+    };
     let shown = fleet.json(&["host", "show", "primary", "--json"]);
+    assert_observational();
+    assert_eq!(
+        shown["dependents"]["pull_drains"][0]["run_id"], "jrun-host-stale",
+        "{shown}"
+    );
     assert_eq!(
         shown["dependents"]["replica_checkouts"][0]["workspace_name"], "primary-replica",
         "{shown}"
@@ -383,7 +418,14 @@ fn host_list_show_rename_and_remove_report_live_state_and_dependents() {
     assert_eq!(code, "host_in_use", "{message}");
     assert!(message.contains("primary-replica"), "{message}");
     assert_eq!(fleet.hosts_bytes(), before);
+    assert!(message.contains("jrun-host-stale"), "{message}");
+    assert_observational();
     let removed = fleet.json(&["host", "remove", "primary", "--force", "--json"]);
+    assert_observational();
+    assert_eq!(
+        removed["orphaned"]["pull_drains"][0]["run_id"], "jrun-host-stale",
+        "{removed}"
+    );
     assert_eq!(removed["action"], "removed", "{removed}");
     assert_eq!(
         removed["orphaned"]["replica_checkouts"][0]["workspace_name"], "primary-replica",
