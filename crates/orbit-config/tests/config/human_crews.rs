@@ -13,9 +13,6 @@ fn human_crew_load(body: &str) -> Result<ResolvedConfig, String> {
     .map_err(|error| error.to_string())
 }
 
-const HUMAN_CREW_AGENTS: &str = "[crews.sol]\nmodel = \"m\"\nprovider = \"codex\"\n\n\
-     [crews.dk]\nkind = \"human\"\ndescription = \"Daniel's own work\"\n";
-
 #[test]
 fn human_crew_loads_apart_from_the_agent_registry() {
     let config = human_crew_load(&format!(

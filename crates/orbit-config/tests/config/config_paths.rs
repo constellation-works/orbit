@@ -1,10 +1,6 @@
 //  Public config-file admission, separate from value/schema tests. The FIFO
 //  case owns a guarded child so a blocking-read regression cannot hang the suite.
 
-const GLOBAL: &str = "[execution.codex]\nsandbox = 'danger-full-access'\n\
-                      [execution.env]\npass = ['GLOBAL_TOKEN']\n";
-const TOGGLES: &str = "[plugin_enablement]\ngraph = false\n";
-
 fn roots(directory: &Path) -> ConfigRoots {
     let global = directory.join("global");
     let workspace = directory.join("workspace");

@@ -44,22 +44,6 @@ impl<'a> PinningHost<'a> {
     }
 }
 
-fn member() -> StateMember {
-    StateMember {
-        key: "fixture-member".into(),
-        task_ids: vec!["fixture-task".into()],
-        fingerprint: "fixture-input".into(),
-        source: SourceRevision {
-            commit: "fixture-head".into(),
-            tree: "fixture-tree".into(),
-        },
-        evidence: serde_json::json!({}),
-        first_seen: at("2026-01-01T00:00:00Z"),
-        changed_at: at("2026-01-01T00:00:00Z"),
-        crew: None,
-    }
-}
-
 impl MemberHost for PinningHost<'_> {
     fn head(&self, _: &str) -> Result<(String, SourceRevision), AutomationError> {
         Ok(("fixture-repo".into(), member().source))
@@ -145,6 +129,22 @@ impl MemberHost for PinningHost<'_> {
         );
         self.pins.borrow_mut().remove(&attempt.id);
         self.released.borrow_mut().push(attempt.id.clone());
+    }
+}
+
+fn member() -> StateMember {
+    StateMember {
+        key: "fixture-member".into(),
+        task_ids: vec!["fixture-task".into()],
+        fingerprint: "fixture-input".into(),
+        source: SourceRevision {
+            commit: "fixture-head".into(),
+            tree: "fixture-tree".into(),
+        },
+        evidence: serde_json::json!({}),
+        first_seen: at("2026-01-01T00:00:00Z"),
+        changed_at: at("2026-01-01T00:00:00Z"),
+        crew: None,
     }
 }
 

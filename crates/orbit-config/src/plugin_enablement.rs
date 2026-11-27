@@ -27,6 +27,15 @@ use crate::config_toml::read_config_toml;
 /// The reserved workspace table that holds per-plugin toggles.
 pub(crate) const PLUGIN_ENABLEMENT_TABLE: &str = "plugin_enablement";
 
+/// A `[plugin_enablement]` table found in a global `config.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MisplacedGlobalPluginEnablement {
+    /// Host label the global document names (`[machine] name` or `id`).
+    pub host: String,
+    /// Global config file holding the table.
+    pub path: std::path::PathBuf,
+}
+
 /// Dotted config-store key for one plugin's workspace toggle.
 pub fn plugin_enablement_key(namespace: &str) -> String {
     format!("{PLUGIN_ENABLEMENT_TABLE}.{namespace}")
@@ -120,15 +129,6 @@ pub fn global_plugin_enablement_fix(path: &Path) -> String {
          `orbit plugin enable|disable <plugin> --scope workspace`",
         config_document::redacted_display(path)
     )
-}
-
-/// A `[plugin_enablement]` table found in a global `config.toml`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MisplacedGlobalPluginEnablement {
-    /// Host label the global document names (`[machine] name` or `id`).
-    pub host: String,
-    /// Global config file holding the table.
-    pub path: std::path::PathBuf,
 }
 
 /// Read `path` (a global `config.toml`) and report a misplaced

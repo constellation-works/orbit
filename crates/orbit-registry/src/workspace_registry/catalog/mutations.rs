@@ -12,6 +12,33 @@ use orbit_types::workspace::{
 
 use super::find_workspace;
 
+/// The inspected result of explicitly rebinding one workspace's source remote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceSourceRemoteRebind {
+    pub workspace_id: String,
+    pub old_remote: String,
+    pub old_repository_identity: Option<String>,
+    pub new_remote: String,
+    pub new_repository_identity: String,
+    pub changed: bool,
+    pub dry_run: bool,
+}
+
+/// The result of rebinding one workspace's registered ship mode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceShipModeRebind {
+    pub workspace_id: String,
+    /// The effective mode before the rebind.
+    pub previous: ShipMode,
+    /// The stored value before the rebind; `None` when it was unset, which
+    /// resolves to `pr`.
+    pub previous_stored: Option<String>,
+    pub ship_mode: ShipMode,
+    /// Whether the stored value changed. Rebinding an unset mode to `pr`
+    /// stores it explicitly without changing the effective mode.
+    pub changed: bool,
+}
+
 /// Registers a new workspace. Errors if a workspace with the same id or name already exists.
 pub fn register_workspace(
     registry: &mut WorkspaceRegistry,
@@ -73,18 +100,6 @@ pub fn register_checkout(
     Ok(())
 }
 
-/// The inspected result of explicitly rebinding one workspace's source remote.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceSourceRemoteRebind {
-    pub workspace_id: String,
-    pub old_remote: String,
-    pub old_repository_identity: Option<String>,
-    pub new_remote: String,
-    pub new_repository_identity: String,
-    pub changed: bool,
-    pub dry_run: bool,
-}
-
 /// Reconcile a detected origin during explicit initialization of an existing workspace.
 ///
 /// Only the declared local owner can establish a missing source identity.
@@ -126,21 +141,6 @@ pub fn reconcile_workspace_source_remote(
     workspace.git_remote = Some(remote.to_string());
     workspace.updated_at = Utc::now();
     Ok(())
-}
-
-/// The result of rebinding one workspace's registered ship mode.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceShipModeRebind {
-    pub workspace_id: String,
-    /// The effective mode before the rebind.
-    pub previous: ShipMode,
-    /// The stored value before the rebind; `None` when it was unset, which
-    /// resolves to `pr`.
-    pub previous_stored: Option<String>,
-    pub ship_mode: ShipMode,
-    /// Whether the stored value changed. Rebinding an unset mode to `pr`
-    /// stores it explicitly without changing the effective mode.
-    pub changed: bool,
 }
 
 /// Set a workspace's registered ship mode, touching nothing else on the

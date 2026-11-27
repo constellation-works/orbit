@@ -36,6 +36,25 @@ pub enum WorkspaceValidationMode {
     BestEffort,
 }
 
+/// A parsed registry together with the validated path it was read from, so a
+/// migrating caller writes back to exactly the file it read. The path is
+/// `None` only when the global root does not exist yet, which also means no
+/// migration can be pending.
+struct RegistrySnapshot {
+    load: ReadOnlyRegistryLoad,
+    path: Option<PathBuf>,
+}
+
+impl From<&MachineIdentityState> for WorkspaceRegistryMachineContext {
+    /// Only a complete identity contributes validation facts; an uninitialized
+    /// machine validates as a standalone installation.
+    fn from(identity: &MachineIdentityState) -> Self {
+        Self {
+            machine_id: identity.id().map(ToOwned::to_owned),
+        }
+    }
+}
+
 /// Load a registry and validate local checkout status against the filesystem.
 ///
 /// Missing checkout roots mark active workspaces invalid; restored roots
@@ -189,15 +208,6 @@ pub(crate) fn load_registry_from_with_context_and_writer(
     })
 }
 
-/// A parsed registry together with the validated path it was read from, so a
-/// migrating caller writes back to exactly the file it read. The path is
-/// `None` only when the global root does not exist yet, which also means no
-/// migration can be pending.
-struct RegistrySnapshot {
-    load: ReadOnlyRegistryLoad,
-    path: Option<PathBuf>,
-}
-
 /// Validate `path` once, then read and parse the registry under it with the
 /// machine facts `context_for` supplies. The context is resolved after the
 /// file is read, so a missing or empty registry never resolves an identity.
@@ -345,16 +355,6 @@ fn registry_machine_context(path: &Path) -> Result<WorkspaceRegistryMachineConte
         ))
     })?;
     Ok((&inspect_machine_identity(global_root)?).into())
-}
-
-impl From<&MachineIdentityState> for WorkspaceRegistryMachineContext {
-    /// Only a complete identity contributes validation facts; an uninitialized
-    /// machine validates as a standalone installation.
-    fn from(identity: &MachineIdentityState) -> Self {
-        Self {
-            machine_id: identity.id().map(ToOwned::to_owned),
-        }
-    }
 }
 
 fn write_registry(registry: &WorkspaceRegistry, path: &Path) -> Result<(), OrbitError> {

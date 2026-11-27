@@ -1,9 +1,6 @@
 //  `workflow.provider_limit_*` [ORB-14697]: `orbit config set` and a config
 //  load admit and reject the same values, through the same registry rows.
 
-const OVERRIDES: &str = "workflow.provider_limit_overrides";
-const BUDGETS: &str = "workflow.provider_limit_budgets";
-
 /// The resolved config one load of `[workflow]` `body` admits, or its error.
 fn load_config(body: &str) -> Result<ResolvedConfig, String> {
     let global = tempfile::tempdir().expect("global tempdir");

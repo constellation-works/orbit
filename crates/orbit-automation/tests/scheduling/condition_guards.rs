@@ -22,17 +22,6 @@ use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 
-fn verdict(open: bool) -> GuardVerdict {
-    if open {
-        GuardVerdict::Open
-    } else {
-        GuardVerdict::Closed {
-            reason: GUARD_FALSE,
-            detail: "`board.eligible.empty` is false".into(),
-        }
-    }
-}
-
 struct GuardedAutoHost {
     root: PathBuf,
     minted: Cell<usize>,
@@ -87,6 +76,43 @@ impl AutoTaskDispatch for GuardedAutoHost {
     }
 }
 
+#[derive(Default)]
+struct GuardedRoutineHost {
+    submitted: RefCell<Vec<String>>,
+    open: Cell<bool>,
+}
+
+impl RoutineDispatch for GuardedRoutineHost {
+    fn evaluate_guard(&self, _: &LoadedRoutine, _: DateTime<Utc>) -> GuardVerdict {
+        verdict(self.open.get())
+    }
+
+    fn submit(&self, _: &Path, _: &str, _: &str, slot: &str) -> Result<String, OrbitError> {
+        let mut submitted = self.submitted.borrow_mut();
+        submitted.push(slot.into());
+        Ok(format!("fixture-run-{}", submitted.len()))
+    }
+
+    fn run_state(&self, _: &Path, _: &str) -> Option<JobRunState> {
+        Some(JobRunState::Success)
+    }
+
+    fn run_owner_liveness(&self, _: &Path, _: &str) -> RunOwnerLiveness {
+        RunOwnerLiveness::Alive
+    }
+}
+
+fn verdict(open: bool) -> GuardVerdict {
+    if open {
+        GuardVerdict::Open
+    } else {
+        GuardVerdict::Closed {
+            reason: GUARD_FALSE,
+            detail: "`board.eligible.empty` is false".into(),
+        }
+    }
+}
+
 #[test]
 fn a_closed_auto_task_guard_holds_the_slot_under_wait_and_consumes_it_under_skip() {
     if isolated(
@@ -133,32 +159,6 @@ fn a_closed_auto_task_guard_holds_the_slot_under_wait_and_consumes_it_under_skip
         );
         tick("2026-10-30T02:05:00Z");
         assert_eq!(host.minted.get(), minted_next_slot, "{miss}");
-    }
-}
-
-#[derive(Default)]
-struct GuardedRoutineHost {
-    submitted: RefCell<Vec<String>>,
-    open: Cell<bool>,
-}
-
-impl RoutineDispatch for GuardedRoutineHost {
-    fn evaluate_guard(&self, _: &LoadedRoutine, _: DateTime<Utc>) -> GuardVerdict {
-        verdict(self.open.get())
-    }
-
-    fn submit(&self, _: &Path, _: &str, _: &str, slot: &str) -> Result<String, OrbitError> {
-        let mut submitted = self.submitted.borrow_mut();
-        submitted.push(slot.into());
-        Ok(format!("fixture-run-{}", submitted.len()))
-    }
-
-    fn run_state(&self, _: &Path, _: &str) -> Option<JobRunState> {
-        Some(JobRunState::Success)
-    }
-
-    fn run_owner_liveness(&self, _: &Path, _: &str) -> RunOwnerLiveness {
-        RunOwnerLiveness::Alive
     }
 }
 

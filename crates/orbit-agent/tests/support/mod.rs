@@ -33,6 +33,34 @@ pub const HOSTILE_ENV: &[&str] = &[
     "ORBIT_UNKNOWN_PRIVILEGE",
 ];
 
+pub struct ChildGuard(pub Child);
+
+impl ChildGuard {
+    pub fn wait(&mut self, timeout: Duration) -> ExitStatus {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.0.try_wait().expect("poll child") {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "child exceeded {timeout:?} ({})",
+                orbit_common::test_env::host_load()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
 pub fn scratch() -> TempDir {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.orbit/tmp");
     fs::create_dir_all(&root).expect("create fixture scratch root");
@@ -80,32 +108,4 @@ pub fn isolated(name: &str, run: impl FnOnce()) {
         &output.stdout,
         &output.stderr,
     );
-}
-
-pub struct ChildGuard(pub Child);
-
-impl ChildGuard {
-    pub fn wait(&mut self, timeout: Duration) -> ExitStatus {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(status) = self.0.try_wait().expect("poll child") {
-                return status;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "child exceeded {timeout:?} ({})",
-                orbit_common::test_env::host_load()
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-}
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        if self.0.try_wait().ok().flatten().is_none() {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
 }

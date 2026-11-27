@@ -11,14 +11,6 @@ use orbit_exec::compile_macos_sandbox_profile;
 #[cfg(target_os = "macos")]
 pub(super) const NEUTRAL_PROVIDER: &str = "codex";
 
-pub(super) fn profile(name: &str, read: &[&str], modify: &[&str]) -> ResolvedFsProfile {
-    ResolvedFsProfile {
-        name: name.to_string(),
-        read: read.iter().map(|s| s.to_string()).collect(),
-        modify: modify.iter().map(|s| s.to_string()).collect(),
-    }
-}
-
 #[derive(Default)]
 pub(super) struct EnvOverrides<'a> {
     pub(super) home: Option<&'a str>,
@@ -31,6 +23,14 @@ pub(super) struct EnvOverrides<'a> {
     pub(super) xdg_config_home: Option<&'a str>,
     pub(super) xdg_state_home: Option<&'a str>,
     pub(super) cargo_home: Option<&'a str>,
+}
+
+pub(super) fn profile(name: &str, read: &[&str], modify: &[&str]) -> ResolvedFsProfile {
+    ResolvedFsProfile {
+        name: name.to_string(),
+        read: read.iter().map(|s| s.to_string()).collect(),
+        modify: modify.iter().map(|s| s.to_string()).collect(),
+    }
 }
 
 pub(super) fn compile_with_env(

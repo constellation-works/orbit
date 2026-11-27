@@ -54,6 +54,10 @@ pub const SCRIPT_SCRATCH_DIRS: [&str; 5] = ["snapshot", "home", "tmp", "in", "ou
 /// The TCP port a `network: https` grant may connect to.
 pub const SCRIPT_HTTPS_PORT: u16 = 443;
 
+/// The most file descriptors one script process may hold open
+/// (`RLIMIT_NOFILE`, script steps §3 Resources).
+pub const SCRIPT_OPEN_FILES_LIMIT: u64 = 1024;
+
 /// The network one script run gets (§3 Network).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScriptSandboxNetwork {
@@ -119,42 +123,6 @@ pub struct ScriptSandboxInput {
     pub name: String,
 }
 
-/// The protected tree a script input source would expose, if any: a masked
-/// tree it is, contains or lies within (a mask enclosing the cwd counts only
-/// for a source outside the cwd, as it is not mounted at all), or a
-/// credential path it is, contains or lies within. `source` and `cwd` are
-/// physical paths. A bind at `in/<name>` is not covered by the masks and
-/// denies, which apply at host paths, so such a source is refused instead.
-pub fn script_input_conflict(
-    env: &orbit_common::Env,
-    source: &Path,
-    cwd: &Path,
-    masked: &[PathBuf],
-    home: Option<&OsStr>,
-) -> Option<PathBuf> {
-    let overlaps =
-        |protected: &Path| source.starts_with(protected) || protected.starts_with(source);
-    for mask in masked {
-        let Ok(mask) = mask.canonicalize() else {
-            continue;
-        };
-        if cwd.starts_with(&mask) && source.starts_with(cwd) {
-            continue;
-        }
-        if overlaps(&mask) {
-            return Some(mask);
-        }
-    }
-    super::credential_denies(env, home)
-        .into_iter()
-        .map(|(path, _)| path.canonicalize().unwrap_or(path))
-        .find(|path| overlaps(path))
-}
-
-pub(super) fn valid_input_name(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0'])
-}
-
 /// One script to run under the profile.
 pub struct ScriptSandboxRequest<'a> {
     pub sandbox: ScriptSandboxSpec<'a>,
@@ -199,6 +167,42 @@ pub struct ScriptSandboxRun {
     /// Not redacted: the caller redacts before storing it.
     pub log: Vec<u8>,
     pub duration: Duration,
+}
+
+/// The protected tree a script input source would expose, if any: a masked
+/// tree it is, contains or lies within (a mask enclosing the cwd counts only
+/// for a source outside the cwd, as it is not mounted at all), or a
+/// credential path it is, contains or lies within. `source` and `cwd` are
+/// physical paths. A bind at `in/<name>` is not covered by the masks and
+/// denies, which apply at host paths, so such a source is refused instead.
+pub fn script_input_conflict(
+    env: &orbit_common::Env,
+    source: &Path,
+    cwd: &Path,
+    masked: &[PathBuf],
+    home: Option<&OsStr>,
+) -> Option<PathBuf> {
+    let overlaps =
+        |protected: &Path| source.starts_with(protected) || protected.starts_with(source);
+    for mask in masked {
+        let Ok(mask) = mask.canonicalize() else {
+            continue;
+        };
+        if cwd.starts_with(&mask) && source.starts_with(cwd) {
+            continue;
+        }
+        if overlaps(&mask) {
+            return Some(mask);
+        }
+    }
+    super::credential_denies(env, home)
+        .into_iter()
+        .map(|(path, _)| path.canonicalize().unwrap_or(path))
+        .find(|path| overlaps(path))
+}
+
+pub(super) fn valid_input_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\0'])
 }
 
 /// The Bubblewrap argv (without the wrapper itself) for one script.
@@ -568,10 +572,6 @@ pub fn probe_script_sandbox_network(network: ScriptSandboxNetwork) -> Result<(),
         Err("a script step gets network access only on Linux".to_string())
     }
 }
-
-/// The most file descriptors one script process may hold open
-/// (`RLIMIT_NOFILE`, script steps §3 Resources).
-pub const SCRIPT_OPEN_FILES_LIMIT: u64 = 1024;
 
 /// The `RLIMIT_*` limits a script run gets: `RLIMIT_CPU` at its timeout in
 /// CPU seconds per process (`SIGXCPU`, then `SIGKILL` after the termination

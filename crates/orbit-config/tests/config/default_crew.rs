@@ -1,10 +1,6 @@
 //  Crew admission, seed compatibility, layering and environment projection
 //  through public config APIs. Cases that own the environment run in children.
 
-const KEY: &str = "workflow.default_crew";
-const PROVIDER_ENV: &str = "CONSTELLATION_DEFAULT_PROVIDER";
-const INVALID_PROVIDER: &str = "invalid-provider";
-
 fn default_crew_write_config(root: &Path, body: &str) {
     std::fs::create_dir_all(root).expect("config directory");
     std::fs::write(root.join("config.toml"), body).expect("config document");

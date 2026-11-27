@@ -20,6 +20,40 @@ const LAUNCHD_PLIST_TEMPLATE: &str = include_str!("../assets/clock/com.orbit.swe
 const SYSTEMD_SERVICE_TEMPLATE: &str = include_str!("../assets/clock/orbit-sweep.service");
 const SYSTEMD_TIMER_TEMPLATE: &str = include_str!("../assets/clock/orbit-sweep.timer");
 
+const CLOCK_ENV_TEMPLATE: &str = "\
+# Operator credentials for `orbit clock tick`, which launchd or systemd starts with no
+# login environment. One NAME=value per line. Only names listed in the effective
+# `[execution.env] pass` are loaded, and the tick refuses this file unless it is
+# readable by its owner alone (chmod 600).
+#
+# Dedicated Claude worker token (create it with `claude setup-token`):
+# CLAUDE_CODE_OAUTH_TOKEN=
+";
+
+/// What an installation attempt did: files written, plus either a successful
+/// activation or the commands the user must run themselves.
+#[derive(Debug)]
+pub struct ClockInstallReport {
+    /// Unit files written.
+    pub files_written: Vec<PathBuf>,
+    /// True when the unit was activated successfully. On systemd this means
+    /// the timer is schedulable, including a healthy in-flight oneshot sweep.
+    pub activated: bool,
+    /// True when the clock was paused, so the units were rewritten for the next
+    /// enable and nothing was activated: a pause is not a failed activation.
+    pub paused: bool,
+    /// Follow-up commands to run manually when activation failed or was
+    /// unavailable (e.g. no user systemd session).
+    pub manual_steps: Vec<String>,
+    /// The owner-only file `orbit clock tick` reads operator credentials from
+    /// [ORB-15154]. The unit never contains them: launchd and systemd start the
+    /// tick with no login environment, so the tick loads the names
+    /// `execution.env.pass` lists from this file.
+    pub env_file: PathBuf,
+    /// True when this install created the (comment-only) file.
+    pub env_file_created: bool,
+}
+
 /// Path launchd redirects `orbit clock tick` stdout/stderr to on macOS, and the
 /// file `run_sweep` rotates so it stays bounded on an always-on host. Single
 /// source of truth shared by the installer and the sweep
@@ -102,40 +136,6 @@ pub(super) fn validated_sweep_log_path(global_root: &Path) -> Result<PathBuf, Or
     Ok(canonical_path)
 }
 
-/// What an installation attempt did: files written, plus either a successful
-/// activation or the commands the user must run themselves.
-#[derive(Debug)]
-pub struct ClockInstallReport {
-    /// Unit files written.
-    pub files_written: Vec<PathBuf>,
-    /// True when the unit was activated successfully. On systemd this means
-    /// the timer is schedulable, including a healthy in-flight oneshot sweep.
-    pub activated: bool,
-    /// True when the clock was paused, so the units were rewritten for the next
-    /// enable and nothing was activated: a pause is not a failed activation.
-    pub paused: bool,
-    /// Follow-up commands to run manually when activation failed or was
-    /// unavailable (e.g. no user systemd session).
-    pub manual_steps: Vec<String>,
-    /// The owner-only file `orbit clock tick` reads operator credentials from
-    /// [ORB-15154]. The unit never contains them: launchd and systemd start the
-    /// tick with no login environment, so the tick loads the names
-    /// `execution.env.pass` lists from this file.
-    pub env_file: PathBuf,
-    /// True when this install created the (comment-only) file.
-    pub env_file_created: bool,
-}
-
-const CLOCK_ENV_TEMPLATE: &str = "\
-# Operator credentials for `orbit clock tick`, which launchd or systemd starts with no
-# login environment. One NAME=value per line. Only names listed in the effective
-# `[execution.env] pass` are loaded, and the tick refuses this file unless it is
-# readable by its owner alone (chmod 600).
-#
-# Dedicated Claude worker token (create it with `claude setup-token`):
-# CLAUDE_CODE_OAUTH_TOKEN=
-";
-
 /// Create the comment-only `clock.env` when absent; never touch an existing
 /// one. Returns its path and whether this call created it.
 pub(super) fn ensure_clock_env_file(global_root: &Path) -> Result<(PathBuf, bool), OrbitError> {
@@ -198,11 +198,12 @@ fn install_launchd(
 ) -> Result<ClockInstallReport, OrbitError> {
     let plist_path = write_launchd_unit(global_root, orbit_bin, settings, home)?;
     let activated = reload_launchd_unit(runner, home);
+    let manual_steps = launchd_manual_steps(activated, &plist_path);
     Ok(ClockInstallReport {
-        manual_steps: launchd_manual_steps(activated, &plist_path),
         files_written: vec![plist_path],
         activated,
         paused: false,
+        manual_steps,
         env_file: PathBuf::new(),
         env_file_created: false,
     })
@@ -305,11 +306,12 @@ fn install_systemd(
         false
     };
 
+    let manual_steps = systemd_manual_steps(activated);
     Ok(ClockInstallReport {
-        manual_steps: systemd_manual_steps(activated),
         files_written,
         activated,
         paused: false,
+        manual_steps,
         env_file: PathBuf::new(),
         env_file_created: false,
     })

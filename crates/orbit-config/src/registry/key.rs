@@ -1,19 +1,5 @@
 use super::*;
 
-/// The choices an enum key accepts, from its declared allowed values; empty
-/// for every other key.
-pub fn config_key_options(key: &str) -> Vec<&'static str> {
-    describe(key)
-        .and_then(|descriptor| descriptor.allowed.choices())
-        .map(<[&str]>::to_vec)
-        .unwrap_or_default()
-}
-
-/// Look up one registry key's metadata.
-pub fn describe(key: &str) -> Option<&'static ConfigKeyDescriptor> {
-    CONFIG_KEY_REGISTRY.iter().find(|entry| entry.key == key)
-}
-
 /// Fixed keys retired from the registry that an existing `config.toml` may
 /// still carry. Loading warns and ignores each one for one release (see
 /// `resolved::warn_compatibility_keys`); `orbit config get`/`set` refuse it
@@ -704,6 +690,40 @@ pub(crate) const DEPRECATED_VALUE_FORMS: &[(&str, &str)] = &[(
      strict instead",
 )];
 
+/// Registry keys `orbit config set` refuses to write, with the reason an
+/// operator needs. Unlike [`REMOVED_CONFIG_KEYS`] these are live settings —
+/// readable by `orbit config get`/`show` and admitted at load — they are
+/// simply not the operator's to change after `orbit init` recorded them.
+pub(crate) const IMMUTABLE_CONFIG_KEYS: &[(&str, &str)] = &[
+    (
+        "machine.id",
+        "a machine identity is generated once by `orbit init` and never reused; \
+         changing it would orphan every task, run, and workspace record minted under it",
+    ),
+    (
+        "machine.task_prefix",
+        "the task-id namespace is fixed for the life of this machine's task store; \
+         ids already minted under it cannot be renumbered",
+    ),
+];
+
+/// Dotted prefix of the one table only the global `config.toml` may carry.
+pub(crate) const GLOBAL_ONLY_KEY_PREFIX: &str = "machine.";
+
+/// The choices an enum key accepts, from its declared allowed values; empty
+/// for every other key.
+pub fn config_key_options(key: &str) -> Vec<&'static str> {
+    describe(key)
+        .and_then(|descriptor| descriptor.allowed.choices())
+        .map(<[&str]>::to_vec)
+        .unwrap_or_default()
+}
+
+/// Look up one registry key's metadata.
+pub fn describe(key: &str) -> Option<&'static ConfigKeyDescriptor> {
+    CONFIG_KEY_REGISTRY.iter().find(|entry| entry.key == key)
+}
+
 /// The deprecation note for a translated key, or `None` for any other key.
 pub(crate) fn deprecated_key_note(key: &str) -> Option<&'static str> {
     DEPRECATED_CONFIG_KEYS
@@ -733,23 +753,6 @@ pub(crate) fn is_compatibility_config_key(key: &str) -> bool {
             .any(|(candidate, _)| *candidate == key)
 }
 
-/// Registry keys `orbit config set` refuses to write, with the reason an
-/// operator needs. Unlike [`REMOVED_CONFIG_KEYS`] these are live settings —
-/// readable by `orbit config get`/`show` and admitted at load — they are
-/// simply not the operator's to change after `orbit init` recorded them.
-pub(crate) const IMMUTABLE_CONFIG_KEYS: &[(&str, &str)] = &[
-    (
-        "machine.id",
-        "a machine identity is generated once by `orbit init` and never reused; \
-         changing it would orphan every task, run, and workspace record minted under it",
-    ),
-    (
-        "machine.task_prefix",
-        "the task-id namespace is fixed for the life of this machine's task store; \
-         ids already minted under it cannot be renumbered",
-    ),
-];
-
 /// The refusal note for an unsettable key, or `None` for any other key.
 pub fn immutable_key_note(key: &str) -> Option<&'static str> {
     IMMUTABLE_CONFIG_KEYS
@@ -757,9 +760,6 @@ pub fn immutable_key_note(key: &str) -> Option<&'static str> {
         .find(|(immutable, _)| *immutable == key)
         .map(|(_, note)| *note)
 }
-
-/// Dotted prefix of the one table only the global `config.toml` may carry.
-pub(crate) const GLOBAL_ONLY_KEY_PREFIX: &str = "machine.";
 
 /// Whether `key` is one of the three `[machine]` identity keys, which are
 /// written together by `orbit init` and never unset one at a time.

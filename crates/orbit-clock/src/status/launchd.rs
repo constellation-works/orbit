@@ -13,6 +13,90 @@ use crate::settings::LAUNCHD_LABEL;
 
 use super::{manager_error, query};
 
+/// Host facts the launchd health checks need, injected so tests can drive a
+/// missing program or a penalty-boxed agent without a real macOS host.
+#[derive(Debug, Clone)]
+pub(crate) struct LaunchdHealthProbe {
+    /// Home directory holding `Library/LaunchAgents`.
+    pub(crate) home: PathBuf,
+    /// launchd GUI domain owner, as in `gui/<uid>/<label>`.
+    pub(crate) uid: u32,
+    /// Binary the unit is compared against.
+    pub(crate) running: RunningBinary,
+    /// How to ask the unit's program for its version. Production passes
+    /// [`probe_program_version`], the same probe `orbit doctor` uses.
+    pub(crate) version_probe: fn(&Path) -> Result<String, String>,
+}
+
+impl LaunchdHealthProbe {
+    pub(super) fn current() -> Result<Self, OrbitError> {
+        Self::at(&home_dir(&orbit_common::Env::capture())?)
+    }
+
+    pub(crate) fn at(home: &Path) -> Result<Self, OrbitError> {
+        Ok(Self {
+            home: home.to_path_buf(),
+            uid: current_uid(),
+            running: RunningBinary::current()?,
+            version_probe: probe_program_version,
+        })
+    }
+}
+
+/// The `launchctl print` fields that expose a stalled agent.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct LaunchdClockDetails {
+    /// Exit status of the most recent run, when one has exited.
+    last_exit_code: Option<i32>,
+    /// launchd is throttling the agent after repeated launch failures.
+    penalty_box: bool,
+}
+
+impl LaunchdClockDetails {
+    /// Read the top-level `last exit code` and `properties` lines. Nested
+    /// blocks repeat some key names, so only the first match of each is used,
+    /// and `properties` is matched on the whole trimmed key so the unrelated
+    /// `jetsamproperties category` line cannot stand in for it.
+    fn parse(output: &str) -> Self {
+        let field = |name: &str| {
+            output.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                (key.trim() == name).then(|| value.trim())
+            })
+        };
+        Self {
+            last_exit_code: field("last exit code").and_then(launchd_exit_code),
+            penalty_box: field("properties").is_some_and(|properties| {
+                properties
+                    .split('|')
+                    .any(|property| property.trim() == "penalty box")
+            }),
+        }
+    }
+
+    /// One sentence naming every reason this agent is not sweeping.
+    fn failure_summary(&self) -> Option<String> {
+        let mut reasons = Vec::new();
+        if let Some(code) = self.last_exit_code.filter(|code| *code != 0) {
+            reasons.push(format!(
+                "its most recent run exited {code} without sweeping"
+            ));
+        }
+        if self.penalty_box {
+            reasons.push(
+                "launchd is holding it in the penalty box after repeated launch failures"
+                    .to_string(),
+            );
+        }
+        (!reasons.is_empty()).then(|| {
+            format!(
+                "launchd agent {LAUNCHD_LABEL} is loaded but {}",
+                reasons.join(", and ")
+            )
+        })
+    }
+}
+
 pub(crate) fn launchd_reports_not_loaded(output: &ManagerCommandOutput) -> bool {
     let diagnostic = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
     [
@@ -73,36 +157,6 @@ pub(super) fn launchd_loaded_without_list(
         &attempts,
         None,
     ))
-}
-
-/// Host facts the launchd health checks need, injected so tests can drive a
-/// missing program or a penalty-boxed agent without a real macOS host.
-#[derive(Debug, Clone)]
-pub(crate) struct LaunchdHealthProbe {
-    /// Home directory holding `Library/LaunchAgents`.
-    pub(crate) home: PathBuf,
-    /// launchd GUI domain owner, as in `gui/<uid>/<label>`.
-    pub(crate) uid: u32,
-    /// Binary the unit is compared against.
-    pub(crate) running: RunningBinary,
-    /// How to ask the unit's program for its version. Production passes
-    /// [`probe_program_version`], the same probe `orbit doctor` uses.
-    pub(crate) version_probe: fn(&Path) -> Result<String, String>,
-}
-
-impl LaunchdHealthProbe {
-    pub(super) fn current() -> Result<Self, OrbitError> {
-        Self::at(&home_dir(&orbit_common::Env::capture())?)
-    }
-
-    pub(crate) fn at(home: &Path) -> Result<Self, OrbitError> {
-        Ok(Self {
-            home: home.to_path_buf(),
-            uid: current_uid(),
-            running: RunningBinary::current()?,
-            version_probe: probe_program_version,
-        })
-    }
 }
 
 #[cfg(unix)]
@@ -183,60 +237,6 @@ fn launchd_recovery(issue: &str) -> String {
     format!(
         "{issue}; recovery: `orbit clock enable` rewrites the unit to this binary and reloads it"
     )
-}
-
-/// The `launchctl print` fields that expose a stalled agent.
-#[derive(Debug, Default, PartialEq, Eq)]
-struct LaunchdClockDetails {
-    /// Exit status of the most recent run, when one has exited.
-    last_exit_code: Option<i32>,
-    /// launchd is throttling the agent after repeated launch failures.
-    penalty_box: bool,
-}
-
-impl LaunchdClockDetails {
-    /// Read the top-level `last exit code` and `properties` lines. Nested
-    /// blocks repeat some key names, so only the first match of each is used,
-    /// and `properties` is matched on the whole trimmed key so the unrelated
-    /// `jetsamproperties category` line cannot stand in for it.
-    fn parse(output: &str) -> Self {
-        let field = |name: &str| {
-            output.lines().find_map(|line| {
-                let (key, value) = line.split_once('=')?;
-                (key.trim() == name).then(|| value.trim())
-            })
-        };
-        Self {
-            last_exit_code: field("last exit code").and_then(launchd_exit_code),
-            penalty_box: field("properties").is_some_and(|properties| {
-                properties
-                    .split('|')
-                    .any(|property| property.trim() == "penalty box")
-            }),
-        }
-    }
-
-    /// One sentence naming every reason this agent is not sweeping.
-    fn failure_summary(&self) -> Option<String> {
-        let mut reasons = Vec::new();
-        if let Some(code) = self.last_exit_code.filter(|code| *code != 0) {
-            reasons.push(format!(
-                "its most recent run exited {code} without sweeping"
-            ));
-        }
-        if self.penalty_box {
-            reasons.push(
-                "launchd is holding it in the penalty box after repeated launch failures"
-                    .to_string(),
-            );
-        }
-        (!reasons.is_empty()).then(|| {
-            format!(
-                "launchd agent {LAUNCHD_LABEL} is loaded but {}",
-                reasons.join(", and ")
-            )
-        })
-    }
 }
 
 /// `last exit code = 78: EX_CONFIG` and `last exit code = 0` both appear;

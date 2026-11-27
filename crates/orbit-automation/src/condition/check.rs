@@ -107,6 +107,13 @@ pub struct CheckedCondition {
     pub reads: ConditionReads,
 }
 
+/// A checked `when:` guard beside a typed trigger kind.
+#[derive(Debug, Clone)]
+pub struct CheckedGuard {
+    pub when: CheckedExpression,
+    pub reads: ConditionReads,
+}
+
 /// Check a condition block for `carrier`. Shape checks
 /// ([`ConditionTrigger::validate`]) run first, so a refused scope or key is
 /// reported before the expressions are parsed.
@@ -216,13 +223,6 @@ pub(crate) fn check_expression(
         ast,
         info: Arc::new(info),
     })
-}
-
-/// A checked `when:` guard beside a typed trigger kind.
-#[derive(Debug, Clone)]
-pub struct CheckedGuard {
-    pub when: CheckedExpression,
-    pub reads: ConditionReads,
 }
 
 /// Check a `when:` guard beside `cron`, `every_minutes`, `deliveries_landed`

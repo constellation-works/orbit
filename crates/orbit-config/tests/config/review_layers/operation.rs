@@ -13,6 +13,14 @@ use orbit_config::ResolvedConfig;
 use orbit_config::admit_config_key;
 use orbit_config::admit_settable_config_key;
 
+const CODEQL_RULE: &str = "[[review.host_evidence]]\n\
+    kind = \"codeql\"\n\
+    name = \"Rust CodeQL (Linux)\"\n\
+    paths = [\"**/*.rs\"]\n\
+    os = \"linux\"\n\
+    command = \"scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls\"\n\
+    artifact = \"evidence/codeql-rust-linux.json\"\n";
+
 /// Load `workspace` over an empty global layer, returning the resolved
 /// config beside every `tracing` event the load wrote.
 fn load_workspace(workspace_body: &str) -> (ResolvedConfig, String) {
@@ -283,14 +291,6 @@ fn invalid_legacy_values_still_fail_closed() {
         );
     }
 }
-
-const CODEQL_RULE: &str = "[[review.host_evidence]]\n\
-    kind = \"codeql\"\n\
-    name = \"Rust CodeQL (Linux)\"\n\
-    paths = [\"**/*.rs\"]\n\
-    os = \"linux\"\n\
-    command = \"scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls\"\n\
-    artifact = \"evidence/codeql-rust-linux.json\"\n";
 
 #[test]
 fn host_evidence_rules_load_and_a_workspace_list_replaces_the_global_one() {

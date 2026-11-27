@@ -8,6 +8,51 @@ use super::protocol_schema::{RESPONSE_ENVELOPE_SCHEMA_VERSION, RESPONSE_ENVELOPE
 use super::wrapper::wrapper_signals;
 use super::{AgentResponseStatus, ResponseParseResult, trace::extract_invocation_trace};
 
+/// The one `error.code` an implementer declares to say its authorized work
+/// is unfinished and could continue in a fresh invocation [ORB-21837].
+pub const IMPLEMENTATION_INCOMPLETE_CODE: &str = "implementation_incomplete";
+
+/// The parser's refusal of an envelope that says `success` and carries `error`.
+const SUCCESS_CARRYING_ERROR_VIOLATION: &str = "success status must not carry error object";
+
+/// Most `result.remaining_work` entries a continuation request may carry.
+const MAX_REMAINING_WORK_ITEMS: usize = 32;
+
+/// Longest `result.remaining_work` entry, in bytes.
+const MAX_REMAINING_WORK_ITEM_BYTES: usize = 2_000;
+
+/// The invariant the [ORB-10449] completion guard is built on. Kept verbatim
+/// as the prefix of every missing-envelope diagnostic so the failure stays
+/// recognizable while [ORB-10746] appends a cause when one is available.
+const MISSING_ENVELOPE_MESSAGE: &str = "stdout does not contain an Orbit response envelope";
+
+/// Suffix JSON parses allowed while searching: the whole-string attempt plus
+/// each `{` candidate that is actually deserialized.
+const ENVELOPE_DISCOVERY_MAX_PARSE_ATTEMPTS: u32 = 4_096;
+
+/// JSON nodes visited while searching for an envelope or declared failure.
+const ENVELOPE_DISCOVERY_MAX_NODES: u32 = 65_536;
+
+const DISCOVERY_LIMIT_PREFIX: &str = "response envelope discovery exceeded a work limit";
+
+// [ORB-10746] `structured_output` first: with `--json-schema` in play it is
+// the schema-validated object the provider committed to, and Claude duplicates
+// it into `result` only as a JSON-encoded string. `result` is null on several
+// terminal paths where `structured_output` still holds the envelope, so probing
+// it first is the difference between reading the authoritative field and
+// parsing a copy by luck.
+const PREFERRED_OBJECT_KEYS: [&str; 9] = [
+    "structured_output",
+    "result",
+    "response",
+    "message",
+    "messages",
+    "content",
+    "final",
+    "final_message",
+    "output",
+];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeclaredResponseFailure {
     pub status: String,
@@ -16,38 +61,6 @@ pub struct DeclaredResponseFailure {
     /// [ORB-21837]. See [`IncompleteContinuationRequest`].
     pub continuation: Option<IncompleteContinuationRequest>,
 }
-
-/// The one `error.code` an implementer declares to say its authorized work
-/// is unfinished and could continue in a fresh invocation [ORB-21837].
-pub const IMPLEMENTATION_INCOMPLETE_CODE: &str = "implementation_incomplete";
-
-/// The parser's refusal of an envelope that says `success` and carries `error`.
-const SUCCESS_CARRYING_ERROR_VIOLATION: &str = "success status must not carry error object";
-
-/// Is `parse_error` exactly the parser's refusal of an envelope that says
-/// `success` and carries an `error` object [ORB-22426]?
-///
-/// Exact equality, so that an error quoting agent text can never match.
-pub fn is_success_carrying_error_violation(parse_error: &str) -> bool {
-    parse_error
-        == OrbitError::AgentProtocolViolation(SUCCESS_CARRYING_ERROR_VIOLATION.to_string())
-            .to_string()
-}
-
-/// Is `parse_error` exactly the parser's generic refusal of a capture with no
-/// envelope [ORB-22427]?
-///
-/// Exact equality: a refusal that names an abnormal provider ending, or quotes
-/// agent text, is not this one.
-pub fn is_missing_envelope_violation(parse_error: &str) -> bool {
-    parse_error
-        == OrbitError::AgentProtocolViolation(MISSING_ENVELOPE_MESSAGE.to_string()).to_string()
-}
-
-/// Most `result.remaining_work` entries a continuation request may carry.
-const MAX_REMAINING_WORK_ITEMS: usize = 32;
-/// Longest `result.remaining_work` entry, in bytes.
-const MAX_REMAINING_WORK_ITEM_BYTES: usize = 2_000;
 
 /// A declared-failed envelope that asks for an implementation continuation
 /// [ORB-21837].
@@ -178,6 +191,95 @@ impl<'a> ParsedStdout<'a> {
     }
 }
 
+/// Caps for one envelope or declared-failure search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EnvelopeDiscoveryBudget {
+    max_parse_attempts: u32,
+    max_nodes: u32,
+}
+
+impl EnvelopeDiscoveryBudget {
+    const fn production() -> Self {
+        Self {
+            max_parse_attempts: ENVELOPE_DISCOVERY_MAX_PARSE_ATTEMPTS,
+            max_nodes: ENVELOPE_DISCOVERY_MAX_NODES,
+        }
+    }
+}
+
+/// Parse/traversal accounting for one bounded search.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct EnvelopeDiscoveryStats {
+    parse_attempts: u32,
+    nodes_visited: u32,
+}
+
+struct Budget {
+    max_parse_attempts: u32,
+    max_nodes: u32,
+    stats: EnvelopeDiscoveryStats,
+}
+
+impl Budget {
+    fn new(limits: EnvelopeDiscoveryBudget) -> Self {
+        Self {
+            max_parse_attempts: limits.max_parse_attempts,
+            max_nodes: limits.max_nodes,
+            stats: EnvelopeDiscoveryStats::default(),
+        }
+    }
+
+    fn production() -> Self {
+        Self::new(EnvelopeDiscoveryBudget::production())
+    }
+
+    fn visit(&mut self) -> Result<(), OrbitError> {
+        self.stats.nodes_visited = self.stats.nodes_visited.saturating_add(1);
+        if self.stats.nodes_visited > self.max_nodes {
+            Err(discovery_limit_error(
+                "traversed nodes",
+                self.stats.nodes_visited,
+                self.max_nodes,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn parse(&mut self) -> Result<(), OrbitError> {
+        self.stats.parse_attempts = self.stats.parse_attempts.saturating_add(1);
+        if self.stats.parse_attempts > self.max_parse_attempts {
+            Err(discovery_limit_error(
+                "parse attempts",
+                self.stats.parse_attempts,
+                self.max_parse_attempts,
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// Is `parse_error` exactly the parser's refusal of an envelope that says
+/// `success` and carries an `error` object [ORB-22426]?
+///
+/// Exact equality, so that an error quoting agent text can never match.
+pub fn is_success_carrying_error_violation(parse_error: &str) -> bool {
+    parse_error
+        == OrbitError::AgentProtocolViolation(SUCCESS_CARRYING_ERROR_VIOLATION.to_string())
+            .to_string()
+}
+
+/// Is `parse_error` exactly the parser's generic refusal of a capture with no
+/// envelope [ORB-22427]?
+///
+/// Exact equality: a refusal that names an abnormal provider ending, or quotes
+/// agent text, is not this one.
+pub fn is_missing_envelope_violation(parse_error: &str) -> bool {
+    parse_error
+        == OrbitError::AgentProtocolViolation(MISSING_ENVELOPE_MESSAGE.to_string()).to_string()
+}
+
 fn protocol_violation_message(error: OrbitError) -> String {
     match error {
         OrbitError::AgentProtocolViolation(message) => message,
@@ -188,11 +290,6 @@ fn protocol_violation_message(error: OrbitError) -> String {
 pub fn is_timeout(exec_result: &ExecutionResult) -> bool {
     exec_result.timed_out
 }
-
-/// The invariant the [ORB-10449] completion guard is built on. Kept verbatim
-/// as the prefix of every missing-envelope diagnostic so the failure stays
-/// recognizable while [ORB-10746] appends a cause when one is available.
-const MISSING_ENVELOPE_MESSAGE: &str = "stdout does not contain an Orbit response envelope";
 
 /// [ORB-10746] Explain *why* a run ended without an envelope when the
 /// provider's own wrapper says the ending was abnormal.
@@ -432,102 +529,6 @@ fn synthetic_error_message(exec_result: &ExecutionResult) -> String {
         return stdout.to_string();
     }
     "agent execution failed".to_string()
-}
-
-/// Suffix JSON parses allowed while searching: the whole-string attempt plus
-/// each `{` candidate that is actually deserialized.
-const ENVELOPE_DISCOVERY_MAX_PARSE_ATTEMPTS: u32 = 4_096;
-
-/// JSON nodes visited while searching for an envelope or declared failure.
-const ENVELOPE_DISCOVERY_MAX_NODES: u32 = 65_536;
-
-const DISCOVERY_LIMIT_PREFIX: &str = "response envelope discovery exceeded a work limit";
-
-// [ORB-10746] `structured_output` first: with `--json-schema` in play it is
-// the schema-validated object the provider committed to, and Claude duplicates
-// it into `result` only as a JSON-encoded string. `result` is null on several
-// terminal paths where `structured_output` still holds the envelope, so probing
-// it first is the difference between reading the authoritative field and
-// parsing a copy by luck.
-const PREFERRED_OBJECT_KEYS: [&str; 9] = [
-    "structured_output",
-    "result",
-    "response",
-    "message",
-    "messages",
-    "content",
-    "final",
-    "final_message",
-    "output",
-];
-
-/// Caps for one envelope or declared-failure search.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EnvelopeDiscoveryBudget {
-    max_parse_attempts: u32,
-    max_nodes: u32,
-}
-
-impl EnvelopeDiscoveryBudget {
-    const fn production() -> Self {
-        Self {
-            max_parse_attempts: ENVELOPE_DISCOVERY_MAX_PARSE_ATTEMPTS,
-            max_nodes: ENVELOPE_DISCOVERY_MAX_NODES,
-        }
-    }
-}
-
-/// Parse/traversal accounting for one bounded search.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct EnvelopeDiscoveryStats {
-    parse_attempts: u32,
-    nodes_visited: u32,
-}
-
-struct Budget {
-    max_parse_attempts: u32,
-    max_nodes: u32,
-    stats: EnvelopeDiscoveryStats,
-}
-
-impl Budget {
-    fn new(limits: EnvelopeDiscoveryBudget) -> Self {
-        Self {
-            max_parse_attempts: limits.max_parse_attempts,
-            max_nodes: limits.max_nodes,
-            stats: EnvelopeDiscoveryStats::default(),
-        }
-    }
-
-    fn production() -> Self {
-        Self::new(EnvelopeDiscoveryBudget::production())
-    }
-
-    fn visit(&mut self) -> Result<(), OrbitError> {
-        self.stats.nodes_visited = self.stats.nodes_visited.saturating_add(1);
-        if self.stats.nodes_visited > self.max_nodes {
-            Err(discovery_limit_error(
-                "traversed nodes",
-                self.stats.nodes_visited,
-                self.max_nodes,
-            ))
-        } else {
-            Ok(())
-        }
-    }
-
-    fn parse(&mut self) -> Result<(), OrbitError> {
-        self.stats.parse_attempts = self.stats.parse_attempts.saturating_add(1);
-        if self.stats.parse_attempts > self.max_parse_attempts {
-            Err(discovery_limit_error(
-                "parse attempts",
-                self.stats.parse_attempts,
-                self.max_parse_attempts,
-            ))
-        } else {
-            Ok(())
-        }
-    }
 }
 
 fn discovery_limit_error(what: &str, actual: u32, max: u32) -> OrbitError {

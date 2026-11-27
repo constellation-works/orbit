@@ -15,6 +15,7 @@ struct Manager {
     service: String,
     next_elapse: &'static str,
 }
+
 impl ClockCommandRunner for Manager {
     fn run(&self, _: &ManagerCommand) -> Result<bool, OrbitError> {
         unreachable!()
@@ -34,6 +35,41 @@ impl ClockCommandRunner for Manager {
         Ok(Some(format!(
             "LoadState=loaded\nActiveState=active\nNextElapseUSecMonotonic={}\n",
             self.next_elapse
+        )))
+    }
+}
+
+struct Launchctl {
+    loaded: bool,
+}
+
+impl ClockCommandRunner for Launchctl {
+    fn run(&self, command: &ManagerCommand) -> Result<bool, OrbitError> {
+        self.probe(command).map(|output| output.success)
+    }
+
+    fn stdout(&self, command: &ManagerCommand) -> Result<Option<String>, OrbitError> {
+        let output = self.probe(command)?;
+        Ok(output.success.then_some(output.stdout))
+    }
+
+    fn probe(&self, command: &ManagerCommand) -> Result<ManagerCommandOutput, OrbitError> {
+        let display = command.display();
+        if display.contains("list com.orbit.sweep") {
+            if self.loaded {
+                return Ok(launchctl_output(true, "123\t0\tcom.orbit.sweep\n", ""));
+            }
+            return Ok(launchctl_output(
+                false,
+                "",
+                "Could not find service \"com.orbit.sweep\" in domain",
+            ));
+        }
+        if display.contains("print ") {
+            return Ok(launchctl_output(true, "last exit code = 0\n", ""));
+        }
+        Err(OrbitError::Execution(format!(
+            "unexpected launchctl command {display}"
         )))
     }
 }
@@ -211,41 +247,6 @@ fn launchd_doctor_readiness_flags_an_unloaded_agent_or_a_stale_sweep_log() {
     let status = status_for(root.path(), true);
     let issue = doctor_clock_not_running_issue(&status, root.path()).expect("missing first log");
     assert!(issue.contains("sweep.log has not been written"), "{issue}");
-}
-
-struct Launchctl {
-    loaded: bool,
-}
-
-impl ClockCommandRunner for Launchctl {
-    fn run(&self, command: &ManagerCommand) -> Result<bool, OrbitError> {
-        self.probe(command).map(|output| output.success)
-    }
-
-    fn stdout(&self, command: &ManagerCommand) -> Result<Option<String>, OrbitError> {
-        let output = self.probe(command)?;
-        Ok(output.success.then_some(output.stdout))
-    }
-
-    fn probe(&self, command: &ManagerCommand) -> Result<ManagerCommandOutput, OrbitError> {
-        let display = command.display();
-        if display.contains("list com.orbit.sweep") {
-            if self.loaded {
-                return Ok(launchctl_output(true, "123\t0\tcom.orbit.sweep\n", ""));
-            }
-            return Ok(launchctl_output(
-                false,
-                "",
-                "Could not find service \"com.orbit.sweep\" in domain",
-            ));
-        }
-        if display.contains("print ") {
-            return Ok(launchctl_output(true, "last exit code = 0\n", ""));
-        }
-        Err(OrbitError::Execution(format!(
-            "unexpected launchctl command {display}"
-        )))
-    }
 }
 
 fn launchctl_output(success: bool, stdout: &str, stderr: &str) -> ManagerCommandOutput {

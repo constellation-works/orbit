@@ -49,6 +49,13 @@ impl BwrapSource {
     }
 }
 
+/// What a path component of a trusted wrapper must be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WrapperEntry {
+    File,
+    Directory,
+}
+
 /// Resolve a plan's wrapper to a binary the sandboxed process cannot have
 /// replaced, checked at the moment of the call.
 pub(super) fn verified_bwrap_path(wrapper: &str) -> Result<PathBuf, OrbitError> {
@@ -116,13 +123,6 @@ pub(super) fn verify_root_owned_wrapper(path: &Path) -> Result<(), String> {
         "{} cannot be ownership-checked on this platform",
         path.display()
     ))
-}
-
-/// What a path component of a trusted wrapper must be.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum WrapperEntry {
-    File,
-    Directory,
 }
 
 /// Why one path entry disqualifies the wrapper, if it does. Pure so the

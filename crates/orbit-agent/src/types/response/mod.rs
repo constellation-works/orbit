@@ -19,10 +19,6 @@ pub use protocol_schema::{response_envelope_json_schema, response_envelope_json_
 pub(crate) use usage::request_usage;
 pub use wrapper::provider_invocation_diagnostic;
 
-pub(crate) fn tool_calls_in_documents(documents: &[Value]) -> Vec<ToolCallTrace> {
-    tool_calls::extract_tool_calls(documents)
-}
-
 /// Phrases a provider CLI prints in its own failure diagnostics when
 /// it cannot authenticate. Lowercase, matched case-insensitively [ORB-13941].
 const PROVIDER_AUTH_FAILURE_PHRASES: &[&str] = &[
@@ -47,20 +43,6 @@ const PROVIDER_AUTH_FAILURE_PHRASES: &[&str] = &[
     "api key is not scoped to a workspace",
 ];
 
-/// Whether a provider's own failure text says it could not authenticate, so
-/// the provider is unusable on this host until an operator signs it in again.
-///
-/// Pass only text the provider wrote about itself — its stderr, terminal
-/// error or structured failure — never the agent's transcript, where a tool's own login failure
-/// would read the same.
-#[must_use]
-pub fn provider_authentication_failure(text: &str) -> bool {
-    let text = text.to_ascii_lowercase();
-    PROVIDER_AUTH_FAILURE_PHRASES
-        .iter()
-        .any(|phrase| text.contains(phrase))
-}
-
 /// Phrases a provider CLI prints in its own failure diagnostics when the
 /// selected model has no capacity to serve the turn. Lowercase, matched
 /// case-insensitively. Codex: `Selected model is at capacity. Please try a
@@ -78,36 +60,6 @@ const PROVIDER_QUOTA_PHRASES: &[&str] = &[
     "credit balance is too low",
 ];
 
-/// Whether a provider's own failure text says its account's quota/billing
-/// is exhausted, so the provider is unavailable on that account until an
-/// operator restores credit or billing.
-///
-/// Pass only text the provider wrote about itself, as for
-/// [`provider_authentication_failure`]. This is distinct from
-/// [`provider_usage_limit`]: an explicit usage-limit phrase takes precedence
-/// over the billing diagnostic so its reset remains available to scheduling.
-#[must_use]
-pub fn provider_quota_exceeded(text: &str) -> bool {
-    let text = text.to_ascii_lowercase();
-    !provider_usage_limit(&text)
-        && PROVIDER_QUOTA_PHRASES
-            .iter()
-            .any(|phrase| text.contains(phrase))
-}
-
-/// Whether a provider's own failure text says the selected model is at
-/// capacity, so retrying the same model immediately cannot succeed.
-///
-/// Pass only text the provider wrote about itself, as for
-/// [`provider_authentication_failure`].
-#[must_use]
-pub fn provider_capacity_exhausted(text: &str) -> bool {
-    let text = text.to_ascii_lowercase();
-    PROVIDER_CAPACITY_PHRASES
-        .iter()
-        .any(|phrase| text.contains(phrase))
-}
-
 /// Phrases a provider CLI prints in its own failure diagnostics when its
 /// content policy refused the turn. Lowercase, matched case-insensitively.
 /// Codex: `This content was flagged for possible cybersecurity risk.`; Claude
@@ -120,19 +72,6 @@ const PROVIDER_REFUSAL_PHRASES: &[&str] = &[
     "violate our usage policy",
     "violates our usage policy",
 ];
-
-/// Whether a provider's own failure text says its content policy refused
-/// the turn, so the same provider would refuse a retry of the same task.
-///
-/// Pass only text the provider wrote about itself, as for
-/// [`provider_authentication_failure`].
-#[must_use]
-pub fn provider_content_refusal(text: &str) -> bool {
-    let text = text.to_ascii_lowercase();
-    PROVIDER_REFUSAL_PHRASES
-        .iter()
-        .any(|phrase| text.contains(phrase))
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentInvocationSpec {
@@ -176,4 +115,65 @@ type JsonMap = serde_json::Map<String, Value>;
 struct ToolCallCollector {
     calls: Vec<ToolCallTrace>,
     by_id: std::collections::HashMap<String, usize>,
+}
+
+pub(crate) fn tool_calls_in_documents(documents: &[Value]) -> Vec<ToolCallTrace> {
+    tool_calls::extract_tool_calls(documents)
+}
+
+/// Whether a provider's own failure text says it could not authenticate, so
+/// the provider is unusable on this host until an operator signs it in again.
+///
+/// Pass only text the provider wrote about itself — its stderr, terminal
+/// error or structured failure — never the agent's transcript, where a tool's own login failure
+/// would read the same.
+#[must_use]
+pub fn provider_authentication_failure(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    PROVIDER_AUTH_FAILURE_PHRASES
+        .iter()
+        .any(|phrase| text.contains(phrase))
+}
+
+/// Whether a provider's own failure text says its account's quota/billing
+/// is exhausted, so the provider is unavailable on that account until an
+/// operator restores credit or billing.
+///
+/// Pass only text the provider wrote about itself, as for
+/// [`provider_authentication_failure`]. This is distinct from
+/// [`provider_usage_limit`]: an explicit usage-limit phrase takes precedence
+/// over the billing diagnostic so its reset remains available to scheduling.
+#[must_use]
+pub fn provider_quota_exceeded(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    !provider_usage_limit(&text)
+        && PROVIDER_QUOTA_PHRASES
+            .iter()
+            .any(|phrase| text.contains(phrase))
+}
+
+/// Whether a provider's own failure text says the selected model is at
+/// capacity, so retrying the same model immediately cannot succeed.
+///
+/// Pass only text the provider wrote about itself, as for
+/// [`provider_authentication_failure`].
+#[must_use]
+pub fn provider_capacity_exhausted(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    PROVIDER_CAPACITY_PHRASES
+        .iter()
+        .any(|phrase| text.contains(phrase))
+}
+
+/// Whether a provider's own failure text says its content policy refused
+/// the turn, so the same provider would refuse a retry of the same task.
+///
+/// Pass only text the provider wrote about itself, as for
+/// [`provider_authentication_failure`].
+#[must_use]
+pub fn provider_content_refusal(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    PROVIDER_REFUSAL_PHRASES
+        .iter()
+        .any(|phrase| text.contains(phrase))
 }

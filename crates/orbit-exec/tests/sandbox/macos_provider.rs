@@ -114,8 +114,8 @@ fn only_the_confined_muse_lane_may_write_muse_state_roots() {
         "muse",
         EnvOverrides {
             home: Some("/Users/test"),
-            xdg_config_home: Some("/Users/test/xdg-config"),
             xdg_data_home: Some("/Users/test/xdg-data"),
+            xdg_config_home: Some("/Users/test/xdg-config"),
             ..Default::default()
         },
     );

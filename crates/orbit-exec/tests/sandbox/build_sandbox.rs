@@ -210,12 +210,14 @@ mod script_linked_worktree {
             .canonicalize()
             .expect("common directory");
         let gitdir = common.join("worktrees").join("worktree");
+        let worktree = worktree.canonicalize().expect("worktree");
+        let scratch = scratch.canonicalize().expect("scratch");
         LinkedWorktree {
-            worktree: worktree.canonicalize().expect("worktree"),
+            _temp: temp,
+            worktree,
             common,
             gitdir,
-            scratch: scratch.canonicalize().expect("scratch"),
-            _temp: temp,
+            scratch,
         }
     }
 

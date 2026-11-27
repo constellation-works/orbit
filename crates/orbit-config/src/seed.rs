@@ -78,6 +78,41 @@ const POOL_KEYS: [&str; 4] = [
     "xhard_complexity_crews",
 ];
 
+/// Machine-scope settings a newly created machine identity starts with, as
+/// `(key, TOML value, comment)`. They are written beside the identity, in the
+/// global `config.toml` that alone may hold `[machine]`, never into the
+/// config template: a template seeded under an explicit `--root` can later
+/// load as a workspace config, which refuses `[machine]`.
+const NEW_MACHINE_DEFAULTS: &[(&str, &str, &str)] = &[(
+    "machine.auto_concurrency.mode",
+    "\"enforce\"",
+    "Admit delivery work only while its forecast fits this host.",
+)];
+
+/// Seeded `workflow.purpose_crews` pools, in order. Each is filtered to the
+/// crews this host seeds enabled (a `crew@effort` member by its base crew),
+/// and a pool left empty is omitted, so it takes its built-in route. The one
+/// exception is `final_recovery`, whose built-in default names crews this host
+/// may not enable: an empty one is written as `[]`, which turns it off.
+const PURPOSE_POOLS: &[(&str, &[&str])] = &[
+    (
+        "review",
+        &["sol", "sonnet", "muse-wonder", "grok", "opus@medium"],
+    ),
+    (
+        "task_pilot",
+        &["luna@high", "haiku@high", "muse-spark@high"],
+    ),
+    ("failure_recovery", &["luna", "haiku", "muse-spark", "grok"]),
+    ("auto_fix", &["luna", "haiku", "muse-spark"]),
+    ("final_recovery", &["sol", "muse-wonder", "opus@medium"]),
+    (
+        "baseline_red_repair",
+        &["terra", "sonnet", "muse-wonder", "grok"],
+    ),
+    ("pre_landing_review", &["luna", "haiku", "muse-spark"]),
+];
+
 /// Explicit, host-independent inputs for rendering a fresh `config.toml`.
 ///
 /// A seed says which provider families this machine can actually dispatch to
@@ -225,17 +260,6 @@ pub fn seed_default_config(
     Ok(true)
 }
 
-/// Machine-scope settings a newly created machine identity starts with, as
-/// `(key, TOML value, comment)`. They are written beside the identity, in the
-/// global `config.toml` that alone may hold `[machine]`, never into the
-/// config template: a template seeded under an explicit `--root` can later
-/// load as a workspace config, which refuses `[machine]`.
-const NEW_MACHINE_DEFAULTS: &[(&str, &str, &str)] = &[(
-    "machine.auto_concurrency.mode",
-    "\"enforce\"",
-    "Admit delivery work only while its forecast fits this host.",
-)];
-
 /// Seed the machine-scope defaults a new machine starts with
 /// (`machine.auto_concurrency.mode = "enforce"`) that `store`, the global
 /// config of a machine whose identity is being created, does not already set.
@@ -366,30 +390,6 @@ fn render_seeded_config(template: &str, seed: Option<&ConfigSeed>) -> Result<Str
     body.push_str(&render_crews(&crews));
     Ok(body)
 }
-
-/// Seeded `workflow.purpose_crews` pools, in order. Each is filtered to the
-/// crews this host seeds enabled (a `crew@effort` member by its base crew),
-/// and a pool left empty is omitted, so it takes its built-in route. The one
-/// exception is `final_recovery`, whose built-in default names crews this host
-/// may not enable: an empty one is written as `[]`, which turns it off.
-const PURPOSE_POOLS: &[(&str, &[&str])] = &[
-    (
-        "review",
-        &["sol", "sonnet", "muse-wonder", "grok", "opus@medium"],
-    ),
-    (
-        "task_pilot",
-        &["luna@high", "haiku@high", "muse-spark@high"],
-    ),
-    ("failure_recovery", &["luna", "haiku", "muse-spark", "grok"]),
-    ("auto_fix", &["luna", "haiku", "muse-spark"]),
-    ("final_recovery", &["sol", "muse-wonder", "opus@medium"]),
-    (
-        "baseline_red_repair",
-        &["terra", "sonnet", "muse-wonder", "grok"],
-    ),
-    ("pre_landing_review", &["luna", "haiku", "muse-spark"]),
-];
 
 /// The `[workflow]` keys a seed owns, written explicitly so no crew route is
 /// an invisible default: the default crew, the four complexity pools seeded

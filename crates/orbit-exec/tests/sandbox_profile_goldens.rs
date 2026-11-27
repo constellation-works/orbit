@@ -71,6 +71,14 @@ const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
 const SCRIPT_CASES: [(&str, bool); 2] =
     [("script_worktree", true), ("script_read_only_root", false)];
 
+/// The Linux install-time plugin build profile, one case per phase
+/// (`docs/design/plugins/3_install_time_build.md` §3.2–§3.3).
+#[cfg(target_os = "linux")]
+const BUILD_CASES: [(&str, BuildPhaseNetwork); 2] = [
+    ("plugin_build_fetch", BuildPhaseNetwork::Https),
+    ("plugin_build_offline", BuildPhaseNetwork::None),
+];
+
 /// One activity policy and the provider whose CLI it confines.
 struct Case {
     name: &'static str,
@@ -614,6 +622,16 @@ impl Fixture {
     }
 }
 
+/// Kills and reaps the renderer however the parent leaves.
+struct ChildGuard(std::process::Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 fn compiled_sandbox_profiles_match_their_goldens() {
     // Under `/tmp` on every platform so the Linux scratch-anchor mounts, which
@@ -757,16 +775,6 @@ fn run_child(root: &Path, output: &Path) {
     orbit_common::test_env::assert_child_test_passed(CHILD_TEST, status, stdout, stderr);
 }
 
-/// Kills and reaps the renderer however the parent leaves.
-struct ChildGuard(std::process::Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 fn golden_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/sandbox_profile_goldens")
 }
@@ -812,14 +820,6 @@ fn golden_matches(name: &str, actual: &str) -> bool {
     }
     false
 }
-
-/// The Linux install-time plugin build profile, one case per phase
-/// (`docs/design/plugins/3_install_time_build.md` §3.2–§3.3).
-#[cfg(target_os = "linux")]
-const BUILD_CASES: [(&str, BuildPhaseNetwork); 2] = [
-    ("plugin_build_fetch", BuildPhaseNetwork::Https),
-    ("plugin_build_offline", BuildPhaseNetwork::None),
-];
 
 fn profile(name: &str, read: Vec<String>, modify: Vec<String>) -> ResolvedFsProfile {
     ResolvedFsProfile {

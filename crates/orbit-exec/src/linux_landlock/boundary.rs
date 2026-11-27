@@ -15,6 +15,11 @@ use super::spawn::child_environment;
 use super::{LandlockPathGrant, host, workspace};
 use crate::runner::ExecRequest;
 
+/// Device nodes a confined writer opens for output. `/dev/null` is what a
+/// shell's `>/dev/null` needs; `/dev/tty` is what an interactive program
+/// probes. Neither reaches the filesystem the boundary protects.
+const WRITABLE_DEVICES: &[&str] = &["/dev/null", "/dev/tty", "/dev/zero", "/dev/full"];
+
 /// An explicit confinement: the roots a child may read, the roots it may
 /// also modify, and whether it may reach TCP.
 ///
@@ -86,10 +91,20 @@ pub struct LandlockBoundary {
     pub deny_tcp: bool,
 }
 
-/// Device nodes a confined writer opens for output. `/dev/null` is what a
-/// shell's `>/dev/null` needs; `/dev/tty` is what an interactive program
-/// probes. Neither reaches the filesystem the boundary protects.
-const WRITABLE_DEVICES: &[&str] = &["/dev/null", "/dev/tty", "/dev/zero", "/dev/full"];
+/// The compiled read boundary for one profile: what the child may read, and
+/// which of the profile's exclusions the kernel is not holding for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LandlockReadBoundary {
+    /// Every path grant the ruleset will carry.
+    pub grants: Vec<LandlockPathGrant>,
+    /// Read exclusions this backend cannot enforce for a path that does not
+    /// exist yet, as written in the profile.
+    ///
+    /// Reported rather than dropped so no layer describes the boundary as
+    /// whole-contract enforcement. These rules keep their full effect in the
+    /// request-time policy check, which decides a concrete path.
+    pub unenforced_exclusions: Vec<String>,
+}
 
 /// Compile the grant list for
 /// [`spawn_under_linux_landlock_boundary`](super::spawn_under_linux_landlock_boundary): the
@@ -277,21 +292,6 @@ pub(super) fn plugin_scope(
 /// made.
 fn existing_canonical(path: &Path) -> Option<PathBuf> {
     path.canonicalize().ok()
-}
-
-/// The compiled read boundary for one profile: what the child may read, and
-/// which of the profile's exclusions the kernel is not holding for it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LandlockReadBoundary {
-    /// Every path grant the ruleset will carry.
-    pub grants: Vec<LandlockPathGrant>,
-    /// Read exclusions this backend cannot enforce for a path that does not
-    /// exist yet, as written in the profile.
-    ///
-    /// Reported rather than dropped so no layer describes the boundary as
-    /// whole-contract enforcement. These rules keep their full effect in the
-    /// request-time policy check, which decides a concrete path.
-    pub unenforced_exclusions: Vec<String>,
 }
 
 /// Compile every path grant a confined child needs: the host paths its own

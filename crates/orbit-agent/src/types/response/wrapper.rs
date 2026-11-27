@@ -33,49 +33,6 @@ pub(super) struct WrapperSignals {
     result_text: Option<String>,
 }
 
-/// Collect wrapper signals from the last document that carries any of them.
-///
-/// Providers emit the wrapper as their final document, so a reverse scan
-/// finds the terminal record rather than an intermediate streaming event.
-pub(super) fn wrapper_signals(documents: &[Value]) -> WrapperSignals {
-    documents
-        .iter()
-        .rev()
-        .find_map(|document| {
-            let object = document.as_object()?;
-            let carries_signal = ["is_error", "subtype", "terminal_reason"]
-                .iter()
-                .any(|key| object.contains_key(*key));
-            if !carries_signal {
-                return None;
-            }
-            Some(WrapperSignals {
-                is_error: object
-                    .get("is_error")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                subtype: non_empty_string(object.get("subtype")),
-                terminal_reason: non_empty_string(object.get("terminal_reason")),
-                result_text: non_empty_string(object.get("result")),
-            })
-        })
-        .unwrap_or_default()
-}
-
-fn non_empty_string(value: Option<&Value>) -> Option<String> {
-    let text = value?.as_str()?.trim();
-    (!text.is_empty()).then(|| text.to_string())
-}
-
-fn quote_bounded(text: &str) -> String {
-    let bounded: String = text.chars().take(QUOTED_PROSE_LIMIT_CHARS).collect();
-    if bounded.chars().count() < text.chars().count() {
-        format!("{bounded}…")
-    } else {
-        bounded
-    }
-}
-
 impl WrapperSignals {
     /// Name a terminal ending the provider itself flagged as abnormal.
     ///
@@ -137,6 +94,49 @@ impl WrapperSignals {
             "the provider returned an API error before completing the invocation: {}",
             quote_bounded(prose)
         ))
+    }
+}
+
+/// Collect wrapper signals from the last document that carries any of them.
+///
+/// Providers emit the wrapper as their final document, so a reverse scan
+/// finds the terminal record rather than an intermediate streaming event.
+pub(super) fn wrapper_signals(documents: &[Value]) -> WrapperSignals {
+    documents
+        .iter()
+        .rev()
+        .find_map(|document| {
+            let object = document.as_object()?;
+            let carries_signal = ["is_error", "subtype", "terminal_reason"]
+                .iter()
+                .any(|key| object.contains_key(*key));
+            if !carries_signal {
+                return None;
+            }
+            Some(WrapperSignals {
+                is_error: object
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                subtype: non_empty_string(object.get("subtype")),
+                terminal_reason: non_empty_string(object.get("terminal_reason")),
+                result_text: non_empty_string(object.get("result")),
+            })
+        })
+        .unwrap_or_default()
+}
+
+fn non_empty_string(value: Option<&Value>) -> Option<String> {
+    let text = value?.as_str()?.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+fn quote_bounded(text: &str) -> String {
+    let bounded: String = text.chars().take(QUOTED_PROSE_LIMIT_CHARS).collect();
+    if bounded.chars().count() < text.chars().count() {
+        format!("{bounded}…")
+    } else {
+        bounded
     }
 }
 

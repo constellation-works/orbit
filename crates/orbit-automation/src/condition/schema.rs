@@ -10,6 +10,141 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::automation::ConditionScope;
 
+const TASK_FIELDS: &[Field] = &[
+    required("id", FieldType::String),
+    required("title", FieldType::String),
+    required("status", FieldType::String),
+    required("tags", FieldType::StringList),
+    required("type", FieldType::String),
+    required("priority", FieldType::String),
+    required("complexity", FieldType::String),
+    optional("crew", FieldType::String),
+    optional("parent_id", FieldType::String),
+    required("dependencies", FieldType::StringList),
+    required("created_at", FieldType::Timestamp),
+    required("updated_at", FieldType::Timestamp),
+    required("status_since", FieldType::Timestamp),
+    optional("origin", FieldType::Object(ObjectKind::Origin)),
+];
+
+const ORIGIN_FIELDS: &[Field] = &[
+    required("trigger", FieldType::String),
+    required("fire_id", FieldType::String),
+    required("depth", FieldType::Int),
+];
+
+const BOARD_FIELDS: &[Field] = &[
+    required("by_status", FieldType::StringIntMap),
+    required("by_tag", FieldType::Object(ObjectKind::TagCounts)),
+    required("eligible", FieldType::Object(ObjectKind::Bucket)),
+    required("backlog", FieldType::Object(ObjectKind::Bucket)),
+    required("in_progress", FieldType::Object(ObjectKind::Bucket)),
+    required("blocked", FieldType::Object(ObjectKind::Bucket)),
+    required("review", FieldType::Object(ObjectKind::Bucket)),
+    required("open_runs", FieldType::Object(ObjectKind::Bucket)),
+    required("drain_running", FieldType::Bool),
+];
+
+/// The condition board plus `empty`: no backlog, in-progress or review task.
+const JOB_BOARD_FIELDS: &[Field] = &[
+    required("by_status", FieldType::StringIntMap),
+    required("by_tag", FieldType::Object(ObjectKind::TagCounts)),
+    required("eligible", FieldType::Object(ObjectKind::Bucket)),
+    required("backlog", FieldType::Object(ObjectKind::Bucket)),
+    required("in_progress", FieldType::Object(ObjectKind::Bucket)),
+    required("blocked", FieldType::Object(ObjectKind::Bucket)),
+    required("review", FieldType::Object(ObjectKind::Bucket)),
+    required("open_runs", FieldType::Object(ObjectKind::Bucket)),
+    required("drain_running", FieldType::Bool),
+    required("empty", FieldType::Bool),
+];
+
+const JOB_FIELDS: &[Field] = &[
+    required("started_at", FieldType::Timestamp),
+    optional("source_revision", FieldType::String),
+];
+
+const PINNED_JOB_FIELDS: &[Field] = &[
+    required("started_at", FieldType::Timestamp),
+    required("source_revision", FieldType::String),
+];
+
+const SELF_STEP_FIELDS: &[Field] = &[
+    required("wait_started_at", FieldType::Timestamp),
+    required("status", FieldType::String),
+    optional("task_id", FieldType::String),
+    optional("prev", FieldType::Object(ObjectKind::PrevStep)),
+];
+
+const PREV_STEP_FIELDS: &[Field] = &[
+    required("status", FieldType::String),
+    optional("end_time", FieldType::Timestamp),
+];
+
+const STEP_OBSERVATION_FIELDS: &[Field] = &[
+    required("status", FieldType::String),
+    optional("end_time", FieldType::Timestamp),
+    optional("task_id", FieldType::String),
+];
+
+const RESULT_FIELDS: &[Field] = &[
+    required("status", FieldType::String),
+    optional("revision", FieldType::String),
+    required("completed_at", FieldType::Timestamp),
+    required("contract", FieldType::String),
+    required("definition_digest", FieldType::String),
+    required("task_id", FieldType::String),
+    optional("run_id", FieldType::String),
+];
+
+const READINESS_RESULT_FIELDS: &[Field] = &[
+    required("status", FieldType::String),
+    required("revision", FieldType::String),
+    required("completed_at", FieldType::Timestamp),
+    required("contract", FieldType::String),
+    required("definition_digest", FieldType::String),
+    required("task_id", FieldType::String),
+    optional("run_id", FieldType::String),
+];
+
+const BUCKET_FIELDS: &[Field] = &[
+    required("count", FieldType::Int),
+    required("empty", FieldType::Bool),
+];
+
+const SELF_ROUTINE_FIELDS: &[Field] = &[
+    optional("last_fired", FieldType::Timestamp),
+    required("fires_24h", FieldType::Int),
+];
+
+const SELF_AUTO_TASK_FIELDS: &[Field] = &[
+    optional("last_fired", FieldType::Timestamp),
+    optional("last_minted", FieldType::Timestamp),
+    optional("last_minted_task", FieldType::String),
+    optional("last_succeeded_at", FieldType::Timestamp),
+    required("fires_24h", FieldType::Int),
+];
+
+/// A named auto-task's accepted-result history, read as
+/// `auto_tasks['<name>']` from any condition. Only a result its declared
+/// completion contract accepted moves `last_succeeded_at`.
+const ACCEPTED_HISTORY_FIELDS: &[Field] = &[optional("last_succeeded_at", FieldType::Timestamp)];
+
+/// Observed statuses of an auto-task step, as `self.status`,
+/// `self.prev.status` and `steps['<id>'].status` evaluate. `done` is an
+/// accepted completion; a skipped step stays `skipped`.
+pub const AUTO_TASK_STEP_STATUSES: &[&str] = &[
+    "waiting",
+    "queued",
+    "running",
+    "done",
+    "held",
+    "failed",
+    "timeout",
+    "cancelled",
+    "skipped",
+];
+
 /// A type in the admitted subset. There is no `dyn`: every expression has
 /// one static type, and `Unknown` only stands for the element of an empty
 /// list literal until it unifies with something.
@@ -189,142 +324,6 @@ pub(crate) struct Field {
     pub(crate) optional: bool,
 }
 
-const fn required(name: &'static str, ty: FieldType) -> Field {
-    Field {
-        name,
-        ty,
-        optional: false,
-    }
-}
-
-const fn optional(name: &'static str, ty: FieldType) -> Field {
-    Field {
-        name,
-        ty,
-        optional: true,
-    }
-}
-
-const TASK_FIELDS: &[Field] = &[
-    required("id", FieldType::String),
-    required("title", FieldType::String),
-    required("status", FieldType::String),
-    required("tags", FieldType::StringList),
-    required("type", FieldType::String),
-    required("priority", FieldType::String),
-    required("complexity", FieldType::String),
-    optional("crew", FieldType::String),
-    optional("parent_id", FieldType::String),
-    required("dependencies", FieldType::StringList),
-    required("created_at", FieldType::Timestamp),
-    required("updated_at", FieldType::Timestamp),
-    required("status_since", FieldType::Timestamp),
-    optional("origin", FieldType::Object(ObjectKind::Origin)),
-];
-
-const ORIGIN_FIELDS: &[Field] = &[
-    required("trigger", FieldType::String),
-    required("fire_id", FieldType::String),
-    required("depth", FieldType::Int),
-];
-
-const BOARD_FIELDS: &[Field] = &[
-    required("by_status", FieldType::StringIntMap),
-    required("by_tag", FieldType::Object(ObjectKind::TagCounts)),
-    required("eligible", FieldType::Object(ObjectKind::Bucket)),
-    required("backlog", FieldType::Object(ObjectKind::Bucket)),
-    required("in_progress", FieldType::Object(ObjectKind::Bucket)),
-    required("blocked", FieldType::Object(ObjectKind::Bucket)),
-    required("review", FieldType::Object(ObjectKind::Bucket)),
-    required("open_runs", FieldType::Object(ObjectKind::Bucket)),
-    required("drain_running", FieldType::Bool),
-];
-
-/// The condition board plus `empty`: no backlog, in-progress or review task.
-const JOB_BOARD_FIELDS: &[Field] = &[
-    required("by_status", FieldType::StringIntMap),
-    required("by_tag", FieldType::Object(ObjectKind::TagCounts)),
-    required("eligible", FieldType::Object(ObjectKind::Bucket)),
-    required("backlog", FieldType::Object(ObjectKind::Bucket)),
-    required("in_progress", FieldType::Object(ObjectKind::Bucket)),
-    required("blocked", FieldType::Object(ObjectKind::Bucket)),
-    required("review", FieldType::Object(ObjectKind::Bucket)),
-    required("open_runs", FieldType::Object(ObjectKind::Bucket)),
-    required("drain_running", FieldType::Bool),
-    required("empty", FieldType::Bool),
-];
-
-const JOB_FIELDS: &[Field] = &[
-    required("started_at", FieldType::Timestamp),
-    optional("source_revision", FieldType::String),
-];
-
-const PINNED_JOB_FIELDS: &[Field] = &[
-    required("started_at", FieldType::Timestamp),
-    required("source_revision", FieldType::String),
-];
-
-const SELF_STEP_FIELDS: &[Field] = &[
-    required("wait_started_at", FieldType::Timestamp),
-    required("status", FieldType::String),
-    optional("task_id", FieldType::String),
-    optional("prev", FieldType::Object(ObjectKind::PrevStep)),
-];
-
-const PREV_STEP_FIELDS: &[Field] = &[
-    required("status", FieldType::String),
-    optional("end_time", FieldType::Timestamp),
-];
-
-const STEP_OBSERVATION_FIELDS: &[Field] = &[
-    required("status", FieldType::String),
-    optional("end_time", FieldType::Timestamp),
-    optional("task_id", FieldType::String),
-];
-
-const RESULT_FIELDS: &[Field] = &[
-    required("status", FieldType::String),
-    optional("revision", FieldType::String),
-    required("completed_at", FieldType::Timestamp),
-    required("contract", FieldType::String),
-    required("definition_digest", FieldType::String),
-    required("task_id", FieldType::String),
-    optional("run_id", FieldType::String),
-];
-
-const READINESS_RESULT_FIELDS: &[Field] = &[
-    required("status", FieldType::String),
-    required("revision", FieldType::String),
-    required("completed_at", FieldType::Timestamp),
-    required("contract", FieldType::String),
-    required("definition_digest", FieldType::String),
-    required("task_id", FieldType::String),
-    optional("run_id", FieldType::String),
-];
-
-const BUCKET_FIELDS: &[Field] = &[
-    required("count", FieldType::Int),
-    required("empty", FieldType::Bool),
-];
-
-const SELF_ROUTINE_FIELDS: &[Field] = &[
-    optional("last_fired", FieldType::Timestamp),
-    required("fires_24h", FieldType::Int),
-];
-
-const SELF_AUTO_TASK_FIELDS: &[Field] = &[
-    optional("last_fired", FieldType::Timestamp),
-    optional("last_minted", FieldType::Timestamp),
-    optional("last_minted_task", FieldType::String),
-    optional("last_succeeded_at", FieldType::Timestamp),
-    required("fires_24h", FieldType::Int),
-];
-
-/// A named auto-task's accepted-result history, read as
-/// `auto_tasks['<name>']` from any condition. Only a result its declared
-/// completion contract accepted moves `last_succeeded_at`.
-const ACCEPTED_HISTORY_FIELDS: &[Field] = &[optional("last_succeeded_at", FieldType::Timestamp)];
-
 /// Which definition kind carries the condition: it decides the clause path
 /// errors name and which `self` fields exist (only an auto-task mints).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -397,6 +396,31 @@ pub(crate) struct WaitScope {
     pub(crate) readiness_result: bool,
 }
 
+/// The status vocabularies a `status` field can take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Statuses {
+    /// A task's stored status.
+    Task,
+    /// An auto-task step's observed status (spec §2).
+    Step,
+}
+
+const fn required(name: &'static str, ty: FieldType) -> Field {
+    Field {
+        name,
+        ty,
+        optional: false,
+    }
+}
+
+const fn optional(name: &'static str, ty: FieldType) -> Field {
+    Field {
+        name,
+        ty,
+        optional: true,
+    }
+}
+
 /// The variables a job wait expression binds.
 pub(crate) fn wait_variable(wait: &WaitScope, name: &str) -> Result<CelType, String> {
     let job = if wait.pinned_revision {
@@ -433,30 +457,6 @@ pub(crate) fn wait_variable(wait: &WaitScope, name: &str) -> Result<CelType, Str
         )),
     }
 }
-
-/// The status vocabularies a `status` field can take.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Statuses {
-    /// A task's stored status.
-    Task,
-    /// An auto-task step's observed status (spec §2).
-    Step,
-}
-
-/// Observed statuses of an auto-task step, as `self.status`,
-/// `self.prev.status` and `steps['<id>'].status` evaluate. `done` is an
-/// accepted completion; a skipped step stays `skipped`.
-pub const AUTO_TASK_STEP_STATUSES: &[&str] = &[
-    "waiting",
-    "queued",
-    "running",
-    "done",
-    "held",
-    "failed",
-    "timeout",
-    "cancelled",
-    "skipped",
-];
 
 /// The variables one scope binds.
 pub(crate) fn variable(

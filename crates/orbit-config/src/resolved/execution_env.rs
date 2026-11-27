@@ -94,11 +94,11 @@ impl ExecutionEnvPolicy {
     /// The default allowlist applied to the supplied parent environment.
     pub fn new(env: &orbit_common::Env) -> Self {
         Self {
+            env: env.clone(),
             inherit: false,
             pass: default_pass_list(),
             login_auth: Vec::new(),
             parent: Arc::new(parent_vars(env)),
-            env: env.clone(),
             crew_sources: Vec::new(),
         }
     }
@@ -107,11 +107,11 @@ impl ExecutionEnvPolicy {
 impl ExecutionEnvPolicy {
     pub(super) fn from_snapshot(env: &orbit_common::Env, snapshot: &ConfigSnapshot) -> Self {
         Self {
+            env: env.clone(),
             inherit: snapshot.execution_env_inherit,
             pass: snapshot.execution_env_pass.clone(),
             login_auth: snapshot.execution_env_login_auth.clone(),
             parent: Arc::new(parent_vars(env)),
-            env: env.clone(),
             crew_sources: Vec::new(),
         }
     }

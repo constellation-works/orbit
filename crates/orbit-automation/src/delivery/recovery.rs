@@ -122,10 +122,10 @@ pub fn apply(store: &Store, request: &Recovery<'_>) -> Result<RecoveryPreview, A
     // The applied document reports the position the recovery left behind, so
     // its refusals describe the consumer rather than the request just settled.
     let projection = Recovery {
+        resolved_action_id: None,
         action_terminal: request.action_terminal && record.reissued.is_none(),
         action_failed_without_evidence: request.action_failed_without_evidence
             && record.reissued.is_none(),
-        resolved_action_id: None,
         ..request.clone()
     };
     project(

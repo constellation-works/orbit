@@ -18,39 +18,6 @@ use std::path::{Path, PathBuf};
 
 const SOURCE_DIR: &str = "/ws/.orbit";
 
-/// Build a validated routine with the common knobs the tests vary.
-fn routine(name: &str, overlap: &str) -> LoadedRoutine {
-    let yaml = format!(
-        "schemaVersion: 1\n\
-         name: {name}\n\
-         enabled: true\n\
-         trigger:\n  cron: \"* * * * *\"\n\
-         target: job:noop\n\
-         policy:\n  timeout_minutes: 10\n  overlap: {overlap}\n  \
-         retries: {{ max: 0, backoff_minutes: 1 }}\n"
-    );
-    LoadedRoutine {
-        definition: parse_routine_yaml(&yaml).expect("valid routine yaml"),
-        origin: RoutineOrigin::Workspace,
-        source_workspace: "polaris".to_string(),
-        source_orbit_dir: PathBuf::from(SOURCE_DIR),
-        path: PathBuf::from(format!("{SOURCE_DIR}/routines/{name}.yaml")),
-    }
-}
-
-fn collection(routines: Vec<LoadedRoutine>) -> RoutineCollection {
-    RoutineCollection {
-        routines,
-        ..RoutineCollection::default()
-    }
-}
-
-fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
-        .single()
-        .expect("valid ts")
-}
-
 /// A scriptable dispatch double: records submissions, hands back deterministic
 /// run ids, and answers `run_state` from a table the test primes.
 #[derive(Default)]
@@ -113,6 +80,122 @@ impl RoutineDispatch for FakeDispatch {
             refusals: Vec::new(),
         })
     }
+}
+
+/// A dispatch whose submissions fail until told otherwise, on a host whose
+/// Orbit build the test can change [ORB-25103].
+#[derive(Default)]
+struct FlakyDispatch {
+    delegate: FakeDispatch,
+    failing: Cell<bool>,
+    build: RefCell<String>,
+    attempts: Cell<u32>,
+}
+
+impl RoutineDispatch for FlakyDispatch {
+    fn submit(&self, dir: &Path, job: &str, actor: &str, slot: &str) -> Result<String, OrbitError> {
+        self.attempts.set(self.attempts.get() + 1);
+        if self.failing.get() {
+            return Err(OrbitError::Execution("worktree mismatch".into()));
+        }
+        self.delegate.submit(dir, job, actor, slot)
+    }
+    fn run_state(&self, dir: &Path, run_id: &str) -> Option<JobRunState> {
+        self.delegate.run_state(dir, run_id)
+    }
+    fn run_owner_liveness(&self, dir: &Path, run_id: &str) -> RunOwnerLiveness {
+        self.delegate.run_owner_liveness(dir, run_id)
+    }
+    fn host_orbit_build(&self) -> Option<String> {
+        Some(self.build.borrow().clone())
+    }
+}
+
+/// Operator action a sweep pass must not overwrite, committed from inside
+/// `host_orbit_build` — which the gate calls after `run_sweep_core` has
+/// taken its breaker snapshot and before it writes its transition. That
+/// call is the deterministic interleave point between snapshot and write.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InterleavedOperatorAction {
+    Reset,
+    Bypass,
+}
+
+struct InterleavingDispatch {
+    delegate: FakeDispatch,
+    store: std::rc::Rc<Store>,
+    action: InterleavedOperatorAction,
+    done: Cell<bool>,
+}
+
+impl RoutineDispatch for InterleavingDispatch {
+    fn submit(&self, dir: &Path, job: &str, actor: &str, slot: &str) -> Result<String, OrbitError> {
+        self.delegate.submit(dir, job, actor, slot)
+    }
+    fn run_state(&self, dir: &Path, run_id: &str) -> Option<JobRunState> {
+        self.delegate.run_state(dir, run_id)
+    }
+    fn run_owner_liveness(&self, dir: &Path, run_id: &str) -> RunOwnerLiveness {
+        self.delegate.run_owner_liveness(dir, run_id)
+    }
+    fn host_orbit_build(&self) -> Option<String> {
+        if !self.done.get() {
+            self.done.set(true);
+            let acted = match self.action {
+                InterleavedOperatorAction::Reset => {
+                    orbit_automation::routines::breaker::reset_breaker(
+                        &self.store,
+                        "hourly",
+                        "human:test",
+                    )
+                    .expect("operator reset")
+                }
+                InterleavedOperatorAction::Bypass => {
+                    orbit_automation::routines::breaker::request_breaker_bypass(
+                        &self.store,
+                        "hourly",
+                        "human:test",
+                    )
+                    .expect("operator bypass")
+                }
+            };
+            assert!(acted, "operator action applies to the open breaker");
+        }
+        Some("1.0.0".into())
+    }
+}
+
+/// Build a validated routine with the common knobs the tests vary.
+fn routine(name: &str, overlap: &str) -> LoadedRoutine {
+    let yaml = format!(
+        "schemaVersion: 1\n\
+         name: {name}\n\
+         enabled: true\n\
+         trigger:\n  cron: \"* * * * *\"\n\
+         target: job:noop\n\
+         policy:\n  timeout_minutes: 10\n  overlap: {overlap}\n  \
+         retries: {{ max: 0, backoff_minutes: 1 }}\n"
+    );
+    LoadedRoutine {
+        definition: parse_routine_yaml(&yaml).expect("valid routine yaml"),
+        origin: RoutineOrigin::Workspace,
+        source_workspace: "polaris".to_string(),
+        source_orbit_dir: PathBuf::from(SOURCE_DIR),
+        path: PathBuf::from(format!("{SOURCE_DIR}/routines/{name}.yaml")),
+    }
+}
+
+fn collection(routines: Vec<LoadedRoutine>) -> RoutineCollection {
+    RoutineCollection {
+        routines,
+        ..RoutineCollection::default()
+    }
+}
+
+fn ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(y, mo, d, h, mi, s)
+        .single()
+        .expect("valid ts")
 }
 
 fn fires(store: &Store, name: &str) -> Vec<RoutineFireRecord> {
@@ -857,35 +940,6 @@ fn temporal_and_same_kind_state_routines_on_one_target_still_skip_as_duplicates(
     }
 }
 
-/// A dispatch whose submissions fail until told otherwise, on a host whose
-/// Orbit build the test can change [ORB-25103].
-#[derive(Default)]
-struct FlakyDispatch {
-    delegate: FakeDispatch,
-    failing: Cell<bool>,
-    build: RefCell<String>,
-    attempts: Cell<u32>,
-}
-
-impl RoutineDispatch for FlakyDispatch {
-    fn submit(&self, dir: &Path, job: &str, actor: &str, slot: &str) -> Result<String, OrbitError> {
-        self.attempts.set(self.attempts.get() + 1);
-        if self.failing.get() {
-            return Err(OrbitError::Execution("worktree mismatch".into()));
-        }
-        self.delegate.submit(dir, job, actor, slot)
-    }
-    fn run_state(&self, dir: &Path, run_id: &str) -> Option<JobRunState> {
-        self.delegate.run_state(dir, run_id)
-    }
-    fn run_owner_liveness(&self, dir: &Path, run_id: &str) -> RunOwnerLiveness {
-        self.delegate.run_owner_liveness(dir, run_id)
-    }
-    fn host_orbit_build(&self) -> Option<String> {
-        Some(self.build.borrow().clone())
-    }
-}
-
 /// [ORB-25103] resident-cycle-orbit failed at launch on every fire for days
 /// because nothing stopped the sweep. Three identical failures trip the
 /// breaker; it holds through its backoff, a failed trial re-opens it with a
@@ -1204,60 +1258,6 @@ fn bypass_fires_an_hourly_routine_between_slots_without_consuming_a_slot() {
         scheduled.slot.as_deref(),
         Some(at(60).to_rfc3339().as_str())
     );
-}
-
-/// Operator action a sweep pass must not overwrite, committed from inside
-/// `host_orbit_build` — which the gate calls after `run_sweep_core` has
-/// taken its breaker snapshot and before it writes its transition. That
-/// call is the deterministic interleave point between snapshot and write.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum InterleavedOperatorAction {
-    Reset,
-    Bypass,
-}
-
-struct InterleavingDispatch {
-    delegate: FakeDispatch,
-    store: std::rc::Rc<Store>,
-    action: InterleavedOperatorAction,
-    done: Cell<bool>,
-}
-
-impl RoutineDispatch for InterleavingDispatch {
-    fn submit(&self, dir: &Path, job: &str, actor: &str, slot: &str) -> Result<String, OrbitError> {
-        self.delegate.submit(dir, job, actor, slot)
-    }
-    fn run_state(&self, dir: &Path, run_id: &str) -> Option<JobRunState> {
-        self.delegate.run_state(dir, run_id)
-    }
-    fn run_owner_liveness(&self, dir: &Path, run_id: &str) -> RunOwnerLiveness {
-        self.delegate.run_owner_liveness(dir, run_id)
-    }
-    fn host_orbit_build(&self) -> Option<String> {
-        if !self.done.get() {
-            self.done.set(true);
-            let acted = match self.action {
-                InterleavedOperatorAction::Reset => {
-                    orbit_automation::routines::breaker::reset_breaker(
-                        &self.store,
-                        "hourly",
-                        "human:test",
-                    )
-                    .expect("operator reset")
-                }
-                InterleavedOperatorAction::Bypass => {
-                    orbit_automation::routines::breaker::request_breaker_bypass(
-                        &self.store,
-                        "hourly",
-                        "human:test",
-                    )
-                    .expect("operator bypass")
-                }
-            };
-            assert!(acted, "operator action applies to the open breaker");
-        }
-        Some("1.0.0".into())
-    }
 }
 
 fn interleaving_fixture(

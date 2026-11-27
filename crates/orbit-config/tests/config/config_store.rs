@@ -4,43 +4,6 @@
 //  and writers that run open-to-save under the write lock serialize, each
 //  validating and persisting the version that includes the other's edit.
 
-struct Roots {
-    global: tempfile::TempDir,
-    workspace: tempfile::TempDir,
-}
-
-impl Roots {
-    fn new() -> Self {
-        let roots = Self {
-            global: tempfile::tempdir().expect("global tempdir"),
-            workspace: tempfile::tempdir().expect("workspace tempdir"),
-        };
-        std::fs::write(roots.workspace_config(), "").expect("empty workspace config");
-        roots
-    }
-
-    fn workspace_config(&self) -> PathBuf {
-        self.workspace.path().join("config.toml")
-    }
-
-    fn global_config(&self) -> PathBuf {
-        self.global.path().join("config.toml")
-    }
-
-    fn config_roots(&self) -> ConfigRoots {
-        ConfigRoots::new(self.global.path(), self.workspace.path())
-    }
-
-    fn load(&self) -> ResolvedConfig {
-        ResolvedConfig::load(&orbit_common::Env::capture(), &self.config_roots())
-            .expect("final config loads")
-    }
-
-    fn toggles(&self) -> std::collections::BTreeMap<String, bool> {
-        load_workspace_plugin_enablement(&self.config_roots()).expect("toggles load")
-    }
-}
-
 fn open(path: &Path) -> ConfigStore {
     ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Workspace, path)
         .expect("open workspace store")

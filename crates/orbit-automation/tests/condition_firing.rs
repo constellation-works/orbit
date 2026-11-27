@@ -29,36 +29,6 @@ use orbit_types::workflow::automation::{
 const CONSUMER: &str = "auto-task:fixture";
 const CADENCE_SECONDS: u64 = 60;
 
-fn at(minute: i64) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339("2026-10-30T09:00:00Z")
-        .unwrap()
-        .with_timezone(&Utc)
-        + Duration::minutes(minute)
-}
-
-fn trigger(extra: serde_json::Value) -> ConditionTrigger {
-    let mut value = serde_json::json!({"scope": "task", "when": "task.status == 'done'"});
-    for (key, field) in extra.as_object().unwrap() {
-        value[key] = field.clone();
-    }
-    serde_json::from_value(value).unwrap()
-}
-
-fn memory_store() -> Store {
-    Store::open_in_memory().unwrap()
-}
-
-fn subject(key: &str, when: Truth, revision: &str) -> SubjectObservation {
-    SubjectObservation {
-        key: key.to_string(),
-        when,
-        rearm: None,
-        revision: revision.to_string(),
-        captured: serde_json::json!({"key": key, "revision": revision}),
-        origin: None,
-    }
-}
-
 type ObserveHook = Box<dyn FnOnce()>;
 
 /// A board of subjects and a keyed action ledger. `admit` is idempotent per
@@ -174,6 +144,82 @@ impl<'a> Pass<'a> {
                 cadence_seconds: CADENCE_SECONDS,
             },
         )
+    }
+}
+
+/// Subjects split into laps the way the task prefilter pages them: each lap
+/// ends at its last subject, and the next lap continues after it.
+#[derive(Default)]
+struct Paged {
+    laps: Vec<Vec<SubjectObservation>>,
+    admitted: Cell<usize>,
+}
+
+impl ConditionHost for Paged {
+    fn observe(
+        &self,
+        state: &ConditionState,
+        _now: DateTime<Utc>,
+    ) -> Result<ConditionObservation, AutomationError> {
+        let index = match state.lap_after.as_deref() {
+            None => 0,
+            Some(after) => self
+                .laps
+                .iter()
+                .position(|lap| lap.last().is_some_and(|last| last.key == after))
+                .map_or(0, |index| index + 1),
+        };
+        let lap = self.laps.get(index).cloned().unwrap_or_default();
+        let last = index + 1 >= self.laps.len();
+        Ok(ConditionObservation {
+            lap_after: if last {
+                None
+            } else {
+                lap.last().map(|subject| subject.key.clone())
+            },
+            subjects: lap,
+            complete: true,
+            lap_complete: last,
+        })
+    }
+
+    fn lookup(&self, _fire: &ConditionFire) -> Result<Option<String>, AutomationError> {
+        Ok(None)
+    }
+
+    fn admit(&self, _fire: &ConditionFire) -> Result<String, AutomationError> {
+        self.admitted.set(self.admitted.get() + 1);
+        Ok(format!("task-{}", self.admitted.get()))
+    }
+}
+
+fn at(minute: i64) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2026-10-30T09:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc)
+        + Duration::minutes(minute)
+}
+
+fn trigger(extra: serde_json::Value) -> ConditionTrigger {
+    let mut value = serde_json::json!({"scope": "task", "when": "task.status == 'done'"});
+    for (key, field) in extra.as_object().unwrap() {
+        value[key] = field.clone();
+    }
+    serde_json::from_value(value).unwrap()
+}
+
+fn memory_store() -> Store {
+    Store::open_in_memory().unwrap()
+}
+
+fn subject(key: &str, when: Truth, revision: &str) -> SubjectObservation {
+    SubjectObservation {
+        key: key.to_string(),
+        when,
+        rearm: None,
+        revision: revision.to_string(),
+        captured: serde_json::json!({"key": key, "revision": revision}),
+        origin: None,
     }
 }
 
@@ -764,52 +810,6 @@ fn a_recorded_fire_cannot_be_rewritten_by_a_later_commit() {
             .unwrap(),
         state
     );
-}
-
-/// Subjects split into laps the way the task prefilter pages them: each lap
-/// ends at its last subject, and the next lap continues after it.
-#[derive(Default)]
-struct Paged {
-    laps: Vec<Vec<SubjectObservation>>,
-    admitted: Cell<usize>,
-}
-
-impl ConditionHost for Paged {
-    fn observe(
-        &self,
-        state: &ConditionState,
-        _now: DateTime<Utc>,
-    ) -> Result<ConditionObservation, AutomationError> {
-        let index = match state.lap_after.as_deref() {
-            None => 0,
-            Some(after) => self
-                .laps
-                .iter()
-                .position(|lap| lap.last().is_some_and(|last| last.key == after))
-                .map_or(0, |index| index + 1),
-        };
-        let lap = self.laps.get(index).cloned().unwrap_or_default();
-        let last = index + 1 >= self.laps.len();
-        Ok(ConditionObservation {
-            lap_after: if last {
-                None
-            } else {
-                lap.last().map(|subject| subject.key.clone())
-            },
-            subjects: lap,
-            complete: true,
-            lap_complete: last,
-        })
-    }
-
-    fn lookup(&self, _fire: &ConditionFire) -> Result<Option<String>, AutomationError> {
-        Ok(None)
-    }
-
-    fn admit(&self, _fire: &ConditionFire) -> Result<String, AutomationError> {
-        self.admitted.set(self.admitted.get() + 1);
-        Ok(format!("task-{}", self.admitted.get()))
-    }
 }
 
 #[test]

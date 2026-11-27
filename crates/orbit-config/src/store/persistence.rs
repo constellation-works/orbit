@@ -12,6 +12,9 @@ use crate::config_io::{config_store_path_error, read_config_file, validated_conf
 use crate::layering::{strip_workspace_refused_keys, validate_staged_workspace_document};
 use crate::plugin_enablement::{PLUGIN_ENABLEMENT_TABLE, workspace_config_sets_policy};
 
+/// Label the config write lock reports in contention diagnostics.
+const CONFIG_WRITE_LOCK_LABEL: &str = "config.toml write";
+
 /// Which physical `config.toml` file a [`ConfigStore`] is bound to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigScope {
@@ -62,9 +65,6 @@ pub struct ConfigStore {
     /// version [`Self::save`] requires to still be on disk before replacing it.
     opened: String,
 }
-
-/// Label the config write lock reports in contention diagnostics.
-const CONFIG_WRITE_LOCK_LABEL: &str = "config.toml write";
 
 impl ConfigStore {
     /// Open `path` for the given scope, reading its current content if it

@@ -79,6 +79,55 @@ pub struct CheckedAutoTaskStep {
     pub reads: ConditionReads,
 }
 
+/// One step's place in the job's structure.
+struct StepSite<'a> {
+    step: &'a JobV2Step,
+    /// File-order position.
+    index: usize,
+    prev: Option<&'a str>,
+    parallel: Option<&'a str>,
+    /// Inside a loop or fan_out body, where a step runs once per item.
+    dynamic: bool,
+    ancestors: Vec<&'a str>,
+    /// Steps settled before this one starts: earlier siblings in each
+    /// enclosing list and the branches of earlier joined parallel blocks.
+    visible: BTreeSet<&'a str>,
+    /// Steps in the parallel branches beside this one's.
+    beside: BTreeSet<&'a str>,
+}
+
+impl StepSite<'_> {
+    /// Why this step may not read `other`.
+    fn refusal(&self, other: &StepSite<'_>) -> String {
+        let id = other.step.id.as_str();
+        if id == self.step.id {
+            "a step cannot read its own observation; read self instead".into()
+        } else if self.ancestors.contains(&id) {
+            format!("`{id}` encloses this step and has not settled while it waits")
+        } else if other.dynamic {
+            format!("`{id}` runs inside a loop or fan_out, which has no single observation")
+        } else if self.beside.contains(id) {
+            format!(
+                "`{id}` runs in a parallel branch beside this one; a branch reads only steps \
+                 settled before its parallel block or earlier in its own branch"
+            )
+        } else if other.index > self.index {
+            format!("`{id}` comes after this step; steps[] reads only earlier steps")
+        } else {
+            format!("`{id}` has not settled when this step waits")
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct WalkContext<'a> {
+    visible: BTreeSet<&'a str>,
+    ancestors: Vec<&'a str>,
+    parallel: Option<&'a str>,
+    dynamic: bool,
+    beside: BTreeSet<&'a str>,
+}
+
 /// Check `job`'s auto-task steps: the disabled state, the step count and
 /// placement, the outer bound against `now`, each CEL field in its typed
 /// scope, and every `steps['<id>']` reference. A job without auto-task steps
@@ -347,55 +396,6 @@ pub fn auto_task_step_deadline(
         return None;
     }
     wait_started_at.checked_add_signed(literal_duration(duration, true)?)
-}
-
-/// One step's place in the job's structure.
-struct StepSite<'a> {
-    step: &'a JobV2Step,
-    /// File-order position.
-    index: usize,
-    prev: Option<&'a str>,
-    parallel: Option<&'a str>,
-    /// Inside a loop or fan_out body, where a step runs once per item.
-    dynamic: bool,
-    ancestors: Vec<&'a str>,
-    /// Steps settled before this one starts: earlier siblings in each
-    /// enclosing list and the branches of earlier joined parallel blocks.
-    visible: BTreeSet<&'a str>,
-    /// Steps in the parallel branches beside this one's.
-    beside: BTreeSet<&'a str>,
-}
-
-impl StepSite<'_> {
-    /// Why this step may not read `other`.
-    fn refusal(&self, other: &StepSite<'_>) -> String {
-        let id = other.step.id.as_str();
-        if id == self.step.id {
-            "a step cannot read its own observation; read self instead".into()
-        } else if self.ancestors.contains(&id) {
-            format!("`{id}` encloses this step and has not settled while it waits")
-        } else if other.dynamic {
-            format!("`{id}` runs inside a loop or fan_out, which has no single observation")
-        } else if self.beside.contains(id) {
-            format!(
-                "`{id}` runs in a parallel branch beside this one; a branch reads only steps \
-                 settled before its parallel block or earlier in its own branch"
-            )
-        } else if other.index > self.index {
-            format!("`{id}` comes after this step; steps[] reads only earlier steps")
-        } else {
-            format!("`{id}` has not settled when this step waits")
-        }
-    }
-}
-
-#[derive(Clone, Default)]
-struct WalkContext<'a> {
-    visible: BTreeSet<&'a str>,
-    ancestors: Vec<&'a str>,
-    parallel: Option<&'a str>,
-    dynamic: bool,
-    beside: BTreeSet<&'a str>,
 }
 
 /// Every step of `job` in file order with its structural context.

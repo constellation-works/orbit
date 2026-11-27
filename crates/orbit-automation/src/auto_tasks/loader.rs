@@ -29,16 +29,6 @@ use crate::definition_directory::{self, DefinitionDirectoryError, DefinitionEntr
 /// Directory under a workspace's `.orbit/` holding auto-task YAML files.
 pub const AUTO_TASKS_DIR: &str = "auto_tasks";
 
-/// Absolute path of the auto-tasks directory for an orbit dir.
-pub fn auto_tasks_dir(orbit_dir: &Path) -> PathBuf {
-    orbit_dir.join(AUTO_TASKS_DIR)
-}
-
-/// Path of one definition's YAML file (`<orbit_dir>/auto_tasks/<name>.yaml`).
-pub fn definition_path(orbit_dir: &Path, name: &str) -> PathBuf {
-    auto_tasks_dir(orbit_dir).join(format!("{name}.yaml"))
-}
-
 /// One successfully loaded, fully validated definition.
 #[derive(Debug, Clone)]
 pub struct LoadedAutoTask {
@@ -75,6 +65,25 @@ pub enum AutoTasksDirectoryError {
     Invalid(String),
 }
 
+impl fmt::Display for AutoTasksDirectoryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => formatter.write_str("auto_tasks directory is missing"),
+            Self::Invalid(message) => formatter.write_str(message),
+        }
+    }
+}
+
+/// Absolute path of the auto-tasks directory for an orbit dir.
+pub fn auto_tasks_dir(orbit_dir: &Path) -> PathBuf {
+    orbit_dir.join(AUTO_TASKS_DIR)
+}
+
+/// Path of one definition's YAML file (`<orbit_dir>/auto_tasks/<name>.yaml`).
+pub fn definition_path(orbit_dir: &Path, name: &str) -> PathBuf {
+    auto_tasks_dir(orbit_dir).join(format!("{name}.yaml"))
+}
+
 /// Resolve the configured auto-task directory before it reaches `read_dir`.
 ///
 /// The runtime supplies the Orbit root, while the directory name is fixed by
@@ -93,15 +102,6 @@ fn map_directory_error(error: DefinitionDirectoryError) -> AutoTasksDirectoryErr
     match error {
         DefinitionDirectoryError::Missing => AutoTasksDirectoryError::Missing,
         DefinitionDirectoryError::Invalid(message) => AutoTasksDirectoryError::Invalid(message),
-    }
-}
-
-impl fmt::Display for AutoTasksDirectoryError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Missing => formatter.write_str("auto_tasks directory is missing"),
-            Self::Invalid(message) => formatter.write_str(message),
-        }
     }
 }
 

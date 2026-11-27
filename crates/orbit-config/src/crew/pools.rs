@@ -18,6 +18,9 @@ pub(crate) const WEIGHT_SEPARATOR: char = ':';
 /// Every member of a bare pool carries one ticket, so the draw is uniform.
 const BARE_WEIGHT: u32 = 1;
 
+/// The `workflow.type_complexity_crews` key as written in `config.toml`.
+pub const TYPE_COMPLEXITY_CREWS_KEY: &str = "workflow.type_complexity_crews";
+
 /// Per-complexity configuration or run overrides. `None` inherits the matching
 /// configured pool; `Some([])` explicitly disables that pool for a run.
 ///
@@ -76,9 +79,6 @@ impl PurposeCrewPools {
     }
 }
 
-/// The `workflow.type_complexity_crews` key as written in `config.toml`.
-pub const TYPE_COMPLEXITY_CREWS_KEY: &str = "workflow.type_complexity_crews";
-
 /// The admitted `workflow.type_complexity_crews.<type>.<tier>` pools: per
 /// `workflow.task_types` type, one optional pool per complexity
 /// tier. A configured pool replaces `workflow.<tier>_complexity_crews` for a
@@ -136,6 +136,78 @@ impl TypeComplexityCrewPools {
                     .map(|entries| (task_type.as_str(), tier, entries))
             })
         })
+    }
+}
+
+/// One validated pool member: a canonical crew name and its relative,
+/// non-negative draw weight. Weights are ratios, not percentages, so they need
+/// not sum to anything in particular; weight `0` parks a crew without deleting
+/// it from the pool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CrewPoolEntry {
+    /// Canonical crew name, as resolved against the configured registry.
+    pub name: String,
+    /// Relative number of tickets this crew holds in the draw.
+    pub weight: u32,
+}
+
+impl CrewPoolEntry {
+    /// A bare pool member, holding the single ticket a name carried before
+    /// weights existed.
+    pub fn bare(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            weight: BARE_WEIGHT,
+        }
+    }
+}
+
+/// Pools persisted before weights existed are plain crew names, so a stored
+/// entry deserialises from either shape and an old run resumes without a
+/// reroll.
+impl<'de> Deserialize<'de> for CrewPoolEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Shape {
+            Legacy(String),
+            Weighted { name: String, weight: u32 },
+        }
+
+        Ok(match Shape::deserialize(deserializer)? {
+            Shape::Legacy(name) => Self::bare(name),
+            Shape::Weighted { name, weight } => Self { name, weight },
+        })
+    }
+}
+
+/// A validated pool: its canonical entries plus whether the operator wrote
+/// weights. The flag only drives rendering, so a bare pool still round-trips
+/// through `orbit config get` without growing `:1` suffixes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CanonicalCrewPool {
+    /// Members in canonical name order, one ticket bucket each.
+    pub entries: Vec<CrewPoolEntry>,
+    /// Whether the pool was written with explicit weights.
+    pub weighted: bool,
+}
+
+impl CanonicalCrewPool {
+    /// The `name[:weight]` strings this pool is stored as in `config.toml`.
+    pub fn to_setting_value(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                if self.weighted {
+                    format!("{}{WEIGHT_SEPARATOR}{}", entry.name, entry.weight)
+                } else {
+                    entry.name.clone()
+                }
+            })
+            .collect()
     }
 }
 
@@ -223,78 +295,6 @@ pub(crate) fn admit_type_complexity_crews(
         }
     }
     Ok(())
-}
-
-/// One validated pool member: a canonical crew name and its relative,
-/// non-negative draw weight. Weights are ratios, not percentages, so they need
-/// not sum to anything in particular; weight `0` parks a crew without deleting
-/// it from the pool.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CrewPoolEntry {
-    /// Canonical crew name, as resolved against the configured registry.
-    pub name: String,
-    /// Relative number of tickets this crew holds in the draw.
-    pub weight: u32,
-}
-
-impl CrewPoolEntry {
-    /// A bare pool member, holding the single ticket a name carried before
-    /// weights existed.
-    pub fn bare(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            weight: BARE_WEIGHT,
-        }
-    }
-}
-
-/// Pools persisted before weights existed are plain crew names, so a stored
-/// entry deserialises from either shape and an old run resumes without a
-/// reroll.
-impl<'de> Deserialize<'de> for CrewPoolEntry {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Shape {
-            Legacy(String),
-            Weighted { name: String, weight: u32 },
-        }
-
-        Ok(match Shape::deserialize(deserializer)? {
-            Shape::Legacy(name) => Self::bare(name),
-            Shape::Weighted { name, weight } => Self { name, weight },
-        })
-    }
-}
-
-/// A validated pool: its canonical entries plus whether the operator wrote
-/// weights. The flag only drives rendering, so a bare pool still round-trips
-/// through `orbit config get` without growing `:1` suffixes.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct CanonicalCrewPool {
-    /// Members in canonical name order, one ticket bucket each.
-    pub entries: Vec<CrewPoolEntry>,
-    /// Whether the pool was written with explicit weights.
-    pub weighted: bool,
-}
-
-impl CanonicalCrewPool {
-    /// The `name[:weight]` strings this pool is stored as in `config.toml`.
-    pub fn to_setting_value(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .map(|entry| {
-                if self.weighted {
-                    format!("{}{WEIGHT_SEPARATOR}{}", entry.name, entry.weight)
-                } else {
-                    entry.name.clone()
-                }
-            })
-            .collect()
-    }
 }
 
 /// Validate and canonicalize one pool at configuration or run admission.

@@ -83,6 +83,136 @@ struct PathBeneathAttr {
     parent_fd: i32,
 }
 
+pub(super) struct Ruleset {
+    fd: OwnedFd,
+    /// The filesystem rights this ruleset takes over; a rule may only grant a
+    /// subset of them.
+    handled_fs: u64,
+}
+
+impl Ruleset {
+    pub(super) fn create(scope: RulesetScope, abi: i64) -> Result<Self, OrbitError> {
+        scope.require_abi(abi)?;
+        let mut handled_fs = HANDLED_FS_ACCESS;
+        if scope.confine_writes {
+            handled_fs |= HANDLED_FS_WRITE_ACCESS;
+        }
+        let handled_access_net = if scope.deny_tcp {
+            ACCESS_NET_BIND_TCP | ACCESS_NET_CONNECT_TCP
+        } else {
+            0
+        };
+        let attr = RulesetAttr {
+            handled_access_fs: handled_fs,
+            handled_access_net,
+        };
+        // SAFETY: `attr` is a well-formed `landlock_ruleset_attr` and its size
+        // is passed alongside it.
+        let fd = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_create_ruleset,
+                std::ptr::addr_of!(attr),
+                std::mem::size_of::<RulesetAttr>(),
+                0u32,
+            )
+        };
+        if fd < 0 {
+            return Err(OrbitError::PolicyDenied(format!(
+                "landlock_create_ruleset failed: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        // SAFETY: `fd` is a freshly created ruleset descriptor this scope owns.
+        let ruleset = Self {
+            fd: unsafe { OwnedFd::from_raw_fd(fd as i32) },
+            handled_fs,
+        };
+        set_cloexec(ruleset.as_raw_fd())?;
+        Ok(ruleset)
+    }
+
+    fn as_raw_fd(&self) -> i32 {
+        self.fd.as_raw_fd()
+    }
+
+    /// Lift the ruleset above every descriptor number the child overwrites on
+    /// its way to `exec`. A no-op when the spawn inherits nothing.
+    fn clear_of_targets(
+        self,
+        inherited_fds: &[crate::process::InheritedFd],
+    ) -> Result<Self, OrbitError> {
+        let Self { fd, handled_fs } = self;
+        let fd = crate::process::relocate_clear_of_targets(fd, inherited_fds).map_err(|error| {
+            OrbitError::Io(format!(
+                "move the landlock ruleset clear of the child's inherited descriptors: {error}"
+            ))
+        })?;
+        Ok(Self { fd, handled_fs })
+    }
+
+    pub(super) fn add_path(&self, grant: &LandlockPathGrant) -> Result<(), OrbitError> {
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = std::ffi::CString::new(grant.path.as_os_str().as_bytes()).map_err(|_| {
+            OrbitError::InvalidInput(format!(
+                "landlock path `{}` contains an interior NUL",
+                grant.path.display()
+            ))
+        })?;
+        // SAFETY: `path` is a NUL-terminated absolute path. `O_PATH` opens a
+        // descriptor that names the inode without granting access to it.
+        let parent_fd = unsafe { libc::open(path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
+        if parent_fd < 0 {
+            let error = std::io::Error::last_os_error();
+            // A grant found by walking a shared directory (a sibling
+            // `TMPDIR/.tmpXXXX` another test or run owned) may be removed
+            // between that walk and this open. Skipping it grants nothing,
+            // so confinement is unchanged. A grant the policy names itself
+            // never carries `allow_vanished` and is refused here instead.
+            if grant.allow_vanished && error.kind() == std::io::ErrorKind::NotFound {
+                orbit_common::tracing::warn!(
+                    target: "orbit.sandbox.landlock",
+                    grant = %grant.path.display(),
+                    "landlock grant found by enumeration vanished before the ruleset opened it; skipping it"
+                );
+                return Ok(());
+            }
+            return Err(OrbitError::Io(format!(
+                "open landlock grant `{}`: {error}",
+                grant.path.display()
+            )));
+        }
+        let rule = PathBeneathAttr {
+            allowed_access: access_bits(grant.grant) & self.handled_fs,
+            parent_fd,
+        };
+        // SAFETY: `rule` holds the live `O_PATH` descriptor opened above and an
+        // access mask that is a subset of the handled set.
+        let added = unsafe {
+            libc::syscall(
+                libc::SYS_landlock_add_rule,
+                self.as_raw_fd() as libc::c_long,
+                LANDLOCK_RULE_PATH_BENEATH as libc::c_long,
+                std::ptr::addr_of!(rule),
+                0u32,
+            )
+        };
+        // Read errno before `close`, which overwrites it when it fails.
+        let add_error = std::io::Error::last_os_error();
+        // SAFETY: `parent_fd` is the descriptor opened in this function and is
+        // no longer referenced by the kernel after `landlock_add_rule` returns.
+        unsafe { libc::close(parent_fd) };
+        if added != 0 {
+            return Err(OrbitError::PolicyDenied(format!(
+                "landlock_add_rule failed for `{}`: {}",
+                grant.path.display(),
+                add_error
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Ask the kernel which Landlock ABI it implements. A negative result means
 /// Landlock is absent or disabled.
 pub(crate) fn abi_version() -> i64 {
@@ -235,136 +365,6 @@ fn restrict_child(command: &mut std::process::Command, ruleset_fd: i32) {
             }
             Ok(())
         });
-    }
-}
-
-pub(super) struct Ruleset {
-    fd: OwnedFd,
-    /// The filesystem rights this ruleset takes over; a rule may only grant a
-    /// subset of them.
-    handled_fs: u64,
-}
-
-impl Ruleset {
-    pub(super) fn create(scope: RulesetScope, abi: i64) -> Result<Self, OrbitError> {
-        scope.require_abi(abi)?;
-        let mut handled_fs = HANDLED_FS_ACCESS;
-        if scope.confine_writes {
-            handled_fs |= HANDLED_FS_WRITE_ACCESS;
-        }
-        let handled_access_net = if scope.deny_tcp {
-            ACCESS_NET_BIND_TCP | ACCESS_NET_CONNECT_TCP
-        } else {
-            0
-        };
-        let attr = RulesetAttr {
-            handled_access_fs: handled_fs,
-            handled_access_net,
-        };
-        // SAFETY: `attr` is a well-formed `landlock_ruleset_attr` and its size
-        // is passed alongside it.
-        let fd = unsafe {
-            libc::syscall(
-                libc::SYS_landlock_create_ruleset,
-                std::ptr::addr_of!(attr),
-                std::mem::size_of::<RulesetAttr>(),
-                0u32,
-            )
-        };
-        if fd < 0 {
-            return Err(OrbitError::PolicyDenied(format!(
-                "landlock_create_ruleset failed: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        // SAFETY: `fd` is a freshly created ruleset descriptor this scope owns.
-        let ruleset = Self {
-            fd: unsafe { OwnedFd::from_raw_fd(fd as i32) },
-            handled_fs,
-        };
-        set_cloexec(ruleset.as_raw_fd())?;
-        Ok(ruleset)
-    }
-
-    fn as_raw_fd(&self) -> i32 {
-        self.fd.as_raw_fd()
-    }
-
-    /// Lift the ruleset above every descriptor number the child overwrites on
-    /// its way to `exec`. A no-op when the spawn inherits nothing.
-    fn clear_of_targets(
-        self,
-        inherited_fds: &[crate::process::InheritedFd],
-    ) -> Result<Self, OrbitError> {
-        let Self { fd, handled_fs } = self;
-        let fd = crate::process::relocate_clear_of_targets(fd, inherited_fds).map_err(|error| {
-            OrbitError::Io(format!(
-                "move the landlock ruleset clear of the child's inherited descriptors: {error}"
-            ))
-        })?;
-        Ok(Self { fd, handled_fs })
-    }
-
-    pub(super) fn add_path(&self, grant: &LandlockPathGrant) -> Result<(), OrbitError> {
-        use std::os::unix::ffi::OsStrExt;
-
-        let path = std::ffi::CString::new(grant.path.as_os_str().as_bytes()).map_err(|_| {
-            OrbitError::InvalidInput(format!(
-                "landlock path `{}` contains an interior NUL",
-                grant.path.display()
-            ))
-        })?;
-        // SAFETY: `path` is a NUL-terminated absolute path. `O_PATH` opens a
-        // descriptor that names the inode without granting access to it.
-        let parent_fd = unsafe { libc::open(path.as_ptr(), libc::O_PATH | libc::O_CLOEXEC) };
-        if parent_fd < 0 {
-            let error = std::io::Error::last_os_error();
-            // A grant found by walking a shared directory (a sibling
-            // `TMPDIR/.tmpXXXX` another test or run owned) may be removed
-            // between that walk and this open. Skipping it grants nothing,
-            // so confinement is unchanged. A grant the policy names itself
-            // never carries `allow_vanished` and is refused here instead.
-            if grant.allow_vanished && error.kind() == std::io::ErrorKind::NotFound {
-                orbit_common::tracing::warn!(
-                    target: "orbit.sandbox.landlock",
-                    grant = %grant.path.display(),
-                    "landlock grant found by enumeration vanished before the ruleset opened it; skipping it"
-                );
-                return Ok(());
-            }
-            return Err(OrbitError::Io(format!(
-                "open landlock grant `{}`: {error}",
-                grant.path.display()
-            )));
-        }
-        let rule = PathBeneathAttr {
-            allowed_access: access_bits(grant.grant) & self.handled_fs,
-            parent_fd,
-        };
-        // SAFETY: `rule` holds the live `O_PATH` descriptor opened above and an
-        // access mask that is a subset of the handled set.
-        let added = unsafe {
-            libc::syscall(
-                libc::SYS_landlock_add_rule,
-                self.as_raw_fd() as libc::c_long,
-                LANDLOCK_RULE_PATH_BENEATH as libc::c_long,
-                std::ptr::addr_of!(rule),
-                0u32,
-            )
-        };
-        // Read errno before `close`, which overwrites it when it fails.
-        let add_error = std::io::Error::last_os_error();
-        // SAFETY: `parent_fd` is the descriptor opened in this function and is
-        // no longer referenced by the kernel after `landlock_add_rule` returns.
-        unsafe { libc::close(parent_fd) };
-        if added != 0 {
-            return Err(OrbitError::PolicyDenied(format!(
-                "landlock_add_rule failed for `{}`: {}",
-                grant.path.display(),
-                add_error
-            )));
-        }
-        Ok(())
     }
 }
 

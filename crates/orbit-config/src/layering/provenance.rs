@@ -17,158 +17,6 @@ use super::{
     EffectiveConfigValue, ShadowReason, ShadowedConfigValue, WORKSPACE_REPLACE_ONLY_KEYS,
 };
 
-pub(super) fn effective_values(
-    env: &orbit_common::Env,
-    resolved: &ResolvedConfig,
-    global: Option<&ConfigDocument>,
-    workspace: Option<&ConfigDocument>,
-) -> Vec<EffectiveConfigValue> {
-    let env_default = env
-        .constellation_default_provider()
-        .and_then(std::ffi::OsStr::to_str)
-        .filter(|value| !value.trim().is_empty());
-    let below = BelowFiles::new(&resolved.crews, env_default);
-    let mut values = resolved
-        .snapshot
-        .all_values()
-        .into_iter()
-        .map(|(key, value)| {
-            let source = source_for_key(key, global, workspace, env_default.is_some());
-            let global_value = global.and_then(|document| {
-                config_document::config_value_at_path(&document.value, key)?;
-                if source.kind() == ConfigValueSourceKind::Global {
-                    return Some(value.clone());
-                }
-                resolved
-                    .snapshot
-                    .admit_override(&document.value, key, &document.path, &resolved.crews)
-                    .ok()
-                    .flatten()
-            });
-            EffectiveConfigValue {
-                shadowed_by: shadowed_for_key(key, &source, global, workspace),
-                built_in: below.shipped_value(key),
-                fallback: fallback_for_key(key, &source, global, global_value.as_ref(), &below),
-                global_value,
-                key: key.to_string(),
-                value,
-                source,
-            }
-        })
-        .collect::<Vec<_>>();
-
-    // `execution.env.inherit` is a derived invariant, not an admitted config
-    // key (see `resolved::ExecutionEnvPolicy`), so it does not belong in the
-    // `settings`-shaped values here: `config get` rejects it via
-    // `admit_config_key`, and a settings-only listing must stay readable by
-    // `config get`/`config set`. `orbit config show`'s JSON/text rendering
-    // surfaces it separately as a derived field.
-
-    for (name, crew) in &resolved.crews {
-        for (field, value) in crew_field_values(crew) {
-            let key = format!("crews.{name}.{field}");
-            let source = source_for_crew_field(name, field, global, workspace);
-            let built_in = below.shipped_crew_field(name, field);
-            values.push(EffectiveConfigValue {
-                shadowed_by: shadowed_for_crew_field(name, field, &source, global),
-                fallback: fallback_for_crew_field(name, field, &source, global, workspace),
-                global_value: global
-                    .and_then(|document| crew_entry(&document.value, name))
-                    .and_then(|entry| entry.get(field))
-                    .map(json_from_toml),
-                built_in,
-                source,
-                key,
-                value,
-            });
-        }
-    }
-    // A human crew lists its few fields like an agent crew's, `kind` always,
-    // so `config get crews.<name>.kind` and the listing say what it is.
-    for (name, human) in &resolved.human_crews {
-        let mut fields = vec![(
-            "kind",
-            serde_json::json!(orbit_types::identity::HUMAN_CREW_KIND),
-        )];
-        if let Some(description) = &human.description {
-            fields.push(("description", serde_json::json!(description)));
-        }
-        if !human.tags.is_empty() {
-            fields.push(("tags", serde_json::json!(human.tags)));
-        }
-        for (field, value) in fields {
-            let source = source_for_crew_field(name, field, global, workspace);
-            values.push(EffectiveConfigValue {
-                shadowed_by: shadowed_for_crew_field(name, field, &source, global),
-                fallback: None,
-                global_value: global
-                    .and_then(|document| crew_entry(&document.value, name))
-                    .and_then(|entry| entry.get(field))
-                    .map(json_from_toml),
-                built_in: serde_json::Value::Null,
-                source,
-                key: format!("crews.{name}.{field}"),
-                value,
-            });
-        }
-    }
-    // `[plugins.<ns>]` rows layer like crews: one row per key actually present
-    // in a layer, with the file that supplied it. A key the plugin defaults
-    // but no file sets is reported by `orbit plugin show`, not here — this
-    // list is what the config files say.
-    for (namespace, section) in &resolved.plugins {
-        let Some(entries) = section.as_object() else {
-            continue;
-        };
-        for (field, value) in entries {
-            let key = format!("plugins.{namespace}.{field}");
-            let source = source_for_key(&key, global, workspace, env_default.is_some());
-            let global_value = global
-                .and_then(|document| config_document::config_value_at_path(&document.value, &key))
-                .map(json_from_toml);
-            values.push(EffectiveConfigValue {
-                shadowed_by: shadowed_for_key(&key, &source, global, workspace),
-                built_in: serde_json::Value::Null,
-                fallback: fallback_for_key(&key, &source, global, global_value.as_ref(), &below),
-                global_value,
-                source,
-                key,
-                value: value.clone(),
-            });
-        }
-    }
-    values.sort_by(|left, right| left.key.cmp(&right.key));
-    values
-}
-
-/// A crew's projected fields, as `crews.<name>.<field>` rows list them.
-fn crew_field_values(crew: &Crew) -> Vec<(&'static str, serde_json::Value)> {
-    let mut fields = vec![
-        ("model", serde_json::json!(crew.assignment.model)),
-        ("provider", serde_json::json!(crew.assignment.provider)),
-        ("description", serde_json::json!(crew.description)),
-        ("tags", serde_json::json!(crew.tags)),
-        // Always projected: a table without the key is enabled, and the
-        // listing shows that rather than hiding the state.
-        ("enabled", serde_json::json!(crew.enabled)),
-    ];
-    // Configured effort only. An omitted field keeps the provider default
-    // and must not appear as a fabricated effective setting.
-    if let Some(effort) = crew.assignment.effort {
-        fields.push(("effort", serde_json::json!(effort)));
-    }
-    // Names only: each entry is `NAME` or `NAME=SOURCE`, never a value.
-    if !crew.env.is_empty() {
-        fields.push(("env", serde_json::json!(crew.env)));
-    }
-    // Only the opt-out: a crew without the key may see images when its
-    // executor declares `image_input`.
-    if !crew.vision {
-        fields.push(("vision", serde_json::json!(false)));
-    }
-    fields
-}
-
 /// What a key resolves to when neither file sets it.
 struct BelowFiles {
     /// Shipped defaults: no file, no environment, the built-in crew registry.
@@ -241,6 +89,168 @@ impl BelowFiles {
             _ => self.built_in(key),
         }
     }
+}
+
+pub(super) fn effective_values(
+    env: &orbit_common::Env,
+    resolved: &ResolvedConfig,
+    global: Option<&ConfigDocument>,
+    workspace: Option<&ConfigDocument>,
+) -> Vec<EffectiveConfigValue> {
+    let env_default = env
+        .constellation_default_provider()
+        .and_then(std::ffi::OsStr::to_str)
+        .filter(|value| !value.trim().is_empty());
+    let below = BelowFiles::new(&resolved.crews, env_default);
+    let mut values = resolved
+        .snapshot
+        .all_values()
+        .into_iter()
+        .map(|(key, value)| {
+            let source = source_for_key(key, global, workspace, env_default.is_some());
+            let global_value = global.and_then(|document| {
+                config_document::config_value_at_path(&document.value, key)?;
+                if source.kind() == ConfigValueSourceKind::Global {
+                    return Some(value.clone());
+                }
+                resolved
+                    .snapshot
+                    .admit_override(&document.value, key, &document.path, &resolved.crews)
+                    .ok()
+                    .flatten()
+            });
+            let shadowed_by = shadowed_for_key(key, &source, global, workspace);
+            let built_in = below.shipped_value(key);
+            let fallback = fallback_for_key(key, &source, global, global_value.as_ref(), &below);
+            EffectiveConfigValue {
+                key: key.to_string(),
+                value,
+                source,
+                shadowed_by,
+                global_value,
+                built_in,
+                fallback,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // `execution.env.inherit` is a derived invariant, not an admitted config
+    // key (see `resolved::ExecutionEnvPolicy`), so it does not belong in the
+    // `settings`-shaped values here: `config get` rejects it via
+    // `admit_config_key`, and a settings-only listing must stay readable by
+    // `config get`/`config set`. `orbit config show`'s JSON/text rendering
+    // surfaces it separately as a derived field.
+
+    for (name, crew) in &resolved.crews {
+        for (field, value) in crew_field_values(crew) {
+            let key = format!("crews.{name}.{field}");
+            let source = source_for_crew_field(name, field, global, workspace);
+            let built_in = below.shipped_crew_field(name, field);
+            let shadowed_by = shadowed_for_crew_field(name, field, &source, global);
+            let fallback = fallback_for_crew_field(name, field, &source, global, workspace);
+            let global_value = global
+                .and_then(|document| crew_entry(&document.value, name))
+                .and_then(|entry| entry.get(field))
+                .map(json_from_toml);
+            values.push(EffectiveConfigValue {
+                key,
+                value,
+                source,
+                shadowed_by,
+                global_value,
+                built_in,
+                fallback,
+            });
+        }
+    }
+    // A human crew lists its few fields like an agent crew's, `kind` always,
+    // so `config get crews.<name>.kind` and the listing say what it is.
+    for (name, human) in &resolved.human_crews {
+        let mut fields = vec![(
+            "kind",
+            serde_json::json!(orbit_types::identity::HUMAN_CREW_KIND),
+        )];
+        if let Some(description) = &human.description {
+            fields.push(("description", serde_json::json!(description)));
+        }
+        if !human.tags.is_empty() {
+            fields.push(("tags", serde_json::json!(human.tags)));
+        }
+        for (field, value) in fields {
+            let source = source_for_crew_field(name, field, global, workspace);
+            let shadowed_by = shadowed_for_crew_field(name, field, &source, global);
+            let global_value = global
+                .and_then(|document| crew_entry(&document.value, name))
+                .and_then(|entry| entry.get(field))
+                .map(json_from_toml);
+            values.push(EffectiveConfigValue {
+                key: format!("crews.{name}.{field}"),
+                value,
+                source,
+                shadowed_by,
+                global_value,
+                built_in: serde_json::Value::Null,
+                fallback: None,
+            });
+        }
+    }
+    // `[plugins.<ns>]` rows layer like crews: one row per key actually present
+    // in a layer, with the file that supplied it. A key the plugin defaults
+    // but no file sets is reported by `orbit plugin show`, not here — this
+    // list is what the config files say.
+    for (namespace, section) in &resolved.plugins {
+        let Some(entries) = section.as_object() else {
+            continue;
+        };
+        for (field, value) in entries {
+            let key = format!("plugins.{namespace}.{field}");
+            let source = source_for_key(&key, global, workspace, env_default.is_some());
+            let global_value = global
+                .and_then(|document| config_document::config_value_at_path(&document.value, &key))
+                .map(json_from_toml);
+            let shadowed_by = shadowed_for_key(&key, &source, global, workspace);
+            let fallback = fallback_for_key(&key, &source, global, global_value.as_ref(), &below);
+            values.push(EffectiveConfigValue {
+                key,
+                value: value.clone(),
+                source,
+                shadowed_by,
+                global_value,
+                built_in: serde_json::Value::Null,
+                fallback,
+            });
+        }
+    }
+    values.sort_by(|left, right| left.key.cmp(&right.key));
+    values
+}
+
+/// A crew's projected fields, as `crews.<name>.<field>` rows list them.
+fn crew_field_values(crew: &Crew) -> Vec<(&'static str, serde_json::Value)> {
+    let mut fields = vec![
+        ("model", serde_json::json!(crew.assignment.model)),
+        ("provider", serde_json::json!(crew.assignment.provider)),
+        ("description", serde_json::json!(crew.description)),
+        ("tags", serde_json::json!(crew.tags)),
+        // Always projected: a table without the key is enabled, and the
+        // listing shows that rather than hiding the state.
+        ("enabled", serde_json::json!(crew.enabled)),
+    ];
+    // Configured effort only. An omitted field keeps the provider default
+    // and must not appear as a fabricated effective setting.
+    if let Some(effort) = crew.assignment.effort {
+        fields.push(("effort", serde_json::json!(effort)));
+    }
+    // Names only: each entry is `NAME` or `NAME=SOURCE`, never a value.
+    if !crew.env.is_empty() {
+        fields.push(("env", serde_json::json!(crew.env)));
+    }
+    // Only the opt-out: a crew without the key may see images when its
+    // executor declares `image_input`.
+    if !crew.vision {
+        fields.push(("vision", serde_json::json!(false)));
+    }
+    fields
 }
 
 /// Where `key` resolves once the layer in `source` stops setting it.

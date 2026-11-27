@@ -15,6 +15,98 @@ const USAGE_CHILD_KEYS: &[&str] = &[
     "usage_metadata",
 ];
 
+const STANDARD_INPUT_KEYS: &[&str] = &[
+    "input_tokens",
+    "inputTokens",
+    "prompt_tokens",
+    "promptTokens",
+    "promptTokenCount",
+    "prompt_token_count",
+];
+
+const TOKEN_BLOCK_INPUT_KEYS: &[&str] = &[
+    "input_tokens",
+    "inputTokens",
+    "prompt_tokens",
+    "promptTokens",
+    "promptTokenCount",
+    "prompt_token_count",
+    "input",
+    "prompt",
+];
+
+const STANDARD_CACHE_READ_KEYS: &[&str] = &[
+    "cache_read_input_tokens",
+    "cacheReadInputTokens",
+    "cache_read_tokens",
+    "cacheReadTokens",
+    "cached_input_tokens",
+    "cachedInputTokens",
+    "cachedContentTokenCount",
+    "cached_content_token_count",
+];
+
+const TOKEN_BLOCK_CACHE_READ_KEYS: &[&str] = &[
+    "cache_read_input_tokens",
+    "cacheReadInputTokens",
+    "cache_read_tokens",
+    "cacheReadTokens",
+    "cached_input_tokens",
+    "cachedInputTokens",
+    "cachedContentTokenCount",
+    "cached_content_token_count",
+    "cached",
+];
+
+const STANDARD_CACHE_CREATE_KEYS: &[&str] = &[
+    "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
+    "cache_create_tokens",
+    "cacheCreateTokens",
+    "cache_write_input_tokens",
+    "cacheWriteInputTokens",
+    "cache_write_tokens",
+    "cacheWriteTokens",
+    "cache_creation_tokens",
+    "cacheCreationTokens",
+];
+
+const CACHE_CREATION_KEY: &str = "cache_creation";
+
+const EPHEMERAL_5M_INPUT_TOKENS_KEY: &str = "ephemeral_5m_input_tokens";
+
+const EPHEMERAL_1H_INPUT_TOKENS_KEY: &str = "ephemeral_1h_input_tokens";
+
+const STANDARD_OUTPUT_KEYS: &[&str] = &[
+    "output_tokens",
+    "outputTokens",
+    "completion_tokens",
+    "completionTokens",
+    "candidatesTokenCount",
+    "candidates_token_count",
+];
+
+const TOKEN_BLOCK_OUTPUT_KEYS: &[&str] = &[
+    "output_tokens",
+    "outputTokens",
+    "completion_tokens",
+    "completionTokens",
+    "candidatesTokenCount",
+    "candidates_token_count",
+    "candidates",
+    "output",
+];
+
+const THOUGHT_KEYS: &[&str] = &[
+    "thoughts",
+    "thoughtsTokenCount",
+    "thoughts_token_count",
+    "thinking_tokens",
+    "thinkingTokens",
+];
+
+const TOKEN_BLOCK_TOOL_KEYS: &[&str] = &["tool", "toolTokenCount", "tool_token_count"];
+
 #[derive(Clone, Copy)]
 enum UsageKeyMode {
     Standard,
@@ -282,94 +374,6 @@ fn usage_from_map(map: &JsonMap, key_mode: UsageKeyMode) -> Option<TokenUsage> {
     })
 }
 
-const STANDARD_INPUT_KEYS: &[&str] = &[
-    "input_tokens",
-    "inputTokens",
-    "prompt_tokens",
-    "promptTokens",
-    "promptTokenCount",
-    "prompt_token_count",
-];
-
-const TOKEN_BLOCK_INPUT_KEYS: &[&str] = &[
-    "input_tokens",
-    "inputTokens",
-    "prompt_tokens",
-    "promptTokens",
-    "promptTokenCount",
-    "prompt_token_count",
-    "input",
-    "prompt",
-];
-
-const STANDARD_CACHE_READ_KEYS: &[&str] = &[
-    "cache_read_input_tokens",
-    "cacheReadInputTokens",
-    "cache_read_tokens",
-    "cacheReadTokens",
-    "cached_input_tokens",
-    "cachedInputTokens",
-    "cachedContentTokenCount",
-    "cached_content_token_count",
-];
-
-const TOKEN_BLOCK_CACHE_READ_KEYS: &[&str] = &[
-    "cache_read_input_tokens",
-    "cacheReadInputTokens",
-    "cache_read_tokens",
-    "cacheReadTokens",
-    "cached_input_tokens",
-    "cachedInputTokens",
-    "cachedContentTokenCount",
-    "cached_content_token_count",
-    "cached",
-];
-
-const STANDARD_CACHE_CREATE_KEYS: &[&str] = &[
-    "cache_creation_input_tokens",
-    "cacheCreationInputTokens",
-    "cache_create_tokens",
-    "cacheCreateTokens",
-    "cache_write_input_tokens",
-    "cacheWriteInputTokens",
-    "cache_write_tokens",
-    "cacheWriteTokens",
-    "cache_creation_tokens",
-    "cacheCreationTokens",
-];
-
-const CACHE_CREATION_KEY: &str = "cache_creation";
-const EPHEMERAL_5M_INPUT_TOKENS_KEY: &str = "ephemeral_5m_input_tokens";
-const EPHEMERAL_1H_INPUT_TOKENS_KEY: &str = "ephemeral_1h_input_tokens";
-
-const STANDARD_OUTPUT_KEYS: &[&str] = &[
-    "output_tokens",
-    "outputTokens",
-    "completion_tokens",
-    "completionTokens",
-    "candidatesTokenCount",
-    "candidates_token_count",
-];
-
-const TOKEN_BLOCK_OUTPUT_KEYS: &[&str] = &[
-    "output_tokens",
-    "outputTokens",
-    "completion_tokens",
-    "completionTokens",
-    "candidatesTokenCount",
-    "candidates_token_count",
-    "candidates",
-    "output",
-];
-
-const THOUGHT_KEYS: &[&str] = &[
-    "thoughts",
-    "thoughtsTokenCount",
-    "thoughts_token_count",
-    "thinking_tokens",
-    "thinkingTokens",
-];
-
 /// `None` when no counter was present; otherwise the saturating sum of the
 /// ones that were.
 fn sum_present(parts: &[Option<u64>]) -> Option<u64> {
@@ -380,8 +384,6 @@ fn sum_present(parts: &[Option<u64>]) -> Option<u64> {
             .fold(0_u64, |total, value| total.saturating_add(*value))
     })
 }
-
-const TOKEN_BLOCK_TOOL_KEYS: &[&str] = &["tool", "toolTokenCount", "tool_token_count"];
 
 /// Returns Claude CLI's cache-creation TTL split when either split field is
 /// present. A missing counterpart is zero: the provider has explicitly chosen

@@ -130,6 +130,156 @@ use std::sync::Mutex;
 use std::sync::mpsc;
 use tracing_subscriber::fmt::MakeWriter;
 
+// The `include!`d files below share this module scope, so their constants and
+// types sit here, ahead of every included function.
+
+// Fixtures of `auto_effort.rs`.
+const AUTO_EFFORT_CREW: &str = "[crews.sol]\nmodel = \"gpt-5.5\"\nprovider = \"codex\"\n";
+
+const AUTO_EFFORT_BANDS: &str = "[[workflow.auto_effort.bands.sol]]\neffort = \"low\"\n\
+     complexity = [\"low\"]\n\n[[workflow.auto_effort.bands.sol]]\neffort = \"high\"\n\
+     complexity = [\"hard\", \"xhard\"]\n";
+
+// Fixtures of `config_paths.rs`.
+const GLOBAL: &str = "[execution.codex]\nsandbox = 'danger-full-access'\n\
+                      [execution.env]\npass = ['GLOBAL_TOKEN']\n";
+
+const TOGGLES: &str = "[plugin_enablement]\ngraph = false\n";
+
+// Fixtures of `crew_env.rs`.
+const CREW_ENV_CREW: &str = "[workflow]\ndefault_crew = \"opus-credits\"\n\n\
+     [crews.opus-credits]\nprovider = \"claude\"\nmodel = \"claude-opus-5-5\"\n";
+
+// Fixtures of `default_crew.rs`.
+const KEY: &str = "workflow.default_crew";
+
+const PROVIDER_ENV: &str = "CONSTELLATION_DEFAULT_PROVIDER";
+
+const INVALID_PROVIDER: &str = "invalid-provider";
+
+// Fixtures of `human_crews.rs`.
+const HUMAN_CREW_AGENTS: &str = "[crews.sol]\nmodel = \"m\"\nprovider = \"codex\"\n\n\
+     [crews.dk]\nkind = \"human\"\ndescription = \"Daniel's own work\"\n";
+
+// Fixtures of `provider_limit.rs`.
+const OVERRIDES: &str = "workflow.provider_limit_overrides";
+
+const BUDGETS: &str = "workflow.provider_limit_budgets";
+
+// Fixtures of `retired_system_crew.rs`.
+const RETIRED_SYSTEM_CREW_KEY: &str = "workflow.system_crew";
+
+const LEGACY: &str = r#"[workflow]
+default_crew = "opus"
+system_crew = "haiku"
+low_complexity_crews = ["haiku"]
+
+[crews.opus]
+provider = "claude"
+model = "fixture-opus"
+
+[crews.haiku]
+provider = "claude"
+model = "fixture-haiku"
+
+[crews.qa]
+provider = "codex"
+model = "fixture-qa"
+"#;
+
+// Fixtures of `unknown_keys.rs`.
+const HOST_EVIDENCE_RULE: &str = "[[review.host_evidence]]\n\
+    kind = \"codeql\"\n\
+    name = \"Rust CodeQL (Linux)\"\n\
+    paths = [\"**/*.rs\"]\n\
+    os = \"linux\"\n\
+    command = \"scripts/codeql-rust-local.sh\"\n\
+    artifact = \"evidence/codeql.json\"\n";
+
+// Fixtures of `config_store.rs`.
+struct Roots {
+    global: tempfile::TempDir,
+    workspace: tempfile::TempDir,
+}
+
+impl Roots {
+    fn new() -> Self {
+        let roots = Self {
+            global: tempfile::tempdir().expect("global tempdir"),
+            workspace: tempfile::tempdir().expect("workspace tempdir"),
+        };
+        std::fs::write(roots.workspace_config(), "").expect("empty workspace config");
+        roots
+    }
+
+    fn workspace_config(&self) -> PathBuf {
+        self.workspace.path().join("config.toml")
+    }
+
+    fn global_config(&self) -> PathBuf {
+        self.global.path().join("config.toml")
+    }
+
+    fn config_roots(&self) -> ConfigRoots {
+        ConfigRoots::new(self.global.path(), self.workspace.path())
+    }
+
+    fn load(&self) -> ResolvedConfig {
+        ResolvedConfig::load(&orbit_common::Env::capture(), &self.config_roots())
+            .expect("final config loads")
+    }
+
+    fn toggles(&self) -> std::collections::BTreeMap<String, bool> {
+        load_workspace_plugin_enablement(&self.config_roots()).expect("toggles load")
+    }
+}
+
+// Fixtures of `mcp_toolsets.rs`.
+#[derive(Clone)]
+struct McpToolsetsCapture(Arc<Mutex<Vec<u8>>>);
+
+impl Write for McpToolsetsCapture {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().expect("capture").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for McpToolsetsCapture {
+    type Writer = McpToolsetsCapture;
+
+    fn make_writer(&self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+// Fixtures of `retired_system_crew.rs`.
+#[derive(Clone)]
+struct Capture(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Capture {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().expect("capture").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for Capture {
+    type Writer = Capture;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
 include!("auto_effort.rs");
 include!("config_paths.rs");
 include!("config_store.rs");

@@ -11,6 +11,27 @@ use orbit_agent::{
 };
 use orbit_types::workflow::activity_job::Provider;
 
+/// Muse Code 1.4.12 allowance payload recorded on macOS at 2026-10-23T04:13Z.
+/// The fixture keeps that payload and minimal surrounding stream records.
+const MUSE_USAGE: &[u8] = include_bytes!("provider_invocation/fixtures/muse_usage.jsonl");
+
+/// Captured from Grok 1.0.67's CLI billing API on dk-server-2, 2026-10-24.
+const GROK_BILLING: &[u8] = include_bytes!("provider_invocation/fixtures/grok_billing.json");
+
+/// agy 1.4.6 on dk-server-2, 2026-10-24: native `/usage` control payload.
+const ANTIGRAVITY_USAGE: &[u8] =
+    include_bytes!("provider_invocation/fixtures/antigravity_usage.json");
+
+/// agy 1.5.13 on dk-server-2, 2026-11-20, Pro account: native `/usage` control
+/// payload whose shared "Gemini Models" group lists Gemini 4 Neon and Hydrogen.
+const ANTIGRAVITY_USAGE_1_5_13: &[u8] =
+    include_bytes!("provider_invocation/fixtures/antigravity_usage_1_5_13.json");
+
+/// Muse Code 1.4.13 allowance payload recorded on macOS at 2026-10-25.
+/// The usage frame moved from `payload_type: "status"` (1.4.12) to
+/// `payload_type: "run.usage"` with `record_type: "status"`.
+const MUSE_USAGE_1413: &[u8] = include_bytes!("provider_invocation/fixtures/muse_usage_1413.jsonl");
+
 #[test]
 fn january_reset_seen_in_late_december_holds_until_next_january() {
     let now = Utc.with_ymd_and_hms(2026, 12, 28, 10, 0, 0).unwrap();
@@ -282,22 +303,6 @@ fn claude_credit_balance_text_is_quota_exhaustion_unless_a_usage_limit_is_named(
         "an explicit usage limit must take precedence over the billing phrase"
     );
 }
-
-/// Muse Code 1.4.12 allowance payload recorded on macOS at 2026-10-23T04:13Z.
-/// The fixture keeps that payload and minimal surrounding stream records.
-const MUSE_USAGE: &[u8] = include_bytes!("provider_invocation/fixtures/muse_usage.jsonl");
-
-/// Captured from Grok 1.0.67's CLI billing API on dk-server-2, 2026-10-24.
-const GROK_BILLING: &[u8] = include_bytes!("provider_invocation/fixtures/grok_billing.json");
-
-/// agy 1.4.6 on dk-server-2, 2026-10-24: native `/usage` control payload.
-const ANTIGRAVITY_USAGE: &[u8] =
-    include_bytes!("provider_invocation/fixtures/antigravity_usage.json");
-
-/// agy 1.5.13 on dk-server-2, 2026-11-20, Pro account: native `/usage` control
-/// payload whose shared "Gemini Models" group lists Gemini 4 Neon and Hydrogen.
-const ANTIGRAVITY_USAGE_1_5_13: &[u8] =
-    include_bytes!("provider_invocation/fixtures/antigravity_usage_1_5_13.json");
 
 #[test]
 fn antigravity_quota_command_reports_scoped_windows_without_reading_answer_text() {
@@ -571,11 +576,6 @@ fn muse_run_usage_records_account_windows_at_completion() {
         assert_eq!(reading.crew, None);
     }
 }
-
-/// Muse Code 1.4.13 allowance payload recorded on macOS at 2026-10-25.
-/// The usage frame moved from `payload_type: "status"` (1.4.12) to
-/// `payload_type: "run.usage"` with `record_type: "status"`.
-const MUSE_USAGE_1413: &[u8] = include_bytes!("provider_invocation/fixtures/muse_usage_1413.jsonl");
 
 #[test]
 fn muse_run_usage_1413_records_account_windows_at_completion() {

@@ -13,12 +13,6 @@ fn auto_effort_load(body: &str) -> Result<ResolvedConfig, String> {
     .map_err(|error| error.to_string())
 }
 
-const AUTO_EFFORT_CREW: &str = "[crews.sol]\nmodel = \"gpt-5.5\"\nprovider = \"codex\"\n";
-
-const AUTO_EFFORT_BANDS: &str = "[[workflow.auto_effort.bands.sol]]\neffort = \"low\"\n\
-     complexity = [\"low\"]\n\n[[workflow.auto_effort.bands.sol]]\neffort = \"high\"\n\
-     complexity = [\"hard\", \"xhard\"]\n";
-
 fn auto_effort_body(workflow: &str, bands: &str) -> String {
     format!("[workflow]\ndefault_crew = \"sol\"\n{workflow}\n{bands}\n{AUTO_EFFORT_CREW}")
 }

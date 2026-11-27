@@ -6,6 +6,10 @@ use std::io::Write;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// Set only by [`force_seatbelt_refusal_for_test`], which production code
+/// cannot call: it exists only under the `test-support` feature.
+static FORCED_SEATBELT_REFUSAL: AtomicBool = AtomicBool::new(false);
+
 /// Result of checking Seatbelt state and, when needed, applying a permissive
 /// profile to a harmless child.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +67,13 @@ impl SandboxExecApplyProbe {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+pub(super) struct ApplyResult {
+    pub(super) success: bool,
+    pub(super) exit_code: Option<i32>,
+    pub(super) stderr: String,
+}
+
 /// The line a test prints when it returns without exercising its
 /// Seatbelt-confined path because `sandbox-exec` cannot apply a profile here,
 /// as inside an agent lane whose own Seatbelt sandbox refuses a nested one.
@@ -74,10 +85,6 @@ pub fn seatbelt_deferral_notice(test: &str, detail: &str) -> String {
         orbit_types::workflow::SEATBELT_DEFERRAL_PREFIX
     )
 }
-
-/// Set only by [`force_seatbelt_refusal_for_test`], which production code
-/// cannot call: it exists only under the `test-support` feature.
-static FORCED_SEATBELT_REFUSAL: AtomicBool = AtomicBool::new(false);
 
 /// Probe once per process. If the kernel does not report an existing sandbox,
 /// use a trusted absolute wrapper, a permissive profile and `/usr/bin/true`.
@@ -122,13 +129,6 @@ pub fn force_seatbelt_refusal_for_test() {
 /// On other platforms this returns true without spawning a child.
 pub fn macos_sandbox_test_guard(env: &orbit_common::Env, test: &str) -> bool {
     probe_sandbox_exec_apply().test_guard(env, test)
-}
-
-#[cfg(any(target_os = "macos", test))]
-pub(super) struct ApplyResult {
-    pub(super) success: bool,
-    pub(super) exit_code: Option<i32>,
-    pub(super) stderr: String,
 }
 
 #[cfg(any(target_os = "macos", test))]

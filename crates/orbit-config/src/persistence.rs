@@ -61,9 +61,9 @@ impl PersistenceConfig {
             job_dir: global_resources_dir.join("jobs"),
             skill_dir: paths.skills_dir.clone(),
             executor_dir: global_resources_dir.join("executors"),
-            policy_dir: global_resources_dir.join("policies"),
             audit_db: paths.global_dir.join("orbit.db"),
             semantic_db: paths.state_dir.join("semantic.db"),
+            policy_dir: global_resources_dir.join("policies"),
         }
     }
 

@@ -7,6 +7,14 @@ use orbit_policy::PolicyEngine;
 use orbit_types::policy::{FsOperation, FsProfile, PolicyDef, PolicyTimestamp};
 use std::collections::HashMap;
 
+struct Case {
+    /// Profile `read` rules (modify mirrors read so validation passes).
+    rules: &'static [&'static str],
+    path: &'static str,
+    allowed: bool,
+    note: &'static str,
+}
+
 fn make_def(
     deny_read: Vec<&str>,
     deny_modify: Vec<&str>,
@@ -65,14 +73,6 @@ fn engine(
         ),
     };
     PolicyEngine::from_def(&def).expect("valid policy def")
-}
-
-struct Case {
-    /// Profile `read` rules (modify mirrors read so validation passes).
-    rules: &'static [&'static str],
-    path: &'static str,
-    allowed: bool,
-    note: &'static str,
 }
 
 fn run_read_cases(cases: &[Case]) {
@@ -714,6 +714,7 @@ fn newline_segment_request_matrix() {
         },
     ]);
 }
+
 #[test]
 fn precedence_matrix() {
     // Within a profile, evaluation is last-match-wins over the rule list:

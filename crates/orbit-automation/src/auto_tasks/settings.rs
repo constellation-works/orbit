@@ -126,6 +126,17 @@ pub struct AutoTaskOverrides {
     pub body_fields: Vec<&'static str>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AutoTaskSettingsDocument {
+    schema_version: u32,
+    #[serde(default)]
+    definitions: BTreeMap<String, AutoTaskSettings>,
+}
+
+/// Every definition's settings, keyed by definition name.
+pub type AutoTaskSettingsTable = BTreeMap<String, AutoTaskSettings>;
+
 /// Split the differences between `body` and `effective` into settings and
 /// body edits. Creation and update stamps are ignored.
 pub fn split_overrides(
@@ -241,17 +252,6 @@ pub fn split_overrides(
         body_fields,
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AutoTaskSettingsDocument {
-    schema_version: u32,
-    #[serde(default)]
-    definitions: BTreeMap<String, AutoTaskSettings>,
-}
-
-/// Every definition's settings, keyed by definition name.
-pub type AutoTaskSettingsTable = BTreeMap<String, AutoTaskSettings>;
 
 /// Path of the settings table for an auto-task directory.
 pub fn settings_path(auto_tasks_dir: &Path) -> PathBuf {

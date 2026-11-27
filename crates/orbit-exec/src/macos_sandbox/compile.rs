@@ -9,6 +9,68 @@ use crate::credential_paths::{
     USER_KEYCHAINS_SUBPATH, cargo_home_dir, credential_read_denies, non_empty_env_path,
 };
 
+/// Host scratch trees every confined process may write.
+const HOST_SCRATCH_WRITE_ROOTS: [&str; 3] = ["/tmp", "/private/tmp", "/private/var/folders"];
+
+/// Subdirectories of `$CARGO_HOME` a sandboxed build must be able to write.
+const CARGO_WRITABLE_CACHE_SUBDIRS: &[&str] = &["registry", "git"];
+
+/// `$CARGO_HOME` lock files a sandboxed build must be able to create and take.
+const CARGO_PACKAGE_CACHE_LOCK_FILES: &[&str] = &[".package-cache", ".package-cache-mutate"];
+
+/// Env inputs that influence per-provider state-directory allowances in the
+/// compiled SBPL profile. The public compiler resolves them from the host
+/// snapshot and passes them together to the profile renderer.
+#[derive(Default, Clone, Copy)]
+struct SandboxCompileEnv<'a> {
+    home: Option<&'a OsStr>,
+    codex_home: Option<&'a OsStr>,
+    claude_config_dir: Option<&'a OsStr>,
+    grok_home: Option<&'a OsStr>,
+    copilot_home: Option<&'a OsStr>,
+    xdg_cache_home: Option<&'a OsStr>,
+    xdg_data_home: Option<&'a OsStr>,
+    xdg_config_home: Option<&'a OsStr>,
+    cargo_home: Option<&'a OsStr>,
+}
+
+/// What the compiled profile decides about `provider` reading the *user* login
+/// keychain directory (`$HOME/Library/Keychains`).
+///
+/// This mirrors the clause order emitted by
+/// [`compile_macos_sandbox_profile`], so a caller can explain a failing run
+/// without re-deriving SBPL semantics. [ORB-10931]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MacosLoginKeychainAccess {
+    /// The profile grants the read: the provider owns credentials there and no
+    /// activity rule takes it back.
+    Allowed,
+    /// The provider keeps the default credential deny — it does not store
+    /// credentials in the keychain, so it never receives the carve-out.
+    DeniedByDefaultPolicy,
+    /// `HOME` did not resolve, so the compiler had no path to re-allow and the
+    /// default deny stands.
+    HomeUnresolved,
+    /// The activity's own negated `read` rule denies the keychain directory.
+    /// It is emitted after the carve-out, so last-match-wins gives it priority.
+    DeniedByActivityRule {
+        /// The rule as authored in the resolved profile, `!`-prefix included.
+        rule: String,
+    },
+}
+
+/// What a plugin backend may reach over the network on macOS (design
+/// `docs/design/plugins/1_scope.md` §4.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MacosNetworkAccess {
+    /// Every socket operation is refused.
+    None,
+    /// Only endpoints on the loopback interface.
+    Loopback,
+    /// Whatever the compiled profile already allows.
+    Any,
+}
+
 /// Compile a [`ResolvedFsProfile`] into SBPL text suitable for
 /// `sandbox-exec -p`.
 ///
@@ -75,22 +137,6 @@ pub fn compile_macos_sandbox_profile(
             cargo_home: env.cargo_home(),
         },
     )
-}
-
-/// Env inputs that influence per-provider state-directory allowances in the
-/// compiled SBPL profile. The public compiler resolves them from the host
-/// snapshot and passes them together to the profile renderer.
-#[derive(Default, Clone, Copy)]
-struct SandboxCompileEnv<'a> {
-    home: Option<&'a OsStr>,
-    codex_home: Option<&'a OsStr>,
-    claude_config_dir: Option<&'a OsStr>,
-    grok_home: Option<&'a OsStr>,
-    copilot_home: Option<&'a OsStr>,
-    xdg_cache_home: Option<&'a OsStr>,
-    xdg_data_home: Option<&'a OsStr>,
-    xdg_config_home: Option<&'a OsStr>,
-    cargo_home: Option<&'a OsStr>,
 }
 
 fn compile_macos_sandbox_profile_with_env(
@@ -283,31 +329,6 @@ fn provider_reads_macos_login_keychain(provider: &str) -> bool {
     )
 }
 
-/// What the compiled profile decides about `provider` reading the *user* login
-/// keychain directory (`$HOME/Library/Keychains`).
-///
-/// This mirrors the clause order emitted by
-/// [`compile_macos_sandbox_profile`], so a caller can explain a failing run
-/// without re-deriving SBPL semantics. [ORB-10931]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MacosLoginKeychainAccess {
-    /// The profile grants the read: the provider owns credentials there and no
-    /// activity rule takes it back.
-    Allowed,
-    /// The provider keeps the default credential deny — it does not store
-    /// credentials in the keychain, so it never receives the carve-out.
-    DeniedByDefaultPolicy,
-    /// `HOME` did not resolve, so the compiler had no path to re-allow and the
-    /// default deny stands.
-    HomeUnresolved,
-    /// The activity's own negated `read` rule denies the keychain directory.
-    /// It is emitted after the carve-out, so last-match-wins gives it priority.
-    DeniedByActivityRule {
-        /// The rule as authored in the resolved profile, `!`-prefix included.
-        rule: String,
-    },
-}
-
 /// Resolve [`MacosLoginKeychainAccess`] for a profile that would be compiled
 /// with the same `provider`, `home`, and `rules`.
 ///
@@ -408,9 +429,6 @@ fn emit_default_credential_read_denies(
 fn profile_grants_write(rules: &ResolvedFsProfile) -> bool {
     rules.modify.iter().any(|rule| !rule.starts_with('!'))
 }
-
-/// Host scratch trees every confined process may write.
-const HOST_SCRATCH_WRITE_ROOTS: [&str; 3] = ["/tmp", "/private/tmp", "/private/var/folders"];
 
 /// Deny writes to each existing writable ancestor entry of a `modify` deny.
 ///
@@ -588,12 +606,6 @@ fn collect_entries(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), OrbitError>
     Ok(())
 }
 
-/// Subdirectories of `$CARGO_HOME` a sandboxed build must be able to write.
-const CARGO_WRITABLE_CACHE_SUBDIRS: &[&str] = &["registry", "git"];
-
-/// `$CARGO_HOME` lock files a sandboxed build must be able to create and take.
-const CARGO_PACKAGE_CACHE_LOCK_FILES: &[&str] = &[".package-cache", ".package-cache-mutate"];
-
 /// Allow writes inside Cargo's shared download caches.
 ///
 /// This is the one host-owned tree a sandboxed build must *write* outside its
@@ -651,18 +663,6 @@ fn emit_read_deny_literal(path: &str, out: &mut String) {
         "(deny file-read* (literal \"{}\"))\n",
         super::sbpl_filter::sbpl_escape(path)
     ));
-}
-
-/// What a plugin backend may reach over the network on macOS (design
-/// `docs/design/plugins/1_scope.md` §4.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MacosNetworkAccess {
-    /// Every socket operation is refused.
-    None,
-    /// Only endpoints on the loopback interface.
-    Loopback,
-    /// Whatever the compiled profile already allows.
-    Any,
 }
 
 /// Append the plugin network clause to a compiled profile.

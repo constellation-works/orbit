@@ -13,28 +13,6 @@ fn mcp_toolsets_write_workspace(root: &Path, body: &str) {
     std::fs::write(root.join("config.toml"), body).expect("workspace config");
 }
 
-#[derive(Clone)]
-struct McpToolsetsCapture(Arc<Mutex<Vec<u8>>>);
-
-impl Write for McpToolsetsCapture {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().expect("capture").extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl<'a> MakeWriter<'a> for McpToolsetsCapture {
-    type Writer = McpToolsetsCapture;
-
-    fn make_writer(&self) -> Self::Writer {
-        self.clone()
-    }
-}
-
 fn mcp_toolsets_load_with_logs(roots: &ConfigRoots) -> (ResolvedConfig, String) {
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::fmt()

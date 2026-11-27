@@ -2,11 +2,6 @@ use crate::providers::common::render_prompt_with_embedded_envelope;
 use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
 use orbit_types::identity::ReasoningEffort;
 
-fn codex_config_string_arg(key: &str, value: &str) -> String {
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("{key}=\"{escaped}\"")
-}
-
 pub(crate) struct CodexCliTransport {
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
@@ -101,4 +96,9 @@ impl CodexCliTransport {
     pub(crate) fn model_name(&self) -> Option<&str> {
         self.model.as_deref()
     }
+}
+
+fn codex_config_string_arg(key: &str, value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("{key}=\"{escaped}\"")
 }

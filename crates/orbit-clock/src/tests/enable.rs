@@ -18,26 +18,6 @@ use super::support::{MockRunner, systemd_activation_outputs};
 
 type VersionProbe = fn(&std::path::Path) -> Result<String, String>;
 
-fn fixture_version(path: &std::path::Path) -> Result<String, String> {
-    if path.exists() {
-        Ok("orbit 0.0.1".into())
-    } else {
-        Err(format!("program does not exist: {}", path.display()))
-    }
-}
-
-fn timed_out_version(_: &std::path::Path) -> Result<String, String> {
-    Err("--version timed out after 3s".into())
-}
-
-fn malformed_version(_: &std::path::Path) -> Result<String, String> {
-    Err("empty --version output".into())
-}
-
-fn unreachable_version(_: &std::path::Path) -> Result<String, String> {
-    Err("could not run installed program: Permission denied".into())
-}
-
 struct Fixture {
     root: TempDir,
     home: TempDir,
@@ -88,6 +68,26 @@ impl Fixture {
             launchd_plist_path(self.home.path()).display()
         )
     }
+}
+
+fn fixture_version(path: &std::path::Path) -> Result<String, String> {
+    if path.exists() {
+        Ok("orbit 0.0.1".into())
+    } else {
+        Err(format!("program does not exist: {}", path.display()))
+    }
+}
+
+fn timed_out_version(_: &std::path::Path) -> Result<String, String> {
+    Err("--version timed out after 3s".into())
+}
+
+fn malformed_version(_: &std::path::Path) -> Result<String, String> {
+    Err("empty --version output".into())
+}
+
+fn unreachable_version(_: &std::path::Path) -> Result<String, String> {
+    Err("could not run installed program: Permission denied".into())
 }
 
 fn dump(success: bool, stdout: &str) -> Result<ManagerCommandOutput, OrbitError> {

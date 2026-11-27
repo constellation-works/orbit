@@ -186,8 +186,10 @@ impl ResolvedConfig {
             tasks_id_start,
             codex_execution,
         } = SnapshotProjection::from_snapshot(&snapshot);
+        let execution_env = ExecutionEnvPolicy::from_snapshot(env, &snapshot);
         Self {
-            execution_env: ExecutionEnvPolicy::from_snapshot(env, &snapshot),
+            snapshot,
+            execution_env,
             codex_execution,
             persistence,
             pr,
@@ -205,7 +207,6 @@ impl ResolvedConfig {
             plugin_enablement: BTreeMap::new(),
             tag_instructions: crate::TagInstructionSettings::default(),
             review_skip_tags: crate::ReviewSkipSettings::default(),
-            snapshot,
         }
     }
 
@@ -410,9 +411,11 @@ impl ResolvedConfig {
             tasks_id_start,
             codex_execution,
         } = SnapshotProjection::from_snapshot(&snapshot);
+        let execution_env = ExecutionEnvPolicy::from_snapshot(env, &snapshot)
+            .with_crew_env_sources(crews.values().flat_map(|crew| &crew.env));
         Ok(Self {
-            execution_env: ExecutionEnvPolicy::from_snapshot(env, &snapshot)
-                .with_crew_env_sources(crews.values().flat_map(|crew| &crew.env)),
+            snapshot,
+            execution_env,
             codex_execution,
             persistence,
             pr,
@@ -430,7 +433,6 @@ impl ResolvedConfig {
             plugin_enablement,
             tag_instructions,
             review_skip_tags,
-            snapshot,
         })
     }
 }
