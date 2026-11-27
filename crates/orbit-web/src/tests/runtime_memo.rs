@@ -179,3 +179,66 @@ async fn stale_entry_is_served_while_one_refresh_replaces_it() {
     .await
     .expect("stale-while-revalidate must complete within the watchdog");
 }
+
+#[tokio::test]
+async fn friction_rates_share_per_workspace_recover_from_failure_and_invalidate() {
+    let memo: RuntimeMemo<()> = RuntimeMemo::new("friction rates regression");
+    let ttl = Duration::from_secs(60);
+    let runtime = Arc::new(fixture_core(
+        &FixtureRuntime::in_memory().expect("build runtime"),
+    ));
+    let other = Arc::new(fixture_core(
+        &FixtureRuntime::in_memory().expect("build runtime"),
+    ));
+    let computations = Arc::new(AtomicUsize::new(0));
+    let compute = |runtime: &Arc<orbit_core::Core>, value: serde_json::Value| {
+        let computations = Arc::clone(&computations);
+        let memo = &memo;
+        let runtime = Arc::clone(runtime);
+        async move {
+            memo.get_or_compute(&runtime, (), ttl, move || {
+                computations.fetch_add(1, Ordering::SeqCst);
+                Ok(value)
+            })
+            .await
+            .expect("compute")
+            .body
+        }
+    };
+
+    // A failed computation is not kept: the next read computes again.
+    let failed = memo
+        .get_or_compute(&runtime, (), ttl, || {
+            Err(orbit_common::OrbitError::Execution("scan failed".into()))
+        })
+        .await;
+    assert!(failed.is_err());
+    assert_eq!(
+        *compute(&runtime, json!({"open": 1})).await,
+        json!({"open": 1})
+    );
+    assert_eq!(computations.load(Ordering::SeqCst), 1);
+
+    // The cohort's later reads share it; another workspace never does.
+    assert_eq!(
+        *compute(&runtime, json!({"open": 9})).await,
+        json!({"open": 1})
+    );
+    assert_eq!(
+        *compute(&other, json!({"open": 5})).await,
+        json!({"open": 5})
+    );
+    assert_eq!(computations.load(Ordering::SeqCst), 2);
+
+    // A write drops only its own workspace's entry.
+    memo.invalidate(&runtime);
+    assert_eq!(
+        *compute(&runtime, json!({"open": 2})).await,
+        json!({"open": 2})
+    );
+    assert_eq!(
+        *compute(&other, json!({"open": 9})).await,
+        json!({"open": 5})
+    );
+    assert_eq!(computations.load(Ordering::SeqCst), 3);
+}

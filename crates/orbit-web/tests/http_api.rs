@@ -54,6 +54,8 @@ mod embedded;
 mod events;
 #[path = "http_api/experiments.rs"]
 mod experiments;
+#[path = "http_api/friction_stats.rs"]
+mod friction_stats;
 #[path = "http_api/friction_writes.rs"]
 mod friction_writes;
 #[path = "http_api/guards.rs"]

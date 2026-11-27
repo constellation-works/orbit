@@ -6,6 +6,9 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 
 pub(super) fn stats(runtime: &OrbitRuntime) -> Result<Value, OrbitError> {
+    // One span per workspace-wide computation, so a fixture can count them.
+    let _span =
+        tracing::trace_span!(target: "orbit.core.friction_stats", "friction_stats").entered();
     // Rates read only status and attribution, so envelope metadata suffices.
     // Owner reads are observational. A task commit publishes the decided
     // envelope before it updates the index row, and holds that task's bundle

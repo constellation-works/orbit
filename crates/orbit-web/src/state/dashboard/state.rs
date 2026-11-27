@@ -97,6 +97,9 @@ pub(in crate::state) struct StateInner {
     /// Per-server cache of the agent scorecard scan, one per workspace
     /// runtime. Every role, window, detail and the attribution strip slice it.
     agents: RuntimeMemo<(), orbit_core::app::agent::AgentFacts>,
+    /// Per-server memo of each workspace runtime's friction rates, shared by
+    /// the Frictions list and stats endpoints within one refresh.
+    friction_stats: RuntimeMemo<()>,
     /// Per-server cache of the last `orbit doctor` report for each workspace
     /// runtime, behind `/api/doctor`.
     doctor_reports: DoctorReports,
@@ -271,6 +274,7 @@ impl DashboardState {
                 codebase: RuntimeMemo::new("codebase analytics scan"),
                 riskiness: RuntimeMemo::new("task riskiness model"),
                 agents: RuntimeMemo::new("agent scorecard scan"),
+                friction_stats: RuntimeMemo::new("friction stats"),
                 doctor_reports: DoctorReports::new(),
                 operator: AtomicBool::new(false),
                 remote_access: std::sync::OnceLock::new(),
@@ -410,6 +414,11 @@ impl DashboardState {
     /// Process-local `/api/diagnostics/errors` memo for this server instance.
     pub(crate) fn diagnostics_errors_memo(&self) -> &RuntimeMemo<(String, usize)> {
         &self.inner.diagnostics_errors
+    }
+
+    /// Process-local friction rates memo for this server instance.
+    pub(crate) fn friction_stats_memo(&self) -> &RuntimeMemo<()> {
+        &self.inner.friction_stats
     }
 
     /// Process-local `orbit doctor` report cache for this server instance.
