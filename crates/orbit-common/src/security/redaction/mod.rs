@@ -24,7 +24,7 @@ mod error;
 mod pattern;
 mod values;
 
-pub use values::{redact_secret_values_json, redact_secret_values_text};
+pub use values::redact_secret_values_text;
 
 pub use env::{
     init_process_redaction, is_sensitive_env_name, redact_sensitive_env_bytes,

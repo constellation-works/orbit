@@ -82,15 +82,6 @@ pub fn normalize_friction_tag_aliases(
     (normalized, substitutions)
 }
 
-/// Return the default friction tag enum in schema-friendly literal form.
-pub fn friction_tags_literal() -> String {
-    DEFAULT_FRICTION_TAGS
-        .iter()
-        .map(|(tag, _description)| *tag)
-        .collect::<Vec<_>>()
-        .join(" | ")
-}
-
 /// Normalize tags against the owning workspace taxonomy before publication.
 pub fn normalize_friction_tags(
     raw_tags: Vec<String>,
