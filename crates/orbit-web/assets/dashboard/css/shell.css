@@ -4,6 +4,7 @@
 /* ORB-10972: the app is a top bar across the window over two columns: a
    fixed nav rail and a content column that owns its own scrolling. */
 .shell {
+  position: relative;
   display: grid;
   grid-template-columns: 200px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
@@ -16,41 +17,166 @@
 .shell > .rail { grid-area: rail; }
 .shell > .main-col { grid-area: main; }
 
-/* Navigation rail collapse (rail-toggle.js): an icon button at the top of
-   the rail, right-aligned on the same row as the Host label. The toggle stays
-   first in the DOM (and focus order); a negative bottom margin of its own
-   height lets the Host row, which is that tall, share its row, and the
-   stacking order keeps the button clickable above the label.
-   Contents slide before the grid column changes once; reduced motion skips
-   the slide. The column leaves a 45px strip containing only the toggle. */
+/* Navigation rail collapse & medium icon rail (rail-toggle.js):
+   - Wide (>=1316px) expanded: 200px labelled rail; the toggle sits top-right
+     on the same row as the Host label (negative bottom margin only while the
+     rail owns .rail-host).
+   - Wide collapsed & Medium (761..1315px) default: 56px icon rail with 40px
+     icon buttons, group hairlines, attention dots, Drain live tint, and views
+     in #rail-views-popover; scope pickers move to the header.
+   - Medium expanded (.rail-overlay-open): labelled 200px rail overlays the
+     content without moving the grid column (STD-07 R5). */
 .rail-toggle {
   position: relative;
   z-index: 1;
   align-self: flex-end;
   flex: 0 0 auto;
-  margin-bottom: -28px;
 }
+.rail:has(> .rail-host) > .rail-toggle { margin-bottom: -28px; }
 .rail-toggle > svg { transform: scaleX(-1); }
 .rail .rail-toggle:focus-visible { outline-offset: -2px; }
 @media (min-width: 761px) {
   /* The Host label's row is as tall as the toggle it shares the row with. */
   .rail-host .rail-scope-label { display: flex; align-items: center; min-height: 28px; }
-  .rail > :not(.rail-toggle) { transition: transform 180ms ease, opacity 180ms ease; }
-  .shell:is(.rail-leaving, .rail-entering) .rail > :not(.rail-toggle) {
-    transform: translateX(-32px);
-    opacity: 0;
-    pointer-events: none;
+  .shell.rail-icon-mode { grid-template-columns: 56px minmax(0, 1fr); }
+  .shell.rail-icon-mode > .rail {
+    padding: var(--space-8);
+    align-items: center;
   }
-  .shell.rail-collapsed { grid-template-columns: 45px minmax(0, 1fr); }
-  .shell.rail-collapsed > .rail { padding: var(--space-8); }
-  .shell.rail-collapsed .rail > :not(.rail-toggle) { display: none; }
-  .shell.rail-collapsed .rail-toggle {
+  .shell.rail-icon-mode .rail-toggle {
     align-self: center;
+    width: 40px;
+    height: 36px;
     margin: 0;
   }
+  .shell.rail-icon-mode .rail > .rail-foot { display: none; }
+  .shell.rail-icon-mode .rail .tabs {
+    align-items: center;
+    width: 100%;
+    margin-top: var(--space-6);
+    margin-bottom: 0;
+    padding-top: var(--space-6);
+    border-top: 1px solid var(--hair);
+    gap: var(--space-2);
+  }
+  .shell.rail-icon-mode .rail-group-label { display: none; }
+  .shell.rail-icon-mode .rail-group + .rail-group > .rail-group-label {
+    display: block;
+    flex: 0 0 auto;
+    width: 24px;
+    height: 1px;
+    margin: var(--space-6) 0;
+    padding: 0;
+    background: var(--hair);
+    color: transparent;
+    overflow: hidden;
+    user-select: none;
+    pointer-events: none;
+  }
+  .shell.rail-icon-mode .rail .tab:not([hidden]),
+  .shell.rail-icon-mode .rail .tab:not([hidden]):has(> .rail-count + .rail-count:not([hidden])) {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 36px;
+    min-height: 36px;
+    padding: 0;
+    gap: 0;
+  }
+  .shell.rail-icon-mode .rail .tab[hidden] { display: none; }
+  .shell.rail-icon-mode .rail .tab > :is(.rail-label, .rail-count) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .shell.rail-icon-mode .rail .tab:has(> .rail-count.alert:not([hidden]):not(:empty))::after {
+    content: "";
+    position: absolute;
+    top: 6px;
+    right: 7px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--state-failed);
+    pointer-events: none;
+  }
+  .shell.rail-icon-mode .rail .rail-drain:has(.rail-drain-state:not([hidden])) .rail-ico { color: var(--state-running); }
+  .shell.rail-icon-mode .rail .rail-drain:has(.rail-drain-state:is([data-drain-state="winding_down"], .held)) .rail-ico { color: var(--warn-fg); }
+  .shell.rail-icon-mode .rail .rail-drain:has(.rail-drain-state[data-drain-state="pulling"]) .rail-ico { color: var(--accent); }
+  .shell.rail-icon-mode .rail .rail-subtabs { display: none; }
 }
-@media (prefers-reduced-motion: reduce) {
-  .rail > :not(.rail-toggle) { transition: none; }
+@media (min-width: 761px) and (max-width: 1315px) {
+  /* Medium keeps the 56px rail track even while the labelled overlay is open,
+     so expanding navigation never moves the content column (STD-07 R5). */
+  .shell { grid-template-columns: 56px minmax(0, 1fr); }
+  .shell.rail-overlay-open > .rail {
+    position: absolute;
+    top: var(--topbar-height);
+    bottom: 0;
+    left: 0;
+    width: 200px;
+    z-index: 50;
+    box-shadow: 0 12px 32px color-mix(in srgb, var(--bg) 55%, transparent);
+  }
+}
+
+/* Views popover opened beside a destination icon in the 56px icon rail. */
+.shell > .rail-views-popover { grid-area: 1 / 1; }
+.rail-views-popover {
+  position: fixed;
+  z-index: 55;
+  min-width: 172px;
+  max-width: calc(100vw - 72px);
+  max-height: calc(100vh - var(--topbar-height) - 16px);
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-6);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--bg) 55%, transparent);
+  overflow-y: auto;
+}
+.rail-views-popover[hidden] { display: none; }
+.rail-views-popover-head {
+  padding: var(--space-4) var(--space-8) var(--space-6);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--hair);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+}
+.rail-views-popover .rail-subtabs,
+.rail-views-popover .rail-subtabs.dimmed {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  max-height: none;
+  overflow: visible;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.rail-views-popover .rail-subtabs.dimmed .subtab.active {
+  background: transparent;
+  color: var(--fg-dim);
+  font-weight: 500;
+}
+.rail-views-popover .rail-subtabs .subtab {
+  width: 100%;
+  height: 30px;
+  padding: 0 var(--space-8);
 }
 
 .skip-link {
@@ -141,7 +267,8 @@
    the dock sits beside the list and holds Drain, so the rail item is withdrawn.
    It stays in the DOM, and its reading still paints while hidden. */
 @media (min-width: 1316px) {
-  .rail .rail-drain { display: none; }
+  .rail .rail-drain,
+  .shell.rail-icon-mode .rail .tab.rail-drain { display: none; }
 }
 /* The live reading: a dot and words, tinted by state. */
 .rail-drain-state { display: inline-flex; align-items: center; gap: var(--space-6); font-weight: 500; color: var(--state-running); }
@@ -649,25 +776,113 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
   .host-resource[data-resource="memory"], .host-resource[data-resource="disk"], .host-resource[data-resource="io"] { min-width: 5.25rem; }
 }
 
-/* Below 1240px the bar tightens its spacing, so the widest destination, the
-   three chips and the Tasks controls still share one row. */
+/* Below 1240px (or whenever scope pickers live in the header) the bar uses
+   compact horizontal spacing while staying strictly on one row (STD-07 R39). */
 @media (max-width: 1240px) {
   .topbar { padding: 0 var(--space-14); gap: var(--space-10); }
 }
-/* Below 1025px the bar drops the host warning and provider usage. */
-@media (max-width: 1024px) {
-  .topbar .host-resource-group { display: none; }
-}
-/* Below 1024px the bar may wrap if its controls don't fit. */
-@media (max-width: 1023px) {
-  .topbar {
-    height: auto;
-    flex-wrap: wrap;
-    row-gap: var(--space-6);
-    padding: var(--space-8) var(--space-12);
+@media (min-width: 761px) {
+  .topbar { flex-wrap: nowrap; }
+  .topbar.has-scope { padding: 0 var(--space-14); gap: var(--space-10); }
+  .topbar.has-scope .phone-scope {
+    display: flex;
+    align-items: center;
+    flex: 0 1 auto;
+    min-width: 0;
+    gap: var(--space-8);
   }
-  .topbar-spacer { order: 0; }
-  .topbar .rail-brand, .topbar .refresh-btn { order: 0; }
+  .topbar.has-scope .phone-scope :is(.rail-host, .rail-workspace) {
+    flex: 0 1 auto;
+    min-width: 0;
+    margin: 0;
+  }
+  .topbar.has-scope .phone-scope .rail-workspace.single-workspace { display: flex; }
+  .topbar.has-scope .phone-scope .rail-scope-label { display: none; }
+  .topbar.has-scope .phone-scope .host-picker-control {
+    display: flex;
+    align-items: center;
+    gap: var(--space-6);
+    min-width: 0;
+  }
+  .topbar.has-scope .phone-scope .host-picker-control > .badge { flex: none; }
+  .topbar.has-scope .phone-scope .workspace-select,
+  .topbar.has-scope .phone-scope .host-picker-control .host-select {
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 100%;
+    min-width: 0;
+    height: 30px;
+    padding: 0 var(--space-8);
+    text-overflow: ellipsis;
+  }
+  .topbar.has-scope .phone-scope .workspace-scope-note.is-inactive { display: none; }
+  .topbar.has-scope .phone-scope .workspace-scope-note:not(.is-inactive) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .topbar.has-scope :is(#task-create-open, #notify-btn, .phone-search-open) { height: 34px; }
+  /* Synchronous content-width measurement (router.js::fitTopbar): prevent
+     flex compression so each progressive fit step triggers where the real
+     full-size content stops fitting (STD-07 R39, R42). */
+  .topbar.topbar-measuring > *,
+  .topbar.topbar-measuring .phone-scope,
+  .topbar.topbar-measuring .phone-scope > *,
+  .topbar.topbar-measuring .host-picker-control,
+  .topbar.topbar-measuring .host-picker-control .host-select,
+  .topbar.topbar-measuring .topbar-task-actions { flex-shrink: 0; }
+  .topbar.topbar-measuring .topbar-spacer { display: none; }
+  .topbar.topbar-measuring .task-search-wrap { flex: 0 0 260px; width: 260px; }
+  .topbar.topbar-measuring.topbar-fit-search .task-search-wrap.search-open { display: none; }
+
+  /* Step 1: Notify loses its label. */
+  .topbar.topbar-fit-notify #notify-btn { width: 34px; padding: 0; justify-content: center; }
+  .topbar.topbar-fit-notify #notify-btn .refresh-label { display: none; }
+  /* Step 2: Provider usage goes (elevated/critical host warning stays). */
+  .topbar.topbar-fit-usage #provider-usage-chips { display: none; }
+  .topbar.topbar-fit-usage .host-resource-group:not(:has(#host-warn:not([hidden]))) { display: none; }
+  /* Step 3: New task becomes its plus icon. */
+  .topbar.topbar-fit-create #task-create-open { width: 34px; height: 34px; padding: 0; justify-content: center; }
+  .topbar.topbar-fit-create #task-create-open > span { display: none; }
+  .topbar.topbar-fit-create #task-create-open svg { width: 16px; height: 16px; }
+  /* Step 4: Brand becomes its mark. */
+  .topbar.topbar-fit-brand .rail-brand { width: 24px; padding: 0; overflow: hidden; }
+  .topbar.topbar-fit-brand .rail-brand svg { flex: none; }
+  /* Step 5: Search becomes an icon button that opens over the header row. */
+  .topbar.topbar-fit-search .phone-search-open {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+  }
+  .topbar.topbar-fit-search .phone-search-open svg { width: 16px; height: 16px; }
+  .topbar.topbar-fit-search .task-search-wrap:not(.search-open) { display: none; }
+  .topbar.topbar-fit-search:has(.task-search-wrap.search-open) > :not(.topbar-task-actions),
+  .topbar.topbar-fit-search:has(.task-search-wrap.search-open) :is(#task-create-open, .phone-search-open) {
+    visibility: hidden;
+  }
+  .topbar.topbar-fit-search .task-search-wrap.search-open {
+    position: absolute;
+    inset: 0;
+    width: auto;
+    max-width: none;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-8);
+    padding: 0 var(--space-14);
+    background: var(--bg-chrome);
+    z-index: 2;
+  }
+  .topbar.topbar-fit-search .task-search-wrap.search-open .phone-search-close { display: inline-flex; flex: none; height: 34px; }
+  .topbar.topbar-fit-search .task-search-wrap.search-open #task-search { grid-area: 1 / 1; height: 34px; min-width: 0; }
+  .topbar.topbar-fit-search .task-search-wrap.search-open .task-search-icon { left: 25px; top: 20px; }
+  .topbar.topbar-fit-search .task-search-wrap.search-open #task-search-clear { grid-area: 1 / 1; position: static; justify-self: end; z-index: 1; }
 }
 
 .refresh-btn {
@@ -722,7 +937,7 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
     padding: 0 max(var(--space-8), env(safe-area-inset-right)) 0 max(var(--space-8), env(safe-area-inset-left));
     gap: var(--space-6);
   }
-  .topbar .topbar-spacer, .topbar .notify-btn { display: none; }
+  .topbar .topbar-spacer, .topbar .notify-btn, .topbar .host-resource-group { display: none; }
   .topbar .rail-brand { width: 24px; padding: 0; overflow: hidden; }
   .rail-brand svg { flex: none; }
   .phone-scope { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; gap: var(--space-6); }
@@ -1240,7 +1455,7 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .host-warn[hidden] { display: none; }
 .host-detail {
   position: fixed;
-  z-index: 30;
+  z-index: 60;
   box-sizing: border-box;
   width: 400px;
   max-width: calc(100vw - 16px);

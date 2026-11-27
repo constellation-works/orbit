@@ -18,6 +18,65 @@ export function isSmallViewport() {
   }
 }
 
+// Read the side-pane floors from CSS custom properties on `#tasks-main` so the
+// stylesheet and script decide one-column vs side-by-side from one source.
+export function taskPaneFloors(main = $("tasks-main")) {
+  let listMin = 380;
+  let paneMin = 370;
+  let gap = 12;
+  try {
+    if (main && typeof window.getComputedStyle === "function") {
+      const style = window.getComputedStyle(main);
+      const parsedList = parseFloat(style.getPropertyValue("--task-list-min"));
+      const parsedPane = parseFloat(style.getPropertyValue("--task-pane-min"));
+      const parsedGap = parseFloat(style.getPropertyValue("--task-pane-gap"));
+      if (Number.isFinite(parsedList) && parsedList > 0) listMin = parsedList;
+      if (Number.isFinite(parsedPane) && parsedPane > 0) paneMin = parsedPane;
+      if (Number.isFinite(parsedGap) && parsedGap >= 0) gap = parsedGap;
+    }
+  } catch (_) {
+    /* keep measured defaults */
+  }
+  return { listMin, paneMin, gap };
+}
+
+// Content-box inline width of `#tasks-main` (falling back to `.main-col` while
+// another tab is active so resizes off Tasks still know the real room).
+export function tasksContentWidth(main = $("tasks-main")) {
+  if (!main) return 0;
+  const style = typeof window.getComputedStyle === "function" ? window.getComputedStyle(main) : null;
+  const padX = style ? (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0) : 40;
+  if (main.clientWidth > 0) return Math.max(0, main.clientWidth - padX);
+  const col = main.closest?.(".main-col");
+  if (col && col.clientWidth > 0) {
+    const maxWidth = style ? parseFloat(style.maxWidth) : NaN;
+    const outer = Number.isFinite(maxWidth) && maxWidth > 0 ? Math.min(col.clientWidth, maxWidth) : col.clientWidth;
+    return Math.max(0, outer - padX);
+  }
+  return 0;
+}
+
+// One shared decision for CSS (`.task-pane-covered`) and JS: true whenever the
+// viewport is small (<=760px) or the Tasks content width is narrower than
+// list minimum + resizer gap + pane minimum.
+export function syncTaskPaneCovered() {
+  const main = $("tasks-main");
+  let covered = isSmallViewport();
+  if (!covered && main) {
+    const width = tasksContentWidth(main);
+    if (width > 0) {
+      const { listMin, paneMin, gap } = taskPaneFloors(main);
+      covered = width < listMin + gap + paneMin;
+    }
+  }
+  if (main) main.classList.toggle("task-pane-covered", covered);
+  return covered;
+}
+
+export function isTaskPaneCovered() {
+  return syncTaskPaneCovered();
+}
+
 export function isTaskPaneVisible() {
   const pane = $("task-detail-pane");
   return Boolean(pane && !pane.hidden);

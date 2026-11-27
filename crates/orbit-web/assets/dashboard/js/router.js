@@ -26,6 +26,7 @@ import { AGENT_ROLES, adoptAgentsSpan, agentsSpan } from './agents.js';
 import { countViewsHashSuffix } from './metrics-running.js';
 import { initBackgroundNotifications, setDashboardTitle, startDashboardPolling } from './polling.js';
 import { topicOf } from './config-topics.js';
+import { closeRailOverlay, isRailIconMode, isRailOverlayOpen, isScopeInHeader, onRailModeChange } from './rail-toggle.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -480,11 +481,12 @@ function railSubtabsFitWhenOpen(strip) {
 }
 function fitRailSubtabRegion() {
   const rail = document.querySelector(".rail");
-  rail?.classList.remove("rail-compact");
+  if (!rail || isRailIconMode()) return;
+  rail.classList.remove("rail-compact");
   for (const strip of document.querySelectorAll(".rail-subtabs")) strip.style.maxHeight = "";
   const largest = [...document.querySelectorAll(".rail-subtabs")]
     .reduce((best, strip) => (!best || strip.children.length > best.children.length ? strip : best), null);
-  if (rail && largest && largest.children.length > RAIL_SUBTAB_MIN_ROWS && !railSubtabsFitWhenOpen(largest)) {
+  if (largest && largest.children.length > RAIL_SUBTAB_MIN_ROWS && !railSubtabsFitWhenOpen(largest)) {
     rail.classList.add("rail-compact");
   }
   const strip = document.querySelector(".rail-subtabs:not(.dimmed)");
@@ -857,6 +859,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   }
   ctx.setResidentDetailId?.(top === "tasks" && residentRoute ? residentId : null);
   syncDockNavigation();
+  fitTopbarFn();
   syncSkipLinkTarget();
   // Reveal the current destination on initial deep links and history changes,
   // as well as clicks.
@@ -917,14 +920,15 @@ function navigateToRunImpl(ctx, runId, workspaceId = null) {
 // can move it when the dock rewrites the hash without the router.
 let routedHref = null;
 
-// On phones the dock's Drain route has its own slot. The other dock views
-// belong to Tasks. The dock can change mode without rerouting the page.
+// At 1315px and below the dock's Drain route has its own nav entry (icon rail
+// or phone bottom bar). The other dock views belong to Tasks.
 export function syncDockNavigation() {
   const drain = $("rail-drain");
   const tasks = document.querySelector(".tab[data-tab='tasks']");
   if (!drain || !tasks) return;
   const onTasks = tasks.classList.contains("active");
-  const onDrain = onTasks && drain.closest(".phone-nav") &&
+  const drainVisible = drain.closest(".phone-nav") || window.matchMedia("(max-width: 1315px)").matches;
+  const onDrain = onTasks && Boolean(drainVisible) &&
     $("tasks-main").classList.contains("dock-route") && $("side-dock").dataset.mode === "drain";
   tasks.setAttribute("aria-current", onTasks && !onDrain ? "page" : "false");
   drain.setAttribute("aria-current", onDrain ? "page" : "false");
@@ -935,39 +939,217 @@ function syncPhoneMoreSelection() {
   $("phone-more-open")?.setAttribute("aria-current", active ? "page" : "false");
 }
 
-// The phone placements reuse the rail nodes, so routing, counts, live state
-// and the native scope pickers have one owner at both widths.
+// Header fit (STD-07 R39): above 760px, shrink top-bar members strictly in
+// spec order, each only where the row measured from its full content stops
+// fitting: Notify's label -> provider usage -> New task icon -> brand mark ->
+// search icon.
+const TOPBAR_FIT_CLASSES = [
+  "topbar-fit-notify",
+  "topbar-fit-usage",
+  "topbar-fit-create",
+  "topbar-fit-brand",
+  "topbar-fit-search",
+];
+let fitTopbarFn = () => {};
+
+function initTopbarFit() {
+  const topbar = document.querySelector(".topbar");
+  if (!topbar) return;
+  const phone = window.matchMedia("(max-width: 760px)");
+  const searchWrap = $("task-search-wrap");
+  const searchOpenBtn = $("phone-search-open");
+  let queued = false;
+
+  function fitTopbar() {
+    if (phone.matches) {
+      for (const cls of TOPBAR_FIT_CLASSES) topbar.classList.remove(cls);
+      return;
+    }
+    if (!topbar.clientWidth) return;
+    topbar.classList.add("topbar-measuring");
+    for (const cls of TOPBAR_FIT_CLASSES) topbar.classList.remove(cls);
+    let step = 0;
+    while (step < TOPBAR_FIT_CLASSES.length && topbar.scrollWidth > topbar.clientWidth + 0.5) {
+      topbar.classList.add(TOPBAR_FIT_CLASSES[step]);
+      step += 1;
+    }
+    topbar.classList.remove("topbar-measuring");
+    // If search expanded back to an inline input while the overlay was open,
+    // clear the overlay state cleanly.
+    if (!topbar.classList.contains("topbar-fit-search") && searchWrap?.classList.contains("search-open")) {
+      searchWrap.classList.remove("search-open");
+      searchOpenBtn?.setAttribute("aria-expanded", "false");
+    }
+  }
+
+  const queueFit = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      fitTopbar();
+    });
+  };
+
+  fitTopbarFn = fitTopbar;
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(queueFit).observe(topbar);
+  }
+  const watch = new MutationObserver(queueFit);
+  for (const id of ["phone-scope", "host-resource-group", "notify-btn"]) {
+    const node = $(id);
+    if (node) watch.observe(node, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden", "class"] });
+  }
+  document.fonts?.ready.then(queueFit);
+  phone.addEventListener("change", queueFit);
+  fitTopbar();
+}
+
+let openViewsPopoverFn = () => false;
+let closeViewsPopoverFn = () => {};
+
+// The phone, icon-rail popover and header-scope placements all reuse the rail
+// nodes via comment markers, so routing, counts, live state and the native
+// scope pickers keep one owner at every width.
 function initPhoneNavigation() {
   const phone = window.matchMedia("(max-width: 760px)");
+  const topbar = document.querySelector(".topbar");
+  const rail = $("navigation-rail");
   const scope = $("phone-scope");
   const bar = $("phone-nav");
   const sheet = $("phone-more");
   const entries = $("phone-more-entries");
   const more = $("phone-more-open");
+  const popover = $("rail-views-popover");
+  const popoverTitle = $("rail-views-popover-title");
+  const popoverBody = $("rail-views-popover-body");
   const primary = ["tasks", "jobs", "diagnostics"];
   const destinations = [...document.querySelectorAll(".rail .rail-group > .tab")];
 
   const healthHeading = el("h3", { class: "phone-health-heading", text: "Health" });
-  const placements = [
-    [$("rail-host"), scope],
-    [$("rail-workspace"), scope],
-    ...destinations.flatMap((entry) => {
-      const inBar = primary.includes(entry.dataset.tab) || entry.id === "rail-drain";
-      const views = entry.nextElementSibling;
-      const placement = [[entry, inBar ? bar : entries]];
-      if (views?.classList.contains("rail-subtabs")) placement.push([views, entries]);
-      return placement;
-    }),
-  ].map(([node, target]) => {
+  const scopePlacements = [$("rail-host"), $("rail-workspace")].map((node) => {
+    const marker = document.createComment("Rail scope position");
+    node.before(marker);
+    return { node, marker };
+  });
+  const subtabByTab = new Map();
+  const navPlacements = destinations.flatMap((entry) => {
+    const inBar = primary.includes(entry.dataset.tab) || entry.id === "rail-drain";
+    const views = entry.nextElementSibling;
+    const placement = [[entry, inBar ? bar : entries]];
+    if (views?.classList.contains("rail-subtabs")) {
+      placement.push([views, entries]);
+    }
+    return placement;
+  }).map(([node, target]) => {
     const marker = document.createComment("Rail position");
     node.before(marker);
+    if (node.classList.contains("rail-subtabs")) {
+      const owner = destinations.find((d) => d.nextElementSibling === marker || d.nextElementSibling === node);
+      if (owner?.dataset.tab) subtabByTab.set(owner.dataset.tab, { tab: owner, subtabs: node, marker });
+    }
     return { node, target, marker };
   });
-  // Keep the views with their destination, including Health in the sheet.
+
+  let activePopover = null;
+
+  function positionViewsPopover(anchor) {
+    if (!popover || popover.hidden || !anchor) return;
+    const railRect = rail.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    const topbarRect = topbar?.getBoundingClientRect();
+    const minTop = (topbarRect ? topbarRect.bottom : 0) + 4;
+    const popHeight = popover.offsetHeight;
+    const maxTop = Math.max(minTop, window.innerHeight - popHeight - 8);
+    const top = Math.max(minTop, Math.min(anchorRect.top, maxTop));
+    popover.style.left = `${Math.round(railRect.right + 4)}px`;
+    popover.style.top = `${Math.round(top)}px`;
+  }
+
+  function closeRailViewsPopover({ restoreFocus = false } = {}) {
+    if (!activePopover) return;
+    const { tab, subtabs, marker } = activePopover;
+    activePopover = null;
+    if (!phone.matches) marker.after(subtabs);
+    if (popover) popover.hidden = true;
+    if (isRailIconMode()) tab.setAttribute("aria-expanded", "false");
+    if (restoreFocus && tab.getClientRects().length) tab.focus();
+  }
+
+  function openRailViewsPopover(tab, { focusFirst = false } = {}) {
+    const entry = subtabByTab.get(tab?.dataset?.tab);
+    if (!entry || !popover || !popoverBody || !isRailIconMode()) return false;
+    if (activePopover && activePopover.tab === tab) {
+      closeRailViewsPopover();
+      return true;
+    }
+    closeRailViewsPopover();
+    activePopover = entry;
+    if (popoverTitle) popoverTitle.textContent = RAIL_LABELS[tab.dataset.tab] || tab.dataset.tab;
+    popoverBody.replaceChildren(entry.subtabs);
+    popover.hidden = false;
+    tab.setAttribute("aria-expanded", "true");
+    positionViewsPopover(tab);
+    if (focusFirst) {
+      const active = !entry.subtabs.classList.contains("dimmed")
+        ? entry.subtabs.querySelector(".subtab.active")
+        : null;
+      (active || entry.subtabs.querySelector(".subtab"))?.focus();
+    }
+    return true;
+  }
+
+  openViewsPopoverFn = openRailViewsPopover;
+  closeViewsPopoverFn = closeRailViewsPopover;
+
+  popover?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeRailViewsPopover({ restoreFocus: true });
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const buttons = [...popover.querySelectorAll(".subtab")];
+    if (!buttons.length) return;
+    event.preventDefault();
+    const index = buttons.indexOf(document.activeElement);
+    const next = event.key === "Home" ? 0
+      : event.key === "End" ? buttons.length - 1
+      : index < 0 ? 0
+      : (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next].focus();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.defaultPrevented || !activePopover) return;
+    event.preventDefault();
+    closeRailViewsPopover({ restoreFocus: true });
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (!activePopover) return;
+    if (popover?.contains(event.target) || activePopover.tab.contains(event.target)) return;
+    closeRailViewsPopover();
+  });
+
+  window.addEventListener("resize", () => {
+    if (activePopover) positionViewsPopover(activePopover.tab);
+  });
+
+  // Keep the views with their destination, including Health in the sheet,
+  // and keep scope pickers in the header whenever the rail shows no labels.
   function placeNavigation() {
+    closeRailViewsPopover();
     if (!phone.matches && sheet.open) sheet.close();
     const focused = document.activeElement;
-    for (const { node, target, marker } of placements) {
+    const scopeInHeader = isScopeInHeader();
+    topbar?.classList.toggle("has-scope", scopeInHeader);
+    for (const { node, marker } of scopePlacements) {
+      if (scopeInHeader) scope.append(node);
+      else marker.after(node);
+    }
+    for (const { node, target, marker } of navPlacements) {
       if (phone.matches) {
         if (target === bar) more.before(node);
         else target.append(node);
@@ -976,7 +1158,9 @@ function initPhoneNavigation() {
     }
     syncPhoneMoreSelection();
     syncDockNavigation();
-    if (focused !== document.body && focused.getClientRects().length) focused.focus();
+    fitTopbarFn();
+    revealActiveRailSelection();
+    if (focused && focused !== document.body && focused.getClientRects().length) focused.focus();
   }
 
   more.addEventListener("click", () => {
@@ -988,8 +1172,10 @@ function initPhoneNavigation() {
   sheet.addEventListener("click", (event) => {
     if (event.target.closest(".tab[data-tab], .subtab") || event.target === sheet) sheet.close();
   });
+  initTopbarFit();
   placeNavigation();
   phone.addEventListener("change", placeNavigation);
+  onRailModeChange(placeNavigation);
 }
 
 function initTabsImpl(ctx) {
@@ -1030,6 +1216,12 @@ function initTabsImpl(ctx) {
   initPhoneNavigation();
   for (const tab of document.querySelectorAll(".tab[data-tab]")) {
     tab.addEventListener("click", (event) => {
+      if (isRailIconMode() && openViewsPopoverFn(tab, { focusFirst: event.detail === 0 })) {
+        return;
+      }
+      closeViewsPopoverFn();
+      const hasSubtabs = ["diagnostics", "analytics", "operations", "config"].includes(tab.dataset.tab);
+      if (isRailOverlayOpen() && !hasSubtabs) closeRailOverlay();
       if (tab.dataset.tab === "jobs" && event.target?.closest?.("#rail-count-jobs")) {
         selectRunningRunFilter();
         setActiveTabImpl(ctx, "jobs/history");
@@ -1056,8 +1248,14 @@ function initTabsImpl(ctx) {
       setActiveTabImpl(ctx, railRoute(ctx, tab.dataset.tab), { refresh: false });
     });
   }
+  $("rail-drain")?.addEventListener("click", () => {
+    closeViewsPopoverFn();
+    if (isRailOverlayOpen()) closeRailOverlay();
+  });
   for (const btn of document.querySelectorAll("#diag-subtabs .subtab")) {
     btn.addEventListener("click", () => {
+      closeViewsPopoverFn();
+      if (isRailOverlayOpen()) closeRailOverlay();
       const route = btn.dataset.subtab === "incidents" ? incidentsRoute(ctx) : `diagnostics/${btn.dataset.subtab}`;
       setActiveTabImpl(ctx, route, { refresh: false });
     });
@@ -1068,9 +1266,11 @@ function initTabsImpl(ctx) {
     );
   }
   for (const btn of document.querySelectorAll("#analytics-subtabs .subtab")) {
-    btn.addEventListener("click", () =>
-      setActiveTabImpl(ctx, analyticsSubtabRoute(ctx, btn.dataset.subtab), { refresh: false }),
-    );
+    btn.addEventListener("click", () => {
+      closeViewsPopoverFn();
+      if (isRailOverlayOpen()) closeRailOverlay();
+      setActiveTabImpl(ctx, analyticsSubtabRoute(ctx, btn.dataset.subtab), { refresh: false });
+    });
   }
   // A Forecast or experiment tab switch is a view change too: it rewrites the
   // hash in place.
@@ -1103,12 +1303,16 @@ function initTabsImpl(ctx) {
     );
   }
   for (const btn of document.querySelectorAll("#operations-subtabs .subtab")) {
-    btn.addEventListener("click", () =>
-      setActiveTabImpl(ctx, `operations/${btn.dataset.subtab}`, { refresh: false }),
-    );
+    btn.addEventListener("click", () => {
+      closeViewsPopoverFn();
+      if (isRailOverlayOpen()) closeRailOverlay();
+      setActiveTabImpl(ctx, `operations/${btn.dataset.subtab}`, { refresh: false });
+    });
   }
   for (const btn of document.querySelectorAll("#config-subtabs .subtab")) {
     btn.addEventListener("click", () => {
+      closeViewsPopoverFn();
+      if (isRailOverlayOpen()) closeRailOverlay();
       setActiveTabImpl(ctx, `config/${btn.dataset.subtab}`, { refresh: false });
     });
   }

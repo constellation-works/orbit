@@ -7,7 +7,7 @@ last_validated: 2026-11-27
 
 # Spec: Compact Viewports
 
-> **Approved. Phases 1 and 2 built.** The operator approved this design and its mocks on 2026-11-27
+> **Approved. Phases 1, 2 and 3 built.** The operator approved this design and its mocks on 2026-11-27
 > (STD-07 R25) [ORB-29230]. [2_design.md](../2_design.md) describes the dashboard as it is.
 > [Phasing](#phasing) names the task that builds each part.
 
@@ -58,14 +58,11 @@ Every threshold in this spec is a sum of these widths. None is chosen by eye (ST
 |---|---|---|
 | List, one-line row | 620px | The `tasks-panel` container query in `css/tasks.css` |
 | List, two-line row | 380px | The list share today's pane clamp reserves; verified at 443px |
-| Task pane | 440px | Where the pane's own narrow mode begins (`task-pane` container query in `css/task-detail.css`); broken at 329px |
+| Task pane | 370px | Measured on `busy-workspace` [ORB-29235]: `.property-row` readiness prose stops wrapping one word per line at 366px (broken at 365px and below); 370px keeps every fixture task free of single-word non-final lines while the compact lever row stays on one line |
 | Rail, labelled | 200px | `.shell` grid in `css/shell.css` |
 | Rail, icons | 56px | A 40px target with 8px either side |
 | Page padding | 40px | 20px either side of `main` |
-| Gap between list and pane | 16px | `main` grid gap |
-
-The pane's true floor lies between 330px and 440px. The build measures it and replaces 440px
-with the measured figure; the sums below follow.
+| Gap between list and pane | 12px | `.task-pane-resizer` track in `css/tasks.css` |
 
 ## Width tiers
 
@@ -75,16 +72,16 @@ with the measured figure; the sums below follow.
 | Medium | 761 to 1315px | Icons, 56px | In the header | List with task pane when both fit, otherwise one column |
 | Small | 760px and below | None; bottom bar | In the header | One column |
 
-- **1316px** is the existing dock breakpoint (`TASKS_ONE_COLUMN_QUERY`). It is also the sum
-  for a labelled rail, a one-line list and a pane: 200 + 40 + 620 + 16 + 440.
+- **1316px** is the existing dock breakpoint (`TASKS_ONE_COLUMN_QUERY`), which stays unchanged.
 - **760px** is the existing phone breakpoint (`PHONE_SHEET_QUERY`).
-- **List with pane** needs 836px of content width: 380 + 16 + 440. With the icon rail that
-  is a 932px viewport. The rule reads the content width of the Tasks view, not the
-  viewport, so it stays right if the rail or the padding changes.
+- **List with pane** needs 762px of content width: 380 + 12 + 370. With the 56px icon rail and
+  40px of page padding that is an 858px viewport. The rule reads the content width of the
+  Tasks view, not the viewport, so it stays right if the rail or the padding changes.
 
-The stylesheet and the script MUST decide "one column" from the same source. Today the
-stylesheet uses media queries and `task-pane.js` repeats them as `matchMedia` strings; a
-container width has no `matchMedia` form, so the build picks one mechanism for both.
+The stylesheet and the script decide "one column" from one shared source: `css/tasks.css`
+declares `--task-list-min` (380px), `--task-pane-min` (370px) and `--task-pane-gap` (12px) on
+`main.tasks-layout`, and `task-shared.js` reads those custom properties on resize to toggle
+`.task-pane-covered` on `#tasks-main`.
 
 ## Shell
 
@@ -186,8 +183,8 @@ medium and wide keep today's layouts.
 | Layout | Where the task shows | Stays visible |
 |---|---|---|
 | Wide | Side pane (unchanged) | Header, rail, list |
-| Medium, content 836px or wider | Side pane | Header, icon rail, list |
-| Medium, content under 836px | Over the list, filling the Tasks view | Header, icon rail |
+| Medium, content 762px or wider | Side pane | Header, icon rail, list |
+| Medium, content under 762px | Over the list, filling the Tasks view | Header, icon rail |
 | Small | The whole viewport | Nothing else |
 
 - **Side pane floors.** The pane is never narrower than the task-pane minimum and the list
@@ -237,7 +234,7 @@ Each phase ships on its own, in this order: they change the same stylesheets and
 |---|---|---|
 | 1. Small shell (built) | The 48px header, the bottom bar and More sheet, 8px board padding, and the one-row status pills at every width | [ORB-29233] |
 | 2. Small Tasks view (built) | Two-line rows, the full-viewport task with previous and next, the history entry | [ORB-29234] |
-| 3. Medium | The icon rail (and as the collapsed rail at wide), scope pickers in the header, the header's fit order, the side pane floors and the one-column task over the list | [ORB-29235] |
+| 3. Medium (built) | The icon rail (and as the collapsed rail at wide), scope pickers in the header, the header's fit order, the side pane floors and the one-column task over the list | [ORB-29235] |
 | 4. Scope at wide | The host and workspace selects move to the header at wide too, so they are in one place at every width | Not filed; after phases 1 to 3 have been in use |
 
 Every implementation task carries the `user-interface` and `ui` tags and attaches
@@ -266,7 +263,6 @@ Drawn with the dashboard's tokens and a mock-only stylesheet
   from about 1170px. This spec does not move that breakpoint.
 - **Only the shell and Tasks are designed.** Other destinations get the new header, rail
   and bar, and keep their own content layouts and breakpoints.
-- **The task-pane minimum is provisional** until the build measures it.
 
 ## Decided at Approval
 

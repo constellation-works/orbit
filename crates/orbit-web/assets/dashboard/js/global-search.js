@@ -16,8 +16,10 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
   const status = document.getElementById('global-search-status');
   const unavailableLine = document.getElementById('global-search-unavailable');
   const phone = window.matchMedia('(max-width: 760px)');
+  const topbar = wrap.closest('.topbar');
   const openButton = document.getElementById('phone-search-open');
   const closeButton = document.getElementById('phone-search-close');
+  const isOverlaySearch = () => phone.matches || Boolean(topbar?.classList.contains('topbar-fit-search'));
   let generation = 0;
   let controller = null;
   let debounce = null;
@@ -52,7 +54,7 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
   }
 
   function showSearchField() {
-    if (phone.matches) {
+    if (isOverlaySearch()) {
       wrap.classList.add('search-open');
       openButton.setAttribute('aria-expanded', 'true');
     }
@@ -275,7 +277,7 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
   });
   input.addEventListener('keydown', event => {
     if (event.isComposing) return;
-    if (event.key === 'Escape' && !phone.matches) {
+    if (event.key === 'Escape' && !isOverlaySearch()) {
       event.preventDefault();
       event.stopPropagation();
       if (!popover.hidden) closeSearchResults(); else clearGlobalSearch();
@@ -298,7 +300,7 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
   openButton.addEventListener('click', showSearchField);
   closeButton.addEventListener('click', () => closePhoneSearch({ restoreFocus: true }));
   wrap.addEventListener('keydown', event => {
-    if (event.key !== 'Escape' || event.isComposing || !phone.matches) return;
+    if (event.key !== 'Escape' || event.isComposing || !isOverlaySearch()) return;
     event.preventDefault();
     event.stopPropagation();
     closePhoneSearch({ restoreFocus: true });
