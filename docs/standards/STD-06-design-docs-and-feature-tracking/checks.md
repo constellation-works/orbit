@@ -20,3 +20,4 @@ Each gate below is real and can be adopted. "Orbit:" says whether Orbit enforces
 | R12 | review-only. The filing checklist of whoever files tasks (in the constellation, the `orchestration-session` skill §4) requires the slug. A tracker query for open tasks whose footprint touches a feature's `paths` but lack its tag can flag misses. Orbit: none. |
 | R13 | review-only. |
 | R14 | review-only. The generator lists `_archived/` separately. Orbit: yes. |
+| R15 | review-only; optionally scan new or changed design-doc lines in public repositories for dated chat quotes |
