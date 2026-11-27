@@ -3,7 +3,11 @@
 use super::*;
 use orbit_types::task::ExecutionLocation;
 use orbit_types::tool::WorkerInvocation;
-use orbit_types::workflow::handoff::already_landed_scope;
+use orbit_types::workflow::automation::SourceRevision;
+use orbit_types::workflow::handoff::{
+    HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, TaskHandoff,
+    already_landed_scope,
+};
 
 fn mixed_evidence(head: &str) -> (Value, Vec<(&'static str, Value)>) {
     let checks = [
@@ -339,59 +343,13 @@ fn claimed_commit_refuses_incomplete_or_mismatched_mixed_role_evidence() {
 fn owner_recheck_types_a_task_scope_change_after_the_evidence_as_stale() {
     use orbit_types::task::{TaskRelation, TaskRelationType};
     use orbit_types::workflow::DeliveryRefusal;
-    use orbit_types::workflow::automation::SourceRevision;
-    use orbit_types::workflow::handoff::{
-        HandoffArtifactRef, HandoffCandidate, HandoffDelivery, HandoffReview, TaskHandoff,
-    };
     let temp = tempdir().unwrap();
     init_git_repo(temp.path());
     let head = git_head(temp.path());
     let (report, logs) = mixed_evidence(&head);
     let (host, checkpoint) = claimed_action(temp.path(), &head, report, logs);
     let checkpoint = checkpoint.expect("the claimed leaf verifies its evidence");
-    let bytes = serde_json::to_vec(&checkpoint).unwrap();
-    host.artifacts
-        .lock()
-        .unwrap()
-        .get_mut(TASK_ID)
-        .unwrap()
-        .push(TaskArtifact::from_text(
-            "checkpoint.json",
-            String::from_utf8(bytes.clone()).unwrap(),
-        ));
-    let revision = SourceRevision {
-        commit: head.clone(),
-        tree: git_output(temp.path(), &["rev-parse", "HEAD^{tree}"]),
-    };
-    let handoff = TaskHandoff {
-        schema_version: 1,
-        workspace_id: "ws_owner".into(),
-        task_id: TASK_ID.into(),
-        claim_id: "claim-verifier".into(),
-        machine_id: "follower".into(),
-        run_id: RUN_ID.into(),
-        candidate: HandoffCandidate {
-            repository: "ws_owner".into(),
-            source_branch: "none".into(),
-            base_branch: git_output(temp.path(), &["rev-parse", "--abbrev-ref", "HEAD"]),
-            landing_branch: git_output(temp.path(), &["rev-parse", "--abbrev-ref", "HEAD"]),
-            candidate: revision.clone(),
-            base: revision,
-            delivery: HandoffDelivery::NoDiff {
-                evidence: HandoffArtifactRef {
-                    path: "checkpoint.json".into(),
-                    sha256: orbit_common::security::release::sha256_hex(&bytes),
-                },
-            },
-        },
-        review: HandoffReview::not_required(),
-        execution_summary: String::new(),
-        validation: Vec::new(),
-        footprint_widening: Vec::new(),
-        owed_criteria: Vec::new(),
-        regression_from: Vec::new(),
-        visual: None,
-    };
+    let handoff = no_diff_handoff(&host, temp.path(), &head, &checkpoint);
     let observe = || {
         orbit_engine::observe_no_diff_candidate(
             &host,
@@ -423,6 +381,58 @@ fn owner_recheck_types_a_task_scope_change_after_the_evidence_as_stale() {
     );
 }
 
+fn no_diff_handoff(
+    host: &VerifierHost,
+    repo: &Path,
+    head: &str,
+    checkpoint: &Value,
+) -> TaskHandoff {
+    let bytes = serde_json::to_vec(checkpoint).unwrap();
+    host.artifacts
+        .lock()
+        .unwrap()
+        .get_mut(TASK_ID)
+        .unwrap()
+        .push(TaskArtifact::from_text(
+            "checkpoint.json",
+            String::from_utf8(bytes.clone()).unwrap(),
+        ));
+    let revision = SourceRevision {
+        commit: head.to_owned(),
+        tree: git_output(repo, &["rev-parse", "HEAD^{tree}"]),
+    };
+    let branch = git_output(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    TaskHandoff {
+        schema_version: 1,
+        workspace_id: "ws_owner".into(),
+        task_id: TASK_ID.into(),
+        claim_id: "claim-verifier".into(),
+        machine_id: "follower".into(),
+        run_id: RUN_ID.into(),
+        candidate: HandoffCandidate {
+            repository: "ws_owner".into(),
+            source_branch: "none".into(),
+            base_branch: branch.clone(),
+            landing_branch: branch,
+            candidate: revision.clone(),
+            base: revision,
+            delivery: HandoffDelivery::NoDiff {
+                evidence: HandoffArtifactRef {
+                    path: "checkpoint.json".into(),
+                    sha256: orbit_common::security::release::sha256_hex(&bytes),
+                },
+            },
+        },
+        review: HandoffReview::not_required(),
+        execution_summary: String::new(),
+        validation: Vec::new(),
+        footprint_widening: Vec::new(),
+        owed_criteria: Vec::new(),
+        regression_from: Vec::new(),
+        visual: None,
+    }
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn claimed_evidence_contracts_1() {
@@ -444,6 +454,87 @@ fn claimed_evidence_contracts_1() {
                 "owner_recheck_types_a_task_scope_change_after_the_evidence_as_stale",
                 owner_recheck_types_a_task_scope_change_after_the_evidence_as_stale,
             ),
+            (
+                "claimed_commit_revalidates_a_moved_block_after_a_disjoint_edit",
+                claimed_commit_revalidates_a_moved_block_after_a_disjoint_edit,
+            ),
         ]);
     });
+}
+
+/// A declaration moved past the body remains covered after an independent
+/// body edit. The claimed verifier still refuses changed or ambiguous proof.
+fn claimed_commit_revalidates_a_moved_block_after_a_disjoint_edit() {
+    let temp = tempdir().unwrap();
+    let repo = temp.path();
+    init_git_repo(repo);
+    let commit = |content: &str, message: &str| {
+        fs::write(repo.join("README.md"), content).unwrap();
+        git_output(repo, &["add", "README.md"]);
+        git_output(repo, &["commit", "-m", message]);
+        git_head(repo)
+    };
+    let start = "preamble\nsection header\nbody starts\n";
+    let block = "helper starts\nhelper body\nhelper ends\n";
+    let body = "init\nload\nprepare\ncheck worker role\nrecord\nfinish\nbody ends\ntrailer\n";
+    commit(&format!("{start}{block}{body}"), "before declaration move");
+    let moved = format!("{start}{body}{block}");
+    let covering = commit(&moved, "move helper [T1]");
+    let updated = moved.replace("check worker role", "check claimed run");
+    let head = commit(&updated, "change the role check");
+
+    let verify = |head: &str| {
+        let (mut report, logs) = mixed_evidence(head);
+        report["covering_commit"] = json!(covering);
+        claimed_action(repo, head, report, logs)
+    };
+    let (host, checkpoint) = verify(&head);
+    let checkpoint = checkpoint.expect("the disjoint edit preserves the move");
+    assert_eq!(checkpoint["decision"], "verified_already_landed");
+    assert_eq!(checkpoint["base_sha"], head);
+    let handoff = no_diff_handoff(&host, repo, &head, &checkpoint);
+    orbit_engine::observe_no_diff_candidate(
+        &host,
+        repo,
+        &handoff,
+        orbit_engine::BaseSyncMode::Local,
+    )
+    .expect("the owner independently verifies the disjoint edit at the pinned revision");
+
+    let assert_refused = |label: &str, rejected_head: &str| {
+        let message = verify(rejected_head).1.expect_err(label).to_string();
+        assert!(
+            message.contains("already_landed_unverified")
+                && message.contains("README.md")
+                && message.contains("no-diff.json"),
+            "{label} must identify the affected path and recovery route: {message}"
+        );
+        assert_eq!(git_head(repo), rejected_head);
+        assert!(git_output(repo, &["status", "--porcelain"]).is_empty());
+    };
+    for (label, content) in [
+        (
+            "changed helper",
+            updated.replace("helper body", "new helper body"),
+        ),
+        ("removed helper", updated.replace(block, "")),
+        (
+            "restored old location",
+            format!("{start}{block}{}", &updated[start.len()..]),
+        ),
+        (
+            "ambiguous duplicate",
+            updated.replace(
+                "record\n",
+                &format!("record\nfinish\nbody ends\ntrailer\n{block}"),
+            ),
+        ),
+    ] {
+        git_output(repo, &["checkout", "-B", "refusal-fixture", &head]);
+        assert_refused(label, &commit(&content, label));
+    }
+    git_output(repo, &["checkout", "-B", "refusal-fixture", &covering]);
+    commit(&moved.replace(block, ""), "remove the helper");
+    let restored = commit(&moved, "restore the covering file exactly");
+    assert_refused("removed helper in an earlier revision", &restored);
 }
