@@ -267,7 +267,7 @@ unlocked_path_validation_commands = ["make ci-fast"]
 build_output_env = ["CARGO_TARGET_DIR"]
 ```
 
-A repair that changed only Markdown since the run's last full pass reruns only `make ci-fast` ([revalidating an unlocked-path repair](CONFIG.md#revalidating-an-unlocked-path-repair)), and a conflict on `docs/INDEX.md` is resolved by regenerating it ([generated paths](CONFIG.md#generated-paths-are-regenerated-not-merged)).
+A repair that changed only Markdown since the run's last full pass reruns only `make ci-fast` ([revalidating an unlocked-path repair](CONFIG.md#revalidating-an-unlocked-path-repair)), and a conflict on `docs/INDEX.md` or `docs/design/FEATURES.md` is resolved by regenerating it ([generated paths](CONFIG.md#generated-paths-are-regenerated-not-merged)).
 
 The reviewable [workspace configuration example](../config/orbit-workspace.toml) shows
 the current repository policy. Merge applicable settings into the owner configuration

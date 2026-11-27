@@ -679,6 +679,38 @@ fn pilot_rows_keep_each_rounds_own_effort() {
     );
 }
 
+#[test]
+fn pilot_selectors_cover_the_generated_feature_board_from_design_docs() {
+    let now = Utc::now();
+    let at = plus_minutes(now, -30);
+    let task_id = "pilot-feature-board";
+    let mut assessment = pilot_assessment(
+        task_id,
+        at,
+        pilot_run("run-feature-board", "pilot-model", "pilot"),
+        "docs/design/FEATURES.md",
+    );
+    assessment.after = vec!["file:docs/design/example/1_overview.md".into()];
+
+    let facts = scan_facts(
+        now,
+        vec![minimal_task(task_id, at)],
+        Vec::new(),
+        Vec::new(),
+        grade(vec![assessment]),
+    );
+    let payload = role_scorecard(&facts, AgentRole::Pilots);
+    let pilot = row(&payload, "crew");
+    let missed_files = pilot["stats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|stat| stat["key"] == "missed_files")
+        .unwrap();
+
+    assert_eq!(missed_files["value"], json!(0));
+}
+
 /// Warning intervals must resample settled warnings, including tasks outside
 /// the assessed cohort.
 #[test]
