@@ -8,7 +8,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
-use orbit_common::security::redaction::redact_all;
+use orbit_common::security::redaction::{redact_all, redact_all_json_with_keys};
 use orbit_types::telemetry::AuditEventStatus;
 
 use crate::RuntimeKernel;
@@ -37,6 +37,7 @@ pub struct SystemAuditEvent<'a> {
     pub role: &'a str,
     /// `Denied` records exit code 1; every other status records 0.
     pub status: AuditEventStatus,
+    /// Serialized JSON arguments. Redacted before they are persisted.
     pub arguments_json: String,
     /// Optional diagnostic stored separately from the event's arguments.
     pub error_message: Option<String>,
@@ -94,7 +95,7 @@ pub fn record_system_audit_event(
             },
             duration_ms: 0,
             working_directory: runtime.paths().repo_root.to_string_lossy().into_owned(),
-            arguments_json: Some(arguments_json),
+            arguments_json: Some(durable_arguments_json(&arguments_json)),
             stdout_truncated: None,
             stderr_truncated: None,
             error_message: error_message.map(|message| redact_all(&message)),
@@ -122,6 +123,17 @@ pub fn record_system_audit_event(
         },
         AuditInvocationFields::default(),
     )
+}
+
+/// Redact arguments at the durability boundary. Callers pass serialized JSON,
+/// so it is redacted as a document: every string value, and every property
+/// name, gets the same redaction as a refused tool call's arguments. Text that
+/// is not JSON falls back to the text redactor, so it is never stored raw.
+fn durable_arguments_json(arguments_json: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(arguments_json) {
+        Ok(arguments) => redact_all_json_with_keys(arguments).to_string(),
+        Err(_) => redact_all(arguments_json),
+    }
 }
 
 fn non_empty_env(value: Option<&std::ffi::OsStr>) -> Option<String> {

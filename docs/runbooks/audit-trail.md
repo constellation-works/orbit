@@ -68,7 +68,8 @@ Per-invocation fields include `id`, `execution_id`, `timestamp`, `command`, `sub
 its secret-redacted arguments in `arguments_json`; past 4,096 bytes of redacted JSON the row keeps
 only a JSON array of the top-level key names that fit in that limit, in argument order. Each name
 that does not fit is left out and counted by a final `+N more` entry, so the row stays valid JSON
-within 4,096 bytes even when the names alone are longer than that.
+within 4,096 bytes even when the names alone are longer than that. Orbit's own system rows, such as
+the `pr_merge` rows, store their `arguments_json` after the same secret redaction.
 
 JSON list, show and export include `self_reported_actor` (an unverified caller
 claim), `plugin` (name, version, manifest digest and grants), `plugin_secrets`
