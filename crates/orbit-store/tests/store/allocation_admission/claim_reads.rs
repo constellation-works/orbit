@@ -217,3 +217,49 @@ fn inspection_joins_only_matching_states_and_preserves_legacy_defaults() {
         assert!(missing.age_seconds.is_some());
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn commit_leases_refuses_a_symlinked_lease_directory() {
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let registry = TaskRegistryStore::open(&task_registry_path(root.path())).unwrap();
+    let partition_dir = registry
+        .workspace_partition_dir(owner.backends.commit_boundary.workspace_id())
+        .unwrap();
+    let outside = TempDir::new().unwrap();
+    fs::write(outside.path().join("ORB-99999"), b"").unwrap();
+    let lease_dir = partition_dir.join(".task-commit-applying");
+    assert!(!lease_dir.exists(), "fresh partition has no lease dir yet");
+    std::os::unix::fs::symlink(outside.path(), &lease_dir).unwrap();
+
+    let error = owner
+        .backends
+        .commit_boundary
+        .recover_if_pending()
+        .expect_err("a symlinked commit lease directory must be refused");
+    assert!(
+        error.to_string().contains("must not be a symlink"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn recover_clears_legacy_pending_marker_inside_canonical_partition() {
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    let registry = TaskRegistryStore::open(&task_registry_path(root.path())).unwrap();
+    let partition_dir = registry
+        .workspace_partition_dir(owner.backends.commit_boundary.workspace_id())
+        .unwrap();
+    let marker = partition_dir.join(".task-commit-pending");
+    fs::write(&marker, b"legacy").unwrap();
+    assert!(marker.exists());
+
+    owner.backends.commit_boundary.recover().unwrap();
+    assert!(
+        !marker.exists(),
+        "recovery removes the legacy pending marker inside the canonical partition"
+    );
+    owner.backends.commit_boundary.recover().unwrap();
+}

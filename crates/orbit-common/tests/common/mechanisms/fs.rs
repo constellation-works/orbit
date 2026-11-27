@@ -246,3 +246,88 @@ fn authority_root_is_stable_across_creating_a_missing_root_under_a_symlinked_anc
     std::fs::create_dir_all(&root).expect("create root");
     assert_eq!(authority_root(&root).expect("existing root"), before);
 }
+
+#[cfg(unix)]
+#[test]
+fn probe_file_lock_refuses_a_symlink_target_and_probes_through_a_symlinked_parent() {
+    use orbit_common::fs::io::{FileLockProbe, probe_file_lock, try_acquire_exclusive_file_lock};
+
+    let temp = TempDir::new().expect("tempdir");
+    let real_dir = temp.path().join("real");
+    let outside_dir = temp.path().join("outside");
+    std::fs::create_dir_all(&real_dir).expect("real dir");
+    std::fs::create_dir_all(&outside_dir).expect("outside dir");
+    let link_dir = temp.path().join("link");
+    std::os::unix::fs::symlink(&real_dir, &link_dir).expect("symlink parent");
+
+    // Missing parent and missing file both report Absent.
+    assert_eq!(
+        probe_file_lock(&temp.path().join("missing/absent.lock")).expect("missing parent"),
+        FileLockProbe::Absent
+    );
+    assert_eq!(
+        probe_file_lock(&link_dir.join("absent.lock")).expect("missing file"),
+        FileLockProbe::Absent
+    );
+
+    // Symlinked leaf pointing outside the parent is refused rather than followed.
+    let outside_file = outside_dir.join("target.lock");
+    std::fs::write(&outside_file, b"").expect("outside target");
+    let leaf_link = real_dir.join("redirect.lock");
+    std::os::unix::fs::symlink(&outside_file, &leaf_link).expect("leaf symlink");
+    let err = probe_file_lock(&leaf_link).expect_err("symlinked lock leaf must be refused");
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+    // Regular lock file reached through a symlinked parent reports Held then Free.
+    let via_link = link_dir.join("live.lock");
+    let guard = try_acquire_exclusive_file_lock(&via_link, "probe-test")
+        .expect("acquire")
+        .expect("lock free");
+    assert_eq!(
+        probe_file_lock(&via_link).expect("probe while held"),
+        FileLockProbe::Held
+    );
+    drop(guard);
+    assert_eq!(
+        probe_file_lock(&via_link).expect("probe after release"),
+        FileLockProbe::Free
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn with_shared_file_lock_skips_missing_or_file_parent_and_coordinates_under_symlink_parent() {
+    use orbit_common::fs::io::with_shared_file_lock;
+
+    let temp = TempDir::new().expect("tempdir");
+    let missing_target = temp.path().join("does-not-exist/task.yaml");
+    let ran: bool =
+        with_shared_file_lock::<_, io::Error, _>(&missing_target, "missing", || Ok(true))
+            .expect("missing parent runs unlocked");
+    assert!(ran);
+    assert!(
+        !temp.path().join("does-not-exist").exists(),
+        "shared lock must not create a missing parent directory"
+    );
+
+    let file_parent = temp.path().join("not-a-dir");
+    std::fs::write(&file_parent, b"").expect("file parent");
+    let ran: bool = with_shared_file_lock::<_, io::Error, _>(
+        &file_parent.join("task.yaml"),
+        "non-dir parent",
+        || Ok(true),
+    )
+    .expect("non-directory parent runs unlocked");
+    assert!(ran);
+
+    let real_dir = temp.path().join("real");
+    std::fs::create_dir_all(&real_dir).expect("real dir");
+    let link_dir = temp.path().join("link");
+    std::os::unix::fs::symlink(&real_dir, &link_dir).expect("symlink parent");
+    let via_link = link_dir.join("task.yaml");
+    let nested: usize = with_shared_file_lock::<_, io::Error, _>(&via_link, "outer", || {
+        with_shared_file_lock::<_, io::Error, _>(&real_dir.join("task.yaml"), "inner", || Ok(2))
+    })
+    .expect("re-entrant shared lock across symlinked parent");
+    assert_eq!(nested, 2);
+}

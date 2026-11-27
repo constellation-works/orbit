@@ -22,7 +22,7 @@ use orbit_types::task::{
     TASK_EVENTS_FILE_NAME, TaskEventRowV2, TaskStatus, named_friction_targets,
     pending_resolves_entries,
 };
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static JOURNAL_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -544,15 +544,23 @@ impl TaskCommitBoundary {
     }
 
     fn clear_pending_marker(&self) -> Result<(), OrbitError> {
-        remove_file_if_present(&self.pending_marker_path())
-    }
-}
-
-fn remove_file_if_present(path: &Path) -> Result<(), OrbitError> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(OrbitError::from_write_io(path, error)),
+        let root = match self.partition_dir.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(OrbitError::from_write_io(&self.partition_dir, error)),
+        };
+        let marker = root.join(PENDING_MARKER_FILE);
+        if !marker.starts_with(&root) {
+            return Err(OrbitError::InvalidInput(format!(
+                "pending commit marker escapes partition '{}'",
+                self.partition_dir.display()
+            )));
+        }
+        match std::fs::remove_file(&marker) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(OrbitError::from_write_io(&marker, error)),
+        }
     }
 }
 

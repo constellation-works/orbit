@@ -249,11 +249,18 @@ pub(crate) fn open_private_file(path: &Path, options: &mut OpenOptions) -> io::R
 /// caller remains responsible for checking the opened descriptor's type and
 /// mapping errors into its domain-specific behavior.
 pub fn open_read_only_no_follow(path: &Path) -> io::Result<File> {
+    open_read_only_no_follow_with_path(path).map(|(file, _)| file)
+}
+
+/// Open `path` for read-only inspection without following its final component,
+/// returning both the opened descriptor and the validated canonical path.
+pub(crate) fn open_read_only_no_follow_with_path(path: &Path) -> io::Result<(File, PathBuf)> {
     let path = validated_private_file_path(path)?;
     let mut options = OpenOptions::new();
     options.read(true);
     apply_read_only_no_follow(&mut options);
-    options.open(&path)
+    let file = options.open(&path)?;
+    Ok((file, path))
 }
 
 /// Resolve a private file's parent before opening it and reject a final
@@ -271,7 +278,7 @@ fn validated_private_file_path(path: &Path) -> io::Result<PathBuf> {
             format!("path '{}' has no file name", path.display()),
         )
     })?;
-    let parent = path.parent().ok_or_else(|| {
+    let parent = crate::fs::path::parent_dir_or_current(path).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("path '{}' has no parent directory", path.display()),
@@ -279,6 +286,15 @@ fn validated_private_file_path(path: &Path) -> io::Result<PathBuf> {
     })?;
     let canonical_parent = fs::canonicalize(parent)?;
     let canonical_path = canonical_parent.join(file_name);
+    if !canonical_path.starts_with(&canonical_parent) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "private file path '{}' escapes its parent directory",
+                path.display()
+            ),
+        ));
+    }
 
     match fs::symlink_metadata(&canonical_path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
