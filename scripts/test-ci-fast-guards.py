@@ -464,6 +464,29 @@ exec {shlex.quote(sys.executable)} "$@"
             if mode != "--guards-core":
                 self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check"])
 
+    def test_dashboard_allowlist_selects_core_owner_and_preserves_fallback(self):
+        self.prepare_ci()
+        self.init_ci_git()
+        target = self.scripts / "removed-dashboard-labels-allowlist.json"
+        target.write_text("[]\n")
+        for mode in ("--guards-core", "--guards-qa", "--guards"):
+            result = self.run_guard("ci-guardrails.sh", mode, env_overrides={"CI_SELF_TESTS": "changed"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            if mode == "--guards-core":
+                self.assertTrue((self.guard_calls / "test-ci-fast-guards.py").exists())
+                self.assertTrue((self.guard_calls / "check-removed-dashboard-labels.py").exists())
+                self.assertFalse((self.guard_calls / "test-check-dependency-direction.py").exists())
+            else:
+                self.assert_self_tests(True, mode)
+        (self.scripts / "other-input").touch()
+        result = self.run_guard("ci-guardrails.sh", "--guards-core", env_overrides={"CI_SELF_TESTS": "changed"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True, "--guards-core")
+        (self.scripts / "other-input").unlink()
+        result = self.run_guard("ci-guardrails.sh", "--guards-core", env_overrides={"CI_SELF_TESTS": "all"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_self_tests(True, "--guards-core")
+
     def test_server_json_and_release_readiness_manifest_select_self_tests(self):
         """PR-mode runs the self-tests that read these two inputs.
 
