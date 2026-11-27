@@ -330,14 +330,16 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
         }
         dependencies.push(
             super::super::dependency_record::authenticate_dependency_record(
-                process_env,
-                deadline,
-                workspace,
-                &snapshot,
-                &run,
+                crate::executor::automation::vcs::operations::dependency_record::DependencyRun {
+                    process_env,
+                    deadline,
+                    workspace,
+                    snapshot: &snapshot,
+                    run: &run,
+                    failed: &failed,
+                    accepted,
+                },
                 job,
-                &failed,
-                accepted,
                 &path,
                 &source,
                 &log.text,

@@ -11,12 +11,24 @@ use crate::context::RuntimeHost;
 
 use super::super::super::super::input::input_string_field;
 use super::super::super::checks::{
-    CheckReadGap, DeferredLogRead, HeadCheckEvidence, head_check_evidence, unmoved_red_base,
+    BaseComparison, CheckReadGap, DeferredLogRead, HeadCheckEvidence, HeadCheckRead,
+    head_check_evidence, unmoved_red_base,
 };
 use super::super::super::git::{self, git_output};
 use super::super::RequiredChecks;
 use super::super::answers::{CheckState, PullRequestStatus, read_required_checks};
 use super::{admission, ledger, verdict};
+
+/// The pinned pull request an `--auto-fix` watcher reads: its admission,
+/// step input, checkout, number and observed status.
+#[derive(Clone, Copy)]
+pub(in crate::executor::automation::vcs::pr) struct AutoFixPull<'a> {
+    pub(in crate::executor::automation::vcs::pr) auto_fix: &'a admission::AutoFix,
+    pub(in crate::executor::automation::vcs::pr) input: &'a Value,
+    pub(in crate::executor::automation::vcs::pr) workspace_path: &'a str,
+    pub(in crate::executor::automation::vcs::pr) pr_number: &'a str,
+    pub(in crate::executor::automation::vcs::pr) status: &'a PullRequestStatus,
+}
 
 /// A required failure the base's own job already fails the same way, while
 /// the base branch has not moved past that commit, or has moved to a commit
@@ -33,18 +45,19 @@ use super::{admission, ledger, verdict};
 /// log) is not itself a red base. It holds only when an earlier poll already
 /// recorded this head's failure as inherited (`pr_auto_fix_base_red`): a
 /// read gap must not turn that recorded inheritance into a repair.
-// Keep the pinned read context and its absolute deadline explicit together.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::executor::automation::vcs::pr) fn red_base_wait<H: RuntimeHost + ?Sized>(
     host: &H,
-    auto_fix: &admission::AutoFix,
-    input: &Value,
-    workspace_path: &str,
-    pr_number: &str,
-    status: &PullRequestStatus,
+    pull: AutoFixPull<'_>,
     failed: &[(Option<String>, String)],
     deadline_ms: Option<u64>,
 ) -> Result<Option<String>, Box<DeferredLogRead>> {
+    let AutoFixPull {
+        auto_fix,
+        input,
+        workspace_path,
+        pr_number,
+        status,
+    } = pull;
     let Some(head) = status.head_sha.as_deref() else {
         return Ok(None);
     };
@@ -74,7 +87,6 @@ pub(in crate::executor::automation::vcs::pr) fn red_base_wait<H: RuntimeHost + ?
 /// [`red_base_wait`]'s reading: `Ok(Some)` holds, `Ok(None)` does not, and
 /// `Err` names what could not be read.
 // Same immutable observation context as red_base_wait; no new budget is inferred.
-#[allow(clippy::too_many_arguments)]
 fn evaluate_red_base<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -97,34 +109,38 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
         &base_name,
         Some(head),
     )?;
+    let base = base.as_deref().unwrap_or_default();
     unmoved_red_base(
-        host,
-        workspace,
-        head,
-        base.as_deref().unwrap_or_default(),
-        &tip,
-        &branch,
+        BaseComparison {
+            host,
+            workspace,
+            head,
+            base,
+            base_branch: &branch,
+            moved_tip: (tip != base).then_some(tip.as_str()),
+            deadline_ms,
+            base_jobs: None,
+            tip_jobs: None,
+        },
         &failed,
-        deadline_ms,
     )
 }
 
 /// Recover CI through the same durable retry planner as claimed landing.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "auto-fix recovery passes the pull status and deadline into the same planner landing uses"
-)]
 pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost + ?Sized>(
     host: &H,
-    auto_fix: &admission::AutoFix,
-    input: &Value,
-    workspace_path: &str,
-    pr_number: &str,
-    status: &PullRequestStatus,
+    pull: AutoFixPull<'_>,
     deadline_ms: u64,
     allow_unreadable_log_rerun: bool,
     observation: &mut Option<super::super::super::checks::rerun_diagnostic::CiRerunDiagnostic>,
 ) -> Result<CiRerunRecovery, OrbitError> {
+    let AutoFixPull {
+        auto_fix,
+        input,
+        workspace_path,
+        pr_number,
+        status,
+    } = pull;
     let Some(head) = status.head_sha.as_deref() else {
         return Ok(CiRerunRecovery::NotEligible);
     };
@@ -162,13 +178,15 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     if no_edit_repair_recorded(host, auto_fix, pr_number, head) {
         match super::super::super::checks::request_no_edit_repair_rerun(
             host,
-            workspace,
-            &auto_fix.task_ids,
-            status,
+            crate::executor::automation::vcs::checks::RerunLanding {
+                workspace,
+                tasks: &auto_fix.task_ids,
+                status,
+                base: base.as_deref().unwrap_or_default(),
+                base_branch: &branch,
+                deadline_ms,
+            },
             &failed,
-            base.as_deref().unwrap_or_default(),
-            &branch,
-            deadline_ms,
             false,
         )? {
             super::super::super::checks::CiRerunStep::Backoff(reason) => {
@@ -201,17 +219,19 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     }
     match super::super::super::checks::plan_ci_rerun(
         host,
-        workspace,
-        &auto_fix.task_ids,
-        None,
-        status,
-        &failed,
-        base.as_deref().unwrap_or_default(),
-        &tip,
-        &branch,
-        deadline_ms,
-        None,
-        allow_unreadable_log_rerun,
+        crate::executor::automation::vcs::checks::CiRerunPlanInputs {
+            workspace,
+            tasks: &auto_fix.task_ids,
+            handoff: None,
+            status,
+            failed: &failed,
+            base: base.as_deref().unwrap_or_default(),
+            tip: &tip,
+            base_branch: &branch,
+            deadline_ms,
+            classified: None,
+            allow_unreadable_log_rerun,
+        },
         &auto_fix.run_id,
         observation,
     )? {
@@ -274,13 +294,15 @@ pub(in crate::executor::automation::vcs::pr) fn failed_no_edit_rerun<H: RuntimeH
     .ok()?;
     match super::super::super::checks::request_no_edit_repair_rerun(
         host,
-        workspace,
-        &auto_fix.task_ids,
-        status,
+        crate::executor::automation::vcs::checks::RerunLanding {
+            workspace,
+            tasks: &auto_fix.task_ids,
+            status,
+            base: base.as_deref().unwrap_or_default(),
+            base_branch: &branch,
+            deadline_ms,
+        },
         &failed,
-        base.as_deref().unwrap_or_default(),
-        &branch,
-        deadline_ms,
         true,
     ) {
         Ok(super::super::super::checks::CiRerunStep::NoEditRerunFailed(reason)) => Some(reason),
@@ -403,16 +425,18 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
         .zip(dependency_base.as_deref());
     let (evidence, annotations, failures) = match head_check_evidence(
         host,
-        Path::new(workspace_path),
-        &auto_fix.task_ids,
-        pr_number,
-        head_sha,
-        status.base_branch.as_deref(),
-        &failed,
-        &required,
-        true,
-        deadline_ms,
-        dependency_context,
+        HeadCheckRead {
+            workspace: Path::new(workspace_path),
+            tasks: &auto_fix.task_ids,
+            pr: pr_number,
+            head: head_sha,
+            base_branch: status.base_branch.as_deref(),
+            failed: &failed,
+            required: &required,
+            allow_suspect_repair: true,
+            deadline_ms,
+            dependency_context,
+        },
     ) {
         HeadCheckEvidence::Repair {
             evidence,

@@ -72,6 +72,62 @@ impl From<String> for CheckReadGap {
     }
 }
 
+/// The jobs on one commit, or why they could not be read; read once per
+/// landing attempt.
+type CommitJobs = Option<Result<Vec<CiCommitJobEvidence>, String>>;
+
+/// An inherited failure, and whether the moved base tip passes the same job.
+struct Inheritance {
+    why: String,
+    /// True when the moved tip's same job succeeded. A failed tip read does
+    /// not set this and does not turn a base-signature match inconclusive:
+    /// the first update still happens, and the failure is not treated as
+    /// surviving onto a passing tip.
+    tip_passes: bool,
+}
+
+/// One read of a pull request head's failed checks for a repair: the
+/// owner tasks, the PR and its head, the failed and required checks, and
+/// `dependency_context`, the head branch and accepted base a dependency
+/// proof binds to.
+pub(in crate::executor::automation::vcs) struct HeadCheckRead<'a> {
+    pub(in crate::executor::automation::vcs) workspace: &'a Path,
+    pub(in crate::executor::automation::vcs) tasks: &'a [String],
+    pub(in crate::executor::automation::vcs) pr: &'a str,
+    pub(in crate::executor::automation::vcs) head: &'a str,
+    pub(in crate::executor::automation::vcs) base_branch: Option<&'a str>,
+    pub(in crate::executor::automation::vcs) failed: &'a [(Option<String>, String)],
+    pub(in crate::executor::automation::vcs) required: &'a RequiredChecks,
+    pub(in crate::executor::automation::vcs) allow_suspect_repair: bool,
+    pub(in crate::executor::automation::vcs) deadline_ms: Option<u64>,
+    pub(in crate::executor::automation::vcs) dependency_context: Option<(&'a str, &'a str)>,
+}
+
+/// The pull request, head and branches a dependency proof is bound to.
+struct DependencyProofScope<'a> {
+    workspace: &'a Path,
+    pr: &'a str,
+    head: &'a str,
+    head_branch: &'a str,
+    base_branch: &'a str,
+    accepted_base: &'a str,
+}
+
+/// The commits one landing attempt classifies failed jobs against: the
+/// pull request head, the candidate's base and its branch, the moved base
+/// tip if any, and the base and tip jobs, each read once per attempt.
+pub(in crate::executor::automation::vcs) struct BaseComparison<'a, H: ?Sized> {
+    pub(in crate::executor::automation::vcs) host: &'a H,
+    pub(in crate::executor::automation::vcs) workspace: &'a Path,
+    pub(in crate::executor::automation::vcs) head: &'a str,
+    pub(in crate::executor::automation::vcs) base: &'a str,
+    pub(in crate::executor::automation::vcs) base_branch: &'a str,
+    pub(in crate::executor::automation::vcs) moved_tip: Option<&'a str>,
+    pub(in crate::executor::automation::vcs) deadline_ms: Option<u64>,
+    pub(in crate::executor::automation::vcs) base_jobs: CommitJobs,
+    pub(in crate::executor::automation::vcs) tip_jobs: CommitJobs,
+}
+
 pub(super) fn prerequisite_log<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -125,23 +181,22 @@ impl DeferredLogRead {
 /// admission; its caller separately preserves the known-red-base hold. A log read the
 /// provider throttled is [`HeadCheckEvidence::ReadDeferred`]; `deadline_ms`,
 /// when set, bounds the log read by the completion's absolute deadline.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "head evidence reads jobs, failed checks and the suspect-repair flag as separate landing inputs"
-)]
 pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
-    workspace: &Path,
-    tasks: &[String],
-    pr: &str,
-    head: &str,
-    base_branch: Option<&str>,
-    failed: &[(Option<String>, String)],
-    required: &RequiredChecks,
-    allow_suspect_repair: bool,
-    deadline_ms: Option<u64>,
-    dependency_context: Option<(&str, &str)>,
+    read: HeadCheckRead<'_>,
 ) -> HeadCheckEvidence {
+    let HeadCheckRead {
+        workspace,
+        tasks,
+        pr,
+        head,
+        base_branch,
+        failed,
+        required,
+        allow_suspect_repair,
+        deadline_ms,
+        dependency_context,
+    } = read;
     let jobs = match commit_jobs(host, workspace, head) {
         Ok(jobs) => jobs,
         Err(error) => {
@@ -260,9 +315,11 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 tasks,
                 head,
                 base_branch,
-                job,
-                &log,
-                &signature.text,
+                super::suspect::LoggedFailure {
+                    job,
+                    log: &log,
+                    signature: &signature.text,
+                },
                 pr.parse::<u64>().ok(),
             ) {
                 Ok(Some(reason)) => {
@@ -279,12 +336,14 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 .ok_or("the PR and base context needed for dependency proof is unavailable")?;
             dependency_repair_excerpt(
                 host,
-                workspace,
-                pr,
-                head,
-                branch,
-                base,
-                accepted,
+                DependencyProofScope {
+                    workspace,
+                    pr,
+                    head,
+                    head_branch: branch,
+                    base_branch: base,
+                    accepted_base: accepted,
+                },
                 &jobs,
                 job,
                 deadline_ms,
@@ -329,22 +388,21 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
 /// Authenticate a waiter's record using the same complete-set proof as reruns.
 /// This is a read-only proof: no rerun is reserved or dispatched. Report
 /// bounded reasons and use only provider job identities in those reasons.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "bind the read to the same PR, job and deadline"
-)]
 fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
     host: &H,
-    workspace: &Path,
-    pr: &str,
-    head: &str,
-    branch: &str,
-    base: &str,
-    accepted: &str,
+    scope: DependencyProofScope<'_>,
     jobs: &[CiCommitJobEvidence],
     waiter: &CiCommitJobEvidence,
     deadline_ms: Option<u64>,
 ) -> Result<String, String> {
+    let DependencyProofScope {
+        workspace,
+        pr,
+        head,
+        head_branch,
+        base_branch,
+        accepted_base,
+    } = scope;
     const PROOF_UNAVAILABLE: &str = "the complete-set proof is unavailable";
     let run = waiter.run_id.number().ok_or(PROOF_UNAVAILABLE)?;
     let waiter_id = waiter.job_id.number().ok_or(PROOF_UNAVAILABLE)?;
@@ -388,9 +446,9 @@ fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
         workspace,
         pr: pr.to_string(),
         head,
-        head_branch: branch,
-        base_branch: base,
-        accepted_base: accepted,
+        head_branch,
+        base_branch,
+        accepted_base,
         run_id: run,
         roots: &roots,
         deadline_ms: deadline,
@@ -448,38 +506,24 @@ fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
     Ok(result)
 }
 
-/// The jobs on one commit, or why they could not be read; read once per
-/// landing attempt.
-type CommitJobs = Option<Result<Vec<CiCommitJobEvidence>, String>>;
-
-/// An inherited failure, and whether the moved base tip passes the same job.
-struct Inheritance {
-    why: String,
-    /// True when the moved tip's same job succeeded. A failed tip read does
-    /// not set this and does not turn a base-signature match inconclusive:
-    /// the first update still happens, and the failure is not treated as
-    /// surviving onto a passing tip.
-    tip_passes: bool,
-}
-
 /// The class of one failed job whose log was already read.
 ///
 /// Landing and auto-fix both call this. The signature comparison is
 /// [`inherited`]; nothing here re-implements it.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace: &Path,
+    comparison: &mut BaseComparison<'_, H>,
     job: &CiCommitJobEvidence,
     log: &str,
-    head: &str,
-    base: &str,
-    base_branch: &str,
-    moved_tip: Option<&str>,
-    base_jobs: &mut CommitJobs,
-    tip_jobs: &mut CommitJobs,
-    deadline_ms: Option<u64>,
 ) -> Result<(CheckFailureClass, String, bool, String), Box<DeferredLogRead>> {
+    let BaseComparison {
+        host,
+        workspace,
+        head,
+        base,
+        base_branch,
+        moved_tip,
+        ..
+    } = *comparison;
     let signature = error_signature(log, failed_step(job));
     if let Some(evidence) = infrastructure_evidence(host, log) {
         return Ok((
@@ -497,19 +541,7 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
             signature.text,
         ));
     }
-    Ok(match inherited(
-        host,
-        workspace,
-        job,
-        log,
-        &signature.text,
-        head,
-        base,
-        moved_tip,
-        base_jobs,
-        tip_jobs,
-        deadline_ms,
-    ) {
+    Ok(match inherited(comparison, job, log, &signature.text) {
         Err(CheckReadGap::Deferred(deferred)) => return Err(deferred),
         Err(CheckReadGap::Unavailable(gap)) => (CheckFailureClass::Inconclusive, gap, false, signature.text),
         Ok(Some(found)) => (
@@ -519,12 +551,14 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
             signature.text,
         ),
         Ok(None) => match super::suspect::stale_untouched_failure(
-            host,
-            workspace,
-            head,
-            base,
-            moved_tip.unwrap_or(base),
-            base_branch,
+            super::suspect::BaseRecheck {
+                host,
+                workspace,
+                head,
+                base,
+                tip: moved_tip.unwrap_or(base),
+                base_branch,
+            },
             job,
             log,
         ) {
@@ -572,24 +606,20 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
 /// this one. `Err` is evidence this read could not establish: a head job
 /// whose identity or log could not be read, or a classification left
 /// inconclusive, such as an unreadable base job or log.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the red-base decision compares head, base and tip commits against the failed jobs in one read"
-)]
 pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace: &Path,
-    head: &str,
-    base: &str,
-    tip: &str,
-    base_branch: &str,
+    mut comparison: BaseComparison<'_, H>,
     failed: &[(Option<String>, String)],
-    deadline_ms: Option<u64>,
 ) -> Result<Option<String>, CheckReadGap> {
+    let BaseComparison {
+        host,
+        workspace,
+        head,
+        base,
+        moved_tip,
+        deadline_ms,
+        ..
+    } = comparison;
     let head_jobs = commit_jobs(host, workspace, head).map_err(|error| error.to_string())?;
-    let moved_tip = (tip != base).then_some(tip);
-    let mut base_jobs = None;
-    let mut tip_jobs = None;
     let mut reasons = Vec::new();
     let mut inconclusive = None;
     let mut candidate_owned = false;
@@ -605,20 +635,8 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
         };
         let label = job_label(job);
         let log = prerequisite_log(host, workspace, head, job, run_id, job_id, deadline_ms)?;
-        let (class, why, _, _) = classify_logged_job(
-            host,
-            workspace,
-            job,
-            &log,
-            head,
-            base,
-            base_branch,
-            moved_tip,
-            &mut base_jobs,
-            &mut tip_jobs,
-            deadline_ms,
-        )
-        .map_err(CheckReadGap::Deferred)?;
+        let (class, why, _, _) =
+            classify_logged_job(&mut comparison, job, &log).map_err(CheckReadGap::Deferred)?;
         match class {
             CheckFailureClass::Inherited => reasons.push(why),
             CheckFailureClass::BaseSuspect | CheckFailureClass::Flaky => return Ok(None),
@@ -656,10 +674,10 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     // The landing's own branch update does not use this hold.
     if let Some(tip) = moved_tip.filter(|tip| !contains(&host.process_env(), workspace, tip, head))
     {
-        tip_jobs.get_or_insert_with(|| {
+        comparison.tip_jobs.get_or_insert_with(|| {
             commit_jobs(host, workspace, tip).map_err(|error| error.to_string())
         });
-        return Ok(unproven_tip(&head_jobs, failed, &tip_jobs).map(|unproven| {
+        return Ok(unproven_tip(&head_jobs, failed, &comparison.tip_jobs).map(|unproven| {
             format!(
                 "base_red: {} and the base branch moved to {tip}, {unproven}, so no repair agent \
                  runs on this poll",
@@ -721,20 +739,23 @@ fn job_concluded(job: &CiCommitJobEvidence) -> bool {
 /// the same signature fails on the base commit, or the base branch moved and
 /// the same job passes there. `Ok(None)` is an answer read in full; `Err`
 /// names the evidence that could not be read.
-#[allow(clippy::too_many_arguments)]
 fn inherited<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace: &Path,
+    comparison: &mut BaseComparison<'_, H>,
     job: &CiCommitJobEvidence,
     log: &str,
     signature: &str,
-    head: &str,
-    base: &str,
-    moved_tip: Option<&str>,
-    base_jobs: &mut CommitJobs,
-    tip_jobs: &mut CommitJobs,
-    deadline_ms: Option<u64>,
 ) -> Result<Option<Inheritance>, CheckReadGap> {
+    let BaseComparison {
+        host,
+        workspace,
+        head,
+        base,
+        moved_tip,
+        deadline_ms,
+        ref mut base_jobs,
+        ref mut tip_jobs,
+        ..
+    } = *comparison;
     let base_jobs = base_jobs
         .get_or_insert_with(|| commit_jobs(host, workspace, base).map_err(|e| e.to_string()))
         .as_ref()

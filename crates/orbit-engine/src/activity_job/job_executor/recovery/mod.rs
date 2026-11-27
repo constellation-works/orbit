@@ -13,7 +13,7 @@ mod unrepairable;
 
 use super::*;
 
-pub(super) use commit::commit_final_recovery_repair;
+pub(super) use commit::{FinalRecoveryRepair, commit_final_recovery_repair};
 pub(super) use failure::attempt_failure_activity;
 pub(super) use input::{
     MAX_RECOVERY_ERROR_MESSAGE_BYTES, bounded_recovery_input, bounded_recovery_text,

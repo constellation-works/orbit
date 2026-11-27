@@ -30,6 +30,24 @@ pub(super) enum UntouchedBaseEvidence {
     PassingBaseRun,
 }
 
+/// One failed job with its read log and normalized signature.
+pub(super) struct LoggedFailure<'a> {
+    pub(super) job: &'a CiCommitJobEvidence,
+    pub(super) log: &'a str,
+    pub(super) signature: &'a str,
+}
+
+/// The commits a base re-check compares: the pull request head, the base it
+/// forked from, the base branch and its tip.
+pub(super) struct BaseRecheck<'a, H: ?Sized> {
+    pub(super) host: &'a H,
+    pub(super) workspace: &'a Path,
+    pub(super) head: &'a str,
+    pub(super) base: &'a str,
+    pub(super) tip: &'a str,
+    pub(super) base_branch: &'a str,
+}
+
 /// A mixed failure's candidate attribution needs its own changed source.
 pub(super) fn cites_changed_candidate(
     process_env: &orbit_common::Env,
@@ -91,21 +109,20 @@ pub(super) fn base_suspect_legacy_event(
 }
 
 /// Independently guard the repair evidence path, including job-level recovery.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "suspicion checks the job log, signature and pull number against the candidate diff in one pass"
-)]
 pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     tasks: &[String],
     head: &str,
     base_branch: Option<&str>,
-    job: &CiCommitJobEvidence,
-    log: &str,
-    signature: &str,
+    failure: LoggedFailure<'_>,
     pr_number: Option<u64>,
 ) -> Result<Option<String>, String> {
+    let LoggedFailure {
+        job,
+        log,
+        signature,
+    } = failure;
     let paths = repository_citations(&host.process_env(), workspace, head, log)?;
     if paths.is_empty() {
         return Ok(None);
@@ -140,12 +157,14 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     )
     .map_err(|error| error.to_string())?;
     let evidence = untouched_base_evidence(
-        host,
-        workspace,
-        head,
-        base.trim(),
-        tip.trim(),
-        branch,
+        BaseRecheck {
+            host,
+            workspace,
+            head,
+            base: base.trim(),
+            tip: tip.trim(),
+            base_branch: branch,
+        },
         job,
         paths,
     )?;
@@ -240,22 +259,18 @@ fn repository_citations(
 /// Whether a matching base check passes. A pass alone only authorizes one
 /// unchanged-head pull-request rerun; only a repeated signature on that
 /// rerun can attribute the failure to the candidate.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "an untouched failure compares head, base and tip with the job log before any rerun"
-)]
 pub(super) fn stale_untouched_failure<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace: &Path,
-    head: &str,
-    base: &str,
-    tip: &str,
-    base_branch: &str,
+    recheck: BaseRecheck<'_, H>,
     job: &CiCommitJobEvidence,
     log: &str,
 ) -> Result<UntouchedBaseEvidence, String> {
-    let paths = repository_citations(&host.process_env(), workspace, head, log)?;
-    untouched_base_evidence(host, workspace, head, base, tip, base_branch, job, paths)
+    let paths = repository_citations(
+        &recheck.host.process_env(),
+        recheck.workspace,
+        recheck.head,
+        log,
+    )?;
+    untouched_base_evidence(recheck, job, paths)
 }
 
 /// Whether `log` cites only repository files the candidate did not change
@@ -289,20 +304,19 @@ pub(super) fn started_after_completion(
     }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "base evidence takes the cited paths plus head, base, tip and the job that failed"
-)]
 fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace: &Path,
-    head: &str,
-    base: &str,
-    tip: &str,
-    base_branch: &str,
+    recheck: BaseRecheck<'_, H>,
     job: &CiCommitJobEvidence,
     paths: BTreeSet<String>,
 ) -> Result<UntouchedBaseEvidence, String> {
+    let BaseRecheck {
+        host,
+        workspace,
+        head,
+        base,
+        tip,
+        base_branch,
+    } = recheck;
     if paths.is_empty() {
         return Ok(UntouchedBaseEvidence::Unrelated);
     }

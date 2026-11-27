@@ -18,8 +18,9 @@ use super::super::super::completion_hold::CompletionHoldCheck;
 use super::super::super::remote_probe::fixed_wait as sleep;
 use super::super::answers::{PullRequestStatus, read_pr_status, read_pr_status_before};
 use super::super::auto_fix::{
-    self, AutoFix, BlockedStopReason, BlockedVerdict, CiRerunRecovery, blocked_verdict,
-    defer_throttled_read, hold_auto_fix_stop, owed_read_wait, red_base_wait, stopped,
+    self, AutoFix, AutoFixPull, BlockedStopReason, BlockedVerdict, CiRerunRecovery,
+    blocked_verdict, defer_throttled_read, hold_auto_fix_stop, owed_read_wait, red_base_wait,
+    stopped,
 };
 use super::super::delivery::{
     BlockedCheckWait, DeliveryPin, PrMergeState, UnreportedChecks, checked_pr_state,
@@ -190,11 +191,13 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     ) -> Result<RedBaseStep, OrbitError> {
         let reason = match red_base_wait(
             self.host,
-            auto_fix,
-            self.input,
-            self.workspace_path,
-            self.pr_number,
-            status,
+            AutoFixPull {
+                auto_fix,
+                input: self.input,
+                workspace_path: self.workspace_path,
+                pr_number: self.pr_number,
+                status,
+            },
             failed,
             self.observation_budget,
         ) {
@@ -351,14 +354,16 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             {
                 match super::super::super::base::refresh::recover(
                     host,
-                    Path::new(workspace_path),
-                    &auto_fix.task_ids,
-                    &auto_fix.run_id,
-                    candidate,
+                    crate::executor::automation::vcs::base::refresh::BaseRefreshOwner {
+                        workspace: Path::new(workspace_path),
+                        tasks: &auto_fix.task_ids,
+                        execution: &auto_fix.run_id,
+                        candidate,
+                        handoff_id: None,
+                    },
                     &status,
                     completion_deadline_ms,
                     false,
-                    None,
                 )
                 .map_err(observed)?
                 {
@@ -461,14 +466,16 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         {
             match super::super::super::base::refresh::recover(
                 host,
-                Path::new(workspace_path),
-                &auto_fix.task_ids,
-                &auto_fix.run_id,
-                candidate,
+                crate::executor::automation::vcs::base::refresh::BaseRefreshOwner {
+                    workspace: Path::new(workspace_path),
+                    tasks: &auto_fix.task_ids,
+                    execution: &auto_fix.run_id,
+                    candidate,
+                    handoff_id: None,
+                },
                 &status,
                 completion_deadline_ms,
                 true,
-                None,
             )
             .map_err(observed)?
             {
@@ -581,11 +588,13 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     Some(reason) => Ok(CiRerunRecovery::NoEditRerunFailed(reason)),
                     None => super::super::auto_fix::recover_ci_rerun(
                         host,
-                        auto_fix,
-                        input,
-                        workspace_path,
-                        pr_number,
-                        status,
+                        AutoFixPull {
+                            auto_fix,
+                            input,
+                            workspace_path,
+                            pr_number,
+                            status,
+                        },
                         completion_deadline_ms,
                         true,
                         &mut *self.diagnostic,

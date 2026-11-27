@@ -2,6 +2,7 @@
 use super::super::super::audit_writer::V2AuditWriter;
 use super::super::super::dispatcher::{DispatchError, DispatchOutcome};
 use super::continuation::run_cli_backend_for_step;
+use super::dispatch::CliDispatchContext;
 use crate::context::RuntimeHost;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use serde_json::Value;
@@ -17,14 +18,16 @@ pub fn run_cli_backend(
     fs_profile: Option<&str>,
 ) -> Result<DispatchOutcome, DispatchError> {
     run_cli_backend_for_step(
-        host,
-        spec,
-        activity_name,
-        activity_name,
-        run_id,
-        audit,
-        input,
-        fs_profile,
+        CliDispatchContext {
+            host,
+            spec,
+            step_id: activity_name,
+            activity_name,
+            run_id,
+            audit: &audit,
+            input,
+            fs_profile,
+        },
         None,
     )
 }

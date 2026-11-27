@@ -15,7 +15,6 @@ use crate::context::{HandoffLandingContext, RuntimeHost};
 use super::super::super::operations::{CiCommitJobEvidence, CiJobEvent};
 
 use super::super::annotations::unanswered_required;
-use super::super::head::classify_logged_job;
 use super::super::jobs::{
     answers, commit_jobs, dependency_only_log, excerpt, job_label, unsuccessful,
 };
@@ -23,6 +22,7 @@ use super::super::log::job_log;
 use super::super::read_wait::ThrottledRead;
 use super::dependency::{DependencyAuthScope, fold_dependency_waiters};
 use super::{CheckFailureClass, CheckRecovery, CheckRecoveryStep, FailedJob, unreadable_job_text};
+use crate::executor::automation::vcs::checks::head::{BaseComparison, classify_logged_job};
 
 /// The failed jobs the first phase classified, for the second phase to act on.
 pub(super) struct ClassifiedFailures<'a> {
@@ -36,23 +36,33 @@ pub(super) struct ClassifiedFailures<'a> {
     pub(super) has_aggregates: bool,
 }
 
+/// The landing's failed checks on the pull request's `head`, and the
+/// landing branch's commit when the landing read one.
+#[derive(Clone, Copy)]
+pub(super) struct LandingChecks<'a> {
+    pub(super) context: &'a HandoffLandingContext,
+    pub(super) failed: &'a [(Option<String>, String)],
+    pub(super) landing_tip: Option<&'a str>,
+    pub(super) head: &'a str,
+    pub(super) pr: u64,
+}
+
 /// Classify the failed checks on `head`. `Break` is a step the landing takes
 /// before any rerun is planned; `Continue` carries the classified jobs.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the classification phase shares the landing's inputs with the entry point"
-)]
 pub(super) fn classify_failed_checks<'a, H: RuntimeHost + ?Sized>(
     host: &H,
-    context: &'a HandoffLandingContext,
-    failed: &[(Option<String>, String)],
-    landing_tip: Option<&'a str>,
+    checks: LandingChecks<'a>,
     recovery: &mut CheckRecovery,
-    head: &str,
-    pr: u64,
     unclassified: &dyn Fn(String) -> CheckRecoveryStep,
     history_cell: &OnceCell<Vec<TaskHistoryEntry>>,
 ) -> Result<ControlFlow<CheckRecoveryStep, ClassifiedFailures<'a>>, OrbitError> {
+    let LandingChecks {
+        context,
+        failed,
+        landing_tip,
+        head,
+        pr,
+    } = checks;
     let workspace = &context.workspace_path;
     if let Some(reason) = super::super::rerun::infrastructure_backoff(
         host,
@@ -119,8 +129,17 @@ pub(super) fn classify_failed_checks<'a, H: RuntimeHost + ?Sized>(
 
     let base = context.candidate.base.commit.as_str();
     let moved_tip = landing_tip.filter(|tip| *tip != base);
-    let mut base_jobs = None;
-    let mut tip_jobs = None;
+    let mut comparison = BaseComparison {
+        host,
+        workspace,
+        head,
+        base,
+        base_branch: &context.candidate.base_branch,
+        moved_tip,
+        deadline_ms: Some(recovery.deadline_ms),
+        base_jobs: None,
+        tip_jobs: None,
+    };
     let mut jobs = Vec::new();
     let mut waiter_logs: Vec<(u64, String)> = Vec::new();
     let answered_checks = failed
@@ -215,29 +234,18 @@ pub(super) fn classify_failed_checks<'a, H: RuntimeHost + ?Sized>(
         if dependency_only_log(&log) {
             waiter_logs.push((job_id, log.clone()));
         }
-        let (mut class, mut why, tip_passes, signature) = match classify_logged_job(
-            host,
-            workspace,
-            job,
-            &log,
-            head,
-            base,
-            &context.candidate.base_branch,
-            moved_tip,
-            &mut base_jobs,
-            &mut tip_jobs,
-            Some(recovery.deadline_ms),
-        ) {
-            Ok(classified) => classified,
-            Err(deferred) => {
-                return Ok(ControlFlow::Break(CheckRecoveryStep::ReadDeferred(
-                    ThrottledRead {
-                        reason: deferred.reason,
-                        throttle: deferred.throttle,
-                    },
-                )));
-            }
-        };
+        let (mut class, mut why, tip_passes, signature) =
+            match classify_logged_job(&mut comparison, job, &log) {
+                Ok(classified) => classified,
+                Err(deferred) => {
+                    return Ok(ControlFlow::Break(CheckRecoveryStep::ReadDeferred(
+                        ThrottledRead {
+                            reason: deferred.reason,
+                            throttle: deferred.throttle,
+                        },
+                    )));
+                }
+            };
         if class == CheckFailureClass::Flaky
             && super::super::suspect::has_matching_candidate_rerun(
                 host,

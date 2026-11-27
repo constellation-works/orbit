@@ -84,15 +84,17 @@ impl OrbitRuntime {
             }
             HandoffDelivery::LocalCandidate => orbit_engine::observe_candidate(
                 self.env(),
-                &self.paths().repo_root,
-                Some(&handoff.candidate.source_branch),
-                &handoff.candidate.base_branch,
-                &handoff.candidate.landing_branch,
-                HandoffDelivery::LocalCandidate,
-                &handoff.workspace_id,
-                // An owner-local candidate has no origin to fetch and must
-                // keep reading the local base it was synchronized onto.
-                BaseSyncMode::Local,
+                orbit_engine::CandidateCheckout {
+                    workspace_path: &self.paths().repo_root,
+                    source: Some(&handoff.candidate.source_branch),
+                    base_branch: &handoff.candidate.base_branch,
+                    landing_branch: &handoff.candidate.landing_branch,
+                    delivery: HandoffDelivery::LocalCandidate,
+                    fallback_repository: &handoff.workspace_id,
+                    // An owner-local candidate has no origin to fetch and must
+                    // keep reading the local base it was synchronized onto.
+                    base_sync: BaseSyncMode::Local,
+                },
             )?,
             // [ORB-12500] The owner reads the published pull request itself:
             // the provider names the delivery, and the candidate and base

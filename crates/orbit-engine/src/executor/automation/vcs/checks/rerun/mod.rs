@@ -22,9 +22,11 @@ use crate::context::RuntimeHost;
 use super::super::operations;
 
 pub(super) use classification::request_classification_rerun;
-pub(in crate::executor::automation::vcs) use classification::request_no_edit_repair_rerun;
+pub(in crate::executor::automation::vcs) use classification::{
+    RerunLanding, request_no_edit_repair_rerun,
+};
 pub(in crate::executor::automation::vcs) use conclusion::handoff_step_set;
-pub(in crate::executor::automation::vcs) use plan::plan_ci_rerun;
+pub(in crate::executor::automation::vcs) use plan::{CiRerunPlanInputs, plan_ci_rerun};
 pub(super) use send::infrastructure_backoff;
 
 pub(in crate::executor::automation::vcs) enum CiRerunStep {

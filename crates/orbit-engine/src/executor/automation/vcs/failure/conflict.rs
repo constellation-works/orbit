@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::executor::automation::input::input_string_field;
 
 use super::super::git::git_output;
+use super::PipelineFailure;
 
 pub(super) fn pipeline_checkpoint_string(input: &Value, step: &str, field: &str) -> Option<String> {
     input
@@ -67,17 +68,19 @@ pub(super) fn conflicts_from_error(error: &str) -> Vec<String> {
         .collect()
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn blocked_pr_body(
     task_id: &str,
-    run_id: &str,
-    failed_step_id: &str,
-    error_code: &str,
-    error_message: &str,
+    failure: PipelineFailure<'_>,
     original_base_sha: &str,
     target_base_sha: &str,
     conflicting_paths: &[String],
 ) -> String {
+    let PipelineFailure {
+        run_id,
+        failed_step_id,
+        error_code,
+        error_message,
+    } = failure;
     let (heading, summary) = if conflicting_paths.is_empty() {
         (
             "Delivery failure handoff",

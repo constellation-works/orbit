@@ -20,8 +20,8 @@ mod summary;
 mod tagged_no_diff;
 
 pub(crate) use implementer::require_implementer_no_diff_artifacts;
-pub(super) use scope::attribute_candidate_paths;
 pub use scope::validate_claim_new_paths;
+pub(super) use scope::{WideningProvenance, attribute_candidate_paths};
 
 pub(super) use actions::commit_failure_candidate;
 pub(in crate::executor::automation) use actions::git_commit;

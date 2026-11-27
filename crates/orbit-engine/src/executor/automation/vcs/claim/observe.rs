@@ -17,6 +17,24 @@ use super::delivery::repository;
 use super::input::refused;
 use super::{delivery, require_clean_checkout};
 
+/// The checkout and branches one candidate observation reads.
+pub struct CandidateCheckout<'a> {
+    /// The checkout holding the candidate.
+    pub workspace_path: &'a Path,
+    /// The candidate branch; `None` reads the checkout's current branch.
+    pub source: Option<&'a str>,
+    /// The base branch the candidate was synchronized onto.
+    pub base_branch: &'a str,
+    /// The branch the candidate lands on.
+    pub landing_branch: &'a str,
+    /// How the candidate is delivered.
+    pub delivery: HandoffDelivery,
+    /// The repository recorded when the checkout names no remote.
+    pub fallback_repository: &'a str,
+    /// The run's sync mode, `local` or `remote`.
+    pub base_sync: BaseSyncMode,
+}
+
 /// Observe a candidate and the base it sits on, in one checkout.
 ///
 /// This is the single observation rule. The executor runs it on its own
@@ -41,17 +59,19 @@ use super::{delivery, require_clean_checkout};
 /// may use the cached remote ref when its merge-base still resolves. Missing
 /// or unrelated cached refs preserve the transient fetch failure. Refusals
 /// and NoDiff observations always require a successful fetch.
-#[allow(clippy::too_many_arguments)]
 pub fn observe_candidate(
     process_env: &orbit_common::Env,
-    workspace_path: &Path,
-    source: Option<&str>,
-    base_branch: &str,
-    landing_branch: &str,
-    delivery: HandoffDelivery,
-    fallback_repository: &str,
-    base_sync: BaseSyncMode,
+    checkout: CandidateCheckout<'_>,
 ) -> Result<HandoffCandidate, OrbitError> {
+    let CandidateCheckout {
+        workspace_path,
+        source,
+        base_branch,
+        landing_branch,
+        delivery,
+        fallback_repository,
+        base_sync,
+    } = checkout;
     let source_branch = match source {
         Some(branch) => branch.to_string(),
         None => git_output(
@@ -190,13 +210,15 @@ pub(super) fn observe_with(
     let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
     let candidate = observe_candidate(
         process_env,
-        workspace_path,
-        None,
-        &context.base_branch,
-        &context.landing_branch,
-        delivery,
-        &context.workspace_id,
-        claimed_base_sync(context, input)?,
+        CandidateCheckout {
+            workspace_path,
+            source: None,
+            base_branch: &context.base_branch,
+            landing_branch: &context.landing_branch,
+            delivery,
+            fallback_repository: &context.workspace_id,
+            base_sync: claimed_base_sync(context, input)?,
+        },
     )?;
     if let Some(declared) = input_string_field(input, "base_sha") {
         let contains_declared = crate::executor::automation::vcs::git::is_ancestor(

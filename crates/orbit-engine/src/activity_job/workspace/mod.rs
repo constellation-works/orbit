@@ -9,6 +9,8 @@ mod rebase_recovery;
 mod rebase_repairs;
 mod recovery;
 
+pub(crate) use declared_pair::WorktreeDispatch;
+
 #[cfg(test)]
 mod tests;
 

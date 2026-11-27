@@ -17,7 +17,7 @@ use orbit_types::workflow::{
     DeliveryRefreshRequest, PR_BASE_INHERITED_REFRESH_CAUSE, PrBaseUpdateAdmission,
     PrBaseUpdateRefusal, PrBaseUpdateReservation, PullRequestRefreshOutcome,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::context::RuntimeHost;
 
@@ -26,9 +26,8 @@ use super::super::super::checks::{
     self, CheckReadGap, DeferredLogRead, InheritedFailure, verify_refreshed_head_from_base,
 };
 use super::super::super::git::{self, git_output};
-use super::super::answers::{PullRequestStatus, read_pr_status};
-use super::admission::AutoFix;
-use super::checks::required_failures;
+use super::checks::{AutoFixPull, required_failures};
+use crate::executor::automation::vcs::pr::answers::read_pr_status;
 
 /// What the base-inherited refresh step decided for one failed head.
 pub(in crate::executor::automation::vcs::pr) enum InheritedRefresh {
@@ -49,20 +48,21 @@ pub(in crate::executor::automation::vcs::pr) enum InheritedRefresh {
 /// Decide, after `rerun_failure` (the no-edit rerun's failure reason),
 /// whether the failure on `status`'s head is base-inherited and, if so,
 /// reserve and run the head's one base refresh.
-// The completion's pinned read context and its absolute deadline stay explicit.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::executor::automation::vcs::pr) fn refresh_inherited_failure<
     H: RuntimeHost + ?Sized,
 >(
     host: &H,
-    auto_fix: &AutoFix,
-    input: &Value,
-    workspace_path: &str,
-    pr_number: &str,
-    status: &PullRequestStatus,
+    pull: AutoFixPull<'_>,
     rerun_failure: &str,
     deadline_ms: u64,
 ) -> Result<InheritedRefresh, OrbitError> {
+    let AutoFixPull {
+        auto_fix,
+        input,
+        workspace_path,
+        pr_number,
+        status,
+    } = pull;
     let hold = |why: String| {
         Ok(InheritedRefresh::Hold(format!(
             "{rerun_failure}; the head is not refreshed to its base tip: {why}"

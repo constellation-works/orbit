@@ -13,15 +13,13 @@
 //! declared failure with the original one attached, and the worktree keeps
 //! the candidate.
 
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use orbit_types::workflow::activity_job::{AgentLoopSpec, IncompleteContinuationPolicy};
 use serde_json::{Value, json};
 
-use super::super::super::audit_writer::V2AuditWriter;
 use super::super::super::dispatcher::{DispatchError, DispatchOutcome};
-use super::dispatch::dispatch_cli_invocation;
+use super::dispatch::{CliDispatchContext, dispatch_cli_invocation};
 use super::prepare::{invocation_timeout_seconds, reject_removed_trusted_host_execution};
 use super::response_correction;
 use crate::context::RuntimeHost;
@@ -57,21 +55,20 @@ impl ContinuationRefusal {
 
 /// Run a CLI agent-loop step, continuing a typed unfinished implementation
 /// within the activity's own budget when its spec admits that.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "policy authorizes the activity name while audit and the worktree boundary report the step id"
-)]
 pub(crate) fn run_cli_backend_for_step(
-    host: &dyn RuntimeHost,
-    spec: &AgentLoopSpec,
-    step_id: &str,
-    activity_name: &str,
-    run_id: &str,
-    audit: Arc<V2AuditWriter>,
-    input: &Value,
-    fs_profile: Option<&str>,
+    step: CliDispatchContext<'_>,
     wall_clock_bound: Option<u64>,
 ) -> Result<DispatchOutcome, DispatchError> {
+    let CliDispatchContext {
+        host,
+        spec,
+        step_id,
+        activity_name,
+        run_id,
+        audit,
+        input,
+        ..
+    } = step;
     // Resolve workspace policy once. Per-invocation dispatch must keep the
     // reduced spec a continuation/correction supplies instead of refilling it.
     let mut wall_clock_bound =
@@ -101,16 +98,11 @@ pub(crate) fn run_cli_backend_for_step(
     let spec = resolved_spec.as_ref().unwrap_or(spec);
     let started = Instant::now();
     let invoke = |spec: &AgentLoopSpec, input: &Value| {
-        dispatch_cli_invocation(
-            host,
+        dispatch_cli_invocation(CliDispatchContext {
             spec,
-            step_id,
-            activity_name,
-            run_id,
-            Arc::clone(&audit),
             input,
-            fs_profile,
-        )
+            ..step
+        })
     };
     // The superseded invocation's usage is still spent by this step; the
     // executor persists only the trace of the outcome it receives.

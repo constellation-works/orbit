@@ -15,6 +15,18 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::{CiRerunAdmission, CiRerunPlan, CiRerunRefusal, CiRerunRoot};
 use std::{collections::BTreeSet, path::Path};
 
+/// The landing identity an unchanged-head rerun is planned for: the owner
+/// tasks, the pull status, the accepted base and its branch, and the
+/// absolute deadline.
+pub(in crate::executor::automation::vcs) struct RerunLanding<'a> {
+    pub(in crate::executor::automation::vcs) workspace: &'a Path,
+    pub(in crate::executor::automation::vcs) tasks: &'a [String],
+    pub(in crate::executor::automation::vcs) status: &'a PullRequestStatus,
+    pub(in crate::executor::automation::vcs) base: &'a str,
+    pub(in crate::executor::automation::vcs) base_branch: &'a str,
+    pub(in crate::executor::automation::vcs) deadline_ms: u64,
+}
+
 /// [model ranking §5.1] Rerun a failed set once on its unchanged head when no
 /// evidence has established its cause yet, so the second result can tell a
 /// flaky failure from the head's own. Every failed job must be in one
@@ -22,23 +34,22 @@ use std::{collections::BTreeSet, path::Path};
 /// flaky retry, and the shared one-rerun budget of the head is reserved
 /// before the send. `Ok(None)` when the set is not eligible or the budget
 /// is already spent; the caller then keeps its own route.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the classification rerun takes the same landing identity the flaky retry does"
-)]
 pub(in crate::executor::automation::vcs::checks) fn request_classification_rerun<
     H: RuntimeHost + ?Sized,
 >(
     host: &H,
-    workspace: &Path,
-    tasks: &[String],
+    target: RerunLanding<'_>,
     handoff: Option<&str>,
-    status: &PullRequestStatus,
-    base: &str,
-    base_branch: &str,
-    deadline_ms: u64,
     failed: &[super::super::recovery::FailedJob],
 ) -> Result<Option<Box<CiRerunPlan>>, OrbitError> {
+    let RerunLanding {
+        workspace,
+        tasks,
+        status,
+        base,
+        base_branch,
+        deadline_ms,
+    } = target;
     let (Some(head), Some(pr), Some(branch)) = (
         status.head_sha.as_deref(),
         status.number,
@@ -103,23 +114,22 @@ pub(in crate::executor::automation::vcs::checks) fn request_classification_rerun
 /// `readback_only` reads the result of a rerun this route already reserved
 /// and never reserves or sends one: a head without that reserved rerun, or
 /// whose rerun has not produced a later failed attempt, is `NotEligible`.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the no-edit rerun takes the same landing identity the classification rerun does"
-)]
 pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
     H: RuntimeHost + ?Sized,
 >(
     host: &H,
-    workspace: &Path,
-    tasks: &[String],
-    status: &PullRequestStatus,
+    target: RerunLanding<'_>,
     failed: &[(Option<String>, String)],
-    base: &str,
-    base_branch: &str,
-    deadline_ms: u64,
     readback_only: bool,
 ) -> Result<CiRerunStep, OrbitError> {
+    let RerunLanding {
+        workspace,
+        tasks,
+        status,
+        base,
+        base_branch,
+        deadline_ms,
+    } = target;
     let (Some(head), Some(pr), Some(branch)) = (
         status.head_sha.as_deref(),
         status.number,

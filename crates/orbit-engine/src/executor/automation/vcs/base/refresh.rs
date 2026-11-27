@@ -21,21 +21,34 @@ pub(in crate::executor::automation::vcs) enum RefreshStep {
     Adopted { waiting: bool },
 }
 
+/// Who owns one base update: the checkout, the owner tasks and execution,
+/// the accepted candidate, and the handoff when a handoff reserves it
+/// instead of its tasks.
+pub(in crate::executor::automation::vcs) struct BaseRefreshOwner<'a> {
+    pub(in crate::executor::automation::vcs) workspace: &'a Path,
+    pub(in crate::executor::automation::vcs) tasks: &'a [String],
+    pub(in crate::executor::automation::vcs) execution: &'a str,
+    pub(in crate::executor::automation::vcs) candidate: &'a HandoffCandidate,
+    pub(in crate::executor::automation::vcs) handoff_id: Option<&'a str>,
+}
+
 /// Called only with captured auto-fix or accepted landing authority. The
 /// provider's status and adapter proof are re-read after reserving, before
 /// the single write. No caller-authored evidence reaches this operation.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
     host: &H,
-    workspace: &Path,
-    tasks: &[String],
-    execution: &str,
-    candidate: &HandoffCandidate,
+    owner: BaseRefreshOwner<'_>,
     status: &PullRequestStatus,
     deadline_ms: u64,
     diagnose: bool,
-    handoff_id: Option<&str>,
 ) -> Result<RefreshStep, OrbitError> {
+    let BaseRefreshOwner {
+        workspace,
+        tasks,
+        execution,
+        candidate,
+        handoff_id,
+    } = owner;
     let primary = tasks.iter().min().ok_or_else(|| refused("no owner task"))?;
     let history = host.get_task_history(primary)?;
     let prior = pr_base_update_reservations(&history)

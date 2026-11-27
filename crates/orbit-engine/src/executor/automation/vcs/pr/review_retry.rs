@@ -3,7 +3,7 @@ use super::super::checks::rerun_diagnostic::CiRerunDiagnostic;
 use super::super::remote_probe::fixed_wait;
 use super::answers::PullRequestStatus;
 use super::auto_fix::{
-    AutoFix, CiRerunRecovery, defer_throttled_read, owed_read_wait, recover_ci_rerun,
+    AutoFix, AutoFixPull, CiRerunRecovery, defer_throttled_read, owed_read_wait, recover_ci_rerun,
 };
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
@@ -46,11 +46,13 @@ pub(in crate::executor::automation::vcs) fn recover_review_ci(
     let mut diagnostic: Option<CiRerunDiagnostic> = None;
     match recover_ci_rerun(
         host,
-        &auto_fix,
-        &retry_input,
-        input["workspace_path"].as_str().unwrap_or_default(),
-        pr,
-        status,
+        AutoFixPull {
+            auto_fix: &auto_fix,
+            input: &retry_input,
+            workspace_path: input["workspace_path"].as_str().unwrap_or_default(),
+            pr_number: pr,
+            status,
+        },
         deadline_ms,
         false,
         &mut diagnostic,

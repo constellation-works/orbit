@@ -801,13 +801,15 @@ fn admit_provider_answer(
         && let Some(index) = commit_index
         && let Err(refusal) = recovery::commit_final_recovery_repair(
             attempt.ctx,
-            attempt.step,
-            attempt.activity,
-            &job.steps[index],
-            &attempt.task_id,
-            &attempt.worktree,
-            snapshot.ownership(),
-            model.as_deref(),
+            recovery::FinalRecoveryRepair {
+                step: attempt.step,
+                activity: attempt.activity,
+                commit_step: &job.steps[index],
+                task_id: &attempt.task_id,
+                worktree: &attempt.worktree,
+                source_before: snapshot.ownership(),
+                recovery_model: model.as_deref(),
+            },
         )
     {
         decision = refused_repair_escalation(attempt, &refusal);

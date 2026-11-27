@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use orbit_types::workflow::activity_job::V2AuditEventKind;
-use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, DeterministicSpec};
+use orbit_types::workflow::activity_job::{ActivityV2Spec, DeterministicSpec};
 
 use crate::context::RuntimeHost;
 use orbit_common::{OrbitError, PrivateVcsFailureClass};
@@ -13,7 +13,7 @@ use orbit_types::workflow::DeterministicAction;
 use serde_json::Value;
 
 use super::audit_writer::V2AuditWriter;
-use super::cli_runner::{run_cli_backend_for_step, task_id_from_input};
+use super::cli_runner::{CliDispatchContext, run_cli_backend_for_step, task_id_from_input};
 
 // Compatibility paths for existing callers; migrate them before retiring this shim.
 pub use crate::context::dispatch_contract::{
@@ -97,14 +97,16 @@ fn dispatch_v2_activity_inner(
     let result = match spec {
         ActivityV2Spec::AgentLoop(spec) => match input.host {
             Some(host) => run_agent_loop_activity(
-                host,
-                input.activity_name,
-                target_activity.unwrap_or(input.activity_name),
-                spec,
-                input.run_id,
-                input.audit.clone(),
-                &activity_input,
-                input.fs_profile,
+                CliDispatchContext {
+                    host,
+                    spec,
+                    step_id: input.activity_name,
+                    activity_name: target_activity.unwrap_or(input.activity_name),
+                    run_id: input.run_id,
+                    audit: &input.audit,
+                    input: &activity_input,
+                    fs_profile: input.fs_profile,
+                },
                 wall_clock_bound,
             ),
             None => Err(DispatchError::HostRequired("agent_loop")),
@@ -313,30 +315,12 @@ fn run_deterministic(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_agent_loop_activity(
-    host: &dyn RuntimeHost,
-    step_id: &str,
-    target_activity: &str,
-    spec: &AgentLoopSpec,
-    run_id: &str,
-    audit: Arc<V2AuditWriter>,
-    input: &Value,
-    fs_profile: Option<&str>,
+    step: CliDispatchContext<'_>,
     wall_clock_bound: Option<u64>,
 ) -> Result<DispatchOutcome, DispatchError> {
-    run_cli_backend_for_step(
-        host,
-        spec,
-        step_id,
-        target_activity,
-        run_id,
-        audit,
-        input,
-        fs_profile,
-        wall_clock_bound,
-    )
-    .map(|outcome| label_failure_with_step(step_id, outcome))
+    run_cli_backend_for_step(step, wall_clock_bound)
+        .map(|outcome| label_failure_with_step(step.step_id, outcome))
 }
 
 /// [ORB-10449] Prefix a failing CLI agent-loop message with the step that

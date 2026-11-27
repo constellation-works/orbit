@@ -10,12 +10,10 @@
 //!
 //! [`recover_failed_checks`]: super::recover_failed_checks
 
-use std::path::Path;
-
 use crate::context::RuntimeHost;
 
 use super::super::completion_deadline::now_ms;
-use super::head::classify_logged_job;
+use super::head::{BaseComparison, classify_logged_job};
 use super::jobs::{answers, commit_jobs, describe, excerpt, job_label, unsuccessful};
 use super::log::job_log;
 use super::read_wait::ThrottledRead;
@@ -61,21 +59,19 @@ impl WatchedFailure {
 }
 
 /// Classify the failed checks on `head`, a pull request whose fork point
-/// from `base_branch` is `base`; `tip` is that branch's current commit.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the watch passes the head, its fork point and the base tip as the landing's separate inputs"
-)]
+/// from `base_branch` is `base`; `moved_tip` is that branch's current
+/// commit when it moved past `base`.
 pub(in crate::executor::automation::vcs) fn classify_watched_failures<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace: &Path,
-    head: &str,
-    base: &str,
-    base_branch: &str,
-    tip: Option<&str>,
+    mut comparison: BaseComparison<'_, H>,
     failed: &[(Option<String>, String)],
-    deadline_ms: Option<u64>,
 ) -> WatchedFailure {
+    let BaseComparison {
+        host,
+        workspace,
+        head,
+        deadline_ms,
+        ..
+    } = comparison;
     let head_jobs = match commit_jobs(host, workspace, head) {
         Ok(jobs) => jobs,
         Err(error) => {
@@ -98,9 +94,6 @@ pub(in crate::executor::automation::vcs) fn classify_watched_failures<H: Runtime
             "no failed workflow job on head {head} answers check '{label}'"
         ));
     }
-    let moved_tip = tip.filter(|tip| *tip != base);
-    let mut base_jobs = None;
-    let mut tip_jobs = None;
     let mut jobs = Vec::new();
     for job in head_jobs
         .iter()
@@ -144,27 +137,16 @@ pub(in crate::executor::automation::vcs) fn classify_watched_failures<H: Runtime
                 continue;
             }
         };
-        let (class, why, tip_passes, signature) = match classify_logged_job(
-            host,
-            workspace,
-            job,
-            &log,
-            head,
-            base,
-            base_branch,
-            moved_tip,
-            &mut base_jobs,
-            &mut tip_jobs,
-            deadline_ms,
-        ) {
-            Ok(classified) => classified,
-            Err(deferred) => {
-                return WatchedFailure::deferred(&ThrottledRead {
-                    reason: deferred.reason,
-                    throttle: deferred.throttle,
-                });
-            }
-        };
+        let (class, why, tip_passes, signature) =
+            match classify_logged_job(&mut comparison, job, &log) {
+                Ok(classified) => classified,
+                Err(deferred) => {
+                    return WatchedFailure::deferred(&ThrottledRead {
+                        reason: deferred.reason,
+                        throttle: deferred.throttle,
+                    });
+                }
+            };
         jobs.push(FailedJob {
             run_id: Some(run_id),
             job_id,

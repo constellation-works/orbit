@@ -37,7 +37,10 @@ use super::preserve::{
     recorded_spec_digest,
 };
 use super::review_gate::preserve_review_gate_candidate;
-use super::{COMPLETION_STEPS, CONFLICT_BLOCKED_EVENT, FAILURE_HANDOFF_EVENT, REVIEW_GATE_STEPS};
+use super::{
+    COMPLETION_STEPS, CONFLICT_BLOCKED_EVENT, FAILURE_HANDOFF_EVENT, PipelineFailure,
+    REVIEW_GATE_STEPS,
+};
 
 /// Block on a merged pull request whose review repair was preserved.
 ///
@@ -228,10 +231,12 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         return preserve_completion_failure(
             host,
             &task,
-            run_id,
-            failed_step_id,
-            error_code,
-            error_message,
+            PipelineFailure {
+                run_id,
+                failed_step_id,
+                error_code,
+                error_message,
+            },
             &pr_number,
             reviewer_push.as_ref(),
             reviewer_preservation.as_ref(),
@@ -393,10 +398,12 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
             host,
             input,
             &task,
-            run_id,
-            failed_step_id,
-            error_code,
-            error_message,
+            PipelineFailure {
+                run_id,
+                failed_step_id,
+                error_code,
+                error_message,
+            },
             &workspace_path,
         );
     }
@@ -459,10 +466,12 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         .unwrap_or_else(|| format!("[BLOCKED] {}", task.title.trim()));
     let body = blocked_pr_body(
         &task.id,
-        run_id,
-        failed_step_id,
-        error_code,
-        error_message,
+        PipelineFailure {
+            run_id,
+            failed_step_id,
+            error_code,
+            error_message,
+        },
         &original_base_sha,
         &target_base_sha,
         &conflicting_paths,

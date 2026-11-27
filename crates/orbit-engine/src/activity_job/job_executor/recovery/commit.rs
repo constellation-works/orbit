@@ -17,6 +17,20 @@ use super::super::final_recovery::RunWorktree;
 use super::*;
 use crate::executor::automation::vcs::git::{git_command_success, git_output, is_ancestor};
 
+/// The final-recovery file repair the host may commit: the failed step, the
+/// recovery activity, the plan's `commit` step and the checkout recovery
+/// observed (root, head, branch) before it ran.
+pub(in crate::activity_job::job_executor) struct FinalRecoveryRepair<'a> {
+    pub(in crate::activity_job::job_executor) step: &'a JobV2Step,
+    pub(in crate::activity_job::job_executor) activity: &'a ResolvedRecoveryActivity,
+    pub(in crate::activity_job::job_executor) commit_step: &'a JobV2Step,
+    pub(in crate::activity_job::job_executor) task_id: &'a str,
+    pub(in crate::activity_job::job_executor) worktree: &'a RunWorktree,
+    pub(in crate::activity_job::job_executor) source_before:
+        Option<(&'a std::path::Path, &'a str, &'a str)>,
+    pub(in crate::activity_job::job_executor) recovery_model: Option<&'a str>,
+}
+
 /// Commit what `recovery` left in the worktree when the failed step runs on
 /// a committed candidate. Nothing happens before the candidate's commit or
 /// for the `commit` step itself, which commit the repair themselves, nor for
@@ -177,17 +191,19 @@ fn deterministic_action(step: &JobV2Step) -> Option<&str> {
 /// engine handed to final recovery. The ordinary commit boundary still owns
 /// repairs before commit; committed candidates use the existing host repair
 /// guards before any index mutation, then the recorded head rewinds delivery.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
     ctx: &ExecCtx<'_>,
-    step: &JobV2Step,
-    activity: &ResolvedRecoveryActivity,
-    commit_step: &JobV2Step,
-    task_id: &str,
-    worktree: &RunWorktree,
-    source_before: Option<(&std::path::Path, &str, &str)>,
-    recovery_model: Option<&str>,
+    repair: FinalRecoveryRepair<'_>,
 ) -> Result<(), RecoveryCommitRefusal> {
+    let FinalRecoveryRepair {
+        step,
+        activity,
+        commit_step,
+        task_id,
+        worktree,
+        source_before,
+        recovery_model,
+    } = repair;
     let pipeline = ctx.pipeline_snapshot();
     let Some(checkpoint) = pipeline
         .get(&commit_step.id)

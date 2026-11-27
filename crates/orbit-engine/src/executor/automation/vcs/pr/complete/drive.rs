@@ -54,6 +54,17 @@ pub(super) enum Delivery {
     Held(CompletionHold),
 }
 
+/// The poll driver's inputs: the step input, the pull request and its
+/// owner tasks, the auto-fix admission and the completion hold rules.
+struct CompletionDrive<'a> {
+    input: &'a Value,
+    workspace_path: &'a str,
+    pr_number: &'a str,
+    task_ids: &'a [String],
+    auto_fix: Option<&'a AutoFix>,
+    hold_check: Option<&'a CompletionHoldCheck>,
+}
+
 /// Poll GitHub until the PR is verifiably merged, requesting the merge (or
 /// auto-merge) as its reported state allows.
 pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
@@ -68,12 +79,14 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     let mut diagnostic = None;
     let result = drive_pr_to_merged_observed(
         host,
-        input,
-        workspace_path,
-        pr_number,
-        task_ids,
-        auto_fix,
-        hold_check,
+        CompletionDrive {
+            input,
+            workspace_path,
+            pr_number,
+            task_ids,
+            auto_fix,
+            hold_check,
+        },
         &mut diagnostic,
     );
     let result = result.map_err(|error| {
@@ -93,18 +106,19 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     result
 }
 
-// One argument per poll-driver input; the public entry keeps its own list.
-#[allow(clippy::too_many_arguments)]
 fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
     host: &H,
-    input: &Value,
-    workspace_path: &str,
-    pr_number: &str,
-    task_ids: &[String],
-    auto_fix: Option<&AutoFix>,
-    hold_check: Option<&CompletionHoldCheck>,
+    drive: CompletionDrive<'_>,
     diagnostic: &mut Option<super::super::super::checks::rerun_diagnostic::CiRerunDiagnostic>,
 ) -> Result<Delivery, OrbitError> {
+    let CompletionDrive {
+        input,
+        workspace_path,
+        pr_number,
+        task_ids,
+        auto_fix,
+        hold_check,
+    } = drive;
     let max_wait_seconds = bounded_u64(
         input,
         "max_wait_seconds",

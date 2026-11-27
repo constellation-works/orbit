@@ -20,6 +20,19 @@ use super::{CiRerunStep, RerunPlanRequest, authenticated_plan, send::send_reserv
 pub(super) const UNREADABLE_LOG_RERUN_PENDING: &str =
     "CI retry was reserved for the unreadable failed-job log; observing without resending";
 
+/// The immutable PR and workflow identity an unreadable-log retry
+/// authenticates, as other reruns do.
+pub(super) struct UnreadableLogRetry<'a> {
+    pub(super) workspace: &'a Path,
+    pub(super) tasks: &'a [String],
+    pub(super) pr: u64,
+    pub(super) head: &'a str,
+    pub(super) head_branch: &'a str,
+    pub(super) accepted_base: &'a str,
+    pub(super) base_branch: &'a str,
+    pub(super) deadline_ms: u64,
+}
+
 pub(super) fn unreadable_log_rerun_pending(
     history: &[TaskHistoryEntry],
     pr: &str,
@@ -46,24 +59,23 @@ pub(super) fn unreadable_log_rerun_pending(
         })
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the unreadable-log retry authenticates the same immutable PR and workflow identity as other reruns"
-)]
 pub(super) fn retry_unreadable_log<H: RuntimeHost + ?Sized>(
     host: &H,
-    workspace: &Path,
-    tasks: &[String],
-    pr: u64,
-    head: &str,
-    head_branch: &str,
-    accepted_base: &str,
-    base_branch: &str,
+    retry: UnreadableLogRetry<'_>,
     jobs: &[CiCommitJobEvidence],
     failed: &[(Option<String>, String)],
     unreadable: &CiCommitJobEvidence,
-    deadline_ms: u64,
 ) -> Result<Option<CiRerunStep>, OrbitError> {
+    let UnreadableLogRetry {
+        workspace,
+        tasks,
+        pr,
+        head,
+        head_branch,
+        accepted_base,
+        base_branch,
+        deadline_ms,
+    } = retry;
     let (Some(run_id), Some(run_attempt), Some(unreadable_id)) = (
         unreadable.run_id.number(),
         unreadable.run_attempt.number(),

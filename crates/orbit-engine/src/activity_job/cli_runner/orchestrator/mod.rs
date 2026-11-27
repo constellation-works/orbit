@@ -15,6 +15,7 @@ mod response_correction;
 mod skills;
 
 pub(crate) use continuation::run_cli_backend_for_step;
+pub(crate) use dispatch::CliDispatchContext;
 pub use entry::run_cli_backend;
 pub(crate) use environment::provider_child_environment;
 pub use environment::{CLAUDE_WORKER_CREDENTIAL_REMEDY, claude_worker_credential_held};
