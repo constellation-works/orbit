@@ -276,7 +276,7 @@ includes both the cache action and the `workspace_cache_unpack_seconds` line.
   and the regression reports itself not applicable.
 
 The workspace test build (`scripts/check-ci-macos.sh --workspace-build`)
-compiles `--lib --bins --tests --examples` with
+compiles `--bins --tests --examples` with
 `RUSTC_WORKSPACE_WRAPPER=clippy-driver` through
 `scripts/with-test-build-lint.sh --check-json`. That wrapper's `CLIPPY_ARGS`
 allows `clippy::disallowed_methods` (crate-root `deny` attributes still reject
