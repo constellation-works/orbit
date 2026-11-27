@@ -756,6 +756,107 @@ fn a_stopped_publication_merged_with_a_commit_beyond_its_base_does_not_settle() 
     );
 }
 
+fn hand_resolved_local_merge_has_an_explicit_operator_close() {
+    use orbit_core::application::task::TaskUpdateParams;
+    use orbit_types::tool::{McpCapability, ToolSessionContext};
+    use std::collections::BTreeSet;
+
+    let (mut f, checkout, _) = escalated_completion_fixture();
+    // Both branches change the same published file so the base merge really
+    // requires an operator resolution.
+    git(&f.repo, &["checkout", "-q", "main"]);
+    git(&f.repo, &["reset", "-q", "--hard", "origin/main"]);
+    std::fs::write(f.repo.join("source.txt"), "base side\n").unwrap();
+    git(&f.repo, &["add", "source.txt"]);
+    git(&f.repo, &["commit", "-qm", "Conflicting base"]);
+    git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
+    git(&checkout, &["fetch", "-q", "origin", "main"]);
+    let conflict = crate::git_test_support::command()
+        .current_dir(&checkout)
+        .args(["merge", "--no-edit", "origin/main"])
+        .output()
+        .unwrap();
+    assert!(!conflict.status.success(), "merge must conflict");
+    std::fs::write(checkout.join("source.txt"), "manual resolution\n").unwrap();
+    git(&checkout, &["add", "source.txt"]);
+    git(&checkout, &["commit", "-qm", "Resolve base conflict"]);
+    let head = git(&checkout, &["rev-parse", "HEAD"]);
+    let (_, merge) = squash_merged_at(&mut f, &checkout, &head);
+    assert!(f.runtime.settle_externally_merged_task(&f.task).is_err());
+
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["state"] = json!("MERGED");
+    answer["headRefOid"] = json!(head);
+    answer["mergeCommit"] = json!({"oid": merge});
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    let evidence = format!(
+        "Operator reviewed and validated merged head {head}, merge {merge}, PR 17, published head {}.",
+        f.head
+    );
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                plan: Some("Verify the merged delivery.".into()),
+                execution_summary: Some(evidence),
+                ..Default::default()
+            },
+            "operator".into(),
+        )
+        .unwrap();
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+            "operator".into(),
+        )
+        .unwrap();
+    let operator = ToolSessionContext {
+        effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+        ..Default::default()
+    };
+    let snapshot = f.runtime.desktop_task_snapshot(&f.task, &operator).unwrap();
+    assert_eq!(snapshot.reviewed_head.as_deref(), Some(head.as_str()));
+    assert!(!snapshot.actions.complete.enabled);
+    let reason = format!("{:?}", snapshot.actions.complete);
+    assert!(
+        reason.contains("explicit task completion transition"),
+        "{reason}"
+    );
+    let inspection = f
+        .runtime
+        .run_tool_as_human(
+            "orbit.task.reconcile_review",
+            json!({"action":"inspect", "id":f.task}),
+        )
+        .unwrap();
+    assert_eq!(inspection["eligible"], false);
+    assert!(
+        inspection["refusal"]
+            .as_str()
+            .unwrap()
+            .contains("not executed on another machine")
+    );
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+            "operator".into(),
+        )
+        .unwrap();
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Done
+    );
+}
+
 fn a_merged_delivery_whose_landing_push_was_when_skipped_settles() {
     // A review-less run's `landing_push` is `when:`-skipped: checkpointed as a
     // success with a null output and listed in `skipped_steps`. It published
@@ -803,5 +904,6 @@ crate::scenario_table!(
     a_stopped_publication_merged_after_a_base_refresh_settles_at_the_merged_head,
     a_merged_base_refresh_with_an_unavailable_origin_reports_verification_failure,
     a_stopped_publication_merged_with_a_commit_beyond_its_base_does_not_settle,
+    hand_resolved_local_merge_has_an_explicit_operator_close,
     a_merged_delivery_whose_landing_push_was_when_skipped_settles,
 );

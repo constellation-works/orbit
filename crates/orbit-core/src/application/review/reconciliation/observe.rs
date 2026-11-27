@@ -87,8 +87,8 @@ pub(super) fn observe(runtime: &OrbitRuntime, task_id: &str) -> Result<Observati
     let foreign = runtime.desktop_foreign_execution(&task)?.ok_or_else(|| {
         refused(
             "the task's linked run was not executed on another machine; reconciliation applies \
-             only to a recovered follower delivery, and a local delivery completes through its \
-             own run",
+             only to a recovered follower delivery; a local delivery uses its own run or an \
+             explicit operator completion transition",
         )
     })?;
     foreign.ensure_stopped()?;

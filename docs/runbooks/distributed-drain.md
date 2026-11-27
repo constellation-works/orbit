@@ -2507,6 +2507,22 @@ the forge can still list merged PRs. The task history records the PR, merge
 time and merge commit under `external_merge_settled`. A closed, unmerged PR
 leaves the task where it was.
 
+A hand-resolved base conflict changes the merge tree and does not qualify as a
+clean base refresh. Automatic settlement and guarded desktop completion refuse
+it; `reconcile-review` is for accepted foreign handoffs and refuses a local
+run. An operator can close the local task explicitly after independently
+verifying the stopped run, PR number, repository and branches, published head,
+exact merged head and merge commit, and fresh review and validation for that
+merged head. Record those identities and evidence on the task, recheck that the
+forge still reports the same merged head and commit, then move a blocked task
+through `in-progress` and `review` to `done` using the operator task update.
+This is operator attestation, not automated reconciliation; do not use it for
+an unreviewed, moved or misbound head. Ordinary completion gates still apply.
+
+This differs from F2026-11-575: there, source-repair admission refuses a
+retained publication earlier because validation-fix provenance is missing;
+the merged local case above concerns settlement after a hand-resolved merge.
+
 ## Migration recipe: leftover epic, child, review, and reservations
 
 Epic execution is retired. Hierarchy remains for reading; admission ignores
