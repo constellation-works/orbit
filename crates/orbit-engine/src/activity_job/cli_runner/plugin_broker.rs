@@ -8,7 +8,7 @@
 use orbit_types::workflow::ExecutorSandboxKind;
 
 use super::super::dispatcher::ResolvedSandbox;
-use crate::context::{PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, RuntimeHost};
+use crate::context::{PLUGIN_BROKER_ENV, PluginBrokerHandle, PluginBrokerRun, RunLifecycle};
 
 /// This launch's broker, if one bound. Dropping it stops the listener and
 /// cancels admitted calls, reclaims backend sessions and removes the socket,
@@ -24,7 +24,7 @@ impl RunPluginBroker {
     /// (design §7). A bind failure, or a run with no worktree to confine a
     /// brokered backend to, is a warning that names the cause.
     pub(super) fn start(
-        host: &dyn RuntimeHost,
+        host: &(impl RunLifecycle + ?Sized),
         run_id: &str,
         run: Option<&PluginBrokerRun>,
         sandbox: Option<&ResolvedSandbox>,

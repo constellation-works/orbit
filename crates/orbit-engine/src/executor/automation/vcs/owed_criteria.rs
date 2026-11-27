@@ -9,12 +9,12 @@
 use orbit_types::workflow::{CONTRACT_REFUSAL_MARKER, OWED_CRITERIA_FIELD, OwedCriterion};
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 
 /// Admit a successful implementer step's owed criteria. `Ok(Some)` is the
 /// admitted list, which replaces the field in the step's output; `Ok(None)`
 /// means the step owes nothing; `Err` is the step's failure message.
-pub(crate) fn accept_implementer_owed_criteria<H: RuntimeHost + ?Sized>(
+pub(crate) fn accept_implementer_owed_criteria<H: HostEnvironment + ?Sized>(
     host: &H,
     run_id: &str,
     input: &Value,

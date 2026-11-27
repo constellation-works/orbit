@@ -19,7 +19,6 @@ use super::super::supervisor::CapturedOutput;
 use super::limit::UsageWindowContext;
 use crate::activity_job::dispatcher::ResolvedSandbox;
 use crate::activity_job::workspace::WorktreeBoundaryGuard;
-use crate::context::RuntimeHost;
 
 pub(super) use frames::{provider_failure, stdout_frames};
 #[cfg(test)]
@@ -28,11 +27,11 @@ pub(super) use projection::project_completion;
 
 /// Everything a provider subprocess left behind once it exited, plus the
 /// run state its completion projection reads.
-pub(super) struct ProviderExit<'a> {
+pub(super) struct ProviderExit<'a, H: ?Sized> {
     pub(super) audit: &'a crate::activity_job::audit_writer::V2AuditWriter,
     pub(super) started_at: chrono::DateTime<chrono::Utc>,
     pub(super) finished_at: chrono::DateTime<chrono::Utc>,
-    pub(super) host: &'a dyn RuntimeHost,
+    pub(super) host: &'a H,
     pub(super) spec: &'a AgentLoopSpec,
     pub(super) input: &'a Value,
     pub(super) run_id: &'a str,

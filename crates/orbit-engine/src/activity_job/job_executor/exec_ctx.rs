@@ -16,10 +16,15 @@ const STEP_OUTPUT_SET_KEY: &str = "script_output_set";
 /// copies on write, while a write with no live snapshot mutates in place.
 pub(super) type PipelineSteps = Arc<HashMap<String, Value>>;
 
-pub(super) struct ExecCtx<'a> {
+/// Succeeded `parallel:` branches a resumed auto-task job restores, keyed by
+/// the parallel step id and then the branch id.
+pub(super) type RestoredBranches =
+    std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>;
+
+pub(super) struct ExecCtx<'a, H: ?Sized = dyn RuntimeHost + 'a> {
     pub(super) run_id: String,
     pub(super) audit: Arc<V2AuditWriter>,
-    pub(super) host: &'a dyn RuntimeHost,
+    pub(super) host: &'a H,
     pub(super) input: Value,
     pub(super) pipeline: Arc<Mutex<PipelineSteps>>,
     /// Latest allowlisted conflict diagnostics, keyed by step id. Kept outside
@@ -56,12 +61,7 @@ pub(super) struct ExecCtx<'a> {
     pub(super) restored_branches: Option<Arc<RestoredBranches>>,
 }
 
-/// Succeeded `parallel:` branches a resumed auto-task job restores, keyed by
-/// the parallel step id and then the branch id.
-pub(super) type RestoredBranches =
-    std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>;
-
-impl ExecCtx<'_> {
+impl<H: ?Sized> ExecCtx<'_, H> {
     /// Resolved task id for the activity input, if any. Threaded onto every
     /// job-lifecycle tracing emission so subprocess and step events correlate.
     pub(super) fn task_id(&self) -> Option<&str> {
@@ -180,14 +180,14 @@ pub(super) fn pipeline_steps_from_raw(
 /// Record a step output. Mutates the map in place unless a snapshot handed
 /// out by `pipeline_snapshot` (a fan-out worker's inherited map, a template
 /// context still in scope) is alive, in which case the map is copied first.
-pub(super) fn record_pipeline(ctx: &ExecCtx<'_>, key: &str, v: Value) {
+pub(super) fn record_pipeline(ctx: &ExecCtx<'_, impl ?Sized>, key: &str, v: Value) {
     let mut steps = ctx.pipeline.lock().unwrap_or_else(PoisonError::into_inner);
     Arc::make_mut(&mut steps).insert(key.to_string(), wrap_step_output(v));
 }
 
 /// [`record_pipeline`] for a script step that kept an output set.
 pub(super) fn record_pipeline_with_files(
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl ?Sized>,
     key: &str,
     v: Value,
     set: &ScriptOutputSet,
@@ -203,7 +203,11 @@ pub(super) fn record_pipeline_with_files(
 /// win over paths resumed from an older stop. The usable pipeline is separate
 /// and may be cleared by final recovery; this map is the source a later
 /// success checkpoint reads.
-pub(super) fn record_conflict_diagnostics(ctx: &ExecCtx<'_>, step_id: &str, diagnostic: &Value) {
+pub(super) fn record_conflict_diagnostics(
+    ctx: &ExecCtx<'_, impl ?Sized>,
+    step_id: &str,
+    diagnostic: &Value,
+) {
     ctx.resumed_diagnostics
         .lock()
         .unwrap_or_else(PoisonError::into_inner)

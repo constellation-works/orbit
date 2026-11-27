@@ -24,6 +24,7 @@ use super::super::prepare::{
     reject_removed_trusted_host_execution, require_conflict_recovery_target,
 };
 use super::CliDispatchContext;
+use crate::context::Dispatch;
 
 /// The built-in untrusted-data handling an activity with `fleet_notices: read` or
 /// `post` receives when it declares no `notice_instruction` of its own.
@@ -87,7 +88,7 @@ fn fleet_notice_text<'a>(
 /// and rides whenever the resolved callable set carries
 /// `orbit.notice.post`, so an empty board never suppresses it.
 fn attach_fleet_notices<'a>(
-    context: CliDispatchContext<'a>,
+    context: CliDispatchContext<'a, impl Dispatch + ?Sized>,
     task_ctx: &mut Option<Value>,
     effective_tools: &[String],
 ) -> FleetNoticeInstructions<'a> {

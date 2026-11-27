@@ -27,7 +27,7 @@ const FAILURE_LOG_TAIL_BYTES: usize = 4 * 1024;
 pub(super) fn run_script_target(
     step: &JobV2Step,
     target: &TargetRef,
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl Dispatch + ?Sized>,
 ) -> Result<StepOutcome, DispatchError> {
     let script = target
         .target
@@ -76,7 +76,7 @@ fn settle_script_run(
     step: &JobV2Step,
     script: &str,
     ran: ScriptStepRan,
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl ?Sized>,
 ) -> Result<StepOutcome, DispatchError> {
     let ScriptStepRan {
         end,
@@ -209,7 +209,11 @@ fn log_tail(log: &[u8]) -> String {
     tail[cut..].to_string()
 }
 
-fn emit_script_execution(ctx: &ExecCtx<'_>, step_id: &str, record: ScriptExecutionRecord) {
+fn emit_script_execution(
+    ctx: &ExecCtx<'_, impl ?Sized>,
+    step_id: &str,
+    record: ScriptExecutionRecord,
+) {
     emit_job_event_lossy(
         &ctx.audit,
         ctx.task_id(),

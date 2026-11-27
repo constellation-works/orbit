@@ -22,7 +22,7 @@ use super::super::super::dispatcher::{DispatchError, DispatchOutcome};
 use super::dispatch::{CliDispatchContext, dispatch_cli_invocation};
 use super::prepare::{invocation_timeout_seconds, reject_removed_trusted_host_execution};
 use super::response_correction;
-use crate::context::RuntimeHost;
+use crate::context::Dispatch;
 
 /// Orbit-owned step output key carrying the typed request the projection
 /// read from the invocation's envelope, or null. Written over any
@@ -231,7 +231,7 @@ fn continuation_request(outcome: &DispatchOutcome) -> Option<Vec<String>> {
 
 /// The first bound a requested continuation would cross, if any.
 fn refuse_continuation(
-    host: &dyn RuntimeHost,
+    host: &(impl Dispatch + ?Sized),
     run_id: &str,
     step_id: &str,
     input: &Value,

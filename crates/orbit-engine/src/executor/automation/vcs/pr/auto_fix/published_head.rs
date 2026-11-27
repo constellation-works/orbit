@@ -40,7 +40,7 @@ pub(in crate::executor::automation::vcs::pr) fn adopt_published_repairs<
 /// contiguous, host-recorded push chain the watcher adopts. Provider input
 /// and the live branch cannot supply a replacement head or retry authority.
 pub(crate) fn recovery_published_head(
-    host: &dyn RunLifecycle,
+    host: &(impl RunLifecycle + ?Sized),
     run_id: &str,
     task_id: &str,
     pr_number: &str,
@@ -66,7 +66,7 @@ pub(crate) fn recovery_published_head(
 /// resolved the way admission resolves them, rather than guessing. The raw
 /// publication fields are not modified.
 pub(crate) fn provider_authenticated_published_head(
-    host: &dyn RunLifecycle,
+    host: &(impl RunLifecycle + ?Sized),
     run_id: &str,
     recovery_input: &Value,
     failed_step_input: &Value,
@@ -99,7 +99,7 @@ pub(crate) fn provider_authenticated_published_head(
 /// a caller-supplied pin so the provider cannot trust one the host did not
 /// authenticate.
 pub(crate) fn apply_authenticated_published_head(
-    host: &dyn RunLifecycle,
+    host: &(impl RunLifecycle + ?Sized),
     run_id: &str,
     recovery_input: &mut Value,
 ) {

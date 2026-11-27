@@ -3,7 +3,9 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost};
+use crate::context::{
+    RebaseRecoveryAttemptScope, Recovery, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 use crate::executor::automation::vcs::absorbed::task_scope_digest;
 use crate::executor::automation::vcs::recovery_published_head;
 
@@ -26,7 +28,7 @@ impl WorktreeBoundaryGuard {
     /// instead of colliding with this one.
     pub(crate) fn authorize_rebase_completion(
         &mut self,
-        host: &dyn RuntimeHost,
+        host: &(impl Recovery + RunLifecycle + RuntimeHostProcessEnvironment + ?Sized),
         input: &Value,
     ) -> Result<(), DispatchError> {
         let invalid = |reason: &str| {

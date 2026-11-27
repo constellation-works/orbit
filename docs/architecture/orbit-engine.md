@@ -32,6 +32,8 @@ Design intent: [docs/design/activity-job/](../../docs/design/activity-job/) — 
 
 How the modules under `crates/orbit-engine/src/` split. The dependency guard, the compatibility shims and the crate-root `tests/engine/` binary are in the [crate guide](../../crates/orbit-engine/AGENTS.md).
 
+Activity-job helpers declare the host capabilities they use. Script steps use `Dispatch` and plugin broker startup uses `RunLifecycle`. Whole-job execution and activity dispatch compose the capabilities through `RuntimeHost`.
+
 - `orbit_agent` is used in `activity_job::cli_runner`, `activity_job::audit_writer`, and `activity_job::sqlite_sink`; the crate root also re-exports `provider_supports_continuity`.
 - `activity_job::cli_runner::supervisor/` runs provider children on `orbit_common::process::supervisor`, which owns the wait loop, pipe workers and stdin writer. It keeps only the engine's side: the provider request and hooks (`spawn.rs`), the rolling head/tail capture with redaction and protocol tail (`capture.rs`), and the per-line trace events of its output sink (`output.rs`). Its sibling `tests/` files mirror those concerns.
 - `activity_job::cli_runner::orchestrator/` splits provider dispatch under `activity_job/cli_runner/orchestrator/dispatch/` into tool/context preparation, provider envelope/environment/argv and sandbox admission, subprocess supervision, and post-run persistence and completion, with the public entry wrapper in `entry.rs`, child environment helpers in `environment.rs`, and audit/output helpers in `evidence.rs`.

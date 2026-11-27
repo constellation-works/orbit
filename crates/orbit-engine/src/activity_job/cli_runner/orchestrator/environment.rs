@@ -1,7 +1,7 @@
 //! Provider credentials, deadlines and child environment composition.
 use super::super::super::dispatcher::DispatchError;
 use super::super::spawn::{CODEX_CA_CERTIFICATE_ENV, SSL_CERT_FILE_ENV};
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 use orbit_common::env_vars;
 use orbit_common::security::child_env::{
     ACTIVITY_DEADLINE_ENV, CLAUDE_CREDENTIAL_ENV, crew_env_file_problem,
@@ -62,7 +62,7 @@ pub(super) fn codex_home(env: &[(String, String)]) -> Option<PathBuf> {
 /// with a 401 part-way through. Failing here names the variable and where to
 /// set it instead. Only the names are inspected, never the values.
 pub(super) fn require_claude_worker_credential(
-    host: &dyn RuntimeHost,
+    host: &(impl HostEnvironment + ?Sized),
     provider: &str,
     child_env: &[(String, String)],
 ) -> Result<(), DispatchError> {
@@ -123,7 +123,7 @@ pub(super) fn require_crew_env(
 /// The macOS spawn layer supplies a public system bundle only when neither
 /// explicit value is present.
 pub(crate) fn provider_child_environment(
-    host: &dyn RuntimeHost,
+    host: &(impl HostEnvironment + ?Sized),
     provider: &str,
     sandbox: Option<&super::super::super::dispatcher::ResolvedSandbox>,
     crew_env: &[CrewEnvVar],

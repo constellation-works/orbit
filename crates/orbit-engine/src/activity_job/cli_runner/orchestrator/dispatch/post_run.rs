@@ -8,7 +8,9 @@ use crate::activity_job::cli_runner::image_input::StagedImages;
 use crate::activity_job::cli_runner::inspection::SourceInspection;
 use crate::activity_job::dispatcher::{DispatchOutcome, ResolvedSandbox};
 use crate::activity_job::workspace::WorktreeBoundaryGuard;
-use crate::context::RuntimeHost;
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::super::super::dispatcher::DispatchError;
 use super::super::completion::{ProviderExit, project_completion};
@@ -24,9 +26,9 @@ const REFRESH_LOCK_BUSY_ATTEMPTS: u32 = 3;
 
 const REFRESH_LOCK_BUSY_PAUSE: Duration = Duration::from_millis(250);
 
-pub(super) struct CliProviderCompletion<'a> {
+pub(super) struct CliProviderCompletion<'a, H: ?Sized> {
     pub(super) started_at: chrono::DateTime<chrono::Utc>,
-    pub(super) context: CliDispatchContext<'a>,
+    pub(super) context: CliDispatchContext<'a, H>,
     pub(super) provider: String,
     pub(super) provider_enum: Provider,
     pub(super) model: Option<String>,
@@ -53,7 +55,7 @@ pub(super) struct CliProviderCompletion<'a> {
 /// (`CliInvocationFailed`). Any other failure, such as a read-only or corrupt
 /// store, stays `CliInvocationPermanent`.
 fn refresh_store_after_provider(
-    host: &dyn RuntimeHost,
+    host: &(impl HostEnvironment + ?Sized),
     provider: &str,
 ) -> Result<(), DispatchError> {
     let mut attempts = 0;
@@ -76,9 +78,17 @@ fn refresh_store_after_provider(
     }
 }
 
-pub(super) fn finish_cli_dispatch(
-    completion: CliProviderCompletion<'_>,
-) -> Result<DispatchOutcome, DispatchError> {
+pub(super) fn finish_cli_dispatch<H>(
+    completion: CliProviderCompletion<'_, H>,
+) -> Result<DispatchOutcome, DispatchError>
+where
+    H: HostEnvironment
+        + Recovery
+        + ReviewGate
+        + RunLifecycle
+        + RuntimeHostProcessEnvironment
+        + ?Sized,
+{
     let finished_at = chrono::Utc::now();
     let CliProviderCompletion {
         context,

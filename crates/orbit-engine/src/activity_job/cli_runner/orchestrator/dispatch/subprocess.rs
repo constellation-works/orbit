@@ -13,6 +13,9 @@ use crate::activity_job::cli_runner::plugin_broker::RunPluginBroker;
 use crate::activity_job::cli_runner::supervisor::CapturedOutput;
 use crate::activity_job::dispatcher::{ResolvedCliExecutor, ResolvedSandbox};
 use crate::activity_job::workspace::WorktreeBoundaryGuard;
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::super::super::dispatcher::DispatchError;
 use super::super::super::envelope::task_id_from_input;
@@ -35,8 +38,8 @@ use super::CliDispatchContext;
 /// staleness of `last_activity_at` and the progress rows one invocation writes.
 const PROVIDER_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 
-pub(super) struct CliProviderInvocation<'a> {
-    pub(super) context: CliDispatchContext<'a>,
+pub(super) struct CliProviderInvocation<'a, H: ?Sized> {
+    pub(super) context: CliDispatchContext<'a, H>,
     pub(super) provider: &'a String,
     pub(super) provider_enum: Provider,
     pub(super) resolved_program: &'a str,
@@ -68,9 +71,17 @@ pub(super) struct ProviderProcessExit {
     pub(super) linux_post_run_guard: Option<orbit_exec::LinuxBwrapPostRunGuard>,
 }
 
-pub(super) fn invoke_cli_provider(
-    invocation: CliProviderInvocation<'_>,
-) -> Result<ProviderProcessExit, DispatchError> {
+pub(super) fn invoke_cli_provider<H>(
+    invocation: CliProviderInvocation<'_, H>,
+) -> Result<ProviderProcessExit, DispatchError>
+where
+    H: HostEnvironment
+        + Recovery
+        + ReviewGate
+        + RunLifecycle
+        + RuntimeHostProcessEnvironment
+        + ?Sized,
+{
     let CliProviderInvocation {
         context,
         provider,

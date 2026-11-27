@@ -19,7 +19,7 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
-use crate::context::{ResolvedActivityTools, RuntimeHost};
+use crate::context::{Recovery, ResolvedActivityTools, RunLifecycle};
 
 use super::super::super::dispatcher::DispatchError;
 
@@ -137,7 +137,7 @@ pub fn activity_tool_policy_env(
 /// pass it to `agent_implement`, whose prompt also reads it) is honored too.
 /// Either signal only ever removes tools, so an input that sets it outside a
 /// claim narrows that run, and no input can lift the binding's guard.
-pub(super) fn claimed_mode(host: &dyn RuntimeHost, input: &Value) -> bool {
+pub(super) fn claimed_mode(host: &(impl RunLifecycle + ?Sized), input: &Value) -> bool {
     host.worker_invocation().is_some()
         || input.get("claimed").and_then(Value::as_bool) == Some(true)
 }
@@ -164,7 +164,7 @@ pub(super) fn claimed_tool_disallow_list(
 /// [`CLAIMED_MODE_DENIED_TOOLS`] in claimed mode. The deny list the child
 /// enforces drops the operator-granted names the host lifted.
 pub(super) fn resolve_activity_tool_grant(
-    host: &dyn RuntimeHost,
+    host: &(impl Recovery + RunLifecycle + ?Sized),
     spec: &AgentLoopSpec,
     run_id: &str,
     activity_name: &str,
@@ -235,7 +235,7 @@ pub(super) fn resolve_activity_tool_grant(
 /// the mutating names to the child. Activities without `response_correction`
 /// are untouched.
 fn drop_mutating_tools_for_response_correction(
-    host: &dyn RuntimeHost,
+    host: &(impl Recovery + ?Sized),
     spec: &AgentLoopSpec,
     activity_name: &str,
     task_ids: &[String],
@@ -318,7 +318,7 @@ fn lift_granted_denials(
 /// claimed-mode denial.
 /// Returns what each arm's dispatch actually received.
 pub(super) fn apply_experiment_tool_overlays(
-    host: &dyn RuntimeHost,
+    host: &(impl Recovery + RunLifecycle + ?Sized),
     grant: &mut ActivityToolGrant,
     overlays: &[ExperimentActivityOverlay],
     activity_name: &str,
@@ -425,7 +425,7 @@ fn narrow_callable_tools(effective_tools: &mut Vec<String>, disallow_list: &[Str
 /// is stamped [`NO_CALLABLE_TOOLS_ENTRY`], because an empty
 /// `ORBIT_ACTIVITY_TOOLS` is read as unrestricted.
 fn restrict_allowlist(
-    host: &dyn RuntimeHost,
+    host: &(impl Recovery + ?Sized),
     activity_tools: &mut ResolvedActivityTools,
     activity_name: &str,
     task_ids: &[String],

@@ -59,7 +59,7 @@ use super::dispatcher::{
     DispatchError, V2DispatchInput, dispatch_v2_activity_without_run_id_injection,
     dispatch_v2_target_activity,
 };
-use crate::context::RuntimeHost;
+use crate::context::{Dispatch, Recovery, RuntimeHost};
 
 use self::audit::*;
 use self::auto_task::*;

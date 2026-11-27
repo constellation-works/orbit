@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use orbit_types::task::ContextWideningStep;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 use crate::executor::automation::vcs::absorbed::{ABSORBING_STEP, AbsorbedReason, covering_commit};
 
 use super::super::boundary_guard::is_host_owned_path;
@@ -23,12 +23,15 @@ use super::git::{
 };
 
 impl WorktreeBoundaryGuard {
-    pub(in crate::activity_job::workspace) fn complete_rebase_recovery(
+    pub(in crate::activity_job::workspace) fn complete_rebase_recovery<H>(
         &self,
-        host: &dyn RuntimeHost,
+        host: &H,
         step_id: &str,
         task_ids: &[String],
-    ) -> Result<RebaseContinuation, DispatchError> {
+    ) -> Result<RebaseContinuation, DispatchError>
+    where
+        H: HostEnvironment + ReviewGate + RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+    {
         let checkpoint = self.rebase_recovery.as_ref().ok_or_else(|| {
             DispatchError::CliInvocationPermanent(
                 "conflict recovery has no authenticated rebase checkpoint".to_string(),
