@@ -18,7 +18,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use futures_core::Stream;
 use orbit_core::OrbitError;
-use orbit_core::app::run::{Command, LeaseNoticeFeed, exec};
+use orbit_core::app::lease::{self, Command, LeaseNoticeFeed, Outcome};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::{Semaphore, mpsc};
@@ -164,9 +164,9 @@ pub(super) fn open_runtime_notice_stream(
         ));
     };
     let runtime = backend.lease_core(caller)?;
-    let (first, feed) = exec(&runtime, Command::lease_notice_feed(input.clone()))
-        .map(|outcome| outcome.value)
-        .map_err(|e| Box::new(map_runtime_error(e)))?;
+    let (first, feed) = lease::exec(&runtime, Command::NoticeFeed(input.clone()))
+        .and_then(Outcome::into_notice_feed)
+        .map_err(|error| Box::new(map_runtime_error(error)))?;
     let (pages, receiver) = mpsc::channel(4);
     tokio::spawn(async move {
         let _permit = permit;

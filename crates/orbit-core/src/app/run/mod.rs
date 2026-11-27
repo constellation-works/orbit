@@ -23,8 +23,6 @@ mod inspection;
 
 mod job;
 
-mod lease;
-
 mod leaves;
 
 mod lineage;
@@ -59,7 +57,6 @@ pub use catalog::{DashboardJobError, DashboardResumeError, JobCatalog, JobRunsPa
 pub(crate) use drain::prepare_input;
 pub use history::{FailureRow, RunHistory};
 pub use job::{JobEntry, PilotRequest, SubmittedJob, WorkflowDispatchResult, wait_timeout};
-pub use lease::{LeaseNoticeFeed, LeaseWrite};
 pub use leaves::{DrainLeafSummary, WaitingBacklog, WaitingTask, waiting_backlog};
 pub use locate::{DashboardReplay, LookupError, RunLookup};
 pub use logs::{LogFollower, LogSnapshot};
