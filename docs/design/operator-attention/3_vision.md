@@ -25,7 +25,7 @@ started. The implemented attention scope is in [2_design.md](./2_design.md).
 
 1. **Acknowledge and snooze.** The accepted follow-up scope defines operator-only records with
    exact signal signatures, reason, author and expiry, and specifies how attention items return
-   when their fingerprint changes. Daniel approved the scope (ORB-27670); phase 1
+   when their fingerprint changes. The owner approved the scope (ORB-27670); phase 1
    (ORB-27754) remains in `someday`, so the new acknowledgement records and `orbit ack`
    behavior have not been implemented. The scope leaves resident write authority and the
    30-day expiry cap as open questions:
