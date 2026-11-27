@@ -12,7 +12,9 @@ use std::fmt::Write as _;
 use orbit_cmd::task_owner::WorkspaceIdentity;
 use orbit_common::OrbitError;
 use orbit_core::app::task::{Outcome, Shown};
-use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskComment, TaskHistoryEntry};
+use orbit_types::task::{
+    GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskComment, TaskHistoryEntry, history_note_summary,
+};
 use orbit_types::workflow::JobRun;
 use serde_json::{Map, Value};
 
@@ -636,62 +638,6 @@ fn history_line(entry: &TaskHistoryEntry) -> String {
             format_task_history_event(entry)
         ),
     }
-}
-
-// Only human-oriented fields are eligible: arbitrary scalar fields can contain
-// ledger keys, identifiers or hashes. `classification` and `attempts` are the
-// retry-exhaustion fields the docs name, shown with their labels. The original
-// note remains in JSON output.
-fn history_note_summary(note: &str) -> String {
-    let Ok(Value::Object(object)) = serde_json::from_str::<Value>(note) else {
-        return note.to_owned();
-    };
-    let words = |key: &str| {
-        object
-            .get(key)
-            .and_then(Value::as_str)
-            .map(history_text_words)
-            .filter(|value| !value.is_empty())
-    };
-    let mut parts: Vec<String> = ["summary", "tool", "phase", "ref", "outcome", "status"]
-        .iter()
-        .copied()
-        .filter_map(words)
-        .collect();
-    parts.extend(words("classification").map(|value| format!("classification={value}")));
-    parts.extend(
-        object
-            .get("attempts")
-            .and_then(Value::as_u64)
-            .map(|attempts| format!("attempts={attempts}")),
-    );
-    let summary = if parts.is_empty() {
-        "structured note".to_owned()
-    } else {
-        parts.join(" · ")
-    };
-    let mut chars = summary.chars();
-    let prefix: String = chars.by_ref().take(75).collect();
-    if chars.next().is_some() {
-        format!("{prefix}…")
-    } else {
-        prefix
-    }
-}
-
-/// Keeps the words of a note field that are not digests or long hex identifiers.
-fn history_text_words(value: &str) -> String {
-    value
-        .split_whitespace()
-        .filter(|word| {
-            let lower = word.to_ascii_lowercase();
-            !lower.contains("sha256")
-                && !word
-                    .split(|c: char| !c.is_ascii_hexdigit())
-                    .any(|part| part.len() >= 32)
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// The words after `Next:` on a task show. Local and routed text both use this.
