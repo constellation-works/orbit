@@ -1,5 +1,6 @@
 use clap::{Args, Subcommand};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::app::gc::{self, Command, Outcome};
+use orbit_core::{Core, OrbitError};
 
 use super::audit::AuditGcArgs;
 use super::deployments::DeploymentGcArgs;
@@ -8,7 +9,7 @@ use super::runs::RunGcArgs;
 use super::support::summary_line;
 use super::tmp::TmpGcArgs;
 use super::worktrees::WorktreeGcArgs;
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 #[command(about = "Inspect and explicitly reap Orbit-managed garbage")]
@@ -17,9 +18,9 @@ pub struct GcCommand {
     pub target: GcTarget,
 }
 
-impl Execute for GcCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.target.execute(runtime)
+impl ExecuteCore for GcCommand {
+    fn execute(self, core: &Core) -> CommandOut {
+        self.target.execute(core)
     }
 }
 
@@ -44,22 +45,30 @@ pub enum GcTarget {
     Journal(JournalGcArgs),
 }
 
-impl Execute for GcTarget {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for GcTarget {
+    fn execute(self, core: &Core) -> CommandOut {
         match self {
-            Self::Worktrees(args) => args.execute(runtime),
-            Self::Tmp(args) => args.execute(runtime),
-            Self::Deployments(args) => args.execute(runtime),
-            Self::Audit(args) => args.execute(runtime),
-            Self::Runs(args) => args.execute(runtime),
-            Self::Journal(args) => args.execute(runtime),
+            Self::Worktrees(args) => args.execute(core),
+            Self::Tmp(args) => args.execute(core),
+            Self::Deployments(args) => args.execute(core),
+            Self::Audit(args) => args.execute(core),
+            Self::Runs(args) => args.execute(core),
+            Self::Journal(args) => args.execute(core),
         }
     }
 }
 
-impl Execute for TmpGcArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let result = runtime.gc_tmp(self.confirm)?;
+impl ExecuteCore for TmpGcArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::Tmp(result) = gc::exec(
+            core,
+            Command::Tmp {
+                confirm: self.confirm,
+            },
+        )?
+        else {
+            return Err(mismatched("tmp"));
+        };
         let doc = serde_json::to_value(&result).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize tmp GC report: {error}"))
         })?;
@@ -88,9 +97,15 @@ impl Execute for TmpGcArgs {
     }
 }
 
-impl Execute for DeploymentGcArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let result = runtime.gc_deployments(self.confirm, self.keep)?;
+impl ExecuteCore for DeploymentGcArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let command = Command::Deployments {
+            confirm: self.confirm,
+            keep: self.keep,
+        };
+        let Outcome::Deployments(result) = gc::exec(core, command)? else {
+            return Err(mismatched("deployments"));
+        };
         let doc = serde_json::to_value(&result).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize deployment GC report: {error}"))
         })?;
@@ -123,9 +138,15 @@ impl Execute for DeploymentGcArgs {
     }
 }
 
-impl Execute for AuditGcArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let report = runtime.gc_audit(self.confirm, self.older_than_days)?;
+impl ExecuteCore for AuditGcArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let command = Command::Audit {
+            confirm: self.confirm,
+            older_than_days: self.older_than_days,
+        };
+        let Outcome::Audit(report) = gc::exec(core, command)? else {
+            return Err(mismatched("audit"));
+        };
         let doc = serde_json::to_value(&report).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize audit GC report: {error}"))
         })?;
@@ -158,9 +179,15 @@ impl Execute for AuditGcArgs {
     }
 }
 
-impl Execute for RunGcArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let report = runtime.gc_runs(self.confirm, self.older_than_days)?;
+impl ExecuteCore for RunGcArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let command = Command::Runs {
+            confirm: self.confirm,
+            older_than_days: self.older_than_days,
+        };
+        let Outcome::Runs(report) = gc::exec(core, command)? else {
+            return Err(mismatched("runs"));
+        };
         let doc = serde_json::to_value(&report).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize run GC report: {error}"))
         })?;
@@ -179,9 +206,15 @@ impl Execute for RunGcArgs {
     }
 }
 
-impl Execute for JournalGcArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let report = runtime.gc_journal(self.confirm, self.older_than_days)?;
+impl ExecuteCore for JournalGcArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let command = Command::Journal {
+            confirm: self.confirm,
+            older_than_days: self.older_than_days,
+        };
+        let Outcome::Journal(report) = gc::exec(core, command)? else {
+            return Err(mismatched("journal"));
+        };
         let doc = serde_json::to_value(&report).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize journal GC report: {error}"))
         })?;
@@ -197,15 +230,18 @@ impl Execute for JournalGcArgs {
     }
 }
 
-impl Execute for WorktreeGcArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let result = runtime.gc_worktrees(
-            self.confirm,
-            self.run,
-            self.older_than_hours,
-            self.estimate_bytes,
-            self.reclaim,
-        )?;
+impl ExecuteCore for WorktreeGcArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let command = Command::Worktrees {
+            confirm: self.confirm,
+            run: self.run,
+            older_than_hours: self.older_than_hours,
+            estimate_bytes: self.estimate_bytes,
+            reclaim: self.reclaim,
+        };
+        let Outcome::Worktrees(result) = gc::exec(core, command)? else {
+            return Err(mismatched("worktrees"));
+        };
         let doc = serde_json::to_value(&result).map_err(|error| {
             OrbitError::Execution(format!("failed to serialize worktree GC report: {error}"))
         })?;
@@ -261,4 +297,10 @@ impl Execute for WorktreeGcArgs {
         }
         Ok(Payload::blocks(doc, vec![Block::text(lines.join("\n"))]).into())
     }
+}
+
+/// The gc app's answer, which is always the report of the class it was asked
+/// about.
+fn mismatched(class: &str) -> OrbitError {
+    OrbitError::Execution(format!("gc {class} answered with another class's report"))
 }

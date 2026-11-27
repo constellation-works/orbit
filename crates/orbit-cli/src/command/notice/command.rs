@@ -1,7 +1,8 @@
 use chrono::Utc;
 use clap::Args;
 use orbit_common::governance::notice::NoticeVerb;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::notice::{self, Command, Input};
 use serde_json::Value;
 
 use super::close;
@@ -9,7 +10,7 @@ use super::list;
 use super::post::{self, post_cli_input};
 use super::show;
 use crate::command::operation_args::Invocation;
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 #[command(about = orbit_common::governance::notice::NOTICE.cli_about)]
@@ -18,13 +19,14 @@ pub struct NoticeCommand {
     pub command: Invocation<NoticeVerb>,
 }
 
-impl Execute for NoticeCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for NoticeCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         let Invocation { spec, mut input } = self.command;
         if spec.verb == NoticeVerb::Post {
             post_cli_input(&mut input)?;
         }
-        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        let value =
+            notice::exec(core, Command::Operation(spec.verb, Input::new(input)))?.into_value()?;
         Ok(render_notice(spec.verb, value).into())
     }
 }

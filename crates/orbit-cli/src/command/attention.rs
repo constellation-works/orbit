@@ -1,18 +1,16 @@
 //! The root attention CLI derives its inputs from the shared tool operation.
 use super::{
-    CommandOut, Payload,
+    CommandOut, ExecuteCore, Payload,
     operation_args::{Invocation, augment_operation_args, input_from_matches},
 };
-use std::ffi::OsStr;
 
 use crate::output::attention::AttentionRow;
 use crate::output::common::payload::Block;
 use clap::{Arg, ArgMatches, Args, Command, FromArgMatches};
-use orbit_common::Env;
 use orbit_common::governance::{attention::AttentionVerb, operation::OperationVerb};
-use orbit_core::{
-    OrbitRuntime,
-    application::attention::{AttentionWaitOutcome, AttentionWaitStatus},
+use orbit_core::Core;
+use orbit_core::app::attention::{
+    self, AttentionWaitOutcome, AttentionWaitStatus, Command as AttentionAppCommand, Input, Outcome,
 };
 use serde_json::{Value, json};
 
@@ -95,33 +93,22 @@ impl FromArgMatches for AttentionCommand {
         Ok(())
     }
 }
-impl AttentionCommand {
-    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
-        if let Some(wait) = &self.wait {
-            return execute_wait(runtime, &self.query.input, wait, env);
-        }
-        let value = runtime.run_tool(self.query.spec.tool_name, Value::Object(self.query.input))?;
-        render_attention_envelope(value)
-    }
-}
 
-fn execute_wait(
-    runtime: &OrbitRuntime,
-    input: &serde_json::Map<String, Value>,
-    wait: &AttentionWait,
-    env: &Env,
-) -> CommandOut {
-    let token = env
-        .orbit_attention_wait_token()
-        .and_then(OsStr::to_str)
-        .unwrap_or_default();
-    let outcome = runtime.attention_wait(
-        token,
-        Value::Object(input.clone()),
-        &wait.timeout,
-        wait.interval.as_deref(),
-    )?;
-    render_attention_wait(outcome)
+impl ExecuteCore for AttentionCommand {
+    fn execute(self, core: &Core) -> CommandOut {
+        let command = match self.wait {
+            Some(wait) => AttentionAppCommand::Wait {
+                fields: self.query.input,
+                timeout: wait.timeout,
+                interval: wait.interval,
+            },
+            None => AttentionAppCommand::Query(Input::new(self.query.input)),
+        };
+        match attention::exec(core, command)? {
+            Outcome::Envelope(value) => render_attention_envelope(value),
+            Outcome::Waited(outcome) => render_attention_wait(outcome),
+        }
+    }
 }
 
 /// Render a finished wait: the envelope plus a `wait` record naming why it

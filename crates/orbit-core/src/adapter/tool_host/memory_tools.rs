@@ -1,96 +1,29 @@
-//! Crew memory's run-bound tool handlers: translate tool input and the
-//! caller's trusted run binding, and delegate to the runtime's crew memory
-//! operations, which own the gate, the write rules and which runs may call
-//! each verb.
+//! The `orbit.memory.*` tool handler.
+//!
+//! Memory verbs are declared once as data in
+//! `orbit_common::governance::memory`. The handler half of the table is the
+//! crew memory app (`crate::app::crew_memory`), joined to the spec half by
+//! [`MemoryVerb`]: this entry turns the tool call into the app's command and
+//! calls its one `exec`.
 
-use crate::OrbitRuntime;
-use crate::application::crew_memory::{MemoryFile, MemoryToolCaller, MemoryWrite};
-use crate::runtime::run_input::managed_run_context_task_id_from_env;
 use orbit_common::OrbitError;
 use orbit_common::governance::memory::MemoryVerb;
-use orbit_common::governance::operation::OperationVerb;
-use orbit_tools::OrbitTaskScope;
-use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
-/// Who is calling, from the session's run binding: a claimed leaf's worker
-/// binding, or the run this tool context names with the task its managed
-/// environment names. Never from input.
-fn memory_tool_caller(
-    process_env: &orbit_common::Env,
-    task_scope: &OrbitTaskScope,
-    session: &ToolSessionContext,
-    model: Option<&str>,
-) -> MemoryToolCaller {
-    let worker = session.worker_invocation.as_ref();
-    let scope_run_id = task_scope.run_id.clone();
-    let scope_task_id = task_scope.task_id.clone().or_else(|| {
-        scope_run_id
-            .as_ref()
-            .and_then(|_| managed_run_context_task_id_from_env(process_env))
-    });
-    MemoryToolCaller {
-        worker_task_id: worker.map(|binding| binding.task_id.clone()),
-        worker_run_id: worker.map(|binding| binding.bound_run_id.clone()),
-        scope_task_id,
-        scope_run_id,
-        model: model.map(ToOwned::to_owned),
-    }
-}
+use crate::Core;
+use crate::app::crew_memory::{self, Command, Input, Outcome};
+use crate::app::tool_call::Caller;
 
+/// Run one memory verb the generic tool entry admitted.
 pub(super) fn dispatch(
-    runtime: &OrbitRuntime,
-    task_scope: &OrbitTaskScope,
-    session: &ToolSessionContext,
+    core: &Core,
     verb: MemoryVerb,
     input: Value,
-    model: Option<&str>,
+    caller: Caller,
 ) -> Result<Value, OrbitError> {
-    let input = verb.spec().parse_input(input)?;
-    let reason = || input.optional_string("reason");
-    let caller = || memory_tool_caller(runtime.env(), task_scope, session, model);
-    match verb {
-        MemoryVerb::Show => {
-            let revision = input
-                .optional_count("revision")?
-                .map(|revision| {
-                    u32::try_from(revision).map_err(|_| {
-                        OrbitError::InvalidInput(format!("revision {revision} is out of range"))
-                    })
-                })
-                .transpose()?;
-            runtime.crew_memory_tool_show(
-                &caller(),
-                input.optional_string("key")?.as_deref(),
-                revision,
-            )
-        }
-        MemoryVerb::Write => {
-            let files = match input.as_value().get("files") {
-                None | Some(Value::Null) => Vec::new(),
-                Some(files) => {
-                    serde_json::from_value::<Vec<MemoryFile>>(files.clone()).map_err(|error| {
-                        OrbitError::InvalidInput(format!(
-                            "`files` must be an array of {{path, text}} objects: {error}"
-                        ))
-                    })?
-                }
-            };
-            let write = MemoryWrite {
-                files,
-                evidence: input.optional_string_list("evidence")?.unwrap_or_default(),
-            };
-            runtime.crew_memory_tool_write(
-                &caller(),
-                &input.required_string("key")?,
-                write,
-                reason()?,
-            )
-        }
-        MemoryVerb::Propose => runtime.crew_memory_tool_propose(
-            &caller(),
-            input.optional_raw_string("text")?.unwrap_or_default(),
-            input.optional_string_list("evidence")?.unwrap_or_default(),
-        ),
-    }
+    crew_memory::exec(
+        core,
+        Command::new(verb, Input::from_tool_entry(input, caller)),
+    )
+    .map(Outcome::into_value)
 }

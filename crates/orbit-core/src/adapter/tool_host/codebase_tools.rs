@@ -1,59 +1,29 @@
-use crate::OrbitRuntime;
-use crate::application::codebase::{CodebaseQuery, RegressionFilter, RelatedQuery};
-use orbit_common::{
-    OrbitError,
-    governance::{
-        codebase::CodebaseVerb,
-        operation::{OperationInput, OperationVerb},
-    },
-};
+//! The `orbit.codebase.*` tool handler.
+//!
+//! Codebase verbs are declared once as data in
+//! `orbit_common::governance::codebase`. The handler half of the table is the
+//! codebase app (`crate::app::codebase`), joined to the spec half by
+//! [`CodebaseVerb`]: this entry turns the tool call into the app's command and
+//! calls its one `exec`.
+
+use orbit_common::OrbitError;
+use orbit_common::governance::codebase::CodebaseVerb;
 use serde_json::Value;
 
+use crate::Core;
+use crate::app::codebase::{self, Command, Input};
+use crate::app::tool_call::Caller;
+
+/// Run one codebase verb the generic tool entry admitted.
 pub(super) fn dispatch(
-    runtime: &OrbitRuntime,
+    core: &Core,
     verb: CodebaseVerb,
     input: Value,
+    caller: Caller,
 ) -> Result<Value, OrbitError> {
-    let input = verb.spec().parse_input(input)?;
-    match verb {
-        CodebaseVerb::Related => {
-            let selection = RelatedQuery::parse(
-                input.optional_string("window")?.as_deref(),
-                input.optional_count("min_support")?,
-                input.optional_count("top")?,
-            )?;
-            runtime.codebase_related(
-                &selection.codebase_query(),
-                &input.required_string("path")?,
-                selection.top(),
-            )
-        }
-        CodebaseVerb::Analytics => runtime.codebase_analytics(&analytics_query(runtime, &input)?),
-        CodebaseVerb::Show => runtime.codebase_path_detail(
-            &analytics_query(runtime, &input)?,
-            &input.required_string("path")?,
-        ),
-    }
-}
-
-/// Window, minimum support, rollup and regression filters for analytics and
-/// path detail; a layer is checked against the workspace's
-/// `workflow.regression_layers`. Related does not use this: those fields are
-/// not its parameters.
-fn analytics_query(
-    runtime: &OrbitRuntime,
-    input: &OperationInput,
-) -> Result<CodebaseQuery, OrbitError> {
-    Ok(CodebaseQuery::parse(
-        input.optional_string("window")?.as_deref(),
-        input.optional_count("min_support")?,
-        input.optional_string("rollup")?.as_deref(),
+    codebase::exec(
+        core,
+        Command::Operation(verb, Input::from_tool_entry(input, caller)),
     )?
-    .with_regression_filter(RegressionFilter::parse(
-        input.optional_string("nature")?.as_deref(),
-        input.optional_string("escape")?.as_deref(),
-        input.optional_string("layer")?.as_deref(),
-        input.optional_string("detected_by")?.as_deref(),
-        runtime.regression_layers(),
-    )?))
+    .into_value()
 }

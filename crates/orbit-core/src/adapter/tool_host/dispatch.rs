@@ -12,9 +12,9 @@ use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::app::attention;
 use crate::app::task::{ToolCall, ToolCaller};
 use crate::app::tool_call;
-use crate::application::agents::AgentDetailSurface;
 use crate::application::resident::{ResidentActionTicket, ResidentCallAdmission};
 use crate::application::task::{
     TaskMutationAudit, audit_status_for_task_mutation_error, with_task_write_provenance,
@@ -35,16 +35,6 @@ fn submission_trigger(session_context: &ToolSessionContext) -> JobRunTrigger {
 
 /// Native commands have no transport; `tool run` supplies a local one.
 /// MCP (including local stdio) always mints an origin session id.
-fn agent_detail_surface(session: &ToolSessionContext) -> AgentDetailSurface {
-    if session.origin_session_id.is_some() || session.transport == Some(McpTransport::SshMcp) {
-        AgentDetailSurface::Mcp
-    } else if session.transport.is_some() {
-        AgentDetailSurface::ToolRun
-    } else {
-        AgentDetailSurface::Cli
-    }
-}
-
 fn session_write_provenance(session: &ToolSessionContext) -> TaskWriteProvenance {
     let surface = session.write_surface.unwrap_or_else(|| {
         if session.origin_session_id.is_some() || session.transport == Some(McpTransport::SshMcp) {
@@ -239,30 +229,37 @@ fn execute_admitted(
             result
         }
         OrbitBuiltinAction::Agents(verb) => super::agents_tools::dispatch(
-            runtime,
+            &crate::Core::within_tool_entry(runtime.clone()),
             verb,
             input,
-            agent_detail_surface(session_context),
+            tool_call::Caller {
+                session: session_context.clone(),
+                ..tool_call::Caller::default()
+            },
         ),
-        OrbitBuiltinAction::Attention(_) => {
-            let resident_scope =
-                runtime.resident_cycle_attention_scope(task_scope.run_id.as_deref());
-            let mint = input.get("wait_grant").and_then(serde_json::Value::as_bool) == Some(true);
-            crate::application::attention::attention_query(
-                runtime,
+        OrbitBuiltinAction::Attention(_) => attention::exec(
+            &crate::Core::within_tool_entry(runtime.clone()),
+            attention::Command::Query(attention::Input::from_tool_entry(
                 input,
-                session_context,
-                resident_scope.as_ref(),
-            )
-            .and_then(|response| {
-                if mint {
-                    crate::application::attention::with_wait_grant(runtime, response)
-                } else {
-                    Ok(response)
-                }
-            })
-        }
-        OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(runtime, verb, input),
+                tool_call::Caller {
+                    session: session_context.clone(),
+                    run_id: task_scope.run_id.clone(),
+                    ..tool_call::Caller::default()
+                },
+            )),
+        )
+        .and_then(|outcome| match outcome {
+            attention::Outcome::Envelope(value) => Ok(value),
+            attention::Outcome::Waited(_) => Err(OrbitError::Execution(
+                "the attention read answered with a wait".to_string(),
+            )),
+        }),
+        OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(
+            &crate::Core::within_tool_entry(runtime.clone()),
+            verb,
+            input,
+            tool_call::Caller::default(),
+        ),
         OrbitBuiltinAction::Automation(verb) => super::automation_tools::dispatch(
             &crate::Core::within_tool_entry(runtime.clone()),
             verb,
@@ -377,7 +374,12 @@ fn execute_admitted(
             agent,
             model,
         ),
-        OrbitBuiltinAction::Search(verb) => super::search_tools::dispatch(runtime, verb, input),
+        OrbitBuiltinAction::Search(verb) => super::search_tools::dispatch(
+            &crate::Core::within_tool_entry(runtime.clone()),
+            verb,
+            input,
+            tool_call::Caller::default(),
+        ),
         OrbitBuiltinAction::Task(verb) => {
             let provenance = session_write_provenance(session_context);
             let surface = provenance.surface.unwrap_or(TaskWriteSurface::Cli);
@@ -494,20 +496,28 @@ fn execute_admitted(
             submission_trigger(session_context),
         ),
         OrbitBuiltinAction::Notice(verb) => super::notice_tools::dispatch(
-            runtime,
-            task_scope,
-            session_context,
+            &crate::Core::within_tool_entry(runtime.clone()),
             verb,
             input,
-            model.as_deref(),
+            tool_call::Caller {
+                session: session_context.clone(),
+                run_id: task_scope.run_id.clone(),
+                task_id: task_scope.task_id.clone(),
+                agent: None,
+                model,
+            },
         ),
         OrbitBuiltinAction::Memory(verb) => super::memory_tools::dispatch(
-            runtime,
-            task_scope,
-            session_context,
+            &crate::Core::within_tool_entry(runtime.clone()),
             verb,
             input,
-            model.as_deref(),
+            tool_call::Caller {
+                session: session_context.clone(),
+                run_id: task_scope.run_id.clone(),
+                task_id: task_scope.task_id.clone(),
+                agent: None,
+                model,
+            },
         ),
         OrbitBuiltinAction::Evolution(verb) => super::evolution_tools::dispatch(
             &crate::Core::within_tool_entry(runtime.clone()),
@@ -522,6 +532,7 @@ fn execute_admitted(
             tool_call::Caller {
                 session: session_context.clone(),
                 run_id: task_scope.run_id.clone(),
+                task_id: task_scope.task_id.clone(),
                 agent,
                 model,
             },

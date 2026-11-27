@@ -4,10 +4,15 @@
 //! A surface builds a `Command`, passes it with its [`Core`](crate::Core) to
 //! that app's `exec`, and renders the `Outcome`. Every `exec` runs through
 //! the one chokepoint in `exec.rs`, which authorizes and audits the command.
-//! `audit`, `auto_task`, `automation`, `config`, `evolution`, `experiment`,
-//! `friction`, `plugin`, `resident`, `routine`, `run`, `skill`, `task` and
-//! `workspace` are apps; the other subjects still live in `application/` and
+//! `agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`,
+//! `config`, `crew_memory`, `evolution`, `experiment`, `friction`, `gc`,
+//! `notice`, `plugin`, `resident`, `routine`, `run`, `search`, `skill`, `task`
+//! and `workspace` are apps; the other subjects still live in `application/` and
 //! are reached through `OrbitRuntime`.
+
+pub mod agent;
+
+pub mod attention;
 
 pub mod audit;
 
@@ -15,7 +20,11 @@ pub mod auto_task;
 
 pub mod automation;
 
+pub mod codebase;
+
 pub mod config;
+
+pub mod crew_memory;
 
 pub mod evolution;
 
@@ -25,6 +34,10 @@ pub mod experiment;
 
 pub mod friction;
 
+pub mod gc;
+
+pub mod notice;
+
 pub mod plugin;
 
 pub mod resident;
@@ -32,6 +45,8 @@ pub mod resident;
 pub mod routine;
 
 pub mod run;
+
+pub mod search;
 
 pub mod skill;
 
