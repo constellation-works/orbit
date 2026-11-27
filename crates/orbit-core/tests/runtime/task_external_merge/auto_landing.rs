@@ -302,6 +302,28 @@ fn a_failed_merge_audit_stores_redacted_error_and_leaves_request_empty() {
         !message.contains(&pattern_token),
         "pattern credential survived: {message}"
     );
+    // The same row persists the error's detail as `arguments_json`, which
+    // must be redacted as the message is.
+    let arguments = failed
+        .arguments_json
+        .as_deref()
+        .expect("failed merge row stores its arguments");
+    assert!(
+        arguments.contains("forge rejected merge with token [REDACTED_ENV]"),
+        "arguments keep the redacted forge error: {arguments}"
+    );
+    assert!(
+        !arguments.contains(TOKEN),
+        "credential survived in arguments: {arguments}"
+    );
+    assert!(
+        arguments.contains("credential [REDACTED_SECRET]"),
+        "pattern credential was not redacted in arguments: {arguments}"
+    );
+    assert!(
+        !arguments.contains(&pattern_token),
+        "pattern credential survived in arguments: {arguments}"
+    );
 }
 
 fn a_succeeded_authorised_run_with_a_passed_observation_is_merged() {
