@@ -252,7 +252,10 @@ pub(super) fn preserve_review_gate_candidate<
             append_comments: vec![TaskComment {
                 at,
                 by: "system".to_string(),
-                message: format!("Publication stopped because {reason}; inspect `orbit run show {run_id} --json` for the next step."),
+                message: format!(
+                    "Publication stopped because {reason}; inspect \
+                     `orbit run show {run_id} --json` for the next step."
+                ),
                 operation_id: None,
             }],
             append_history,

@@ -8,9 +8,11 @@ use serde_json::Value;
 
 use crate::context::{RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate};
 
-use super::super::input::{canonicalize_existing_dir, required_input_string, required_job_run_id};
 use super::claim::{carries_implementer_output, implementer_summary};
 use super::conventions::meaningful_execution_summary;
+use crate::executor::automation::input::{
+    canonicalize_existing_dir, required_input_string, required_job_run_id,
+};
 
 pub(super) const FAILED_HANDOFF_ACTOR: &str = "system";
 

@@ -3021,6 +3021,7 @@ fn pr_open_permanent_create_failures_never_retry_or_look_up_again(sandbox: &Path
         assert_create_failure(&host, &error, diagnostic);
     }
 }
+
 fn assert_failure_comment(message: &str) {
     assert!(!message.contains('\n'), "{message}");
     assert!(!message.contains("```"), "{message}");
@@ -3035,6 +3036,7 @@ fn assert_failure_comment(message: &str) {
         "{message}"
     );
 }
+
 fn failure_comments_keep_diagnostics_in_the_run(sandbox: &Path) {
     for (step, code, diagnostic, expected) in [
         (
@@ -3075,6 +3077,7 @@ fn failure_comments_keep_diagnostics_in_the_run(sandbox: &Path) {
     assert_eq!(output["workspace_path"], fx.repo.to_string_lossy().as_ref());
     assert_failure_comment(&host.comments(TASK_ID).last().unwrap().message);
 }
+
 fn conflict_handoff_keeps_structured_conflict_details(sandbox: &Path) {
     let (fx, host) = fx_host(sandbox);
     let candidate = fx.commit("shared.txt", "candidate\n");
@@ -7147,7 +7150,11 @@ fn a_failed_review_revalidation_rejects_and_preserves_both_commits(sandbox: &Pat
     let legacy = TaskComment {
         at: comment.at,
         by: "system".to_string(),
-        message: "## Review gate escalation\n\nVerdict: `reject`. The reviewer's fixes did not pass owner revalidation.".to_string(),
+        message: concat!(
+            "## Review gate escalation\n\n",
+            "Verdict: `reject`. The reviewer's fixes did not pass owner revalidation."
+        )
+        .to_string(),
         operation_id: None,
     };
     assert_eq!(
@@ -7810,7 +7817,15 @@ test_groups! {
     pr_body_and_promotion_contracts => [pr_promote_records_the_pull_request_page_with_its_number, pr_open_appends_the_review_fixes_section_to_the_published_body],
     metadata_lag_pins_and_repair => [previous_published_head_metadata_lag_keeps_exact_delivery_and_review_pins, previous_published_head_metadata_lag_after_in_run_conflict_repair],
     pr_open_branch_identity => [pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip, pr_open_refuses_a_stacked_base_already_merged_into_the_landing_branch, pr_open_judges_a_stacked_repair_by_its_own_marker_not_its_fixes_quote, pr_open_refuses_a_head_or_base_other_than_the_reviewed_candidate],
-    pr_create_retry_contracts => [conflict_handoff_keeps_structured_conflict_details, failure_comments_keep_diagnostics_in_the_run, pr_open_permanent_create_failures_never_retry_or_look_up_again, pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr, pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase, pr_open_refuses_a_reused_pr_targeting_another_base, a_failure_handoff_refuses_a_reused_pr_targeting_another_base],
+    pr_create_retry_contracts => [
+        conflict_handoff_keeps_structured_conflict_details,
+        failure_comments_keep_diagnostics_in_the_run,
+        pr_open_permanent_create_failures_never_retry_or_look_up_again,
+        pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr,
+        pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase,
+        pr_open_refuses_a_reused_pr_targeting_another_base,
+        a_failure_handoff_refuses_a_reused_pr_targeting_another_base
+    ],
     pr_lookup_retry_contracts => [pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling, pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens],
     pr_number_and_push_transports => [pr_open_preserves_provider_number_representations, fixture_push_guard_checks_all_effective_push_urls, fixture_push_refuses_non_file_transports_without_network],
     git_push_effective_destination_contracts => [git_push_publishes_to_effective_push_destination_not_fetch_remote, git_push_probes_composed_rewrite_destination_not_its_rewrite, git_push_refuses_self_pointing_effective_push_url],

@@ -80,7 +80,10 @@ fn review_repair_after_merge_handoff<H: RunLifecycle + ?Sized>(
             append_comments.push(TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
-                message: format!("Review repair handoff failed because the pull request already merged; inspect `orbit run show {run_id} --json` to recover the repair."),
+                message: format!(
+                    "Review repair handoff failed because the pull request already merged; inspect \
+                     `orbit run show {run_id} --json` to recover the repair."
+                ),
                 operation_id: Some(operation_id),
             });
         }

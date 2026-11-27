@@ -196,7 +196,10 @@ pub(super) fn preserve_agent_blocked_candidate<
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
-                message: format!("Delivery stopped because an agent reported a blocker; inspect `orbit run show {run_id} --json` to resolve it and preserve the candidate."),
+                message: format!(
+                    "Delivery stopped because an agent reported a blocker; inspect \
+                     `orbit run show {run_id} --json` to resolve it and preserve the candidate."
+                ),
                 operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
@@ -359,7 +362,10 @@ pub(super) fn preserve_validation_environment_candidate<
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
-                message: format!("Validation failed because a required tool is missing; inspect `orbit run show {run_id} --json` to restore it and resume."),
+                message: format!(
+                    "Validation failed because a required tool is missing; inspect \
+                     `orbit run show {run_id} --json` to restore it and resume."
+                ),
                 operation_id: None,
             }],
             append_history: vec![held_history(&held)],
@@ -702,7 +708,10 @@ pub(super) fn hold_baseline_red_candidate<
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
-                message: format!("Validation failed because the base has the same failure; inspect `orbit run show {run_id} --json` and fix the base before retrying."),
+                message: format!(
+                    "Validation failed because the base has the same failure; inspect \
+                     `orbit run show {run_id} --json` and fix the base before retrying."
+                ),
                 operation_id: None,
             }],
             append_history: vec![held_history(&held)],
