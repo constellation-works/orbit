@@ -63,24 +63,28 @@ pub(crate) fn audited_forge_merge(
         &pull_request,
         "requested",
         AuditEventStatus::Success,
+        None,
         request.clone(),
     )?;
     let outcome = forge.merge_pull_request(repo_root, number, head_sha, message);
-    let (phase, status, detail) = match &outcome {
+    let (phase, status, detail, error_message) = match &outcome {
         Ok(PullRequestMergeOutcome::Merged { merge_commit }) => (
             "merged",
             AuditEventStatus::Success,
             json!({"merge_commit": merge_commit}),
+            None,
         ),
         Ok(PullRequestMergeOutcome::Refused { reason }) => (
             "refused",
             AuditEventStatus::Denied,
             json!({"reason": reason}),
+            None,
         ),
         Err(error) => (
             "failed",
             AuditEventStatus::Failure,
             json!({"error": error.to_string()}),
+            Some(error.to_string()),
         ),
     };
     record_merge_outcome(
@@ -89,6 +93,7 @@ pub(crate) fn audited_forge_merge(
         &pull_request,
         phase,
         status,
+        error_message.as_deref(),
         merged_fields(request, detail),
     );
     outcome
@@ -131,6 +136,7 @@ pub(crate) fn audited_private_vcs_merge(
         &pull_request,
         "requested",
         AuditEventStatus::Success,
+        None,
         request.clone(),
     )?;
     let outcome = orbit_engine::run_private_vcs_operation(
@@ -138,7 +144,7 @@ pub(crate) fn audited_private_vcs_merge(
         orbit_engine::PRIVATE_VCS_PR_MERGE,
         input,
     );
-    let (phase, status, detail) = match &outcome {
+    let (phase, status, detail, error_message) = match &outcome {
         Ok(response) => {
             let (phase, status) = if response.get("ambiguous_merge").is_some() {
                 // The forge's reply was lost: the merge may or may not exist.
@@ -160,12 +166,17 @@ pub(crate) fn audited_private_vcs_merge(
                     "refusal": response.get("refusal"),
                     "ambiguous_merge": response.get("ambiguous_merge"),
                 }),
+                response
+                    .get("ambiguous_merge")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
             )
         }
         Err(error) => (
             "failed",
             AuditEventStatus::Failure,
             json!({"error": error.to_string()}),
+            Some(error.to_string()),
         ),
     };
     record_merge_outcome(
@@ -174,6 +185,7 @@ pub(crate) fn audited_private_vcs_merge(
         &pull_request,
         phase,
         status,
+        error_message.as_deref(),
         merged_fields(request, detail),
     );
     outcome
@@ -192,11 +204,18 @@ fn record_merge_outcome(
     pull_request: &str,
     phase: &str,
     status: AuditEventStatus,
+    error_message: Option<&str>,
     detail: Value,
 ) {
-    if let Err(error) =
-        record_merge_audit(runtime, attribution, pull_request, phase, status, detail)
-    {
+    if let Err(error) = record_merge_audit(
+        runtime,
+        attribution,
+        pull_request,
+        phase,
+        status,
+        error_message,
+        detail,
+    ) {
         tracing::warn!(
             target: "orbit.core.external_merge",
             pull_request,
@@ -214,6 +233,7 @@ fn record_merge_audit(
     pull_request: &str,
     phase: &str,
     status: AuditEventStatus,
+    error_message: Option<&str>,
     detail: Value,
 ) -> Result<(), OrbitError> {
     let mut payload = json!({
@@ -237,6 +257,7 @@ fn record_merge_audit(
             role: "system",
             status,
             arguments_json: payload.to_string(),
+            error_message: error_message.map(ToOwned::to_owned),
             workspace_id: workspace_id.as_deref(),
             task_id: attribution.task_id,
             attribution: match attribution.run_id {

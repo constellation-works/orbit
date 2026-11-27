@@ -72,6 +72,7 @@ impl NoticeAudit {
                 role: self.poster.map_or("unidentified", AuthorClass::as_str),
                 status,
                 arguments_json: self.detail.to_string(),
+                error_message: None,
                 workspace_id: workspace_id.as_deref(),
                 task_id: None,
                 attribution: AuditRunAttribution::Environment { run_id: None },

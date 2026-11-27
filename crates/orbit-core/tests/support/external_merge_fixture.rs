@@ -103,6 +103,8 @@ pub(crate) struct ForgeState {
     pub(crate) head_answers: VecDeque<String>,
     /// Refusal reason returned by `merge_pull_request` instead of merging.
     pub(crate) merge_refusal: Option<String>,
+    /// Error returned by `merge_pull_request` instead of merging.
+    pub(crate) merge_error: Option<String>,
     pub(crate) merges: Vec<(u64, String)>,
     pub(crate) landed: Option<MergedPullRequest>,
 }
@@ -192,6 +194,13 @@ impl FakeForge {
     pub(crate) fn refuse_merge(&self, reason: Option<&str>) {
         self.0.lock().unwrap().merge_refusal = reason.map(str::to_string);
     }
+
+    /// Error `merge_pull_request` returns instead of merging, or `None` to
+    /// allow a merge unless a refusal is configured.
+    pub(crate) fn fail_merge(&self, error: Option<&str>) {
+        self.0.lock().unwrap().merge_error = error.map(str::to_string);
+    }
+
     pub(crate) fn reads(&self) -> u32 {
         self.0.lock().unwrap().reads
     }
@@ -301,6 +310,9 @@ impl TaskPrForge for FakeForge {
         _: &orbit_types::workflow::MergeMessage,
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         let mut state = self.0.lock().unwrap();
+        if let Some(error) = state.merge_error.clone() {
+            return Err(OrbitError::Execution(error));
+        }
         if let Some(reason) = state.merge_refusal.clone() {
             return Ok(PullRequestMergeOutcome::Refused { reason });
         }

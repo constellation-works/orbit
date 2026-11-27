@@ -493,6 +493,7 @@ fn record_refresh_audit(
             role: "system",
             status,
             arguments_json: detail.to_string(),
+            error_message: None,
             workspace_id: workspace_id.as_deref(),
             task_id: Some(task_id),
             attribution: AuditRunAttribution::Environment { run_id: None },
