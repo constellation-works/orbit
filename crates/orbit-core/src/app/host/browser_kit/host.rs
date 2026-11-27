@@ -59,6 +59,7 @@ pub(super) fn require_host_operator(env: &Env) -> Result<(), OrbitError> {
         ));
     }
     #[cfg(unix)]
+    // SAFETY: geteuid has no preconditions and cannot fail.
     if unsafe { libc::geteuid() } == 0 {
         return Err(OrbitError::InvalidInput(
             "run `orbit config browser-kit` as the user who runs workers, not as root; \

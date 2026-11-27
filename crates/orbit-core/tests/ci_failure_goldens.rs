@@ -1143,7 +1143,8 @@ fn ci_operator_pr_cover_reports_open_landed_closed_and_unavailable_states() {
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
     orbit_common::test_env::prime_executable(&mut std::process::Command::new(&gh));
     let new_path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
-    // Isolated child process only.
+    // SAFETY: `isolated` runs this test alone with `--test-threads=1` in a
+    // dedicated child process, so no other test or thread reads `PATH` concurrently.
     unsafe {
         std::env::set_var("PATH", new_path);
     }

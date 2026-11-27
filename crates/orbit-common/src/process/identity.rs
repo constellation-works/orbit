@@ -791,17 +791,23 @@ pub(super) fn linux_process_group_liveness_with(
 pub(super) fn darwin_list_pgrp_pids(pgid: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
     use std::ffi::c_void;
     use std::io;
-    use std::mem::size_of;
 
-    unsafe fn query(pgid: libc::pid_t, buffer: *mut c_void, buffer_size: i32) -> io::Result<usize> {
-        // Safety: caller guarantees `buffer` is null with `buffer_size == 0`
-        // for a size probe or writable for `buffer_size` bytes; `__error` is
-        // thread-local and cleared so `0` (empty group) is distinct from errors.
-        // Unlike `proc_listpids`, `proc_listpgrppids` divides the kernel's byte
-        // count by `sizeof(int)` before returning.
+    fn query(pgid: libc::pid_t, buffer: Option<&mut [libc::pid_t]>) -> io::Result<usize> {
+        let (ptr, buffer_size) = match buffer {
+            Some(pids) if !pids.is_empty() => (
+                pids.as_mut_ptr().cast::<c_void>(),
+                i32::try_from(std::mem::size_of_val(pids)).map_err(io::Error::other)?,
+            ),
+            _ => (std::ptr::null_mut(), 0),
+        };
+        // SAFETY: `ptr` is either null with `buffer_size == 0` (size probe) or
+        // writable for `buffer_size` bytes; `__error` is thread-local and
+        // cleared so `0` (empty group) is distinct from errors. Unlike
+        // `proc_listpids`, `proc_listpgrppids` divides the kernel's byte count
+        // by `sizeof(int)` before returning.
         let (count, errno) = unsafe {
             *libc::__error() = 0;
-            let count = libc::proc_listpgrppids(pgid, buffer, buffer_size);
+            let count = libc::proc_listpgrppids(pgid, ptr, buffer_size);
             (count, *libc::__error())
         };
         if count < 0 {
@@ -821,21 +827,15 @@ pub(super) fn darwin_list_pgrp_pids(pgid: libc::pid_t) -> std::io::Result<Vec<li
         usize::try_from(count).map_err(io::Error::other)
     }
 
-    // Safety: null/zero requests the required PID slot count.
-    let required = unsafe { query(pgid, std::ptr::null_mut(), 0) }?;
+    let required = query(pgid, None)?;
     if required == 0 {
         return Ok(Vec::new());
     }
 
-    let pid_size = size_of::<libc::pid_t>();
     let mut slots = required.saturating_mul(2).max(16);
     for _ in 0..3 {
         let mut pids = vec![0 as libc::pid_t; slots];
-        let buffer_size =
-            i32::try_from(pids.len().saturating_mul(pid_size)).map_err(io::Error::other)?;
-        // Safety: `pids` is writable for exactly `buffer_size` bytes.
-        let written_count =
-            unsafe { query(pgid, pids.as_mut_ptr().cast::<c_void>(), buffer_size) }?;
+        let written_count = query(pgid, Some(&mut pids))?;
         if written_count == 0 {
             return Ok(Vec::new());
         }
