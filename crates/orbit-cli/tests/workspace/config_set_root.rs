@@ -259,6 +259,47 @@ fn config_set_under_root_refuses_without_workspace_layer_and_names_global() {
     );
 }
 
+#[test]
+fn global_machine_web_public_url_can_be_set_read_and_validated() {
+    if crate::isolated_test::run_in_child(
+        "config_set_root::global_machine_web_public_url_can_be_set_read_and_validated",
+    ) {
+        return;
+    }
+    let fixture = Fixture::layered();
+    let root = fixture.root.to_string_lossy().into_owned();
+    let key = "machine.web.public_url";
+    let origin = "https://node.tailnet.ts.net";
+
+    fixture
+        .orbit(&["--root", &root, "config", "set", key, origin, "--global"])
+        .success();
+    let output = fixture
+        .orbit(&["--root", &root, "config", "get", key, "--json"])
+        .success()
+        .get_output()
+        .clone();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["value"], origin);
+
+    let before = fs::read(fixture.global_config()).unwrap();
+    let refused = fixture
+        .orbit(&[
+            "--root",
+            &root,
+            "config",
+            "set",
+            key,
+            "ftp://node.tailnet.ts.net",
+            "--global",
+        ])
+        .failure();
+    let error = String::from_utf8_lossy(&refused.get_output().stderr);
+    assert!(error.contains(key), "{error}");
+    assert!(error.contains("http or https origin"), "{error}");
+    assert_eq!(fs::read(fixture.global_config()).unwrap(), before);
+}
+
 /// Literal syntax, file preservation, init modes and confirmation output are
 /// local CLI contracts even though the write transaction is shared with HTTP.
 #[test]

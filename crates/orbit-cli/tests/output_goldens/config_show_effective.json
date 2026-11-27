@@ -217,6 +217,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.web.public_url": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.web.trusted_hosts": {
       "scope": "built-in",
       "state": "default",

@@ -35,6 +35,13 @@ macro_rules! with_housekeeping_keys {
         allowed: format("Tailscale login names"),
         resolve: |raw: Option<Vec<String>>| resolve_web_trusted_logins(raw),
     },
+    machine_web_public_url: Option<String> => String {
+        key: "machine.web.public_url", value_type: "string",
+        description: "HTTP or HTTPS origin readers use to open this machine's dashboard links.",
+        section: ConfigSection::Machine, order: 89,
+        allowed: format("http or https origin without a path, query, or fragment"),
+        resolve: |raw: Option<String>| resolve_web_public_url(raw),
+    },
     decision_channel_enabled: bool => bool {
         key: "decision_channel.enabled", value_type: "bool",
         description: "Raise decision requests for work held on a human decision.",

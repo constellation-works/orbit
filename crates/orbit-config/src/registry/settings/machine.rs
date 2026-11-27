@@ -57,13 +57,16 @@ pub struct WorkerContainmentSettings {
     pub cpu_quota_percent: u32,
 }
 
-/// `[machine.web]`, admitted on its own: the dashboard's trusted hosts.
+/// `[machine.web]`, admitted on its own: the dashboard's trusted hosts and
+/// public origin.
 ///
 /// `orbit web serve` reads only these keys, so an unrelated problem elsewhere
 /// in the global file (or one a workspace layer masks) does not stop the
 /// dashboard. Values go through the registry rows' own resolvers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MachineWebSettings {
+    /// `machine.web.public_url` — normalized HTTP or HTTPS dashboard origin.
+    pub public_url: Option<String>,
     /// `machine.web.trusted_hosts` — lowercase DNS names.
     pub trusted_hosts: Vec<String>,
     /// `machine.web.trusted_logins` — Tailscale login names.
@@ -74,6 +77,13 @@ impl MachineWebSettings {
     /// Admit `[machine.web]` from one already-parsed document.
     pub(crate) fn admit(document: &toml::Value, config_path: &Path) -> Result<Self, OrbitError> {
         Ok(Self {
+            public_url: super::resolve::resolve_web_public_url(
+                config_document::read_typed_config_value(
+                    document,
+                    "machine.web.public_url",
+                    config_path,
+                )?,
+            )?,
             trusted_hosts: resolve_web_trusted_hosts(config_document::read_typed_config_value(
                 document,
                 "machine.web.trusted_hosts",

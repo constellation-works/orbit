@@ -59,6 +59,26 @@ with `orbit web serve --operator`, or stop it and reconnect.
 with `orbit host add`, you can stay in one dashboard and
 [switch hosts](#switch-hosts) instead.
 
+## Set the public dashboard address
+
+`machine.web.public_url` is the HTTP or HTTPS origin that readers of this
+machine's task and run links can open. Set it in the global config on the
+machine that produces those links, and choose an address reachable from the
+reader's device:
+
+```bash
+orbit config set --global \
+  machine.web.public_url \
+  'https://<node>.<tailnet>.ts.net'
+```
+
+For a dashboard exposed with Tailscale Serve, use its HTTPS name. When the
+reader is on the same machine, or using `orbit web connect`, use the loopback
+address and port that the reader's browser opens, such as
+`http://localhost:7878`. A tunnel's local port can change; update the setting
+when it does. Leave the setting unset when no stable reachable address is
+available.
+
 ## Open it over Tailscale Serve
 
 To open the dashboard from another tailnet device, such as a phone, front it
