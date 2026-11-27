@@ -203,5 +203,35 @@
     "identifier": "remote_command",
     "doc": "docs/design/architecture-restructure/2_design.md",
     "reason": "Names the new `app::remote_command` module (`crates/orbit-core/src/app/remote_command/`) added in ORB-28971, rather than the removed `app::run::Command::remote_command` constructor."
+  },
+  {
+    "identifier": "contention",
+    "doc": "docs/architecture/orbit-cli.md",
+    "reason": "Names the `orbit task locks contention` CLI subcommand (`TaskInvocation::Contention`), not the removed `app::run` constructor `Command::contention`."
+  },
+  {
+    "identifier": "contention",
+    "doc": "docs/design/architecture-restructure/2_design.md",
+    "reason": "Names the removed `app::run` constructor `Command::contention` as the before-state in the placement table, and the `orbit task locks contention` CLI command it became in ORB-28987 (`Command::Contention` in `app::task`)."
+  },
+  {
+    "identifier": "contention",
+    "doc": "docs/dev/qa/cli-command-evidence.md",
+    "reason": "Names the `orbit task locks contention` CLI subcommand, not the removed `app::run` constructor `Command::contention`."
+  },
+  {
+    "identifier": "contention",
+    "doc": "website/src/content/docs/concepts/tasks.md",
+    "reason": "Names the `orbit task locks contention` CLI subcommand, not the removed `app::run` constructor `Command::contention`."
+  },
+  {
+    "identifier": "contention",
+    "doc": "website/src/content/docs/how-to/continuous-delivery.md",
+    "reason": "Names the `orbit task locks contention` CLI subcommand, not the removed `app::run` constructor `Command::contention`."
+  },
+  {
+    "identifier": "contention",
+    "doc": "website/src/content/docs/reference/cli.md",
+    "reason": "Names the `orbit task locks contention` CLI subcommand, not the removed `app::run` constructor `Command::contention`."
   }
 ]

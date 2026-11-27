@@ -6,7 +6,7 @@ use crate::output::common::table::{Column, Table};
 use crate::parse::parse_duration_seconds;
 use clap::Args;
 use orbit_common::governance::task::TaskVerb;
-use orbit_core::app::run::{Command, exec};
+use orbit_core::app::task::{Command, exec};
 use orbit_core::{Core, OrbitError};
 use serde_json::{Value, json};
 use std::fmt::Write as _;
@@ -38,7 +38,7 @@ pub struct LocksContentionArgs {
 
 impl ExecuteCore for LocksContentionArgs {
     fn execute(self, core: &Core) -> CommandOut {
-        let report = exec(core, Command::contention())?.value;
+        let report = exec(core, Command::Contention)?.into_contention()?;
 
         let mut table = Table::new(vec![
             Column::new("SELECTOR").fixed(),
