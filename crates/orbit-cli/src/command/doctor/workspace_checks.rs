@@ -8,6 +8,7 @@ use orbit_core::app::doctor::{
 
 use super::command::DoctorCommand;
 use crate::command::CommandOut;
+use crate::output::doctor::DoctorReportFilter;
 
 impl DoctorCommand {
     /// The report `orbit doctor` can still give when the runtime would not
@@ -65,9 +66,17 @@ impl DoctorCommand {
         };
         Some(crate::output::doctor::report_output(
             misplaced.into_iter().chain([runtime]).collect(),
-            self.problems,
+            self.report_filter(),
             self.check.as_deref(),
         ))
+    }
+
+    fn report_filter(&self) -> DoctorReportFilter {
+        if self.problems {
+            DoctorReportFilter::ProblemsOnly
+        } else {
+            DoctorReportFilter::AllChecks
+        }
     }
 
     /// The bare `orbit doctor` body: optional repairs, then the workspace report.
@@ -111,6 +120,6 @@ impl DoctorCommand {
         }];
         results.extend(repaired_rows);
         results.extend(rows);
-        crate::output::doctor::report_output(results, self.problems, self.check.as_deref())
+        crate::output::doctor::report_output(results, self.report_filter(), self.check.as_deref())
     }
 }

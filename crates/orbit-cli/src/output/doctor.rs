@@ -18,6 +18,15 @@ use crate::output::common::payload::{Block, CommandOutput, Payload};
 use crate::output::common::sink::OutputMode;
 use crate::output::common::table::{Column, Table};
 
+/// Which diagnostic rows `orbit doctor` renders.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DoctorReportFilter {
+    /// Every diagnostic row.
+    AllChecks,
+    /// Only `Error` and `Warning` rows.
+    ProblemsOnly,
+}
+
 /// Whether an executor's effective arguments yield tool-call traces.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ToolTelemetryStatus {
@@ -158,9 +167,10 @@ pub(crate) fn push_repaired(
 /// severity, the JSON rows, and a nonzero exit when any check failed.
 pub(crate) fn report_output(
     mut results: Vec<WorkspaceDoctorResult>,
-    problems: bool,
+    filter: DoctorReportFilter,
     check: Option<&str>,
 ) -> Result<CommandOutput, OrbitError> {
+    let problems = filter == DoctorReportFilter::ProblemsOnly;
     if let Some(check) = check {
         let row = results
             .iter()
