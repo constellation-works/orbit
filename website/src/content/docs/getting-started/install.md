@@ -64,8 +64,8 @@ codex plugin add orbit@orbit
 mkdir -p ~/.cursor/plugins/local && ln -sfn "$(pwd)/plugin" ~/.cursor/plugins/local/orbit
 ```
 
-In Claude Code, the plugin also adds a live task band, an interactive board,
-and a ship view. See [Use the Claude Code mod](/how-to/claude-code/).
+In Claude Code, the plugin links task and run IDs in assistant replies to the
+dashboard. See [Use the Claude Code mod](/how-to/claude-code/).
 
 ## Let your agent set it up
 

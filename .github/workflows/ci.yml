@@ -231,6 +231,10 @@ jobs:
         with:
           path: .tool-cache/ripgrep-${{ env.RIPGREP_VERSION }}-${{ env.RIPGREP_LINUX_SHA256 }}/archive
           key: orbit-tool-ripgrep-${{ runner.os }}-linux-x86_64-${{ env.RIPGREP_VERSION }}-${{ env.RIPGREP_LINUX_SHA256 }}
+      - &guard-node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "^22.23.4"
       - name: Run static repository guards
         env:
           CI_TEST_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || '' }}
@@ -733,6 +737,7 @@ jobs:
         timeout-minutes: 10
         run: bash .orbit/tmp/workflow-ci/scripts/ci-probe-bubblewrap.sh
 
+      - *guard-node
       - name: Run CI guardrails
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
