@@ -14,6 +14,7 @@ use super::{
 };
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams;
+use crate::application::task::lifecycle::is_application_consent_actor;
 use crate::application::task::params::TaskUpdateParams;
 use crate::application::task::{
     PilotAdmissionHold, TaskCorpusPort, TaskJobPort, TaskRecords, TaskResidentPort, TriageTarget,
@@ -393,6 +394,7 @@ impl OrbitRuntime {
                             task_id,
                             note.map(str::to_string),
                             Some(comment),
+                            is_application_consent_actor(actor_label),
                         )?;
                         Ok(DecisionAnswerEffects {
                             deferred_approval: Some(effects),

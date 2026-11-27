@@ -31,6 +31,8 @@ struct ApprovalRequest {
     agent: Option<String>,
     model: Option<String>,
     guard_run_ownership: bool,
+    /// The decision was answered through an application consent.
+    application_consent: bool,
 }
 
 impl OrbitRuntime {
@@ -108,6 +110,7 @@ impl OrbitRuntime {
                 agent,
                 model,
                 guard_run_ownership: false,
+                application_consent: false,
             },
         )
     }
@@ -131,6 +134,7 @@ impl OrbitRuntime {
                 agent: None,
                 model: None,
                 guard_run_ownership: false,
+                application_consent: false,
             },
         )
     }
@@ -157,6 +161,7 @@ impl OrbitRuntime {
                 agent,
                 model,
                 guard_run_ownership: true,
+                application_consent: false,
             },
         )
     }
@@ -177,6 +182,7 @@ impl OrbitRuntime {
         id: &str,
         note: Option<String>,
         comment: Option<String>,
+        application_consent: bool,
     ) -> Result<(Task, DeferredApprovalEffects), OrbitError> {
         self.approve_task_deferring_effects(
             id,
@@ -187,6 +193,7 @@ impl OrbitRuntime {
                 agent: None,
                 model: None,
                 guard_run_ownership: true,
+                application_consent,
             },
         )
     }
@@ -224,6 +231,7 @@ impl OrbitRuntime {
             agent,
             model,
             guard_run_ownership,
+            application_consent,
         } = request;
         self.ensure_coordination_task_write_permitted()?;
         let note = note.map(|value| redact_all(&value));
@@ -255,6 +263,7 @@ impl OrbitRuntime {
                     canonical_agent.as_deref(),
                     canonical_model.as_deref(),
                     effective_label.as_str(),
+                    application_consent,
                 );
                 ensure_status_change_not_run_owned(self, id, recovery)?;
             }
