@@ -39,8 +39,6 @@ const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
 /// Approval policies `execution.codex.approval_policy` admits.
 const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
-// compat-until: 2026-08-17 (98ebb4c5d0e2)
-const LEGACY_DEFAULT_WORKFLOW_CREW: &str = "claude";
 
 /// Live `[crews.<name>]` fields addressable as `crews.<name>.<field>`.
 ///

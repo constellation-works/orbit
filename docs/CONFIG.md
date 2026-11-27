@@ -1711,7 +1711,7 @@ Final recovery keeps its own rules (no fallback; `[]` turns it off), and automat
 **Validation.**
 
 - `model` and `provider` must be non-empty.
-- `default_crew` must name a defined crew. Left unset with crews defined, Orbit uses `opus` (or a legacy `claude` crew), else refuses to load.
+- `default_crew` must name a defined crew. Left unset with crews defined, Orbit uses `opus`, else refuses to load.
 - A crew name may not contain `:` or `@`, which the crew-reference grammar reserves ([repair](#repairing-a-config-that-already-names-a-crew-with-a-colon)).
 - An Antigravity crew needs an `agy models` slug; a bare Gemini CLI ID such as `gemini-3.8-flash` fails with migration guidance.
 
@@ -1828,7 +1828,7 @@ Every `provider` string (a crew's, an activity's inline `provider`, setup detect
 2. **task_config**: an explicit `task.crew`, or a pool or [purpose](#purpose-crew-pools) assignment still valid for its pool (normally set at creation; admission redraws stale pool assignments and default fallbacks, see [pools](#automatic-crew-pools-by-complexity)).
 3. **workspace_default**: `workflow.default_crew`.
 4. **environment_default**: `CONSTELLATION_DEFAULT_PROVIDER`, a provider ID or alias. `claude` selects `opus`, `codex` selects `sol`, `antigravity` selects `gemini-flash` and `muse` selects `muse-spark` when defined; any other ID selects the same-named crew. Never overrides a configured `default_crew`.
-5. **system_default**: the `opus` crew, or a legacy `claude` crew.
+5. **system_default**: the `opus` crew.
 
 The environment-default tier applies even when neither config file exists.
 An unset or blank variable leaves the built-in default in effect. An invalid
