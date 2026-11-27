@@ -9,12 +9,14 @@ use orbit_types::workflow::{ReviewGateAdmissionOutput, ReviewGateRefusal, Review
 use serde_json::{Value, json};
 
 use super::super::super::REVIEW_AUDIT;
-use super::super::super::admission::{apply_security_state_review, run_review_admission};
-use super::super::context::{GateContext, admitted_run_id, completed_task_ids, not_applicable};
 use super::super::host_gates::HOST_VALIDATION_STEP_INPUT;
 use super::holds::SKIP_REVIEW_REASON;
 use super::{admission, holds, reviewer};
 use crate::OrbitRuntime;
+use crate::application::review::admission::{apply_security_state_review, run_review_admission};
+use crate::application::review::gate::context::{
+    GateContext, admitted_run_id, completed_task_ids, not_applicable,
+};
 
 /// Admit a reviewer for the committed, base-synchronized candidate.
 ///

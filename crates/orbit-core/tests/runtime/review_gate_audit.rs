@@ -272,7 +272,12 @@ impl Fixture {
                 "task_pr_pipeline",
                 1,
                 Utc::now(),
-                Some(json!({"review": admission, "task_ids": [task.id], "task_id": task.id, "base_branch": "main"})),
+                Some(json!({
+                    "review": admission,
+                    "task_ids": [task.id],
+                    "task_id": task.id,
+                    "base_branch": "main"
+                })),
                 None,
             )
             .unwrap();

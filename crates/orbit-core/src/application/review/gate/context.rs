@@ -10,10 +10,10 @@ use orbit_types::task::{Task, requires_security_state_review};
 use orbit_types::workflow::{ReviewAdmission, ReviewGateAdmissionOutput, ReviewGateNotApplicable};
 use serde_json::{Value, json};
 
-use super::super::admission::{apply_security_state_review, run_review_admission};
 use super::super::{MAX_RESUME_CHAIN, automation_error, lineage_key, resumes_owner};
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
+use crate::application::review::admission::{apply_security_state_review, run_review_admission};
 
 /// Shared inputs of both gate steps.
 pub(super) struct GateContext {

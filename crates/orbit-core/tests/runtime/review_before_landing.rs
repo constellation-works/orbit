@@ -2,6 +2,8 @@
 //! its unpublished candidate, and any outcome but an approve keeps that PR
 //! open and unmerged with the task in review [ORB-14849].
 
+mod security_state;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -17,8 +19,6 @@ use orbit_types::task::TaskStatus;
 use orbit_types::task::{ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM};
 use orbit_types::workflow::{JobRunState, REVIEW_CONTRACT_VERSION};
 use serde_json::{Value, json};
-
-mod security_state;
 
 use self::security_state::security_state_review_is_required_at_the_captured_delivery_layer;
 use super::review_gate_audit::Fixture;

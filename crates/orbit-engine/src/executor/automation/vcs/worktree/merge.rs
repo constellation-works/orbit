@@ -200,7 +200,9 @@ fn merge_with_rebase_retry(
                 after.trim(),
                 before.trim(),
             )? {
-                return Err(super::super::pr::tagged_candidate_requires_pr_review());
+                return Err(
+                    crate::executor::automation::vcs::pr::tagged_candidate_requires_pr_review(),
+                );
             }
             return Ok(FastForwardLanding {
                 before: before.trim().to_string(),

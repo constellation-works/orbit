@@ -141,7 +141,11 @@ pub(in crate::executor::automation) fn git_merge<
             if let Some(held) = local_completion_hold(host, input, batch_id, &batch_tasks)? {
                 return Ok(held);
             }
-            super::super::worktree::merge_batch_worktree_into_base(host, input, &batch_tasks)
+            crate::executor::automation::vcs::worktree::merge_batch_worktree_into_base(
+                host,
+                input,
+                &batch_tasks,
+            )
         }
         "pr_merge"
             if batch_tasks
