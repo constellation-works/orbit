@@ -10,7 +10,7 @@ doc_role: vision
 type: design
 summary: "Deferred directions for orbit attention: dashboard feed, notifications, plugin kinds, resolved feed and approval kind; acknowledgement has an accepted follow-up scope"
 tags: [operator-attention, vision]
-paths: ["crates/orbit-core/src/application/attention/**"]
+paths: ["crates/orbit-core/src/app/attention/**"]
 related_features: [operator-attention, human-decision-channel, plugins, user-interface]
 related_artifacts: [ORB-21164]
 ---

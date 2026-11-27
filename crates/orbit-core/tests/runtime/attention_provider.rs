@@ -1013,7 +1013,7 @@ fn ci_red_keeps_id_workflow_apart_from_name_spelling_its_key() {
 /// with missing history shrinks but one stays degraded, and keeps waiting
 /// while that membership holds.
 fn ci_red_wait_wakes_when_degraded_workflow_membership_changes() {
-    use orbit_core::application::attention::AttentionWaitStatus;
+    use orbit_core::app::attention::AttentionWaitStatus;
     let fixture = Fixture::new(true);
     let minted = call_with(
         &fixture.runtime,
@@ -1132,7 +1132,7 @@ fn ci_red_wait_wakes_when_degraded_workflow_membership_changes() {
 /// failures differ only in diagnostic text, and surfaces the latest
 /// diagnostic on timeout.
 fn ci_red_wait_keeps_polling_when_provider_diagnostic_changes() {
-    use orbit_core::application::attention::AttentionWaitStatus;
+    use orbit_core::app::attention::AttentionWaitStatus;
     let fixture = Fixture::new(true);
     let minted = call_with(
         &fixture.runtime,
@@ -1206,7 +1206,7 @@ fn ci_red_wait_keeps_polling_when_provider_diagnostic_changes() {
 /// when swapping degraded membership, so the wait still wakes with
 /// `degraded_changed`.
 fn ci_red_wait_wakes_when_same_named_degraded_workflows_swap() {
-    use orbit_core::application::attention::AttentionWaitStatus;
+    use orbit_core::app::attention::AttentionWaitStatus;
     let fixture = Fixture::new(true);
     let minted = call_with(
         &fixture.runtime,

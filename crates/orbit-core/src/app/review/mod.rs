@@ -183,16 +183,21 @@ impl App for ReviewApp {
     type Error = Error;
 
     fn operation(command: &Command) -> Operation {
+        // Consent verbs are audited under the admin role the command line
+        // declares, not the runtime actor the app guard would otherwise record.
         match command {
             Command::ConsentApplication { .. } => Operation::command("application", "consent")
-                .target(Some("application_consent"), None),
+                .target(Some("application_consent"), None)
+                .audit_role("admin"),
             Command::RotateApplication { consent_id, .. } => {
                 Operation::command("application", "rotate")
                     .target(Some("application_consent"), Some(consent_id.clone()))
+                    .audit_role("admin")
             }
             Command::RevokeApplication { consent_id } => {
                 Operation::command("application", "revoke")
                     .target(Some("application_consent"), Some(consent_id.clone()))
+                    .audit_role("admin")
             }
             Command::ClaimConsole { .. } => Operation::dashboard_read("review", "claim-console"),
             Command::Dashboard(origin, action) => dashboard::operation(origin, &action.write),

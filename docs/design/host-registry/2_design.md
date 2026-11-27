@@ -4,8 +4,8 @@ type: design
 title: "Host Registry — Design"
 owner: codex
 created_date: 2026-07-16
-updated_date: 2026-11-11
-last_validated: 2026-10-19
+updated_date: 2026-11-27
+last_validated: 2026-11-27
 status: Accepted
 feature: host-registry
 doc_role: design
@@ -26,8 +26,9 @@ The live implementation has five layers.
 | orbit-types | Workspace identity DTOs, machine/workspace identifier validation, lifecycle enums and schema constants | Files, runtime construction, transport |
 | orbit-registry | Machine identity lifecycle; workspace catalog parsing, mutation, validation, health and file I/O; the host file's schema, validation and atomic writes | CLI orchestration, MCP framing, Core execution |
 | orbit-config | Global machine settings schema and config.toml I/O | Workspace catalog persistence and runtime composition |
-| orbit-cmd | Registry-aware selection and Core runtime construction; the `orbit host` operations, which join the host file to the federated identity probe | Registry schemas or persistence |
-| CLI, Web and MCP server | User/API inputs, presentation, refresh timing and request dispatch | Alternate catalog semantics |
+| orbit-core `app::host` | Shared `orbit host` operations and the dependents they report | SSH probing, replica-checkout opening, transport |
+| orbit-cmd | Registry-aware selection, Core construction and host routing; adapters for `app::host`'s federated probe and read-only pull-drain inspection | Host-operation rules, validation or writes |
+| CLI, Web and MCP server | User/API inputs, presentation, refresh timing and dispatch through shared operations | Alternate catalog semantics |
 
 MachineIdentity lives in orbit-registry. The machine settings schema and config.toml I/O live in orbit-config. Shared primitives such as validate_machine_id, validate_machine_name and the machine-ID namespace constants live in orbit-types so identity validation remains persistence-neutral.
 
@@ -79,7 +80,7 @@ The prefix is also the unit of task *authority* across hosts: the host whose pre
 - `orbit_registry::hosts::load_host_routes` is the one loader for federated serve, follower pull drains and replica worktree GC.
 - The retired `~/.orbit/mcp-destinations.toml` is never parsed. Its presence alone or beside `hosts.toml` fails every load with `host_file_conflict`, naming the path and the remedy: move it aside, run `orbit host add <ssh-target>` for each `ssh` row, then delete the moved file. JSON compatibility fields remain: `legacy` on host rows and lists is always `false`, and `HostChange.migrated` is always `[]`.
 
-The `orbit host` operations live in orbit-cmd so the CLI and the dashboard share them. They probe a host with the federated MCP session (`ssh -T -F <orbit-ssh-config> -- <target> orbit mcp serve --remote-caller-machine-id <local id>`, agent authority, federated probe budget) and read the discovery envelope's `machine_id`, `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint` and optional `host_os`. A probe that answers with a different `machine_id` or `task_prefix` than the entry fails closed with `host_identity_mismatch`; the entry is never rewritten from a probe.
+The shared `orbit host` operations live in `orbit-core::app::host`: the CLI dispatches to `app::host::run`, and the dashboard calls the same app operations. `orbit-cmd` supplies the app's ports: a federated MCP probe and a read-only opener for registered replica checkouts whose pull drains are inspected when reporting dependents. The probe uses (`ssh -T -F <orbit-ssh-config> -- <target> orbit mcp serve --remote-caller-machine-id <local id>`, agent authority, federated probe budget) and reads the discovery envelope's `machine_id`, `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint` and optional `host_os`. A probe that answers with a different `machine_id` or `task_prefix` than the entry fails closed with `host_identity_mismatch`; the entry is never rewritten from a probe.
 
 ## 3. Workspace catalog
 
@@ -152,7 +153,7 @@ Before any runtime opens, the CLI routes a call that addresses one task by id (`
 
 ### Web
 
-The Observe › Fleet view and `/api/hosts` routes manage the serving host's host file through the same orbit-cmd operations as `orbit host`, and answer with its JSON and error codes ([specs/host-commands.md](./specs/host-commands.md#dashboard), [ORB-14451]). The list reads a host-file snapshot under the rule below: it reloads when the host file, the legacy destinations file or `config.toml` changes, and a file that fails to load is reported beside the last valid snapshot. Mutations load the file themselves, as the CLI does, and need the operator capability (the governed dashboard operation `host.edit`).
+The Observe › Fleet view and `/api/hosts` routes manage the serving host's host file through the same `orbit-core::app::host` operations dispatched by `orbit host`, and answer with the app's JSON and error codes ([specs/host-commands.md](./specs/host-commands.md#dashboard), [ORB-14451]). The list reads a host-file snapshot under the rule below: it reloads when the host file, the legacy destinations file or `config.toml` changes, and a file that fails to load is reported beside the last valid snapshot. Mutations load the file themselves, as the CLI does, and need the operator capability (the governed dashboard operation `host.edit`).
 
 `/api/on/<host>/<path>` resolves `<host>` against the same snapshot, by name or `machine_id`, and forwards the request to that host's own dashboard over an on-demand SSH forward ([remote-access specs/host-forward.md](../remote-access/specs/host-forward.md)). Each new tunnel checks the remote's own `machine_id` against the entry and refuses a mismatch. `GET /api/hosts/<host>/connection` reports reachability, attach or spawn, version, protocol and skew from that check. The host file gains no fields; tunnel state is held in memory and never persisted.
 

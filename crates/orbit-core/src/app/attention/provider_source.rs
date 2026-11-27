@@ -1,6 +1,7 @@
 //! Provider and record sources: `ci_red` from the provider read behind
 //! `github.run.list`, cached per workspace and bounded by the source timeout.
-use super::sources::{
+
+use super::source::{
     AttentionCandidates, AttentionSourceContext, SharedOpenTasks, attention_reason, attention_task,
     workspace_degraded,
 };
@@ -407,7 +408,7 @@ pub(super) fn read_ci_attention(
     // A pending task commit makes the repair-task association
     // unavailable: history reads would settle it. The CI evidence itself
     // is still safe to report, degraded explicitly below.
-    let pending_commit = super::sources::pending_commit_message(runtime);
+    let pending_commit = super::source::pending_commit_message(runtime);
     let mut repair_lookup_degraded = false;
     let mut repair_lookup: Option<BTreeMap<String, (String, Option<AttentionTask>)>> = None;
     for (workflow_key, run) in newest_by_workflow {

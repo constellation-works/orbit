@@ -12,11 +12,15 @@
 //! dashboard both call these operations, so
 //! validation and writes have one implementation.
 //!
-//! Every command here is machine-global and opens no workspace, so none of
-//! them runs through the chokepoint in `app/exec.rs`: a surface calls
-//! [`run`] or the named functions directly and keeps its own authorization.
-//! The live probe and the pull-drain read sit above this crate; a surface
-//! passes them in as [`Ports`].
+//! Host-registry commands start machine-global without selecting a workspace,
+//! so they run outside the chokepoint in `app/exec.rs`: a surface calls [`run`]
+//! or the named functions directly and keeps its own authorization. When show
+//! or remove reports a remote host's dependents, the app reads the global
+//! workspace registry and uses [`PullDrains`] to inspect matching registered
+//! replica checkouts read-only for pending or running pull drains. Those
+//! checkouts are inspection inputs, not the command's selected workspace.
+//! The live probe and pull-drain opener sit above this crate; a surface passes
+//! them in as [`Ports`].
 
 pub mod browser_kit;
 
@@ -288,7 +292,9 @@ pub struct PullDrainDependent {
     pub state: String,
 }
 
-/// Run one host command. It opens no workspace and writes no audit row.
+/// Run one machine-global host command without selecting a workspace. A
+/// dependents read may inspect matching replica checkouts read-only; this app
+/// writes no audit row.
 pub fn run(ports: Ports<'_>, command: Command) -> Result<Outcome, Error> {
     Ok(match command {
         Command::List { global_root, probe } => {

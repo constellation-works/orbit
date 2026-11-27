@@ -113,7 +113,7 @@ pub(crate) enum ManagedAssetLayout {
 
 impl ManagedAssetLayout {
     /// Resolve one manifest key to its path relative to the managed directory.
-    pub(super) fn relative_path(self, name: &str) -> PathBuf {
+    pub(crate) fn relative_path(self, name: &str) -> PathBuf {
         match self {
             Self::YamlStem => PathBuf::from(format!("{name}.yaml")),
             Self::RelativePath => PathBuf::from(name),

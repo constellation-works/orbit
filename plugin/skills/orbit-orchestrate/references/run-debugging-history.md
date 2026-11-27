@@ -53,6 +53,22 @@ leaf left.
 
 ## Settlement hydration
 
-Settlement hydration reads follower runs through the operator-only `orbit.run` action `observe` route, which reads stored records without reconciliation or mutation. The follower opens that route without stale-run reconciliation, including discovery that precedes the read. A nonterminal leaf is a mismatch. Ordinary run inspection is an operator surface: `orbit.run` action `show` requires operator capability and refuses agent sessions.
+Hydrate a settled claim whose leaf run evidence is missing. In `orbit run settlements --no-reconcile --json`, that is a claim whose `run_evidence.provenance` is null, or whose `build_state` or `root_cause_state` is `unrecorded`, and whose follower still holds the leaf run. Settled claims can be listed without operator capability: `orbit run settlements --since 7d --no-reconcile --json`.
+
+Authority: an operator on the owning host runs `orbit run settlements-hydrate`. It is operator-only and bounded; an agent session, a managed scan or a claimed worker is refused. It writes only immutable `hydrated` evidence and changes no claim, task or run.
+
+```bash
+orbit run settlements-hydrate --follower-workspace <workspace> --task <task-id> --json
+```
+
+`orbit run settlements-hydrate --help` lists every filter (`--claim`, `--task`, `--machine`, `--since`), the paging options and `--recheck`. The outcomes, claim matching and JSON shape are in [the owner surface reference](../../orbit/references/setup/distributed-drain-owner-surface.md#read-only-owner-surface).
+
+Verify the result:
+
+- Read each row's `outcome`. `hydrated` means the evidence is stored now. `replayed` means the same evidence was already held (shown with `--recheck`). `conflict` means different evidence is held and stands, so do not overwrite it. `mismatch` means the follower's run is not the claim's bound terminal claimed-leaf job, or the leaf is still live; hydrate after it ends. `absent` means the follower holds no such run, and legacy evidence stays `unrecorded`. `unreachable` means ask again later. `no_leaf_run` means the claim has no leaf run to read.
+- Page through the claims. While `remaining` is nonzero, repeat the command with `--after <next_after_claim_id>` and the same filters.
+- Reread `orbit run settlements --no-reconcile --json`. A hydrated claim's `run_evidence.provenance` reads `hydrated`. A field that stays `unrecorded` is final: do not fill it from the owner's record, a current build or the settlement text.
+
+Behind the command, hydration reads follower runs through the operator-only `orbit.run` action `observe` route, which reads stored records without reconciliation or mutation. The follower opens that route without stale-run reconciliation, including discovery that precedes the read. A nonterminal leaf is a mismatch. Ordinary run inspection is an operator surface: `orbit.run` action `show` requires operator capability and refuses agent sessions.
 
 A shell session on the owning host can use `orbit run show <RUN_ID>`; the MCP route requires operator capability. Both reconcile on open. Followers must support the observe route; older followers cannot be hydrated safely.

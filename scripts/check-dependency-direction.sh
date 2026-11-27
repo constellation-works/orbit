@@ -1593,10 +1593,7 @@ PY
 # blocks; application reaches them only through the ports the adapter implements
 # (`ToolInvocationPort`, `PullTransportPort`). The names are derived from the
 # adapter's blocks, so a new adapter method is covered without being listed.
-# Same-named methods on receivers that are not `OrbitRuntime`: the skill
-# repository `doctor`. Exact lines only.
-adapter_upcall_allowed='^health/artifact_diagnosis\.rs:[0-9]+:.*runtime\.skill_catalog\(\)\.read\(\)\.skill\(\)\.doctor\('
-if ! inherent_calls_into "$app_src" "" "" "$adapter_upcall_allowed" '' "$repo_root/crates/orbit-core/src/adapter"; then
+if ! inherent_calls_into "$app_src" "" "" '' '' "$repo_root/crates/orbit-core/src/adapter"; then
   echo "orbit-core application must not call inherent OrbitRuntime methods defined under adapter; reach them through an application-owned port [ORB-22004]"
   fail=1
 fi
