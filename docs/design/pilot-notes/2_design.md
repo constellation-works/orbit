@@ -4,11 +4,11 @@ owner: claude
 created_date: 2026-11-27
 updated_date: 2026-11-27
 last_validated: 2026-11-27
-status: Draft
+status: Accepted
 feature: pilot-notes
 doc_role: design
 type: design
-summary: "Draft, not built: a config table that maps a note label to an instruction file, the section the pilot's prompt gains, `notes` in the assessment and what apply does with them, and where a note is read"
+summary: "Approved design, not yet built: a config table that maps a note label to an instruction file, the section the pilot's prompt gains, `notes` in the assessment and what apply does with them, and where a note is read"
 tags: [pilot-notes, task-pilot]
 related_features: [task-pilot, plugins, workspace-agent-corpus]
 related_artifacts: [ORB-29567]
@@ -16,7 +16,7 @@ related_artifacts: [ORB-29567]
 
 # Pilot Notes — Design
 
-Read the [overview](./1_overview.md) first. This is a draft for the operator to approve
+Read the [overview](./1_overview.md) first. The operator approved this design on 2026-11-27
 ([ORB-29567]); nothing in it is built. It adds to the [task pilot](../task-pilot/1_scope.md),
 whose assessment artifact and readout it reuses, and it borrows the file-reading rules of tag
 instructions (`docs/CONFIG.md`, `[workflow.tag_instructions.<tag>]`).
@@ -53,8 +53,8 @@ and adds one `Pilot notes` section after the activity's built-in instruction.
 - **A file that cannot be used switches off its own note for that run.** Missing at that
   revision, not UTF-8, empty or over the bound: the pilot runs without that label, and the gap
   is recorded (below) and raised as a `doctor` finding naming the label, the file and the
-  reason. The pilot is never refused over a note. This is the second
-  [open decision](./1_overview.md#4-open-decisions).
+  reason. The pilot is never refused over a note
+  ([decision](./4_decisions.md#a-note-never-stops-the-pilot)).
 - **What applied is audited.** Each pilot dispatch records an `activity.pilot_notes_applied`
   event naming each label, its file, the revision, the SHA-256 and the size, or the reason it
   was switched off. It does not carry the text. `orbit run show` prints it as it prints tag
@@ -100,8 +100,8 @@ correction round. The assessment records `notes_dropped` with each label and rea
 **Where a note lives.** In the assessment artifact, with everything else the pilot said about
 the task. Apply already stores the complete assessment as `pilot/assessment-<operation-id>.json`,
 sealed with its digest, written under the task lock before the receipt, and passed through
-the shared redactor. A note needs no storage of its own. This is the first
-[open decision](./1_overview.md#4-open-decisions).
+the shared redactor. A note needs no storage of its own
+([decision](./4_decisions.md#a-note-lives-in-the-assessment-not-in-a-task-comment)).
 
 What follows from that:
 

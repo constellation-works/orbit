@@ -4,9 +4,9 @@ owner: claude
 created_date: 2026-11-27
 updated_date: 2026-11-27
 last_validated: 2026-11-27
-status: Draft
+status: Accepted
 stage: designing
-next: "Operator approval of the draft [ORB-29567]"
+next: "Add the config table and the pilot's prompt section [ORB-29586]"
 feature: pilot-notes
 doc_role: overview
 type: design
@@ -22,8 +22,8 @@ A pilot note is a short text the task pilot writes about one task, in answer to 
 workspace asked. The workspace maps a label to an instruction file. The pilot reads the
 instruction with its own, and returns a note under that label for each task it assesses. Orbit
 keeps the note with the assessment and shows it on the task. Orbit never reads a note's
-meaning and never acts on it: a note is for whoever asked the question, usually a plugin. This
-is a draft for the operator to approve ([ORB-29567]). Nothing in it is built.
+meaning and never acts on it: a note is for whoever asked the question, usually a plugin. The
+operator approved the design on 2026-11-27 ([ORB-29567]). Nothing in it is built.
 
 ## 1. Motivation
 
@@ -73,27 +73,29 @@ from the task. Orbit learns nothing about what the question means.
 | Pilots on another host | [Claimed pilots](./2_design.md#6-claimed-pilots) | 2 |
 | The dashboard | [Reading a note](./2_design.md#5-reading-a-note) | 2 |
 
-## 4. Open decisions
+## 4. Decided at approval
 
-Two choices are the operator's. Each has a recommendation, and the design is written to it.
+The operator approved the design as drafted on 2026-11-27. Two points were open questions in
+the draft and were approved with the recommendation. Both are recorded in the
+[decisions](./4_decisions.md):
 
-1. **Where a note lives.** *Recommended:* inside the assessment artifact, shown through the
-   task's pilot readout. The alternative is one task comment per label. A comment is visible
-   in the comment list with no new readout, but it spends the task's comment budget on every
-   pilot, needs its own replace-in-place rule, and makes a second copy of what the assessment
-   already holds ([design](./2_design.md#4-notes-in-the-assessment)).
-2. **What a broken note instruction does.** *Recommended:* the pilot runs without that note
-   and the gap is reported. The alternative is to refuse the pilot, as a broken tag
-   instruction refuses its activity. A tag instruction is refused for the tasks that carry
-   its tag; a note instruction applies to every task, so refusing would stop every admission
-   in the workspace over an advisory text ([design](./2_design.md#2-the-pilots-prompt)).
+1. **A note lives in the assessment, not in a task comment.**
+2. **A note never stops the pilot.** A note instruction that cannot be used switches off its
+   own note, and a bad note is dropped.
 
 ## 5. Build
 
-Build tasks are filed once the design is approved.
+| Phase | Task |
+|---|---|
+| 1. Local notes | [ORB-29586] adds the config table, the pilot's prompt section, the audit event and the `doctor` finding; [ORB-29588] adds `notes` to the assessment, the checks in apply and the readouts |
+| 2. Claimed pilots and the dashboard | [ORB-29589] shows notes on a task's detail; [ORB-29590] gives a claimed pilot the owner's captured instructions |
 
 ## Task References
 
 - [ORB-29567] — this design.
+- [ORB-29586] — adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding.
+- [ORB-29588] — adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
+- [ORB-29589] — shows pilot notes on the dashboard's task detail.
+- [ORB-29590] — gives a claimed pilot the owner's captured note instructions.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
