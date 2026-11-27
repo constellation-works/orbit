@@ -340,27 +340,72 @@ pub fn local_protocol_fingerprint() -> &'static str {
     orbit_store::contract::distributed_drain_protocol_fingerprint()
 }
 
-/// Run `probe` over every item at once, each within its own budget, so one
-/// unreachable host never holds the others. Results keep the input order.
+/// Probe in bounded batches, keeping results in input order. If a worker
+/// cannot start, probe its item on the calling thread.
 pub fn in_parallel<T, R>(items: &[T], probe: impl Fn(&T) -> R + Sync) -> Vec<R>
 where
     T: Sync,
     R: Send,
 {
-    std::thread::scope(|scope| {
-        let handles = items
-            .iter()
-            .map(|item| {
-                let probe = &probe;
-                scope.spawn(move || probe(item))
-            })
-            .collect::<Vec<_>>();
-        handles
-            .into_iter()
-            .map(|handle| match handle.join() {
-                Ok(result) => result,
-                Err(panic) => std::panic::resume_unwind(panic),
-            })
-            .collect()
+    in_parallel_with(items, probe, |index| {
+        #[cfg(test)]
+        if REFUSE_START.with(|refusal| {
+            refusal
+                .get()
+                .is_some_and(|at| at == index || at == usize::MAX)
+        }) {
+            return Err(std::io::Error::other("injected thread-start refusal"));
+        }
+        let _ = index;
+        Ok(())
     })
 }
+
+#[cfg(test)]
+thread_local! {
+    static REFUSE_START: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+fn in_parallel_with<T, R>(
+    items: &[T],
+    probe: impl Fn(&T) -> R + Sync,
+    start: impl Fn(usize) -> std::io::Result<()>,
+) -> Vec<R>
+where
+    T: Sync,
+    R: Send,
+{
+    const MAX_PROBES: usize = 8;
+    let mut results = Vec::with_capacity(items.len());
+    for (batch, chunk) in items.chunks(MAX_PROBES).enumerate() {
+        std::thread::scope(|scope| {
+            let handles = chunk
+                .iter()
+                .enumerate()
+                .map(|(offset, item)| {
+                    let probe = &probe;
+                    start(batch * MAX_PROBES + offset).and_then(|()| {
+                        std::thread::Builder::new().spawn_scoped(scope, move || probe(item))
+                    })
+                })
+                .collect::<Vec<_>>();
+            results.extend(
+                chunk
+                    .iter()
+                    .zip(handles)
+                    .map(|(item, handle)| match handle {
+                        Ok(handle) => match handle.join() {
+                            Ok(result) => result,
+                            Err(panic) => std::panic::resume_unwind(panic),
+                        },
+                        Err(_) => probe(item),
+                    }),
+            );
+        });
+    }
+    results
+}
+
+#[cfg(test)]
+#[path = "tests/mod.rs"]
+mod tests;
