@@ -27,9 +27,9 @@ use crate::runtime::run_input::managed_dispatch_context_from_env;
 use crate::runtime::run_input::managed_run_context_from_env;
 use crate::runtime::{
     HostLifetime, OrbitRuntime, OrbitRuntimeRoots, ResolvedOrbitRoots, RuntimeConfigLoader,
-    RuntimeKernel, WorkspaceRootHint, WorkspaceRuntimeBinding, resolve_bootstrap_roots,
-    resolve_bootstrap_roots_with_hint, resolve_global_root, resolve_initialize_roots,
-    resolve_initialize_roots_with_hint,
+    RuntimeKernel, RuntimeOpenOptions, WorkspaceRootHint, WorkspaceRuntimeBinding,
+    resolve_bootstrap_roots, resolve_bootstrap_roots_with_hint, resolve_global_root,
+    resolve_initialize_roots, resolve_initialize_roots_with_hint,
 };
 
 impl OrbitRuntime {
@@ -381,14 +381,16 @@ fn build_runtime(
     } else {
         RuntimeKernel::build_from_resolved_config(
             roots,
-            binding,
             &runtime_config,
-            layout_report,
-            host_lifetime,
-            read_only,
-            config_loader,
-            if read_only { None } else { task_prefix },
             super::open_store(&runtime_config.persistence.audit_db)?,
+            RuntimeOpenOptions {
+                binding,
+                layout_report,
+                host_lifetime,
+                read_only,
+                config_loader,
+                task_prefix: if read_only { None } else { task_prefix },
+            },
         )?
     };
     let runtime = OrbitRuntime::from_kernel(kernel);

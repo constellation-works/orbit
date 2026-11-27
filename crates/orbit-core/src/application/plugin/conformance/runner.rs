@@ -19,7 +19,7 @@ use orbit_types::plugin::{
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin::backend::build_plugin_backend;
+use crate::runtime::plugin::backend::{PluginBackendContext, build_plugin_backend};
 use crate::runtime::plugin::config::plugin_config_schema;
 use crate::runtime::plugin::requirements::{host_version, unmet_requirement};
 
@@ -139,26 +139,28 @@ pub fn test_plugin_dir(
     let fixture_secrets = Arc::new(FixtureSecrets::default());
     let backend = build_plugin_backend(
         &plugin,
-        PluginProvenance {
-            name: plugin.namespace().to_string(),
-            version: plugin.manifest.metadata.version.clone(),
-            manifest_digest: plugin.manifest_digest.clone(),
-            grants: grants.to_recorded(),
+        PluginBackendContext {
+            provenance: PluginProvenance {
+                name: plugin.namespace().to_string(),
+                version: plugin.manifest.metadata.version.clone(),
+                manifest_digest: plugin.manifest_digest.clone(),
+                grants: grants.to_recorded(),
+            },
+            state_dir,
+            global_root,
+            grants,
+            config,
+            // No operator has consented yet, so the programs resolve against this
+            // process's `PATH`, exactly as `orbit plugin enable` from here would
+            // record them.
+            program_paths: resolve_declared_programs(
+                &plugin.manifest.spec.requires.programs,
+                runtime.execution_env_policy().process_env().path(),
+            )
+            .0,
+            // The goldens' fixtures, swapped in per case; never the host store.
+            secrets: Some(Arc::clone(&fixture_secrets) as Arc<dyn PluginSecretSource>),
         },
-        &state_dir,
-        &global_root,
-        grants,
-        config,
-        // No operator has consented yet, so the programs resolve against this
-        // process's `PATH`, exactly as `orbit plugin enable` from here would
-        // record them.
-        resolve_declared_programs(
-            &plugin.manifest.spec.requires.programs,
-            runtime.execution_env_policy().process_env().path(),
-        )
-        .0,
-        // The goldens' fixtures, swapped in per case; never the host store.
-        Some(Arc::clone(&fixture_secrets) as Arc<dyn PluginSecretSource>),
     );
     refuse_covering_fs_write_roots(backend.spec(), None).map_err(manifest_refusal)?;
     create_workspace_write_files(backend.spec(), &workspace_root)?;
