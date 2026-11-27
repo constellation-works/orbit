@@ -169,7 +169,7 @@ pub(super) mod filesystem {
         }
     }
 
-    unsafe fn errno() -> *mut libc::c_int {
+    fn errno() -> *mut libc::c_int {
         #[cfg(target_os = "linux")]
         // SAFETY: libc returns this thread's errno storage.
         unsafe {
