@@ -34,9 +34,6 @@ mod target;
 mod templating;
 mod validate;
 
-#[cfg(test)]
-mod tests;
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
@@ -88,6 +85,9 @@ pub use self::templating::{
     render_job_step_input_from_state,
 };
 pub use self::validate::{validate_job, validate_job_deterministic_actions};
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug, Clone)]
 pub struct JobOutcome {
