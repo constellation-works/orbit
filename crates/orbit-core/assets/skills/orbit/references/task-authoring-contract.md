@@ -49,10 +49,27 @@ pickup. Do not confuse a task description with a design document or a transcript
   treated. Example: “Completion rate uses all non-archived tasks; an absent or
   null owner is unknown, an empty owner is unassigned, and legacy rows without
   the owner field are unknown.”
+  - When a change affects a persisted format, say whether a pre-change record
+    will be read, migrated or refused. Include an acceptance criterion that
+    exercises that outcome with a fixture containing an actual pre-change
+    record, so the check reads the old representation rather than constructing
+    a current-format record.
 - **Acceptance:** define observable behavior and evidence, including important
   refusal/negative cases. Commands are validation methods, not substitutes for an
   expected result. Distinguish implemented, tested, merged and deployed when those
   differ; do not make an implementation task require an unauthorized live rollout.
+  - For every executable check criterion, name the behavior or outcome the check
+    exercises and give one input it must accept and one it must reject. A test or
+    command name alone does not establish what the check proves.
+  - If a criterion checks wording, layout, help text or another text surface,
+    classify it as text review. Phrase presence alone is not behavioral evidence
+    for an executable check.
+  - A grep criterion states the exact command, searched path scope and match
+    count at filing, plus the expected count after the change. Keep the path
+    scope narrow. For example, if
+    `rg -n -F 'old_setting' crates/orbit-config/src/ | wc -l` returns 4 at
+    filing, require it to return 0 after the removal. Use repository-wide scope
+    only when filing-time results show that every match belongs to the target.
 - **Timing and performance criteria:** a timing criterion must be stable under
   re-measurement of an unchanged binary: repeated measurement of the same binary
   on the same fixture must not be able to flip it across its bound.
