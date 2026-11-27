@@ -4,7 +4,9 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::automation::DirectLandingRequest;
 use serde_json::{Value, json};
 
-use crate::context::{HandoffLandingStep, RuntimeHost};
+use crate::context::{
+    HandoffLandingStep, HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::super::input::input_string_field;
 use super::super::completion_hold::{ChangedPaths, candidate_commit_changed_paths};
@@ -21,7 +23,9 @@ use super::run::LandingPass;
 
 /// Owner-local delivery: no origin, no pull request, and a fast-forward of the
 /// landing branch is the entire external effect.
-pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
+pub(super) fn land_local_candidate<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     context: &LandingPass,
     input: &Value,
@@ -197,7 +201,9 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
 /// nothing to merge. The typed evidence and completion authority are still
 /// required — the owner store rechecks both — and the covering commit is
 /// verified here against the real landing ref.
-pub(super) fn land_already_landed<H: RuntimeHost + ?Sized>(
+pub(super) fn land_already_landed<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     context: &LandingPass,
     covering_commit: &str,
@@ -249,7 +255,9 @@ pub(super) fn land_already_landed<H: RuntimeHost + ?Sized>(
 /// the synchronized base, at the completion write. The landing branch may
 /// have advanced past that base since the run synchronized [ORB-15074];
 /// `observe_or_stop` already stops when it no longer contains it.
-pub(super) fn land_no_diff<H: RuntimeHost + ?Sized>(
+pub(super) fn land_no_diff<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     context: &LandingPass,
     view: &LandingView,

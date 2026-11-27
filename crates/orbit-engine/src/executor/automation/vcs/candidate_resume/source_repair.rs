@@ -4,14 +4,16 @@ use super::super::pr_answers::read_pr_status;
 use super::adopt::{Adoption, adopt_published_branch};
 use super::apply::{Applied, apply, output, record};
 use super::{Candidate, Outcome};
-use crate::context::{ReviewGate, RunLifecycle, RuntimeHost};
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 use orbit_common::OrbitError;
 use orbit_types::task::Task;
 use orbit_types::workflow::{JobRun, SourceRepairAdmission, source_repair_authorizations};
 use serde_json::{Value, json};
 use std::path::Path;
 
-pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
+pub(super) fn continue_source<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     run: &JobRun,
     task: &Task,
@@ -137,7 +139,9 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
 
 /// A host-authenticated completed owner candidate skips implementation after a
 /// clean apply. All later validation, review and completion gates run afresh.
-pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
+pub(super) fn continue_published_owner<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     run_id: &str,
     task: &Task,

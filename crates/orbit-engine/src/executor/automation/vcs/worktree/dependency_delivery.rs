@@ -23,7 +23,7 @@ use orbit_common::{DependencyNotDelivered, OrbitError};
 use orbit_types::task::{TaskStatus, archived_task_completed_before_archive};
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::delivery_marker::commits_matching;
 
@@ -83,7 +83,7 @@ pub(in crate::executor::automation) fn dependency_delivery_mode_from_input(
 /// different from the one the worktree is created at. `base_ref` is carried
 /// only to name the base in the diagnostic.
 pub(in crate::executor::automation) fn ensure_dependencies_delivered_into_base<
-    H: RuntimeHost + ?Sized,
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
 >(
     host: &H,
     repo_root: &Path,

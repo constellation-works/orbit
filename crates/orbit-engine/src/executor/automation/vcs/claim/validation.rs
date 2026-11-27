@@ -13,7 +13,9 @@ use orbit_types::workflow::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::context::{ClaimExecutionContext, RuntimeHost};
+use crate::context::{
+    ClaimExecutionContext, HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 use crate::executor::automation::input::input_string_field;
 
 use super::super::baseline::{
@@ -137,7 +139,9 @@ impl ClaimedResult {
 /// [ORB-15764] A `no-diff-expected` skip checkpoint on that route runs no
 /// command or replay at all and records `skipped_no_diff_expected` with no
 /// validation references ([`super::no_diff`]).
-pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn claim_validate<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -238,7 +242,7 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
 /// covers every path the candidate changes on its base, so no required
 /// command or deferral replay runs. The owner re-judges the candidate, and
 /// records the decision in history, when it accepts the handoff.
-fn light_validation<H: RuntimeHost + ?Sized>(
+fn light_validation<H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
     workspace_path: &Path,
@@ -272,7 +276,9 @@ fn mark_light(output: &mut Value, light: Option<&LightDeliveryDecision>) {
 /// command in `replays` must report executed tests before either continuation.
 /// Shared by the ordinary route and clean-base NoDiff
 /// validation so neither can attach a passing log the other would refuse.
-pub(super) fn run_claimed_commands<H: RuntimeHost + ?Sized>(
+pub(super) fn run_claimed_commands<
+    H: ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     context: &ClaimExecutionContext,
     workspace_path: &Path,
@@ -310,7 +316,9 @@ pub(super) fn run_claimed_commands<H: RuntimeHost + ?Sized>(
 /// Pin a pre-publication validation onto the published candidate: the
 /// commands already passed on this exact commit and base, so the logs are
 /// built from those results with the pull request as their delivery.
-fn pin_prevalidated<H: RuntimeHost + ?Sized>(
+fn pin_prevalidated<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     context: &ClaimExecutionContext,
     workspace_path: &Path,
@@ -429,7 +437,7 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
 
 /// Attach one typed log per command to the owner's task: a passed command's,
 /// or a known-red command's with its exit status and report [ORB-15427].
-pub(super) fn attach_handoff_logs<H: RuntimeHost + ?Sized>(
+pub(super) fn attach_handoff_logs<H: ReviewGate + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
     candidate: &HandoffCandidate,
@@ -544,7 +552,7 @@ fn decision(known_red: &[KnownRedValidation], results: &[ClaimedResult]) -> &'st
 /// and both logs are attached to the owner's task before the step fails; a
 /// failure the base shares is typed `baseline_red`, and one that still could
 /// not reach the network after its retries is typed `transient`.
-fn claim_failure<H: RuntimeHost + ?Sized>(
+fn claim_failure<H: ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
     input: &Value,

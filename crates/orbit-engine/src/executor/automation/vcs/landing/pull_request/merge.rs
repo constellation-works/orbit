@@ -5,7 +5,9 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
-use crate::context::{HandoffLandingStep, RuntimeHost};
+use crate::context::{
+    HandoffLandingStep, HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::super::base::refresh::RefreshStep;
 use super::super::super::commit::squash_merge_fields;
@@ -18,7 +20,9 @@ use super::super::observe::observe_candidate;
 use super::super::record::{behind_base, complete, record, refuse_pr};
 use super::poll::{LandingPoll, Step};
 
-impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
+impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>
+    LandingPoll<'a, H>
+{
     pub(super) fn refresh_base(
         &self,
         status: &PullRequestStatus,

@@ -4,7 +4,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskActivityUpdate};
+use crate::context::{HostEnvironment, RunLifecycle, TaskActivityUpdate};
 
 use super::StateExecutionContext;
 use super::input::{input_string_field, required_input_string};
@@ -13,7 +13,7 @@ pub(in crate::executor::automation) use complete::{
     authorization_note, complete_tasks, task_complete,
 };
 
-pub(super) fn update_task<H: RuntimeHost + ?Sized>(
+pub(super) fn update_task<H: RunLifecycle + HostEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     state_context: Option<&StateExecutionContext>,
@@ -60,7 +60,7 @@ pub(super) fn update_task<H: RuntimeHost + ?Sized>(
     Ok(json!({}))
 }
 
-fn activity_identity<H: RuntimeHost + ?Sized>(
+fn activity_identity<H: HostEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     state_context: Option<&StateExecutionContext>,

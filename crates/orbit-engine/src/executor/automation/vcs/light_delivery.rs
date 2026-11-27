@@ -20,7 +20,7 @@ use orbit_types::task::{
 };
 
 use crate::context::{
-    HostEnvironment, RunLifecycle, RuntimeHost, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+    HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
 };
 
 use super::baseline::in_detached_worktree;
@@ -134,7 +134,9 @@ pub(super) fn light_delivery_decision<
 ///
 /// # Errors
 /// Returns an error when a task cannot be read or Git cannot diff.
-pub fn review_skip_decision<H: RuntimeHost + ?Sized>(
+pub fn review_skip_decision<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace: &Path,
     base: &str,
@@ -197,7 +199,7 @@ pub fn review_skip_decision<H: RuntimeHost + ?Sized>(
 /// Returns an error only when the guard cannot be materialized outside
 /// the checkout or `head` cannot be checked out; a missing or failing
 /// guard is a [`GuardOutcome`].
-pub fn run_review_skip_guard<H: RuntimeHost + ?Sized>(
+pub fn run_review_skip_guard<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     base: &str,

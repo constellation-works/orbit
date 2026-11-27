@@ -27,7 +27,7 @@ use orbit_common::text::floor_char_boundary;
 use orbit_types::workflow::{CandidateCarry, CandidateCarryOutput};
 use serde_json::{Value, json};
 
-use crate::context::{HostEnvironment, RuntimeHost, RuntimeHostProcessEnvironment};
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 use crate::executor::automation::input::{input_string_field, required_input_string};
 
 use super::super::commit::commit_claimed_partial;
@@ -40,7 +40,9 @@ const MAX_CARRY_REASON_BYTES: usize = 1024;
 
 /// Make the failed leaf's unpublished candidate fetchable from
 /// `origin`, and report where it is.
-pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn claim_candidate_carry<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -48,7 +50,7 @@ pub(in crate::executor::automation) fn claim_candidate_carry<H: RuntimeHost + ?S
         .map_err(|error| OrbitError::Execution(error.to_string()))
 }
 
-fn candidate_carry<H: RuntimeHost + ?Sized>(
+fn candidate_carry<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<CandidateCarryOutput, OrbitError> {
@@ -155,7 +157,7 @@ fn candidate_carry<H: RuntimeHost + ?Sized>(
 /// cannot be read, stays `published`. A carry failure keeps the local tip
 /// as `failed`, with the pushed head and reason, so a later claim on this
 /// host resumes the reviewer fix instead of reverting to the pushed head.
-fn carry_published<H: RuntimeHost + ?Sized>(
+fn carry_published<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: Option<&Path>,
     branch: &str,

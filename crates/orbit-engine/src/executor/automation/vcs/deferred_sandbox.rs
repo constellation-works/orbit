@@ -32,7 +32,7 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
-use crate::context::{Dispatch, HostEnvironment, ReviewGate, RunLifecycle, RuntimeHost};
+use crate::context::{Dispatch, HostEnvironment, ReviewGate, RunLifecycle};
 
 /// The checkout directory a handed-off gate summary must be in: the
 /// implementer's scratch.
@@ -241,7 +241,7 @@ pub(super) fn deferred_replays<H: RunLifecycle + HostEnvironment + ?Sized>(
 
 /// The command a claimed leaf's validation replays: this attempt's
 /// implementer output, handed in as `implementation`.
-pub(super) fn claimed_deferred_replays<H: RuntimeHost + ?Sized>(
+pub(super) fn claimed_deferred_replays<H: HostEnvironment + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<Vec<String>, OrbitError> {

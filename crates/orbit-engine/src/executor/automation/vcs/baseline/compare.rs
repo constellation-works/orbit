@@ -6,7 +6,7 @@ use super::super::required::command::{
 use super::cache::{
     CACHE_SCHEMA_VERSION, cache_paths, cached_base_check, read_cached, run_on_base,
 };
-use crate::context::{HostEnvironment, RuntimeHost, RuntimeHostProcessEnvironment};
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::fs::file_lock::{FileLockOptions, acquire_exclusive_file_lock};
@@ -435,7 +435,9 @@ pub(in crate::executor::automation::vcs) fn compare_with_base_until<
 
 /// Owner claim comparisons retain inconclusive runs separately. They cannot
 /// confirm known red, but settlement retries must not restart a cold base run.
-pub(in super::super) fn compare_claimed_with_base_until<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn compare_claimed_with_base_until<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     base_sha: &str,

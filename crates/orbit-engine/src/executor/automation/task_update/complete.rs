@@ -19,7 +19,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
-use crate::context::{HostEnvironment, RunLifecycle, RuntimeHost, TaskActivityUpdate};
+use crate::context::{HostEnvironment, RunLifecycle, TaskActivityUpdate};
 
 use super::super::input::{input_string_field, required_job_run_id};
 use super::super::vcs::completion_hold::{
@@ -32,7 +32,7 @@ use super::super::vcs::completion_hold::{
 /// are skipped so a resumed run is idempotent; any task that is neither `review`
 /// nor `done` is an error, because reaching completion from there would skip the
 /// delivery the authorization was granted for.
-pub(in crate::executor::automation) fn task_complete<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn task_complete<H: RunLifecycle + HostEnvironment + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {

@@ -22,7 +22,9 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::context::{ClaimExecutionContext, RuntimeHost};
+use crate::context::{
+    ClaimExecutionContext, HostEnvironment, ReviewGate, RuntimeHostProcessEnvironment,
+};
 
 use super::super::host_evidence::run_host_sandbox_test;
 use super::input::refused;
@@ -56,7 +58,7 @@ pub(super) fn declared(input: &Value) -> Result<Option<DeclaredAlreadyResolved>,
 
 /// Run each admitted selector on `candidate`'s base, in order, and return
 /// their passing results; the first that is not passing evidence fails.
-pub(super) fn replay<H: RuntimeHost + ?Sized>(
+pub(super) fn replay<H: ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     context: &ClaimExecutionContext,
     workspace: &Path,

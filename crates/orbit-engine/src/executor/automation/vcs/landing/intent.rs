@@ -6,7 +6,9 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::handoff::HandoffDelivery;
 use serde_json::{Value, json};
 
-use crate::context::{HandoffLandingStep, RuntimeHost};
+use crate::context::{
+    HandoffLandingStep, HostEnvironment, ReviewGate, RuntimeHostProcessEnvironment,
+};
 
 use super::super::git::{fetch_remote_base, git_command_success};
 use super::super::pr::diagnostics;
@@ -82,7 +84,9 @@ impl LandingView {
 /// attempt a fresh, fully rechecked landing. A merged pull request with a
 /// different identity resolves the external uncertainty before recording Stop;
 /// resolving an intent is not proof that the authorized candidate landed.
-pub(super) fn reconcile_intent<H: RuntimeHost + ?Sized>(
+pub(super) fn reconcile_intent<
+    H: ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     context: &LandingPass,
     intent_id: &str,

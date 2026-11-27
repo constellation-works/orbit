@@ -46,7 +46,7 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::github_host::{OUTCOME_CAPABILITY_UNAVAILABLE, query_root};
 use super::input::input_string_field;
@@ -98,7 +98,9 @@ pub(super) fn bounded_u64(
     Ok(raw.min(max))
 }
 
-pub(super) fn collect_ci_evidence<H: RuntimeHost + ?Sized>(
+pub(super) fn collect_ci_evidence<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -156,7 +158,7 @@ pub(super) fn collect_ci_evidence<H: RuntimeHost + ?Sized>(
 /// job runs retain their source run's identity, so retrying one scheduled sweep
 /// cannot count as several consecutive sweeps. Direct activity calls fall back
 /// to the current UTC hour, matching the shipped routine's hourly cadence.
-fn retryable_history_sweep_id<H: RuntimeHost + ?Sized>(host: &H, input: &Value) -> String {
+fn retryable_history_sweep_id<H: RunLifecycle + ?Sized>(host: &H, input: &Value) -> String {
     const MAX_RETRY_ANCESTORS: usize = 64;
 
     let fallback = || format!("hour:{}", chrono::Utc::now().format("%Y%m%d%H"));

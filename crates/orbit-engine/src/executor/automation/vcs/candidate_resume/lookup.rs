@@ -11,7 +11,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string, required_job_run_id,
 };
@@ -35,7 +35,9 @@ enum HeldDecision {
 
 /// Apply the task's preserved candidate onto this run's base, if it may be
 /// resumed, and decide whether the implementation step runs.
-pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn candidate_resume<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -302,7 +304,7 @@ fn claim_candidate(preserved: &Value, claim: Option<ClaimSource>) -> Option<Cand
 /// The candidate recorded by the failure handoff of the run the task was last
 /// linked to, or else the one its evidence hold kept, or why there is none to
 /// resume.
-fn preserved_candidate<H: RuntimeHost + ?Sized>(
+fn preserved_candidate<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     task: &Task,
     prior_run_id: Option<String>,
@@ -368,7 +370,7 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
 /// run reported findings on it. A held run ends before the failure handoff,
 /// so the hold artifact is what names the exact commit the evidence was
 /// checked against.
-fn held_candidate<H: RuntimeHost + ?Sized>(
+fn held_candidate<H: RunLifecycle + ?Sized>(
     host: &H,
     task: &Task,
     prior_run_id: &str,
@@ -436,7 +438,7 @@ fn held_candidate<H: RuntimeHost + ?Sized>(
 /// executed on another machine: the candidate the owner kept from the task's
 /// last claim, never anything this machine's run store holds under that
 /// run's id.
-fn foreign_candidate<H: RuntimeHost + ?Sized>(
+fn foreign_candidate<H: ReviewGate + ?Sized>(
     host: &H,
     task: &Task,
     foreign: &ForeignRun,
@@ -455,7 +457,7 @@ fn foreign_candidate<H: RuntimeHost + ?Sized>(
 
 /// [ORB-14603] The candidate the owner kept from the claim whose leaf was
 /// this machine's run `prior_run_id`, when that leaf left no failure handoff.
-fn local_claim_candidate<H: RuntimeHost + ?Sized>(
+fn local_claim_candidate<H: ReviewGate + ?Sized>(
     host: &H,
     task: &Task,
     prior_run_id: &str,
@@ -537,7 +539,7 @@ fn held_decision(history: &[TaskHistoryEntry], run_id: &str) -> Option<HeldDecis
 /// [ORB-18660] The repair output for a held candidate an owner evidence run
 /// reported findings on: the system-written findings for held run `run_id`,
 /// or where to find them when that record is unreadable.
-fn evidence_findings<H: RuntimeHost + ?Sized>(
+fn evidence_findings<H: RunLifecycle + ?Sized>(
     host: &H,
     task: &Task,
     run_id: &str,
@@ -585,7 +587,7 @@ fn evidence_findings<H: RuntimeHost + ?Sized>(
 /// the task's description or acceptance criteria changed since
 /// `recorded_spec` was taken. `Some(None)` is a record that should carry a
 /// spec digest and does not; `None` is one that never did.
-fn refuse_stale<H: RuntimeHost + ?Sized>(
+fn refuse_stale<H: RunLifecycle + ?Sized>(
     host: &H,
     task: &Task,
     candidate: Candidate,

@@ -7,7 +7,9 @@ use orbit_types::workflow::handoff::{
 };
 use serde_json::{Value, json};
 
-use crate::context::{HandoffLandingStep, HandoffLandingUpdate, RuntimeHost};
+use crate::context::{
+    HandoffLandingStep, HandoffLandingUpdate, HostEnvironment, ReviewGate, RunLifecycle,
+};
 
 use super::super::completion_hold::{
     ChangedPaths, evaluate_completion_hold, record_landing_completion_hold,
@@ -16,7 +18,7 @@ use super::super::pr::diagnostics;
 use super::super::pr::{PrMergeState, PullRequestStatus};
 use super::run::LandingPass;
 
-pub(super) fn record<H: RuntimeHost + ?Sized>(
+pub(super) fn record<H: ReviewGate + ?Sized>(
     host: &H,
     context: &LandingPass,
     step: HandoffLandingStep,
@@ -44,7 +46,7 @@ pub(super) fn record<H: RuntimeHost + ?Sized>(
     Ok(())
 }
 
-pub(super) fn complete<H: RuntimeHost + ?Sized>(
+pub(super) fn complete<H: ReviewGate + ?Sized>(
     host: &H,
     context: &LandingPass,
     observed: HandoffCandidate,
@@ -69,7 +71,7 @@ pub(super) fn complete<H: RuntimeHost + ?Sized>(
 /// evidence on the owner. Evidence a task edit made stale is a typed
 /// [`DeliveryRefusal::EvidenceStale`]: record the stop, with the candidate left
 /// in review, and hold the run instead of failing it.
-pub(super) fn complete_or_hold_stale_evidence<H: RuntimeHost + ?Sized>(
+pub(super) fn complete_or_hold_stale_evidence<H: ReviewGate + ?Sized>(
     host: &H,
     context: &LandingPass,
     observed: HandoffCandidate,
@@ -93,7 +95,7 @@ pub(super) fn complete_or_hold_stale_evidence<H: RuntimeHost + ?Sized>(
 
 /// Keep diagnostics in the existing opaque evidence string. The enclosing
 /// durable attempt supplies its attempt number/run; `observed` stays empty.
-pub(super) fn stop_pr<H: RuntimeHost + ?Sized>(
+pub(super) fn stop_pr<H: ReviewGate + ?Sized>(
     host: &H,
     context: &LandingPass,
     observation: &Value,
@@ -110,7 +112,7 @@ pub(super) fn stop_pr<H: RuntimeHost + ?Sized>(
 }
 
 /// Record the same landing stop with a deliberate held run outcome.
-pub(super) fn hold_pr<H: RuntimeHost + ?Sized>(
+pub(super) fn hold_pr<H: ReviewGate + ?Sized>(
     host: &H,
     context: &LandingPass,
     observation: &Value,
@@ -142,7 +144,7 @@ pub(super) fn hold_pr<H: RuntimeHost + ?Sized>(
 
 /// [`stop_pr`] recorded as `step`, a [`HandoffLandingStep::Stop`] or
 /// [`HandoffLandingStep::StopForRequeue`].
-pub(super) fn refuse_pr<H: RuntimeHost + ?Sized>(
+pub(super) fn refuse_pr<H: ReviewGate + ?Sized>(
     host: &H,
     context: &LandingPass,
     observation: &Value,
@@ -152,7 +154,7 @@ pub(super) fn refuse_pr<H: RuntimeHost + ?Sized>(
     record_refusal(host, context, observation, step, reason, None)
 }
 
-pub(super) fn stop_waiting_checks<H: RuntimeHost + ?Sized>(
+pub(super) fn stop_waiting_checks<H: ReviewGate + ?Sized>(
     host: &H,
     context: &LandingPass,
     observation: &Value,
@@ -172,7 +174,7 @@ pub(super) fn stop_waiting_checks<H: RuntimeHost + ?Sized>(
     })
 }
 
-fn record_refusal<H: RuntimeHost + ?Sized>(
+fn record_refusal<H: ReviewGate + ?Sized>(
     host: &H,
     context: &LandingPass,
     observation: &Value,
@@ -227,7 +229,7 @@ fn record_refusal<H: RuntimeHost + ?Sized>(
 
 /// Record a durable stop and return the error the run fails with, so the
 /// evidence an operator reads and the failure they see say the same thing.
-pub(super) fn stop<H: RuntimeHost + ?Sized>(
+pub(super) fn stop<H: ReviewGate + ?Sized>(
     host: &H,
     context: &LandingPass,
     reason: &str,
@@ -237,7 +239,7 @@ pub(super) fn stop<H: RuntimeHost + ?Sized>(
 
 /// [`stop`] for a candidate that conflicts with, or is stale against, the base
 /// it lands on. The owner store hands it to one automatic repair.
-pub(super) fn stop_for_repair<H: RuntimeHost + ?Sized>(
+pub(super) fn stop_for_repair<H: ReviewGate + ?Sized>(
     host: &H,
     context: &LandingPass,
     reason: &str,
@@ -245,7 +247,7 @@ pub(super) fn stop_for_repair<H: RuntimeHost + ?Sized>(
     record_stop(host, context, reason, true)
 }
 
-pub(super) fn record_stop<H: RuntimeHost + ?Sized>(
+pub(super) fn record_stop<H: ReviewGate + ?Sized>(
     host: &H,
     context: &LandingPass,
     reason: &str,
@@ -270,7 +272,7 @@ pub(super) fn record_stop<H: RuntimeHost + ?Sized>(
 /// `None` when the landing may proceed. Callers that first observe the
 /// candidate already merged or contained settle that fact instead and
 /// never reach this gate: a merge that already happened cannot be held.
-pub(super) fn completion_hold_stop<H: RuntimeHost + ?Sized>(
+pub(super) fn completion_hold_stop<H: RunLifecycle + ReviewGate + HostEnvironment + ?Sized>(
     host: &H,
     context: &LandingPass,
     changed: &ChangedPaths,

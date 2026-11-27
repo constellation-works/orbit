@@ -8,6 +8,7 @@
 
 use std::path::Path;
 
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 use orbit_common::OrbitError;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{CommitIdentity, RequiredValidationFailureKind};
@@ -496,7 +497,7 @@ pub fn publish_held_candidate(
 
 /// Preserve a claimed evidence hold at the same durable ref as a failed leaf.
 /// A refused push still names the local candidate and its diagnostic.
-pub fn carry_evidence_candidate<H: crate::context::RuntimeHost + ?Sized>(
+pub fn carry_evidence_candidate<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     commit: &str,
@@ -647,7 +648,7 @@ pub fn landed_candidate_facts(
 /// Run one required validation command in `workspace_path` with the shared
 /// validation runner: the same shell, environment, timeout and failure
 /// classification as delivery validation.
-pub fn run_required_validation<H: crate::context::RuntimeHost + ?Sized>(
+pub fn run_required_validation<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     command: &str,

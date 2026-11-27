@@ -8,7 +8,9 @@ use orbit_common::{OrbitError, PrivateVcsFailureClass};
 use orbit_types::workflow::handoff::HandoffDelivery;
 use serde_json::Value;
 
-use crate::context::{HandoffLandingContext, RuntimeHost};
+use crate::context::{
+    HandoffLandingContext, HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::super::ci::bounded_u64;
 use super::super::super::input::input_string_field;
@@ -138,7 +140,9 @@ impl Deref for LandingPass {
     }
 }
 
-pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn handoff_land<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -193,7 +197,7 @@ pub(super) fn transport_failure(error: &OrbitError) -> bool {
 /// fails with. An intent this owner published and could not resolve is left
 /// as it is: the store refuses a stop past it, and the next attempt
 /// reconciles it against the provider before anything else.
-fn settle_failure<H: RuntimeHost + ?Sized>(
+fn settle_failure<H: ReviewGate + ?Sized>(
     host: &H,
     pass: &LandingPass,
     passes: u32,
@@ -224,7 +228,7 @@ fn settle_failure<H: RuntimeHost + ?Sized>(
     }
 }
 
-fn land<H: RuntimeHost + ?Sized>(
+fn land<H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     context: &LandingPass,
     input: &Value,

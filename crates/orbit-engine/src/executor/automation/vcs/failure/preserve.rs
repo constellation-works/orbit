@@ -6,7 +6,9 @@ use orbit_types::task::{TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus}
 use orbit_types::workflow::{CANDIDATE_HELD_EVENT, FailureHandoffDecision, HeldCandidate};
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+};
 
 use super::super::claim::carry_to_durable_ref;
 use super::super::commit::commit_failure_candidate;
@@ -52,7 +54,7 @@ fn bounded_diagnostic(error_message: &str) -> String {
 
 /// The spec digest a later run compares before resuming this candidate
 /// [ORB-13985], read after this handoff's own selector widening.
-pub(super) fn recorded_spec_digest<H: RuntimeHost + ?Sized>(
+pub(super) fn recorded_spec_digest<H: RunLifecycle + ?Sized>(
     host: &H,
     task_id: &str,
 ) -> Result<String, OrbitError> {
@@ -65,7 +67,9 @@ pub(super) fn recorded_spec_digest<H: RuntimeHost + ?Sized>(
 /// task's next run may be a claim on another host, which can fetch the
 /// candidate only from `origin`. A refused push never stops the hold: the
 /// candidate stays on this host, and the record says why.
-fn carry_held_candidate<H: RuntimeHost + ?Sized>(
+fn carry_held_candidate<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: &orbit_types::task::Task,
     run_id: &str,
@@ -153,7 +157,9 @@ fn insert_carry(output: &mut Value, held: &HeldCandidate) {
 /// [ORB-14905] Unlike the holds below it publishes no durable candidate ref:
 /// it commits nothing, so there is no candidate commit to push, and
 /// `candidate_resume` never resumes its decision.
-pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
+pub(super) fn preserve_agent_blocked_candidate<
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: &orbit_types::task::Task,
     run_id: &str,
@@ -248,7 +254,9 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
 /// the task to the backlog (or `in-progress`) and a new run resumes this
 /// candidate (`candidate_resume` treats `held_owner_signoff` as
 /// preserving); the held run itself is not resumed.
-pub(super) fn preserve_owner_signoff_candidate<H: RuntimeHost + ?Sized>(
+pub(super) fn preserve_owner_signoff_candidate<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: &orbit_types::task::Task,
     run_id: &str,
@@ -330,7 +338,9 @@ pub(super) fn preserve_owner_signoff_candidate<H: RuntimeHost + ?Sized>(
 /// [ORB-14905] An operator may return the task to the backlog instead of
 /// resuming the run, and a claim on another host may take it next, so the
 /// candidate is also pushed to its durable ref on `origin`.
-pub(super) fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>(
+pub(super) fn preserve_validation_environment_candidate<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: &orbit_types::task::Task,
     run_id: &str,
@@ -416,7 +426,9 @@ pub(super) fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>
 /// is also pushed to its durable ref on `origin` and recorded in the task's
 /// history for admission to offer. A refused push is recorded in a task
 /// comment: the candidate is host-local.
-pub(super) fn hold_provider_failure_candidate<H: RuntimeHost + ?Sized>(
+pub(super) fn hold_provider_failure_candidate<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: &orbit_types::task::Task,
     run_id: &str,
@@ -495,7 +507,9 @@ pub(super) fn hold_provider_failure_candidate<H: RuntimeHost + ?Sized>(
 /// ref and recorded in the task's history, and no PR is opened. The task's
 /// status is not written here: run finalization returns it to the backlog,
 /// and its next run, once the upgrade settles, resumes this candidate.
-pub(super) fn hold_upgrade_pending_candidate<H: RuntimeHost + ?Sized>(
+pub(super) fn hold_upgrade_pending_candidate<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: &orbit_types::task::Task,
     run_id: &str,
@@ -574,7 +588,9 @@ pub(super) fn hold_upgrade_pending_candidate<H: RuntimeHost + ?Sized>(
 /// so the candidate is the reviewed head and nothing else is committed. The
 /// task's status is not written here: the cancellation returns it to the
 /// backlog naming the timeout and this candidate, and its next run resumes it.
-pub(super) fn hold_child_timeout_candidate<H: RuntimeHost + ?Sized>(
+pub(super) fn hold_child_timeout_candidate<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: &orbit_types::task::Task,
     run_id: &str,
@@ -690,7 +706,9 @@ fn failing_on_base(failures: &orbit_types::workflow::BaselineRedFailures) -> Str
 /// hands it to the task's next claim, and a run on this host finds it in this
 /// handoff's output. When the push is refused the hold still happens, and its
 /// output and comment say the candidate is host-local.
-pub(super) fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
+pub(super) fn hold_baseline_red_candidate<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: &orbit_types::task::Task,
     run_id: &str,

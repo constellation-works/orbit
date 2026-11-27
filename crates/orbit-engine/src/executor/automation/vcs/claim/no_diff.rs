@@ -17,7 +17,9 @@ use orbit_types::workflow::handoff::{
 };
 use serde_json::{Value, json};
 
-use crate::context::{ClaimExecutionContext, RuntimeHost};
+use crate::context::{
+    ClaimExecutionContext, HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::deferred_sandbox::{claimed_deferred_replays, with_replays};
 use super::super::git::{BaseSyncMode, git_output, resolve_worktree_start_point};
@@ -55,7 +57,7 @@ pub(in crate::executor::automation::vcs) fn carries_no_diff_artifacts(input: &Va
         .is_some_and(|artifacts| !artifacts.is_empty())
 }
 
-fn checkpoint<H: RuntimeHost + ?Sized>(
+fn checkpoint<H: RunLifecycle + ?Sized>(
     host: &H,
     task_id: &str,
     reference: &HandoffArtifactRef,
@@ -73,7 +75,9 @@ fn checkpoint<H: RuntimeHost + ?Sized>(
 
 /// Recheck the pinned checkpoint on the leaf, and return whether it is a
 /// `no-diff-expected` skip, whose handoff carries no validation.
-pub(super) fn verify_leaf<H: RuntimeHost + ?Sized>(
+pub(super) fn verify_leaf<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     context: &ClaimExecutionContext,
     workspace: &Path,
@@ -165,7 +169,9 @@ fn require_unchanged_base(
     )))
 }
 
-pub(super) fn validate<H: RuntimeHost + ?Sized>(
+pub(super) fn validate<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     context: &ClaimExecutionContext,
     workspace: &Path,
@@ -258,7 +264,9 @@ pub(super) fn validate<H: RuntimeHost + ?Sized>(
 /// have advanced since [ORB-15074]. No executor branch or pull request needs
 /// to exist on the owner, and no checkout is modified: the shared verifier
 /// reads immutable Git objects and task artifacts.
-pub fn observe_no_diff_candidate<H: RuntimeHost + ?Sized>(
+pub fn observe_no_diff_candidate<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace: &Path,
     handoff: &TaskHandoff,

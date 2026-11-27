@@ -7,7 +7,9 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::DeliveryRefusal;
 use serde_json::json;
 
-use crate::context::{HandoffLandingStep, RuntimeHost};
+use crate::context::{
+    HandoffLandingStep, HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::super::base::refresh::RefreshStep;
 use super::super::super::checks::{
@@ -25,7 +27,9 @@ use super::super::record::{behind_base, describe, refuse_pr};
 use super::super::run::transport_failure;
 use super::poll::{LandingPoll, Step};
 
-impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
+impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>
+    LandingPoll<'a, H>
+{
     /// Refines the state with the required checks and records whether the
     /// landing is only waiting for them.
     pub(super) fn read_required_checks(

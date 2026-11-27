@@ -26,7 +26,7 @@ use orbit_types::workflow::BaselineRedFailures;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::super::baseline::{
     BaseCommandResult, FAILING_TESTS_KEY, cached_base_check, compare_claimed_with_base_until,
@@ -258,7 +258,7 @@ impl KnownRedUnconfirmed {
 ///
 /// Only call this with a command the host itself trusts: it runs on the host,
 /// outside any agent sandbox.
-pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
+pub fn verify_base_failure<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     base_sha: &str,
@@ -533,7 +533,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
 ///
 /// Only call this with a command the owner itself requires: it runs on the
 /// owner's host, outside any agent sandbox.
-pub fn verify_claimed_known_red<H: RuntimeHost + ?Sized>(
+pub fn verify_claimed_known_red<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     report: &ClaimedKnownRed<'_>,

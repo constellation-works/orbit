@@ -10,7 +10,9 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+};
 
 use super::super::commit::{is_partial_repair_message, partial_repair_message};
 use super::super::freshness::remote_branch_sha;
@@ -31,7 +33,9 @@ const REVIEW_TIMEOUT_MAX_REQUEUES: usize = 1;
 /// commits stay as they are; the branch is pushed so partial fixes and
 /// evidence are recoverable. The task records the bounded timeout requeue,
 /// evidence hold or substantive escalation. No PR is opened.
-pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
+pub(super) fn preserve_review_gate_candidate<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     task: &orbit_types::task::Task,
