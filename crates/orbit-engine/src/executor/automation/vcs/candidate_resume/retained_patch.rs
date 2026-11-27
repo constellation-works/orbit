@@ -13,7 +13,9 @@ use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::SourceRepairRetainedPatch;
 
-use crate::executor::automation::vcs::git::{git_output, git_run_bytes, timeout_recovery_error};
+use crate::executor::automation::vcs::git::{
+    git_output, git_run_bytes, git_success, timeout_recovery_error,
+};
 
 /// What applying the bound edits left in the checkout.
 pub(super) enum RetainedApplied {
@@ -37,6 +39,11 @@ pub(super) fn apply_retained_patch(
             "retained final-recovery edits do not match the bound digest".into(),
         ));
     }
+    // The candidate is applied as unstaged edits, but `--3way` needs the index
+    // to agree with the working copy on every path it touches. Stage the
+    // candidate for the apply and unstage everything after, so the successor
+    // still sees one plain dirty checkout.
+    git_success(process_env, workspace, &["add", "--all"])?;
     let applied = git_run_bytes(
         process_env,
         workspace,
@@ -52,14 +59,19 @@ pub(super) fn apply_retained_patch(
             ),
         ));
     }
+    let unmerged = if applied.success {
+        String::new()
+    } else {
+        git_output(
+            process_env,
+            workspace,
+            &["diff", "--name-only", "--diff-filter=U"],
+        )?
+    };
+    git_success(process_env, workspace, &["reset", "--quiet"])?;
     if applied.success {
         return Ok(RetainedApplied::Clean);
     }
-    let unmerged = git_output(
-        process_env,
-        workspace,
-        &["diff", "--name-only", "--diff-filter=U"],
-    )?;
     let paths: Vec<String> = unmerged.lines().map(str::to_string).collect();
     if paths.is_empty() {
         return Ok(RetainedApplied::Refused(format!(

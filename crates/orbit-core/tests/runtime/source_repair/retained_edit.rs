@@ -29,11 +29,9 @@ fn incident() -> (Fixture, PathBuf, String) {
             },
         )
         .unwrap();
-    let edited = git(&checkout, &["ls-files"])
-        .lines()
-        .next()
-        .expect("the candidate tracks a file")
-        .to_string();
+    // The published candidate changed this file, so the retained edit lands on
+    // a path the squashed candidate also touched.
+    let edited = "source.txt".to_string();
     std::fs::write(checkout.join(LINT_FIX), "final recovery lint fix\n").unwrap();
     git(&checkout, &["add", LINT_FIX]);
     let mut body = std::fs::read_to_string(checkout.join(&edited)).unwrap();
@@ -140,15 +138,18 @@ fn retained_final_recovery_edits_reach_a_fresh_same_pr_repair() {
 
     // The successor applies the exact edits, commits, validates and pushes
     // them to the same PR under the original lease.
-    let repaired = super::generations::publish_and_cancel(&f, &id, 1);
+    let repaired = super::generations::publish_applied_and_cancel(&f, &id);
     assert_ne!(repaired, f.head);
     assert_eq!(
         git(&f.repo, &["show", &format!("{repaired}:{LINT_FIX}")]),
         "final recovery lint fix"
     );
+    let merged = git(&f.repo, &["show", &format!("{repaired}:{edited}")]);
     assert!(
-        git(&f.repo, &["show", &format!("{repaired}:{edited}")]).ends_with("final recovery edit")
+        merged.starts_with("complete published candidate"),
+        "{merged}"
     );
+    assert!(merged.ends_with("final recovery edit"), "{merged}");
     let resumed =
         f.runtime.read_run_state(&id).unwrap().unwrap().pipeline["resume_candidate"].clone();
     assert_eq!(resumed["reused_branch"], f.branch);
