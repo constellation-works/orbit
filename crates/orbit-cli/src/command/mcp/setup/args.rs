@@ -6,7 +6,9 @@ use orbit_cmd::mcp_clients::{McpClient, McpClientScope};
 use orbit_common::Env;
 use orbit_core::OrbitError;
 
-use super::dispatch::{ConfigTarget, action_payload, auto_detected_providers, run_action};
+use super::dispatch::{
+    ConfigTarget, McpActionContext, action_payload, auto_detected_providers, run_action,
+};
 use super::providers::ServerLaunch;
 use super::workspace::{WorkspaceLayout, env_home_dir, resolve_workspace_layout};
 use crate::command::CommandOut;
@@ -240,12 +242,14 @@ impl InitArgs {
         let home_dir = env_home_dir(env);
         let providers = run_action(
             McpAction::Init(launch),
-            layout.as_ref().map(|layout| layout.repo_root.as_path()),
-            layout_orbit_root(layout.as_ref()),
             self.providers.resolve_mode()?,
-            home_dir.clone(),
-            self.scope,
-            global_orbit_dir,
+            &McpActionContext {
+                repo_root: layout.as_ref().map(|layout| layout.repo_root.as_path()),
+                orbit_root: layout_orbit_root(layout.as_ref()),
+                home_dir: home_dir.as_deref(),
+                scope: self.scope,
+                global_orbit_dir,
+            },
             env,
         )?;
         action_payload(
@@ -297,12 +301,14 @@ impl RemoveArgs {
         let home_dir = env_home_dir(env);
         let providers = run_action(
             action,
-            layout.as_ref().map(|layout| layout.repo_root.as_path()),
-            layout_orbit_root(layout.as_ref()),
             self.providers.resolve_mode()?,
-            home_dir.clone(),
-            self.scope,
-            global_orbit_dir,
+            &McpActionContext {
+                repo_root: layout.as_ref().map(|layout| layout.repo_root.as_path()),
+                orbit_root: layout_orbit_root(layout.as_ref()),
+                home_dir: home_dir.as_deref(),
+                scope: self.scope,
+                global_orbit_dir,
+            },
             env,
         )?;
         action_payload(
@@ -398,12 +404,14 @@ pub(crate) fn init_auto_for_workspace(
     }
     let configured = run_action(
         McpAction::Init(ServerLaunch::local(true, Some(workspace_id))),
-        Some(repo_root),
-        orbit_root,
         ProviderSelectionMode::Explicit(providers),
-        home_dir,
-        ScopeArg::Workspace,
-        global_orbit_dir,
+        &McpActionContext {
+            repo_root: Some(repo_root),
+            orbit_root,
+            home_dir: home_dir.as_deref(),
+            scope: ScopeArg::Workspace,
+            global_orbit_dir,
+        },
         env,
     )?;
     // Legacy paths are reported only when reconciliation actually changed a

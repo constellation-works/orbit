@@ -40,6 +40,15 @@ pub(super) struct AppliedPresetOutcome {
     pub(super) enabled: Vec<String>,
 }
 
+/// Post-registration setup flags and outcomes folded into [`WorkspaceInitReport`].
+pub(super) struct InitReportOptions {
+    pub(super) task_id_start: Option<u32>,
+    pub(super) mcp: bool,
+    pub(super) inject_rules: bool,
+    pub(super) browser_kit: BrowserKitOutcome,
+    pub(super) preset: Option<AppliedPresetOutcome>,
+}
+
 enum AllocatorOutcome {
     Skipped,
     Ran { next: String, changed: bool },
@@ -76,16 +85,11 @@ fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> String {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn collect_init_report(
     init_result: WorkspaceInitResult,
     global_root: &Path,
-    task_id_start: Option<u32>,
-    mcp: bool,
-    inject_rules: bool,
-    browser_kit: BrowserKitOutcome,
-    preset: Option<AppliedPresetOutcome>,
     global_orbit_dir: Option<&Path>,
+    options: InitReportOptions,
     env: &Env,
 ) -> Result<WorkspaceInitReport, OrbitError> {
     let onboarding = onboarding_finalize_guidance(&init_result.root, &init_result.orbit_dir);
@@ -94,7 +98,7 @@ pub(super) fn collect_init_report(
         checkout_files.insert(checkout_file_label(&init_result.root, &gitignore));
     }
 
-    let allocator = match task_id_start {
+    let allocator = match options.task_id_start {
         Some(start) => {
             let outcome = orbit_core::bootstrap::task_migration::seed_task_id_start(
                 global_root,
@@ -109,7 +113,7 @@ pub(super) fn collect_init_report(
         None => AllocatorOutcome::Skipped,
     };
 
-    let mcp_outcome = if mcp {
+    let mcp_outcome = if options.mcp {
         let (providers, files) = crate::command::mcp::init_auto_for_workspace(
             &init_result.root,
             &init_result.orbit_dir,
@@ -129,7 +133,7 @@ pub(super) fn collect_init_report(
         McpOutcome::Skipped
     };
 
-    let rules_outcome = if inject_rules {
+    let rules_outcome = if options.inject_rules {
         let outcome = inject_agent_rules(&init_result.root)?;
         for entry in &outcome.outcomes {
             checkout_files.insert(checkout_file_label(&init_result.root, &entry.path));
@@ -162,8 +166,8 @@ pub(super) fn collect_init_report(
         allocator,
         mcp: mcp_outcome,
         rules: rules_outcome,
-        browser_kit,
-        preset,
+        browser_kit: options.browser_kit,
+        preset: options.preset,
     })
 }
 

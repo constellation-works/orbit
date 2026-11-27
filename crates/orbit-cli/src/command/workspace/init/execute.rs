@@ -28,7 +28,8 @@ use super::WorkspaceInitArgs;
 use super::WorkspaceInitResult;
 use super::browser_kit::offer_browser_kit;
 use super::report::{
-    AppliedPresetOutcome, collect_init_report, format_workspace_init, workspace_init_json,
+    AppliedPresetOutcome, InitReportOptions, collect_init_report, format_workspace_init,
+    workspace_init_json,
 };
 use super::validate::{
     canonical_workspace_id, preserve_corrupt_workspace_identity, read_workspace_identity,
@@ -97,12 +98,14 @@ impl WorkspaceInitArgs {
         let report = collect_init_report(
             init_result,
             &global_root,
-            task_id_start,
-            mcp,
-            inject_rules,
-            browser_kit,
-            preset,
             resolved.global_orbit_dir().ok(),
+            InitReportOptions {
+                task_id_start,
+                mcp,
+                inject_rules,
+                browser_kit,
+                preset,
+            },
             env,
         )?;
 

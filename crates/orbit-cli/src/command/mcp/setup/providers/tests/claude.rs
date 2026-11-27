@@ -9,8 +9,9 @@ use tempfile::tempdir;
 use orbit_common::fs::directory_lock::observe_directory_lock_waits;
 use orbit_common::fs::io::atomic_write_text;
 
+use crate::command::mcp::setup::dispatch::{McpActionContext, run_action};
+
 use super::super::super::args::{McpAction, McpProvider, ProviderSelectionMode, ScopeArg};
-use super::super::super::dispatch::run_action;
 use super::super::common::ServerLaunch;
 
 #[test]
@@ -65,12 +66,14 @@ fn check_concurrent_update(action: McpAction<'static>) {
     let worker = std::thread::spawn(move || {
         run_action(
             action,
-            Some(&worker_repo),
-            &worker_orbit_root,
             ProviderSelectionMode::Explicit(vec![McpProvider::Claude]),
-            Some(worker_home),
-            ScopeArg::Home,
-            None,
+            &McpActionContext {
+                repo_root: Some(&worker_repo),
+                orbit_root: &worker_orbit_root,
+                home_dir: Some(&worker_home),
+                scope: ScopeArg::Home,
+                global_orbit_dir: None,
+            },
             &orbit_common::Env::default(),
         )
     });

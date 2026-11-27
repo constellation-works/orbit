@@ -60,6 +60,15 @@ impl ConfigTarget {
     }
 }
 
+/// Target paths and scope for an `orbit mcp init`/`remove` action.
+pub(super) struct McpActionContext<'a> {
+    pub(super) repo_root: Option<&'a Path>,
+    pub(super) orbit_root: &'a Path,
+    pub(super) home_dir: Option<&'a Path>,
+    pub(super) scope: ScopeArg,
+    pub(super) global_orbit_dir: Option<&'a Path>,
+}
+
 fn server_id_for_action(action: McpAction<'_>) -> &'static str {
     match action {
         McpAction::Init(ServerLaunch::Federated { .. }) | McpAction::RemoveFederated => {
@@ -197,23 +206,25 @@ fn legacy_grok_entry(
         .transpose()
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn run_action(
     action: McpAction<'_>,
-    repo_root: Option<&Path>,
-    orbit_root: &Path,
     selection: ProviderSelectionMode,
-    home_dir: Option<PathBuf>,
-    scope: ScopeArg,
-    global_orbit_dir: Option<&Path>,
+    context: &McpActionContext<'_>,
     env: &Env,
 ) -> Result<Vec<McpProvider>, OrbitError> {
-    let providers = resolve_providers(selection, repo_root, home_dir.as_deref());
+    let providers = resolve_providers(selection, context.repo_root, context.home_dir);
     // Local launches carry a non-default catalog. Federated launches ignore
     // it inside `ServerLaunch::with_orbit_root`.
-    let embedded = super::workspace::embedded_launch_root(orbit_root, global_orbit_dir);
+    let embedded =
+        super::workspace::embedded_launch_root(context.orbit_root, context.global_orbit_dir);
     for provider in &providers {
-        let target = ConfigTarget::resolve(scope, provider, repo_root, home_dir.as_deref(), env)?;
+        let target = ConfigTarget::resolve(
+            context.scope,
+            provider,
+            context.repo_root,
+            context.home_dir,
+            env,
+        )?;
         match action {
             McpAction::Init(launch) => {
                 let launch = launch.with_orbit_root(embedded.as_deref());
@@ -425,7 +436,6 @@ pub(super) fn action_payload(
     Ok(Payload::detail(doc, text).into())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn format_action_summary(
     action: McpAction<'_>,
     providers: &[McpProvider],

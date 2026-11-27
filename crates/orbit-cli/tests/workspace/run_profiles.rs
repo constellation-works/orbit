@@ -74,93 +74,22 @@ impl Fixture {
         String::from_utf8(output).unwrap()
     }
 
-    /// Seed one finished single-run delivery admitted `hours_ago`, with one
-    /// row per minute at `cores` and 1 GiB.
-    fn delivery(
-        &self,
-        run_id: &str,
-        task_id: &str,
-        class: &str,
-        complexity: &str,
-        hours_ago: i64,
-        cores: &[f64],
-    ) {
-        self.delivery_with_accounting(
-            run_id,
-            task_id,
-            class,
-            complexity,
-            hours_ago,
-            cores,
-            "linux-cgroup-v1",
-        );
-    }
-
-    /// [`Self::delivery`] with its minutes stamped `cpu_accounting`.
-    #[allow(clippy::too_many_arguments)]
-    fn delivery_with_accounting(
-        &self,
-        run_id: &str,
-        task_id: &str,
-        class: &str,
-        complexity: &str,
-        hours_ago: i64,
-        cores: &[f64],
-        cpu_accounting: &str,
-    ) {
-        let memory = vec![GIB; cores.len()];
-        self.insert_delivery(
-            run_id,
-            task_id,
-            class,
-            complexity,
-            hours_ago,
-            cores,
-            &memory,
-            cpu_accounting,
-        );
-    }
-
-    /// One finished delivery; minute `i` uses `cores[i]` and `memory_bytes[i]`.
-    #[allow(clippy::too_many_arguments)]
-    fn delivery_load(
-        &self,
-        run_id: &str,
-        task_id: &str,
-        class: &str,
-        complexity: &str,
-        hours_ago: i64,
-        cores: &[f64],
-        memory_bytes: &[i64],
-    ) {
-        assert_eq!(cores.len(), memory_bytes.len());
-        self.insert_delivery(
-            run_id,
-            task_id,
-            class,
-            complexity,
-            hours_ago,
-            cores,
-            memory_bytes,
-            "linux-cgroup-v1",
-        );
-    }
-
     /// Insert one finished single-run delivery and its per-minute rows.
-    #[allow(clippy::too_many_arguments)]
-    fn insert_delivery(
-        &self,
-        run_id: &str,
-        task_id: &str,
-        class: &str,
-        complexity: &str,
-        hours_ago: i64,
-        cores: &[f64],
-        memory_bytes: &[i64],
-        cpu_accounting: &str,
-    ) {
+    /// When `memory_bytes` is `None`, every minute uses 1 GiB.
+    fn insert_delivery(&self, delivery: DeliverySeed<'_>) {
+        let default_memory;
+        let memory_bytes = match delivery.memory_bytes {
+            Some(memory_bytes) => {
+                assert_eq!(delivery.cores.len(), memory_bytes.len());
+                memory_bytes
+            }
+            None => {
+                default_memory = vec![GIB; delivery.cores.len()];
+                &default_memory
+            }
+        };
         let db = Connection::open(self.home.join(".orbit/orbit.db")).unwrap();
-        let admitted = Utc::now() - chrono::Duration::hours(hours_ago);
+        let admitted = Utc::now() - chrono::Duration::hours(delivery.hours_ago);
         let stamp = |minutes: i64| {
             (admitted + chrono::Duration::minutes(minutes))
                 .to_rfc3339_opts(SecondsFormat::Micros, true)
@@ -169,26 +98,30 @@ impl Fixture {
             "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, \
                  scheduled_at, created_at, finished_at) \
              VALUES (?1, 'ws_fixture', 'task_auto_pipeline', 1, 'success', ?2, ?2, ?3)",
-            params![run_id, stamp(0), stamp(cores.len() as i64)],
+            params![
+                delivery.run_id,
+                stamp(0),
+                stamp(delivery.cores.len() as i64)
+            ],
         )
         .unwrap();
-        for (index, (cpu, memory)) in cores.iter().zip(memory_bytes).enumerate() {
+        for (index, (cpu, memory)) in delivery.cores.iter().zip(memory_bytes).enumerate() {
             db.execute(
                 "INSERT INTO run_resource_minutes (workspace_id, run_id, minute_index, \
                      minute_started_at, task_id, work_class, complexity, resumed, \
                      delivery_admitted_at, cpu_cores, memory_bytes, samples, cpu_accounting) \
                  VALUES ('ws_fixture', ?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, 12, ?10)",
                 params![
-                    run_id,
+                    delivery.run_id,
                     index as i64,
                     stamp(index as i64),
-                    task_id,
-                    class,
-                    complexity,
+                    delivery.task_id,
+                    delivery.class,
+                    delivery.complexity,
                     stamp(0),
                     cpu,
                     memory,
-                    cpu_accounting
+                    delivery.cpu_accounting
                 ],
             )
             .unwrap();
@@ -220,18 +153,9 @@ impl Fixture {
     }
 
     /// Record one admission pass's forecast: `(offset, cores, GiB)` points.
-    #[allow(clippy::too_many_arguments)]
-    fn forecast(
-        &self,
-        run_id: &str,
-        mode: &str,
-        at: DateTime<Utc>,
-        points: &[(u32, f64, i64)],
-        admitted: &[&str],
-        fit_admitted: &[&str],
-        fit_skipped: &[&str],
-    ) {
-        let points: Vec<Value> = points
+    fn forecast(&self, forecast: ForecastSeed<'_>) {
+        let points: Vec<Value> = forecast
+            .points
             .iter()
             .map(|(offset, cores, gib)| {
                 serde_json::json!({
@@ -248,14 +172,14 @@ impl Fixture {
                      fit_admitted_json, fit_skipped_json) \
                  VALUES ('ws_fixture', ?1, ?2, ?3, 16, ?4, ?5, ?6, ?7, ?8)",
                 params![
-                    run_id,
-                    at.to_rfc3339_opts(SecondsFormat::Micros, true),
-                    mode,
+                    forecast.run_id,
+                    forecast.at.to_rfc3339_opts(SecondsFormat::Micros, true),
+                    forecast.mode,
                     32 * GIB,
                     serde_json::to_string(&points).unwrap(),
-                    serde_json::to_string(admitted).unwrap(),
-                    serde_json::to_string(fit_admitted).unwrap(),
-                    serde_json::to_string(fit_skipped).unwrap(),
+                    serde_json::to_string(forecast.admitted).unwrap(),
+                    serde_json::to_string(forecast.fit_admitted).unwrap(),
+                    serde_json::to_string(forecast.fit_skipped).unwrap(),
                 ],
             )
             .unwrap();
@@ -307,6 +231,27 @@ impl Fixture {
     }
 }
 
+struct DeliverySeed<'a> {
+    run_id: &'a str,
+    task_id: &'a str,
+    class: &'a str,
+    complexity: &'a str,
+    hours_ago: i64,
+    cores: &'a [f64],
+    memory_bytes: Option<&'a [i64]>,
+    cpu_accounting: &'a str,
+}
+
+struct ForecastSeed<'a> {
+    run_id: &'a str,
+    mode: &'a str,
+    at: DateTime<Utc>,
+    points: &'a [(u32, f64, i64)],
+    admitted: &'a [&'a str],
+    fit_admitted: &'a [&'a str],
+    fit_skipped: &'a [&'a str],
+}
+
 /// Calibration must select the intersection of time, drain and recorded
 /// mode, including decisions and errors, without rewriting its evidence.
 #[test]
@@ -340,7 +285,15 @@ fn accuracy_selects_a_cohort_and_rejects_invalid_selectors_without_mutation() {
             60.0,
         ),
     ] {
-        fixture.forecast(run, mode, at, &[(5, cpu, 8)], &["ORB-1"], &[], &["ORB-1"]);
+        fixture.forecast(ForecastSeed {
+            run_id: run,
+            mode,
+            at,
+            points: &[(5, cpu, 8)],
+            admitted: &["ORB-1"],
+            fit_admitted: &[],
+            fit_skipped: &["ORB-1"],
+        });
     }
     fixture.host_minute(since + chrono::Duration::minutes(5), 5.0, 6);
     let before = fixture.measurements();
@@ -484,27 +437,48 @@ fn profiles_report_tabulates_profiles_emits_series_and_flags_building_no_diff_wo
         serde_json::from_str(&fixture.stdout(&["run", "profiles", "--json"])).unwrap();
     assert_eq!(empty["profiles"], serde_json::json!([]));
 
-    fixture.delivery("jrun-a", "ORB-1", "change", "hard", 5, &[2.0, 2.0, 2.0]);
-    fixture.delivery("jrun-b", "ORB-2", "change", "hard", 4, &[2.0, 2.0, 2.0]);
+    fixture.insert_delivery(DeliverySeed {
+        run_id: "jrun-a",
+        task_id: "ORB-1",
+        class: "change",
+        complexity: "hard",
+        hours_ago: 5,
+        cores: &[2.0, 2.0, 2.0],
+        memory_bytes: None,
+        cpu_accounting: "linux-cgroup-v1",
+    });
+    fixture.insert_delivery(DeliverySeed {
+        run_id: "jrun-b",
+        task_id: "ORB-2",
+        class: "change",
+        complexity: "hard",
+        hours_ago: 4,
+        cores: &[2.0, 2.0, 2.0],
+        memory_bytes: None,
+        cpu_accounting: "linux-cgroup-v1",
+    });
     // Superseded macOS accounting that missed reaped descendants stays out
     // of the profile it would otherwise join.
-    fixture.delivery_with_accounting(
-        "jrun-own-only",
-        "ORB-4",
-        "change",
-        "hard",
-        2,
-        &[9.0, 9.0, 9.0],
-        "macos-mach-ns-v1",
-    );
-    fixture.delivery(
-        "jrun-review",
-        "ORB-3",
-        "no-diff",
-        "medium",
-        3,
-        &[0.2, 2.5, 3.0],
-    );
+    fixture.insert_delivery(DeliverySeed {
+        run_id: "jrun-own-only",
+        task_id: "ORB-4",
+        class: "change",
+        complexity: "hard",
+        hours_ago: 2,
+        cores: &[9.0, 9.0, 9.0],
+        memory_bytes: None,
+        cpu_accounting: "macos-mach-ns-v1",
+    });
+    fixture.insert_delivery(DeliverySeed {
+        run_id: "jrun-review",
+        task_id: "ORB-3",
+        class: "no-diff",
+        complexity: "medium",
+        hours_ago: 3,
+        cores: &[0.2, 2.5, 3.0],
+        memory_bytes: None,
+        cpu_accounting: "linux-cgroup-v1",
+    });
 
     let doc: Value = serde_json::from_str(&fixture.stdout(&["run", "profiles", "--json"])).unwrap();
     let profiles = doc["profiles"].as_array().unwrap();
@@ -629,35 +603,38 @@ fn profiles_report_shows_per_delivery_peak_quantiles_above_the_mean_peak() {
     // Minute 0 is A's spike; minute 1 is B's. The per-minute mean is 5.5
     // then 3.5, so PEAK_CPU is 5.5. Each delivery's own peak is 10 and 6,
     // nearest-rank p50 6 and p90 10.
-    fixture.delivery_load(
-        "jrun-early",
-        "ORB-early",
-        "change",
-        "hard",
-        5,
-        &[10.0, 1.0],
-        &[8 * GIB, GIB],
-    );
-    fixture.delivery_load(
-        "jrun-late",
-        "ORB-late",
-        "change",
-        "hard",
-        4,
-        &[1.0, 6.0],
-        &[2 * GIB, 4 * GIB],
-    );
+    fixture.insert_delivery(DeliverySeed {
+        run_id: "jrun-early",
+        task_id: "ORB-early",
+        class: "change",
+        complexity: "hard",
+        hours_ago: 5,
+        cores: &[10.0, 1.0],
+        memory_bytes: Some(&[8 * GIB, GIB]),
+        cpu_accounting: "linux-cgroup-v1",
+    });
+    fixture.insert_delivery(DeliverySeed {
+        run_id: "jrun-late",
+        task_id: "ORB-late",
+        class: "change",
+        complexity: "hard",
+        hours_ago: 4,
+        cores: &[1.0, 6.0],
+        memory_bytes: Some(&[2 * GIB, 4 * GIB]),
+        cpu_accounting: "linux-cgroup-v1",
+    });
     // Fewer than min_profile_deliveries, and only one minute: both quantiles
     // are that delivery's peak.
-    fixture.delivery_load(
-        "jrun-once",
-        "ORB-once",
-        "no-diff",
-        "medium",
-        3,
-        &[1.5],
-        &[3 * GIB],
-    );
+    fixture.insert_delivery(DeliverySeed {
+        run_id: "jrun-once",
+        task_id: "ORB-once",
+        class: "no-diff",
+        complexity: "medium",
+        hours_ago: 3,
+        cores: &[1.5],
+        memory_bytes: Some(&[3 * GIB]),
+        cpu_accounting: "linux-cgroup-v1",
+    });
 
     let doc: Value = serde_json::from_str(&fixture.stdout(&["run", "profiles", "--json"])).unwrap();
     let profiles = doc["profiles"].as_array().unwrap();
@@ -775,25 +752,25 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
     let at = |minutes: i64| minute + chrono::Duration::minutes(minutes);
     // A shadow pass at 20 s past the minute forecasts +5, +10, +20 and +30;
     // the +30 minute is never measured.
-    fixture.forecast(
-        "jrun-shadow",
-        "shadow",
-        minute + chrono::Duration::seconds(20),
-        &[(5, 4.0, 8), (10, 2.0, 4), (20, 1.0, 2), (30, 1.0, 2)],
-        &["ORB-1", "ORB-2"],
-        &["ORB-2", "ORB-3"],
-        &["ORB-1"],
-    );
+    fixture.forecast(ForecastSeed {
+        run_id: "jrun-shadow",
+        mode: "shadow",
+        at: minute + chrono::Duration::seconds(20),
+        points: &[(5, 4.0, 8), (10, 2.0, 4), (20, 1.0, 2), (30, 1.0, 2)],
+        admitted: &["ORB-1", "ORB-2"],
+        fit_admitted: &["ORB-2", "ORB-3"],
+        fit_skipped: &["ORB-1"],
+    });
     // An enforce pass a minute later, measured at +5 only.
-    fixture.forecast(
-        "jrun-enforce",
-        "enforce",
-        at(1),
-        &[(5, 3.0, 1)],
-        &["ORB-4"],
-        &["ORB-4"],
-        &[],
-    );
+    fixture.forecast(ForecastSeed {
+        run_id: "jrun-enforce",
+        mode: "enforce",
+        at: at(1),
+        points: &[(5, 3.0, 1)],
+        admitted: &["ORB-4"],
+        fit_admitted: &["ORB-4"],
+        fit_skipped: &[],
+    });
     // Three pull requests: a shadow claim, a shadow idle response and an
     // enforce-held request. Only requests sent under shadow would be held.
     for (mode, sent, admitted, minute) in [
@@ -801,15 +778,15 @@ fn accuracy_pairs_forecasts_with_measured_minutes_and_counts_shadow_decisions() 
         ("shadow", true, vec![], 3),
         ("enforce", false, vec![], 4),
     ] {
-        fixture.forecast(
-            "jrun-pull",
+        fixture.forecast(ForecastSeed {
+            run_id: "jrun-pull",
             mode,
-            at(minute),
-            &[(5, 7.0, 9)],
-            &admitted,
-            &[],
-            &[],
-        );
+            at: at(minute),
+            points: &[(5, 7.0, 9)],
+            admitted: &admitted,
+            fit_admitted: &[],
+            fit_skipped: &[],
+        });
         fixture.db().execute(
             "UPDATE admission_forecasts SET pull_decision_json = ?1 WHERE run_id = 'jrun-pull' AND forecast_at = ?2",
             params![serde_json::json!({"sent": sent, "forecast_no_headroom": true}).to_string(),
@@ -1001,31 +978,31 @@ fn accuracy_splits_idle_minutes_from_sampling_gaps() {
         .duration_trunc(chrono::Duration::minutes(1))
         .unwrap();
     let at = |minutes: i64| minute + chrono::Duration::minutes(minutes);
-    fixture.forecast(
-        "jrun-drain",
-        "shadow",
-        minute + chrono::Duration::seconds(20),
-        &[
+    fixture.forecast(ForecastSeed {
+        run_id: "jrun-drain",
+        mode: "shadow",
+        at: minute + chrono::Duration::seconds(20),
+        points: &[
             (5, 4.0, 8),
             (10, 3.0, 2),
             (15, 2.0, 1),
             (20, 1.0, 1),
             (30, 1.0, 1),
         ],
-        &[],
-        &[],
-        &[],
-    );
+        admitted: &[],
+        fit_admitted: &[],
+        fit_skipped: &[],
+    });
     // Still inside its horizon, so this point is pending rather than a gap.
-    fixture.forecast(
-        "jrun-drain",
-        "shadow",
-        Utc::now() - chrono::Duration::seconds(20),
-        &[(5, 9.0, 9)],
-        &[],
-        &[],
-        &[],
-    );
+    fixture.forecast(ForecastSeed {
+        run_id: "jrun-drain",
+        mode: "shadow",
+        at: Utc::now() - chrono::Duration::seconds(20),
+        points: &[(5, 9.0, 9)],
+        admitted: &[],
+        fit_admitted: &[],
+        fit_skipped: &[],
+    });
     fixture.host_minute(at(5), 6.0, 6);
     fixture.job_run(
         "jrun-paired-worker",
@@ -1248,46 +1225,46 @@ fn enforce_accuracy_reports_admitted_tasks_gap_holds_and_pull_holds() {
     let stamp = |minutes: i64| at + chrono::Duration::minutes(minutes);
 
     // A shadow pass must stay out of `--mode enforce` and keep its own columns.
-    fixture.forecast(
-        "jrun-shadow",
-        "shadow",
-        stamp(0),
-        &[(5, 1.0, 1)],
-        &["ORB-S"],
-        &[],
-        &["ORB-S"],
-    );
+    fixture.forecast(ForecastSeed {
+        run_id: "jrun-shadow",
+        mode: "shadow",
+        at: stamp(0),
+        points: &[(5, 1.0, 1)],
+        admitted: &["ORB-S"],
+        fit_admitted: &[],
+        fit_skipped: &["ORB-S"],
+    });
     // Two local enforce passes. ORB-2 is admitted twice and ORB-3 is held
     // twice; each counts once. ORB-4 is held only.
-    fixture.forecast(
-        "jrun-local",
-        "enforce",
-        stamp(1),
-        &[(5, 2.0, 1)],
-        &["ORB-1", "ORB-2"],
-        &["ORB-1", "ORB-2"],
-        &["ORB-3"],
-    );
-    fixture.forecast(
-        "jrun-local",
-        "enforce",
-        stamp(2),
-        &[(5, 2.0, 1)],
-        &["ORB-2"],
-        &["ORB-2"],
-        &["ORB-3", "ORB-4"],
-    );
+    fixture.forecast(ForecastSeed {
+        run_id: "jrun-local",
+        mode: "enforce",
+        at: stamp(1),
+        points: &[(5, 2.0, 1)],
+        admitted: &["ORB-1", "ORB-2"],
+        fit_admitted: &["ORB-1", "ORB-2"],
+        fit_skipped: &["ORB-3"],
+    });
+    fixture.forecast(ForecastSeed {
+        run_id: "jrun-local",
+        mode: "enforce",
+        at: stamp(2),
+        points: &[(5, 2.0, 1)],
+        admitted: &["ORB-2"],
+        fit_admitted: &["ORB-2"],
+        fit_skipped: &["ORB-3", "ORB-4"],
+    });
     // Pull enforce: one sent with room, one held and not sent, one sent and held.
     for (minute, sent, held) in [(3i64, true, false), (4, false, true), (5, true, true)] {
-        fixture.forecast(
-            "jrun-pull",
-            "enforce",
-            stamp(minute),
-            &[(5, 3.0, 1)],
-            &[],
-            &[],
-            &[],
-        );
+        fixture.forecast(ForecastSeed {
+            run_id: "jrun-pull",
+            mode: "enforce",
+            at: stamp(minute),
+            points: &[(5, 3.0, 1)],
+            admitted: &[],
+            fit_admitted: &[],
+            fit_skipped: &[],
+        });
         fixture
             .db()
             .execute(
@@ -1434,7 +1411,15 @@ fn accuracy_attributes_only_covered_deliveries_and_keeps_legacy_raw_pairs() {
     let points = [(5, 5.0, 8), (10, 5.0, 8), (20, 5.0, 8), (30, 5.0, 8)];
     // A legacy writer can still write without any new metadata after migration.
     for drain in ["jrun-attributed", "jrun-legacy"] {
-        fixture.forecast(drain, "enforce", at, &points, &[], &[], &[]);
+        fixture.forecast(ForecastSeed {
+            run_id: drain,
+            mode: "enforce",
+            at,
+            points: &points,
+            admitted: &[],
+            fit_admitted: &[],
+            fit_skipped: &[],
+        });
     }
     let covered = serde_json::json!([
         {"workspace_id":"ws_fixture", "task_id":"running", "admitted_at":(before + chrono::Duration::nanoseconds(123)).to_rfc3339(), "run_ids":["worker-running"]},

@@ -562,7 +562,6 @@ struct Confined {
 }
 
 impl Confined {
-    #[allow(clippy::too_many_arguments)]
     fn spawn(
         runner: &OrbitRuntime,
         follower: &Node,
