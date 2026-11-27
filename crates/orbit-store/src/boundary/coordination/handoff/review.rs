@@ -2,6 +2,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
+use orbit_types::task::{SECURITY_STATE_REVIEW_TAG, requires_security_state_review};
 use orbit_types::workflow::{
     BaselineRedFailures, EvidenceHostOs, KnownRedValidation, ReviewCertificate, ReviewEvidenceKind,
     ReviewExternalEvidence, ReviewTiming, ValidationOutcome, ValidationRole, handoff::*,
@@ -41,11 +42,27 @@ impl TaskCommitBoundary {
             }
             return Ok(Vec::new());
         }
+        let security_review = requires_security_state_review(
+            &self
+                .bundle_store
+                .read_bundle_lightweight(&handoff.task_id)?
+                .envelope
+                .tags,
+        );
+        if security_review && ship.mode == "local" {
+            return Err(review_refused(
+                R::ReviewEvidenceMissing,
+                &format!(
+                    "`{SECURITY_STATE_REVIEW_TAG}` requires review before landing; use the reviewed PR delivery route"
+                ),
+            ));
+        }
         // [ORB-16855] A `skip-review` candidate within the owner's
         // light-delivery paths — or a mapped review-skip tag's candidate
         // within its profile whose guard passed — carries no review,
         // whatever the claim captured.
-        if handoff.review.policy == ReviewTiming::None
+        if !security_review
+            && handoff.review.policy == ReviewTiming::None
             && handoff.review.evidence().is_none()
             && self.light_review_skip_applies(handoff, light)?
         {
@@ -57,6 +74,14 @@ impl TaskCommitBoundary {
         // evidence for no captured timing is refused. Before-PR and
         // before-landing captures fall through and still require evidence.
         if ship.review_timing() == ReviewTiming::None {
+            if security_review {
+                return Err(review_refused(
+                    R::ReviewEvidenceMissing,
+                    &format!(
+                        "`{SECURITY_STATE_REVIEW_TAG}` requires review before landing; this claim has no captured review timing"
+                    ),
+                ));
+            }
             if handoff.review != HandoffReview::not_required() {
                 return Err(review_refused(
                     R::ReviewEvidenceUnexpected,
@@ -94,11 +119,16 @@ impl TaskCommitBoundary {
                 evidence
             }
             _ => {
+                let reason = if security_review {
+                    format!(" (required by `{SECURITY_STATE_REVIEW_TAG}`)")
+                } else {
+                    String::new()
+                };
                 return Err(review_refused(
                     R::ReviewEvidenceMissing,
                     &format!(
                         "the claim captured review timing `{}`; the handoff must carry the \
-                         leaf's review for it",
+                         leaf's review for it{reason}",
                         captured.as_str()
                     ),
                 ));

@@ -25,6 +25,9 @@ pickup. Do not confuse a task description with a design document or a transcript
   that result are implementation work, not an external dependency. A move's
   companion fixture, path-filter and tracing-filter edits follow
   [Moves with companion fixtures and guards](#moves-with-companion-fixtures-and-guards).
+- **Security state:** tag work that changes persisted state behind a security
+  boundary with `security-state-review`. Its candidate requires delivery review
+  before landing, even when workspace review is off or a review skip applies.
 - **Prerequisites:** name actual task IDs and the capability each supplies. Record
   blocking edges in `dependencies` on `orbit.task.add` (or `orbit.task.update`
   after guarded creation), not only in prose. Do not require an upstream

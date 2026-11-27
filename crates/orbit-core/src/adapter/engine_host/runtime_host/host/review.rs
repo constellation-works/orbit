@@ -39,6 +39,14 @@ impl ReviewGate for EngineHost<'_> {
         )
     }
 
+    fn security_state_review_ready(
+        &self,
+        task: &orbit_types::task::Task,
+        head: &str,
+    ) -> Result<bool, OrbitError> {
+        self.runtime.security_state_review_ready(task, head)
+    }
+
     fn record_review_landing(
         &self,
         request: &orbit_engine::ReviewLandingRequest,

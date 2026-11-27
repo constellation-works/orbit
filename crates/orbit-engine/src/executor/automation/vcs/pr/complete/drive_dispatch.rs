@@ -114,6 +114,9 @@ impl<H: ?Sized> PollDriver<'_, H> {
 
     /// Shared landing evidence and truthful attribution for normal and reconciled reads.
     fn delivered_merge(&self, status: &PullRequestStatus) -> Result<Delivery, OrbitError> {
+        if self.exact_review_required {
+            ensure_pr_head_is_reviewed(status, self.pr_number, self.reviewed_head_sha.as_deref())?;
+        }
         let evidence = self.pin.ensure_delivered(status, self.pr_number)?;
         let landed_commit = status.exact_merge_commit.as_deref();
         let managed_merge = self
@@ -558,7 +561,7 @@ impl<H: ?Sized> PollDriver<'_, H> {
             )
             .map_err(observed)?;
             let condition = merge_condition_sha(
-                if self.base_adopted {
+                if self.base_adopted && !self.exact_review_required {
                     None
                 } else {
                     self.reviewed_head_sha.as_deref()

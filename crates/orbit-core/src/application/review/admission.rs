@@ -17,6 +17,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_config::{PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY};
+use orbit_types::task::{SECURITY_STATE_REVIEW_TAG, Task, requires_security_state_review};
 use orbit_types::workflow::{
     self, REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_REQUEST_KEY,
     REVIEW_RUN_OPTION_SOURCE, ReviewAdmission, ReviewLayer, ReviewTiming,
@@ -28,6 +29,8 @@ use super::crew::pre_landing_review_crew_unset;
 use crate::OrbitRuntime;
 use crate::application::contracts::review_layer_json;
 use crate::application::job::ReviewAdmissionHook;
+use crate::application::task::TaskReviewPort;
+use crate::runtime::run_input::carried_task_ids;
 
 impl OrbitRuntime {
     /// A run's captured review layer as `{"timing", "source"}`, or null
@@ -36,6 +39,28 @@ impl OrbitRuntime {
         Ok(run_review_admission(self, run_id)?
             .as_ref()
             .map_or(Value::Null, review_layer_json))
+    }
+
+    /// Authenticate the exact-head review for a security-state delivery.
+    pub(crate) fn security_state_review_ready(
+        &self,
+        task: &Task,
+        head: &str,
+    ) -> Result<bool, OrbitError> {
+        self.handoff_landing_review_ready(task, Some(head), None)
+    }
+
+    /// Read the task tags from their authoritative records.
+    pub(super) fn delivery_requires_security_state_review<'a>(
+        &self,
+        task_ids: impl IntoIterator<Item = &'a str>,
+    ) -> Result<bool, OrbitError> {
+        for id in task_ids {
+            if requires_security_state_review(&self.get_task(id)?.tags) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -139,14 +164,28 @@ fn install_review_admission(
     }
 
     // A child takes its parent's admission whole, the parent's request
-    // included, so its own input never re-resolves one.
-    let admission = match inherited {
+    // included. A PR leaf applies its task obligations to that snapshot.
+    let mut admission = match inherited {
         Some(admission) => admission,
         None => resolve(runtime, request)?,
     };
+    if job_name == workflow::TASK_PR_PIPELINE_JOB
+        && runtime.delivery_requires_security_state_review(
+            carried_task_ids(input).iter().map(String::as_str),
+        )?
+    {
+        apply_security_state_review(&mut admission);
+    }
     if job_name == workflow::TASK_LOCAL_PIPELINE_JOB
         && let Some(layer) = ReviewLayer::from_timing(admission.timing)
     {
+        if runtime.delivery_requires_security_state_review(
+            carried_task_ids(input).iter().map(String::as_str),
+        )? {
+            return Err(OrbitError::InvalidInput(format!(
+                "`{SECURITY_STATE_REVIEW_TAG}` requires review before landing; ship through the PR route"
+            )));
+        }
         return Err(OrbitError::InvalidInput(local_route_conflict(
             layer,
             &admission.timing_source,
@@ -163,6 +202,14 @@ fn install_review_admission(
         })?,
     );
     Ok(())
+}
+
+/// Retain the configured layer, adding before-landing review when it is off.
+pub(super) fn apply_security_state_review(admission: &mut ReviewAdmission) {
+    if !admission.gates_merge() {
+        admission.timing = ReviewTiming::BeforeLanding;
+    }
+    admission.timing_source = SECURITY_STATE_REVIEW_TAG.to_string();
 }
 
 /// The snapshot a parent run persisted, if it carries one.
@@ -601,7 +648,16 @@ fn resume_admissions(
         }),
         Err(error) => return Err(error.to_string()),
     };
-    let current = resolve(runtime, request).map_err(|error| error.to_string())?;
+    let mut current = resolve(runtime, request).map_err(|error| error.to_string())?;
+    if run.job_id == workflow::TASK_PR_PIPELINE_JOB
+        && runtime
+            .delivery_requires_security_state_review(
+                carried_task_ids(input).iter().map(String::as_str),
+            )
+            .map_err(|error| error.to_string())?
+    {
+        apply_security_state_review(&mut current);
+    }
     Ok((previous, current))
 }
 

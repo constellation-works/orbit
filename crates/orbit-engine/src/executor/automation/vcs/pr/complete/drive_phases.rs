@@ -101,6 +101,7 @@ pub(super) struct PollDriver<'a, H: ?Sized> {
     /// candidate. A prior CI-emission reservation describes the old head.
     pub(super) audited_refresh_adopted: bool,
     pub(super) reviewed_head_sha: Option<String>,
+    pub(super) exact_review_required: bool,
     pub(super) watch_only: bool,
     pub(super) unsettled_polls: u32,
     pub(super) unreported: UnreportedChecks,
@@ -416,7 +417,7 @@ impl<H: ?Sized> PollDriver<'_, H> {
                 return Ok(ObserveFlow::ContinuePoll);
             }
             self.pin.ensure_pinned_candidate(&status, pr_number)?;
-            if !self.base_adopted {
+            if self.exact_review_required || !self.base_adopted {
                 ensure_pr_head_is_reviewed(&status, pr_number, self.reviewed_head_sha.as_deref())?;
             }
         }

@@ -11,6 +11,14 @@ pub const NO_DIFF_WORK_CLASS: &str = "no-diff";
 /// The work class of every other task that is not a recurring template.
 pub const CHANGE_WORK_CLASS: &str = "change";
 
+/// Task tag requiring a delivery review for changes to persisted security state.
+pub const SECURITY_STATE_REVIEW_TAG: &str = "security-state-review";
+
+/// Whether the task tags require a review before a candidate lands.
+pub fn requires_security_state_review(tags: &[String]) -> bool {
+    tags.iter().any(|tag| tag == SECURITY_STATE_REVIEW_TAG)
+}
+
 /// Whether these tags say the task was not meant to change files: they
 /// carry `no-diff-expected`. The one predicate every reader of that tag
 /// shares, whatever work class an `auto-task:` tag also gives the task.

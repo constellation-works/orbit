@@ -3,13 +3,14 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
+use orbit_types::task::SECURITY_STATE_REVIEW_TAG;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{ReviewGateAdmissionOutput, ReviewGateRefusal, ReviewTiming};
 use serde_json::{Value, json};
 
 use super::super::super::REVIEW_AUDIT;
-use super::super::super::admission::run_review_admission;
-use super::super::context::{GateContext, admitted_run_id, not_applicable};
+use super::super::super::admission::{apply_security_state_review, run_review_admission};
+use super::super::context::{GateContext, admitted_run_id, completed_task_ids, not_applicable};
 use super::super::host_gates::HOST_VALIDATION_STEP_INPUT;
 use super::holds::SKIP_REVIEW_REASON;
 use super::{admission, holds, reviewer};
@@ -119,8 +120,8 @@ fn admission_output(
         other => DispatchError::action_failed(action, other.to_string()),
     };
     // A run without a captured review admission predates the policy or was
-    // never a delivery submission: it keeps the pre-existing behavior and
-    // never loads tasks or Git state for a gate that cannot apply.
+    // never a delivery submission. It keeps the pre-existing behavior
+    // unless a delivered task requires security-state review.
     // Prefer the dispatcher-injected `run_id` (the admitted job) over
     // `job_run_id`, which a caller may spell as a stable worktree token that
     // has no run record [ORB-11520].
@@ -135,7 +136,21 @@ fn admission_output(
         },
         None => None,
     };
-    let Some(admission) = run_review_admission(runtime, &run_id)
+    let security_review = runtime
+        .delivery_requires_security_state_review(completed_task_ids(input))
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+    let no_diff = input
+        .get("skipped_no_diff_expected")
+        .and_then(Value::as_bool)
+        == Some(true);
+    let local = input.get("mode").and_then(Value::as_str) == Some("local");
+    let missing_contract = || {
+        refused(format!(
+            "review_admission_missing: `{SECURITY_STATE_REVIEW_TAG}` requires review before landing; \
+             this run has no captured review layer. Ship it through the owner's PR route"
+        ))
+    };
+    let Some(mut admission) = run_review_admission(runtime, &run_id)
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
     else {
         if rebase.is_some() {
@@ -145,8 +160,22 @@ fn admission_output(
                     .to_string(),
             ));
         }
+        if security_review && !no_diff {
+            return Err(missing_contract());
+        }
         return Ok(not_applicable("review_admission_missing", None));
     };
+    if security_review && !no_diff {
+        if local {
+            return Err(refused(format!(
+                "review_local_route_refused: `{SECURITY_STATE_REVIEW_TAG}` requires review before landing; ship through the PR route"
+            )));
+        }
+        if runtime.role().is_worker() && !admission.gates_merge() {
+            return Err(missing_contract());
+        }
+        apply_security_state_review(&mut admission);
+    }
     if rebase.is_some() && !admission.gates_merge() {
         return Err(refused(
             "review_gate_stale: completion rebased a reviewed head but the run's review \
@@ -184,16 +213,12 @@ fn admission_output(
         };
         return Ok(not_applicable(reason, Some(&admission)));
     }
-    if input
-        .get("skipped_no_diff_expected")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    if no_diff {
         // A checked no-diff exemption delivers no code: nothing to review and
         // nothing that could later count as code coverage.
         return Ok(not_applicable("no_diff_exemption", Some(&admission)));
     }
-    if input.get("mode").and_then(Value::as_str) == Some("local") {
+    if local {
         // A review layer before landing on a local-only route is refused
         // rather than reinterpreted; a pipeline may learn its route late.
         let (code, setting) = if admission.gates_landing() {
@@ -219,6 +244,7 @@ fn admission_output(
     // gated only by the hosted checks. The budget preflight runs before any
     // candidate exists, so it keeps its normal decision.
     if !preflight
+        && !security_review
         && holds::light_review_skipped(runtime, &context)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
     {
@@ -249,6 +275,7 @@ fn admission_output(
         "run_id": context.run_id,
         "task_ids": context.task_ids,
         "reviewer_crew": admission.crew,
+        "timing_source": admission.timing_source,
         "outcome": outcome.as_ref().map_or(json!("refused"), |output| json!(output.decision())),
         "recorded_at": Utc::now().to_rfc3339(),
     });
@@ -269,6 +296,9 @@ fn admission_output(
         )
         .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
     outcome.map_err(|error| match error {
+        OrbitError::CapabilityDenied(message) if security_review && !awaiting_evidence => refused(
+            format!("{message} (required by `{SECURITY_STATE_REVIEW_TAG}`)"),
+        ),
         OrbitError::CapabilityDenied(message) if awaiting_evidence => {
             DispatchError::ReviewGateRefused {
                 action: action.to_string(),

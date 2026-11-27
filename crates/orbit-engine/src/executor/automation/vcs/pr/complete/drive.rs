@@ -59,42 +59,28 @@ pub(super) enum Delivery {
 
 /// The poll driver's inputs: the step input, the pull request and its
 /// owner tasks, the auto-fix admission and the completion hold rules.
-struct CompletionDrive<'a> {
-    input: &'a Value,
-    workspace_path: &'a str,
-    pr_number: &'a str,
-    task_ids: &'a [String],
-    auto_fix: Option<&'a AutoFix>,
-    hold_check: Option<&'a CompletionHoldCheck>,
+pub(super) struct CompletionDrive<'a> {
+    pub(super) input: &'a Value,
+    pub(super) workspace_path: &'a str,
+    pub(super) pr_number: &'a str,
+    pub(super) task_ids: &'a [String],
+    pub(super) auto_fix: Option<&'a AutoFix>,
+    pub(super) hold_check: Option<&'a CompletionHoldCheck>,
+    pub(super) exact_review_required: bool,
 }
 
 /// Poll GitHub until the PR is verifiably merged, requesting the merge (or
 /// auto-merge) as its reported state allows.
 pub(super) fn drive_pr_to_merged<H>(
     host: &H,
-    input: &Value,
-    workspace_path: &str,
-    pr_number: &str,
-    task_ids: &[String],
-    auto_fix: Option<&AutoFix>,
-    hold_check: Option<&CompletionHoldCheck>,
+    drive: CompletionDrive<'_>,
 ) -> Result<Delivery, OrbitError>
 where
     H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
 {
     let mut diagnostic = None;
-    let result = drive_pr_to_merged_observed(
-        host,
-        CompletionDrive {
-            input,
-            workspace_path,
-            pr_number,
-            task_ids,
-            auto_fix,
-            hold_check,
-        },
-        &mut diagnostic,
-    );
+    let auto_fix = drive.auto_fix;
+    let result = drive_pr_to_merged_observed(host, drive, &mut diagnostic);
     let result = result.map_err(|error| {
         super::super::super::checks::rerun_diagnostic::append_ci_rerun_diagnostic(
             error,
@@ -127,6 +113,7 @@ where
         task_ids,
         auto_fix,
         hold_check,
+        exact_review_required,
     } = drive;
     let max_wait_seconds = bounded_u64(
         input,
@@ -240,6 +227,7 @@ where
         base_adopted,
         audited_refresh_adopted: false,
         reviewed_head_sha,
+        exact_review_required,
         watch_only,
         unsettled_polls,
         unreported,

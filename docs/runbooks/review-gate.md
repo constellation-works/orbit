@@ -130,7 +130,9 @@ A task filed with `skip-review`, or given it by an operator, gets no review at
 any timing while its candidate stays within `workflow.light_delivery_paths`
 ([light delivery](../CONFIG.md#light-delivery-skip-review-and-skip-validation)).
 Every path the candidate changes since its pinned base must match, and every
-task it delivers must carry the tag. When both hold, `review_gate_admit` and
+task it delivers must carry the tag. A candidate that includes a
+`security-state-review` task still requires an approval of its exact head.
+When the skip applies, `review_gate_admit` and
 `landing_review_gate_admit` return `applies: false` with reason
 `skip_review_light_delivery`. Settle then records `gate: not_required`, and the
 PR opens and merges gated only by the required hosted checks. The
@@ -183,7 +185,9 @@ is reviewed again is decided by the successor's own captured review timing, not
 by the requeue, and the prior publication is authenticated independently of that
 timing:
 
-- `review.timing = "off"` (the workspace default) skips independent review.
+- `review.timing = "off"` (the workspace default) skips independent review
+  except for a candidate that includes a `security-state-review` task, which
+  gets before-landing review.
   `landing_review_gate_admit` reports `applies: false` (`review_before_landing_off`)
   and the `landing_review` step is skipped, so the adopted reviewer head lands
   without an independent review of its own.

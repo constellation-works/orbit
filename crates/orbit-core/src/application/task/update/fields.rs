@@ -1,9 +1,10 @@
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_types::task::{
-    CrewSource, GRANTED_TOOLS_FIELD, LIGHT_DELIVERY_TAGS, REQUIRES_LABELS_FIELD, Task, TaskStatus,
-    is_system_identity_tag, is_valid_orb_task_id, normalize_host_labels, normalize_required_tools,
-    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
+    CrewSource, GRANTED_TOOLS_FIELD, LIGHT_DELIVERY_TAGS, REQUIRES_LABELS_FIELD,
+    SECURITY_STATE_REVIEW_TAG, Task, TaskStatus, is_system_identity_tag, is_valid_orb_task_id,
+    normalize_host_labels, normalize_required_tools, normalize_task_dependencies,
+    normalize_task_tags, requires_security_state_review, validate_os_tags,
     validate_task_dependencies_with,
 };
 
@@ -161,6 +162,14 @@ impl OrbitRuntime {
                 return Err(OrbitError::CapabilityDenied(format!(
                     "an agent cannot add `{added}` to an existing task; only filing the task \
                      or an operator update sets it"
+                )));
+            }
+            if writer == TaskFieldWriter::Agent
+                && requires_security_state_review(&task.tags)
+                && !requires_security_state_review(&tags)
+            {
+                return Err(OrbitError::CapabilityDenied(format!(
+                    "an agent cannot remove `{SECURITY_STATE_REVIEW_TAG}`"
                 )));
             }
             // [ORB-21238] `no-pilot` on an assessed or preparing task

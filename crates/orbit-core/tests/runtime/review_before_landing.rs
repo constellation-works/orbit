@@ -18,6 +18,9 @@ use orbit_types::task::{ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM};
 use orbit_types::workflow::{JobRunState, REVIEW_CONTRACT_VERSION};
 use serde_json::{Value, json};
 
+mod security_state;
+
+use self::security_state::security_state_review_is_required_at_the_captured_delivery_layer;
 use super::review_gate_audit::Fixture;
 
 fn an_owner_before_landing_review_keeps_the_durable_task_summary() {
@@ -1372,5 +1375,6 @@ crate::scenario_table!(
     failed_reviewer_commit_preservation_excludes_protected_descendants_when_a_file_replaces_a_directory,
     failed_reviewer_commit_preservation_excludes_protected_descendants_when_a_directory_replaces_a_file,
     refused_reviewer_commit_patch_reproduces_tracked_binary_and_final_whitespace,
-    refused_durable_push_patch_reproduces_saved_commit_binary_changes
+    refused_durable_push_patch_reproduces_saved_commit_binary_changes,
+    security_state_review_is_required_at_the_captured_delivery_layer
 );

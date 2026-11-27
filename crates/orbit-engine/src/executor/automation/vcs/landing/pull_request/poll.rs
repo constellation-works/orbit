@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_types::task::SECURITY_STATE_REVIEW_TAG;
 use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
@@ -344,6 +345,20 @@ pub(in crate::executor::automation::vcs::landing) fn land_pull_request<
         poll.ensure_within_deadline()?;
         let status = poll.read_status()?;
         let state = poll.observe_status(&status)?;
+        if context.security_state_review_required
+            && status
+                .head_sha
+                .as_deref()
+                .is_some_and(|head| head != context.candidate.candidate.commit)
+        {
+            return Err(poll.hold(
+                true,
+                DeliveryRefusal::EvidenceStale,
+                &format!(
+                    "`{SECURITY_STATE_REVIEW_TAG}` requires a fresh review of the moved candidate"
+                ),
+            )?);
+        }
         poll.decide_completion_hold(&state)?;
         // [ORB-15956] A branch update this landing (or an earlier attempt)
         // requested moved the head onto a verified merge with the base.

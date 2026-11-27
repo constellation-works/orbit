@@ -21,7 +21,10 @@ use orbit_automation::review::{
 };
 use orbit_common::fs::path_filter::PathFilter;
 use orbit_store::Store;
-use orbit_types::task::{LIGHT_DELIVERY_PATHS_KEY, LightDeliveryJudgement, SKIP_REVIEW_TAG};
+use orbit_types::task::{
+    LIGHT_DELIVERY_PATHS_KEY, LightDeliveryJudgement, SKIP_REVIEW_TAG,
+    requires_security_state_review,
+};
 use orbit_types::workflow::ReviewCertificate;
 use orbit_types::workflow::automation::{AutomationState, Delivery, DeliveryExclusion, SourcePage};
 
@@ -127,6 +130,9 @@ fn light_delivery_exclusion(
         let Ok(task) = runtime.get_task(task_id) else {
             return Ok(None);
         };
+        if requires_security_state_review(&task.tags) {
+            return Ok(None);
+        }
         digests.push((task_id.clone(), task_meaning_digest(&task)?));
         tasks.push(task);
     }

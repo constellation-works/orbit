@@ -35,6 +35,7 @@ pub(super) struct Fixture {
 struct FixtureSettings<'a> {
     workflow: &'a str,
     review_setting: Option<&'a str>,
+    omit_reviewer: bool,
 }
 
 impl Fixture {
@@ -56,6 +57,22 @@ impl Fixture {
             None,
             &[],
             Default::default(),
+        )
+    }
+
+    pub(super) fn security_review(timing: ReviewTiming, reviewer_available: bool) -> Self {
+        Self::build(
+            &[],
+            "",
+            timing,
+            10,
+            None,
+            &[],
+            FixtureSettings {
+                workflow: "light_delivery_paths = [\"candidate.txt\"]",
+                omit_reviewer: !reviewer_available,
+                ..Default::default()
+            },
         )
     }
 
@@ -126,16 +143,18 @@ impl Fixture {
         let FixtureSettings {
             workflow,
             review_setting,
+            omit_reviewer,
         } = settings;
         let pool = selection.is_some();
         let selection = selection.unwrap_or_default();
         let switch = match timing {
-            ReviewTiming::BeforeLanding => "before_landing",
-            _ => "before_pr",
+            ReviewTiming::BeforeLanding => "before_landing = true",
+            ReviewTiming::BeforePr => "before_pr = true",
+            _ => "timing = \"off\"",
         };
         let workspace_review = review_setting
             .map(str::to_string)
-            .unwrap_or_else(|| format!("{switch} = true"));
+            .unwrap_or_else(|| switch.to_string());
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("global");
         let repo = root.path().join("repo");
@@ -215,7 +234,7 @@ impl Fixture {
                     _ => policy.review_before_pr.source.label().into(),
                 }
             },
-            crew: (!pool).then(|| policy.review_crew.value[0].clone()),
+            crew: (!pool && !omit_reviewer).then(|| policy.review_crew.value[0].clone()),
             crew_pool: if pool {
                 policy
                     .review_crew
@@ -253,7 +272,7 @@ impl Fixture {
                 "task_pr_pipeline",
                 1,
                 Utc::now(),
-                Some(json!({"review": admission, "task_ids": [task.id], "task_id": task.id})),
+                Some(json!({"review": admission, "task_ids": [task.id], "task_id": task.id, "base_branch": "main"})),
                 None,
             )
             .unwrap();

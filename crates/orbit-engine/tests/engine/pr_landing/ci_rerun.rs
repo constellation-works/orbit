@@ -518,6 +518,7 @@ fn claimed<'a>(fx: &Fixture, host: &'a DeliveryHost) -> ClaimedRetry<'a> {
     ClaimedRetry {
         inner: host,
         context: orbit_engine::HandoffLandingContext {
+            security_state_review_required: false,
             handoff_id: "handoff-retry".into(),
             task_id: TASK_ID.into(),
             claim_id: "claim-retry".into(),

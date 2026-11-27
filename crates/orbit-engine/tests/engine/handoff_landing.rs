@@ -1018,6 +1018,7 @@ fn owner_checkout(repo: &Path) -> LandingHost {
     LandingHost {
         repo: repo.to_path_buf(),
         context: HandoffLandingContext {
+            security_state_review_required: false,
             handoff_id: "handoff-1".into(),
             task_id: TASK_ID.into(),
             claim_id: "claim-1".into(),
