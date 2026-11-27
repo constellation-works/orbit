@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
 use orbit_common::test_env::{wait_until, with_supervision_clock};
 
-use super::super::converge::{DEFAULT_PROBE_TIMEOUT, probe_version, require_admission_contract};
+use crate::app::update::converge::{
+    DEFAULT_PROBE_TIMEOUT, probe_version, require_admission_contract,
+};
 
 struct DescendantGuard<'a>(&'a Path);
 

@@ -34,7 +34,10 @@ pub mod source;
 
 pub use environment::{for_install_target, from_process, workspace_for_preflight};
 
-pub use orbit_core::app::update::*;
+pub use orbit_core::app::update::{
+    UpdateEnvironment, UpdateOutcome, UpdateReport, UpdateRequest, UpdateWorkspace,
+    acquire_admissions, channel, converge, local_candidate, run_update,
+};
 
 #[cfg(test)]
 mod tests;

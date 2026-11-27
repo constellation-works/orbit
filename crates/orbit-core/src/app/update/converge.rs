@@ -122,8 +122,7 @@ impl ConvergenceStep {
 /// as does one that does not describe its contract within `timeout`.
 ///
 /// What a candidate's `update --contract` report commits it to.
-#[doc(hidden)]
-pub struct AdmissionContract {
+pub(super) struct AdmissionContract {
     /// The compatibility the candidate reports under
     /// `compatibility-generation-v2`, which its pin records so compatible
     /// builds can join it; `None` for a candidate that only speaks
@@ -407,8 +406,7 @@ pub(super) fn probe_writable_state(
 }
 
 /// See [`AdmissionContract`] for what the report yields.
-#[doc(hidden)]
-pub fn require_admission_contract(
+pub(super) fn require_admission_contract(
     executable: &Path,
     timeout: Duration,
 ) -> Result<AdmissionContract, OrbitError> {

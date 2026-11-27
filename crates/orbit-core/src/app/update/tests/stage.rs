@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::update::stage::{
+use crate::app::update::stage::{
     restore_backup_with_rename, stage_executable, write_staging_file_with_mode,
 };
 
@@ -162,7 +162,7 @@ fn a_failed_atomic_restore_keeps_both_complete_files_and_cleans_staging() {
 #[cfg(target_os = "linux")]
 #[test]
 fn rollback_replaces_a_running_executable_atomically() {
-    use crate::update::stage::restore_backup;
+    use crate::app::update::stage::restore_backup;
     use orbit_common::test_process::retry_executable_busy;
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
@@ -184,14 +184,14 @@ fn rollback_replaces_a_running_executable_atomically() {
         .expect("make previous executable runnable");
 
     orbit_common::test_env::assert_child_test_exists(
-        "update::tests::stage::running_replacement_process_fixture",
+        "app::update::tests::stage::running_replacement_process_fixture",
     );
     let mut command = Command::new(&destination);
     command
         .args([
             "--ignored",
             "--exact",
-            "update::tests::stage::running_replacement_process_fixture",
+            "app::update::tests::stage::running_replacement_process_fixture",
         ])
         .env("ORBIT_TEST_REPLACEMENT_READY", &ready)
         .env("ORBIT_TEST_REPLACEMENT_RELEASE", &release);

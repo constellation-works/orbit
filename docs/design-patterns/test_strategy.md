@@ -2571,7 +2571,7 @@ The 15 originally admitted `orbit-cmd` tests remain. Their update fixture is
 trimmed to the restore-callback fault injection, and the stale-lock holder
 helpers sit beside the one test that uses them.
 
-`update/tests/converge.rs::probe_timeouts_tear_down_descendants_before_and_after_parent_exit`
+`app/update/tests/converge.rs::probe_timeouts_tear_down_descendants_before_and_after_parent_exit`
 is admitted under criterion 2 (deadline fault injection). Its four rows call the
 version probe and the private admission-contract probe, with the leader either
 alive or exited while a descendant holds its output pipes. A readiness-triggered

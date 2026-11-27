@@ -1,8 +1,3 @@
-//! Sibling unit tests for the `orbit update` pipeline.
+//! Sibling unit tests for `orbit update`.
 
-mod fixture;
-mod flow;
-mod stage;
-
-#[cfg(unix)]
-mod converge;
+mod source;

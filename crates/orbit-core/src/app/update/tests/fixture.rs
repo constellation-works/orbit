@@ -10,10 +10,11 @@
 //! the exported `run_update` reaches is tested from the CLI crate's
 //! `tests/process/update/flow.rs`, against its own copy of this fixture.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
+use orbit_common::OrbitError;
 use orbit_common::security::release::{
     RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME, TrustedReleaseKey,
 };
@@ -24,9 +25,9 @@ use rsa::signature::{SignatureEncoding, Signer};
 use sha2::Sha256;
 use tempfile::TempDir;
 
-use crate::update::channel::InstallChannel;
-use crate::update::source::{DirectoryReleaseSource, MIRROR_LATEST_FILE};
-use crate::update::{UpdateEnvironment, UpdateRequest, UpdateWorkspace};
+use crate::app::update::channel::InstallChannel;
+use crate::app::update::source::ReleaseSource;
+use crate::app::update::{UpdateEnvironment, UpdateRequest, UpdateWorkspace};
 
 /// A throwaway keypair generated for these tests. It is not the release
 /// signing key and no published artifact will ever verify against it.
@@ -70,11 +71,18 @@ R7dTEa7m1rPGwS7jBMC+avb7EOPmVyZuIRqHwzDITTeCpT+R1YWu0DyFJdZyvPvB
 -----END PUBLIC KEY-----";
 
 /// The release target the fixture publishes for.
+/// File in the mirror naming the newest published version.
+const MIRROR_LATEST_FILE: &str = "latest-version.txt";
+
 const TEST_TARGET: &str = "x86_64-unknown-linux-gnu";
 
 /// What the fake binary's `clock repair` reports on stdout, standing in for a
 /// real rewrite of a unit whose program had moved.
-const CLOCK_REPAIR_REPORT: &str = "rewrote clock unit ~/Library/LaunchAgents/com.orbit.sweep.plist: it ran /opt/homebrew/bin/orbit, which no longer exists, and now runs ~/.orbit/bin/orbit (reloaded)";
+const CLOCK_REPAIR_REPORT: &str = concat!(
+    "rewrote clock unit ~/Library/LaunchAgents/com.orbit.sweep.plist: ",
+    "it ran /opt/homebrew/bin/orbit, which no longer exists, ",
+    "and now runs ~/.orbit/bin/orbit (reloaded)",
+);
 
 /// A fake installation plus the release mirror it updates from.
 pub struct Fixture {
@@ -116,7 +124,7 @@ impl Fixture {
     pub fn publish_archive(&self, version: &str, archive: &[u8]) {
         let directory = self.mirror.join(format!("v{version}"));
         std::fs::create_dir_all(&directory).expect("release directory");
-        let asset = crate::update::channel::release_archive_name(TEST_TARGET);
+        let asset = crate::app::update::channel::release_archive_name(TEST_TARGET);
         std::fs::write(directory.join(&asset), archive).expect("write archive");
 
         let digest = orbit_common::security::release::sha256_hex(archive);
@@ -156,7 +164,7 @@ impl Fixture {
                 root_argument: Some(workspace_root),
             }),
             bundled_bwrap_installed: false,
-            probe_timeout: crate::update::converge::DEFAULT_PROBE_TIMEOUT,
+            probe_timeout: crate::app::update::converge::DEFAULT_PROBE_TIMEOUT,
         }
     }
 
@@ -164,9 +172,9 @@ impl Fixture {
     pub fn installed_reports(&self) -> String {
         format!(
             "orbit {}",
-            crate::update::converge::probe_version(
+            crate::app::update::converge::probe_version(
                 &self.executable,
-                crate::update::converge::DEFAULT_PROBE_TIMEOUT,
+                crate::app::update::converge::DEFAULT_PROBE_TIMEOUT,
             )
             .expect("run installed binary")
         )
@@ -190,6 +198,65 @@ impl Fixture {
             .collect();
         names.sort();
         names
+    }
+}
+
+/// A mirror directory laid out as `<root>/v<version>/<asset>`, with a
+/// `latest-version.txt` marker, standing in for the release transport.
+#[derive(Debug)]
+struct DirectoryReleaseSource {
+    root: PathBuf,
+}
+
+impl DirectoryReleaseSource {
+    fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+}
+
+impl ReleaseSource for DirectoryReleaseSource {
+    fn describe(&self) -> String {
+        format!("release mirror {}", self.root.display())
+    }
+
+    fn latest_version(&self) -> Result<String, OrbitError> {
+        let body = std::fs::read_to_string(self.root.join(MIRROR_LATEST_FILE))
+            .map_err(|error| OrbitError::Execution(format!("read latest version: {error}")))?;
+        Ok(body.trim().trim_start_matches('v').to_string())
+    }
+
+    /// Extract the single `orbit` member, refusing any other member.
+    fn unpack(&self, archive: &[u8], asset: &str) -> Result<Vec<u8>, OrbitError> {
+        let decoder = flate2::read::GzDecoder::new(archive);
+        let mut reader = tar::Archive::new(decoder);
+        let unreadable = |error: std::io::Error| {
+            OrbitError::Execution(format!("could not read {asset}: {error}"))
+        };
+        let mut executable = None;
+        for entry in reader.entries().map_err(unreadable)? {
+            let mut entry = entry.map_err(unreadable)?;
+            let name = entry
+                .path()
+                .map_err(unreadable)?
+                .to_string_lossy()
+                .into_owned();
+            if executable.is_some() || name != "orbit" {
+                return Err(OrbitError::Execution(format!(
+                    "unexpected member `{name}` in {asset}; expected only `orbit`"
+                )));
+            }
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(unreadable)?;
+            executable = Some(bytes);
+        }
+        executable.ok_or_else(|| OrbitError::Execution(format!("{asset} does not contain `orbit`")))
+    }
+
+    fn fetch(&self, version: &str, asset: &str) -> Result<Vec<u8>, OrbitError> {
+        let path = self.root.join(format!("v{version}")).join(asset);
+        std::fs::read(&path).map_err(|error| {
+            OrbitError::Execution(format!("read {} from the mirror: {error}", path.display()))
+        })
     }
 }
 
@@ -217,7 +284,11 @@ fn sign(message: &[u8]) -> Vec<u8> {
 /// and records every other invocation so a test can assert none happened.
 fn script(version: &str, log: &Path) -> Vec<u8> {
     let contract = r#"{"schema_version":1,"contract":"executable-generation-v1"}"#;
-    let inspection = r#"{"up_to_date":true,"schema":{"current":21,"supported":21},"layout":{"current":3,"supported":3},"forward_compatible":{"read_only":false}}"#;
+    let inspection = concat!(
+        r#"{"up_to_date":true,"schema":{"current":21,"supported":21},"#,
+        r#""layout":{"current":3,"supported":3},"#,
+        r#""forward_compatible":{"read_only":false}}"#,
+    );
     format!(
         "#!/bin/sh\n\
          if [ \"$1\" = --version ]; then echo 'orbit {version}'; exit 0; fi\n\
