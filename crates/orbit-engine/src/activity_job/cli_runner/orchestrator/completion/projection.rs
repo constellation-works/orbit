@@ -20,6 +20,9 @@ use super::frames::{
 use super::{failure, frames};
 use crate::activity_job::dispatcher::{DispatchError, DispatchInvocationTrace, DispatchOutcome};
 use crate::context::dispatch_contract::DECLARED_FAILURE_EVIDENCE_KEY;
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 use orbit_agent::{
     ParsedStdout, antigravity_background_task_diagnostic, antigravity_terminal_error_diagnostic,
     assign_recorded_tool_calls, is_missing_envelope_violation, is_success_carrying_error_violation,
@@ -185,9 +188,17 @@ fn insert_orbit_owned_output(
 
 /// Decide the step outcome from the provider's exit and its stdout envelope,
 /// run the post-provider worktree check, and project the step output.
-pub(in super::super) fn project_completion(
-    exit: ProviderExit<'_>,
-) -> Result<DispatchOutcome, DispatchError> {
+pub(in crate::activity_job::cli_runner::orchestrator) fn project_completion<H>(
+    exit: ProviderExit<'_, H>,
+) -> Result<DispatchOutcome, DispatchError>
+where
+    H: HostEnvironment
+        + Recovery
+        + ReviewGate
+        + RunLifecycle
+        + RuntimeHostProcessEnvironment
+        + ?Sized,
+{
     let ProviderExit {
         audit,
         started_at,

@@ -14,7 +14,7 @@ use orbit_types::workflow::ProviderLimitFailure;
 use orbit_types::workflow::activity_job::Provider;
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::antigravity_usage::AntigravityUsageRequest;
 use super::completion::{provider_failure, stdout_frames};
@@ -126,7 +126,7 @@ fn claude_rate_limit(
 /// crew `account` the run used, if any. A host that cannot record it still
 /// fails the step with the typed limit; the store is advisory.
 pub(super) fn record_limit(
-    host: &dyn RuntimeHost,
+    host: &(impl HostEnvironment + ?Sized),
     provider: &str,
     limit: &ProviderLimitFailure,
     detail: &str,
@@ -163,7 +163,7 @@ pub(super) fn record_limit(
 /// reading is attributed to `account`, the crew account the run used, or to
 /// the provider's default login when that is `None`.
 pub(super) fn record_usage_windows(
-    host: &dyn RuntimeHost,
+    host: &(impl HostEnvironment + RuntimeHostProcessEnvironment + ?Sized),
     provider: Provider,
     stdout: &[u8],
     context: &UsageWindowContext,
@@ -226,7 +226,7 @@ pub(super) fn record_usage_windows(
 
 /// The store is advisory: a host that cannot record an observation logs it
 /// and the step's outcome stands.
-fn record(host: &dyn RuntimeHost, observation: &ProviderLimitObservation) {
+fn record(host: &(impl HostEnvironment + ?Sized), observation: &ProviderLimitObservation) {
     if let Err(error) = host.record_provider_limit(observation) {
         tracing::warn!(
             provider = observation.provider,

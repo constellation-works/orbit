@@ -53,6 +53,7 @@ impl RefreshFailure {
 /// resolve against a fixed registry. Sandbox and a
 /// persistence-refresh failure are optional so a test can force one post-run
 /// check without standing up the rest of the runtime.
+#[derive(Default)]
 pub(in crate::activity_job::cli_runner) struct TestHost {
     command: String,
     sandbox: Option<ResolvedSandbox>,
@@ -66,10 +67,7 @@ impl TestHost {
     pub(in crate::activity_job::cli_runner) fn with_command(command: String) -> Self {
         Self {
             command,
-            sandbox: None,
-            refresh_failure: None,
-            refresh_failing_calls: None,
-            refresh_calls: AtomicU32::new(0),
+            ..Self::default()
         }
     }
 
@@ -193,6 +191,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
     AgentLoopSpec::for_provider(String::new(), provider, timeout.as_secs())
 }
 
+#[cfg(unix)]
 pub(in crate::activity_job::cli_runner) fn write_executable(path: &Path, contents: &str) {
     use std::os::unix::fs::PermissionsExt;
 

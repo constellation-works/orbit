@@ -17,7 +17,7 @@ use std::path::Path;
 use orbit_common::fs::path_glob::RelativePathGlob;
 use orbit_exec::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process_supervised};
 
-use crate::context::{GeneratedPath, RuntimeHost};
+use crate::context::{GeneratedPath, HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::rebase_recovery::git_mutation_output;
 use super::rebase_repairs::has_conflict_markers;
@@ -28,7 +28,7 @@ const REGENERATE_TIMEOUT_MS: u64 = 10 * 60 * 1000;
 /// The conflicting paths that match a configured generated path, each with
 /// the command that regenerates it. The first matching glob wins.
 pub(crate) fn conflicted_generated_paths(
-    host: &dyn RuntimeHost,
+    host: &(impl HostEnvironment + ?Sized),
     conflicting_paths: &[String],
 ) -> Vec<GeneratedPath> {
     let configured = host
@@ -60,7 +60,7 @@ pub(crate) fn conflicted_generated_paths(
 /// continuation stages the regenerated files with the rest of the
 /// resolution. The error is the reason the repair fails.
 pub(super) fn regenerate(
-    host: &dyn RuntimeHost,
+    host: &(impl HostEnvironment + RuntimeHostProcessEnvironment + ?Sized),
     root: &Path,
     generated: &[GeneratedPath],
 ) -> Result<(), String> {
@@ -109,7 +109,11 @@ fn take_a_side(process_env: &orbit_common::Env, root: &Path, path: &str) -> Resu
     Ok(())
 }
 
-fn run_generator(host: &dyn RuntimeHost, root: &Path, command: &str) -> Result<(), String> {
+fn run_generator(
+    host: &(impl HostEnvironment + RuntimeHostProcessEnvironment + ?Sized),
+    root: &Path,
+    command: &str,
+) -> Result<(), String> {
     let supervised = run_process_supervised(
         &host.process_env(),
         &ExecRequest {

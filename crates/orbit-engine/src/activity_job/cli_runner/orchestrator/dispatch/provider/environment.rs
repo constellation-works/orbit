@@ -8,7 +8,8 @@ use super::super::CliDispatchContext;
 use crate::activity_job::cli_runner::inspection::SourceInspection;
 use crate::activity_job::dispatcher::{DispatchError, ResolvedSandbox};
 use crate::context::{
-    ProvenanceEnv, ResolvedActivityTools, default_python_cache_prefix, provenance_env,
+    HostEnvironment, ProvenanceEnv, ResolvedActivityTools, RunLifecycle,
+    RuntimeHostProcessEnvironment, default_python_cache_prefix, provenance_env,
 };
 use orbit_common::env_vars;
 use orbit_common::process::build_budget::WAIT_DIRECTORY_ENV;
@@ -26,8 +27,8 @@ use orbit_common::env_vars::CARGO_DENY_DB_PATH as CARGO_DENY_DB_PATH_ENV;
 /// Scratch subdirectory holding this run's cargo-deny advisory database.
 const CARGO_DENY_ADVISORY_DB_SUBDIR: &str = "cargo-deny-advisory-db";
 
-pub(super) struct ProviderEnvironmentInput<'a> {
-    pub(super) context: CliDispatchContext<'a>,
+pub(super) struct ProviderEnvironmentInput<'a, H: ?Sized> {
+    pub(super) context: CliDispatchContext<'a, H>,
     pub(super) provider: &'a str,
     pub(super) model: &'a Option<String>,
     pub(super) inspection: &'a Option<SourceInspection>,
@@ -121,8 +122,10 @@ fn sandbox_profile_allows_modify(
     Ok(allowed)
 }
 
-pub(super) fn prepare_provider_environment(
-    input: ProviderEnvironmentInput<'_>,
+pub(super) fn prepare_provider_environment<
+    H: HostEnvironment + RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+>(
+    input: ProviderEnvironmentInput<'_, H>,
 ) -> Result<PreparedProviderEnvironment, DispatchError> {
     let ProviderEnvironmentInput {
         context,

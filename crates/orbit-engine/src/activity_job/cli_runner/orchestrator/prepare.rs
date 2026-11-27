@@ -13,7 +13,7 @@ use super::super::super::workspace::resolve_subprocess_cwd;
 use super::super::inspection::SourceInspection;
 use super::super::spawn::{PreparedSandbox, prepare_sandbox_for_dispatch};
 use super::super::supervisor::DEFAULT_WALL_CLOCK_TIMEOUT_SECONDS;
-use crate::context::RuntimeHost;
+use crate::context::{Dispatch, Recovery};
 
 /// The checkout a provider runs in: the assigned source cwd, or the
 /// temporary checkout of a source inspection with its rebound inputs.
@@ -69,7 +69,7 @@ pub(super) fn require_conflict_recovery_target(
 
 /// The activity's tool context, attributed to this provider and model.
 pub(super) fn activity_tool_context(
-    host: &dyn RuntimeHost,
+    host: &(impl Recovery + ?Sized),
     spec: &AgentLoopSpec,
     run_id: &str,
     fs_profile: Option<&str>,
@@ -126,7 +126,7 @@ pub(super) fn prepare_source_checkout(
 
 /// Resolve the activity's ordinary executor sandbox.
 pub(super) fn resolve_dispatch_sandbox(
-    host: &dyn RuntimeHost,
+    host: &(impl Dispatch + ?Sized),
     provider: &str,
     fs_profile: Option<&str>,
     subprocess_cwd: Option<&Path>,

@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::context::{RuntimeHost, StepRecoveryAdmission};
+use crate::context::{ReviewGate, StepRecoveryAdmission};
 use crate::executor::automation::vcs::git::{BaseSyncMode, GitBytesOutcome, git_run_bytes};
 use orbit_types::workflow::{COMPLETE_PR_STEP_ID, COMPLETE_REVIEWED_PR_STEP_ID, SYNC_BASE_STEP_ID};
 
@@ -153,7 +153,7 @@ pub(super) fn unmerged_paths(
 /// its authorization stands; rechecked just before the host writes the
 /// checkout.
 pub(super) fn recheck_recovery_owner(
-    host: &dyn RuntimeHost,
+    host: &(impl ReviewGate + ?Sized),
     run_id: &str,
     step_id: &str,
     task_ids: &[String],

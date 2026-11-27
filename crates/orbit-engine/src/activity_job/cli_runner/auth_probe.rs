@@ -15,7 +15,9 @@ use super::spawn::{SpawnError, prepare_sandbox_for_dispatch};
 use super::supervisor::{
     SpawnTraceContext, SpawnWithTimeoutRequest, spawn_for_supervision, spawn_with_timeout,
 };
-use crate::{DispatchError, RuntimeHost};
+use crate::{
+    Dispatch, DispatchError, HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 /// The recovery verdict, without provider output or credential values.
 pub struct AuthProbeOutcome {
@@ -28,7 +30,7 @@ pub struct AuthProbeOutcome {
 /// applying the host's env allowlist and the crew overlay. Cache/keychain
 /// labels describe the fallback; Orbit does not read credentials.
 pub fn auth_credential_source(
-    host: &dyn RuntimeHost,
+    host: &(impl HostEnvironment + ?Sized),
     provider: &str,
     crew_env: &[CrewEnvVar],
 ) -> String {
@@ -58,8 +60,10 @@ fn credential_source(provider: &str, env: &[(String, String)]) -> String {
 /// Run a declared probe with the leaf launcher, cleared allowlisted environment
 /// (with the probed crew's `env` overlay), sandbox and process-tree timeout.
 /// No activity tools or broker are granted.
-pub fn run_auth_probe(
-    host: &dyn RuntimeHost,
+pub fn run_auth_probe<
+    H: Dispatch + HostEnvironment + RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+>(
+    host: &H,
     provider: &str,
     crew_env: &[CrewEnvVar],
     probe: &AuthProbe,

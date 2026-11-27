@@ -34,9 +34,6 @@ mod target;
 mod templating;
 mod validate;
 
-#[cfg(test)]
-mod tests;
-
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
@@ -59,7 +56,7 @@ use super::dispatcher::{
     DispatchError, V2DispatchInput, dispatch_v2_activity_without_run_id_injection,
     dispatch_v2_target_activity,
 };
-use crate::context::RuntimeHost;
+use crate::context::{Dispatch, Recovery, RuntimeHost};
 
 use self::audit::*;
 use self::auto_task::*;
@@ -88,6 +85,9 @@ pub use self::templating::{
     render_job_step_input_from_state,
 };
 pub use self::validate::{validate_job, validate_job_deterministic_actions};
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug, Clone)]
 pub struct JobOutcome {

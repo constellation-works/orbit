@@ -1,6 +1,7 @@
 use super::reviewer::ReviewerInvocation;
 use super::*;
 use crate::context::dispatch_contract::DECLARED_FAILURE_EVIDENCE_KEY;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle};
 use orbit_types::workflow::{AGENT_IMPLEMENT_ACTIVITY, IMPLEMENT_ONE_STEP_ID};
 
 /// Run-input keys the executor owns and hands every nested target of the
@@ -333,7 +334,7 @@ fn dispatch_once(
 /// The defect the host finds in the report of the reviewer that just
 /// returned, when the reviewer can still correct it [ORB-14616]. A failed
 /// check is logged and leaves the report to settlement.
-fn report_correction(ctx: &ExecCtx<'_>, input: &Value) -> Option<String> {
+fn report_correction(ctx: &ExecCtx<'_, impl ReviewGate + ?Sized>, input: &Value) -> Option<String> {
     let request = review_report_request(ctx, input)?;
     ctx.host
         .review_report_correction(&request)
@@ -352,7 +353,7 @@ fn report_correction(ctx: &ExecCtx<'_>, input: &Value) -> Option<String> {
 /// The host's question about the report of the reviewer `input` dispatched;
 /// `None` when the input names no admitted attempt.
 fn review_report_request(
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl ?Sized>,
     input: &Value,
 ) -> Option<crate::context::ReviewReportCorrectionRequest> {
     let field = |key: &str| {
@@ -389,7 +390,7 @@ fn review_report_request(
 /// report, a reject, an open finding, a gap beyond the named checks, or a
 /// host that cannot judge — keeps the declared failure.
 fn hold_failed_reviewer_for_evidence(
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl ReviewGate + ?Sized>,
     input: &Value,
     dispatch: &mut super::super::dispatcher::DispatchOutcome,
 ) {
@@ -656,7 +657,7 @@ fn claimed_artifact_array_shape_error(output: &Value) -> Option<(&'static str, S
 fn accept_implementer_deferral(
     step: &JobV2Step,
     target: &TargetStep,
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl Dispatch + HostEnvironment + ReviewGate + RunLifecycle + ?Sized>,
     input: &Value,
     success: bool,
     message: Option<String>,
@@ -700,7 +701,7 @@ fn accept_implementer_deferral(
 fn accept_implementer_owed_criteria(
     step: &JobV2Step,
     target: &TargetStep,
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl HostEnvironment + ?Sized>,
     input: &Value,
     success: bool,
     message: Option<String>,
@@ -796,7 +797,7 @@ fn is_implementer_step(step: &JobV2Step, target: &TargetStep) -> bool {
 /// and surfaced on the run record as `telemetry.persist_failed`; the step's
 /// success stays decided solely by its own work.
 pub(super) fn persist_dispatch_invocation(
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl Recovery + ?Sized>,
     step_id: &str,
     input: &Value,
     dispatch: &super::super::dispatcher::DispatchOutcome,
@@ -819,7 +820,7 @@ pub(super) fn persist_dispatch_invocation(
 /// input supplies the resolved fallback crew.
 pub(super) fn crew_overridden_spec(
     t: &TargetStep,
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl Recovery + ?Sized>,
     rendered_input: &Value,
 ) -> Result<Option<AgentLoopSpec>, DispatchError> {
     let ActivityV2Spec::AgentLoop(inline_spec) = &t.spec else {

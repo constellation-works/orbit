@@ -7,11 +7,7 @@ use serde_json::json;
 
 use super::super::super::super::supervisor::CapturedOutput;
 use super::super::super::completion::{ProviderExit, print_budget_exhausted, project_completion};
-use crate::context::NullRuntimeHost;
-
-struct IdleHost;
-
-impl NullRuntimeHost for IdleHost {}
+use crate::activity_job::cli_runner::tests::test_support::TestHost;
 
 pub(super) fn project(stalled: bool, timed_out: bool) -> crate::DispatchOutcome {
     project_stdout("fixture", b"", false, stalled, timed_out)
@@ -36,7 +32,7 @@ pub(super) fn project_provider_output(
     timed_out: bool,
 ) -> crate::DispatchOutcome {
     let spec: AgentLoopSpec = serde_json::from_value(json!({})).expect("empty agent spec");
-    let host = IdleHost;
+    let host = TestHost::default();
     let input = json!({});
     let redaction = PatternRedactor::http_default();
     let audit = crate::activity_job::V2AuditWriter::new(

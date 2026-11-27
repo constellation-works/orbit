@@ -6,7 +6,9 @@ use serde_json::{Value, json};
 
 use orbit_types::task::ContextWideningStep;
 
-use crate::context::RuntimeHost;
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::declared_pair::{
     WorktreeDispatch, declared_workspace_path, exact_canonical_dir, git_top_level, task_id,
@@ -253,7 +255,14 @@ impl WorktreeBoundaryGuard {
     /// or one that stops again on a later pick of that same rebase.
     pub(crate) fn verify_after_provider(
         self,
-        host: &dyn RuntimeHost,
+        host: &(
+             impl HostEnvironment
+             + Recovery
+             + ReviewGate
+             + RunLifecycle
+             + RuntimeHostProcessEnvironment
+             + ?Sized
+         ),
         recovery_succeeded: bool,
         recovery_step_id: Option<&str>,
         task_ids: &[String],
@@ -301,7 +310,7 @@ impl WorktreeBoundaryGuard {
     /// recovery widens from its host continuation instead.
     fn widen_for_agent_changes(
         &self,
-        host: &dyn RuntimeHost,
+        host: &(impl RunLifecycle + RuntimeHostProcessEnvironment + ?Sized),
         task_ids: &[String],
     ) -> Result<(), DispatchError> {
         let Some(step) = ContextWideningStep::for_activity(&self.activity) else {
@@ -333,7 +342,7 @@ impl WorktreeBoundaryGuard {
     /// path still uncovered, so a failed write loses only the provenance.
     pub(super) fn widen_task(
         &self,
-        host: &dyn RuntimeHost,
+        host: &(impl RunLifecycle + ?Sized),
         task_ids: &[String],
         step: ContextWideningStep,
         paths: &[String],

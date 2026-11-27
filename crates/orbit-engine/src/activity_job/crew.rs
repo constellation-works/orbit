@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::context::CrewConfig;
 
 use super::dispatcher::DispatchError;
-use crate::context::RuntimeHost;
+use crate::context::Recovery;
 
 /// A run-scoped restriction on the crews this run may launch [ORB-11242]. The
 /// key travels on the *run* input, so the restriction survives whichever input
@@ -45,7 +45,7 @@ pub struct ResolvedAgentSettings {
 /// host resolves from configuration; absent both, the run input preserves the
 /// run's resolved crew selection.
 pub fn resolve_crew_settings(
-    host: &dyn RuntimeHost,
+    host: &(impl Recovery + ?Sized),
     inline: &AgentLoopSpec,
     activity_input: &Value,
     run_input: &Value,

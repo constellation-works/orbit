@@ -32,7 +32,7 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
-use crate::context::{HostEnvironment, RunLifecycle, RuntimeHost};
+use crate::context::{Dispatch, HostEnvironment, ReviewGate, RunLifecycle, RuntimeHost};
 
 /// The checkout directory a handed-off gate summary must be in: the
 /// implementer's scratch.
@@ -65,7 +65,9 @@ pub(super) fn with_replays(mut commands: Vec<String>, replays: &[String]) -> Vec
 /// the gate summary it names and, on an owner run, keep it on the task.
 /// `Ok(Some)` is the derived record, which replaces the handoff in the step's
 /// output; `Err` is the step's failure message.
-pub(crate) fn accept_implementer_deferral<H: RuntimeHost + ?Sized>(
+pub(crate) fn accept_implementer_deferral<
+    H: Dispatch + HostEnvironment + ReviewGate + RunLifecycle + ?Sized,
+>(
     host: &H,
     run_id: &str,
     input: &Value,
@@ -106,7 +108,7 @@ pub(crate) fn accept_implementer_deferral<H: RuntimeHost + ?Sized>(
 
 /// The record the handoff's gate summary and Orbit's own probe derive, or
 /// `None` when the implementer deferred nothing.
-fn derive<H: RuntimeHost + ?Sized>(
+fn derive<H: Dispatch + HostEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     output: &Value,
@@ -181,7 +183,7 @@ fn read_summary(checkout: &Path, path: &str) -> Result<Vec<u8>, String> {
 
 /// Write the task's [`DEFERRED_SANDBOX_ARTIFACT`], or clear one an earlier
 /// implementation left when this one deferred nothing.
-fn keep<H: RuntimeHost + ?Sized>(
+fn keep<H: ReviewGate + RunLifecycle + ?Sized>(
     host: &H,
     run_id: &str,
     task_id: &str,

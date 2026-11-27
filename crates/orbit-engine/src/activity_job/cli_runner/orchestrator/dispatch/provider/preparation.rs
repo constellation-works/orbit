@@ -7,6 +7,7 @@ use super::super::CliDispatchContext;
 use super::super::preparation::PreparedCliDispatch;
 use crate::activity_job::cli_runner::image_input::StagedImages;
 use crate::activity_job::dispatcher::DispatchError;
+use crate::context::{Dispatch, HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment};
 use orbit_agent::{Agent, AgentConfig};
 use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
@@ -32,7 +33,7 @@ pub(super) struct ProviderEnvelope {
 }
 
 pub(super) fn prepare_provider_envelope<'a>(
-    context: CliDispatchContext<'a>,
+    context: CliDispatchContext<'a, impl Dispatch + HostEnvironment + RunLifecycle + ?Sized>,
     prepared: &PreparedCliDispatch<'_>,
 ) -> Result<ProviderEnvelope, DispatchError> {
     let CliDispatchContext {
@@ -244,7 +245,7 @@ pub(super) fn rebuilt_envelope_input(input: &serde_json::Value) -> serde_json::V
 
 /// Configure provider argv and native confinement before constructing its agent.
 pub(super) fn prepare_provider_agent(
-    context: CliDispatchContext<'_>,
+    context: CliDispatchContext<'_, impl Dispatch + RuntimeHostProcessEnvironment + ?Sized>,
     provider: &str,
     sandbox: Option<&crate::activity_job::dispatcher::ResolvedSandbox>,
     resolved_sandbox: Option<&crate::activity_job::dispatcher::ResolvedSandbox>,

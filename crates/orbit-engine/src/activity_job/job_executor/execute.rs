@@ -568,7 +568,7 @@ fn insert_checkpointed_step_outputs(
 /// references to files that are gone or different. Restoring the set is
 /// never replaced by re-running its producer, which would hide the loss.
 pub(super) fn verify_resumed_output_sets<'a>(
-    host: &dyn RuntimeHost,
+    host: &(impl Dispatch + ?Sized),
     run_id: &str,
     sets: impl IntoIterator<Item = (&'a String, &'a ScriptOutputSet)>,
 ) -> Result<(), DispatchError> {
@@ -601,7 +601,7 @@ pub(super) fn verify_resumed_output_sets<'a>(
 /// The script output sets behind the entries a completed top-level step
 /// exposed (its own id and its compound entries), for its checkpoint.
 fn exposed_output_sets(
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl ?Sized>,
     step_id: &str,
     compound_outputs: &BTreeMap<String, Value>,
 ) -> BTreeMap<String, ScriptOutputSet> {
@@ -672,7 +672,7 @@ pub(super) fn fan_in_alias(step: &JobV2Step) -> Option<&str> {
 /// the resumed pipeline mirrors what downstream steps saw, not a filtered
 /// view. (Fan-out workers write into their own map and never reach this one.)
 fn compound_outputs_since(
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl ?Sized>,
     step: &JobV2Step,
     before: &PipelineSteps,
 ) -> BTreeMap<String, Value> {
@@ -695,7 +695,7 @@ fn step_completed_in_resume(resume: Option<&PipelineState>, step_index: u32) -> 
 /// final-recovery `resume` reruns them: their own outputs, fan-in aliases,
 /// and nested entries. A rerun step whose `when:` is now false must not leave
 /// the previous pass's output visible to later templates.
-fn forget_step_outputs_from(ctx: &ExecCtx<'_>, job: &JobV2, index: usize) {
+fn forget_step_outputs_from(ctx: &ExecCtx<'_, impl ?Sized>, job: &JobV2, index: usize) {
     let mut keys = Vec::new();
     for step in &job.steps[index..] {
         collect_step_keys(step, &mut keys);
@@ -730,7 +730,11 @@ pub(super) fn collect_step_keys<'a>(step: &'a JobV2Step, keys: &mut Vec<&'a str>
 }
 
 /// [`checkpoint_completed_step`] for a top-level step its `when:` skipped.
-fn checkpoint_skipped_step(ctx: &ExecCtx<'_>, step_index: u32, step_id: &str) {
+fn checkpoint_skipped_step(
+    ctx: &ExecCtx<'_, impl Recovery + ?Sized>,
+    step_index: u32,
+    step_id: &str,
+) {
     if let Err(error) = ctx
         .host
         .checkpoint_skipped_step(&ctx.run_id, step_index, step_id)
@@ -752,7 +756,7 @@ fn checkpoint_skipped_step(ctx: &ExecCtx<'_>, step_index: u32, step_id: &str) {
 /// checkpoint stay O(step output). Non-fatal: a checkpoint write failure
 /// degrades resumability but must never fail an otherwise-successful run.
 fn checkpoint_completed_step(
-    ctx: &ExecCtx<'_>,
+    ctx: &ExecCtx<'_, impl Recovery + ?Sized>,
     step_index: u32,
     step_id: &str,
     output: &Value,
