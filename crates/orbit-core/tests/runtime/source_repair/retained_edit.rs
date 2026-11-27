@@ -207,8 +207,35 @@ fn adoption_refuses_a_clean_checkout() {
     f.inspect();
 }
 
+/// A staged Git link is omitted from a patch read without entering nested
+/// repositories, so adoption refuses rather than bind a path whose change the
+/// bytes lack, and leaves the retained checkout as it found it.
+fn adoption_refuses_a_staged_git_link() {
+    let (f, checkout, _) = incident();
+    let head = git(&checkout, &["rev-parse", "HEAD"]);
+    git(
+        &checkout,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{head},nested"),
+        ],
+    );
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+    assert!(dirty.contains("nested"), "{dirty}");
+
+    let mut request = f.request("inspect");
+    request["source_repair"]["adopt_retained_edits"] = json!(true);
+    let error = refused_without_effects(&f, request, "staged git link");
+    assert!(error.contains("nested"), "{error}");
+    assert!(error.contains("Git link"), "{error}");
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+}
+
 crate::scenario_table!(
     retained_edit_scenarios,
     retained_final_recovery_edits_reach_a_fresh_same_pr_repair,
-    adoption_refuses_a_clean_checkout
+    adoption_refuses_a_clean_checkout,
+    adoption_refuses_a_staged_git_link
 );
