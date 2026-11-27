@@ -296,40 +296,6 @@ impl TaskV2Store {
         })
     }
 
-    /// Publish the body documents. They are separate files, and the post-write
-    /// row is the in-memory bundle, so it has to carry the same bytes just
-    /// published or a caller would observe the pre-write description,
-    /// criteria, plan or execution summary.
-    fn write_document_bodies(
-        &self,
-        id: &str,
-        bundle: &mut TaskBundleV2,
-        fields: &TaskDocumentUpdateParams,
-    ) -> Result<(), OrbitError> {
-        if let Some(value) = &fields.description {
-            self.bundle_store
-                .rewrite_document(id, TaskDocumentV2::Description, value)?;
-            bundle.description = value.clone();
-        }
-        if let Some(value) = &fields.acceptance_criteria {
-            let rendered = render_acceptance(value);
-            self.bundle_store
-                .rewrite_document(id, TaskDocumentV2::Acceptance, &rendered)?;
-            bundle.acceptance = rendered;
-        }
-        if let Some(value) = &fields.plan {
-            self.bundle_store
-                .rewrite_document(id, TaskDocumentV2::Plan, value)?;
-            bundle.plan = value.clone();
-        }
-        if let Some(value) = &fields.execution_summary {
-            self.bundle_store
-                .rewrite_document(id, TaskDocumentV2::ExecutionSummary, value)?;
-            bundle.execution_summary = value.clone();
-        }
-        Ok(())
-    }
-
     /// Pre-flight form of the work-start guard in [`Self::update_task_history`]:
     /// same target/event classification and same claim check, evaluated
     /// against the footprint the combined write would start work on.
@@ -379,6 +345,40 @@ impl TaskV2Store {
         } else {
             self.with_task_lock(id, || self.write_task_history(id, fields, false))
         }
+    }
+
+    /// Publish the body documents. They are separate files, and the post-write
+    /// row is the in-memory bundle, so it has to carry the same bytes just
+    /// published or a caller would observe the pre-write description,
+    /// criteria, plan or execution summary.
+    fn write_document_bodies(
+        &self,
+        id: &str,
+        bundle: &mut TaskBundleV2,
+        fields: &TaskDocumentUpdateParams,
+    ) -> Result<(), OrbitError> {
+        if let Some(value) = &fields.description {
+            self.bundle_store
+                .rewrite_document(id, TaskDocumentV2::Description, value)?;
+            bundle.description = value.clone();
+        }
+        if let Some(value) = &fields.acceptance_criteria {
+            let rendered = render_acceptance(value);
+            self.bundle_store
+                .rewrite_document(id, TaskDocumentV2::Acceptance, &rendered)?;
+            bundle.acceptance = rendered;
+        }
+        if let Some(value) = &fields.plan {
+            self.bundle_store
+                .rewrite_document(id, TaskDocumentV2::Plan, value)?;
+            bundle.plan = value.clone();
+        }
+        if let Some(value) = &fields.execution_summary {
+            self.bundle_store
+                .rewrite_document(id, TaskDocumentV2::ExecutionSummary, value)?;
+            bundle.execution_summary = value.clone();
+        }
+        Ok(())
     }
 
     /// One history write under the lock its caller took. `claimed` is true
