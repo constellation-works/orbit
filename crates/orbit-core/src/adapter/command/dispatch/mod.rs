@@ -11,9 +11,7 @@ mod claimed;
 mod dry_run;
 mod execute;
 
-pub use audit::{
-    AuditContext, audit_role_label, audit_role_label_for_entry_point, trusted_mcp_audit_context,
-};
+pub use audit::{audit_role_label, audit_role_label_for_entry_point, trusted_mcp_audit_context};
 #[cfg(unix)]
 pub(crate) use brokered::RunDispatch;
 pub use callback::{refuse_plugin_child_cli_command, refuse_plugin_child_remote_callback};
@@ -23,11 +21,12 @@ pub use claimed::{
 };
 pub use dry_run::DryRunResult;
 pub(super) use execute::execute_global_plugin_dispatch;
+pub(crate) use execute::mark_tool_audit_recorded;
 pub use execute::{
-    GlobalAuditStoreCache, GlobalToolCall, ToolCommandCall, ToolDispatchOutcome, ToolEntryPoint,
+    GlobalAuditStoreCache, GlobalToolCall, ToolCommandCall, ToolEntryPoint,
     execute_global_in_process_tool_dispatch,
-    execute_global_in_process_tool_dispatch_with_audit_writer, mark_tool_audit_recorded,
-    take_tool_audit_recorded, tool_suggestion_context,
+    execute_global_in_process_tool_dispatch_with_audit_writer, take_tool_audit_recorded,
+    tool_suggestion_context,
 };
 
 #[cfg(test)]

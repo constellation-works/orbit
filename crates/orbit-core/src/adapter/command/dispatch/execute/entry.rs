@@ -67,12 +67,12 @@ thread_local! {
 /// tool invocation on this thread. Higher layers (the CLI `AuditGuard`) call
 /// [`take_tool_audit_recorded`] during their own teardown to suppress a
 /// duplicate emission. The signal is per-thread and one-shot.
-pub fn mark_tool_audit_recorded() {
+pub(crate) fn mark_tool_audit_recorded() {
     TOOL_AUDIT_RECORDED.with(|cell| cell.set(true));
 }
 
 /// Read and clear the per-thread tool-audit-recorded flag set by
-/// [`mark_tool_audit_recorded`]. Returns `true` if a runtime-level audit row
+/// `mark_tool_audit_recorded`. Returns `true` if a runtime-level audit row
 /// was emitted on this thread since the last call.
 pub fn take_tool_audit_recorded() -> bool {
     TOOL_AUDIT_RECORDED.with(|cell| cell.replace(false))

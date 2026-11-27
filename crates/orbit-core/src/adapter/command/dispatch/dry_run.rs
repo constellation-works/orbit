@@ -22,7 +22,7 @@ impl OrbitRuntime {
     /// Preview the same capability, activity, active-tool and plugin-callback
     /// checks as CLI dispatch. Tool bodies and their input-specific validation
     /// are never invoked; capability decisions retain their ordinary audit.
-    pub fn run_tool_dry_run_with_session_context(
+    pub(crate) fn run_tool_dry_run_with_session_context(
         &self,
         name: &str,
         input: &Value,

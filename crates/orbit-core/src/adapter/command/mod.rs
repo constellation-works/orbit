@@ -15,28 +15,24 @@ pub use orbit_tools::tool_suggestions;
 
 #[cfg(unix)]
 pub(crate) use dispatch::RunDispatch;
-pub use dispatch::{
-    AuditContext, DryRunResult, GlobalAuditStoreCache, GlobalToolCall, ToolCommandCall,
-    ToolDispatchOutcome, ToolEntryPoint, audit_role_label, audit_role_label_for_entry_point,
-    execute_global_in_process_tool_dispatch,
-    execute_global_in_process_tool_dispatch_with_audit_writer, mark_tool_audit_recorded,
-    refuse_plugin_child_cli_command, refuse_plugin_child_remote_callback, take_tool_audit_recorded,
-    tool_suggestion_context, trusted_mcp_audit_context,
-};
+pub(crate) use dispatch::mark_tool_audit_recorded;
 #[cfg(unix)]
 pub use dispatch::{
     ClaimedOwnerCall, ClaimedOwnerRoute, bridge_claimed_owner_call, owner_route_unavailable,
 };
+pub use dispatch::{
+    DryRunResult, GlobalAuditStoreCache, GlobalToolCall, ToolCommandCall, ToolEntryPoint,
+    audit_role_label, audit_role_label_for_entry_point, execute_global_in_process_tool_dispatch,
+    execute_global_in_process_tool_dispatch_with_audit_writer, refuse_plugin_child_cli_command,
+    refuse_plugin_child_remote_callback, take_tool_audit_recorded, tool_suggestion_context,
+    trusted_mcp_audit_context,
+};
 pub use plugin::{
     HostPluginMcpCache, HostPluginMcpSurface, MAX_PLUGIN_SECRET_BYTES, PluginAddOptions,
-    PluginAddResult, PluginCliGroup, PluginCliVerb, PluginDoctorResult, PluginEnableOptions,
-    PluginEnableResult, PluginLinkSummary, PluginMigrateRequest, PluginPanelSummary,
-    PluginPermissionChange, PluginPermissionSummary, PluginRemoveOptions, PluginSecretStatus,
-    PluginSecretValue, PluginSeedAction, PluginSeedOutcome, PluginSkillLink, PluginSummary,
-    PluginSummaryJsonProfile, PluginSyncOutcome, PluginTestOptions, PluginTestOutcome,
-    PluginTestReport, PluginTestValidationGate, PluginToolSummary, PluginUpgradeOptions,
-    PluginUpgradeResult, PluginValidationReport, execute_global_plugin_tool,
-    host_plugin_cli_groups, host_plugin_mcp_definitions, host_plugin_rows, migrate_plugin_sidecars,
-    plugin_summary_json,
+    PluginCliGroup, PluginCliVerb, PluginEnableOptions, PluginMigrateRequest,
+    PluginPermissionChange, PluginRemoveOptions, PluginSecretStatus, PluginSecretValue,
+    PluginSeedOutcome, PluginSkillLink, PluginSummary, PluginSummaryJsonProfile, PluginTestOptions,
+    PluginTestReport, PluginTestValidationGate, PluginUpgradeOptions, PluginUpgradeResult,
+    execute_global_plugin_tool, host_plugin_cli_groups, host_plugin_rows, plugin_summary_json,
 };
 pub use registry::{DoctorResult, DoctorStatus, ToolInfo};

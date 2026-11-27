@@ -4,7 +4,7 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::plugin::InstalledPlugin;
-use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
+use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
 use crate::adapter::command::ToolEntryPoint;
@@ -21,20 +21,6 @@ pub fn host_plugin_cli_groups(
     let config = global_only_config(global_root)?;
     let store = opener.open_read_only(&config.persistence.audit_db)?;
     discovery::host_plugin_cli_groups(global_root, &store, &config.plugins)
-}
-
-/// MCP definitions for this host's active plugin tools.
-///
-/// Plugin installs are host-global, so this answers without a workspace and
-/// is what the MCP server merges into `tools/list` alongside the canonical
-/// built-in surface.
-pub fn host_plugin_mcp_definitions(
-    opener: StoreOpener,
-    global_root: &Path,
-) -> Result<Vec<McpToolDefinition>, OrbitError> {
-    let config = global_only_config(global_root)?;
-    let store = opener.open_read_only(&config.persistence.audit_db)?;
-    discovery::host_plugin_mcp_definitions(global_root, &store, &config.plugins)
 }
 
 /// This host's plugin rows as stored now, for a long-lived host that keys a
