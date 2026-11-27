@@ -12,6 +12,39 @@ const ENGINE_CONTEXT_KEYS: [&str; 2] = ["final_recovery_resume", STEERING_ROUND_
 /// failed only the output contract.
 const CONTRACT_CORRECTION_KEY: &str = "contract_correction";
 
+/// Output key naming the declared failure of a reviewer whose report the
+/// host admitted to settlement as evidence-only [ORB-25667].
+const REVIEWER_DECLARED_FAILURE_KEY: &str = "reviewer_declared_failure";
+
+/// Longest refusal text an audit event carries.
+const CONTRACT_CORRECTION_AUDIT_BYTES: usize = 1_024;
+
+/// Longest refused value the correction input quotes back.
+const CONTRACT_CORRECTION_VALUE_BYTES: usize = 4_096;
+
+/// One dispatch of the step's activity.
+struct Dispatched {
+    outcome: super::super::dispatcher::DispatchOutcome,
+    timed_out: bool,
+    /// The dispatch was the reviewer of an admitted attempt.
+    reviewer: bool,
+}
+
+/// A completed contract correction. Either way its invocation was spent, so
+/// the caller persists it exactly once.
+enum ContractCorrection {
+    /// A successful response: its fields overlay the original's.
+    Accepted {
+        outcome: super::super::dispatcher::DispatchOutcome,
+        input: Value,
+    },
+    /// A response that is not successful: the original refusal stands.
+    Refused {
+        outcome: super::super::dispatcher::DispatchOutcome,
+        input: Value,
+    },
+}
+
 pub(super) fn run_target(
     step: &JobV2Step,
     t: &TargetStep,
@@ -222,14 +255,6 @@ pub(super) fn run_target(
     })
 }
 
-/// One dispatch of the step's activity.
-struct Dispatched {
-    outcome: super::super::dispatcher::DispatchOutcome,
-    timed_out: bool,
-    /// The dispatch was the reviewer of an admitted attempt.
-    reviewer: bool,
-}
-
 /// Dispatch the step's activity once. A reviewer's start and end are
 /// reported around it, and its wall clock is the deadline the review's
 /// remaining minutes allow; `None` when those minutes are already spent, so no
@@ -352,10 +377,6 @@ fn review_report_request(
         workspace_path: field("workspace_path")?.into(),
     })
 }
-
-/// Output key naming the declared failure of a reviewer whose report the
-/// host admitted to settlement as evidence-only [ORB-25667].
-const REVIEWER_DECLARED_FAILURE_KEY: &str = "reviewer_declared_failure";
 
 /// [ORB-25667] A reviewer whose envelope declared failure (`status:
 /// "failed"`, exit 0) because a required check could not run on its host
@@ -485,26 +506,6 @@ fn implementer_contract_refusal(output: &Value) -> Option<(&'static str, String)
             ),
         )
     })
-}
-
-/// Longest refusal text an audit event carries.
-const CONTRACT_CORRECTION_AUDIT_BYTES: usize = 1_024;
-/// Longest refused value the correction input quotes back.
-const CONTRACT_CORRECTION_VALUE_BYTES: usize = 4_096;
-
-/// A completed contract correction. Either way its invocation was spent, so
-/// the caller persists it exactly once.
-enum ContractCorrection {
-    /// A successful response: its fields overlay the original's.
-    Accepted {
-        outcome: super::super::dispatcher::DispatchOutcome,
-        input: Value,
-    },
-    /// A response that is not successful: the original refusal stands.
-    Refused {
-        outcome: super::super::dispatcher::DispatchOutcome,
-        input: Value,
-    },
 }
 
 /// Ask an agent-loop implementer once to correct a successful response that

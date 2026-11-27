@@ -1,4 +1,5 @@
 //! Recovery admission and the post-recovery retry loop.
+
 use super::commit::commit_recovery_repair_for_retry;
 use super::decision::{PendingRecoveryAttempt, RecoveryAdmission, attempt_recovery_activity};
 use super::input::bind_recovery_context;
@@ -100,6 +101,16 @@ impl StepFailure {
             }),
         }
     }
+}
+
+/// How the post-recovery attempt of a failed step ended.
+enum PostRecovery {
+    /// Recovered, or failed for good with the original diagnostic attached.
+    Settled(Result<StepOutcome, DispatchError>),
+    /// The retry stopped on a different typed rebase conflict, or handed
+    /// over a newly admitted `--auto-fix` check repair, and a further
+    /// recovery round is admitted.
+    RecoverAgain(DispatchError),
 }
 
 pub(in crate::activity_job::job_executor) fn recover_or_return_original(
@@ -391,16 +402,6 @@ fn check_repair_hold_action(failure: &StepFailure) -> String {
         }
         _ => "pr_complete".to_string(),
     }
-}
-
-/// How the post-recovery attempt of a failed step ended.
-enum PostRecovery {
-    /// Recovered, or failed for good with the original diagnostic attached.
-    Settled(Result<StepOutcome, DispatchError>),
-    /// The retry stopped on a different typed rebase conflict, or handed
-    /// over a newly admitted `--auto-fix` check repair, and a further
-    /// recovery round is admitted.
-    RecoverAgain(DispatchError),
 }
 
 fn post_recovery_attempt(

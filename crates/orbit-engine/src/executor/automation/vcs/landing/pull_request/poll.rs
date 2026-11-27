@@ -25,72 +25,6 @@ use super::super::observe::{adopt_base_update, pin_for};
 use super::super::record::{completion_hold_stop, describe, hold_pr, stop_pr};
 use super::super::run::{LandingBudget, LandingPass};
 
-pub(in crate::executor::automation::vcs::landing) fn land_pull_request<H: RuntimeHost + ?Sized>(
-    host: &H,
-    context: &LandingPass,
-    number: u64,
-    budget: &LandingBudget,
-    view: &LandingView,
-    run_id: &str,
-) -> Result<Value, OrbitError> {
-    let mut poll = LandingPoll::new(host, context, number, budget, view, run_id);
-    loop {
-        poll.ensure_within_deadline()?;
-        let status = poll.read_status()?;
-        let state = poll.observe_status(&status)?;
-        poll.decide_completion_hold(&state)?;
-        // [ORB-15956] A branch update this landing (or an earlier attempt)
-        // requested moved the head onto a verified merge with the base.
-        let updated_head = adopt_base_update(&host.process_env(), &mut poll.pin, context, &status);
-        let refresh = poll.refresh_base(&status, false)?;
-        if matches!(refresh, RefreshStep::Changed) {
-            continue;
-        }
-        let mut refresh_wait = matches!(
-            refresh,
-            RefreshStep::Wait | RefreshStep::Adopted { waiting: true }
-        );
-        if let PrMergeState::Merged = state {
-            return poll.settle_merged(&host.process_env(), &status, updated_head);
-        }
-        poll.ensure_pinned(&status)?;
-        poll.refuse_draft(&status)?;
-        let state = poll.read_required_checks(&status)?;
-        if let Step::Continue = poll.diagnose_blocked_base(&status, &state, &mut refresh_wait)? {
-            continue;
-        }
-        poll.note_elapsed()?;
-        // [ORB-15677] [ORB-15812] The review owed these checks to the pull
-        // request's hosted CI instead of running them: nothing merges until
-        // each reports an explicit success on the pinned head. A skipped or
-        // neutral result keeps waiting. Branch protection is separate.
-        let owed = owed_hosted_checks(&status, &context.owed_hosted_checks);
-        let mut waiting_on_recovery = refresh_wait;
-        if let Step::Continue = poll.recover_failed_checks(
-            &host.process_env(),
-            &status,
-            &state,
-            &owed,
-            &mut waiting_on_recovery,
-        )? {
-            continue;
-        }
-        if !waiting_on_recovery {
-            let mergeable = matches!(state, PrMergeState::Mergeable);
-            poll.stop_on_terminal_state(&status, state)?;
-            if mergeable && poll.intent.is_none() && owed == OwedHostedChecks::Passed {
-                match poll.request_merge(&host.process_env(), &status, updated_head.is_some())? {
-                    Step::Continue => continue,
-                    Step::Done(completed) => return Ok(completed),
-                    Step::Proceed => {}
-                }
-            }
-        }
-        // Requested already, or still waiting for required or owed checks.
-        poll.wait_or_time_out(&owed)?;
-    }
-}
-
 /// What a landing phase tells the poll loop to do next. Errors stay `Err`.
 pub(super) enum Step {
     /// Re-read the pull request from the top of the loop.
@@ -390,5 +324,71 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
         } else {
             self.stop(false, &reason)
         }
+    }
+}
+
+pub(in crate::executor::automation::vcs::landing) fn land_pull_request<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &LandingPass,
+    number: u64,
+    budget: &LandingBudget,
+    view: &LandingView,
+    run_id: &str,
+) -> Result<Value, OrbitError> {
+    let mut poll = LandingPoll::new(host, context, number, budget, view, run_id);
+    loop {
+        poll.ensure_within_deadline()?;
+        let status = poll.read_status()?;
+        let state = poll.observe_status(&status)?;
+        poll.decide_completion_hold(&state)?;
+        // [ORB-15956] A branch update this landing (or an earlier attempt)
+        // requested moved the head onto a verified merge with the base.
+        let updated_head = adopt_base_update(&host.process_env(), &mut poll.pin, context, &status);
+        let refresh = poll.refresh_base(&status, false)?;
+        if matches!(refresh, RefreshStep::Changed) {
+            continue;
+        }
+        let mut refresh_wait = matches!(
+            refresh,
+            RefreshStep::Wait | RefreshStep::Adopted { waiting: true }
+        );
+        if let PrMergeState::Merged = state {
+            return poll.settle_merged(&host.process_env(), &status, updated_head);
+        }
+        poll.ensure_pinned(&status)?;
+        poll.refuse_draft(&status)?;
+        let state = poll.read_required_checks(&status)?;
+        if let Step::Continue = poll.diagnose_blocked_base(&status, &state, &mut refresh_wait)? {
+            continue;
+        }
+        poll.note_elapsed()?;
+        // [ORB-15677] [ORB-15812] The review owed these checks to the pull
+        // request's hosted CI instead of running them: nothing merges until
+        // each reports an explicit success on the pinned head. A skipped or
+        // neutral result keeps waiting. Branch protection is separate.
+        let owed = owed_hosted_checks(&status, &context.owed_hosted_checks);
+        let mut waiting_on_recovery = refresh_wait;
+        if let Step::Continue = poll.recover_failed_checks(
+            &host.process_env(),
+            &status,
+            &state,
+            &owed,
+            &mut waiting_on_recovery,
+        )? {
+            continue;
+        }
+        if !waiting_on_recovery {
+            let mergeable = matches!(state, PrMergeState::Mergeable);
+            poll.stop_on_terminal_state(&status, state)?;
+            if mergeable && poll.intent.is_none() && owed == OwedHostedChecks::Passed {
+                match poll.request_merge(&host.process_env(), &status, updated_head.is_some())? {
+                    Step::Continue => continue,
+                    Step::Done(completed) => return Ok(completed),
+                    Step::Proceed => {}
+                }
+            }
+        }
+        // Requested already, or still waiting for required or owed checks.
+        poll.wait_or_time_out(&owed)?;
     }
 }

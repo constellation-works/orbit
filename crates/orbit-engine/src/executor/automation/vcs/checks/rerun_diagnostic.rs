@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 const MAX_OBSERVATIONS: usize = 16;
+
 const MAX_JOBS: usize = 32;
+
 const MAX_REASON_BYTES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -152,6 +154,17 @@ impl CiRerunDiagnostic {
     }
 }
 
+#[derive(Default, Deserialize, PartialEq, Serialize)]
+struct CiRerunJournal {
+    schema_version: u8,
+    execution: String,
+    observed_head: Option<String>,
+    current: Option<CiRerunDiagnostic>,
+    observations: Vec<Option<CiRerunDiagnostic>>,
+    omitted_observations: u64,
+    outcome: Option<Value>,
+}
+
 /// Keep the diagnostic header, never raw multiline provider output. Redact
 /// before UTF-8 truncation so a token crossing the bound cannot leak a prefix.
 fn bounded_ci_rerun_reason(reason: &str) -> String {
@@ -165,17 +178,6 @@ fn bounded_ci_rerun_reason(reason: &str) -> String {
         reason.push_str("...");
     }
     reason
-}
-
-#[derive(Default, Deserialize, PartialEq, Serialize)]
-struct CiRerunJournal {
-    schema_version: u8,
-    execution: String,
-    observed_head: Option<String>,
-    current: Option<CiRerunDiagnostic>,
-    observations: Vec<Option<CiRerunDiagnostic>>,
-    omitted_observations: u64,
-    outcome: Option<Value>,
 }
 
 /// One replaceable artifact per execution, no append-only history. Read it

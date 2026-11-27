@@ -16,10 +16,6 @@ use orbit_types::workflow::{
     ToolAllowlistError, activity_tool_policy_deprecation, validate_activity_tool_allowlist,
 };
 
-fn parse_schema_header(yaml: &str) -> Result<SchemaHeader, serde_yaml::Error> {
-    serde_yaml::from_str(yaml)
-}
-
 /// Loaded schemaVersion 2 activity asset plus its envelope metadata.
 #[derive(Debug, Clone)]
 pub struct ActivityAsset {
@@ -100,6 +96,24 @@ impl AssetLoadError {
     }
 }
 
+/// Checks a parsed document that declares the given `schemaVersion` for keys
+/// its typed read would not refuse: the retired `role`, and for jobs the
+/// auto-task keys a schemaVersion 2 file may not name.
+type CheckDocument = fn(&serde_yaml::Value, u32) -> Result<(), AssetLoadError>;
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct V2EnvelopeYaml<T> {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u32,
+    kind: ResourceKind,
+    metadata: orbit_types::resource::ResourceMetadata,
+    spec: T,
+}
+
+fn parse_schema_header(yaml: &str) -> Result<SchemaHeader, serde_yaml::Error> {
+    serde_yaml::from_str(yaml)
+}
+
 /// The `metadata.name` declared in `yaml`, when the document parses far
 /// enough to recover it. Returns `None` for unreadable documents or a
 /// missing/empty/non-string name.
@@ -163,11 +177,6 @@ pub fn load_job_asset(yaml: &str) -> Result<JobAsset, AssetLoadError> {
         spec: res.spec,
     })
 }
-
-/// Checks a parsed document that declares the given `schemaVersion` for keys
-/// its typed read would not refuse: the retired `role`, and for jobs the
-/// auto-task keys a schemaVersion 2 file may not name.
-type CheckDocument = fn(&serde_yaml::Value, u32) -> Result<(), AssetLoadError>;
 
 /// Read the envelope of an asset whose header names one of `versions`: its
 /// header, the retired-role check, and the typed body.
@@ -345,13 +354,4 @@ fn require_kind(actual: &ResourceKind, expected: ResourceKind) -> Result<(), Ass
             actual: actual.to_string(),
         })
     }
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-struct V2EnvelopeYaml<T> {
-    #[serde(rename = "schemaVersion")]
-    schema_version: u32,
-    kind: ResourceKind,
-    metadata: orbit_types::resource::ResourceMetadata,
-    spec: T,
 }

@@ -1,6 +1,12 @@
 use super::*;
 use std::collections::HashSet;
 
+#[derive(Clone)]
+struct OutputGuards {
+    step_id: String,
+    chain: Vec<String>,
+}
+
 /// Rebase steps with a resolved, later host validator on the same candidate.
 /// This is deliberately conservative: compound continuations and additional
 /// guards cannot prove that validation runs whenever conflict recovery resumes.
@@ -241,12 +247,6 @@ fn validate_step_output_readiness(job: &JobV2) -> Result<(), DispatchError> {
         check_step_output_refs(step, &[], &guards)?;
     }
     Ok(())
-}
-
-#[derive(Clone)]
-struct OutputGuards {
-    step_id: String,
-    chain: Vec<String>,
 }
 
 /// Every `when:` whose false branch skips this step — the step's own guard

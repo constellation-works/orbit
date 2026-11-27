@@ -28,6 +28,17 @@ use super::{WorktreeIdentity, is_registered_worktree};
 
 const DEFAULT_BASE: &str = "main";
 
+enum RegisteredWorktree {
+    Usable {
+        branch: String,
+        head: String,
+    },
+    Incomplete {
+        retained_work: bool,
+        evidence: String,
+    },
+}
+
 /// Create a worktree and branch for a single task or task bundle, stamp
 /// `job_run_id` and `workspace_path` on every task in scope, and move them to
 /// `in_progress`.
@@ -365,17 +376,6 @@ fn ensure_worktree(
 
     git_success(process_env, repo_root, &["worktree", "prune"])?;
     add_worktree(process_env, repo_root, worktree_path, &target, branch_name)
-}
-
-enum RegisteredWorktree {
-    Usable {
-        branch: String,
-        head: String,
-    },
-    Incomplete {
-        retained_work: bool,
-        evidence: String,
-    },
 }
 
 /// Read-only completeness check. Deleted tracked files, dirty files, and extra

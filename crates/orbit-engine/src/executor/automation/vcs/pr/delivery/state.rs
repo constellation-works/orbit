@@ -211,6 +211,41 @@ impl std::fmt::Display for CheckWaitRefusal {
     }
 }
 
+/// What current branch policy still owes on the observed head, from the
+/// same authenticated current-gates read a base update is held to.
+struct PolicyRequiredAssessment {
+    failed_workflow_runs: Vec<orbit_types::workflow::PrInfrastructureEvidence>,
+    /// Policy-required checks the head has not reported at all.
+    missing: Vec<String>,
+    /// Policy-required checks the head reported still running, with no
+    /// failed report. The required-checks GraphQL read can settle before
+    /// such a check is reported as required (or name it differently), while
+    /// branch policy and the check-runs read already agree it is required
+    /// and running [ORB-21458]: that is a wait, not an unsatisfied refusal.
+    pending: Vec<String>,
+    /// Policy-required checks the head reported failed. A failed gate
+    /// keeps its existing recovery or stop, never a merge-state wait.
+    failed: Vec<String>,
+    /// Policy requires at least one check, and the head reported none of
+    /// them in any state [ORB-23812].
+    every_required_missing: bool,
+    /// The forge adapter reported a workflow run for this head [ORB-24457].
+    head_workflow_present: bool,
+}
+
+/// [ORB-15677] Where the owner-owed hosted checks stand on a pull request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::executor::automation::vcs) enum OwedHostedChecks {
+    /// Every named check reported an explicit success, and none is still
+    /// running or finished without one.
+    Passed,
+    /// A named check has not reported yet, is still running, or completed
+    /// without an explicit success (skipped or neutral).
+    Waiting(Vec<String>),
+    /// A named check failed, or its state is unreadable.
+    Failed(String),
+}
+
 /// Require green required checks even on a provider-reported mergeable head.
 /// Refine BLOCKED from authenticated current policy on the observed head,
 /// an actually running owner-owed check, or an owner rollup still running
@@ -521,28 +556,6 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
     }
 }
 
-/// What current branch policy still owes on the observed head, from the
-/// same authenticated current-gates read a base update is held to.
-struct PolicyRequiredAssessment {
-    failed_workflow_runs: Vec<orbit_types::workflow::PrInfrastructureEvidence>,
-    /// Policy-required checks the head has not reported at all.
-    missing: Vec<String>,
-    /// Policy-required checks the head reported still running, with no
-    /// failed report. The required-checks GraphQL read can settle before
-    /// such a check is reported as required (or name it differently), while
-    /// branch policy and the check-runs read already agree it is required
-    /// and running [ORB-21458]: that is a wait, not an unsatisfied refusal.
-    pending: Vec<String>,
-    /// Policy-required checks the head reported failed. A failed gate
-    /// keeps its existing recovery or stop, never a merge-state wait.
-    failed: Vec<String>,
-    /// Policy requires at least one check, and the head reported none of
-    /// them in any state [ORB-23812].
-    every_required_missing: bool,
-    /// The forge adapter reported a workflow run for this head [ORB-24457].
-    head_workflow_present: bool,
-}
-
 /// The checks current branch policy requires that the observed head has not
 /// reported at all, and those it reported still running, from the same
 /// authenticated current-gates read a base update is held to. A check the
@@ -700,19 +713,6 @@ fn pending_policy_required_checks(gates: &Value, missing: &[String]) -> (Vec<Str
         }
     }
     (pending, failed)
-}
-
-/// [ORB-15677] Where the owner-owed hosted checks stand on a pull request.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::executor::automation::vcs) enum OwedHostedChecks {
-    /// Every named check reported an explicit success, and none is still
-    /// running or finished without one.
-    Passed,
-    /// A named check has not reported yet, is still running, or completed
-    /// without an explicit success (skipped or neutral).
-    Waiting(Vec<String>),
-    /// A named check failed, or its state is unreadable.
-    Failed(String),
 }
 
 /// Judge the hosted checks `names` against the pull request's status rollup.

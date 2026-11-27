@@ -76,6 +76,7 @@ pub use removal_fixture::with_host_target_removal_hook;
 
 const UNATTRIBUTED_DETAIL: &str = "Neither a recorded run's checkout nor a base-rerun, \
      host-evidence or recovery record derives this host validation target. GC retains it.";
+
 const BASE_RUN_LABEL: &str = "base run cache";
 
 /// The runs whose checkout one host target was built for.
@@ -113,6 +114,15 @@ struct TargetsRoot {
 struct Target {
     name: CString,
     path: PathBuf,
+}
+
+/// One listed target and what owns it, resolved before any is classified.
+enum TargetOwner<'i, 'r> {
+    Run {
+        attribution: &'i Attribution<'r>,
+        selected: &'r JobRun,
+    },
+    Scratch(Option<ScratchOwner>),
 }
 
 /// Open the targets directory of `repo_root` from `/` without following any
@@ -297,15 +307,6 @@ pub(super) fn run_has_host_target(
         })
 }
 
-/// One listed target and what owns it, resolved before any is classified.
-enum TargetOwner<'i, 'r> {
-    Run {
-        attribution: &'i Attribution<'r>,
-        selected: &'r JobRun,
-    },
-    Scratch(Option<ScratchOwner>),
-}
-
 /// Classify, and with `options.delete` remove, the host validation targets
 /// of recorded runs, attributed through `run_paths` (each resolvable run and
 /// its derived checkouts). `removed_worktrees` are the checkouts this sweep
@@ -343,10 +344,8 @@ pub(super) fn collect_host_targets(
     let mut base_runs = base_run_owners(process_env, repo_root);
     let mut targets = Vec::new();
     for name in names {
-        let target = Target {
-            path: root.path.join(OsStr::from_bytes(name.to_bytes())),
-            name,
-        };
+        let path = root.path.join(OsStr::from_bytes(name.to_bytes()));
+        let target = Target { name, path };
         let attribution = target.name.to_str().ok().and_then(|key| index.get(key));
         let Some(attribution) = attribution else {
             if options.run_id.is_none() {

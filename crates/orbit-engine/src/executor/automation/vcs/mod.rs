@@ -1,46 +1,82 @@
 pub(crate) mod absorbed;
-mod attribution;
-mod base;
-mod baseline;
-mod build_output;
-mod candidate_resume;
-mod candidate_validate;
-mod checks;
-pub mod claim;
-mod commit;
-mod completion_deadline;
-pub(crate) mod completion_hold;
-mod conventions;
-mod deferral_probe;
-mod deferred_sandbox;
-mod delivery_marker;
-mod failure;
-mod flaky;
-mod forge_text;
-mod freshness;
-pub(crate) mod git;
-mod handoff;
-mod host_evidence;
-mod interrupted_review;
-mod landing;
-mod light_delivery;
-mod operations;
-mod owed_criteria;
-mod pr;
-mod pr_answers;
-mod push;
-mod remote_probe;
-mod required;
-mod resume;
-mod retry_lineage;
-pub mod review_gate;
-mod scratch_target;
-mod validation_log;
-mod validation_scope;
-mod worktree;
 
-#[cfg(test)]
-mod tests;
+mod attribution;
+
+mod base;
+
+mod baseline;
+
+mod build_output;
+
+mod candidate_resume;
+
+mod candidate_validate;
+
+mod checks;
+
+pub mod claim;
+
+mod commit;
+
+mod completion_deadline;
+
+pub(crate) mod completion_hold;
+
+mod conventions;
+
+mod deferral_probe;
+
+mod deferred_sandbox;
+
+mod delivery_marker;
+
+mod failure;
+
+mod flaky;
+
+mod forge_text;
+
+mod freshness;
+
+pub(crate) mod git;
+
+mod handoff;
+
+mod host_evidence;
+
+mod interrupted_review;
+
+mod landing;
+
+mod light_delivery;
+
+mod operations;
+
+mod owed_criteria;
+
+mod pr;
+
+mod pr_answers;
+
+mod push;
+
+mod remote_probe;
+
+mod required;
+
+mod resume;
+
+mod retry_lineage;
+
+pub mod review_gate;
+
+mod scratch_target;
+
+mod validation_log;
+
+mod validation_scope;
+
+mod worktree;
 
 pub use base::claim::{
     ClaimedKnownRed, KnownRedUnconfirmed, verify_claimed_known_red, verify_claimed_known_red_base,
@@ -101,17 +137,6 @@ pub use worktree::{
     WorktreeReclaimReport, collect_worktrees, run_worktree_has_reclaim_output, run_worktree_paths,
 };
 
-/// Run one engine-private VCS/PR operation against the real `git` and `gh`,
-/// outside the public tool registry. A host answers
-/// [`crate::RuntimeHost::run_private_vcs_operation`] with it.
-pub fn run_private_operation(
-    process_env: &orbit_common::Env,
-    operation: &str,
-    input: &serde_json::Value,
-) -> Result<serde_json::Value, orbit_common::OrbitError> {
-    operations::run(process_env, operation, input)
-}
-
 /// [ORB-26389] The engine-private operation that merges a pull request. A
 /// host answering [`crate::RuntimeHost::run_private_vcs_operation`] audits
 /// every request of it, so no Orbit-initiated merge leaves the trail.
@@ -122,6 +147,17 @@ pub const PRIVATE_VCS_PR_MERGE: &str = operations::PR_MERGE;
 /// `{"run_id": …, "step_id": …, "task_id": …}`, each `null` when the
 /// caller's input carried none.
 pub const PR_MERGE_ATTRIBUTION_FIELD: &str = "attribution";
+
+/// Run one engine-private VCS/PR operation against the real `git` and `gh`,
+/// outside the public tool registry. A host answers
+/// [`crate::RuntimeHost::run_private_vcs_operation`] with it.
+pub fn run_private_operation(
+    process_env: &orbit_common::Env,
+    operation: &str,
+    input: &serde_json::Value,
+) -> Result<serde_json::Value, orbit_common::OrbitError> {
+    operations::run(process_env, operation, input)
+}
 
 /// The [`PR_MERGE_ATTRIBUTION_FIELD`] value for a merge requested by the
 /// deterministic step whose input is `input`: the dispatcher injects the
@@ -150,3 +186,6 @@ pub(crate) fn pr_merge_attribution(input: &serde_json::Value) -> serde_json::Val
         "task_id": task_id,
     })
 }
+
+#[cfg(test)]
+mod tests;

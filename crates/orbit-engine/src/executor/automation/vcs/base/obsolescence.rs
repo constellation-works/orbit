@@ -77,6 +77,16 @@ enum BaseObsolescenceMode {
     Ignore,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum BaseStatus {
+    /// Work merged into this base can still reach the landing branch.
+    Live,
+    /// The base branch is gone from `origin`.
+    Deleted,
+    /// The base carries nothing the landing branch does not already have.
+    Landed(String),
+}
+
 fn base_obsolescence_mode_from_input(input: &Value) -> Result<BaseObsolescenceMode, OrbitError> {
     match input
         .as_object()
@@ -91,16 +101,6 @@ fn base_obsolescence_mode_from_input(input: &Value) -> Result<BaseObsolescenceMo
             "input.base_obsolescence must be 'enforce' or 'ignore', got '{other}'"
         ))),
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum BaseStatus {
-    /// Work merged into this base can still reach the landing branch.
-    Live,
-    /// The base branch is gone from `origin`.
-    Deleted,
-    /// The base carries nothing the landing branch does not already have.
-    Landed(String),
 }
 
 /// Refuse `phase` when `base` can no longer carry this delivery.

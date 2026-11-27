@@ -12,6 +12,36 @@ use crate::executor::automation::vcs::git::{GitBytesOutcome, git_run_bytes};
 
 use super::super::dispatcher::DispatchError;
 
+// Fingerprint parsing and recovery patches require uncolored a/ and b/
+// paths regardless of the user's Git presentation settings.
+pub(super) const DIFF_IDENTITY_FLAGS: [&str; 8] = [
+    "--binary",
+    "--full-index",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--no-color",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+];
+
+// Agent fan-out invokes this module concurrently. Per-key OnceLocks make
+// overlapping captures share one snapshot, and each entry is removed as soon as
+// its capture finishes. Nothing outlives the capture: `GIT_OPTIONAL_LOCKS=0`
+// keeps `git status` from refreshing the index, so unstaged edits and new
+// untracked files change neither HEAD nor the index mtime, and a retained
+// snapshot would hand a later dispatch a stale "before". A failed capture is
+// dropped the same way, so the next dispatch retries.
+static PRIMARY_BEFORE_IN_FLIGHT: LazyLock<
+    Mutex<BTreeMap<PrimaryBeforeKey, Arc<PrimaryBeforeCell>>>,
+> = LazyLock::new(|| Mutex::new(BTreeMap::new()));
+
+/// Stable identity for an untracked directory that is not a repository with a
+/// resolved HEAD. An unborn nested repository and a directory Git listed
+/// without its own toplevel share this marker, so two snapshots of the same
+/// directory still match.
+const OPAQUE_DIRECTORY_IDENTITY: &str = "opaque-directory";
+
 /// Exact, read-only identity of the Git state that an agent invocation can
 /// observe or mutate. Large byte streams are represented by domain-separated
 /// SHA-256 identities; each untracked path retains one content identity so
@@ -42,19 +72,6 @@ pub(crate) struct GitPathState {
     pub(crate) untracked_content_sha256: Option<String>,
 }
 
-// Fingerprint parsing and recovery patches require uncolored a/ and b/
-// paths regardless of the user's Git presentation settings.
-pub(super) const DIFF_IDENTITY_FLAGS: [&str; 8] = [
-    "--binary",
-    "--full-index",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--no-renames",
-    "--no-color",
-    "--src-prefix=a/",
-    "--dst-prefix=b/",
-];
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct PrimaryBeforeKey {
     run_id: String,
@@ -65,16 +82,12 @@ struct PrimaryBeforeKey {
 
 type PrimaryBeforeCell = OnceLock<Result<GitWorktreeFingerprint, DispatchError>>;
 
-// Agent fan-out invokes this module concurrently. Per-key OnceLocks make
-// overlapping captures share one snapshot, and each entry is removed as soon as
-// its capture finishes. Nothing outlives the capture: `GIT_OPTIONAL_LOCKS=0`
-// keeps `git status` from refreshing the index, so unstaged edits and new
-// untracked files change neither HEAD nor the index mtime, and a retained
-// snapshot would hand a later dispatch a stale "before". A failed capture is
-// dropped the same way, so the next dispatch retries.
-static PRIMARY_BEFORE_IN_FLIGHT: LazyLock<
-    Mutex<BTreeMap<PrimaryBeforeKey, Arc<PrimaryBeforeCell>>>,
-> = LazyLock::new(|| Mutex::new(BTreeMap::new()));
+enum UntrackedPathKind {
+    Missing,
+    Symlink,
+    Directory,
+    File,
+}
 
 /// Capture a primary checkout's pre-provider snapshot, sharing the result with
 /// captures of the same run, HEAD and index that overlap in time. A capture that
@@ -599,19 +612,6 @@ fn unescape_git_escape(bytes: &[u8]) -> Option<(u8, &[u8])> {
         byte => Some((byte, rest)),
     }
 }
-
-enum UntrackedPathKind {
-    Missing,
-    Symlink,
-    Directory,
-    File,
-}
-
-/// Stable identity for an untracked directory that is not a repository with a
-/// resolved HEAD. An unborn nested repository and a directory Git listed
-/// without its own toplevel share this marker, so two snapshots of the same
-/// directory still match.
-const OPAQUE_DIRECTORY_IDENTITY: &str = "opaque-directory";
 
 fn untracked_path_kind(root: &Path, path: &str) -> Result<UntrackedPathKind, DispatchError> {
     match fs::symlink_metadata(root.join(path)) {

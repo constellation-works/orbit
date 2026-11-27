@@ -89,26 +89,14 @@ pub(in crate::executor::automation::vcs) use super::capture::capture;
 pub(crate) use orbit_common::env_vars::ORBIT_VALIDATION_SELECTION as VALIDATION_SELECTION_ENV;
 /// The file a required command may write its [`ValidationSummary`] to.
 pub(crate) use orbit_common::env_vars::ORBIT_VALIDATION_SUMMARY as VALIDATION_SUMMARY_ENV;
+
 /// Ceiling for one required validation command. Long enough for a real
 /// repository check suite, short enough that a wedged command settles the
 /// step instead of holding it open indefinitely.
 pub(in crate::executor::automation::vcs) const VALIDATION_TIMEOUT_MS: u64 = 45 * 60 * 1000;
+
 /// Diagnostic messages carry summaries and artifact references, never logs.
 pub(in crate::executor::automation::vcs) const MAX_VALIDATION_MESSAGE_BYTES: usize = 16 * 1024;
-
-/// Bound a diagnostic field on a UTF-8 boundary, leaving room for evidence.
-pub(in crate::executor::automation::vcs) fn bounded_validation_text(
-    text: &str,
-    limit: usize,
-) -> String {
-    if text.len() <= limit {
-        return text.to_string();
-    }
-    format!(
-        "{}…",
-        &text[..floor_char_boundary(text, limit.saturating_sub(3))]
-    )
-}
 
 /// The line a failed run's captured output ends with, naming the `PATH` it
 /// ran under so a missing tool can be diagnosed.
@@ -405,6 +393,20 @@ impl RequiredCommandRun {
     }
 }
 
+/// Bound a diagnostic field on a UTF-8 boundary, leaving room for evidence.
+pub(in crate::executor::automation::vcs) fn bounded_validation_text(
+    text: &str,
+    limit: usize,
+) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    format!(
+        "{}…",
+        &text[..floor_char_boundary(text, limit.saturating_sub(3))]
+    )
+}
+
 /// The recorded shape of a resolved validation environment: its source, PATH
 /// and login-shell outcome.
 pub(crate) fn environment_record(environment: &ValidationEnvironment) -> Value {
@@ -635,8 +637,8 @@ pub(in crate::executor::automation::vcs) fn run_required_command<H: RuntimeHost 
         network_retries: 0,
         network_evidence: None,
         summary,
-        diagnostic_fingerprint,
         failures,
+        diagnostic_fingerprint,
         timeout_ms,
         timing,
     })

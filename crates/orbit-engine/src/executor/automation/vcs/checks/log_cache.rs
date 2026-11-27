@@ -25,11 +25,14 @@ use super::super::operations::{CiCommitJobEvidence, CiJobLogAnswer, CiJobStatus}
 
 /// Answers kept at once; the oldest is pruned first.
 const MAX_ENTRIES: usize = 128;
+
 /// The largest serialized answer kept. The read itself is bounded far below
 /// this, so only a malformed answer is ever refused.
 const MAX_ENTRY_BYTES: usize = 256 * 1024;
+
 /// How long one answer is reused before it ages out.
 const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 // Ignore older entries that could retain a truncated, unattributable answer.
 const SCHEMA_VERSION: u64 = 2;
 
@@ -44,16 +47,6 @@ struct CiJobLogCacheEntry {
     run_attempt: u64,
     #[serde(deserialize_with = "decode_cache_answer")]
     answer: CiJobLogAnswer,
-}
-
-fn decode_cache_answer<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<CiJobLogAnswer, D::Error> {
-    let answer = Value::deserialize(deserializer)?;
-    if !answer.is_object() {
-        return Err(D::Error::custom("cache answer must be an object"));
-    }
-    Ok(CiJobLogAnswer::decode_response(answer))
 }
 
 /// The identity of one completed job's log for one run attempt.
@@ -107,6 +100,16 @@ impl JobLogKey {
             && entry.job_id == self.job_id
             && entry.run_attempt == self.run_attempt
     }
+}
+
+fn decode_cache_answer<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<CiJobLogAnswer, D::Error> {
+    let answer = Value::deserialize(deserializer)?;
+    if !answer.is_object() {
+        return Err(D::Error::custom("cache answer must be an object"));
+    }
+    Ok(CiJobLogAnswer::decode_response(answer))
 }
 
 /// `<data root>/state/ci_job_log_cache`, or `None` for a host with no data

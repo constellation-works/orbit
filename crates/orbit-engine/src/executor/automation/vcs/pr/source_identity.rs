@@ -1,4 +1,5 @@
 //! Exact publication predicates and bounded evidence for refused provider reads.
+
 use std::{path::Path, time::Duration};
 
 use chrono::{DateTime, Utc};
@@ -30,8 +31,11 @@ use crate::context::{RuntimeHost, TaskAutomationUpdate};
 pub(in crate::executor::automation::vcs) use identity::mismatches;
 
 const OBSERVED: &str = "source_repair_publication_observed";
+
 const REFUSED: &str = "source_repair_publication_refused";
+
 const MAX_REREADS: u64 = 3;
+
 const POLL_SECONDS: u64 = 5;
 
 /// Append-only reservations survive action retries and interruption between
@@ -74,6 +78,21 @@ impl Settling {
         }
         Ok(budget)
     }
+}
+
+// Deserialize the authenticated checkpoint once, before projecting its fields.
+// Arbitrary diagnostic fields remain raw only at this observation boundary.
+#[derive(serde::Deserialize)]
+struct PushCheckpoint {
+    phase: PublicationPushCheckpoint,
+    branch: String,
+    local_sha: String,
+    #[serde(default)]
+    remote_sha_before: Value,
+    #[serde(default)]
+    force_with_lease: Value,
+    #[serde(default)]
+    decision: Value,
 }
 
 /// Only authenticated replacement metadata can settle. Every observation,
@@ -334,21 +353,6 @@ fn admission_evidence(binding: &SourceRepairBinding) -> Result<Value, OrbitError
         );
     }
     Ok(Value::Object(admission))
-}
-
-// Deserialize the authenticated checkpoint once, before projecting its fields.
-// Arbitrary diagnostic fields remain raw only at this observation boundary.
-#[derive(serde::Deserialize)]
-struct PushCheckpoint {
-    phase: PublicationPushCheckpoint,
-    branch: String,
-    local_sha: String,
-    #[serde(default)]
-    remote_sha_before: Value,
-    #[serde(default)]
-    force_with_lease: Value,
-    #[serde(default)]
-    decision: Value,
 }
 
 /// A checkpoint is evidence only when this run's successful step output agrees

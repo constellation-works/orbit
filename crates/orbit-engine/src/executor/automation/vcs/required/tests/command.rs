@@ -15,10 +15,15 @@ use super::super::command::{
 };
 
 const DIAGNOSTIC: &str = "make: rg: No such file or directory";
+
 /// Larger than the 256 KiB capture cap, so a prefix-only capture drops the tail.
 const OVERSIZED_BYTES: usize = 400 * 1024;
 
 const EMPTY_PATH: &str = "/nonexistent-orbit-path";
+
+struct CaptureHost;
+
+impl crate::test_support::NullRuntimeHost for CaptureHost {}
 
 fn tool(exit_code: i32, output: &str) -> Option<Option<String>> {
     missing_tool(Some(exit_code), output, EMPTY_PATH).map(|missing| missing.tool)
@@ -92,10 +97,6 @@ fn shell_and_launcher_diagnostics_name_the_missing_tool() {
         assert!(missing_tool(Some(1), output, EMPTY_PATH).is_some());
     }
 }
-
-struct CaptureHost;
-
-impl crate::test_support::NullRuntimeHost for CaptureHost {}
 
 /// A stdout past 256 KiB used to fill the capture and delete stderr, so exit 2
 /// was classified `candidate` and repair read the middle of stdout

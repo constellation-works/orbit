@@ -54,6 +54,13 @@ const EXECUTION_SUMMARY_PERSISTED_EVENT: &str = "execution_summary_persisted";
 /// implement loop; its checkpointed output carries the returned summary.
 const IMPLEMENT_STEP_ID: &str = "implement_one";
 
+/// One worktree entry, reduced to the two facts a summary reports.
+#[derive(Debug, Eq, PartialEq)]
+struct WorktreeChange {
+    pub(super) kind: &'static str,
+    pub(super) path: String,
+}
+
 /// This run's implementation output for commit evidence. Explicit step input
 /// wins; owner pipelines otherwise checkpoint it under `implement_one`.
 /// A resumed run that skipped implementation may have no such output.
@@ -170,13 +177,6 @@ fn returned_summary<H: RuntimeHost + ?Sized>(
             .and_then(|implementation_input| implementer_summary(&implementation_input))
     };
     Ok(summary.filter(|summary| meaningful_execution_summary(summary).is_some()))
-}
-
-/// One worktree entry, reduced to the two facts a summary reports.
-#[derive(Debug, Eq, PartialEq)]
-struct WorktreeChange {
-    pub(super) kind: &'static str,
-    pub(super) path: String,
 }
 
 /// Read the change this step will deliver without staging or mutating anything.

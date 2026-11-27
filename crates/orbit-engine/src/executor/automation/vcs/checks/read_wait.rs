@@ -20,6 +20,32 @@ use crate::executor::automation::read_throttle::{read_not_before, rfc3339_ms};
 /// Waits one landing pass may take for throttled check reads.
 const MAX_THROTTLED_READ_WAITS: u64 = 3;
 
+/// A failed-check read the provider rate-limited.
+pub(in crate::executor::automation::vcs) struct ThrottledRead {
+    /// What could not be read, with the provider's own diagnostic.
+    pub(in crate::executor::automation::vcs) reason: String,
+    pub(in crate::executor::automation::vcs) throttle: ProviderReadThrottle,
+}
+
+impl ThrottledRead {
+    /// The throttled read behind `error`, or `None` for any other failure.
+    pub(super) fn of(error: &OrbitError, reason: impl FnOnce() -> String) -> Option<Self> {
+        let throttle = error.private_vcs_failure()?.read_throttle.clone()?;
+        Some(Self {
+            reason: reason(),
+            throttle,
+        })
+    }
+}
+
+/// What the landing does about an unavailable read.
+pub(in crate::executor::automation::vcs) enum ReadWait {
+    /// Sleep `delay_ms`, then poll again; `note` is the recorded wait.
+    Wait { delay_ms: u64, note: Value },
+    /// Hold for the forge with this evidence, retaining the read's reason.
+    Hold(String),
+}
+
 /// Retry missing log evidence on this pass before handing it to the owner sweep.
 /// These waits never authorize a CI rerun or consume a candidate repair.
 pub(in crate::executor::automation::vcs) fn landing_log_read_wait(
@@ -54,32 +80,6 @@ pub(in crate::executor::automation::vcs) fn landing_log_read_wait(
             "deadline_ms": deadline_ms,
         }),
     }
-}
-
-/// A failed-check read the provider rate-limited.
-pub(in crate::executor::automation::vcs) struct ThrottledRead {
-    /// What could not be read, with the provider's own diagnostic.
-    pub(in crate::executor::automation::vcs) reason: String,
-    pub(in crate::executor::automation::vcs) throttle: ProviderReadThrottle,
-}
-
-impl ThrottledRead {
-    /// The throttled read behind `error`, or `None` for any other failure.
-    pub(super) fn of(error: &OrbitError, reason: impl FnOnce() -> String) -> Option<Self> {
-        let throttle = error.private_vcs_failure()?.read_throttle.clone()?;
-        Some(Self {
-            reason: reason(),
-            throttle,
-        })
-    }
-}
-
-/// What the landing does about an unavailable read.
-pub(in crate::executor::automation::vcs) enum ReadWait {
-    /// Sleep `delay_ms`, then poll again; `note` is the recorded wait.
-    Wait { delay_ms: u64, note: Value },
-    /// Hold for the forge with this evidence, retaining the read's reason.
-    Hold(String),
 }
 
 /// The wait `read` earns at `now_ms`, given the `waits` this pass already

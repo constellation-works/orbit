@@ -100,42 +100,48 @@ pub(super) struct Bounds {
 }
 
 fn bounds_from_input(input: &Value) -> Result<Bounds, OrbitError> {
+    // Both listings need at least one entry: the list requests reject a
+    // zero limit, and a sweep that errors every time can never report a
+    // clean result.
+    let max_runs = bounded_u64(input, "max_runs", DEFAULT_MAX_RUNS, MAX_MAX_RUNS)?.max(1);
+    let max_pull_requests = bounded_u64(
+        input,
+        "max_pull_requests",
+        DEFAULT_MAX_PULL_REQUESTS,
+        MAX_PULL_REQUESTS,
+    )?
+    .max(1);
+    let max_investigated_runs = bounded_u64(
+        input,
+        "max_investigated_runs",
+        DEFAULT_MAX_INVESTIGATED_RUNS,
+        MAX_INVESTIGATED_RUNS,
+    )? as usize;
+    let log_max_bytes = bounded_u64(
+        input,
+        "log_max_bytes",
+        DEFAULT_LOG_MAX_BYTES,
+        MAX_LOG_MAX_BYTES,
+    )? as usize;
+    let max_job_log_reads = bounded_u64(
+        input,
+        "max_job_log_reads",
+        DEFAULT_MAX_JOB_LOG_READS,
+        MAX_MAX_JOB_LOG_READS,
+    )? as usize;
+    let max_checkout_log_reads = bounded_u64(
+        input,
+        "max_checkout_log_reads",
+        DEFAULT_MAX_CHECKOUT_LOG_READS,
+        MAX_INVESTIGATED_RUNS,
+    )? as usize;
     Ok(Bounds {
-        // Both listings need at least one entry: the list requests reject a
-        // zero limit, and a sweep that errors every time can never report a
-        // clean result.
-        max_runs: bounded_u64(input, "max_runs", DEFAULT_MAX_RUNS, MAX_MAX_RUNS)?.max(1),
-        max_pull_requests: bounded_u64(
-            input,
-            "max_pull_requests",
-            DEFAULT_MAX_PULL_REQUESTS,
-            MAX_PULL_REQUESTS,
-        )?
-        .max(1),
-        max_investigated_runs: bounded_u64(
-            input,
-            "max_investigated_runs",
-            DEFAULT_MAX_INVESTIGATED_RUNS,
-            MAX_INVESTIGATED_RUNS,
-        )? as usize,
-        log_max_bytes: bounded_u64(
-            input,
-            "log_max_bytes",
-            DEFAULT_LOG_MAX_BYTES,
-            MAX_LOG_MAX_BYTES,
-        )? as usize,
-        max_job_log_reads: bounded_u64(
-            input,
-            "max_job_log_reads",
-            DEFAULT_MAX_JOB_LOG_READS,
-            MAX_MAX_JOB_LOG_READS,
-        )? as usize,
-        max_checkout_log_reads: bounded_u64(
-            input,
-            "max_checkout_log_reads",
-            DEFAULT_MAX_CHECKOUT_LOG_READS,
-            MAX_INVESTIGATED_RUNS,
-        )? as usize,
+        max_runs,
+        max_pull_requests,
+        max_investigated_runs,
+        log_max_bytes,
+        max_checkout_log_reads,
+        max_job_log_reads,
         max_retired_ref_probes: bounded_u64(
             input,
             "max_retired_ref_probes",

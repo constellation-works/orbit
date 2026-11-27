@@ -12,6 +12,11 @@ use super::super::super::dispatcher::DispatchError;
 /// the provider name — establishes that the run read the pinned source.
 const GENERIC_INSTRUCTION: &str = "Provider inspection surface: use this CLI's own native file-read and shell/command tools to read files and run read-only git/rg commands in the checkout. These native tools are separate from the Orbit MCP tool list.";
 
+pub(in crate::activity_job::cli_runner) struct InspectionTools {
+    pub(in crate::activity_job::cli_runner) args: Vec<String>,
+    pub(in crate::activity_job::cli_runner) instruction: &'static str,
+}
+
 /// Refuse an inspection that cannot start before executor lookup: a profile
 /// other than `reviewer`, or a provider with no CLI runtime. A null revision
 /// still denotes a non-Git inspection.
@@ -72,9 +77,4 @@ fn unavailable(provider: &str, reason: &str) -> DispatchError {
         provider: provider.to_string(),
         reason: reason.to_string(),
     }
-}
-
-pub(in crate::activity_job::cli_runner) struct InspectionTools {
-    pub(in crate::activity_job::cli_runner) args: Vec<String>,
-    pub(in crate::activity_job::cli_runner) instruction: &'static str,
 }

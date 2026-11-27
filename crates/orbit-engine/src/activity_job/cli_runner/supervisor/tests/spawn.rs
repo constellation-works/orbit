@@ -13,16 +13,49 @@ use super::test_support::{spawn_test_request, stdin_trace};
 
 const STDIN_CHILD: &str =
     "activity_job::cli_runner::supervisor::tests::spawn::stdin_lifecycle_child";
+
 const STDIN_DIR_ENV: &str = "ORBIT_TEST_STDIN_LIFECYCLE_DIR";
+
 #[cfg(target_os = "linux")]
 const STDIN_HOLDER: &str =
     "activity_job::cli_runner::supervisor::tests::spawn::escaped_stdin_holder";
+
 #[cfg(target_os = "linux")]
 const HOLDER_DIR_ENV: &str = "ORBIT_TEST_STDIN_HOLDER_DIR";
+
 #[cfg(target_os = "linux")]
 const STDIN_PROVIDER: &str = "activity_job::cli_runner::supervisor::tests::spawn::stdin_provider";
+
 #[cfg(target_os = "linux")]
 const PROVIDER_MODE_ENV: &str = "ORBIT_TEST_STDIN_PROVIDER_MODE";
+
+#[cfg(target_os = "linux")]
+struct StdinHolderGuard(std::path::PathBuf);
+
+#[cfg(target_os = "linux")]
+impl Drop for StdinHolderGuard {
+    fn drop(&mut self) {
+        // The outer guard walks the isolated fixture directories as a fallback
+        // when the child process cannot run its per-holder guard.
+        if let Ok(entries) = std::fs::read_dir(&self.0) {
+            for entry in entries.flatten().filter(|entry| entry.path().is_dir()) {
+                let _guard = Self(entry.path());
+            }
+        }
+        let pid = std::fs::read_to_string(self.0.join("holder.pid"))
+            .ok()
+            .and_then(|pid| pid.parse::<libc::pid_t>().ok());
+        if let Some(pid) = pid.filter(|pid| *pid > 1) {
+            // SAFETY: only the fixture-owned holder publishes this pid. The
+            // isolated child is a subreaper and can also reap it; the outer
+            // fallback may receive ECHILD, which needs no further action.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+                libc::waitpid(pid, std::ptr::null_mut(), 0);
+            }
+        }
+    }
+}
 
 /// Kernel pipe ownership and injected wait failures require the private
 /// supervisor seam. Re-exec keeps process-wide thread/descriptor observations
@@ -414,34 +447,6 @@ fn escaped_stdin_holder() {
     // This socket remains open in the caller through the helper-alive check.
     let _ = observation.read_exact(&mut request);
     std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
-}
-
-#[cfg(target_os = "linux")]
-struct StdinHolderGuard(std::path::PathBuf);
-
-#[cfg(target_os = "linux")]
-impl Drop for StdinHolderGuard {
-    fn drop(&mut self) {
-        // The outer guard walks the isolated fixture directories as a fallback
-        // when the child process cannot run its per-holder guard.
-        if let Ok(entries) = std::fs::read_dir(&self.0) {
-            for entry in entries.flatten().filter(|entry| entry.path().is_dir()) {
-                let _guard = Self(entry.path());
-            }
-        }
-        let pid = std::fs::read_to_string(self.0.join("holder.pid"))
-            .ok()
-            .and_then(|pid| pid.parse::<libc::pid_t>().ok());
-        if let Some(pid) = pid.filter(|pid| *pid > 1) {
-            // SAFETY: only the fixture-owned holder publishes this pid. The
-            // isolated child is a subreaper and can also reap it; the outer
-            // fallback may receive ECHILD, which needs no further action.
-            unsafe {
-                libc::kill(pid, libc::SIGKILL);
-                libc::waitpid(pid, std::ptr::null_mut(), 0);
-            }
-        }
-    }
 }
 
 /// A provider whose shell tool stops itself: the supervisor ends the stopped

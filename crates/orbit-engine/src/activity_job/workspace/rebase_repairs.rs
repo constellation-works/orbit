@@ -29,6 +29,11 @@ use super::rebase_recovery::ResolutionIntent;
 /// Git's buffer-is-binary heuristic: a NUL within the first 8000 bytes.
 const BINARY_SNIFF_BYTES: usize = 8000;
 
+struct StageEntry {
+    mode: String,
+    oid: String,
+}
+
 /// The authorized conflict paths that hold no repair: neither changed by
 /// this invocation (`changed`) nor repaired before it.
 pub(super) fn unrepaired_conflict_paths(
@@ -258,11 +263,6 @@ fn merge_driver(
         Some(driver) => Ok(driver.to_string()),
         None => Ok(String::new()),
     }
-}
-
-struct StageEntry {
-    mode: String,
-    oid: String,
 }
 
 fn conflict_stages(

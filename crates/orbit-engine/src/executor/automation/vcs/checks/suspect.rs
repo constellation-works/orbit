@@ -48,6 +48,25 @@ pub(super) struct BaseRecheck<'a, H: ?Sized> {
     pub(super) base_branch: &'a str,
 }
 
+/// The earlier failed attempt a rerun receipt or base-suspect note records.
+struct PriorFailure {
+    head: Option<String>,
+    run: Option<u64>,
+    completed: Option<chrono::DateTime<chrono::FixedOffset>>,
+    attempt: Option<u64>,
+}
+
+/// [ORB-25926] A same-check base-branch pass that proves a base-suspect
+/// failure's base innocent.
+pub(super) struct GreenBaseProof {
+    /// The push run whose same check passed.
+    pub(super) run_id: Option<u64>,
+    /// The base-branch commit that run tested; it contains the candidate's base.
+    pub(super) base_sha: String,
+    /// The base-branch tip read for a same-check failure.
+    pub(super) tip: String,
+}
+
 /// A mixed failure's candidate attribution needs its own changed source.
 pub(super) fn cites_changed_candidate(
     process_env: &orbit_common::Env,
@@ -539,14 +558,6 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
     false
 }
 
-/// The earlier failed attempt a rerun receipt or base-suspect note records.
-struct PriorFailure {
-    head: Option<String>,
-    run: Option<u64>,
-    completed: Option<chrono::DateTime<chrono::FixedOffset>>,
-    attempt: Option<u64>,
-}
-
 /// Whether a note names PR numbers and none of them is `pr_number`.
 fn names_other_pull_request(noted: impl Iterator<Item = u64>, pr_number: Option<u64>) -> bool {
     let noted = noted.collect::<Vec<_>>();
@@ -596,17 +607,6 @@ pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
         tracing::warn!(task, evidence = %note, "base-suspect: waiting for conclusive same-check base and pull-request rerun evidence; no candidate repair");
     }
     Ok(())
-}
-
-/// [ORB-25926] A same-check base-branch pass that proves a base-suspect
-/// failure's base innocent.
-pub(super) struct GreenBaseProof {
-    /// The push run whose same check passed.
-    pub(super) run_id: Option<u64>,
-    /// The base-branch commit that run tested; it contains the candidate's base.
-    pub(super) base_sha: String,
-    /// The base-branch tip read for a same-check failure.
-    pub(super) tip: String,
 }
 
 /// Whether `check` passed on a base-branch push run at a commit from `base`

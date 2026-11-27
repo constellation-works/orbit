@@ -22,6 +22,11 @@ use super::super::super::dispatcher::DispatchError;
 use super::super::inspection::SourceInspection;
 use super::test_support::write_executable;
 
+/// Set in the re-executed child to the directory holding the stub `git`.
+const STUB_GIT_DIR_ENV: &str = "ORBIT_TEST_INSPECTION_STUB_GIT_DIR";
+
+const STALLED_COPY_CHILD: &str = "activity_job::cli_runner::tests::inspection::stalled_full_ancestry_copy_leaves_a_reusable_slot";
+
 #[test]
 fn missing_commit_and_slot_ownership_are_permanent() {
     let temp = tempdir().expect("tempdir");
@@ -147,10 +152,6 @@ fn slot_exhaustion_and_git_io_stay_retryable() {
     let error = exhausted.expect("the inspection pool is bounded");
     assert_retryable_error(&error, "all source inspection slots are leased");
 }
-
-/// Set in the re-executed child to the directory holding the stub `git`.
-const STUB_GIT_DIR_ENV: &str = "ORBIT_TEST_INSPECTION_STUB_GIT_DIR";
-const STALLED_COPY_CHILD: &str = "activity_job::cli_runner::tests::inspection::stalled_full_ancestry_copy_leaves_a_reusable_slot";
 
 /// [ORB-14806] A full-ancestry copy that stalls past its bulk deadline fails
 /// the lease and is killed, and the next lease reuses the slot. Admitted under

@@ -9,6 +9,17 @@ use std::process::Command;
 use super::super::freshness::remote_branch_sha;
 use super::super::git::{GitTimeoutBudget, GitTimeoutBudgetGuard};
 
+const STUB_GIT: &str = r#"#!/bin/sh
+set -eu
+while [ "$1" = -c ]; do shift 2; done
+[ "$1" = ls-remote ] && [ "$2" = --heads ] && [ "$3" = origin ] && [ "$4" = refs/heads/candidate ] || exit 2
+count=$(($(cat count) + 1))
+printf '%s\n' "$count" > count
+if [ "$count" -le "$(cat timeouts)" ]; then : > probe-ready; exec sleep 600; fi
+if [ -s refusal ]; then cat refusal >&2; exit 1; fi
+cat response
+"#;
+
 #[test]
 fn branch_lookup_retries_only_supervisor_timeouts_with_a_bounded_budget() {
     let test = concat!(
@@ -161,14 +172,3 @@ fn branch_lookup_retries_only_supervisor_timeouts_with_a_bounded_budget() {
         },
     );
 }
-
-const STUB_GIT: &str = r#"#!/bin/sh
-set -eu
-while [ "$1" = -c ]; do shift 2; done
-[ "$1" = ls-remote ] && [ "$2" = --heads ] && [ "$3" = origin ] && [ "$4" = refs/heads/candidate ] || exit 2
-count=$(($(cat count) + 1))
-printf '%s\n' "$count" > count
-if [ "$count" -le "$(cat timeouts)" ]; then : > probe-ready; exec sleep 600; fi
-if [ -s refusal ]; then cat refusal >&2; exit 1; fi
-cat response
-"#;

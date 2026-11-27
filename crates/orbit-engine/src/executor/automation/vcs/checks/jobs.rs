@@ -29,6 +29,21 @@ const RUNNER_LOSS: &[&str] = &[
     "the hosted runner encountered an error",
 ];
 
+const CONCLUSION_SIGNATURE_PREFIX: &str = "concluded ";
+
+/// A failed waiter whose log names only an awaited cancellation, timeout, or
+/// the waiter's own deadline. Any other emitted line, including a dependency
+/// record, is a different failure.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum AwaitedStop {
+    /// `ci-await: … concluded cancelled`.
+    Cancelled,
+    /// `ci-await: … concluded timed_out`.
+    TimedOut,
+    /// `ci-await: timed out after …`.
+    Timeout,
+}
+
 /// The step a failed job's signature falls back to naming.
 pub(super) fn failed_step(job: &CiCommitJobEvidence) -> &str {
     job.failed_step
@@ -83,19 +98,6 @@ pub(super) fn job_label(job: &CiCommitJobEvidence) -> String {
         Some(workflow) => format!("{workflow} / {name}"),
         None => name.to_string(),
     }
-}
-
-/// A failed waiter whose log names only an awaited cancellation, timeout, or
-/// the waiter's own deadline. Any other emitted line, including a dependency
-/// record, is a different failure.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum AwaitedStop {
-    /// `ci-await: … concluded cancelled`.
-    Cancelled,
-    /// `ci-await: … concluded timed_out`.
-    TimedOut,
-    /// `ci-await: timed out after …`.
-    Timeout,
 }
 
 /// The awaited stop a log reports when every emitted line is that signal or
@@ -182,8 +184,6 @@ pub(super) fn dependency_only_log(log: &str) -> bool {
 pub(super) fn concluded_stopped(job: &CiCommitJobEvidence) -> Option<&str> {
     job.conclusion.value().and_then(CiJobConclusion::stopped)
 }
-
-const CONCLUSION_SIGNATURE_PREFIX: &str = "concluded ";
 
 /// Signature of a stop classified from the job conclusion, with no log.
 pub(super) fn conclusion_signature(conclusion: &str) -> String {

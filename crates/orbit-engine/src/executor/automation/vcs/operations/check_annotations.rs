@@ -20,26 +20,11 @@ use super::DEFAULT_TIMEOUT_MS;
 use super::input::{number, required_string, same, text, valid_expected_remote_sha};
 use super::process::execute_with_transient_retry;
 
-// Invalid or absent fields retain the same conservative interpretation as JSON
-// lookups: they cannot prove a failure, but do not hide other annotations.
-fn optional_field<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: DeserializeOwned,
-{
-    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
-}
+/// The provider's annotation page size.
+const PAGE: u64 = 100;
 
-fn optional_run<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<CiCheckAnnotationRun>, D::Error> {
-    let value = Value::deserialize(deserializer)?;
-    Ok(if value.is_object() {
-        serde_json::from_value(value).ok()
-    } else {
-        None
-    })
-}
+/// Annotation pages one read follows before it refuses as too large.
+const MAX_PAGES: u64 = 10;
 
 #[derive(Serialize, Deserialize, Default)]
 #[serde(bound(deserialize = "A: DeserializeOwned"))]
@@ -142,10 +127,26 @@ pub(in super::super) enum CiAnnotationLevel {
     Other,
 }
 
-/// The provider's annotation page size.
-const PAGE: u64 = 100;
-/// Annotation pages one read follows before it refuses as too large.
-const MAX_PAGES: u64 = 10;
+// Invalid or absent fields retain the same conservative interpretation as JSON
+// lookups: they cannot prove a failure, but do not hide other annotations.
+fn optional_field<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
+}
+
+fn optional_run<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<CiCheckAnnotationRun>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(if value.is_object() {
+        serde_json::from_value(value).ok()
+    } else {
+        None
+    })
+}
 
 fn refused(reason: &str) -> OrbitError {
     OrbitError::Execution(format!(

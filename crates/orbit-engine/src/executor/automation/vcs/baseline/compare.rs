@@ -28,6 +28,9 @@ const BASE_LOCK_TIMEOUT: Duration = Duration::from_secs(50 * 60);
 /// was handed, key included.
 pub(crate) const FAILING_TESTS_KEY: &str = "failing_tests";
 
+/// The prefix `failure_identities` gives a failed test.
+const TEST_FAILURE_PREFIX: &str = "test ";
+
 /// One required command's result on a base commit, as cached.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaseCommandResult {
@@ -57,98 +60,6 @@ pub struct BaseCommandResult {
     #[serde(default)]
     pub diagnostic_fingerprint: Option<String>,
     pub recorded_at: chrono::DateTime<Utc>,
-}
-
-/// Why `base` cannot stand in for the candidate's run of the same command,
-/// which reported `selection`, or `None` when it can [ORB-15131].
-///
-/// A command that reports no summary on either side has no selection check.
-/// Otherwise the base must report the candidate's selection,
-/// and a pass counts only when it executed at least one counted test. A
-/// replay of the candidate's failing tests ([`FAILING_TESTS_KEY`]) must have
-/// executed one whether it passed or failed: a filter that matched nothing
-/// shows nothing about those tests [ORB-15328].
-pub(super) fn not_comparable(
-    selection: Option<&Value>,
-    base: &BaseCommandResult,
-) -> Option<String> {
-    let summary = base.summary.as_ref();
-    let replays_failures =
-        selection.is_some_and(|selection| selection.get(FAILING_TESTS_KEY).is_some());
-    if let Some(selection) = selection {
-        let Some(summary) = summary else {
-            return Some(format!(
-                "the base run reported no selection, so it cannot be shown to have tested the \
-                 candidate's ({selection})"
-            ));
-        };
-        if summary.selection != *selection {
-            return Some(format!(
-                "the base run tested {} where the candidate tested {selection}",
-                summary.selection
-            ));
-        }
-        if replays_failures {
-            if base.host_coverage_refused || base.timed_out {
-                return Some("the failing-test replay refused host coverage or timed out".into());
-            }
-            if let Some(reason) = replay_coverage(selection, summary) {
-                return Some(reason);
-            }
-        }
-    }
-    match summary.map(|summary| summary.tests_run) {
-        Some(Some(0)) if base.passed => {
-            Some("the base run passed without executing a test".to_string())
-        }
-        Some(None) if base.passed => {
-            Some("the base run passed without reporting how many tests it executed".to_string())
-        }
-        Some(Some(0)) if replays_failures => {
-            Some("the base replay of the failing tests executed none of them".to_string())
-        }
-        Some(None) if replays_failures => Some(
-            "the base replay of the failing tests did not report how many it executed".to_string(),
-        ),
-        _ => None,
-    }
-}
-
-/// Prefer a conclusive comparable full cache, otherwise replay only fully
-/// identified test failures. The original candidate command stays complete;
-/// unknown, compiler, timeout and host-refused outcomes retain full comparison.
-pub(in super::super) fn compare_candidate_with_base<H: RuntimeHost + ?Sized>(
-    host: &H,
-    workspace_path: &Path,
-    base_sha: &str,
-    run: &RequiredCommandRun,
-) -> BaselineCheck {
-    if let Some(check) = cached_base_check(
-        host,
-        workspace_path,
-        base_sha,
-        &run.command,
-        run.selection(),
-    )
-    .filter(BaselineCheck::conclusive)
-    {
-        return check;
-    }
-    let narrowed = (!run.timed_out
-        && run.host_output_refusal.is_none()
-        && run.deferred_notice.is_none()
-        && run.infrastructure_failure.is_none()
-        && run.missing_tool.is_none()
-        && run.network_evidence.is_none())
-    .then(|| failing_tests_selection(run.selection(), &run.failures, &[]))
-    .flatten();
-    compare_with_base(
-        host,
-        workspace_path,
-        base_sha,
-        &run.command,
-        narrowed.as_ref().or(run.selection()),
-    )
 }
 
 /// What rerunning a failed command on the candidate's base showed.
@@ -326,6 +237,109 @@ impl BaselineCheck {
     }
 }
 
+enum BaseComparison {
+    Ordinary(Option<Instant>),
+    OwnerClaim(Instant),
+}
+
+#[derive(Serialize, Deserialize)]
+struct ClaimInconclusive {
+    schema_version: u32,
+    reason: String,
+}
+
+/// Why `base` cannot stand in for the candidate's run of the same command,
+/// which reported `selection`, or `None` when it can [ORB-15131].
+///
+/// A command that reports no summary on either side has no selection check.
+/// Otherwise the base must report the candidate's selection,
+/// and a pass counts only when it executed at least one counted test. A
+/// replay of the candidate's failing tests ([`FAILING_TESTS_KEY`]) must have
+/// executed one whether it passed or failed: a filter that matched nothing
+/// shows nothing about those tests [ORB-15328].
+pub(super) fn not_comparable(
+    selection: Option<&Value>,
+    base: &BaseCommandResult,
+) -> Option<String> {
+    let summary = base.summary.as_ref();
+    let replays_failures =
+        selection.is_some_and(|selection| selection.get(FAILING_TESTS_KEY).is_some());
+    if let Some(selection) = selection {
+        let Some(summary) = summary else {
+            return Some(format!(
+                "the base run reported no selection, so it cannot be shown to have tested the \
+                 candidate's ({selection})"
+            ));
+        };
+        if summary.selection != *selection {
+            return Some(format!(
+                "the base run tested {} where the candidate tested {selection}",
+                summary.selection
+            ));
+        }
+        if replays_failures {
+            if base.host_coverage_refused || base.timed_out {
+                return Some("the failing-test replay refused host coverage or timed out".into());
+            }
+            if let Some(reason) = replay_coverage(selection, summary) {
+                return Some(reason);
+            }
+        }
+    }
+    match summary.map(|summary| summary.tests_run) {
+        Some(Some(0)) if base.passed => {
+            Some("the base run passed without executing a test".to_string())
+        }
+        Some(None) if base.passed => {
+            Some("the base run passed without reporting how many tests it executed".to_string())
+        }
+        Some(Some(0)) if replays_failures => {
+            Some("the base replay of the failing tests executed none of them".to_string())
+        }
+        Some(None) if replays_failures => Some(
+            "the base replay of the failing tests did not report how many it executed".to_string(),
+        ),
+        _ => None,
+    }
+}
+
+/// Prefer a conclusive comparable full cache, otherwise replay only fully
+/// identified test failures. The original candidate command stays complete;
+/// unknown, compiler, timeout and host-refused outcomes retain full comparison.
+pub(in super::super) fn compare_candidate_with_base<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &Path,
+    base_sha: &str,
+    run: &RequiredCommandRun,
+) -> BaselineCheck {
+    if let Some(check) = cached_base_check(
+        host,
+        workspace_path,
+        base_sha,
+        &run.command,
+        run.selection(),
+    )
+    .filter(BaselineCheck::conclusive)
+    {
+        return check;
+    }
+    let narrowed = (!run.timed_out
+        && run.host_output_refusal.is_none()
+        && run.deferred_notice.is_none()
+        && run.infrastructure_failure.is_none()
+        && run.missing_tool.is_none()
+        && run.network_evidence.is_none())
+    .then(|| failing_tests_selection(run.selection(), &run.failures, &[]))
+    .flatten();
+    compare_with_base(
+        host,
+        workspace_path,
+        base_sha,
+        &run.command,
+        narrowed.as_ref().or(run.selection()),
+    )
+}
+
 /// The known-red rule delivery validation and review settlement share
 /// [ORB-15375] [ORB-15546]: whether a failed candidate `run`'s failures are
 /// all the base's to answer for, given the failures the base's run of the
@@ -360,9 +374,6 @@ fn names_only_failed_tests(failures: &BTreeSet<String>) -> bool {
             .iter()
             .all(|failure| failure.starts_with(TEST_FAILURE_PREFIX))
 }
-
-/// The prefix `failure_identities` gives a failed test.
-const TEST_FAILURE_PREFIX: &str = "test ";
 
 /// What a hold records as failing [ORB-15374]: `identities`, as
 /// `failure_identities` parsed them from `output`, or the tail of `output`
@@ -436,11 +447,6 @@ pub(in super::super) fn compare_claimed_with_base_until<H: RuntimeHost + ?Sized>
     )
 }
 
-enum BaseComparison {
-    Ordinary(Option<Instant>),
-    OwnerClaim(Instant),
-}
-
 fn compare_base<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,
@@ -460,12 +466,16 @@ fn compare_base<H: RuntimeHost + ?Sized>(
         not_comparable: None,
         exact_replay: false,
     };
-    let judged = |result: BaseCommandResult, cached: bool| BaselineCheck {
-        base_sha: base_sha.to_string(),
-        not_comparable: not_comparable(selection, &result),
-        result: Ok(result),
-        cached,
-        exact_replay: selection.is_some_and(|selection| selection.get(FAILING_TESTS_KEY).is_some()),
+    let judged = |result: BaseCommandResult, cached: bool| {
+        let not_comparable = not_comparable(selection, &result);
+        BaselineCheck {
+            base_sha: base_sha.to_string(),
+            result: Ok(result),
+            cached,
+            not_comparable,
+            exact_replay: selection
+                .is_some_and(|selection| selection.get(FAILING_TESTS_KEY).is_some()),
+        }
     };
     let cache = match cache_paths(
         &host.process_env(),
@@ -553,6 +563,7 @@ fn compare_base<H: RuntimeHost + ?Sized>(
                     run.command
                 ));
             }
+            let validation_env = run.environment_record();
             let result = BaseCommandResult {
                 schema_version: CACHE_SCHEMA_VERSION,
                 base_sha: base_sha.to_string(),
@@ -560,12 +571,12 @@ fn compare_base<H: RuntimeHost + ?Sized>(
                 passed: run.passed,
                 exit_code: run.exit_code,
                 timed_out: run.timed_out,
-                validation_env: run.environment_record(),
                 output: run.output,
                 network_retries: run.network_retries,
                 timing: run.timing,
                 host_coverage_refused: run.host_output_refusal.is_some()
                     || run.deferred_notice.is_some(),
+                validation_env,
                 summary: run.summary,
                 failures: run.failures,
                 diagnostic_fingerprint: run.diagnostic_fingerprint,
@@ -598,12 +609,6 @@ fn compare_base<H: RuntimeHost + ?Sized>(
         }
     }
     check
-}
-
-#[derive(Serialize, Deserialize)]
-struct ClaimInconclusive {
-    schema_version: u32,
-    reason: String,
 }
 
 fn read_claim_inconclusive(path: &Path) -> Option<String> {

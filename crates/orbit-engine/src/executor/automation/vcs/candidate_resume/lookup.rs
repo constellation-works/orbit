@@ -24,6 +24,15 @@ use super::{
     REVIEW_VERDICT_STEP,
 };
 
+/// How the task's latest status decision released held run `run_id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeldDecision {
+    /// Every named check arrived: review the held candidate again.
+    Received,
+    /// [ORB-18660] An owner evidence run reported findings: repair it.
+    Findings,
+}
+
 /// Apply the task's preserved candidate onto this run's base, if it may be
 /// resumed, and decide whether the implementation step runs.
 pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>(
@@ -264,6 +273,7 @@ fn claim_candidate(preserved: &Value, claim: Option<ClaimSource>) -> Option<Cand
     // candidate is complete.
     let failed_step_id =
         input_string_field(preserved, "failed_step_id").unwrap_or_else(|| "handoff".to_string());
+    let needs_review_repair = failed_step_id == REVIEW_VERDICT_STEP;
     Some(Candidate {
         run_id: input_string_field(preserved, "source_run_id")
             .unwrap_or_else(|| "an earlier claim".to_string()),
@@ -271,8 +281,8 @@ fn claim_candidate(preserved: &Value, claim: Option<ClaimSource>) -> Option<Cand
         head_sha,
         durable_ref: input_string_field(preserved, "durable_ref")
             .filter(|reference| valid_candidate_ref(reference)),
-        needs_review_repair: failed_step_id == REVIEW_VERDICT_STEP,
         failed_step_id,
+        needs_review_repair,
         held: false,
         claim,
         published: preserved.get("published").and_then(Value::as_bool) == Some(true),
@@ -499,15 +509,6 @@ fn kept_candidate(kept: KeptClaimCandidate) -> Result<Preserved, OrbitError> {
         format!("candidate {} from {source}: {detail}", candidate.head_sha),
     );
     Ok(Preserved::Refused(candidate, reason))
-}
-
-/// How the task's latest status decision released held run `run_id`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HeldDecision {
-    /// Every named check arrived: review the held candidate again.
-    Received,
-    /// [ORB-18660] An owner evidence run reported findings: repair it.
-    Findings,
 }
 
 /// Whether the latest status decision in `history` released held run

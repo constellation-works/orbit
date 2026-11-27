@@ -7,6 +7,13 @@ use orbit_store::Store;
 use orbit_store::contract::{V2AuditEventFilter, V2AuditEventInsertParams};
 use orbit_types::workflow::activity_job::V2AuditEvent;
 
+/// What [`AuditSink::write_blob`] returns in place of a ref when the blob
+/// could not be stored. [`V2AuditWriter::write_blob`] turns it into a counted
+/// audit failure, so it never reaches an event as a ref.
+///
+/// [`V2AuditWriter::write_blob`]: super::audit_writer::V2AuditWriter::write_blob
+pub(crate) const BLOB_WRITE_ERROR_PREFIX: &str = "error:";
+
 pub struct V2SqliteSink {
     store: Store,
     workspace_id: String,
@@ -91,13 +98,6 @@ impl V2SqliteSink {
         &self.blob_store
     }
 }
-
-/// What [`AuditSink::write_blob`] returns in place of a ref when the blob
-/// could not be stored. [`V2AuditWriter::write_blob`] turns it into a counted
-/// audit failure, so it never reaches an event as a ref.
-///
-/// [`V2AuditWriter::write_blob`]: super::audit_writer::V2AuditWriter::write_blob
-pub(crate) const BLOB_WRITE_ERROR_PREFIX: &str = "error:";
 
 impl AuditSink for V2SqliteSink {
     fn write_blob(&self, content: &[u8]) -> String {

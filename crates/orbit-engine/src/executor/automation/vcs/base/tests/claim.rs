@@ -25,12 +25,6 @@ use super::super::super::required::command::{VALIDATION_TIMEOUT_MS, run_required
 use super::super::claim::failure_identities;
 #[cfg(unix)]
 use super::super::claim::{BaseFailureVerdict, BaseReplay, ReplayBudget, verify_base_failure};
-#[cfg(unix)]
-#[cfg(unix)]
-struct Host;
-
-#[cfg(unix)]
-impl crate::test_support::NullRuntimeHost for Host {}
 
 // These comparisons exercise verdicts and caches, not host scheduling speed.
 // Allow real setup time instead of requiring a one-second base checkout.
@@ -38,6 +32,13 @@ impl crate::test_support::NullRuntimeHost for Host {}
 // Git preparation, subsequent base runs and cleanup still use real time.
 #[cfg(unix)]
 const COMPARISON_WINDOW: Duration = Duration::from_secs(60);
+
+#[cfg(unix)]
+#[cfg(unix)]
+struct Host;
+
+#[cfg(unix)]
+impl crate::test_support::NullRuntimeHost for Host {}
 
 #[cfg(unix)]
 fn cut_ready_process<T>(ready: PathBuf, operation: impl FnOnce() -> T) -> T {

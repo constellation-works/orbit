@@ -235,10 +235,10 @@ pub(super) fn run_fan_out(
     // first worker message. An ordinary failure earlier in the batch must
     // not hide a provider failure and leave the next routine tick unheld.
     Ok(StepOutcome {
-        failure_code: (!block_ok).then_some(first_failure_code).flatten(),
         success: block_ok,
         output: collected_value,
         message: (!block_ok).then_some(first_failure).flatten(),
+        failure_code: (!block_ok).then_some(first_failure_code).flatten(),
     })
 }
 

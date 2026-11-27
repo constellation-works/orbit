@@ -66,6 +66,7 @@ pub(in crate::executor::automation::vcs) enum CheckReadGap {
     Unavailable(String),
     Deferred(Box<DeferredLogRead>),
 }
+
 impl From<String> for CheckReadGap {
     fn from(reason: String) -> Self {
         Self::Unavailable(reason)
@@ -128,6 +129,17 @@ pub(in crate::executor::automation::vcs) struct BaseComparison<'a, H: ?Sized> {
     pub(in crate::executor::automation::vcs) tip_jobs: CommitJobs,
 }
 
+impl DeferredLogRead {
+    pub(super) fn error(&self) -> OrbitError {
+        OrbitError::PrivateVcs(Box::new(orbit_common::PrivateVcsFailure {
+            operation: super::super::operations::CI_JOB_LOG.into(),
+            class: orbit_common::PrivateVcsFailureClass::Other,
+            message: self.reason.clone(),
+            read_throttle: Some(self.throttle.clone()),
+        }))
+    }
+}
+
 pub(super) fn prerequisite_log<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -155,17 +167,6 @@ pub(super) fn prerequisite_log<H: RuntimeHost + ?Sized>(
             None => CheckReadGap::Unavailable(reason),
         }
     })
-}
-
-impl DeferredLogRead {
-    pub(super) fn error(&self) -> OrbitError {
-        OrbitError::PrivateVcs(Box::new(orbit_common::PrivateVcsFailure {
-            operation: super::super::operations::CI_JOB_LOG.into(),
-            class: orbit_common::PrivateVcsFailureClass::Other,
-            message: self.reason.clone(),
-            read_throttle: Some(self.throttle.clone()),
-        }))
-    }
 }
 
 /// Read the failed jobs behind `failed` on `head`, the exact commit the

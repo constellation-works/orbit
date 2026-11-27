@@ -5,6 +5,42 @@ use orbit_types::workflow::{
 use super::super::*;
 use super::types;
 
+/// Keys whose value names the provider, crew or model a step ran on.
+const MODEL_IDENTITY_KEYS: [&str; 13] = [
+    "model",
+    "models",
+    "provider",
+    "crew",
+    "crew_name",
+    "crew_account",
+    "crew_draw",
+    "crew_draws",
+    "argv_redacted",
+    "agent_execution_id",
+    "effort",
+    "reasoning_effort",
+    "auto_effort",
+];
+
+/// What stands in for a withheld crew or model name inside evidence text.
+const WITHHELD_MODEL: &str = "[implementer model withheld]";
+
+/// Packet fields that carry the failed run's own evidence. The ids, paths and
+/// step lists Orbit set itself are never rewritten.
+const EVIDENCE_KEYS: [&str; 6] = [
+    "error_message",
+    "failed_step_input",
+    "log_tail",
+    "required_check_failures",
+    "step_outputs",
+    "step_recovery_attempts",
+];
+
+pub(super) enum FinalRecoveryInput {
+    Ready(Value),
+    Wait(String),
+}
+
 /// The one task this run carries, from `task_id` or a one-element `task_ids`.
 pub(super) fn single_task_id(input: &Value) -> Option<String> {
     let non_empty = |value: &Value| {
@@ -45,11 +81,6 @@ pub(super) fn run_worktree(
             base_sha: text(output, "base_sha"),
         })
     })
-}
-
-pub(super) enum FinalRecoveryInput {
-    Ready(Value),
-    Wait(String),
 }
 
 pub(super) fn final_recovery_input(
@@ -141,26 +172,6 @@ pub(super) fn final_recovery_input(
     Ok(FinalRecoveryInput::Ready(input))
 }
 
-/// Keys whose value names the provider, crew or model a step ran on.
-const MODEL_IDENTITY_KEYS: [&str; 13] = [
-    "model",
-    "models",
-    "provider",
-    "crew",
-    "crew_name",
-    "crew_account",
-    "crew_draw",
-    "crew_draws",
-    "argv_redacted",
-    "agent_execution_id",
-    "effort",
-    "reasoning_effort",
-    "auto_effort",
-];
-
-/// What stands in for a withheld crew or model name inside evidence text.
-const WITHHELD_MODEL: &str = "[implementer model withheld]";
-
 /// Leave the implementer's crew and model out of the recovery packet, so the
 /// recovery agent attributes fault from the evidence alone [model ranking
 /// §5.2]: drop every [`MODEL_IDENTITY_KEYS`] field from the step evidence and
@@ -197,17 +208,6 @@ fn withhold_implementer_model(input: &mut Value, run_input: &Value) {
         }
     }
 }
-
-/// Packet fields that carry the failed run's own evidence. The ids, paths and
-/// step lists Orbit set itself are never rewritten.
-const EVIDENCE_KEYS: [&str; 6] = [
-    "error_message",
-    "failed_step_input",
-    "log_tail",
-    "required_check_failures",
-    "step_outputs",
-    "step_recovery_attempts",
-];
 
 fn collect_model_names(value: Option<&Value>, names: &mut std::collections::BTreeSet<String>) {
     match value {

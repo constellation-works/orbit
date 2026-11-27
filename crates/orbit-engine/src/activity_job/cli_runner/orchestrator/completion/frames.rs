@@ -6,6 +6,16 @@ use orbit_agent::{
 };
 use serde_json::Value;
 
+/// The provider-failure predicates both response-correction guards share: a
+/// correction must never relabel a provider-owned failure as a formatting issue.
+pub(super) const PROVIDER_FAILURE_PREDICATES: [fn(&str) -> bool; 5] = [
+    provider_authentication_failure,
+    provider_usage_limit,
+    provider_quota_exceeded,
+    provider_capacity_exhausted,
+    provider_content_refusal,
+];
+
 /// Stdout's JSON frames, for the provider-owned failure readers below.
 ///
 /// A slice `StreamDeserializer` truncates its input at the first parse error,
@@ -69,16 +79,6 @@ pub(super) fn provider_failure_diagnostic(provider: &str, stdout: &[u8]) -> Opti
         })
         .last()
 }
-
-/// The provider-failure predicates both response-correction guards share: a
-/// correction must never relabel a provider-owned failure as a formatting issue.
-pub(super) const PROVIDER_FAILURE_PREDICATES: [fn(&str) -> bool; 5] = [
-    provider_authentication_failure,
-    provider_usage_limit,
-    provider_quota_exceeded,
-    provider_capacity_exhausted,
-    provider_content_refusal,
-];
 
 /// Claude's exact formatting-only terminal, never quoted assistant/tool content.
 /// Unlike diagnostic frame readers, this requires a complete JSON stream with

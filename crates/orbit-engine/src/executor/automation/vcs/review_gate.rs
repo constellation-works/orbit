@@ -50,6 +50,32 @@ pub struct CandidateIdentity {
     pub commits: Vec<CommitIdentity>,
 }
 
+/// What a managed landing looks like against the reviewed candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LandedFacts {
+    /// The integration branch immediately before the landing span.
+    pub base_at_landing: SourceRevision,
+    pub is_candidate_commit: bool,
+    pub parents: usize,
+    pub span_commits: usize,
+}
+
+/// One required validation command's result, run exactly as the delivery
+/// validation steps run it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequiredValidationRun {
+    pub command: String,
+    pub passed: bool,
+    pub exit_code: i32,
+    pub timed_out: bool,
+    /// The raw command failure classification, absent when it passed without
+    /// deferring execution.
+    pub failure_kind: Option<RequiredValidationFailureKind>,
+    pub output: String,
+    /// How the validation environment was resolved.
+    pub environment: serde_json::Value,
+}
+
 /// Resolve a commit-ish to its commit and tree ids.
 pub fn revision(
     process_env: &orbit_common::Env,
@@ -419,16 +445,6 @@ pub fn path_text_at(
     Ok(Some(String::from_utf8_lossy(&outcome.stdout).into_owned()))
 }
 
-/// What a managed landing looks like against the reviewed candidate.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LandedFacts {
-    /// The integration branch immediately before the landing span.
-    pub base_at_landing: SourceRevision,
-    pub is_candidate_commit: bool,
-    pub parents: usize,
-    pub span_commits: usize,
-}
-
 /// Whether `ancestor` is `descendant` or in its history. An object the
 /// checkout does not hold is not contained.
 pub fn contains_commit(
@@ -628,22 +644,6 @@ pub fn landed_candidate_facts(
     })
 }
 
-/// One required validation command's result, run exactly as the delivery
-/// validation steps run it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RequiredValidationRun {
-    pub command: String,
-    pub passed: bool,
-    pub exit_code: i32,
-    pub timed_out: bool,
-    /// The raw command failure classification, absent when it passed without
-    /// deferring execution.
-    pub failure_kind: Option<RequiredValidationFailureKind>,
-    pub output: String,
-    /// How the validation environment was resolved.
-    pub environment: serde_json::Value,
-}
-
 /// Run one required validation command in `workspace_path` with the shared
 /// validation runner: the same shell, environment, timeout and failure
 /// classification as delivery validation.
@@ -659,13 +659,15 @@ pub fn run_required_validation<H: crate::context::RuntimeHost + ?Sized>(
         None,
         super::required::command::VALIDATION_TIMEOUT_MS,
     )?;
+    let failure_kind = run.failure_kind();
+    let environment = run.environment_record();
     Ok(RequiredValidationRun {
-        failure_kind: run.failure_kind(),
-        environment: run.environment_record(),
         command: run.command,
         passed: run.passed,
         exit_code: run.exit_code,
         timed_out: run.timed_out,
+        failure_kind,
         output: run.output,
+        environment,
     })
 }

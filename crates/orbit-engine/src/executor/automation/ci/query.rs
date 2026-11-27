@@ -136,22 +136,6 @@ impl RemoteBranchHeads {
     }
 }
 
-// pub(super) widened for sibling-layout tests in ci/tests/query.rs
-fn parse_remote_branch_heads(output: &str) -> BTreeMap<String, String> {
-    output
-        .lines()
-        .filter_map(|line| {
-            let (sha, reference) = line.split_once('\t')?;
-            let branch = reference.strip_prefix("refs/heads/")?;
-            let sha = sha.trim();
-            if sha.is_empty() || branch.is_empty() {
-                return None;
-            }
-            Some((branch.to_string(), sha.to_string()))
-        })
-        .collect()
-}
-
 /// The reads the CI stages are allowed to make.
 ///
 /// A trait rather than free functions so the stages can be exercised against
@@ -456,6 +440,22 @@ impl CiQueries for HostCiQueries {
             descendant,
         )
     }
+}
+
+// pub(super) widened for sibling-layout tests in ci/tests/query.rs
+fn parse_remote_branch_heads(output: &str) -> BTreeMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (sha, reference) = line.split_once('\t')?;
+            let branch = reference.strip_prefix("refs/heads/")?;
+            let sha = sha.trim();
+            if sha.is_empty() || branch.is_empty() {
+                return None;
+            }
+            Some((branch.to_string(), sha.to_string()))
+        })
+        .collect()
 }
 
 /// Bound and redact one test fixture log, scanning it before truncation.

@@ -4,6 +4,28 @@ use orbit_types::workflow::activity_job::ScriptOutputSet;
 
 use super::*;
 
+/// Marker on a compound branch checkpoint. A target branch stores its raw
+/// output; a loop, fan-out, or nested parallel stores this envelope so a
+/// replay can put back every pipeline entry the branch exposed. A compound
+/// checkpoint written before the envelope existed has no marker and is
+/// replayed, because that raw output does not carry the nested entries.
+const COMPOUND_BRANCH_CHECKPOINT_KIND: &str = "compound_branch";
+
+/// Marker on the checkpoint of a branch (target or compound) whose script
+/// steps kept output files. Beside the output and exposed entries it holds
+/// `script_output_sets`, the exact descriptors behind each entry's
+/// `steps.<id>.files`, keyed by pipeline key. A branch whose scripts kept no
+/// files keeps the target or compound shape above, unchanged.
+const SCRIPT_BRANCH_CHECKPOINT_KIND: &str = "script_branch";
+
+/// Exposed pipeline entries and the output sets behind them, as a script
+/// branch checkpoint carries them.
+type ScriptBranchParts = (
+    Value,
+    serde_json::Map<String, Value>,
+    BTreeMap<String, ScriptOutputSet>,
+);
+
 pub(super) fn run_parallel(
     step: &JobV2Step,
     block: &ParallelBlock,
@@ -168,29 +190,15 @@ pub(super) fn run_parallel(
     record_pipeline(ctx, &step.id, out.clone());
 
     Ok(StepOutcome {
-        failure_code: (!block_ok).then_some(first_failure_code).flatten(),
         success: block_ok,
         output: out,
         // A failed join keeps the first branch message, preferring a provider
         // diagnostic, so provider-limit and blocker markers reach retry, final
         // recovery and run finalization like a failed fan-out's.
         message: (!block_ok).then_some(first_failure).flatten(),
+        failure_code: (!block_ok).then_some(first_failure_code).flatten(),
     })
 }
-
-/// Marker on a compound branch checkpoint. A target branch stores its raw
-/// output; a loop, fan-out, or nested parallel stores this envelope so a
-/// replay can put back every pipeline entry the branch exposed. A compound
-/// checkpoint written before the envelope existed has no marker and is
-/// replayed, because that raw output does not carry the nested entries.
-const COMPOUND_BRANCH_CHECKPOINT_KIND: &str = "compound_branch";
-
-/// Marker on the checkpoint of a branch (target or compound) whose script
-/// steps kept output files. Beside the output and exposed entries it holds
-/// `script_output_sets`, the exact descriptors behind each entry's
-/// `steps.<id>.files`, keyed by pipeline key. A branch whose scripts kept no
-/// files keeps the target or compound shape above, unchanged.
-const SCRIPT_BRANCH_CHECKPOINT_KIND: &str = "script_branch";
 
 /// The recorded output of a succeeded branch a resumed auto-task job
 /// restores. Target and compound branches are both restored whole. A
@@ -266,10 +274,10 @@ fn restored_branch(
     }
     record(&branch.id, output.clone());
     Ok(Some(StepOutcome {
-        failure_code: None,
         success: true,
         output,
         message: None,
+        failure_code: None,
     }))
 }
 
@@ -283,14 +291,6 @@ fn unavailable_branch_sets(step: &JobV2Step, branch: &JobV2Step, reason: &str) -
         ),
     }
 }
-
-/// Exposed pipeline entries and the output sets behind them, as a script
-/// branch checkpoint carries them.
-type ScriptBranchParts = (
-    Value,
-    serde_json::Map<String, Value>,
-    BTreeMap<String, ScriptOutputSet>,
-);
 
 /// Split a script branch checkpoint. `None` when the value is not that
 /// envelope; `Some(Err)` when it is but a part is missing or unreadable,

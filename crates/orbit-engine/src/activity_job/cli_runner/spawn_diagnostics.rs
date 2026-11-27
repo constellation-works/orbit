@@ -14,6 +14,10 @@ use orbit_types::workflow::activity_job::Provider;
 
 use super::super::dispatcher::ResolvedSandbox;
 
+/// Text `sandbox-exec` writes when the kernel refuses to apply the compiled
+/// profile at all. It is the wrapper's own failure, not the confined program's.
+const MACOS_SANDBOX_APPLY_FAILURE_MARKER: &str = "sandbox_apply: Operation not permitted";
+
 /// Turn a child-reported EROFS into a policy-owned denial when the failing
 /// program included the attempted path in stderr. This runs after the real
 /// Bubblewrap child exits, so it covers the production invocation boundary
@@ -97,10 +101,6 @@ fn keychain_auth_failure_marker(provider: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-
-/// Text `sandbox-exec` writes when the kernel refuses to apply the compiled
-/// profile at all. It is the wrapper's own failure, not the confined program's.
-const MACOS_SANDBOX_APPLY_FAILURE_MARKER: &str = "sandbox_apply: Operation not permitted";
 
 /// Name a `sandbox-exec` wrapper that could not apply Orbit's profile.
 ///

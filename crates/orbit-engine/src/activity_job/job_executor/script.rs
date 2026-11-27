@@ -125,20 +125,20 @@ fn settle_script_run(
                     emit_script_execution(ctx, &step.id, record);
                     record_pipeline_with_files(ctx, &step.id, output.clone(), &set);
                     Ok(StepOutcome {
-                        failure_code: None,
                         success: true,
                         output,
                         message: None,
+                        failure_code: None,
                     })
                 }
                 ScriptStepOutputs::None => {
                     emit_script_execution(ctx, &step.id, record);
                     record_pipeline(ctx, &step.id, output.clone());
                     Ok(StepOutcome {
-                        failure_code: None,
                         success: true,
                         output,
                         message: None,
+                        failure_code: None,
                     })
                 }
             },
@@ -186,10 +186,10 @@ fn settle_script_run(
     });
     record_pipeline(ctx, &step.id, output.clone());
     Ok(StepOutcome {
-        failure_code: None,
         success: false,
         output,
         message: Some(message),
+        failure_code: None,
     })
 }
 

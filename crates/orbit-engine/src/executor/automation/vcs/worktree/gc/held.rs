@@ -22,14 +22,17 @@ use std::path::{Component, Path};
 #[cfg(target_os = "linux")]
 const HELD_FLAGS: libc::c_int =
     libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+
 /// Darwin has no O_PATH. Require read access at open time and fail closed
 /// otherwise; fchmod can restore owner write/search access through this fd.
 /// Do not emulate O_PATH with a checked path or a /dev/fd path.
 #[cfg(target_os = "macos")]
 const HELD_FLAGS: libc::c_int =
     libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+
 /// Listing reopens a held directory's own `.`, which is never a symlink.
 const LIST_FLAGS: libc::c_int = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC;
+
 const OWNER_RWX: libc::mode_t = 0o700;
 
 /// The device and inode an entry had when it was observed.
@@ -50,12 +53,6 @@ pub(super) struct HeldDirectory {
     fd: OwnedFd,
     identity: Identity,
     mode: libc::mode_t,
-}
-
-/// One path component as the C string the `*at` calls take.
-pub(super) fn entry_name(name: &OsStr) -> io::Result<CString> {
-    CString::new(name.as_bytes())
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
 
 impl HeldDirectory {
@@ -227,6 +224,12 @@ impl Drop for DirectoryStream {
         // SAFETY: fdopendir created this stream and it is closed only here.
         unsafe { libc::closedir(self.0) };
     }
+}
+
+/// One path component as the C string the `*at` calls take.
+pub(super) fn entry_name(name: &OsStr) -> io::Result<CString> {
+    CString::new(name.as_bytes())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
 
 fn replaced(name: &CStr) -> io::Error {

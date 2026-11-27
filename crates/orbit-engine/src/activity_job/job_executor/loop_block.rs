@@ -82,10 +82,10 @@ pub(super) fn run_loop(
             let outcome = run_step(body, &loop_ctx)?;
             if !outcome.success {
                 return Ok(StepOutcome {
-                    failure_code: outcome.failure_code,
                     success: false,
                     output: outcome.output,
                     message: outcome.message,
+                    failure_code: outcome.failure_code,
                 });
             }
             last_output = outcome.output;
@@ -150,23 +150,23 @@ pub(super) fn run_loop(
 
     if exhausted && block.fail_when_exhausted {
         return Ok(StepOutcome {
-            failure_code: Some(orbit_types::workflow::StepFailureCode::Other(
-                orbit_types::workflow::LOOP_EXHAUSTED_ERROR_CODE.to_string(),
-            )),
             success: false,
             output: out,
             message: Some(format!(
                 "loop step `{}` exhausted {} iterations without break_when holding (max_iterations {})",
                 step.id, last_iter, block.max_iterations
             )),
+            failure_code: Some(orbit_types::workflow::StepFailureCode::Other(
+                orbit_types::workflow::LOOP_EXHAUSTED_ERROR_CODE.to_string(),
+            )),
         });
     }
 
     Ok(StepOutcome {
-        failure_code: None,
         success: true,
         output: out,
         message: None,
+        failure_code: None,
     })
 }
 

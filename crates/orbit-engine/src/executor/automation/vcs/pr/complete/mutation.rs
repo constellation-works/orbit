@@ -16,6 +16,19 @@ use super::super::super::operations;
 use super::super::answers::ReviewedMergeOutcome;
 use super::super::merge::{MergeStrategy, PermittedMerge, resolve_permitted_merge};
 
+/// What completion's durable task history allows a failed read to become.
+enum CompletionHistory {
+    /// No repair or completion mutation provenance: the host may authenticate
+    /// the unchanged publication and retry.
+    ReadOnly,
+    /// Repair, reservation, completion rebase or source-repair provenance,
+    /// but no merge or auto-merge mutation: no authenticated retry, though no
+    /// merge was requested on the forge.
+    Repaired,
+    /// A merge or auto-merge mutation whose outcome must be reconciled.
+    Mutated,
+}
+
 /// [ORB-16307] A failed authenticated read made before any completion mutation:
 /// the PR status, required-check and merge-policy reads, and the base-refresh
 /// and infrastructure prerequisite reads. Only a transport failure within the
@@ -108,19 +121,6 @@ pub(crate) fn forge_observation_hold_message(cause: &str) -> String {
          reads the forge again",
         DeliveryRefusal::ForgeObservationUnavailable.error_code()
     )
-}
-
-/// What completion's durable task history allows a failed read to become.
-enum CompletionHistory {
-    /// No repair or completion mutation provenance: the host may authenticate
-    /// the unchanged publication and retry.
-    ReadOnly,
-    /// Repair, reservation, completion rebase or source-repair provenance,
-    /// but no merge or auto-merge mutation: no authenticated retry, though no
-    /// merge was requested on the forge.
-    Repaired,
-    /// A merge or auto-merge mutation whose outcome must be reconciled.
-    Mutated,
 }
 
 /// Whether a `pr_completion_mutation_started` entry records a merge or

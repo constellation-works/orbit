@@ -66,6 +66,14 @@ pub(super) struct Held {
     pub(super) views: BTreeMap<u64, Value>,
 }
 
+#[derive(Default)]
+struct Budget {
+    ancestry_checks: usize,
+    view_reads: usize,
+    log_reads: usize,
+    comparisons_skipped: usize,
+}
+
 /// Move each current failure with an in-flight push successor at a descendant
 /// commit out of `current`, unless it reproduced on its previous completed run
 /// or has been held past the window. A failure whose ancestry cannot be
@@ -207,14 +215,6 @@ pub(super) fn hold_for_in_flight_descendants<Q: CiQueries + ?Sized>(
         ));
     }
     held
-}
-
-#[derive(Default)]
-struct Budget {
-    ancestry_checks: usize,
-    view_reads: usize,
-    log_reads: usize,
-    comparisons_skipped: usize,
 }
 
 /// The previous completed run this red run reproduced on: red itself, at the

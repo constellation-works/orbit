@@ -35,6 +35,13 @@ use orbit_common::env_vars::ORBIT_PROC_PROGRAM_POLICY as PROC_PROGRAM_POLICY_ENV
 /// `ORBIT_ACTIVITY_TOOLS` as unrestricted.
 const NO_CALLABLE_TOOLS_ENTRY: &str = "orbit.activity-policy.none";
 
+/// The tools one invocation may call, with claimed mode applied.
+pub(super) struct ActivityToolGrant {
+    pub(super) tool_policy: ActivityToolPolicyMode,
+    pub(super) tool_disallow_list: Option<Vec<String>>,
+    pub(super) activity_tools: ResolvedActivityTools,
+}
+
 /// Last pre-migration shipped program lists. An older MCP server understands
 /// only `ORBIT_PROC_ALLOWED_PROGRAMS`, so these preserve the old bound while
 /// a new orchestrator and an old server coexist. Custom deny-mode activities
@@ -151,13 +158,6 @@ pub(super) fn claimed_tool_disallow_list(
         }
     }
     Some(list)
-}
-
-/// The tools one invocation may call, with claimed mode applied.
-pub(super) struct ActivityToolGrant {
-    pub(super) tool_policy: ActivityToolPolicyMode,
-    pub(super) tool_disallow_list: Option<Vec<String>>,
-    pub(super) activity_tools: ResolvedActivityTools,
 }
 
 /// Resolve the activity's tool grant for these tasks, removing

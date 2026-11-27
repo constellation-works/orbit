@@ -66,6 +66,24 @@ impl std::fmt::Display for PrMergeBlock {
     }
 }
 
+/// Review and readable-rollup refusals shared by landing and auto-fix.
+/// Display is diagnostic only; recovery authority matches the variants.
+#[derive(Debug, thiserror::Error)]
+pub(in crate::executor::automation::vcs) enum BlockedCheckRefusal {
+    #[error("review is required ({0})")]
+    ReviewRequired(String),
+    #[error("review decision is unavailable")]
+    ReviewUnavailable,
+    #[error("status check rollup is unreadable{suffix}", suffix = .0.as_ref().map(|name| format!(" for '{name}'")).unwrap_or_default())]
+    RollupUnreadable(Option<String>),
+}
+
+impl BlockedCheckRefusal {
+    pub(in crate::executor::automation::vcs) fn delivery_refusal(&self) -> Option<DeliveryRefusal> {
+        matches!(self, Self::ReviewRequired(_)).then_some(DeliveryRefusal::RequirementsUnsatisfied)
+    }
+}
+
 pub(in crate::executor::automation::vcs) fn classify_pr_state(
     pull_request: &PullRequestStatus,
 ) -> PrMergeState {
@@ -124,24 +142,6 @@ pub(in crate::executor::automation::vcs) fn classify_pr_state(
         // An empty or unrecognized merge state is treated as still settling:
         // GitHub reports UNKNOWN while it computes mergeability.
         _ => PrMergeState::Pending,
-    }
-}
-
-/// Review and readable-rollup refusals shared by landing and auto-fix.
-/// Display is diagnostic only; recovery authority matches the variants.
-#[derive(Debug, thiserror::Error)]
-pub(in crate::executor::automation::vcs) enum BlockedCheckRefusal {
-    #[error("review is required ({0})")]
-    ReviewRequired(String),
-    #[error("review decision is unavailable")]
-    ReviewUnavailable,
-    #[error("status check rollup is unreadable{suffix}", suffix = .0.as_ref().map(|name| format!(" for '{name}'")).unwrap_or_default())]
-    RollupUnreadable(Option<String>),
-}
-
-impl BlockedCheckRefusal {
-    pub(in crate::executor::automation::vcs) fn delivery_refusal(&self) -> Option<DeliveryRefusal> {
-        matches!(self, Self::ReviewRequired(_)).then_some(DeliveryRefusal::RequirementsUnsatisfied)
     }
 }
 

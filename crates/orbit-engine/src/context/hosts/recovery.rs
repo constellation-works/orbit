@@ -1,5 +1,9 @@
 //! Step and final recovery requests, admission, and decisions.
 
+/// Schema version of the decision file a `step_failure_recovery` invocation
+/// writes into its [`StepRecoveryDecisionSlot`].
+pub const STEP_RECOVERY_DECISION_SCHEMA_VERSION: u32 = 1;
+
 /// Whether a step-recovery hook may dispatch [ORB-11332].
 ///
 /// The test-only `NullRuntimeHost` default answers `Allowed`. `Reserved` admits the attempt
@@ -22,10 +26,6 @@ pub struct RebaseRecoveryAttemptScope {
     pub head_sha_before: String,
     pub target_base_sha: String,
 }
-
-/// Schema version of the decision file a `step_failure_recovery` invocation
-/// writes into its [`StepRecoveryDecisionSlot`].
-pub const STEP_RECOVERY_DECISION_SCHEMA_VERSION: u32 = 1;
 
 /// The one `step_failure_recovery` invocation a decision slot is allocated
 /// for: its run, failed step, failed attempt and assigned worktree.
@@ -131,36 +131,6 @@ pub struct PublishedCompletionObservation {
     pub validation_unchanged: bool,
     /// Present when review or completion policy differs from the capture.
     pub policy_change: Option<String>,
-}
-
-/// Choose the observation admission from evidence the caller has already read.
-///
-/// A stopped run with an unchanged candidate, validation and policy is
-/// requeued. That is not a policy change and it does not grant a merge.
-/// A process-owned run, including a retry descendant, retries once in the
-/// worker. A changed candidate, changed validation, or a foreign live owner
-/// is refused. A policy change keeps the current-policy requeue.
-pub fn admit_published_completion_observation(
-    facts: PublishedCompletionObservation,
-) -> Result<CompletionObservationAdmission, &'static str> {
-    if !facts.candidate_unchanged {
-        return Err("completion candidate or checkout changed");
-    }
-    if !facts.validation_unchanged {
-        return Err("native validation candidate or effective policy changed");
-    }
-    if let Some(reason) = facts.policy_change {
-        return Ok(CompletionObservationAdmission::PolicyChanged { reason });
-    }
-    match facts.liveness {
-        CompletionOwnerLiveness::ProcessOwned => Ok(CompletionObservationAdmission::Retry),
-        CompletionOwnerLiveness::Stopped => Ok(CompletionObservationAdmission::Stopped {
-            reason: "the published candidate, policy and validation are unchanged".to_string(),
-        }),
-        CompletionOwnerLiveness::ForeignLive => {
-            Err("completion no longer belongs to this active owner")
-        }
-    }
 }
 
 /// Host authentication of a published completion after a transient read failure.
@@ -277,4 +247,34 @@ pub enum PrAutoFixAdmission {
     /// No repair may run here, for this reason: no usable crew, or a host
     /// that does not own the task's record.
     Refused(String),
+}
+
+/// Choose the observation admission from evidence the caller has already read.
+///
+/// A stopped run with an unchanged candidate, validation and policy is
+/// requeued. That is not a policy change and it does not grant a merge.
+/// A process-owned run, including a retry descendant, retries once in the
+/// worker. A changed candidate, changed validation, or a foreign live owner
+/// is refused. A policy change keeps the current-policy requeue.
+pub fn admit_published_completion_observation(
+    facts: PublishedCompletionObservation,
+) -> Result<CompletionObservationAdmission, &'static str> {
+    if !facts.candidate_unchanged {
+        return Err("completion candidate or checkout changed");
+    }
+    if !facts.validation_unchanged {
+        return Err("native validation candidate or effective policy changed");
+    }
+    if let Some(reason) = facts.policy_change {
+        return Ok(CompletionObservationAdmission::PolicyChanged { reason });
+    }
+    match facts.liveness {
+        CompletionOwnerLiveness::ProcessOwned => Ok(CompletionObservationAdmission::Retry),
+        CompletionOwnerLiveness::Stopped => Ok(CompletionObservationAdmission::Stopped {
+            reason: "the published candidate, policy and validation are unchanged".to_string(),
+        }),
+        CompletionOwnerLiveness::ForeignLive => {
+            Err("completion no longer belongs to this active owner")
+        }
+    }
 }

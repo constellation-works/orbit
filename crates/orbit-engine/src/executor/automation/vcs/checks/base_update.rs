@@ -8,6 +8,24 @@ use orbit_types::plugin::is_full_commit_id;
 use super::super::git::{git_command_success, git_output};
 use super::super::pr_answers::PullRequestStatus;
 
+/// A pull request the forge reports merged, and the head its stopped
+/// delivery published.
+#[derive(Debug, Clone, Copy)]
+pub struct MergedBaseRefresh<'a> {
+    /// The exact head the delivery published and validated.
+    pub published_head: &'a str,
+    /// The head the pull request merged at.
+    pub merged_head: &'a str,
+    /// The pull request's source branch.
+    pub source_branch: &'a str,
+    /// The branch it merged into.
+    pub landing_branch: &'a str,
+    /// The pull request's number.
+    pub pull_request: u64,
+    /// The commit it merged as.
+    pub merge_commit: &'a str,
+}
+
 pub(super) fn contains(
     process_env: &orbit_common::Env,
     workspace: &Path,
@@ -359,24 +377,6 @@ fn merge_delivers_head(
         return Err("reported merge tree does not deliver this provider head".into());
     }
     Ok(parent)
-}
-
-/// A pull request the forge reports merged, and the head its stopped
-/// delivery published.
-#[derive(Debug, Clone, Copy)]
-pub struct MergedBaseRefresh<'a> {
-    /// The exact head the delivery published and validated.
-    pub published_head: &'a str,
-    /// The head the pull request merged at.
-    pub merged_head: &'a str,
-    /// The pull request's source branch.
-    pub source_branch: &'a str,
-    /// The branch it merged into.
-    pub landing_branch: &'a str,
-    /// The pull request's number.
-    pub pull_request: u64,
-    /// The commit it merged as.
-    pub merge_commit: &'a str,
 }
 
 /// Verify that a pull request merged at a head other than its published one

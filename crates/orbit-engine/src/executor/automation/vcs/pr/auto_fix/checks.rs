@@ -30,6 +30,72 @@ pub(in crate::executor::automation::vcs::pr) struct AutoFixPull<'a> {
     pub(in crate::executor::automation::vcs::pr) status: &'a PullRequestStatus,
 }
 
+/// What the shared CI retry decided for this poll.
+pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
+    /// Infrastructure pacing holds independently of the planner evidence deadline.
+    BackingOff(String),
+    /// The planner holds for the named reason. The caller bounds the hold:
+    /// past its deadline the failure goes to the repair path.
+    Waiting(String),
+    /// A rerun was reserved and sent on this poll. Do not admit a repair.
+    Retried,
+    /// The failure is not a CI retry. The caller may repair it.
+    NotEligible,
+    /// The retry budget is spent on stopped jobs or logged infrastructure
+    /// failures. The reason names the hold. Do not admit a repair.
+    Stopped(String),
+    /// The no-edit repair's rerun failed again, or its one rerun budget is
+    /// already spent; hold with the named typed delivery refusal instead of
+    /// failing.
+    Held {
+        refusal: DeliveryRefusal,
+        reason: String,
+    },
+    /// [ORB-26860] The no-edit repair's one rerun on the unchanged head
+    /// failed again, for the named reason. The caller holds as
+    /// `RepairDispatched` unless the failure is base-inherited and the head's
+    /// one base refresh runs.
+    NoEditRerunFailed(String),
+}
+
+/// What reading the failed checks on the pinned head decided.
+pub(in crate::executor::automation::vcs::pr) enum CheckRepair {
+    /// The hand-off failure once admitted, or the stop.
+    Ended(OrbitError),
+    /// The provider throttled a failed job's log read. Nothing was admitted
+    /// and no budget was spent.
+    ReadDeferred(DeferredLogRead),
+}
+
+/// The required failures on a head, with the head-bound read naming them.
+type RequiredFailures = (Vec<(Option<String>, String)>, RequiredChecks);
+
+/// A refusal of [`required_failures`], with the hold it deserves when the
+/// evidence is inconclusive rather than a verdict on the pull request.
+pub(super) struct RequiredFailuresStop {
+    reason: String,
+    hold: Option<DeliveryRefusal>,
+}
+
+impl RequiredFailuresStop {
+    fn held(refusal: DeliveryRefusal, reason: String) -> Self {
+        Self {
+            reason,
+            hold: Some(refusal),
+        }
+    }
+
+    /// The stop for `pr_number`: a typed hold when the evidence is
+    /// inconclusive, an ordinary stop otherwise.
+    fn into_error(self, pr_number: &str) -> OrbitError {
+        let error = verdict::stopped(pr_number, &self.reason);
+        match self.hold {
+            Some(refusal) => verdict::hold_auto_fix_stop(error, refusal),
+            None => error,
+        }
+    }
+}
+
 /// A required failure the base's own job already fails the same way, while
 /// the base branch has not moved past that commit, or has moved to a commit
 /// that cannot prove yet whether the base fixed it: its same job has not
@@ -314,34 +380,6 @@ pub(in crate::executor::automation::vcs::pr) fn failed_no_edit_rerun<H: RuntimeH
     }
 }
 
-/// What the shared CI retry decided for this poll.
-pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
-    /// Infrastructure pacing holds independently of the planner evidence deadline.
-    BackingOff(String),
-    /// The planner holds for the named reason. The caller bounds the hold:
-    /// past its deadline the failure goes to the repair path.
-    Waiting(String),
-    /// A rerun was reserved and sent on this poll. Do not admit a repair.
-    Retried,
-    /// The failure is not a CI retry. The caller may repair it.
-    NotEligible,
-    /// The retry budget is spent on stopped jobs or logged infrastructure
-    /// failures. The reason names the hold. Do not admit a repair.
-    Stopped(String),
-    /// The no-edit repair's rerun failed again, or its one rerun budget is
-    /// already spent; hold with the named typed delivery refusal instead of
-    /// failing.
-    Held {
-        refusal: DeliveryRefusal,
-        reason: String,
-    },
-    /// [ORB-26860] The no-edit repair's one rerun on the unchanged head
-    /// failed again, for the named reason. The caller holds as
-    /// `RepairDispatched` unless the failure is base-inherited and the head's
-    /// one base refresh runs.
-    NoEditRerunFailed(String),
-}
-
 /// Whether a repair of `head` on a task this run watches ended with no
 /// edit and no scope record. An unreadable history is no record.
 fn no_edit_repair_recorded<H: RuntimeHost + ?Sized>(
@@ -374,15 +412,6 @@ fn recorded_base_red<H: RuntimeHost + ?Sized>(
                 .any(|record| record.failed_head == head)
         })
     })
-}
-
-/// What reading the failed checks on the pinned head decided.
-pub(in crate::executor::automation::vcs::pr) enum CheckRepair {
-    /// The hand-off failure once admitted, or the stop.
-    Ended(OrbitError),
-    /// The provider throttled a failed job's log read. Nothing was admitted
-    /// and no budget was spent.
-    ReadDeferred(DeferredLogRead),
 }
 
 /// Read the failed checks on the pinned head and admit their repair.
@@ -539,9 +568,6 @@ pub(in crate::executor::automation::vcs::pr) fn base_tip_checks<H: RuntimeHost +
     )
 }
 
-/// The required failures on a head, with the head-bound read naming them.
-type RequiredFailures = (Vec<(Option<String>, String)>, RequiredChecks);
-
 /// The failed checks branch protection requires on `head_sha`. The rollup
 /// does not say which checks are required, and a `BLOCKED` state can come
 /// from a rule the rollup does not show, so an optional failure beside it
@@ -557,32 +583,6 @@ pub(super) fn required_failures<H: RuntimeHost + ?Sized>(
 ) -> Result<RequiredFailures, String> {
     classified_required_failures(host, workspace_path, pr_number, head_sha, failed)
         .map_err(|stop| stop.reason)
-}
-
-/// A refusal of [`required_failures`], with the hold it deserves when the
-/// evidence is inconclusive rather than a verdict on the pull request.
-pub(super) struct RequiredFailuresStop {
-    reason: String,
-    hold: Option<DeliveryRefusal>,
-}
-
-impl RequiredFailuresStop {
-    fn held(refusal: DeliveryRefusal, reason: String) -> Self {
-        Self {
-            reason,
-            hold: Some(refusal),
-        }
-    }
-
-    /// The stop for `pr_number`: a typed hold when the evidence is
-    /// inconclusive, an ordinary stop otherwise.
-    fn into_error(self, pr_number: &str) -> OrbitError {
-        let error = verdict::stopped(pr_number, &self.reason);
-        match self.hold {
-            Some(refusal) => verdict::hold_auto_fix_stop(error, refusal),
-            None => error,
-        }
-    }
 }
 
 fn classified_required_failures<H: RuntimeHost + ?Sized>(

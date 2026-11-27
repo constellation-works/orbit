@@ -1,8 +1,20 @@
 //! Finite supported REST-read commands and their trusted runner bindings.
+
 use super::prerequisite::unreadable;
 use orbit_common::OrbitError;
 use orbit_common::env_vars;
 use serde_json::Value;
+
+const STATE_PROJECTION: &str = "if .merged == true then \"state=merged\"\n  elif .state == \"open\" or .state == \"closed\" then \"state=\" + .state\n  else error(\"Unexpected pull request state\") end";
+
+/// Most sibling jobs one scope-gated job may wait for besides its root and
+/// scope. The form is finite: a longer list refuses.
+const MAX_SIBLING_NEEDS: usize = 4;
+
+enum LiveStateRead {
+    Strict,
+    FailSoft,
+}
 
 /// Bind the failed API step to the prerequisite's source, not arbitrary log
 /// text from an unrelated job/step. Certify every step the failed job repeats;
@@ -195,8 +207,6 @@ fn projected_api_read(command: &str) -> bool {
     !endpoint.contains('\'') && literal_api_read(&format!("gh api --method GET {endpoint}"))
 }
 
-const STATE_PROJECTION: &str = "if .merged == true then \"state=merged\"\n  elif .state == \"open\" or .state == \"closed\" then \"state=\" + .state\n  else error(\"Unexpected pull request state\") end";
-
 /// One fixed read, including its error path. Only the live response can emit
 /// open/closed/merged; failure discards stdout (including raw API error bodies)
 /// and emits unknown. Empty successful reads also emit unknown.
@@ -299,10 +309,6 @@ pub(super) fn pr_emission_job(workflow: &Value, id: &str) -> Result<(), OrbitErr
     }
 }
 
-/// Most sibling jobs one scope-gated job may wait for besides its root and
-/// scope. The form is finite: a longer list refuses.
-const MAX_SIBLING_NEEDS: usize = 4;
-
 /// Whether every extra `needs` entry of scope-gated job `id` is a distinct
 /// other job of this workflow in the plain two-need full form: not reusable,
 /// `needs` exactly `[root, scope]` and `if` exactly `full`, the dependent's own
@@ -336,11 +342,6 @@ fn scope_gated_siblings(
             && job.get("needs") == Some(&plain)
             && job.get("if").and_then(Value::as_str) == Some(full)
     })
-}
-
-enum LiveStateRead {
-    Strict,
-    FailSoft,
 }
 
 /// Every output an open PR can produce must admit the dependent job. In the

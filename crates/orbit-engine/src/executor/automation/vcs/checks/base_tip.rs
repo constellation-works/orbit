@@ -25,6 +25,63 @@ use super::jobs::{
 /// result before the evidence counts as missing.
 const BASE_WALK_LIMIT: usize = 8;
 
+/// The base branch's latest push jobs, read once per commit in one call.
+struct BaseHistory<'a, H: RuntimeHost + ?Sized> {
+    host: &'a H,
+    workspace: &'a Path,
+    base_branch: &'a str,
+    jobs: HashMap<String, Option<Vec<CiCommitJobEvidence>>>,
+}
+
+impl<H: RuntimeHost + ?Sized> BaseHistory<'_, H> {
+    /// The newest commit, from `start` back along first-parent history and
+    /// at most [`BASE_WALK_LIMIT`] commits, whose `job` ran to success or
+    /// failure, with that job. `None` when a same job has not concluded,
+    /// a commit lists that job more than once, a listing or the history
+    /// cannot be read, or no commit in the bound ran it to a result.
+    fn decisive(
+        &mut self,
+        process_env: &orbit_common::Env,
+        start: &str,
+        job: &CiCommitJobEvidence,
+    ) -> Option<(String, CiCommitJobEvidence)> {
+        let limit = format!("--max-count={BASE_WALK_LIMIT}");
+        let commits = git_output(
+            process_env,
+            self.workspace,
+            &["rev-list", "--first-parent", &limit, start],
+        )
+        .ok()?;
+        for commit in commits.split_whitespace() {
+            let (host, workspace, base_branch) = (self.host, self.workspace, self.base_branch);
+            let jobs = self
+                .jobs
+                .entry(commit.to_string())
+                .or_insert_with(|| latest_push_jobs(host, workspace, commit, base_branch))
+                .as_deref()?;
+            let matching = jobs
+                .iter()
+                .filter(|candidate| same_job(candidate, job))
+                .collect::<Vec<_>>();
+            match matching.as_slice() {
+                [] => {}
+                [found] if found.status.value() != Some(&CiJobStatus::Completed) => return None,
+                [found]
+                    if matches!(
+                        found.conclusion.value(),
+                        Some(CiJobConclusion::Success | CiJobConclusion::Failure)
+                    ) =>
+                {
+                    return Some((commit.to_string(), (*found).clone()));
+                }
+                [_] => {}
+                _ => return None,
+            }
+        }
+        None
+    }
+}
+
 /// Compare every required failure with the base's latest push jobs. A green
 /// base needs no historical fork-point logs. A red base needs the same
 /// emitted diagnostic; sharing a job name alone is not enough to suppress a
@@ -167,63 +224,6 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
         json!({"failed_head":head,"landed_base":tip,"base_branch":base_branch,"source":"latest_push","checks":evidence,
         "path":if red {"known_red_base"} else {"base_refresh"}}),
     ))
-}
-
-/// The base branch's latest push jobs, read once per commit in one call.
-struct BaseHistory<'a, H: RuntimeHost + ?Sized> {
-    host: &'a H,
-    workspace: &'a Path,
-    base_branch: &'a str,
-    jobs: HashMap<String, Option<Vec<CiCommitJobEvidence>>>,
-}
-
-impl<H: RuntimeHost + ?Sized> BaseHistory<'_, H> {
-    /// The newest commit, from `start` back along first-parent history and
-    /// at most [`BASE_WALK_LIMIT`] commits, whose `job` ran to success or
-    /// failure, with that job. `None` when a same job has not concluded,
-    /// a commit lists that job more than once, a listing or the history
-    /// cannot be read, or no commit in the bound ran it to a result.
-    fn decisive(
-        &mut self,
-        process_env: &orbit_common::Env,
-        start: &str,
-        job: &CiCommitJobEvidence,
-    ) -> Option<(String, CiCommitJobEvidence)> {
-        let limit = format!("--max-count={BASE_WALK_LIMIT}");
-        let commits = git_output(
-            process_env,
-            self.workspace,
-            &["rev-list", "--first-parent", &limit, start],
-        )
-        .ok()?;
-        for commit in commits.split_whitespace() {
-            let (host, workspace, base_branch) = (self.host, self.workspace, self.base_branch);
-            let jobs = self
-                .jobs
-                .entry(commit.to_string())
-                .or_insert_with(|| latest_push_jobs(host, workspace, commit, base_branch))
-                .as_deref()?;
-            let matching = jobs
-                .iter()
-                .filter(|candidate| same_job(candidate, job))
-                .collect::<Vec<_>>();
-            match matching.as_slice() {
-                [] => {}
-                [found] if found.status.value() != Some(&CiJobStatus::Completed) => return None,
-                [found]
-                    if matches!(
-                        found.conclusion.value(),
-                        Some(CiJobConclusion::Success | CiJobConclusion::Failure)
-                    ) =>
-                {
-                    return Some((commit.to_string(), (*found).clone()));
-                }
-                [_] => {}
-                _ => return None,
-            }
-        }
-        None
-    }
 }
 
 /// The jobs of the latest push run of each workflow on `commit` of

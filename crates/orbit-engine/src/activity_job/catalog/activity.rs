@@ -206,26 +206,6 @@ impl V2ActivityCatalog {
     }
 }
 
-/// The name a parse refusal is withdrawn under: the declared
-/// `metadata.name` when the refusal or the file itself still yields it,
-/// otherwise the conservative file-stem fallback for identities that
-/// cannot be recovered.
-fn withdrawn_activity_name(path: &Path, source: &AssetLoadError) -> String {
-    if let Some(name) = source.declared_activity_name() {
-        return name.to_string();
-    }
-    if let Some(name) = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|yaml| declared_activity_name_in_yaml(&yaml))
-    {
-        return name;
-    }
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or_default()
-        .to_string()
-}
-
 struct ActivityCatalogAdapter {
     skip_retired: bool,
 }
@@ -258,6 +238,26 @@ impl CatalogAdapter for ActivityCatalogAdapter {
             }
         }
     }
+}
+
+/// The name a parse refusal is withdrawn under: the declared
+/// `metadata.name` when the refusal or the file itself still yields it,
+/// otherwise the conservative file-stem fallback for identities that
+/// cannot be recovered.
+fn withdrawn_activity_name(path: &Path, source: &AssetLoadError) -> String {
+    if let Some(name) = source.declared_activity_name() {
+        return name.to_string();
+    }
+    if let Some(name) = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|yaml| declared_activity_name_in_yaml(&yaml))
+    {
+        return name;
+    }
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Load one activity YAML with the same parse and retired-schema rules the

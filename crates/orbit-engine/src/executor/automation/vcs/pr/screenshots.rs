@@ -24,7 +24,9 @@ use super::super::operations;
 /// Image width for a capture at most this many pixels wide: a phone-sized
 /// viewport renders narrower than a desktop one.
 const NARROW_VIEWPORT_MAX: u32 = 480;
+
 const NARROW_IMAGE_WIDTH: u32 = 200;
+
 const WIDE_IMAGE_WIDTH: u32 = 420;
 
 /// What the body renders under the screenshots heading.
@@ -38,6 +40,26 @@ pub(super) enum Screenshots {
     /// The section is on: its rendered table.
     Table(String),
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Phase {
+    Before,
+    After,
+}
+
+/// One publishable screenshot artifact.
+struct Shot {
+    /// The name under `screenshots/`, which is also its path in the commit.
+    file: String,
+    view: String,
+    theme: String,
+    width: u32,
+    phase: Phase,
+    content: Vec<u8>,
+}
+
+/// A table row's view, viewport width (wider first) and theme.
+type RowKey<'a> = (&'a str, Reverse<u32>, &'a str);
 
 /// Publish the task's screenshots when the section applies to this delivery,
 /// and return what the body renders. Only a single-task delivery has the
@@ -113,23 +135,6 @@ fn publish<H: RuntimeHost + ?Sized>(
         commit_sha,
         shots,
     )))
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Phase {
-    Before,
-    After,
-}
-
-/// One publishable screenshot artifact.
-struct Shot {
-    /// The name under `screenshots/`, which is also its path in the commit.
-    file: String,
-    view: String,
-    theme: String,
-    width: u32,
-    phase: Phase,
-    content: Vec<u8>,
 }
 
 /// The task's publishable screenshots, in artifact path order. Anything that
@@ -274,9 +279,6 @@ fn git_stdin(
     }
     Ok(String::from_utf8_lossy(&outcome.stdout).trim().to_string())
 }
-
-/// A table row's view, viewport width (wider first) and theme.
-type RowKey<'a> = (&'a str, Reverse<u32>, &'a str);
 
 /// One row per view, width and theme, views in name order and wider
 /// viewports first, with a Before and an After column. The row names the

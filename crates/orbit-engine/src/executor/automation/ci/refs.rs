@@ -10,6 +10,10 @@ use super::optional_input_string;
 use super::partition::{is_dependabot_update, run_branch, run_is_completed, run_is_unsuccessful};
 use super::query::{CiQueries, RemoteBranchHeads};
 
+/// One closed-PR page is enough: it only has to reach back as far as the
+/// repository-wide run listing does, which is the newest 100 runs.
+const MAX_CLOSED_PULL_REQUESTS: u64 = 100;
+
 /// Which of the workspace's heads a run belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RefKind {
@@ -35,6 +39,14 @@ pub(super) struct ScannedRef {
     pub(super) head_sha: Option<String>,
     pub(super) pr_number: Option<Value>,
     pub(super) pr_url: Option<Value>,
+}
+
+pub(super) struct CandidateProbeResults {
+    pub(super) retired: std::collections::BTreeSet<String>,
+    /// Branches still on origin whose pull request was closed or merged at
+    /// the branch's current head, mapped to that pull request.
+    pub(super) closed: std::collections::BTreeMap<String, Value>,
+    pub(super) unverified: std::collections::BTreeMap<String, (String, String)>,
 }
 
 /// Work out which heads to scan.
@@ -152,18 +164,6 @@ pub(super) fn derive_refs<Q: CiQueries + ?Sized>(
     }
 
     Ok(refs)
-}
-
-/// One closed-PR page is enough: it only has to reach back as far as the
-/// repository-wide run listing does, which is the newest 100 runs.
-const MAX_CLOSED_PULL_REQUESTS: u64 = 100;
-
-pub(super) struct CandidateProbeResults {
-    pub(super) retired: std::collections::BTreeSet<String>,
-    /// Branches still on origin whose pull request was closed or merged at
-    /// the branch's current head, mapped to that pull request.
-    pub(super) closed: std::collections::BTreeMap<String, Value>,
-    pub(super) unverified: std::collections::BTreeMap<String, (String, String)>,
 }
 
 /// Branches that carry a red run but no longer exist on origin or whose pull

@@ -2,14 +2,19 @@ use orbit_types::workflow::activity_job::ScriptOutputSet;
 
 use super::*;
 
+pub(super) const CONFLICT_DIAGNOSTIC_KEYS: [&str; 2] = ["conflicting_paths", "conflicting_files"];
+
+/// The private key under which a wrapped entry keeps the full descriptor of
+/// the script output set behind its `files` view. Templates read `output`,
+/// `state` and `files` only, so this key is never rendered.
+const STEP_OUTPUT_SET_KEY: &str = "script_output_set";
+
 /// Outputs of completed steps keyed by step id (or a fan-in `collect` alias),
 /// stored in the `{ "output": raw }` shape the template engine reads. One
 /// `Arc` is shared by every template context built from it, so evaluation
 /// never rebuilds or deep-clones the map; a write after a snapshot was taken
 /// copies on write, while a write with no live snapshot mutates in place.
 pub(super) type PipelineSteps = Arc<HashMap<String, Value>>;
-
-pub(super) const CONFLICT_DIAGNOSTIC_KEYS: [&str; 2] = ["conflicting_paths", "conflicting_files"];
 
 pub(super) struct ExecCtx<'a> {
     pub(super) run_id: String,
@@ -106,6 +111,16 @@ impl ExecCtx<'_> {
     }
 }
 
+/// Result of running a single step.
+pub(super) struct StepOutcome {
+    pub(super) success: bool,
+    pub(super) output: Value,
+    pub(super) message: Option<String>,
+    /// The typed step-failure code parsed once at ingestion, when the
+    /// failure declared one.
+    pub(super) failure_code: Option<orbit_types::workflow::StepFailureCode>,
+}
+
 /// The template engine reads `{{ steps.<id>.output.<field> }}`, so pipeline
 /// outputs are stored under an `output` key — the same `.output.` prefix
 /// callers would use against a v1 step. Moves `raw`; no copy.
@@ -114,11 +129,6 @@ pub(super) fn wrap_step_output(raw: Value) -> Value {
     wrapped.insert("output".to_string(), raw);
     Value::Object(wrapped)
 }
-
-/// The private key under which a wrapped entry keeps the full descriptor of
-/// the script output set behind its `files` view. Templates read `output`,
-/// `state` and `files` only, so this key is never rendered.
-const STEP_OUTPUT_SET_KEY: &str = "script_output_set";
 
 /// [`wrap_step_output`] for a script step that kept an output set: the
 /// entry also carries `files`, the `[{name, path, bytes, media_type,
@@ -165,16 +175,6 @@ pub(super) fn pipeline_steps_from_raw(
             })
             .collect(),
     )
-}
-
-/// Result of running a single step.
-pub(super) struct StepOutcome {
-    pub(super) success: bool,
-    pub(super) output: Value,
-    pub(super) message: Option<String>,
-    /// The typed step-failure code parsed once at ingestion, when the
-    /// failure declared one.
-    pub(super) failure_code: Option<orbit_types::workflow::StepFailureCode>,
 }
 
 /// Record a step output. Mutates the map in place unless a snapshot handed

@@ -21,104 +21,25 @@ use super::record::{record_stop, stop};
 /// Budget for waiting out required checks on a pull request before the attempt
 /// stops. The same shape `pr_complete` uses, so operators tune one thing.
 const DEFAULT_MAX_WAIT_SECONDS: u64 = 3600;
+
 const DEFAULT_MAX_BASE_CI_CYCLES: u64 = 3;
+
 const DEFAULT_POLL_INTERVAL_SECONDS: u64 = 30;
+
 const MAX_WAIT_SECONDS: u64 = 6 * 60 * 60;
+
 const MAX_BASE_CI_CYCLES: u64 = 100;
+
 const MIN_POLL_INTERVAL_SECONDS: u64 = 5;
+
 const MAX_POLL_INTERVAL_SECONDS: u64 = 10 * 60;
 
 /// Landing passes one run makes when a provider transport failure interrupts
 /// a pass before any external write, including the first. Each later pass
 /// waits out the matching backoff first.
 const TRANSPORT_PASSES: u32 = 3;
+
 const TRANSPORT_BACKOFF: [Duration; 2] = [Duration::from_secs(20), Duration::from_secs(60)];
-
-pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
-    host: &H,
-    input: &Value,
-) -> Result<Value, OrbitError> {
-    let handoff_id = input_string_field(input, "handoff_id").ok_or_else(|| {
-        OrbitError::InvalidInput("handoff_land: handoff_id is required".to_string())
-    })?;
-    // One budget for the whole run: a retried pass does not restart the wait.
-    let budget = LandingBudget::from_input(input)?;
-    let mut passes = 1;
-    loop {
-        let pass = LandingPass::new(
-            host.handoff_landing_context(&handoff_id)?,
-            super::super::pr_merge_attribution(input),
-        );
-        let error = match land(host, &pass, input, &budget) {
-            Ok(landed) => return Ok(landed),
-            Err(error) => error,
-        };
-        if pass.settled.get() {
-            return Err(error);
-        }
-        if passes < TRANSPORT_PASSES
-            && !pass.wrote.get()
-            && transport_failure(&error)
-            && let Some(backoff) = TRANSPORT_BACKOFF.get((passes - 1) as usize).copied()
-            && budget.allows(backoff)?
-        {
-            tracing::warn!(
-                %error,
-                handoff_id,
-                pass = passes,
-                "handoff_land: provider transport failure before any external write; retrying \
-                 the same handoff"
-            );
-            sleep(backoff);
-            passes += 1;
-            continue;
-        }
-        return Err(settle_failure(host, &pass, passes, error));
-    }
-}
-
-/// A provider failure the provider boundary classified as a transport
-/// failure: no credential, permission, rate-limit or permanent-HTTP signal.
-pub(super) fn transport_failure(error: &OrbitError) -> bool {
-    error
-        .private_vcs_failure()
-        .is_some_and(|failure| failure.class == PrivateVcsFailureClass::TransientObservation)
-}
-
-/// Record the stop a failed run left unrecorded, and return the error the run
-/// fails with. An intent this owner published and could not resolve is left
-/// as it is: the store refuses a stop past it, and the next attempt
-/// reconciles it against the provider before anything else.
-fn settle_failure<H: RuntimeHost + ?Sized>(
-    host: &H,
-    pass: &LandingPass,
-    passes: u32,
-    error: OrbitError,
-) -> OrbitError {
-    if pass.intent_open.get() {
-        return error;
-    }
-    let message = error.to_string();
-    let message = message.strip_prefix("handoff_land: ").unwrap_or(&message);
-    let tries = if passes > 1 {
-        format!(" after {passes} tries")
-    } else {
-        String::new()
-    };
-    let reason = format!("the landing run failed{tries}: {message}; the candidate stays in review");
-    match record_stop(host, pass, &reason, false) {
-        Ok(stopped) => stopped,
-        Err(refused) => {
-            tracing::warn!(
-                %refused,
-                %error,
-                handoff_id = %pass.handoff_id,
-                "handoff_land: the failed run's stop could not be recorded"
-            );
-            error
-        }
-    }
-}
 
 /// The check-wait budget of one landing run, shared by every pass it makes.
 pub(super) struct LandingBudget {
@@ -214,6 +135,92 @@ impl Deref for LandingPass {
 
     fn deref(&self) -> &HandoffLandingContext {
         &self.context
+    }
+}
+
+pub(in crate::executor::automation) fn handoff_land<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+) -> Result<Value, OrbitError> {
+    let handoff_id = input_string_field(input, "handoff_id").ok_or_else(|| {
+        OrbitError::InvalidInput("handoff_land: handoff_id is required".to_string())
+    })?;
+    // One budget for the whole run: a retried pass does not restart the wait.
+    let budget = LandingBudget::from_input(input)?;
+    let mut passes = 1;
+    loop {
+        let pass = LandingPass::new(
+            host.handoff_landing_context(&handoff_id)?,
+            super::super::pr_merge_attribution(input),
+        );
+        let error = match land(host, &pass, input, &budget) {
+            Ok(landed) => return Ok(landed),
+            Err(error) => error,
+        };
+        if pass.settled.get() {
+            return Err(error);
+        }
+        if passes < TRANSPORT_PASSES
+            && !pass.wrote.get()
+            && transport_failure(&error)
+            && let Some(backoff) = TRANSPORT_BACKOFF.get((passes - 1) as usize).copied()
+            && budget.allows(backoff)?
+        {
+            tracing::warn!(
+                %error,
+                handoff_id,
+                pass = passes,
+                "handoff_land: provider transport failure before any external write; retrying \
+                 the same handoff"
+            );
+            sleep(backoff);
+            passes += 1;
+            continue;
+        }
+        return Err(settle_failure(host, &pass, passes, error));
+    }
+}
+
+/// A provider failure the provider boundary classified as a transport
+/// failure: no credential, permission, rate-limit or permanent-HTTP signal.
+pub(super) fn transport_failure(error: &OrbitError) -> bool {
+    error
+        .private_vcs_failure()
+        .is_some_and(|failure| failure.class == PrivateVcsFailureClass::TransientObservation)
+}
+
+/// Record the stop a failed run left unrecorded, and return the error the run
+/// fails with. An intent this owner published and could not resolve is left
+/// as it is: the store refuses a stop past it, and the next attempt
+/// reconciles it against the provider before anything else.
+fn settle_failure<H: RuntimeHost + ?Sized>(
+    host: &H,
+    pass: &LandingPass,
+    passes: u32,
+    error: OrbitError,
+) -> OrbitError {
+    if pass.intent_open.get() {
+        return error;
+    }
+    let message = error.to_string();
+    let message = message.strip_prefix("handoff_land: ").unwrap_or(&message);
+    let tries = if passes > 1 {
+        format!(" after {passes} tries")
+    } else {
+        String::new()
+    };
+    let reason = format!("the landing run failed{tries}: {message}; the candidate stays in review");
+    match record_stop(host, pass, &reason, false) {
+        Ok(stopped) => stopped,
+        Err(refused) => {
+            tracing::warn!(
+                %refused,
+                %error,
+                handoff_id = %pass.handoff_id,
+                "handoff_land: the failed run's stop could not be recorded"
+            );
+            error
+        }
     }
 }
 

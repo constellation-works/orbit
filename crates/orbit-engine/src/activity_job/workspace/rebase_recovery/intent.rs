@@ -31,12 +31,16 @@ use super::super::DispatchError;
 
 /// The intent file's schema version, named in the leaf's input.
 pub(crate) const RESOLUTION_INTENT_SCHEMA_VERSION: u32 = 1;
+
 /// Directories from the worktree root to the slot directory.
 const SLOT_COMPONENTS: [&str; 3] = [".orbit", "tmp", "rebase-resolution"];
+
 /// An intent names a handful of paths; anything larger is not one.
 const MAX_INTENT_BYTES: u64 = 64 * 1024;
+
 /// Longest step-id or run-id fragment kept in the file name.
 const MAX_NAME_FRAGMENT: usize = 48;
+
 /// The nonce is 16 random bytes, hex-encoded.
 const NONCE_BYTES: usize = 16;
 
@@ -85,64 +89,6 @@ struct IntentFile {
     target_base_sha: String,
     task_ids: Vec<String>,
     resolutions: Vec<ResolutionIntent>,
-}
-
-/// Allocate this invocation's intent slot and return the binding to name in
-/// the leaf's input as `resolution_intent`. `None` when the input names no
-/// existing absolute worktree to hold it; the host then adopts no intents,
-/// and the boundary guard still judges the worktree itself.
-pub(crate) fn allocate_resolution_intent(
-    input: &Value,
-    run_id: &str,
-    failed_step_id: &str,
-    attempt: u32,
-) -> Result<Option<Value>, DispatchError> {
-    let Some(workspace) = input
-        .get("workspace_path")
-        .and_then(Value::as_str)
-        .map(Path::new)
-        .filter(|path| path.is_absolute())
-    else {
-        return Ok(None);
-    };
-    let Some(target_base_sha) = input.get("target_base_sha").and_then(Value::as_str) else {
-        return Ok(None);
-    };
-    let Some(root) = fs::canonicalize(workspace)
-        .ok()
-        .filter(|root| root.is_dir())
-    else {
-        return Ok(None);
-    };
-    let dir = orbit_common::fs::io::create_private_dir_chain(
-        &root,
-        &SLOT_COMPONENTS.iter().collect::<PathBuf>(),
-    )
-    .map_err(|error| intent_error(&error.to_string()))?;
-    let nonce = orbit_common::security::token::random_hex(NONCE_BYTES)
-        .map_err(|error| intent_error(&error.to_string()))?;
-    let path = dir.join(slot_file_name(
-        run_id,
-        failed_step_id,
-        attempt.into(),
-        &nonce,
-    ));
-    if fs::symlink_metadata(&path).is_ok() {
-        return Err(intent_error(&format!(
-            "the slot '{}' already exists",
-            path.display()
-        )));
-    }
-    Ok(Some(serde_json::json!({
-        "path": path.display().to_string(),
-        "schema_version": RESOLUTION_INTENT_SCHEMA_VERSION,
-        "run_id": run_id,
-        "failed_step_id": failed_step_id,
-        "attempt": attempt,
-        "nonce": nonce,
-        "target_base_sha": target_base_sha,
-        "task_ids": recovery_task_ids(input),
-    })))
 }
 
 /// The admitted slot, held only in the boundary guard's memory.
@@ -331,6 +277,64 @@ impl ResolutionIntentSlot {
         }
         Ok(dir)
     }
+}
+
+/// Allocate this invocation's intent slot and return the binding to name in
+/// the leaf's input as `resolution_intent`. `None` when the input names no
+/// existing absolute worktree to hold it; the host then adopts no intents,
+/// and the boundary guard still judges the worktree itself.
+pub(crate) fn allocate_resolution_intent(
+    input: &Value,
+    run_id: &str,
+    failed_step_id: &str,
+    attempt: u32,
+) -> Result<Option<Value>, DispatchError> {
+    let Some(workspace) = input
+        .get("workspace_path")
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .filter(|path| path.is_absolute())
+    else {
+        return Ok(None);
+    };
+    let Some(target_base_sha) = input.get("target_base_sha").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let Some(root) = fs::canonicalize(workspace)
+        .ok()
+        .filter(|root| root.is_dir())
+    else {
+        return Ok(None);
+    };
+    let dir = orbit_common::fs::io::create_private_dir_chain(
+        &root,
+        &SLOT_COMPONENTS.iter().collect::<PathBuf>(),
+    )
+    .map_err(|error| intent_error(&error.to_string()))?;
+    let nonce = orbit_common::security::token::random_hex(NONCE_BYTES)
+        .map_err(|error| intent_error(&error.to_string()))?;
+    let path = dir.join(slot_file_name(
+        run_id,
+        failed_step_id,
+        attempt.into(),
+        &nonce,
+    ));
+    if fs::symlink_metadata(&path).is_ok() {
+        return Err(intent_error(&format!(
+            "the slot '{}' already exists",
+            path.display()
+        )));
+    }
+    Ok(Some(serde_json::json!({
+        "path": path.display().to_string(),
+        "schema_version": RESOLUTION_INTENT_SCHEMA_VERSION,
+        "run_id": run_id,
+        "failed_step_id": failed_step_id,
+        "attempt": attempt,
+        "nonce": nonce,
+        "target_base_sha": target_base_sha,
+        "task_ids": recovery_task_ids(input),
+    })))
 }
 
 /// The task set the recovery input names, in its order.

@@ -264,13 +264,13 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
             status_decision: (event == REVIEW_GATE_EVENT).then(|| TaskDecision::RunTransition {
                 run_id: run_id.to_string(),
             }),
-            append_history,
             append_comments: vec![TaskComment {
                 at,
                 by: "system".to_string(),
                 message: format!("{note}\n\n{body}"),
                 operation_id: None,
             }],
+            append_history,
             ..TaskAutomationUpdate::default()
         },
     )?;

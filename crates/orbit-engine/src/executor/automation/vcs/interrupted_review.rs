@@ -54,6 +54,16 @@ const REVIEW_GATES: [(&str, &str, &str); 4] = [
     ),
 ];
 
+/// The pipeline-state key under which the host that stopped a run records
+/// what [`preserve_rescue_candidate`] kept: `run_id`, `rescue_ref` and
+/// `rescue_commit` (null when nothing was kept), `partial_commit` when
+/// uncommitted changes were committed, and `failure` when keeping failed.
+pub const RESCUE_CANDIDATE_KEY: &str = "rescue_candidate";
+
+/// Scratch index for the working-tree snapshot. Distinct from the detached
+/// commit's index so a refused snapshot cannot collide with it.
+const RESCUE_SNAPSHOT_INDEX: &str = "orbit-rescue-snapshot.index";
+
 /// A review gate a run stopped inside: admitted, not settled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewInFlight {
@@ -74,12 +84,6 @@ pub struct PreservedReviewRepair {
     /// The repair commit; `None` when the reviewer left nothing uncommitted.
     pub commit: Option<String>,
 }
-
-/// The pipeline-state key under which the host that stopped a run records
-/// what [`preserve_rescue_candidate`] kept: `run_id`, `rescue_ref` and
-/// `rescue_commit` (null when nothing was kept), `partial_commit` when
-/// uncommitted changes were committed, and `failure` when keeping failed.
-pub const RESCUE_CANDIDATE_KEY: &str = "rescue_candidate";
 
 /// What [`preserve_rescue_candidate`] kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,10 +113,6 @@ pub fn rescue_candidate_ref(run_id: &str) -> Result<String, OrbitError> {
     }
     Ok(format!("refs/orbit/rescue/{run_id}"))
 }
-
-/// Scratch index for the working-tree snapshot. Distinct from the detached
-/// commit's index so a refused snapshot cannot collide with it.
-const RESCUE_SNAPSHOT_INDEX: &str = "orbit-rescue-snapshot.index";
 
 /// Keep `workspace_path`'s candidate — its `HEAD` plus every uncommitted
 /// change, as one detached commit when dirty — under

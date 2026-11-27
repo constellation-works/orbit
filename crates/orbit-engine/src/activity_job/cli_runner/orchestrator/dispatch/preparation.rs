@@ -25,6 +25,16 @@ use super::super::prepare::{
 };
 use super::CliDispatchContext;
 
+/// The built-in untrusted-data handling an activity with `fleet_notices: read` or
+/// `post` receives when it declares no `notice_instruction` of its own.
+const BUILT_IN_NOTICE_INSTRUCTION: &str =
+    include_str!("../../../../../assets/fleet_notices/untrusted_data.txt");
+
+/// The built-in posting guidance an activity with `fleet_notices: post`
+/// receives when it declares no `notice_posting_instruction` of its own.
+const BUILT_IN_NOTICE_POSTING_INSTRUCTION: &str =
+    include_str!("../../../../../assets/fleet_notices/posting.txt");
+
 pub(super) struct PreparedCliDispatch<'a> {
     pub(super) provider: String,
     pub(super) provider_enum: Provider,
@@ -55,16 +65,6 @@ pub(super) struct FleetNoticeInstructions<'a> {
     pub(super) notice_instruction: Option<&'a str>,
     pub(super) notice_posting_instruction: Option<&'a str>,
 }
-
-/// The built-in untrusted-data handling an activity with `fleet_notices: read` or
-/// `post` receives when it declares no `notice_instruction` of its own.
-const BUILT_IN_NOTICE_INSTRUCTION: &str =
-    include_str!("../../../../../assets/fleet_notices/untrusted_data.txt");
-
-/// The built-in posting guidance an activity with `fleet_notices: post`
-/// receives when it declares no `notice_posting_instruction` of its own.
-const BUILT_IN_NOTICE_POSTING_INSTRUCTION: &str =
-    include_str!("../../../../../assets/fleet_notices/posting.txt");
 
 /// The activity's own non-empty instruction, else the built-in text when the
 /// activity opts into the matching `fleet_notices` level.
