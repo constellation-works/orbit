@@ -14,104 +14,7 @@ mod platform {
 
     use super::*;
 
-    pub(super) fn identity(pid: libc::pid_t) -> io::Result<Option<BackendIdentity>> {
-        let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-            Ok(stat) => stat,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error),
-        };
-        // comm can contain spaces and parentheses. Field 22 (starttime) is
-        // index 19 after the final ')', where field 3 (state) begins.
-        let generation = stat
-            .rsplit_once(')')
-            .and_then(|(_, rest)| rest.split_whitespace().nth(19))
-            .and_then(|value| value.parse().ok())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid process stat"))?;
-        Ok(Some(BackendIdentity {
-            pid,
-            generation,
-            exec_version: 0,
-        }))
-    }
-
     pub(super) struct ProcessHandle(OwnedFd);
-
-    pub(super) struct Readiness(UnixListener);
-    pub(super) type ReadyLease = UnixStream;
-
-    fn readiness_address(workspace: &Path) -> io::Result<SocketAddr> {
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        // Orbit supplies the backend a canonical workspace root. Match it
-        // even when the test's temporary root has a symlinked ancestor.
-        workspace.canonicalize()?.hash(&mut hash);
-        // The disposable workspace's random parent directory distinguishes
-        // fixtures. An abstract address avoids Unix sun_path limits when the
-        // executor's TMPDIR is deep, and vanishes when the listener closes.
-        SocketAddr::from_abstract_name(format!("orbit-signal-fixture-{:x}", hash.finish()))
-    }
-
-    pub(super) fn publish_readiness(workspace: &Path) -> io::Result<ReadyLease> {
-        // Landlock does not grant the backend /proc reads. A connection lets
-        // the kernel supply its process identity without widening fs grants.
-        UnixStream::connect_addr(&readiness_address(workspace)?)
-    }
-
-    impl Readiness {
-        pub(super) fn new(workspace: &Path) -> io::Result<Self> {
-            let listener = UnixListener::bind_addr(&readiness_address(workspace)?)?;
-            listener.set_nonblocking(true)?;
-            Ok(Self(listener))
-        }
-
-        pub(super) fn receive(&self) -> io::Result<Option<BackendGuard>> {
-            let stream = match self.0.accept() {
-                Ok((stream, _)) => stream,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
-                Err(error) => return Err(error),
-            };
-            let mut credentials = libc::ucred {
-                pid: 0,
-                uid: 0,
-                gid: 0,
-            };
-            socket_option(&stream, libc::SO_PEERCRED, &mut credentials)?;
-            let mut fd: libc::c_int = -1;
-            // Linux 6.5+ SO_PEERPIDFD, absent from the libc bindings. It uses
-            // the socket's retained struct pid, not a lookup of a reusable PID.
-            // https://github.com/torvalds/linux/blob/v6.5/net/core/sock.c
-            socket_option(&stream, 77, &mut fd)?;
-            // Safety: successful SO_PEERPIDFD returned a fresh owned pidfd.
-            let handle = ProcessHandle(unsafe { OwnedFd::from_raw_fd(fd) });
-            Ok(Some(BackendGuard {
-                identity: BackendIdentity {
-                    pid: credentials.pid,
-                    generation: 0,
-                    exec_version: 0,
-                },
-                handle: Some(handle),
-            }))
-        }
-    }
-
-    fn socket_option<T>(stream: &UnixStream, option: libc::c_int, value: &mut T) -> io::Result<()> {
-        let mut size = std::mem::size_of::<T>() as libc::socklen_t;
-        // Safety: value points to an initialized buffer of the supplied size;
-        // callers use the kernel ABI type for SO_PEERCRED or SO_PEERPIDFD.
-        let rc = unsafe {
-            libc::getsockopt(
-                stream.as_raw_fd(),
-                libc::SOL_SOCKET,
-                option,
-                std::ptr::from_mut(value).cast(),
-                &mut size,
-            )
-        };
-        if rc == 0 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
-    }
 
     impl ProcessHandle {
         pub(super) fn open(expected: BackendIdentity) -> io::Result<Option<Self>> {
@@ -174,15 +77,119 @@ mod platform {
             }
         }
     }
+
+    pub(super) struct Readiness(UnixListener);
+
+    impl Readiness {
+        pub(super) fn new(workspace: &Path) -> io::Result<Self> {
+            let listener = UnixListener::bind_addr(&readiness_address(workspace)?)?;
+            listener.set_nonblocking(true)?;
+            Ok(Self(listener))
+        }
+
+        pub(super) fn receive(&self) -> io::Result<Option<BackendGuard>> {
+            let stream = match self.0.accept() {
+                Ok((stream, _)) => stream,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+                Err(error) => return Err(error),
+            };
+            let mut credentials = libc::ucred {
+                pid: 0,
+                uid: 0,
+                gid: 0,
+            };
+            socket_option(&stream, libc::SO_PEERCRED, &mut credentials)?;
+            let mut fd: libc::c_int = -1;
+            // Linux 6.5+ SO_PEERPIDFD, absent from the libc bindings. It uses
+            // the socket's retained struct pid, not a lookup of a reusable PID.
+            // https://github.com/torvalds/linux/blob/v6.5/net/core/sock.c
+            socket_option(&stream, 77, &mut fd)?;
+            // Safety: successful SO_PEERPIDFD returned a fresh owned pidfd.
+            let handle = ProcessHandle(unsafe { OwnedFd::from_raw_fd(fd) });
+            Ok(Some(BackendGuard {
+                identity: BackendIdentity {
+                    pid: credentials.pid,
+                    generation: 0,
+                    exec_version: 0,
+                },
+                handle: Some(handle),
+            }))
+        }
+    }
+
+    pub(super) type ReadyLease = UnixStream;
+
+    pub(super) fn identity(pid: libc::pid_t) -> io::Result<Option<BackendIdentity>> {
+        let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        // comm can contain spaces and parentheses. Field 22 (starttime) is
+        // index 19 after the final ')', where field 3 (state) begins.
+        let generation = stat
+            .rsplit_once(')')
+            .and_then(|(_, rest)| rest.split_whitespace().nth(19))
+            .and_then(|value| value.parse().ok())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid process stat"))?;
+        Ok(Some(BackendIdentity {
+            pid,
+            generation,
+            exec_version: 0,
+        }))
+    }
+
+    fn readiness_address(workspace: &Path) -> io::Result<SocketAddr> {
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        // Orbit supplies the backend a canonical workspace root. Match it
+        // even when the test's temporary root has a symlinked ancestor.
+        workspace.canonicalize()?.hash(&mut hash);
+        // The disposable workspace's random parent directory distinguishes
+        // fixtures. An abstract address avoids Unix sun_path limits when the
+        // executor's TMPDIR is deep, and vanishes when the listener closes.
+        SocketAddr::from_abstract_name(format!("orbit-signal-fixture-{:x}", hash.finish()))
+    }
+
+    pub(super) fn publish_readiness(workspace: &Path) -> io::Result<ReadyLease> {
+        // Landlock does not grant the backend /proc reads. A connection lets
+        // the kernel supply its process identity without widening fs grants.
+        UnixStream::connect_addr(&readiness_address(workspace)?)
+    }
+
+    fn socket_option<T>(stream: &UnixStream, option: libc::c_int, value: &mut T) -> io::Result<()> {
+        let mut size = std::mem::size_of::<T>() as libc::socklen_t;
+        // Safety: value points to an initialized buffer of the supplied size;
+        // callers use the kernel ABI type for SO_PEERCRED or SO_PEERPIDFD.
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                option,
+                std::ptr::from_mut(value).cast(),
+                &mut size,
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
 }
 #[cfg(target_os = "macos")]
 mod platform {
+    unsafe extern "C" {
+        // libproc.h: audit_token_t is eight u32 values. The kernel checks
+        // val[5] (PID) and val[7] (pidversion) while holding the process ref.
+        // https://github.com/apple-oss-distributions/xnu/blob/xnu-10063.121.3/bsd/kern/proc_info.c
+        fn proc_signal_with_audittoken(token: *const [u32; 8], signal: libc::c_int) -> libc::c_int;
+    }
+
     use std::path::{Path, PathBuf};
 
     use super::*;
 
     pub(super) struct Readiness(PathBuf);
-    pub(super) struct ReadyLease;
 
     impl Readiness {
         pub(super) fn new(workspace: &Path) -> io::Result<Self> {
@@ -201,6 +208,8 @@ mod platform {
             BackendGuard::acquire(identity).map(Some)
         }
     }
+
+    pub(super) struct ReadyLease;
 
     // XNU's proc_info_private.h: PROC_PIDUNIQIDENTIFIERINFO and its stable
     // 56-byte API layout. libc exposes proc_pidinfo but not this flavor.
@@ -253,13 +262,6 @@ mod platform {
         let marker = serde_json::to_vec(&identity)?;
         std::fs::write(workspace.join("markers/listen.ready"), marker)?;
         Ok(ReadyLease)
-    }
-
-    unsafe extern "C" {
-        // libproc.h: audit_token_t is eight u32 values. The kernel checks
-        // val[5] (PID) and val[7] (pidversion) while holding the process ref.
-        // https://github.com/apple-oss-distributions/xnu/blob/xnu-10063.121.3/bsd/kern/proc_info.c
-        fn proc_signal_with_audittoken(token: *const [u32; 8], signal: libc::c_int) -> libc::c_int;
     }
 
     pub(super) fn identity(pid: libc::pid_t) -> io::Result<Option<BackendIdentity>> {
@@ -331,10 +333,6 @@ pub(super) struct ReadyLease {
     _inner: platform::ReadyLease,
 }
 
-pub(super) fn publish_readiness(workspace: &std::path::Path) -> io::Result<ReadyLease> {
-    platform::publish_readiness(workspace).map(|inner| ReadyLease { _inner: inner })
-}
-
 pub(super) struct BackendGuard {
     pub(super) identity: BackendIdentity,
     handle: Option<platform::ProcessHandle>,
@@ -369,6 +367,10 @@ impl Drop for BackendGuard {
             let _ = handle.kill();
         }
     }
+}
+
+pub(super) fn publish_readiness(workspace: &std::path::Path) -> io::Result<ReadyLease> {
+    platform::publish_readiness(workspace).map(|inner| ReadyLease { _inner: inner })
 }
 
 fn spawn_sleeper() -> super::ChildGuard {

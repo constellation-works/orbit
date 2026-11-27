@@ -6,6 +6,103 @@ use orbit_common::fs::generation::{
     Access, GenerationGuard, Participant, ParticipantRole, QUIESCE_TIMEOUT_ENV,
 };
 
+/// The source commit every local candidate here is attested to.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const CANDIDATE_COMMIT: &str = "0d0e0a0d0b0e0e0f0d0e0a0d0b0e0e0f0d0e0a0d";
+
+/// A stdio server's stderr, kept in a file so a failed handover can quote it.
+/// `exec` keeps the descriptor, so the outgoing image and the one it hands
+/// over to append to the same file, in order.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct ServerStderr(PathBuf);
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl ServerStderr {
+    /// Debug handover tracing from both images, for the failure report.
+    const RUST_LOG: &str = "orbit.generation=debug,orbit.mcp=debug,rmcp=info";
+
+    fn create(workspace: &McpWorkspace, name: &str) -> (Self, Stdio) {
+        let path = workspace.home.join(format!("{name}.stderr"));
+        let file = std::fs::File::create(&path).expect("server stderr");
+        (Self(path), Stdio::from(file))
+    }
+
+    /// The last 16 KiB the outgoing and incoming images wrote.
+    fn tail(&self) -> String {
+        let bytes = std::fs::read(&self.0).unwrap_or_default();
+        let start = bytes.len().saturating_sub(16 * 1024);
+        format!(
+            "server stderr ({} of {} bytes, outgoing then incoming image):\n{}",
+            bytes.len() - start,
+            bytes.len(),
+            String::from_utf8_lossy(&bytes[start..])
+        )
+    }
+
+    /// [`test_env::wait_until`] for `server`, failing with its stderr tail
+    /// when the server exits or the deadline passes.
+    fn wait_until(&self, server: &mut ChildGuard, what: &str, mut ready: impl FnMut() -> bool) {
+        let started = Instant::now();
+        test_env::wait_until(what, || {
+            assert!(
+                server.try_wait().expect("poll server").is_none(),
+                "the server exited while waiting for {what}; {}",
+                self.tail()
+            );
+            assert!(
+                started.elapsed() < test_env::FIXTURE_STEP_DEADLINE,
+                "timed out after {:.1?} waiting for {what} ({}); {}",
+                started.elapsed(),
+                test_env::host_load(),
+                self.tail()
+            );
+            ready()
+        });
+    }
+}
+
+/// Settle the detached fixture worker even when a handover assertion unwinds.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct DrainCleanup<'a> {
+    workspace: &'a McpWorkspace,
+    run_id: String,
+    armed: bool,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for DrainCleanup<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut command = McpWorkspace::orbit_command(&self.workspace.work, &self.workspace.home);
+        command.args(["run", "cancel", &self.run_id, "--confirm"]);
+        // Production cancellation waits for the verified owner to exit. Keep
+        // cleanup bounded without a second panic during assertion unwinding.
+        let output = orbit_common::process::run_bounded_capped(
+            &mut command,
+            test_env::FIXTURE_STEP_DEADLINE,
+            64 * 1024,
+        );
+        if !matches!(&output, Ok(output) if output.status.success()) {
+            tracing::warn!(?output, "drain fixture cleanup failed");
+        }
+    }
+}
+
+/// A live stdio server that already accepted 2026-07-28 down to 2025-11-25.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct NegotiatedHandover {
+    workspace: McpWorkspace,
+    task_id: String,
+    partition: String,
+    server_stderr: ServerStderr,
+    client: McpClient,
+    pid: u32,
+    installed: PathBuf,
+    old_digest: String,
+}
+
 /// Spawn an `orbit` binary that this fixture just copied into place.
 ///
 /// On Linux this absorbs the parallel-fork `ETXTBSY` race described in
@@ -653,10 +750,6 @@ fn listener_retains_admission_until_process_exit() {
     assert!(preflight(&workspace).status.success());
 }
 
-/// The source commit every local candidate here is attested to.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-const CANDIDATE_COMMIT: &str = "0d0e0a0d0b0e0e0f0d0e0a0d0b0e0e0f0d0e0a0d";
-
 /// Describe `candidate` in a new manifest beside it, through the candidate.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn write_candidate_manifest(workspace: &McpWorkspace, candidate: &Path) -> PathBuf {
@@ -715,89 +808,9 @@ fn local_candidate_update(
     output_copied_orbit(&mut command).expect("local candidate update")
 }
 
-/// A stdio server's stderr, kept in a file so a failed handover can quote it.
-/// `exec` keeps the descriptor, so the outgoing image and the one it hands
-/// over to append to the same file, in order.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-struct ServerStderr(PathBuf);
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl ServerStderr {
-    /// Debug handover tracing from both images, for the failure report.
-    const RUST_LOG: &str = "orbit.generation=debug,orbit.mcp=debug,rmcp=info";
-
-    fn create(workspace: &McpWorkspace, name: &str) -> (Self, Stdio) {
-        let path = workspace.home.join(format!("{name}.stderr"));
-        let file = std::fs::File::create(&path).expect("server stderr");
-        (Self(path), Stdio::from(file))
-    }
-
-    /// The last 16 KiB the outgoing and incoming images wrote.
-    fn tail(&self) -> String {
-        let bytes = std::fs::read(&self.0).unwrap_or_default();
-        let start = bytes.len().saturating_sub(16 * 1024);
-        format!(
-            "server stderr ({} of {} bytes, outgoing then incoming image):\n{}",
-            bytes.len() - start,
-            bytes.len(),
-            String::from_utf8_lossy(&bytes[start..])
-        )
-    }
-
-    /// [`test_env::wait_until`] for `server`, failing with its stderr tail
-    /// when the server exits or the deadline passes.
-    fn wait_until(&self, server: &mut ChildGuard, what: &str, mut ready: impl FnMut() -> bool) {
-        let started = Instant::now();
-        test_env::wait_until(what, || {
-            assert!(
-                server.try_wait().expect("poll server").is_none(),
-                "the server exited while waiting for {what}; {}",
-                self.tail()
-            );
-            assert!(
-                started.elapsed() < test_env::FIXTURE_STEP_DEADLINE,
-                "timed out after {:.1?} waiting for {what} ({}); {}",
-                started.elapsed(),
-                test_env::host_load(),
-                self.tail()
-            );
-            ready()
-        });
-    }
-}
-
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn running_digest(workspace: &McpWorkspace, pid: u32) -> Option<String> {
     crate::generation_fixture::running_digest(&authority_root(workspace), pid)
-}
-
-/// Settle the detached fixture worker even when a handover assertion unwinds.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-struct DrainCleanup<'a> {
-    workspace: &'a McpWorkspace,
-    run_id: String,
-    armed: bool,
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl Drop for DrainCleanup<'_> {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        let mut command = McpWorkspace::orbit_command(&self.workspace.work, &self.workspace.home);
-        command.args(["run", "cancel", &self.run_id, "--confirm"]);
-        // Production cancellation waits for the verified owner to exit. Keep
-        // cleanup bounded without a second panic during assertion unwinding.
-        let output = orbit_common::process::run_bounded_capped(
-            &mut command,
-            test_env::FIXTURE_STEP_DEADLINE,
-            64 * 1024,
-        );
-        if !matches!(&output, Ok(output) if output.status.success()) {
-            tracing::warn!(?output, "drain fixture cleanup failed");
-        }
-    }
 }
 
 /// Candidate admission and MCP session continuity do not exercise a drain's
@@ -1137,19 +1150,6 @@ fn assert_negotiated_session(
     )
     .expect("capabilities");
     assert_eq!(capabilities, json!(["agent"]), "{row}");
-}
-
-/// A live stdio server that already accepted 2026-07-28 down to 2025-11-25.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-struct NegotiatedHandover {
-    workspace: McpWorkspace,
-    task_id: String,
-    partition: String,
-    server_stderr: ServerStderr,
-    client: McpClient,
-    pid: u32,
-    installed: PathBuf,
-    old_digest: String,
 }
 
 /// Start `orbit mcp serve` from a private installation, initialize at

@@ -25,10 +25,12 @@ impl Fixture {
 
     fn empty() -> Self {
         let temp = tempdir().expect("fixture tempdir");
+        let home = temp.path().join("home");
+        let work = temp.path().join("work");
         let fixture = Self {
-            home: temp.path().join("home"),
-            work: temp.path().join("work"),
             _temp: temp,
+            home,
+            work,
         };
         fs::create_dir_all(&fixture.home).expect("fixture home");
         fixture

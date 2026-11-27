@@ -12,6 +12,54 @@ use super::args::{McpAction, McpProvider, ProviderSelectionMode, ScopeArg};
 use super::format::{load_toml_document, write_or_remove_toml_document};
 use super::providers::*;
 
+/// Resolved file targets for a single provider+scope.
+///
+/// `mcp_path` is the active registry, `legacy_mcp_path` is a migration source,
+/// and `settings_path` is Claude's optional permissions file. Scope determines
+/// whether they live in HOME or in the repo.
+pub(super) struct ConfigTarget {
+    pub(super) mcp_path: PathBuf,
+    pub(super) legacy_mcp_path: Option<PathBuf>,
+    pub(super) settings_path: Option<PathBuf>,
+    pub(super) scope: ScopeArg,
+}
+
+impl ConfigTarget {
+    /// `repo_root` is `None` only for a run that never resolved a checkout
+    /// (federated home scope); workspace scope cannot be targeted without one.
+    pub(super) fn resolve(
+        scope: ScopeArg,
+        provider: &McpProvider,
+        repo_root: Option<&Path>,
+        home_dir: Option<&Path>,
+        env: &Env,
+    ) -> Result<Self, OrbitError> {
+        let repo_root = match (scope, repo_root) {
+            (_, Some(repo_root)) => repo_root,
+            // Home-scope paths are derived from `home_dir` alone.
+            (ScopeArg::Home, None) => Path::new(""),
+            (ScopeArg::Workspace, None) => {
+                return Err(OrbitError::InvalidInput(
+                    "workspace-scope MCP config needs a resolved checkout".to_string(),
+                ));
+            }
+        };
+        let paths = mcp_clients::client_config_paths(
+            scope.client_scope(),
+            provider.client(),
+            repo_root,
+            home_dir,
+            env,
+        )?;
+        Ok(Self {
+            mcp_path: paths.mcp_path,
+            legacy_mcp_path: paths.legacy_mcp_path,
+            settings_path: paths.settings_path,
+            scope,
+        })
+    }
+}
+
 fn server_id_for_action(action: McpAction<'_>) -> &'static str {
     match action {
         McpAction::Init(ServerLaunch::Federated { .. }) | McpAction::RemoveFederated => {
@@ -239,54 +287,6 @@ pub(super) fn run_action(
         }
     }
     Ok(providers)
-}
-
-/// Resolved file targets for a single provider+scope.
-///
-/// `mcp_path` is the active registry, `legacy_mcp_path` is a migration source,
-/// and `settings_path` is Claude's optional permissions file. Scope determines
-/// whether they live in HOME or in the repo.
-pub(super) struct ConfigTarget {
-    pub(super) mcp_path: PathBuf,
-    pub(super) legacy_mcp_path: Option<PathBuf>,
-    pub(super) settings_path: Option<PathBuf>,
-    pub(super) scope: ScopeArg,
-}
-
-impl ConfigTarget {
-    /// `repo_root` is `None` only for a run that never resolved a checkout
-    /// (federated home scope); workspace scope cannot be targeted without one.
-    pub(super) fn resolve(
-        scope: ScopeArg,
-        provider: &McpProvider,
-        repo_root: Option<&Path>,
-        home_dir: Option<&Path>,
-        env: &Env,
-    ) -> Result<Self, OrbitError> {
-        let repo_root = match (scope, repo_root) {
-            (_, Some(repo_root)) => repo_root,
-            // Home-scope paths are derived from `home_dir` alone.
-            (ScopeArg::Home, None) => Path::new(""),
-            (ScopeArg::Workspace, None) => {
-                return Err(OrbitError::InvalidInput(
-                    "workspace-scope MCP config needs a resolved checkout".to_string(),
-                ));
-            }
-        };
-        let paths = mcp_clients::client_config_paths(
-            scope.client_scope(),
-            provider.client(),
-            repo_root,
-            home_dir,
-            env,
-        )?;
-        Ok(Self {
-            mcp_path: paths.mcp_path,
-            legacy_mcp_path: paths.legacy_mcp_path,
-            settings_path: paths.settings_path,
-            scope,
-        })
-    }
 }
 
 fn resolve_providers(

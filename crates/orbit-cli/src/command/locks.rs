@@ -11,6 +11,75 @@ use orbit_core::{Core, OrbitError};
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 
+/// Hotspot rows rendered by default. Long enough to show a pattern, short
+/// enough that the tail of singletons does not bury it.
+const DEFAULT_CONTENTION_LIMIT: usize = 10;
+
+#[derive(Args)]
+#[command(
+    about = "Show which files the pending backlog collides on (what caps parallelism)",
+    after_help = "Examples:\n  orbit task locks contention\n  orbit task locks contention --limit 25\n  orbit task locks contention --json\n\n\
+                  TASKS counts pending tasks whose lock surface overlaps that selector; a\n\
+                  selector claimed by one task constrains nothing and is not listed.\n\n\
+                  GROUPS counts clusters of pending tasks linked by overlapping surfaces.\n\
+                  Tasks in different groups can never block each other, so the group count\n\
+                  is a floor on how many dispatch can admit at once — not a ceiling, since\n\
+                  two tasks inside one group are often compatible and merely linked through\n\
+                  a third.\n\n\
+                  Surfaces are the ones conflict admission reserves: declared selectors,\n\
+                  including valid ones whose target no longer exists. A task declaring\n\
+                  nothing locks nothing and is counted apart."
+)]
+pub struct LocksContentionArgs {
+    /// Maximum hotspot rows to show. Default 10.
+    #[arg(long, default_value_t = DEFAULT_CONTENTION_LIMIT)]
+    pub limit: usize,
+}
+
+impl ExecuteCore for LocksContentionArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let report = exec(core, Command::contention())?.value;
+
+        let mut table = Table::new(vec![
+            Column::new("SELECTOR").fixed(),
+            Column::new("TASKS").number(),
+        ])
+        .keep_all_columns();
+        for hotspot in report.hotspots.iter().take(self.limit) {
+            table.add_row(vec![hotspot.selector.clone(), hotspot.tasks().to_string()]);
+        }
+
+        let doc = json!({
+            "hotspots": report
+                .hotspots
+                .iter()
+                .map(|hotspot| json!({
+                    "selector": hotspot.selector,
+                    "tasks": hotspot.tasks(),
+                    "task_ids": hotspot.task_ids,
+                }))
+                .collect::<Vec<_>>(),
+            "pending": {
+                "total": report.pending(),
+                "constrained": report.constrained,
+                "unconstrained": report.unconstrained,
+            },
+            "groups": report.groups,
+            "largest_group": report.largest_group,
+            "parallel_floor": report.parallel_floor(),
+        });
+
+        // With no hotspots the summary line already says why, so an empty grid
+        // (and its own "nothing found" message) would only contradict it.
+        let mut blocks = Vec::new();
+        if !report.hotspots.is_empty() {
+            blocks.push(Block::table(table));
+        }
+        blocks.push(Block::text(contention_summary(&report, self.limit)));
+        Ok(Payload::blocks(doc, blocks).into())
+    }
+}
+
 pub(crate) fn render(verb: TaskVerb, value: Value) -> CommandOut {
     match verb {
         TaskVerb::LocksList => Ok(Payload::detail(value.clone(), format_task_locks(&value)).into()),
@@ -128,75 +197,6 @@ fn granted_summary(result: &Value) -> String {
         "Release it early with `orbit task locks release {reservation_id} --confirm`."
     );
     out
-}
-
-/// Hotspot rows rendered by default. Long enough to show a pattern, short
-/// enough that the tail of singletons does not bury it.
-const DEFAULT_CONTENTION_LIMIT: usize = 10;
-
-#[derive(Args)]
-#[command(
-    about = "Show which files the pending backlog collides on (what caps parallelism)",
-    after_help = "Examples:\n  orbit task locks contention\n  orbit task locks contention --limit 25\n  orbit task locks contention --json\n\n\
-                  TASKS counts pending tasks whose lock surface overlaps that selector; a\n\
-                  selector claimed by one task constrains nothing and is not listed.\n\n\
-                  GROUPS counts clusters of pending tasks linked by overlapping surfaces.\n\
-                  Tasks in different groups can never block each other, so the group count\n\
-                  is a floor on how many dispatch can admit at once — not a ceiling, since\n\
-                  two tasks inside one group are often compatible and merely linked through\n\
-                  a third.\n\n\
-                  Surfaces are the ones conflict admission reserves: declared selectors,\n\
-                  including valid ones whose target no longer exists. A task declaring\n\
-                  nothing locks nothing and is counted apart."
-)]
-pub struct LocksContentionArgs {
-    /// Maximum hotspot rows to show. Default 10.
-    #[arg(long, default_value_t = DEFAULT_CONTENTION_LIMIT)]
-    pub limit: usize,
-}
-
-impl ExecuteCore for LocksContentionArgs {
-    fn execute(self, core: &Core) -> CommandOut {
-        let report = exec(core, Command::contention())?.value;
-
-        let mut table = Table::new(vec![
-            Column::new("SELECTOR").fixed(),
-            Column::new("TASKS").number(),
-        ])
-        .keep_all_columns();
-        for hotspot in report.hotspots.iter().take(self.limit) {
-            table.add_row(vec![hotspot.selector.clone(), hotspot.tasks().to_string()]);
-        }
-
-        let doc = json!({
-            "hotspots": report
-                .hotspots
-                .iter()
-                .map(|hotspot| json!({
-                    "selector": hotspot.selector,
-                    "tasks": hotspot.tasks(),
-                    "task_ids": hotspot.task_ids,
-                }))
-                .collect::<Vec<_>>(),
-            "pending": {
-                "total": report.pending(),
-                "constrained": report.constrained,
-                "unconstrained": report.unconstrained,
-            },
-            "groups": report.groups,
-            "largest_group": report.largest_group,
-            "parallel_floor": report.parallel_floor(),
-        });
-
-        // With no hotspots the summary line already says why, so an empty grid
-        // (and its own "nothing found" message) would only contradict it.
-        let mut blocks = Vec::new();
-        if !report.hotspots.is_empty() {
-            blocks.push(Block::table(table));
-        }
-        blocks.push(Block::text(contention_summary(&report, self.limit)));
-        Ok(Payload::blocks(doc, blocks).into())
-    }
 }
 
 /// One line stating what the numbers mean for dispatch.

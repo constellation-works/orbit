@@ -12,6 +12,23 @@ use std::{
     process::Output,
     time::{Duration, Instant},
 };
+
+const WARNING_MESSAGE: &str =
+    "The index is outdated and must be refreshed before querying the latest workspace records.";
+
+const ERROR_MESSAGE: &str = "The after-landing review consumer is stuck in \
+    definition_changed and cannot accept new delivery candidates.";
+
+const FIX: &str = "orbit auto-task recover delivery-code-review";
+
+type ConfigPaths = (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf);
+
+#[derive(Debug)]
+struct RenderFixtureOutput {
+    stdout: String,
+    stderr: String,
+}
+
 fn command(fixture: &WorkCheckout) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");
     test_env::clear_inherited_authority(|name| {
@@ -68,7 +85,7 @@ fn global_dir(fixture: &WorkCheckout) -> std::path::PathBuf {
     mkdir(&dir);
     dir
 }
-type ConfigPaths = (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf);
+
 fn write_configs(fixture: &WorkCheckout, global: &str, workspace: &str) -> ConfigPaths {
     let dir = global_dir(fixture);
     let global_path = dir.join("config.toml");
@@ -1160,15 +1177,7 @@ fn restrict_fixture_directories(path: &std::path::Path) {
         }
     }
 }
-const WARNING_MESSAGE: &str =
-    "The index is outdated and must be refreshed before querying the latest workspace records.";
-const ERROR_MESSAGE: &str = "The after-landing review consumer is stuck in definition_changed and cannot accept new delivery candidates.";
-const FIX: &str = "orbit auto-task recover delivery-code-review";
-#[derive(Debug)]
-struct RenderFixtureOutput {
-    stdout: String,
-    stderr: String,
-}
+
 fn render_fixture(case: &str) -> RenderFixtureOutput {
     let logs = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("child logs");
     let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));

@@ -41,6 +41,31 @@ pub(crate) enum Preflight {
     Remote(CommandOut),
 }
 
+/// How a workspace-less notice list's merged answer renders.
+enum AggregateRender {
+    Notice(NoticeVerb),
+    ToolRun(tool::ToolRunShape),
+}
+
+/// One tool call a command reduces to, and how its answer renders.
+struct RoutedCall {
+    name: String,
+    input: Value,
+    render: Render,
+}
+
+enum Render {
+    TaskShow { fields: Vec<String> },
+    TaskWrite { verb: &'static str },
+    ArtifactGet { out: Option<PathBuf> },
+    Notice { verb: NoticeVerb },
+    ReviewReset,
+    Requeue,
+    Reconcile,
+    Pilot,
+    ToolRun(tool::ToolRunShape),
+}
+
 /// Route `cli` before bootstrap: resolve `--host`, then deliver a call that
 /// belongs to another host there.
 pub(crate) fn preflight(
@@ -298,12 +323,6 @@ fn workspace_less(cli: &Cli, env: &Env) -> Result<bool, OrbitError> {
         )?
         .is_none(),
     )
-}
-
-/// How a workspace-less notice list's merged answer renders.
-enum AggregateRender {
-    Notice(NoticeVerb),
-    ToolRun(tool::ToolRunShape),
 }
 
 /// Deliver a workspace-less `orbit.notice.list` to the federated client,
@@ -580,25 +599,6 @@ fn caller_authority_for_declared_model(declared: Option<&str>, env: &Env) -> Mcp
     } else {
         caller_authority(env)
     }
-}
-
-/// One tool call a command reduces to, and how its answer renders.
-struct RoutedCall {
-    name: String,
-    input: Value,
-    render: Render,
-}
-
-enum Render {
-    TaskShow { fields: Vec<String> },
-    TaskWrite { verb: &'static str },
-    ArtifactGet { out: Option<PathBuf> },
-    Notice { verb: NoticeVerb },
-    ReviewReset,
-    Requeue,
-    Reconcile,
-    Pilot,
-    ToolRun(tool::ToolRunShape),
 }
 
 fn routed_call(cli: &Cli, holder: &HostEntry, env: &Env) -> Result<RoutedCall, OrbitError> {

@@ -48,6 +48,97 @@ const SSE_RESPONSE_HEAD_LIMIT: usize = 16 * 1024;
 /// How long to wait for the dashboard to start accepting connections.
 const STARTUP_DEADLINE: Duration = Duration::from_secs(10);
 
+/// Own the QA runner and every descendant in its process group.
+///
+/// Drop and the deadline path send SIGTERM while this child is still unreaped,
+/// so the group id cannot have been reused, then SIGKILL only if it is still
+/// the live leader. The runner reaps descendants before it exits on SIGTERM.
+#[cfg(target_os = "linux")]
+struct OwnedRunner {
+    child: Child,
+}
+
+#[cfg(target_os = "linux")]
+impl OwnedRunner {
+    fn spawn(command: &mut Command) -> Self {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+        let child = command.spawn().expect("spawn subreaper runner");
+        Self { child }
+    }
+
+    fn terminate(&mut self) {
+        if matches!(self.child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        let pgid = self.child.id() as libc::pid_t;
+        if pgid <= 1 {
+            return;
+        }
+        // SAFETY: `pgid` is the pid of this unreaped child, which leads the
+        // group created at spawn. `kill(-pgid)` signals only that group.
+        unsafe { libc::kill(-pgid, libc::SIGTERM) };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                _ => break,
+            }
+        }
+        if matches!(self.child.try_wait(), Ok(None)) {
+            // SAFETY: the leader is still unreaped, so the group id is still
+            // the one this fixture created.
+            unsafe { libc::kill(-pgid, libc::SIGKILL) };
+            let _ = self.child.wait();
+        }
+    }
+
+    fn wait_finished(&mut self, deadline: Duration) -> Option<std::process::ExitStatus> {
+        let start = Instant::now();
+        loop {
+            if let Ok(Some(status)) = self.child.try_wait() {
+                return Some(status);
+            }
+            if start.elapsed() >= deadline {
+                self.terminate();
+                return self.child.try_wait().ok().flatten();
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn output_text(&mut self) -> (String, String) {
+        fn read_capped(pipe: impl Read) -> String {
+            let mut text = String::new();
+            let _ = pipe.take(256 * 1024).read_to_string(&mut text);
+            text
+        }
+        let stdout = self
+            .child
+            .stdout
+            .take()
+            .map(read_capped)
+            .unwrap_or_default();
+        let stderr = self
+            .child
+            .stderr
+            .take()
+            .map(read_capped)
+            .unwrap_or_default();
+        (stdout, stderr)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for OwnedRunner {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
 #[test]
 fn dashboard_exits_promptly_on_sigterm_with_open_connections() {
     let temp = tempdir().expect("tempdir");
@@ -1081,97 +1172,6 @@ sys.stdout.flush()
             port > 1024 && port != 9,
             "the stub must own an ephemeral port, not a fixed one: {port}"
         );
-    }
-}
-
-/// Own the QA runner and every descendant in its process group.
-///
-/// Drop and the deadline path send SIGTERM while this child is still unreaped,
-/// so the group id cannot have been reused, then SIGKILL only if it is still
-/// the live leader. The runner reaps descendants before it exits on SIGTERM.
-#[cfg(target_os = "linux")]
-struct OwnedRunner {
-    child: Child,
-}
-
-#[cfg(target_os = "linux")]
-impl OwnedRunner {
-    fn spawn(command: &mut Command) -> Self {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-        let child = command.spawn().expect("spawn subreaper runner");
-        Self { child }
-    }
-
-    fn terminate(&mut self) {
-        if matches!(self.child.try_wait(), Ok(Some(_))) {
-            return;
-        }
-        let pgid = self.child.id() as libc::pid_t;
-        if pgid <= 1 {
-            return;
-        }
-        // SAFETY: `pgid` is the pid of this unreaped child, which leads the
-        // group created at spawn. `kill(-pgid)` signals only that group.
-        unsafe { libc::kill(-pgid, libc::SIGTERM) };
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            match self.child.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                _ => break,
-            }
-        }
-        if matches!(self.child.try_wait(), Ok(None)) {
-            // SAFETY: the leader is still unreaped, so the group id is still
-            // the one this fixture created.
-            unsafe { libc::kill(-pgid, libc::SIGKILL) };
-            let _ = self.child.wait();
-        }
-    }
-
-    fn wait_finished(&mut self, deadline: Duration) -> Option<std::process::ExitStatus> {
-        let start = Instant::now();
-        loop {
-            if let Ok(Some(status)) = self.child.try_wait() {
-                return Some(status);
-            }
-            if start.elapsed() >= deadline {
-                self.terminate();
-                return self.child.try_wait().ok().flatten();
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    fn output_text(&mut self) -> (String, String) {
-        fn read_capped(pipe: impl Read) -> String {
-            let mut text = String::new();
-            let _ = pipe.take(256 * 1024).read_to_string(&mut text);
-            text
-        }
-        let stdout = self
-            .child
-            .stdout
-            .take()
-            .map(read_capped)
-            .unwrap_or_default();
-        let stderr = self
-            .child
-            .stderr
-            .take()
-            .map(read_capped)
-            .unwrap_or_default();
-        (stdout, stderr)
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Drop for OwnedRunner {
-    fn drop(&mut self) {
-        self.terminate();
     }
 }
 

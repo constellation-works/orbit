@@ -18,47 +18,6 @@ use serde_json::json;
 
 const TEST: &str = "experiment_readout::per_protocol_table_is_not_introduced_as_intention_to_treat";
 
-#[test]
-fn per_protocol_table_is_not_introduced_as_intention_to_treat() {
-    if crate::isolated_test::run_in_child(TEST) {
-        return;
-    }
-    let fixture = Fixture::workspace();
-    let text = fixture.plain_readout();
-    let intro = line_containing(&text, "per-protocol (delivered runs only)");
-    assert!(
-        !intro.to_ascii_lowercase().contains("intention-to-treat"),
-        "per-protocol table introduced as intention-to-treat:\n{intro}\n\n{text}"
-    );
-    let caption_at = text
-        .find("per-protocol (delivered runs only)")
-        .expect("per-protocol caption");
-    let after_caption = &text[caption_at..];
-    let per_protocol_header = after_caption
-        .lines()
-        .find(|line| line.starts_with("ARM\t"))
-        .unwrap_or_else(|| panic!("per-protocol table missing after its caption:\n{text}"));
-    assert!(
-        per_protocol_header.contains("MEAN [95%]") && !per_protocol_header.contains("OPEN"),
-        "per-protocol caption does not introduce the per-protocol table:\n{per_protocol_header}\n\n{text}"
-    );
-    let itt_at = text
-        .find("delivery_done_rate (rate, higher is better, rate):")
-        .unwrap_or_else(|| panic!("intention-to-treat metric heading missing:\n{text}"));
-    assert!(
-        caption_at < itt_at,
-        "per-protocol table should precede the intention-to-treat metric table:\n{text}"
-    );
-    let itt_header = text[itt_at..]
-        .lines()
-        .find(|line| line.starts_with("ARM\t"))
-        .unwrap_or_else(|| panic!("intention-to-treat metric table missing:\n{text}"));
-    assert!(
-        itt_header.contains("OPEN") && itt_header.contains("RATE [95% WILSON]"),
-        "intention-to-treat metric table was not rendered:\n{itt_header}\n\n{text}"
-    );
-}
-
 struct Fixture {
     _temp: tempfile::TempDir,
     home: PathBuf,
@@ -208,6 +167,47 @@ impl Fixture {
             .output()
             .expect("run orbit")
     }
+}
+
+#[test]
+fn per_protocol_table_is_not_introduced_as_intention_to_treat() {
+    if crate::isolated_test::run_in_child(TEST) {
+        return;
+    }
+    let fixture = Fixture::workspace();
+    let text = fixture.plain_readout();
+    let intro = line_containing(&text, "per-protocol (delivered runs only)");
+    assert!(
+        !intro.to_ascii_lowercase().contains("intention-to-treat"),
+        "per-protocol table introduced as intention-to-treat:\n{intro}\n\n{text}"
+    );
+    let caption_at = text
+        .find("per-protocol (delivered runs only)")
+        .expect("per-protocol caption");
+    let after_caption = &text[caption_at..];
+    let per_protocol_header = after_caption
+        .lines()
+        .find(|line| line.starts_with("ARM\t"))
+        .unwrap_or_else(|| panic!("per-protocol table missing after its caption:\n{text}"));
+    assert!(
+        per_protocol_header.contains("MEAN [95%]") && !per_protocol_header.contains("OPEN"),
+        "per-protocol caption does not introduce the per-protocol table:\n{per_protocol_header}\n\n{text}"
+    );
+    let itt_at = text
+        .find("delivery_done_rate (rate, higher is better, rate):")
+        .unwrap_or_else(|| panic!("intention-to-treat metric heading missing:\n{text}"));
+    assert!(
+        caption_at < itt_at,
+        "per-protocol table should precede the intention-to-treat metric table:\n{text}"
+    );
+    let itt_header = text[itt_at..]
+        .lines()
+        .find(|line| line.starts_with("ARM\t"))
+        .unwrap_or_else(|| panic!("intention-to-treat metric table missing:\n{text}"));
+    assert!(
+        itt_header.contains("OPEN") && itt_header.contains("RATE [95% WILSON]"),
+        "intention-to-treat metric table was not rendered:\n{itt_header}\n\n{text}"
+    );
 }
 
 #[test]

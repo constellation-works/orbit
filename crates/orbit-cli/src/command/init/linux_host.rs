@@ -95,13 +95,6 @@ impl Distribution {
     }
 }
 
-fn os_release_value(release: &str, key: &str) -> Option<String> {
-    release.lines().find_map(|line| {
-        let (name, value) = line.split_once('=')?;
-        (name == key).then(|| value.trim_matches('"').trim_matches('\'').to_string())
-    })
-}
-
 /// The small host boundary lets decision tests run without touching the CI host.
 // `pub(super)` widened for the sibling tests/ layout: the fixture in
 // `tests/linux_host.rs` implements this trait. Production callers use [`prepare`].
@@ -141,27 +134,6 @@ impl<'a> RealHost<'a> {
             env,
             staged: None,
         })
-    }
-}
-
-/// Refuse root preparation before any host operation unless sudo identifies
-/// the unprivileged account whose namespace capability must be checked.
-fn intended_probe_user(
-    euid: u32,
-    sudo_uid: Option<&str>,
-    sudo_gid: Option<&str>,
-) -> Result<Option<(u32, u32)>, OrbitError> {
-    if euid != 0 {
-        return Ok(None);
-    }
-    let uid = sudo_uid.and_then(|value| value.parse::<u32>().ok());
-    let gid = sudo_gid.and_then(|value| value.parse::<u32>().ok());
-    match (uid, gid) {
-        (Some(uid), Some(gid)) if uid != 0 => Ok(Some((uid, gid))),
-        _ => Err(OrbitError::Execution(
-            "root installation cannot identify the intended unprivileged Orbit user; run the installer from that account (sudo will authenticate only for package/profile changes), or set ORBIT_SKIP_HOST_PREREQUISITES=1 when an image build or administrator owns the host's sandbox packages"
-                .to_string(),
-        )),
     }
 }
 
@@ -313,6 +285,34 @@ impl Host for RealHost<'_> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(OrbitError::Execution(format!("read {path}: {error}"))),
         }
+    }
+}
+
+fn os_release_value(release: &str, key: &str) -> Option<String> {
+    release.lines().find_map(|line| {
+        let (name, value) = line.split_once('=')?;
+        (name == key).then(|| value.trim_matches('"').trim_matches('\'').to_string())
+    })
+}
+
+/// Refuse root preparation before any host operation unless sudo identifies
+/// the unprivileged account whose namespace capability must be checked.
+fn intended_probe_user(
+    euid: u32,
+    sudo_uid: Option<&str>,
+    sudo_gid: Option<&str>,
+) -> Result<Option<(u32, u32)>, OrbitError> {
+    if euid != 0 {
+        return Ok(None);
+    }
+    let uid = sudo_uid.and_then(|value| value.parse::<u32>().ok());
+    let gid = sudo_gid.and_then(|value| value.parse::<u32>().ok());
+    match (uid, gid) {
+        (Some(uid), Some(gid)) if uid != 0 => Ok(Some((uid, gid))),
+        _ => Err(OrbitError::Execution(
+            "root installation cannot identify the intended unprivileged Orbit user; run the installer from that account (sudo will authenticate only for package/profile changes), or set ORBIT_SKIP_HOST_PREREQUISITES=1 when an image build or administrator owns the host's sandbox packages"
+                .to_string(),
+        )),
     }
 }
 

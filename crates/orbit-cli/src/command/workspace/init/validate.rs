@@ -9,6 +9,17 @@ use orbit_types::identity::canonicalize_workspace_id;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry};
 use serde::Deserialize;
 
+#[derive(Deserialize)]
+pub(super) struct StoredWorkspaceIdentity {
+    schema_version: u32,
+    pub(super) workspace_id: String,
+}
+
+pub(super) enum WorkspaceIdentityRecovery {
+    Missing,
+    Corrupt(Vec<u8>),
+}
+
 /// Refuse to seed routines whose names another registered workspace on this
 /// host already declares.
 ///
@@ -59,17 +70,6 @@ fn describe_routine_collisions(collisions: &[RoutineNameCollision]) -> String {
 
 pub(super) fn canonical_workspace_id(name: &str) -> String {
     canonicalize_workspace_id(name)
-}
-
-#[derive(Deserialize)]
-pub(super) struct StoredWorkspaceIdentity {
-    schema_version: u32,
-    pub(super) workspace_id: String,
-}
-
-pub(super) enum WorkspaceIdentityRecovery {
-    Missing,
-    Corrupt(Vec<u8>),
 }
 
 pub(super) fn validate_existing_registration(

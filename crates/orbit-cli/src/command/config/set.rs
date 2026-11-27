@@ -12,25 +12,6 @@ use serde_json::json;
 
 use crate::command::{CommandOut, Payload};
 
-/// Refuse a workspace `config set` before runtime open when the working
-/// directory's uninitialized `.orbit/` is not the workspace that resolution
-/// selected. Opening the runtime would otherwise bootstrap that other root.
-/// An explicit workspace selector names its target directly, so the working
-/// directory's roots are never resolved in that case.
-pub fn preflight_indirect_workspace_write(
-    root_override: Option<&Path>,
-    global: bool,
-    explicit_workspace: bool,
-    env: &Env,
-) -> Result<(), OrbitError> {
-    if global || root_override.is_some() || explicit_workspace {
-        return Ok(());
-    }
-    let cwd = std::env::current_dir().map_err(|err| OrbitError::Io(err.to_string()))?;
-    let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&cwd, None)?;
-    refuse_indirect_uninitialized_caller_orbit(env, &cwd, &roots.shared_root, false)
-}
-
 #[derive(Args)]
 pub struct ConfigSetArgs {
     /// Dotted config.toml key, e.g. workflow.base_branch
@@ -106,4 +87,23 @@ impl ConfigSetArgs {
         )
         .into())
     }
+}
+
+/// Refuse a workspace `config set` before runtime open when the working
+/// directory's uninitialized `.orbit/` is not the workspace that resolution
+/// selected. Opening the runtime would otherwise bootstrap that other root.
+/// An explicit workspace selector names its target directly, so the working
+/// directory's roots are never resolved in that case.
+pub fn preflight_indirect_workspace_write(
+    root_override: Option<&Path>,
+    global: bool,
+    explicit_workspace: bool,
+    env: &Env,
+) -> Result<(), OrbitError> {
+    if global || root_override.is_some() || explicit_workspace {
+        return Ok(());
+    }
+    let cwd = std::env::current_dir().map_err(|err| OrbitError::Io(err.to_string()))?;
+    let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&cwd, None)?;
+    refuse_indirect_uninitialized_caller_orbit(env, &cwd, &roots.shared_root, false)
 }

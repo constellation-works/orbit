@@ -267,6 +267,21 @@ impl HostOutput {
     }
 }
 
+impl Drop for HostOutput {
+    fn drop(&mut self) {
+        // Settle the passive active control before the routine-worker guard
+        // inventories all fixture runs. ChildGuard also reaps on an unwind.
+        let _ = self.runtime.finalize_job_run(
+            &self.active_run,
+            JobRunState::Success,
+            Utc::now(),
+            Some(0),
+        );
+        drop(self.owner.stdin.take());
+        let _ = self.owner.wait();
+    }
+}
+
 fn attach_run(runtime: &OrbitRuntime, workspace: &Workspace, run_id: &str) -> PathBuf {
     let run = runtime.show_job_run(run_id).unwrap();
     let source =
@@ -320,19 +335,4 @@ fn finish_run(runtime: &OrbitRuntime, run_id: &str, mut owner: crate::child_guar
     );
     drop(owner.stdin.take());
     assert!(owner.wait().unwrap().success());
-}
-
-impl Drop for HostOutput {
-    fn drop(&mut self) {
-        // Settle the passive active control before the routine-worker guard
-        // inventories all fixture runs. ChildGuard also reaps on an unwind.
-        let _ = self.runtime.finalize_job_run(
-            &self.active_run,
-            JobRunState::Success,
-            Utc::now(),
-            Some(0),
-        );
-        drop(self.owner.stdin.take());
-        let _ = self.owner.wait();
-    }
 }

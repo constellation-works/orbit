@@ -26,6 +26,13 @@ use crate::git_repo;
 /// Distinctive enough that finding it anywhere is a leak, not a coincidence.
 const SECRET: &str = "orbit-test-secret-7f3a9c1e5b";
 
+const TWO_SECRETS: &str = concat!(
+    "    - name: refresh_token\n",
+    "      description: OAuth refresh token.\n",
+    "      rotatable: true\n",
+    "    - name: api_key\n",
+);
+
 struct Fixture {
     _temp: TempDir,
     home: PathBuf,
@@ -186,8 +193,6 @@ fn write_plugin_named(root: &Path, name: &str, secrets: &str) {
     )
     .expect("write manifest");
 }
-
-const TWO_SECRETS: &str = "    - name: refresh_token\n      description: OAuth refresh token.\n      rotatable: true\n    - name: api_key\n";
 
 /// Every file under `dir` whose bytes contain [`SECRET`], skipping `skip`.
 fn files_holding_the_secret(dir: &Path, skip: &Path) -> Vec<PathBuf> {

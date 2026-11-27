@@ -21,47 +21,6 @@ use super::super::operation_args::Invocation;
 use crate::command::operation::DispatchContext;
 use crate::command::{CommandOut, Payload};
 
-/// Explicit owner selection is resolved before opening the CLI runtime.
-pub(crate) fn retry_owner_workspace(command: &super::command::TaskSubcommand) -> Option<&str> {
-    let super::command::TaskSubcommand::Operation(super::command::TaskInvocation::Registry(
-        invocation,
-    )) = command
-    else {
-        return None;
-    };
-    if invocation.spec.verb != TaskVerb::RetryHandoff {
-        return None;
-    }
-    invocation
-        .input
-        .get("owner_workspace")
-        .and_then(Value::as_str)
-}
-
-/// CLI-only response options: list presentation and the artifact destination.
-#[derive(Clone, Default)]
-pub(super) struct ListView {
-    /// Signal-tier records (`--ops`).
-    pub(super) ops: bool,
-    /// Every table column (`--full`).
-    pub(super) full: bool,
-    /// Destination consumed from `artifact get --out`.
-    pub(super) artifact_out: Option<String>,
-}
-
-pub(super) fn execute(
-    invocation: Invocation<TaskVerb>,
-    context: &DispatchContext<'_>,
-) -> CommandOut {
-    let Invocation { spec, mut input } = invocation;
-    let view = prepare(spec.verb, context, &mut input)?;
-    let outcome = task::exec(
-        context.core()?,
-        Command::Operation(spec.verb, Input::new(input.clone())),
-    )?;
-    render(spec.verb, &input, outcome, view)
-}
-
 /// `orbit task add`'s CLI-only flags, carried to the handler as its CLI
 /// options under the names it reads.
 const ADD_CLI_OPTIONS: [(&str, &str); 5] = [
@@ -82,6 +41,47 @@ const UPDATE_MODIFIERS: [&str; 4] = [
     "allow_missing_context",
     "allow_drop_system_tags",
 ];
+
+/// CLI-only response options: list presentation and the artifact destination.
+#[derive(Clone, Default)]
+pub(super) struct ListView {
+    /// Signal-tier records (`--ops`).
+    pub(super) ops: bool,
+    /// Every table column (`--full`).
+    pub(super) full: bool,
+    /// Destination consumed from `artifact get --out`.
+    pub(super) artifact_out: Option<String>,
+}
+
+/// Explicit owner selection is resolved before opening the CLI runtime.
+pub(crate) fn retry_owner_workspace(command: &super::command::TaskSubcommand) -> Option<&str> {
+    let super::command::TaskSubcommand::Operation(super::command::TaskInvocation::Registry(
+        invocation,
+    )) = command
+    else {
+        return None;
+    };
+    if invocation.spec.verb != TaskVerb::RetryHandoff {
+        return None;
+    }
+    invocation
+        .input
+        .get("owner_workspace")
+        .and_then(Value::as_str)
+}
+
+pub(super) fn execute(
+    invocation: Invocation<TaskVerb>,
+    context: &DispatchContext<'_>,
+) -> CommandOut {
+    let Invocation { spec, mut input } = invocation;
+    let view = prepare(spec.verb, context, &mut input)?;
+    let outcome = task::exec(
+        context.core()?,
+        Command::Operation(spec.verb, Input::new(input.clone())),
+    )?;
+    render(spec.verb, &input, outcome, view)
+}
 
 /// Shape a task request for the CLI before it reaches the tool. Each
 /// CLI-only parameter is consumed here, so none reaches the tool as a field

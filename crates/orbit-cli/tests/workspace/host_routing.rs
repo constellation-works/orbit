@@ -141,6 +141,110 @@ impl Routed {
     }
 }
 
+/// A line-delimited MCP client over a spawned server's stdio.
+struct StdioClient {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    lines: Receiver<String>,
+    next_id: i64,
+}
+
+impl StdioClient {
+    fn spawn(fleet: &Fleet, args: &[&str]) -> Self {
+        let mut child = fleet
+            .process(&fleet.local.home, &fleet.local_repo, args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn MCP server");
+        let stdin = child.stdin.take().expect("server stdin");
+        let stdout = child.stdout.take().expect("server stdout");
+        let (sender, lines) = channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut client = Self {
+            child,
+            stdin,
+            lines,
+            next_id: 0,
+        };
+        client.request(
+            "initialize",
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "host-routing", "version": "0" },
+            }),
+        );
+        client.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+        client
+    }
+
+    fn send(&mut self, message: &Value) {
+        let mut line = message.to_string();
+        line.push('\n');
+        self.stdin
+            .write_all(line.as_bytes())
+            .expect("write to server");
+        self.stdin.flush().expect("flush server stdin");
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        self.next_id += 1;
+        let id = self.next_id;
+        self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
+        loop {
+            let line = self
+                .lines
+                .recv_timeout(Duration::from_secs(60))
+                .unwrap_or_else(|error| panic!("no answer to {method}: {error}"));
+            let Ok(response) = serde_json::from_str::<Value>(line.trim()) else {
+                continue;
+            };
+            if response["id"].as_i64() == Some(id) {
+                return response;
+            }
+        }
+    }
+
+    fn call(&mut self, name: &str, arguments: Value) -> Value {
+        let response = self.request(
+            "tools/call",
+            json!({ "name": name, "arguments": arguments }),
+        );
+        response
+            .get("result")
+            .cloned()
+            .unwrap_or_else(|| panic!("{name} returned no result: {response}"))
+    }
+
+    fn call_ok(&mut self, name: &str, arguments: Value) -> Value {
+        let result = self.call(name, arguments);
+        assert_eq!(result["isError"], false, "{name} failed: {result}");
+        result["structuredContent"].clone()
+    }
+
+    fn call_err(&mut self, name: &str, arguments: Value) -> Value {
+        let result = self.call(name, arguments);
+        assert_eq!(result["isError"], true, "{name} succeeded: {result}");
+        result["structuredContent"].clone()
+    }
+}
+
+impl Drop for StdioClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 fn parse(stdout: &[u8], args: &[&str]) -> Value {
     serde_json::from_slice(stdout).unwrap_or_else(|error| {
         panic!(
@@ -1477,110 +1581,6 @@ fn host_ssh_command_hint_quotes_metacharacters_and_roundtrips_posix_argv() {
             !marker.exists(),
             "evaluating the hint through a POSIX shell must not execute embedded metacharacters"
         );
-    }
-}
-
-/// A line-delimited MCP client over a spawned server's stdio.
-struct StdioClient {
-    child: std::process::Child,
-    stdin: std::process::ChildStdin,
-    lines: Receiver<String>,
-    next_id: i64,
-}
-
-impl StdioClient {
-    fn spawn(fleet: &Fleet, args: &[&str]) -> Self {
-        let mut child = fleet
-            .process(&fleet.local.home, &fleet.local_repo, args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn MCP server");
-        let stdin = child.stdin.take().expect("server stdin");
-        let stdout = child.stdout.take().expect("server stdout");
-        let (sender, lines) = channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                if sender.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-        let mut client = Self {
-            child,
-            stdin,
-            lines,
-            next_id: 0,
-        };
-        client.request(
-            "initialize",
-            json!({
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": { "name": "host-routing", "version": "0" },
-            }),
-        );
-        client.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
-        client
-    }
-
-    fn send(&mut self, message: &Value) {
-        let mut line = message.to_string();
-        line.push('\n');
-        self.stdin
-            .write_all(line.as_bytes())
-            .expect("write to server");
-        self.stdin.flush().expect("flush server stdin");
-    }
-
-    fn request(&mut self, method: &str, params: Value) -> Value {
-        self.next_id += 1;
-        let id = self.next_id;
-        self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
-        loop {
-            let line = self
-                .lines
-                .recv_timeout(Duration::from_secs(60))
-                .unwrap_or_else(|error| panic!("no answer to {method}: {error}"));
-            let Ok(response) = serde_json::from_str::<Value>(line.trim()) else {
-                continue;
-            };
-            if response["id"].as_i64() == Some(id) {
-                return response;
-            }
-        }
-    }
-
-    fn call(&mut self, name: &str, arguments: Value) -> Value {
-        let response = self.request(
-            "tools/call",
-            json!({ "name": name, "arguments": arguments }),
-        );
-        response
-            .get("result")
-            .cloned()
-            .unwrap_or_else(|| panic!("{name} returned no result: {response}"))
-    }
-
-    fn call_ok(&mut self, name: &str, arguments: Value) -> Value {
-        let result = self.call(name, arguments);
-        assert_eq!(result["isError"], false, "{name} failed: {result}");
-        result["structuredContent"].clone()
-    }
-
-    fn call_err(&mut self, name: &str, arguments: Value) -> Value {
-        let result = self.call(name, arguments);
-        assert_eq!(result["isError"], true, "{name} succeeded: {result}");
-        result["structuredContent"].clone()
-    }
-}
-
-impl Drop for StdioClient {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
     }
 }
 

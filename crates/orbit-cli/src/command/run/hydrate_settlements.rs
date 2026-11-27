@@ -118,10 +118,6 @@ impl RunHydrateSettlementsArgs {
     }
 }
 
-fn outcome_label(outcome: LeafHydrationOutcome) -> String {
-    orbit_common::protocol::serde_string_label(&outcome).unwrap_or_default()
-}
-
 /// The operator's own read of a follower's run records: the existing
 /// federated client, opened as the operator, asking the follower for
 /// `orbit.run` action `observe` in the workspace the operator named.
@@ -164,4 +160,8 @@ impl FollowerRunObserver for OperatorRunObserver {
             ToolSessionContext::default(),
         )
     }
+}
+
+fn outcome_label(outcome: LeafHydrationOutcome) -> String {
+    orbit_common::protocol::serde_string_label(&outcome).unwrap_or_default()
 }

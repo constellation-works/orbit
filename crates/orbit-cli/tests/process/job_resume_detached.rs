@@ -21,22 +21,6 @@ mod unix {
 
     use super::fixture_crew;
 
-    /// Run a freshly copied test binary, absorbing the parallel-fork `ETXTBSY`
-    /// race described in [`orbit_common::test_process`]. Other errors return
-    /// immediately. Non-Linux launches stay direct, matching `update::output_of`.
-    fn installed_output(
-        command: &mut assert_cmd::Command,
-    ) -> std::io::Result<std::process::Output> {
-        #[cfg(target_os = "linux")]
-        {
-            orbit_common::test_process::retry_executable_busy(|| command.output())
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            command.output()
-        }
-    }
-
     pub(super) struct Fixture {
         _temp: TempDir,
         pub(super) gate: WorkflowGate,
@@ -230,6 +214,22 @@ mod unix {
                 );
                 std::thread::sleep(Duration::from_millis(100));
             }
+        }
+    }
+
+    /// Run a freshly copied test binary, absorbing the parallel-fork `ETXTBSY`
+    /// race described in [`orbit_common::test_process`]. Other errors return
+    /// immediately. Non-Linux launches stay direct, matching `update::output_of`.
+    fn installed_output(
+        command: &mut assert_cmd::Command,
+    ) -> std::io::Result<std::process::Output> {
+        #[cfg(target_os = "linux")]
+        {
+            orbit_common::test_process::retry_executable_busy(|| command.output())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            command.output()
         }
     }
 

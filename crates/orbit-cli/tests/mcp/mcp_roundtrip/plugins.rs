@@ -9,6 +9,17 @@ mod agent_callable;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
 
+/// A secret value distinctive enough that finding it anywhere is a leak.
+const MCP_SECRET: &str = "orbit-mcp-secret-2c8e41d7";
+
+/// SHA-256 of [`MCP_SECRET`]: the fixture server echoes each delivered
+/// secret as its digest, so the response proves delivery without holding it.
+const MCP_SECRET_SHA256: &str = "32c4c9e0712924bce14ea13f1713eda001770562d70a31ceffa6acac7cc1cb53";
+
+/// The value the rotation test sets; the fixture rotates it to this plus
+/// `-rotated`, so neither value ever travels in tool arguments.
+const MCP_ROTATION_SECRET: &str = "orbit-mcp-rotation-9e1f03a2";
+
 /// Write a plugin outside the workspace checkout — installs are global, and a
 /// source inside the repository is refused on purpose.
 fn write_plugin(home: &Path, namespace: &str) -> PathBuf {
@@ -1825,12 +1836,6 @@ fn install_mcp_secret_fixture(
     assert!(set.status.success(), "{name}: {set:?}");
 }
 
-/// A secret value distinctive enough that finding it anywhere is a leak.
-const MCP_SECRET: &str = "orbit-mcp-secret-2c8e41d7";
-/// SHA-256 of [`MCP_SECRET`]: the fixture server echoes each delivered
-/// secret as its digest, so the response proves delivery without holding it.
-const MCP_SECRET_SHA256: &str = "32c4c9e0712924bce14ea13f1713eda001770562d70a31ceffa6acac7cc1cb53";
-
 /// An `mcp`-backend plugin that declares a secret receives it on every
 /// `tools/call` as `params._meta.orbit.secrets` once the operator sets it, and
 /// the value appears in no MCP response, no `plugin show` output, and no audit
@@ -1918,10 +1923,6 @@ fn an_mcp_backend_receives_its_declared_secret_in_meta_and_no_response_holds_it(
         .expect("scan audit rows");
     assert_eq!(leaked, 0, "no audit row holds the value");
 }
-
-/// The value the rotation test sets; the fixture rotates it to this plus
-/// `-rotated`, so neither value ever travels in tool arguments.
-const MCP_ROTATION_SECRET: &str = "orbit-mcp-rotation-9e1f03a2";
 
 /// An `mcp`-backend plugin rotates a declared `rotatable` secret through its
 /// result's `_meta.orbit.secret_updates`: the update at the delivered version

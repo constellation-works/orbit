@@ -1442,11 +1442,14 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
 #[test]
 fn seeded_auto_task_defaults_are_inert_portable_and_name_only_callable_tools() {
     let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    let repo = temp.path().join("repo");
+    let root = temp.path().join("state");
     let fixture = Fixture {
-        home: temp.path().join("home"),
-        repo: temp.path().join("repo"),
-        root: temp.path().join("state"),
         _temp: temp,
+        home,
+        repo,
+        root,
     };
     fs::create_dir_all(&fixture.home).unwrap();
     fs::create_dir_all(&fixture.repo).unwrap();

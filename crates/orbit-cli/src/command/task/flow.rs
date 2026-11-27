@@ -67,6 +67,97 @@ pub struct TaskFlowArgs {
     pub buckets: usize,
 }
 
+impl ExecuteCore for TaskFlowArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let width = bucket_width(&self.window)?;
+        let now = Utc::now();
+        report_start(now, width, self.buckets).ok_or_else(|| {
+            OrbitError::InvalidInput(format!(
+                "window '{}' x {} buckets reaches past the earliest representable time",
+                self.window, self.buckets
+            ))
+        })?;
+        let points: Vec<FlowPoint> = task::exec(
+            core,
+            Command::Flow {
+                tags: self.tags,
+                task_type: self.task_type,
+            },
+        )
+        .and_then(Outcome::into_flow)?
+        .iter()
+        .map(|(task, history)| FlowPoint::from_task(task, history))
+        .collect();
+
+        let report = compute_flow(&points, now, width, self.buckets);
+
+        let mut table = Table::new(vec![
+            Column::new("WINDOW").fixed(),
+            Column::new("FILED").number(),
+            Column::new("REOPENED").number(),
+            Column::new("CLOSED").number(),
+            Column::new("DROPPED").number(),
+            Column::new("NET").number(),
+            Column::new("OPEN AT END").number(),
+        ])
+        .keep_all_columns()
+        .empty_message("no windows to report");
+
+        for bucket in &report.buckets {
+            table.add_row(vec![
+                bucket.start.format("%Y-%m-%d").to_string(),
+                bucket.filed.to_string(),
+                bucket.reopened.to_string(),
+                bucket.closed.to_string(),
+                bucket.dropped.to_string(),
+                format_net(bucket.net()),
+                bucket.open_at_end.to_string(),
+            ]);
+        }
+
+        let doc = json!({
+            "window": self.window,
+            "buckets": report
+                .buckets
+                .iter()
+                .map(|bucket| json!({
+                    "start": bucket.start.to_rfc3339(),
+                    "end": bucket.end.to_rfc3339(),
+                    "filed": bucket.filed,
+                    "reopened": bucket.reopened,
+                    "closed": bucket.closed,
+                    "dropped": bucket.dropped,
+                    "net": bucket.net(),
+                    "open_at_end": bucket.open_at_end,
+                }))
+                .collect::<Vec<_>>(),
+            "totals": {
+                "filed": report.filed,
+                "reopened": report.reopened,
+                "closed": report.closed,
+                "dropped": report.dropped,
+                "net": report.net(),
+                "open_now": report.open_now,
+            },
+            "verdict": report.verdict(),
+        });
+
+        let summary = format!(
+            "{} filed, {} reopened, {} closed, {} dropped over {} × {} — net {}, {} open now: {}",
+            report.filed,
+            report.reopened,
+            report.closed,
+            report.dropped,
+            self.buckets,
+            self.window,
+            format_net(report.net()),
+            report.open_now,
+            report.verdict(),
+        );
+        Ok(Payload::blocks(doc, vec![Block::table(table), Block::prose(summary)]).into())
+    }
+}
+
 /// The task creation time and status changes the report reads. Reducing to
 /// them keeps the arithmetic testable without constructing whole tasks.
 #[derive(Clone)]
@@ -275,104 +366,18 @@ pub(crate) fn compute_flow(
         }
     }
 
+    let filed = buckets.iter().map(|bucket| bucket.filed).sum();
+    let reopened = buckets.iter().map(|bucket| bucket.reopened).sum();
+    let closed = buckets.iter().map(|bucket| bucket.closed).sum();
+    let dropped = buckets.iter().map(|bucket| bucket.dropped).sum();
+    let open_now = points.iter().filter(|point| point.open_at(now)).count();
     FlowReport {
-        filed: buckets.iter().map(|bucket| bucket.filed).sum(),
-        reopened: buckets.iter().map(|bucket| bucket.reopened).sum(),
-        closed: buckets.iter().map(|bucket| bucket.closed).sum(),
-        dropped: buckets.iter().map(|bucket| bucket.dropped).sum(),
-        open_now: points.iter().filter(|point| point.open_at(now)).count(),
         buckets,
-    }
-}
-
-impl ExecuteCore for TaskFlowArgs {
-    fn execute(self, core: &Core) -> CommandOut {
-        let width = bucket_width(&self.window)?;
-        let now = Utc::now();
-        report_start(now, width, self.buckets).ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "window '{}' x {} buckets reaches past the earliest representable time",
-                self.window, self.buckets
-            ))
-        })?;
-        let points: Vec<FlowPoint> = task::exec(
-            core,
-            Command::Flow {
-                tags: self.tags,
-                task_type: self.task_type,
-            },
-        )
-        .and_then(Outcome::into_flow)?
-        .iter()
-        .map(|(task, history)| FlowPoint::from_task(task, history))
-        .collect();
-
-        let report = compute_flow(&points, now, width, self.buckets);
-
-        let mut table = Table::new(vec![
-            Column::new("WINDOW").fixed(),
-            Column::new("FILED").number(),
-            Column::new("REOPENED").number(),
-            Column::new("CLOSED").number(),
-            Column::new("DROPPED").number(),
-            Column::new("NET").number(),
-            Column::new("OPEN AT END").number(),
-        ])
-        .keep_all_columns()
-        .empty_message("no windows to report");
-
-        for bucket in &report.buckets {
-            table.add_row(vec![
-                bucket.start.format("%Y-%m-%d").to_string(),
-                bucket.filed.to_string(),
-                bucket.reopened.to_string(),
-                bucket.closed.to_string(),
-                bucket.dropped.to_string(),
-                format_net(bucket.net()),
-                bucket.open_at_end.to_string(),
-            ]);
-        }
-
-        let doc = json!({
-            "window": self.window,
-            "buckets": report
-                .buckets
-                .iter()
-                .map(|bucket| json!({
-                    "start": bucket.start.to_rfc3339(),
-                    "end": bucket.end.to_rfc3339(),
-                    "filed": bucket.filed,
-                    "reopened": bucket.reopened,
-                    "closed": bucket.closed,
-                    "dropped": bucket.dropped,
-                    "net": bucket.net(),
-                    "open_at_end": bucket.open_at_end,
-                }))
-                .collect::<Vec<_>>(),
-            "totals": {
-                "filed": report.filed,
-                "reopened": report.reopened,
-                "closed": report.closed,
-                "dropped": report.dropped,
-                "net": report.net(),
-                "open_now": report.open_now,
-            },
-            "verdict": report.verdict(),
-        });
-
-        let summary = format!(
-            "{} filed, {} reopened, {} closed, {} dropped over {} × {} — net {}, {} open now: {}",
-            report.filed,
-            report.reopened,
-            report.closed,
-            report.dropped,
-            self.buckets,
-            self.window,
-            format_net(report.net()),
-            report.open_now,
-            report.verdict(),
-        );
-        Ok(Payload::blocks(doc, vec![Block::table(table), Block::prose(summary)]).into())
+        filed,
+        reopened,
+        closed,
+        dropped,
+        open_now,
     }
 }
 

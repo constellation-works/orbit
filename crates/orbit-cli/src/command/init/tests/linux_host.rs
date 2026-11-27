@@ -10,6 +10,29 @@ use super::super::linux_host::{
     probe_profile_is_loaded as profile_is_loaded, probe_profile_source, probe_profile_target,
 };
 
+const STAGED: &str = "/fixture/staged/bwrap";
+const STAGED_SHA256: &str = "5ea1ed";
+const PACKAGE_COMMANDS: [&str; 5] = [
+    "/usr/bin/apt-get",
+    "/usr/bin/dnf5",
+    "/usr/bin/dnf",
+    "/usr/bin/pacman",
+    "/usr/bin/zypper",
+];
+
+const MISSING: &str = "trusted Bubblewrap not available at /usr/bin/bwrap";
+const UID_MAP: &str = "bwrap: setting up uid map: Permission denied";
+const NAMESPACE_DENIED: &str = "bwrap: Creating new namespace failed: Operation not permitted";
+
+const NO_BIND_FD: &str = "Bubblewrap at /usr/bin/bwrap does not support the required --bind-fd \
+                          and --ro-bind-fd object-authority mounts, and no bundled Bubblewrap is installed";
+
+const BUNDLED_READY: &str = "ready-bundled:0.12.0";
+const BUNDLED_INSTALL: [&str; 2] = [
+    "/usr/bin/install -d -o root -g root -m 0755 /usr/local/libexec/orbit",
+    "/usr/bin/install -o root -g root -m 0755 /fixture/staged/bwrap /usr/local/libexec/orbit/bwrap",
+];
+
 struct FixtureHost {
     release: String,
     probes: VecDeque<BwrapProbeOutcome>,
@@ -26,37 +49,6 @@ struct FixtureHost {
     /// Install the bundled binary with bytes other than the staged ones.
     tamper_install: bool,
     digests: HashMap<String, String>,
-}
-
-const STAGED: &str = "/fixture/staged/bwrap";
-const STAGED_SHA256: &str = "5ea1ed";
-const PACKAGE_COMMANDS: [&str; 5] = [
-    "/usr/bin/apt-get",
-    "/usr/bin/dnf5",
-    "/usr/bin/dnf",
-    "/usr/bin/pacman",
-    "/usr/bin/zypper",
-];
-
-/// `ready` passes on the host binary; `ready-bundled:<version>` passes on the
-/// bundled one; anything else is a failed probe with that detail.
-fn probe_outcome(detail: &str) -> BwrapProbeOutcome {
-    if let Some(version) = detail.strip_prefix("ready-bundled:") {
-        return BwrapProbeOutcome {
-            available: true,
-            trusted_path: BUNDLED_BWRAP_PATH.to_string(),
-            detail: "capability probe succeeded".to_string(),
-            source: Some(BwrapSource::Bundled),
-            version: Some(version.to_string()),
-        };
-    }
-    BwrapProbeOutcome {
-        available: detail == "ready",
-        trusted_path: "/usr/bin/bwrap".to_string(),
-        detail: detail.to_string(),
-        source: (detail == "ready").then_some(BwrapSource::Host),
-        version: (detail == "ready").then(|| "0.11.1".to_string()),
-    }
 }
 
 impl FixtureHost {
@@ -179,6 +171,27 @@ impl Host for FixtureHost {
     }
 }
 
+/// `ready` passes on the host binary; `ready-bundled:<version>` passes on the
+/// bundled one; anything else is a failed probe with that detail.
+fn probe_outcome(detail: &str) -> BwrapProbeOutcome {
+    if let Some(version) = detail.strip_prefix("ready-bundled:") {
+        return BwrapProbeOutcome {
+            available: true,
+            trusted_path: BUNDLED_BWRAP_PATH.to_string(),
+            detail: "capability probe succeeded".to_string(),
+            source: Some(BwrapSource::Bundled),
+            version: Some(version.to_string()),
+        };
+    }
+    BwrapProbeOutcome {
+        available: detail == "ready",
+        trusted_path: "/usr/bin/bwrap".to_string(),
+        detail: detail.to_string(),
+        source: (detail == "ready").then_some(BwrapSource::Host),
+        version: (detail == "ready").then(|| "0.11.1".to_string()),
+    }
+}
+
 // Fault injection: prove preparation stops at declined/denied authorization,
 // including the second authorization site used for Ubuntu's profile remedy.
 #[test]
@@ -287,10 +300,6 @@ fn namespace_denial_and_ready_host_never_request_host_changes() {
         }
     }
 }
-
-const MISSING: &str = "trusted Bubblewrap not available at /usr/bin/bwrap";
-const UID_MAP: &str = "bwrap: setting up uid map: Permission denied";
-const NAMESPACE_DENIED: &str = "bwrap: Creating new namespace failed: Operation not permitted";
 
 // Safety invariant: root must never probe as root or change packages without
 // identifying the intended unprivileged user. Pure inputs avoid process-wide
@@ -441,14 +450,6 @@ fn apparmor_package_install_rechecks_the_signature_before_loading_policy() {
         }
     }
 }
-
-const NO_BIND_FD: &str = "Bubblewrap at /usr/bin/bwrap does not support the required --bind-fd \
-                          and --ro-bind-fd object-authority mounts, and no bundled Bubblewrap is installed";
-const BUNDLED_READY: &str = "ready-bundled:0.12.0";
-const BUNDLED_INSTALL: [&str; 2] = [
-    "/usr/bin/install -d -o root -g root -m 0755 /usr/local/libexec/orbit",
-    "/usr/bin/install -o root -g root -m 0755 /fixture/staged/bwrap /usr/local/libexec/orbit/bwrap",
-];
 
 #[test]
 fn an_old_host_bwrap_gets_the_bundled_one_and_its_failures_stop_before_sudo() {

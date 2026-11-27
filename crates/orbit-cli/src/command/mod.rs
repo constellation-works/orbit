@@ -10,6 +10,9 @@ pub mod browser_kit;
 pub mod clock;
 pub mod codebase;
 pub mod config;
+
+pub(crate) mod confirmation;
+
 pub mod decision;
 pub mod doctor;
 pub mod evolution;
@@ -40,6 +43,7 @@ pub mod update;
 pub mod web;
 pub mod workspace;
 
+pub(crate) use confirmation::require_confirmation;
 pub use operation::args as operation_args;
 
 use std::path::PathBuf;
@@ -65,17 +69,6 @@ pub type CommandOut = Result<CommandOutput, OrbitError>;
 /// the entry's own authorization and audit guard leave it alone.
 pub trait ExecuteCore {
     fn execute(self, core: &Core) -> CommandOut;
-}
-
-/// Require the standard non-interactive confirmation flag before an
-/// irreversible CLI operation proceeds.
-pub(crate) fn require_confirmation(confirm: bool, action: &str) -> Result<(), OrbitError> {
-    if confirm {
-        return Ok(());
-    }
-    Err(OrbitError::InvalidInput(format!(
-        "{action} is irreversible; pass --confirm to proceed"
-    )))
 }
 
 // Grouped `--help` sections come from the row tables in `help.rs`, attached in `entry/discover.rs`.

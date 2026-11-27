@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
 
+const KNOWN_SCRIPT_EXTENSIONS: &[&str] =
+    &["sh", "bash", "zsh", "py", "js", "mjs", "cjs", "ts", "rb"];
+
 pub(super) fn resolve_manifest_path(tool_path: &Path, explicit: Option<&str>) -> Option<PathBuf> {
     if let Some(path) = explicit {
         return Some(PathBuf::from(path));
@@ -17,9 +20,6 @@ fn manifest_candidates(tool_path: &Path) -> Vec<PathBuf> {
         sidecar_manifest_path_with_extension(tool_path, "json"),
     ]
 }
-
-const KNOWN_SCRIPT_EXTENSIONS: &[&str] =
-    &["sh", "bash", "zsh", "py", "js", "mjs", "cjs", "ts", "rb"];
 
 pub(super) fn tool_file_stem(tool_path: &Path) -> &str {
     let file_name = tool_path

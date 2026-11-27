@@ -21,18 +21,6 @@ use crate::output::common::sink;
 /// that flag skips the crew prompts.
 pub(super) const PROMPT_REMEDY: &str = "pass both --machine-name <NAME> and --task-prefix <PREFIX> (2-5 uppercase ASCII letters) to create this machine's identity without prompts; add --non-interactive to skip the remaining prompts";
 
-/// Attach `remedy` to a prompt that closed, stalled or overflowed. Other read
-/// errors pass through unchanged. Callers pick the remedy, because the same
-/// stalled read means different things to each prompt.
-pub(super) fn with_remedy(error: io::Error, remedy: &str) -> io::Error {
-    match error.kind() {
-        ErrorKind::UnexpectedEof | ErrorKind::TimedOut | ErrorKind::InvalidData => {
-            io::Error::new(error.kind(), format!("{error}; {remedy}"))
-        }
-        _ => error,
-    }
-}
-
 const STDIN_CLOSED_BEFORE_PROMPT: &str = "stdin closed before an interactive prompt was answered";
 
 const STDIN_PROMPT_TIMEOUT: &str = "stdin did not answer an interactive prompt";
@@ -49,6 +37,23 @@ const STDIN_LINE_TOO_LONG: &str = "stdin interactive prompt answer is too long";
 
 struct StdinLeftover {
     buf: Vec<u8>,
+}
+
+enum Fill {
+    More,
+    Eof,
+}
+
+/// Attach `remedy` to a prompt that closed, stalled or overflowed. Other read
+/// errors pass through unchanged. Callers pick the remedy, because the same
+/// stalled read means different things to each prompt.
+pub(super) fn with_remedy(error: io::Error, remedy: &str) -> io::Error {
+    match error.kind() {
+        ErrorKind::UnexpectedEof | ErrorKind::TimedOut | ErrorKind::InvalidData => {
+            io::Error::new(error.kind(), format!("{error}; {remedy}"))
+        }
+        _ => error,
+    }
 }
 
 fn leftover() -> MutexGuard<'static, StdinLeftover> {
@@ -92,11 +97,6 @@ fn read_stdin_line(timeout: Option<Duration>) -> io::Result<String> {
             }
         }
     }
-}
-
-enum Fill {
-    More,
-    Eof,
 }
 
 fn fill_leftover(buf: &mut Vec<u8>, deadline: Option<Instant>) -> io::Result<Fill> {

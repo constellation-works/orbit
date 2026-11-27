@@ -38,11 +38,13 @@ impl Fixture {
         } else {
             temp.path().join("home/.orbit")
         };
+        let home = temp.path().join("home");
+        let repo = temp.path().join("repo");
         let fixture = Self {
-            home: temp.path().join("home"),
-            repo: temp.path().join("repo"),
-            root,
             _temp: temp,
+            home,
+            repo,
+            root,
         };
         fs::create_dir_all(&fixture.home).expect("home");
         fs::create_dir_all(&fixture.repo).expect("repo");

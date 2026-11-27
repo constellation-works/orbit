@@ -14,21 +14,6 @@ use super::browser_kit::{BrowserKitOutcome, browser_kit_json, browser_kit_line};
 const ONBOARDING_FINALIZE_GUIDANCE: &str = "review the managed `.gitignore` entry (Orbit ignores `.orbit/` as per-user state and does not auto-commit or discard operator changes)";
 const RELOCATED_ROOT_ONBOARDING_GUIDANCE: &str = "review generated Orbit definitions in the configured Orbit root before local workflows (Orbit does not auto-commit or discard operator changes)";
 
-fn onboarding_finalize_guidance(workspace_root: &Path, orbit_dir: &Path) -> &'static str {
-    if manages_checkout_local_orbit_files(workspace_root, orbit_dir) {
-        ONBOARDING_FINALIZE_GUIDANCE
-    } else {
-        RELOCATED_ROOT_ONBOARDING_GUIDANCE
-    }
-}
-
-fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> String {
-    match task_prefix {
-        Some(task_prefix) => format!("{task_prefix}-{next:05}"),
-        None => format!("{next:05}"),
-    }
-}
-
 pub(super) struct WorkspaceInitReport {
     id: String,
     name: String,
@@ -74,6 +59,21 @@ enum RulesOutcome {
 struct RuleFileOutcome {
     label: String,
     action: InjectionAction,
+}
+
+fn onboarding_finalize_guidance(workspace_root: &Path, orbit_dir: &Path) -> &'static str {
+    if manages_checkout_local_orbit_files(workspace_root, orbit_dir) {
+        ONBOARDING_FINALIZE_GUIDANCE
+    } else {
+        RELOCATED_ROOT_ONBOARDING_GUIDANCE
+    }
+}
+
+fn render_task_id_start(task_prefix: Option<&str>, next: u32) -> String {
+    match task_prefix {
+        Some(task_prefix) => format!("{task_prefix}-{next:05}"),
+        None => format!("{next:05}"),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

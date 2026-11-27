@@ -50,14 +50,14 @@ impl Fleet {
         let local_home = temp.path().join("local-home");
         let local_repo = temp.path().join("local-repo");
         let mut fleet = Self {
+            temp,
+            bin,
+            routes,
             local: Install {
                 home: local_home.clone(),
                 machine_id: String::new(),
             },
             local_repo,
-            temp,
-            bin,
-            routes,
         };
         fleet.local = fleet.prepare_install("local-home", "local-box", "LB");
         git_repo::init(&fleet.local_repo);
@@ -107,11 +107,11 @@ impl Fleet {
         )
         .expect("parse config");
         Install {
+            home,
             machine_id: config["machine"]["id"]
                 .as_str()
                 .expect("machine.id")
                 .to_string(),
-            home,
         }
     }
 

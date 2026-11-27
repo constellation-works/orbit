@@ -229,6 +229,24 @@ impl Fixture {
     }
 }
 
+/// Keep command diagnostics and the test call site when sharing output checks.
+trait CheckedPluginOutput {
+    #[track_caller]
+    fn success_output(&mut self) -> std::process::Output;
+    #[track_caller]
+    fn success_json(&mut self) -> Value;
+}
+
+impl CheckedPluginOutput for assert_cmd::Command {
+    fn success_output(&mut self) -> std::process::Output {
+        self.assert().success().get_output().clone()
+    }
+
+    fn success_json(&mut self) -> Value {
+        stdout_json(&self.success_output())
+    }
+}
+
 /// A plugin whose group and tool descriptions run to several sentences. The
 /// group's first sentence is longer than a listing row may be; each second
 /// sentence is the part only `--help` should print. Written into the source's
@@ -3026,24 +3044,6 @@ fn stderr_json(output: &std::process::Output) -> Value {
             String::from_utf8_lossy(&output.stderr)
         )
     })
-}
-
-/// Keep command diagnostics and the test call site when sharing output checks.
-trait CheckedPluginOutput {
-    #[track_caller]
-    fn success_output(&mut self) -> std::process::Output;
-    #[track_caller]
-    fn success_json(&mut self) -> Value;
-}
-
-impl CheckedPluginOutput for assert_cmd::Command {
-    fn success_output(&mut self) -> std::process::Output {
-        self.assert().success().get_output().clone()
-    }
-
-    fn success_json(&mut self) -> Value {
-        stdout_json(&self.success_output())
-    }
 }
 
 fn write_shell_backend(source: &Path, script: impl AsRef<[u8]>) -> std::path::PathBuf {

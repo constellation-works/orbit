@@ -25,6 +25,108 @@ const LEAF_RUN: &str = "jrun-hydrate-orphan";
 const DRAIN_RUN: &str = "follower-drain";
 const REQUEST_ID: &str = "hydrate-observation";
 
+struct ObservingSsh {
+    home: PathBuf,
+    work: PathBuf,
+    log: PathBuf,
+    db: PathBuf,
+    partition: String,
+    orbit_dir: PathBuf,
+    leaf: String,
+    drain: String,
+    task: String,
+    follower_machine: String,
+    owner_machine: String,
+    owner_logical: String,
+}
+
+struct Host {
+    _temp: tempfile::TempDir,
+    home: PathBuf,
+    repo: PathBuf,
+    global: PathBuf,
+    machine_id: String,
+    logical_id: String,
+    partition_id: String,
+}
+
+impl Host {
+    fn init(name: &str, prefix: &str) -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&repo).unwrap();
+        let repo = repo.canonicalize().unwrap();
+        super::git_repo::init(&repo);
+        let host = Self {
+            _temp: temp,
+            home,
+            repo,
+            global: PathBuf::new(),
+            machine_id: String::new(),
+            logical_id: String::new(),
+            partition_id: String::new(),
+        };
+        host.orbit(
+            &host.repo,
+            &[
+                "init",
+                "--non-interactive",
+                "--skip-host-prerequisites",
+                "--machine-name",
+                name,
+                "--task-prefix",
+                prefix,
+            ],
+        );
+        host.orbit(&host.repo, &["workspace", "init", "--name", name]);
+        let global = host.home.join(".orbit");
+        let runtime = open_runtime(&global, &host.repo.join(".orbit"));
+        let logical_id = runtime
+            .workspace_runtime_binding()
+            .expect("registered workspace")
+            .logical_workspace_id
+            .clone();
+        let partition_id = runtime.workspace_id().unwrap();
+        let machine_id = runtime
+            .automation_machine_identity()
+            .expect("machine identity")
+            .to_string();
+        drop(runtime);
+        Self {
+            global,
+            machine_id,
+            logical_id,
+            partition_id,
+            ..host
+        }
+    }
+
+    fn orbit(&self, cwd: &Path, args: &[&str]) -> Output {
+        let output = orbit_command(&self.home, cwd).args(args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "orbit {} failed\nstdout:\n{}\nstderr:\n{}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+
+    fn orbit_json(&self, cwd: &Path, args: &[&str]) -> Value {
+        let output = self.orbit(cwd, args);
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+            panic!(
+                "orbit json ({error}): {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+        })
+    }
+}
+
 #[test]
 fn hydration_through_operator_route_leaves_an_orphaned_leaf_unchanged() {
     if isolated_test::run_in_child(
@@ -256,108 +358,6 @@ fn hydration_through_operator_route_leaves_an_orphaned_leaf_unchanged() {
         after_settlements, before_settlements,
         "hydration rewrote the owner's settlement"
     );
-}
-
-struct ObservingSsh {
-    home: PathBuf,
-    work: PathBuf,
-    log: PathBuf,
-    db: PathBuf,
-    partition: String,
-    orbit_dir: PathBuf,
-    leaf: String,
-    drain: String,
-    task: String,
-    follower_machine: String,
-    owner_machine: String,
-    owner_logical: String,
-}
-
-struct Host {
-    _temp: tempfile::TempDir,
-    home: PathBuf,
-    repo: PathBuf,
-    global: PathBuf,
-    machine_id: String,
-    logical_id: String,
-    partition_id: String,
-}
-
-impl Host {
-    fn init(name: &str, prefix: &str) -> Self {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        let repo = temp.path().join("repo");
-        fs::create_dir_all(&home).unwrap();
-        fs::create_dir_all(&repo).unwrap();
-        let repo = repo.canonicalize().unwrap();
-        super::git_repo::init(&repo);
-        let host = Self {
-            home,
-            repo,
-            global: PathBuf::new(),
-            machine_id: String::new(),
-            logical_id: String::new(),
-            partition_id: String::new(),
-            _temp: temp,
-        };
-        host.orbit(
-            &host.repo,
-            &[
-                "init",
-                "--non-interactive",
-                "--skip-host-prerequisites",
-                "--machine-name",
-                name,
-                "--task-prefix",
-                prefix,
-            ],
-        );
-        host.orbit(&host.repo, &["workspace", "init", "--name", name]);
-        let global = host.home.join(".orbit");
-        let runtime = open_runtime(&global, &host.repo.join(".orbit"));
-        let logical_id = runtime
-            .workspace_runtime_binding()
-            .expect("registered workspace")
-            .logical_workspace_id
-            .clone();
-        let partition_id = runtime.workspace_id().unwrap();
-        let machine_id = runtime
-            .automation_machine_identity()
-            .expect("machine identity")
-            .to_string();
-        drop(runtime);
-        Self {
-            global,
-            machine_id,
-            logical_id,
-            partition_id,
-            ..host
-        }
-    }
-
-    fn orbit(&self, cwd: &Path, args: &[&str]) -> Output {
-        let output = orbit_command(&self.home, cwd).args(args).output().unwrap();
-        assert!(
-            output.status.success(),
-            "orbit {} failed\nstdout:\n{}\nstderr:\n{}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output
-    }
-
-    fn orbit_json(&self, cwd: &Path, args: &[&str]) -> Value {
-        let output = self.orbit(cwd, args);
-        serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-            panic!(
-                "orbit json ({error}): {}\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-        })
-    }
 }
 
 fn open_runtime(global: &Path, workspace: &Path) -> OrbitRuntime {

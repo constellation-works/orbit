@@ -177,6 +177,19 @@ impl Install {
     }
 }
 
+pub(super) struct ReapedChild {
+    pub(super) child: Option<Child>,
+}
+
+impl Drop for ReapedChild {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 /// Run `command`, which [`Install::command`] bounds by
 /// [`test_env::FIXTURE_STEP_DEADLINE`]. A command killed at that hang guard
 /// fails naming `what` and the host load, rather than as a refusal.
@@ -736,19 +749,6 @@ fn resuming_candidate_script(version: &str) -> Vec<u8> {
         contract.trim()
     )
     .into_bytes()
-}
-
-pub(super) struct ReapedChild {
-    pub(super) child: Option<Child>,
-}
-
-impl Drop for ReapedChild {
-    fn drop(&mut self) {
-        if let Some(child) = self.child.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-    }
 }
 
 /// Rendezvous with the mirror reader without a blocking opener thread or

@@ -24,13 +24,17 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let root = temp.path().join("orbit-root");
+        let alpha = temp.path().join("alpha");
+        // Beneath its own parent, so a case can make that parent unreadable.
+        let beta = temp.path().join("volume").join("beta");
         let fixture = Self {
-            home: temp.path().join("home"),
-            root: temp.path().join("orbit-root"),
-            alpha: temp.path().join("alpha"),
-            // Beneath its own parent, so a case can make that parent unreadable.
-            beta: temp.path().join("volume").join("beta"),
             _temp: temp,
+            home,
+            root,
+            alpha,
+            beta,
         };
         fs::create_dir_all(&fixture.home).expect("home");
         crate::git_repo::init(&fixture.alpha);

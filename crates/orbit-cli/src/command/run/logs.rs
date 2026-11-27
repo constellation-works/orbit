@@ -61,6 +61,29 @@ impl RunLogsArgs {
     }
 }
 
+enum FollowError {
+    Runtime(orbit_core::OrbitError),
+    Io(std::io::Error),
+}
+
+impl From<orbit_core::OrbitError> for FollowError {
+    fn from(error: orbit_core::OrbitError) -> Self {
+        Self::Runtime(error)
+    }
+}
+
+impl From<std::io::Error> for FollowError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+#[derive(Default)]
+struct FollowedPrefix {
+    bytes: usize,
+    hash: DefaultHasher,
+}
+
 fn follow_logs_payload(
     core: &Core,
     env: &Env,
@@ -174,29 +197,6 @@ fn follow_logs(
         writer.flush()?;
         std::thread::sleep(Duration::from_millis(100));
     }
-}
-
-enum FollowError {
-    Runtime(orbit_core::OrbitError),
-    Io(std::io::Error),
-}
-
-impl From<orbit_core::OrbitError> for FollowError {
-    fn from(error: orbit_core::OrbitError) -> Self {
-        Self::Runtime(error)
-    }
-}
-
-impl From<std::io::Error> for FollowError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
-    }
-}
-
-#[derive(Default)]
-struct FollowedPrefix {
-    bytes: usize,
-    hash: DefaultHasher,
 }
 
 fn drain_provider_lines(

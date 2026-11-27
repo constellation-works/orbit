@@ -42,13 +42,6 @@ use tempfile::{TempDir, tempdir_in};
 
 const UPDATE_ENV: &str = "ORBIT_UPDATE_OUTPUT_GOLDENS";
 
-/// One covered list command: its golden-file stem and the argv prefix
-/// (without `--json`) that produces its list.
-struct Command {
-    name: &'static str,
-    args: &'static [&'static str],
-}
-
 /// List commands covered across plain and json. Each renders through
 /// `output::common::table::Table` for its non-`--json` form.
 const COMMANDS: &[Command] = &[
@@ -95,6 +88,94 @@ const SEED_TASKS: &[(&str, &str, &str, &str)] = &[
         "feature",
     ),
 ];
+
+/// Every governed tool operation paired with its expected MCP advertisement placement.
+const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
+    ("orbit.attention", Placement::Advertised),
+    ("orbit.auto_task.delete", Placement::Unadvertised),
+    ("orbit.auto_task.reset", Placement::Unadvertised),
+    ("orbit.automation.clear_stall", Placement::Unadvertised),
+    ("orbit.command.exec", Placement::Advertised),
+    ("orbit.decision.digest", Placement::Advertised),
+    ("orbit.decision.submit", Placement::Advertised),
+    ("orbit.drain.claim.bind", Placement::Unadvertised),
+    ("orbit.drain.claim.effort", Placement::Unadvertised),
+    ("orbit.drain.claim.settle", Placement::Unadvertised),
+    ("orbit.drain.claims", Placement::Unadvertised),
+    ("orbit.drain.probe", Placement::Unadvertised),
+    ("orbit.drain.receipt.lookup", Placement::Unadvertised),
+    ("orbit.evolution.decline", Placement::Unadvertised),
+    ("orbit.experiment.abandon", Placement::Advertised),
+    ("orbit.experiment.assign", Placement::Advertised),
+    ("orbit.experiment.clone", Placement::Advertised),
+    ("orbit.experiment.conclude", Placement::Advertised),
+    ("orbit.experiment.create", Placement::Advertised),
+    ("orbit.experiment.delete", Placement::Unadvertised),
+    ("orbit.experiment.pause", Placement::Advertised),
+    ("orbit.experiment.resume", Placement::Advertised),
+    ("orbit.experiment.reweight", Placement::Advertised),
+    ("orbit.experiment.start", Placement::Advertised),
+    ("orbit.experiment.update", Placement::Advertised),
+    // Crew memory write and propose are run-bound: listed only by a server
+    // whose dispatch stamp names them, which only a dreaming run's has.
+    ("orbit.memory.propose", Placement::Advertised),
+    ("orbit.memory.write", Placement::Advertised),
+    // Listed only by a server that enables the opt-in `notice` toolset.
+    ("orbit.notice.close", Placement::Advertised),
+    ("orbit.notice.post", Placement::Advertised),
+    ("orbit.pipeline.invoke", Placement::Advertised),
+    // Listed only by a server that enables the opt-in `resident` toolset.
+    ("orbit.resident.checkpoint", Placement::Advertised),
+    ("orbit.resident.control", Placement::Advertised),
+    ("orbit.resident.grant", Placement::Advertised),
+    ("orbit.resident.relay", Placement::Advertised),
+    ("orbit.routine.control", Placement::Advertised),
+    // Script grants are reached via `orbit script grant|revoke`; phase 1
+    // registers no MCP tool for them, so the governed rows exist to make
+    // the names operator-only before any tool can be called.
+    ("orbit.script.grant", Placement::Unadvertised),
+    ("orbit.script.revoke", Placement::Unadvertised),
+    ("orbit.task.delete", Placement::Unadvertised),
+    // Field-level: `orbit.task.add`/`update` with `granted_tools` check it.
+    ("orbit.task.grant_tools", Placement::Unadvertised),
+    ("orbit.task.locks.release", Placement::Unadvertised),
+    ("orbit.task.locks.reserve", Placement::Unadvertised),
+    ("orbit.task.pull", Placement::Unadvertised),
+    ("orbit.task.reconcile_review", Placement::Advertised),
+    ("orbit.task.reject", Placement::Unadvertised),
+    ("orbit.task.repilot", Placement::Advertised),
+    ("orbit.task.requeue", Placement::Advertised),
+    ("orbit.task.resume_delivery", Placement::Advertised),
+    ("orbit.task.recover_claim", Placement::Advertised),
+    ("orbit.task.retry_handoff", Placement::Advertised),
+    ("orbit.task.revoke_handoff", Placement::Advertised),
+    ("orbit.task.review_reset", Placement::Advertised),
+    ("orbit.workflow.auto", Placement::Advertised),
+    ("orbit.workflow.land", Placement::Advertised),
+    ("orbit.workflow.refresh", Placement::Advertised),
+    ("orbit.workflow.run.list", Placement::Advertised),
+    ("orbit.workflow.run.observe", Placement::Advertised),
+    ("orbit.workflow.run.resume", Placement::Advertised),
+    ("orbit.workflow.run.show", Placement::Advertised),
+    ("orbit.workflow.ship", Placement::Advertised),
+    ("orbit.workspace.claim.release", Placement::Unadvertised),
+];
+
+/// One covered list command: its golden-file stem and the argv prefix
+/// (without `--json`) that produces its list.
+struct Command {
+    name: &'static str,
+    args: &'static [&'static str],
+}
+
+/// Whether MCP advertises a governed tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Placement {
+    /// Listed by `tools/list`.
+    Advertised,
+    /// Kept off MCP listing; reached via CLI or dashboard.
+    Unadvertised,
+}
 
 struct Fixture {
     _temp: TempDir,
@@ -601,87 +682,6 @@ spec:
             + "\n";
     assert_golden("plugin_build_doctor.json", &actual);
 }
-
-/// Whether MCP advertises a governed tool.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Placement {
-    /// Listed by `tools/list`.
-    Advertised,
-    /// Kept off MCP listing; reached via CLI or dashboard.
-    Unadvertised,
-}
-
-/// Every governed tool operation paired with its expected MCP advertisement placement.
-const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
-    ("orbit.attention", Placement::Advertised),
-    ("orbit.auto_task.delete", Placement::Unadvertised),
-    ("orbit.auto_task.reset", Placement::Unadvertised),
-    ("orbit.automation.clear_stall", Placement::Unadvertised),
-    ("orbit.command.exec", Placement::Advertised),
-    ("orbit.decision.digest", Placement::Advertised),
-    ("orbit.decision.submit", Placement::Advertised),
-    ("orbit.drain.claim.bind", Placement::Unadvertised),
-    ("orbit.drain.claim.effort", Placement::Unadvertised),
-    ("orbit.drain.claim.settle", Placement::Unadvertised),
-    ("orbit.drain.claims", Placement::Unadvertised),
-    ("orbit.drain.probe", Placement::Unadvertised),
-    ("orbit.drain.receipt.lookup", Placement::Unadvertised),
-    ("orbit.evolution.decline", Placement::Unadvertised),
-    ("orbit.experiment.abandon", Placement::Advertised),
-    ("orbit.experiment.assign", Placement::Advertised),
-    ("orbit.experiment.clone", Placement::Advertised),
-    ("orbit.experiment.conclude", Placement::Advertised),
-    ("orbit.experiment.create", Placement::Advertised),
-    ("orbit.experiment.delete", Placement::Unadvertised),
-    ("orbit.experiment.pause", Placement::Advertised),
-    ("orbit.experiment.resume", Placement::Advertised),
-    ("orbit.experiment.reweight", Placement::Advertised),
-    ("orbit.experiment.start", Placement::Advertised),
-    ("orbit.experiment.update", Placement::Advertised),
-    // Crew memory write and propose are run-bound: listed only by a server
-    // whose dispatch stamp names them, which only a dreaming run's has.
-    ("orbit.memory.propose", Placement::Advertised),
-    ("orbit.memory.write", Placement::Advertised),
-    // Listed only by a server that enables the opt-in `notice` toolset.
-    ("orbit.notice.close", Placement::Advertised),
-    ("orbit.notice.post", Placement::Advertised),
-    ("orbit.pipeline.invoke", Placement::Advertised),
-    // Listed only by a server that enables the opt-in `resident` toolset.
-    ("orbit.resident.checkpoint", Placement::Advertised),
-    ("orbit.resident.control", Placement::Advertised),
-    ("orbit.resident.grant", Placement::Advertised),
-    ("orbit.resident.relay", Placement::Advertised),
-    ("orbit.routine.control", Placement::Advertised),
-    // Script grants are reached via `orbit script grant|revoke`; phase 1
-    // registers no MCP tool for them, so the governed rows exist to make
-    // the names operator-only before any tool can be called.
-    ("orbit.script.grant", Placement::Unadvertised),
-    ("orbit.script.revoke", Placement::Unadvertised),
-    ("orbit.task.delete", Placement::Unadvertised),
-    // Field-level: `orbit.task.add`/`update` with `granted_tools` check it.
-    ("orbit.task.grant_tools", Placement::Unadvertised),
-    ("orbit.task.locks.release", Placement::Unadvertised),
-    ("orbit.task.locks.reserve", Placement::Unadvertised),
-    ("orbit.task.pull", Placement::Unadvertised),
-    ("orbit.task.reconcile_review", Placement::Advertised),
-    ("orbit.task.reject", Placement::Unadvertised),
-    ("orbit.task.repilot", Placement::Advertised),
-    ("orbit.task.requeue", Placement::Advertised),
-    ("orbit.task.resume_delivery", Placement::Advertised),
-    ("orbit.task.recover_claim", Placement::Advertised),
-    ("orbit.task.retry_handoff", Placement::Advertised),
-    ("orbit.task.revoke_handoff", Placement::Advertised),
-    ("orbit.task.review_reset", Placement::Advertised),
-    ("orbit.workflow.auto", Placement::Advertised),
-    ("orbit.workflow.land", Placement::Advertised),
-    ("orbit.workflow.refresh", Placement::Advertised),
-    ("orbit.workflow.run.list", Placement::Advertised),
-    ("orbit.workflow.run.observe", Placement::Advertised),
-    ("orbit.workflow.run.resume", Placement::Advertised),
-    ("orbit.workflow.run.show", Placement::Advertised),
-    ("orbit.workflow.ship", Placement::Advertised),
-    ("orbit.workspace.claim.release", Placement::Unadvertised),
-];
 
 #[test]
 fn authorization_matrix_matches_live_registry() {

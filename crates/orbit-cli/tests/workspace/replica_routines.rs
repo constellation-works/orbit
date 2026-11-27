@@ -27,6 +27,13 @@ const OWNER: &str = "gc-owner";
 const REPLICA: &str = "gc-replica";
 const REMOTE_OWNER: &str = "hm_fixture_remote";
 
+#[derive(Debug, PartialEq, Eq)]
+struct AutoTaskStateSnapshot {
+    definitions_and_assets: BTreeMap<String, Vec<u8>>,
+    cursor: Option<Vec<u8>>,
+    tasks: Value,
+}
+
 #[test]
 fn replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged() {
     if !isolated("replica_fires_only_its_worktree_gc_routine_and_owner_scheduling_is_unchanged") {
@@ -825,13 +832,6 @@ fn replica_auto_task_definition_mutations_refuse_without_changing_local_state() 
             "refused orbit {args:?} must preserve definition bytes, cursor, managed assets, and task state"
         );
     }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct AutoTaskStateSnapshot {
-    definitions_and_assets: BTreeMap<String, Vec<u8>>,
-    cursor: Option<Vec<u8>>,
-    tasks: Value,
 }
 
 fn auto_task_state_snapshot(repo: &Path, home: &Path) -> AutoTaskStateSnapshot {

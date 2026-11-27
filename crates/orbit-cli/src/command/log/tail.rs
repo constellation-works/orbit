@@ -25,6 +25,10 @@ use crate::output::common::sink::OutputMode;
 
 use super::format::{self, LevelFilter};
 
+// Excludes the newline delimiter. Oversized records are silently skipped,
+// just like malformed JSON; keep discarding across EOF until their newline.
+const MAX_RECORD_BYTES: usize = 1024 * 1024;
+
 #[derive(Args)]
 pub struct TailArgs {
     /// Number of recent lines to print before exiting (or before tailing in
@@ -104,6 +108,118 @@ impl ExecuteCore for TailArgs {
     }
 }
 
+#[cfg(test)]
+pub(super) struct FollowTestControl {
+    ready: Sender<()>,
+    stop: Receiver<()>,
+    initial_read_pause: Option<(Sender<()>, Receiver<()>)>,
+}
+
+#[cfg(test)]
+impl FollowTestControl {
+    pub(super) fn new(ready: Sender<()>, stop: Receiver<()>) -> Self {
+        Self {
+            ready,
+            stop,
+            initial_read_pause: None,
+        }
+    }
+
+    pub(super) fn pause_during_initial_read(
+        mut self,
+        reached: Sender<()>,
+        resume: Receiver<()>,
+    ) -> Self {
+        self.initial_read_pause = Some((reached, resume));
+        self
+    }
+}
+
+struct InitialWindow {
+    reader: BufReader<File>,
+    pending: RecordBuffer,
+}
+
+#[derive(Default)]
+struct RecordBuffer {
+    bytes: Vec<u8>,
+    discarding: bool,
+}
+
+impl RecordBuffer {
+    /// Consume at most one reader-buffer chunk, retaining only admitted bytes.
+    /// The caller clears the record after a delimiter or a file change.
+    fn read_chunk(&mut self, reader: &mut impl BufRead) -> io::Result<(usize, bool)> {
+        let available = reader.fill_buf()?;
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let payload_len = newline.unwrap_or(available.len());
+        let consumed = payload_len + usize::from(newline.is_some());
+        if !self.discarding {
+            if payload_len > MAX_RECORD_BYTES - self.bytes.len() {
+                self.bytes.clear();
+                self.discarding = true;
+            } else {
+                // Exact growth avoids geometric allocation above the byte cap.
+                self.bytes.reserve_exact(payload_len);
+                self.bytes.extend_from_slice(&available[..payload_len]);
+            }
+        }
+        reader.consume(consumed);
+        Ok((consumed, newline.is_some()))
+    }
+
+    fn clear(&mut self) {
+        self.bytes.clear();
+        self.discarding = false;
+    }
+}
+
+/// A chronological tail window whose storage never exceeds its requested
+/// record count. The line currently being parsed is held by the caller.
+struct MatchingLineWindow {
+    limit: usize,
+    lines: VecDeque<String>,
+}
+
+impl MatchingLineWindow {
+    pub(super) fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            lines: VecDeque::new(),
+        }
+    }
+
+    pub(super) fn push(&mut self, line: String) {
+        if self.limit == 0 {
+            return;
+        }
+        if self.lines.len() == self.limit {
+            self.lines.pop_front();
+        }
+        self.lines.push_back(line);
+    }
+
+    fn into_lines(self) -> VecDeque<String> {
+        self.lines
+    }
+}
+
+enum FollowControl {
+    Forever,
+    #[cfg(test)]
+    UntilStopped(Receiver<()>),
+}
+
+impl FollowControl {
+    fn should_stop(&self) -> bool {
+        match self {
+            Self::Forever => false,
+            #[cfg(test)]
+            Self::UntilStopped(stop) => !matches!(stop.try_recv(), Err(TryRecvError::Empty)),
+        }
+    }
+}
+
 pub(super) fn build_filters(args: &TailArgs) -> Result<Filters, OrbitError> {
     log_format::build_filters(
         args.target.clone(),
@@ -140,33 +256,6 @@ fn run_tail<W: Write + ?Sized>(
         writer,
         FollowControl::Forever,
     )
-}
-
-#[cfg(test)]
-pub(super) struct FollowTestControl {
-    ready: Sender<()>,
-    stop: Receiver<()>,
-    initial_read_pause: Option<(Sender<()>, Receiver<()>)>,
-}
-
-#[cfg(test)]
-impl FollowTestControl {
-    pub(super) fn new(ready: Sender<()>, stop: Receiver<()>) -> Self {
-        Self {
-            ready,
-            stop,
-            initial_read_pause: None,
-        }
-    }
-
-    pub(super) fn pause_during_initial_read(
-        mut self,
-        reached: Sender<()>,
-        resume: Receiver<()>,
-    ) -> Self {
-        self.initial_read_pause = Some((reached, resume));
-        self
-    }
 }
 
 #[cfg(test)]
@@ -220,49 +309,6 @@ fn print_initial_window<W: Write + ?Sized>(
     writer: &mut W,
 ) -> io::Result<InitialWindow> {
     print_initial_window_with_hook(path, args, filters, use_color, writer, || Ok(()))
-}
-
-struct InitialWindow {
-    reader: BufReader<File>,
-    pending: RecordBuffer,
-}
-
-// Excludes the newline delimiter. Oversized records are silently skipped,
-// just like malformed JSON; keep discarding across EOF until their newline.
-const MAX_RECORD_BYTES: usize = 1024 * 1024;
-
-#[derive(Default)]
-struct RecordBuffer {
-    bytes: Vec<u8>,
-    discarding: bool,
-}
-
-impl RecordBuffer {
-    /// Consume at most one reader-buffer chunk, retaining only admitted bytes.
-    /// The caller clears the record after a delimiter or a file change.
-    fn read_chunk(&mut self, reader: &mut impl BufRead) -> io::Result<(usize, bool)> {
-        let available = reader.fill_buf()?;
-        let newline = available.iter().position(|byte| *byte == b'\n');
-        let payload_len = newline.unwrap_or(available.len());
-        let consumed = payload_len + usize::from(newline.is_some());
-        if !self.discarding {
-            if payload_len > MAX_RECORD_BYTES - self.bytes.len() {
-                self.bytes.clear();
-                self.discarding = true;
-            } else {
-                // Exact growth avoids geometric allocation above the byte cap.
-                self.bytes.reserve_exact(payload_len);
-                self.bytes.extend_from_slice(&available[..payload_len]);
-            }
-        }
-        reader.consume(consumed);
-        Ok((consumed, newline.is_some()))
-    }
-
-    fn clear(&mut self) {
-        self.bytes.clear();
-        self.discarding = false;
-    }
 }
 
 fn print_initial_window_with_hook<W: Write + ?Sized>(
@@ -326,36 +372,6 @@ fn read_initial_window(
         InitialWindow { reader, pending },
         matching_lines.into_lines(),
     ))
-}
-
-/// A chronological tail window whose storage never exceeds its requested
-/// record count. The line currently being parsed is held by the caller.
-struct MatchingLineWindow {
-    limit: usize,
-    lines: VecDeque<String>,
-}
-
-impl MatchingLineWindow {
-    pub(super) fn new(limit: usize) -> Self {
-        Self {
-            limit,
-            lines: VecDeque::new(),
-        }
-    }
-
-    pub(super) fn push(&mut self, line: String) {
-        if self.limit == 0 {
-            return;
-        }
-        if self.lines.len() == self.limit {
-            self.lines.pop_front();
-        }
-        self.lines.push_back(line);
-    }
-
-    fn into_lines(self) -> VecDeque<String> {
-        self.lines
-    }
 }
 
 fn follow_file<W: Write + ?Sized>(
@@ -526,22 +542,6 @@ fn same_file(left: &std::fs::Metadata, right: &std::fs::Metadata) -> io::Result<
             io::ErrorKind::Unsupported,
             "following log rotation requires Unix file identity (use WSL2 on Windows)",
         ))
-    }
-}
-
-enum FollowControl {
-    Forever,
-    #[cfg(test)]
-    UntilStopped(Receiver<()>),
-}
-
-impl FollowControl {
-    fn should_stop(&self) -> bool {
-        match self {
-            Self::Forever => false,
-            #[cfg(test)]
-            Self::UntilStopped(stop) => !matches!(stop.try_recv(), Err(TryRecvError::Empty)),
-        }
     }
 }
 

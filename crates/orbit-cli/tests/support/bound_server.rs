@@ -172,13 +172,6 @@ impl Drop for BoundServer {
     }
 }
 
-#[derive(Default)]
-struct Output {
-    readers: Vec<JoinHandle<()>>,
-    tail: Arc<Mutex<VecDeque<String>>>,
-    finish: Arc<(Mutex<Option<Instant>>, Condvar)>,
-}
-
 // Readers keep exclusive ownership of their pipe throughout cancellation.
 #[cfg(unix)]
 trait Pipe: Read + std::os::fd::AsRawFd + Send + 'static {}
@@ -188,6 +181,13 @@ impl<T: Read + std::os::fd::AsRawFd + Send + 'static> Pipe for T {}
 trait Pipe: Read + std::os::windows::io::AsRawHandle + Send + 'static {}
 #[cfg(windows)]
 impl<T: Read + std::os::windows::io::AsRawHandle + Send + 'static> Pipe for T {}
+
+#[derive(Default)]
+struct Output {
+    readers: Vec<JoinHandle<()>>,
+    tail: Arc<Mutex<VecDeque<String>>>,
+    finish: Arc<(Mutex<Option<Instant>>, Condvar)>,
+}
 
 impl Output {
     fn read(
@@ -298,6 +298,12 @@ impl Output {
     }
 }
 
+impl Drop for Output {
+    fn drop(&mut self) {
+        self.join(Instant::now() + Duration::from_secs(2));
+    }
+}
+
 fn emit(
     tail: &Mutex<VecDeque<String>>,
     announcement: &Option<(Announcement, mpsc::SyncSender<SocketAddr>)>,
@@ -366,10 +372,4 @@ fn read_available(pipe: &mut impl Pipe, buffer: &mut [u8]) -> io::Result<usize> 
     }
     let count = buffer.len().min(available as usize);
     pipe.read(&mut buffer[..count])
-}
-
-impl Drop for Output {
-    fn drop(&mut self) {
-        self.join(Instant::now() + Duration::from_secs(2));
-    }
 }

@@ -431,6 +431,12 @@ impl WorkspaceInitArgs {
     }
 }
 
+#[derive(Serialize)]
+struct WorkspaceIdentityDocument<'a> {
+    schema_version: u32,
+    workspace_id: &'a str,
+}
+
 /// Enable the plugin-seeded definitions `preset` names through the registered
 /// checkout's runtime, then record the preset as applied.
 fn apply_preset_definitions(
@@ -493,12 +499,6 @@ fn checked_out_branch(cwd: &Path, env: &Env) -> Result<String, OrbitError> {
     } else {
         branch
     })
-}
-
-#[derive(Serialize)]
-struct WorkspaceIdentityDocument<'a> {
-    schema_version: u32,
-    workspace_id: &'a str,
 }
 
 fn write_workspace_identity(orbit_dir: &Path, workspace_id: &str) -> Result<(), OrbitError> {

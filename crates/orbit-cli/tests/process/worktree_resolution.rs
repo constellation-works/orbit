@@ -23,6 +23,22 @@ macro_rules! isolated {
     };
 }
 
+macro_rules! contract_rows {
+    ($( $(#[$meta:meta])* $check:ident ),+ $(,)?) => {
+        for (name, check) in [$( $(#[$meta])* (stringify!($check), $check as fn()),)+] {
+            tracing::info!(case = name, "CLI contract row");
+            assert!(
+                std::panic::catch_unwind(check).is_ok(),
+                "CLI contract row {name} failed"
+            );
+        }
+    };
+}
+
+/// Upper bound on one `orbit` child, so a wedged command fails the test
+/// instead of hanging it.
+const ORBIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+
 /// One private home and checkout per scenario; no registry or state is shared between rows.
 struct Fixture {
     temp: tempfile::TempDir,
@@ -234,6 +250,46 @@ impl Fixture {
             );
         }
     }
+}
+
+/// Restores a path's permissions when dropped, so an assertion that panics
+/// while the path is read-only cannot leave a directory the tempdir cannot
+/// delete (the leftover would sit inside an agent worktree's `.orbit/tmp`).
+#[cfg(unix)]
+struct RestorePermissions {
+    path: PathBuf,
+    original: fs::Permissions,
+}
+
+#[cfg(unix)]
+impl RestorePermissions {
+    fn set_mode(path: &Path, mode: u32) -> Self {
+        let original = fs::metadata(path).expect("path to restrict").permissions();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("restrict path");
+        Self {
+            path: path.to_path_buf(),
+            original,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RestorePermissions {
+    fn drop(&mut self) {
+        let _ = fs::set_permissions(&self.path, self.original.clone());
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DataDirSetup {
+    Clean,
+    ProvidersFromHome,
+    SyntheticCheckout,
+}
+
+struct ConfigStamp {
+    bytes: Vec<u8>,
+    modified: std::time::SystemTime,
 }
 
 /// Seeded main checkout plus an initialized linked worktree:
@@ -531,34 +587,6 @@ fn init_submodule_fixture(superproject: &Path) -> PathBuf {
         ],
     );
     fs::canonicalize(superproject.join("sub")).expect("submodule checkout")
-}
-
-/// Restores a path's permissions when dropped, so an assertion that panics
-/// while the path is read-only cannot leave a directory the tempdir cannot
-/// delete (the leftover would sit inside an agent worktree's `.orbit/tmp`).
-#[cfg(unix)]
-struct RestorePermissions {
-    path: PathBuf,
-    original: fs::Permissions,
-}
-
-#[cfg(unix)]
-impl RestorePermissions {
-    fn set_mode(path: &Path, mode: u32) -> Self {
-        let original = fs::metadata(path).expect("path to restrict").permissions();
-        fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("restrict path");
-        Self {
-            path: path.to_path_buf(),
-            original,
-        }
-    }
-}
-
-#[cfg(unix)]
-impl Drop for RestorePermissions {
-    fn drop(&mut self) {
-        let _ = fs::set_permissions(&self.path, self.original.clone());
-    }
 }
 
 #[cfg(unix)]
@@ -1779,10 +1807,6 @@ fn string_field<'a>(value: &'a Value, field: &str) -> &'a str {
         .unwrap_or_else(|| panic!("expected string field `{field}` in {value}"))
 }
 
-/// Upper bound on one `orbit` child, so a wedged command fails the test
-/// instead of hanging it.
-const ORBIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
-
 fn orbit_command(
     cwd: &Path,
     home: &Path,
@@ -1969,13 +1993,6 @@ fn write_auto_task_fixture(orbit_dir: &Path, description: &str) {
     );
 }
 
-#[derive(Clone, Copy)]
-enum DataDirSetup {
-    Clean,
-    ProvidersFromHome,
-    SyntheticCheckout,
-}
-
 fn doctor_providers_with_explicit_root_does_not_bind_parent_of_data_dir() {
     check_data_dir_checkout(DataDirSetup::ProvidersFromHome);
 }
@@ -2138,11 +2155,6 @@ fn registered_workspace_id(fixture: &Fixture, repo: &Path) -> String {
         .and_then(|row| row["id"].as_str())
         .unwrap_or_else(|| panic!("registered workspace for {}: {listed}", repo.display()))
         .to_string()
-}
-
-struct ConfigStamp {
-    bytes: Vec<u8>,
-    modified: std::time::SystemTime,
 }
 
 fn config_stamp(path: &Path) -> ConfigStamp {
@@ -2353,15 +2365,6 @@ fn config_set_explicit_workspace_selector_bypasses_indirect_refusal() {
         !read_str(&config_b).contains("implicit"),
         "refused implicit write must not change workspace B"
     );
-}
-
-macro_rules! contract_rows {
-    ($( $(#[$meta:meta])* $check:ident ),+ $(,)?) => {
-        for (name, check) in [$( $(#[$meta])* (stringify!($check), $check as fn()),)+] {
-            tracing::info!(case = name, "CLI contract row");
-            assert!(std::panic::catch_unwind(check).is_ok(), "CLI contract row {name} failed");
-        }
-    };
 }
 
 #[test]

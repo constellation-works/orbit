@@ -23,16 +23,6 @@ use crate::output::common::table::{Column, Table};
 /// payload ranks.
 const TEXT_ROWS: usize = 10;
 
-/// A path ranking as the text views name it.
-struct Ranking {
-    key: &'static str,
-    label: &'static str,
-    /// What the numerator counts.
-    numerator: &'static str,
-    /// What the denominator counts.
-    denominator: &'static str,
-}
-
 /// The dimensions a regression is broken down and filtered by.
 const REGRESSION_DIMENSIONS: [&str; 4] = ["nature", "escape", "layer", "detected_by"];
 
@@ -69,6 +59,16 @@ const PATH_RANKINGS: &[Ranking] = &[
         denominator: "requesters that reserved or were refused it",
     },
 ];
+
+/// A path ranking as the text views name it.
+struct Ranking {
+    key: &'static str,
+    label: &'static str,
+    /// What the numerator counts.
+    numerator: &'static str,
+    /// What the denominator counts.
+    denominator: &'static str,
+}
 
 #[derive(Args)]
 #[command(about = orbit_common::governance::codebase::CODEBASE.cli_about)]

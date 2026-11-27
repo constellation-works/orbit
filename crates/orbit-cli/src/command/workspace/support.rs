@@ -3,6 +3,40 @@ use std::path::{Path, PathBuf};
 use orbit_common::fs::io::atomic_write_text;
 use orbit_core::OrbitError;
 
+/// The Orbit-managed `.gitignore` block written by `orbit workspace init`.
+///
+/// `.orbit/` is per-user checkout state (config, routines, auto-tasks,
+/// resources). It is not a repository artifact, so the managed block ignores
+/// the whole directory with no `!` re-includes.
+const ORBIT_GITIGNORE_BLOCK: &[&str] = &[
+    "# Orbit per-user state — not a repository artifact.",
+    ".orbit/",
+];
+
+/// Lines earlier managed blocks wrote that the current policy retires.
+///
+/// Includes the previous re-include form (`.orbit/*` plus `!.orbit/...`) so
+/// `init`/`sync` rewrite an existing checkout instead of leaving stale
+/// negations above the new block.
+const RETIRED_ORBIT_BLOCK_LINES: &[&str] = &[
+    ".orbit/*",
+    "!.orbit/auto_tasks/",
+    "!.orbit/resources/",
+    "!.orbit/routines/",
+    "!.orbit/config.toml",
+    "!.orbit/learnings/",
+    "!.orbit/adrs/",
+    ".orbit/adrs/index.sqlite*",
+    ".orbit/adrs/proposed/",
+    ".orbit/adrs/superseded/",
+    ".orbit/**/*.lock",
+];
+
+/// Legacy ignore lines written by earlier `orbit workspace init` versions that
+/// are *not* the canonical `.orbit/` form. A bare `.orbit/` is the desired
+/// managed line and must not be treated as something to replace.
+const LEGACY_ORBIT_LINES: &[&str] = &[".orbit", "/.orbit", "/.orbit/"];
+
 pub(super) fn dir_name_or_fallback(path: &Path) -> String {
     path.file_name()
         .and_then(|n| n.to_str())
@@ -83,40 +117,6 @@ fn checkout_local_orbit_root<'a>(
 fn is_git_repo_root(path: &Path) -> bool {
     path.join(".git").exists()
 }
-
-/// The Orbit-managed `.gitignore` block written by `orbit workspace init`.
-///
-/// `.orbit/` is per-user checkout state (config, routines, auto-tasks,
-/// resources). It is not a repository artifact, so the managed block ignores
-/// the whole directory with no `!` re-includes.
-const ORBIT_GITIGNORE_BLOCK: &[&str] = &[
-    "# Orbit per-user state — not a repository artifact.",
-    ".orbit/",
-];
-
-/// Lines earlier managed blocks wrote that the current policy retires.
-///
-/// Includes the previous re-include form (`.orbit/*` plus `!.orbit/...`) so
-/// `init`/`sync` rewrite an existing checkout instead of leaving stale
-/// negations above the new block.
-const RETIRED_ORBIT_BLOCK_LINES: &[&str] = &[
-    ".orbit/*",
-    "!.orbit/auto_tasks/",
-    "!.orbit/resources/",
-    "!.orbit/routines/",
-    "!.orbit/config.toml",
-    "!.orbit/learnings/",
-    "!.orbit/adrs/",
-    ".orbit/adrs/index.sqlite*",
-    ".orbit/adrs/proposed/",
-    ".orbit/adrs/superseded/",
-    ".orbit/**/*.lock",
-];
-
-/// Legacy ignore lines written by earlier `orbit workspace init` versions that
-/// are *not* the canonical `.orbit/` form. A bare `.orbit/` is the desired
-/// managed line and must not be treated as something to replace.
-const LEGACY_ORBIT_LINES: &[&str] = &[".orbit", "/.orbit", "/.orbit/"];
 
 /// Renders [`ORBIT_GITIGNORE_BLOCK`] as newline-terminated text.
 fn orbit_gitignore_block() -> String {

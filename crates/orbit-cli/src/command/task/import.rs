@@ -24,43 +24,6 @@ pub struct TaskImportArgs {
     pub on_conflict: ConflictArg,
 }
 
-/// CLI spelling of [`ImportConflictPolicy`].
-#[derive(Copy, Clone, Debug, ValueEnum)]
-pub enum ConflictArg {
-    /// Allocate a fresh local id for colliding tasks and rewrite references.
-    Renumber,
-    /// Leave the local task and drop the incoming one.
-    Skip,
-    /// Abort the whole import on the first collision.
-    Fail,
-    /// Trust the host that minted the id: replace a colliding task whose id
-    /// prefix is foreign, keep a colliding task under this host's prefix, and
-    /// never renumber. Safe to re-run.
-    OwnerWins,
-}
-
-impl From<ConflictArg> for ImportConflictPolicy {
-    fn from(value: ConflictArg) -> Self {
-        match value {
-            ConflictArg::Renumber => ImportConflictPolicy::Renumber,
-            ConflictArg::Skip => ImportConflictPolicy::Skip,
-            ConflictArg::Fail => ImportConflictPolicy::Fail,
-            ConflictArg::OwnerWins => ImportConflictPolicy::OwnerWins,
-        }
-    }
-}
-
-fn action_label(action: ImportAction) -> &'static str {
-    match action {
-        ImportAction::Kept => "kept",
-        ImportAction::Renumbered => "renumbered",
-        ImportAction::AlreadyPresent => "already-present",
-        ImportAction::SkippedConflict => "skipped",
-        ImportAction::Updated => "updated",
-        ImportAction::SkippedLocalOwned => "skipped-local-owned",
-    }
-}
-
 impl ExecuteCore for TaskImportArgs {
     fn execute(self, core: &Core) -> CommandOut {
         let outcome = task::exec(
@@ -118,5 +81,42 @@ impl ExecuteCore for TaskImportArgs {
             lines.push(format!("  id mapping written to {}", path.display()));
         }
         Ok(Payload::detail(doc, lines.join("\n")).into())
+    }
+}
+
+/// CLI spelling of [`ImportConflictPolicy`].
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum ConflictArg {
+    /// Allocate a fresh local id for colliding tasks and rewrite references.
+    Renumber,
+    /// Leave the local task and drop the incoming one.
+    Skip,
+    /// Abort the whole import on the first collision.
+    Fail,
+    /// Trust the host that minted the id: replace a colliding task whose id
+    /// prefix is foreign, keep a colliding task under this host's prefix, and
+    /// never renumber. Safe to re-run.
+    OwnerWins,
+}
+
+impl From<ConflictArg> for ImportConflictPolicy {
+    fn from(value: ConflictArg) -> Self {
+        match value {
+            ConflictArg::Renumber => ImportConflictPolicy::Renumber,
+            ConflictArg::Skip => ImportConflictPolicy::Skip,
+            ConflictArg::Fail => ImportConflictPolicy::Fail,
+            ConflictArg::OwnerWins => ImportConflictPolicy::OwnerWins,
+        }
+    }
+}
+
+fn action_label(action: ImportAction) -> &'static str {
+    match action {
+        ImportAction::Kept => "kept",
+        ImportAction::Renumbered => "renumbered",
+        ImportAction::AlreadyPresent => "already-present",
+        ImportAction::SkippedConflict => "skipped",
+        ImportAction::Updated => "updated",
+        ImportAction::SkippedLocalOwned => "skipped-local-owned",
     }
 }

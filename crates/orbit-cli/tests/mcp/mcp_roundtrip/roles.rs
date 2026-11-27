@@ -21,6 +21,117 @@ const READER_TOOLS: [&str; 9] = [
     "orbit_workspace_list",
 ];
 
+/// The operator role's default advertised surface (16 tools; the six rarely
+/// used tools are opt-in via `--toolset` / `machine.mcp.toolsets`).
+const OPERATOR_DEFAULT_TOOLS: [&str; 16] = [
+    "orbit_attention",
+    "orbit_command_exec",
+    "orbit_decision",
+    "orbit_friction",
+    "orbit_routine_control",
+    "orbit_run",
+    "orbit_search",
+    "orbit_task_add",
+    "orbit_task_artifact",
+    "orbit_task_eligible",
+    "orbit_task_list",
+    "orbit_task_recover",
+    "orbit_task_show",
+    "orbit_task_update",
+    "orbit_workflow",
+    "orbit_workspace_list",
+];
+
+/// The six rarely used tools that moved to opt-in for the operator role, with
+/// the toolset that enables each.
+const OPERATOR_OPT_IN_TOOLS: [(&str, &str); 6] = [
+    ("orbit_auto_task", "automation"),
+    ("orbit_automation_explain", "automation"),
+    ("orbit_codebase", "codebase"),
+    ("orbit_pipeline_invoke", "pipelines"),
+    ("orbit_task_block_triage", "task-triage"),
+    ("orbit_ui", "ui"),
+];
+
+const AGENT_TOOLS: [&str; 17] = [
+    "orbit_attention",
+    "orbit_codebase",
+    "orbit_decision",
+    "orbit_friction",
+    "orbit_notice_close",
+    "orbit_notice_list",
+    "orbit_notice_post",
+    "orbit_notice_show",
+    "orbit_search",
+    "orbit_task_add",
+    "orbit_task_artifact",
+    "orbit_task_eligible",
+    "orbit_task_list",
+    "orbit_task_show",
+    "orbit_task_update",
+    "orbit_ui",
+    "orbit_workspace_list",
+];
+
+const MANAGER_TOOLS: [&str; 24] = [
+    "orbit_attention",
+    "orbit_decision",
+    "orbit_evolution_add",
+    "orbit_evolution_list",
+    "orbit_evolution_show",
+    "orbit_notice_close",
+    "orbit_notice_list",
+    "orbit_notice_post",
+    "orbit_notice_show",
+    "orbit_resident_checkpoint",
+    "orbit_resident_control",
+    "orbit_resident_digest",
+    "orbit_resident_grant",
+    "orbit_resident_list",
+    "orbit_resident_metrics",
+    "orbit_resident_relay",
+    "orbit_resident_show",
+    "orbit_run",
+    "orbit_search",
+    "orbit_task_artifact",
+    "orbit_task_eligible",
+    "orbit_task_list",
+    "orbit_task_show",
+    "orbit_workspace_list",
+];
+
+const RESIDENT_TOOLS: [&str; 29] = [
+    "orbit_attention",
+    "orbit_decision",
+    "orbit_evolution_add",
+    "orbit_evolution_list",
+    "orbit_evolution_show",
+    "orbit_friction",
+    "orbit_notice_close",
+    "orbit_notice_list",
+    "orbit_notice_post",
+    "orbit_notice_show",
+    "orbit_pipeline_invoke",
+    "orbit_resident_checkpoint",
+    "orbit_resident_control",
+    "orbit_resident_digest",
+    "orbit_resident_grant",
+    "orbit_resident_list",
+    "orbit_resident_metrics",
+    "orbit_resident_relay",
+    "orbit_resident_show",
+    "orbit_run",
+    "orbit_search",
+    "orbit_task_add",
+    "orbit_task_artifact",
+    "orbit_task_eligible",
+    "orbit_task_list",
+    "orbit_task_show",
+    "orbit_task_update",
+    "orbit_workflow",
+    "orbit_workspace_list",
+];
+
 fn sorted(mut names: Vec<&str>) -> Vec<&str> {
     names.retain(|name| *name != "orbit_ui");
     names.sort_unstable();
@@ -329,117 +440,6 @@ fn all_workspace_attention_lists_a_global_notice_once() {
     assert_eq!(global_items.len(), 1, "{attention}");
     assert_eq!(global_items[0]["severity"], "medium", "{attention}");
 }
-
-/// The operator role's default advertised surface (16 tools; the six rarely
-/// used tools are opt-in via `--toolset` / `machine.mcp.toolsets`).
-const OPERATOR_DEFAULT_TOOLS: [&str; 16] = [
-    "orbit_attention",
-    "orbit_command_exec",
-    "orbit_decision",
-    "orbit_friction",
-    "orbit_routine_control",
-    "orbit_run",
-    "orbit_search",
-    "orbit_task_add",
-    "orbit_task_artifact",
-    "orbit_task_eligible",
-    "orbit_task_list",
-    "orbit_task_recover",
-    "orbit_task_show",
-    "orbit_task_update",
-    "orbit_workflow",
-    "orbit_workspace_list",
-];
-
-/// The six rarely used tools that moved to opt-in for the operator role, with
-/// the toolset that enables each.
-const OPERATOR_OPT_IN_TOOLS: [(&str, &str); 6] = [
-    ("orbit_auto_task", "automation"),
-    ("orbit_automation_explain", "automation"),
-    ("orbit_codebase", "codebase"),
-    ("orbit_pipeline_invoke", "pipelines"),
-    ("orbit_task_block_triage", "task-triage"),
-    ("orbit_ui", "ui"),
-];
-
-const AGENT_TOOLS: [&str; 17] = [
-    "orbit_attention",
-    "orbit_codebase",
-    "orbit_decision",
-    "orbit_friction",
-    "orbit_notice_close",
-    "orbit_notice_list",
-    "orbit_notice_post",
-    "orbit_notice_show",
-    "orbit_search",
-    "orbit_task_add",
-    "orbit_task_artifact",
-    "orbit_task_eligible",
-    "orbit_task_list",
-    "orbit_task_show",
-    "orbit_task_update",
-    "orbit_ui",
-    "orbit_workspace_list",
-];
-
-const MANAGER_TOOLS: [&str; 24] = [
-    "orbit_attention",
-    "orbit_decision",
-    "orbit_evolution_add",
-    "orbit_evolution_list",
-    "orbit_evolution_show",
-    "orbit_notice_close",
-    "orbit_notice_list",
-    "orbit_notice_post",
-    "orbit_notice_show",
-    "orbit_resident_checkpoint",
-    "orbit_resident_control",
-    "orbit_resident_digest",
-    "orbit_resident_grant",
-    "orbit_resident_list",
-    "orbit_resident_metrics",
-    "orbit_resident_relay",
-    "orbit_resident_show",
-    "orbit_run",
-    "orbit_search",
-    "orbit_task_artifact",
-    "orbit_task_eligible",
-    "orbit_task_list",
-    "orbit_task_show",
-    "orbit_workspace_list",
-];
-
-const RESIDENT_TOOLS: [&str; 29] = [
-    "orbit_attention",
-    "orbit_decision",
-    "orbit_evolution_add",
-    "orbit_evolution_list",
-    "orbit_evolution_show",
-    "orbit_friction",
-    "orbit_notice_close",
-    "orbit_notice_list",
-    "orbit_notice_post",
-    "orbit_notice_show",
-    "orbit_pipeline_invoke",
-    "orbit_resident_checkpoint",
-    "orbit_resident_control",
-    "orbit_resident_digest",
-    "orbit_resident_grant",
-    "orbit_resident_list",
-    "orbit_resident_metrics",
-    "orbit_resident_relay",
-    "orbit_resident_show",
-    "orbit_run",
-    "orbit_search",
-    "orbit_task_add",
-    "orbit_task_artifact",
-    "orbit_task_eligible",
-    "orbit_task_list",
-    "orbit_task_show",
-    "orbit_task_update",
-    "orbit_workflow",
-    "orbit_workspace_list",
-];
 
 #[test]
 fn default_and_operator_profiles_advertise_their_expected_surfaces() {

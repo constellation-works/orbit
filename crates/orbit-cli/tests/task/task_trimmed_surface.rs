@@ -20,6 +20,59 @@ use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
+impl TestWorkspace {
+    fn drive_to_done(&self, id: &str) {
+        self.run(&["task", "update", id, "--approve"], "approve");
+        self.run(
+            &[
+                "task",
+                "update",
+                id,
+                "--plan",
+                "1) do it",
+                "--status",
+                "in-progress",
+            ],
+            "start",
+        );
+        self.run(
+            &[
+                "task",
+                "update",
+                id,
+                "--execution-summary",
+                "did it",
+                "--status",
+                "review",
+            ],
+            "to review",
+        );
+        self.run(&["task", "update", id, "--status", "done"], "to done");
+    }
+
+    /// Selectors the task's latest creation grant names, `null` for none.
+    fn creation_grant(&self, id: &str) -> Value {
+        let task = self.task_json(&["task", "show", id, "--json"]);
+        task["history"]
+            .as_array()
+            .expect("task history")
+            .iter()
+            .rev()
+            .find(|entry| entry["event"] == json!("context_creation_authorized"))
+            .map(|entry| {
+                let note: Value = serde_json::from_str(entry["note"].as_str().expect("grant note"))
+                    .expect("grant JSON");
+                note["selectors"].clone()
+            })
+            .unwrap_or(Value::Null)
+    }
+
+    fn task_json(&self, args: &[&str]) -> Value {
+        let output = self.run(args, "task JSON command");
+        serde_json::from_slice(&output.stdout).expect("task JSON output")
+    }
+}
+
 /// [ORB-12245] `done` and `archived` are terminal on the governed surface.
 /// A human on the bare CLI can still override the table with `--force`, and
 /// the override is named in the task's history.
@@ -1035,59 +1088,6 @@ fn workspace() -> TestWorkspace {
     template.acceptance_criteria = vec!["status lands where the update says".into()];
     template.complexity = orbit_types::task::TaskComplexity::Medium;
     TestWorkspace::new("trimmed-surface-test", template)
-}
-
-impl TestWorkspace {
-    fn drive_to_done(&self, id: &str) {
-        self.run(&["task", "update", id, "--approve"], "approve");
-        self.run(
-            &[
-                "task",
-                "update",
-                id,
-                "--plan",
-                "1) do it",
-                "--status",
-                "in-progress",
-            ],
-            "start",
-        );
-        self.run(
-            &[
-                "task",
-                "update",
-                id,
-                "--execution-summary",
-                "did it",
-                "--status",
-                "review",
-            ],
-            "to review",
-        );
-        self.run(&["task", "update", id, "--status", "done"], "to done");
-    }
-
-    /// Selectors the task's latest creation grant names, `null` for none.
-    fn creation_grant(&self, id: &str) -> Value {
-        let task = self.task_json(&["task", "show", id, "--json"]);
-        task["history"]
-            .as_array()
-            .expect("task history")
-            .iter()
-            .rev()
-            .find(|entry| entry["event"] == json!("context_creation_authorized"))
-            .map(|entry| {
-                let note: Value = serde_json::from_str(entry["note"].as_str().expect("grant note"))
-                    .expect("grant JSON");
-                note["selectors"].clone()
-            })
-            .unwrap_or(Value::Null)
-    }
-
-    fn task_json(&self, args: &[&str]) -> Value {
-        let output = self.run(args, "task JSON command");
-        serde_json::from_slice(&output.stdout).expect("task JSON output")
-    }
 }
 
 fn run_orbit_with_identity(

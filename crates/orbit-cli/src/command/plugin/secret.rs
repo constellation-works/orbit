@@ -91,6 +91,84 @@ impl ExecuteCore for PluginSecretSetArgs {
     }
 }
 
+#[derive(Args)]
+pub struct PluginSecretListArgs {
+    /// Plugin namespace
+    pub plugin: String,
+}
+
+impl ExecuteCore for PluginSecretListArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        use crate::output::common::table::{Column, Table};
+        use comfy_table::Cell;
+
+        let Outcome::SecretsListed(secrets) =
+            exec(core, Command::ListSecrets(self.plugin.clone()))?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
+        let mut table = Table::new(vec![
+            Column::new("SECRET").fixed(),
+            Column::new("STATE").fixed(),
+            Column::new("UPDATED").fixed(),
+            Column::new("DESCRIPTION"),
+        ])
+        .empty_message("this plugin declares no secrets");
+        for secret in &secrets {
+            table.add_row(vec![
+                Cell::new(&secret.name),
+                Cell::new(secret_state(secret)),
+                Cell::new(secret.updated_at.as_deref().unwrap_or("-")),
+                Cell::new(&secret.description),
+            ]);
+        }
+        let records = secrets
+            .iter()
+            .map(|secret| secret_record(&self.plugin, secret))
+            .collect::<Vec<_>>();
+        Ok(Payload::list(records, table).into())
+    }
+}
+
+#[derive(Args)]
+pub struct PluginSecretRmArgs {
+    /// Plugin namespace
+    pub plugin: String,
+    /// Secret name
+    pub name: String,
+}
+
+impl ExecuteCore for PluginSecretRmArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let Outcome::SecretRemoved(removed) = exec(
+            core,
+            Command::RemoveSecret {
+                plugin: self.plugin.clone(),
+                name: self.name.clone(),
+            },
+        )?
+        else {
+            unreachable!("plugin command returned an unrelated outcome");
+        };
+        let text = if removed {
+            format!(
+                "Removed secret '{}' from plugin '{}'.",
+                self.name, self.plugin
+            )
+        } else {
+            format!(
+                "Plugin '{}' has no secret '{}' set; nothing was removed.",
+                self.plugin, self.name
+            )
+        };
+        Ok(Payload::detail(
+            json!({ "plugin": self.plugin, "name": self.name, "removed": removed }),
+            text,
+        )
+        .into())
+    }
+}
+
 /// The value from a piped stdin, or from a no-echo prompt when stdin is a
 /// terminal. One trailing newline is dropped: `echo token |` and a typed
 /// line both end with one that is not part of the value.
@@ -164,45 +242,6 @@ fn prompt_without_echo(_prompt: &str) -> Result<String, OrbitError> {
     ))
 }
 
-#[derive(Args)]
-pub struct PluginSecretListArgs {
-    /// Plugin namespace
-    pub plugin: String,
-}
-
-impl ExecuteCore for PluginSecretListArgs {
-    fn execute(self, core: &Core) -> CommandOut {
-        use crate::output::common::table::{Column, Table};
-        use comfy_table::Cell;
-
-        let Outcome::SecretsListed(secrets) =
-            exec(core, Command::ListSecrets(self.plugin.clone()))?
-        else {
-            unreachable!("plugin command returned an unrelated outcome");
-        };
-        let mut table = Table::new(vec![
-            Column::new("SECRET").fixed(),
-            Column::new("STATE").fixed(),
-            Column::new("UPDATED").fixed(),
-            Column::new("DESCRIPTION"),
-        ])
-        .empty_message("this plugin declares no secrets");
-        for secret in &secrets {
-            table.add_row(vec![
-                Cell::new(&secret.name),
-                Cell::new(secret_state(secret)),
-                Cell::new(secret.updated_at.as_deref().unwrap_or("-")),
-                Cell::new(&secret.description),
-            ]);
-        }
-        let records = secrets
-            .iter()
-            .map(|secret| secret_record(&self.plugin, secret))
-            .collect::<Vec<_>>();
-        Ok(Payload::list(records, table).into())
-    }
-}
-
 fn secret_state(secret: &PluginSecretStatus) -> &'static str {
     match (secret.declared, secret.set) {
         (true, true) => "set",
@@ -221,43 +260,4 @@ fn secret_record(plugin: &str, secret: &PluginSecretStatus) -> serde_json::Value
         "set": secret.set,
         "updated_at": secret.updated_at,
     })
-}
-
-#[derive(Args)]
-pub struct PluginSecretRmArgs {
-    /// Plugin namespace
-    pub plugin: String,
-    /// Secret name
-    pub name: String,
-}
-
-impl ExecuteCore for PluginSecretRmArgs {
-    fn execute(self, core: &Core) -> CommandOut {
-        let Outcome::SecretRemoved(removed) = exec(
-            core,
-            Command::RemoveSecret {
-                plugin: self.plugin.clone(),
-                name: self.name.clone(),
-            },
-        )?
-        else {
-            unreachable!("plugin command returned an unrelated outcome");
-        };
-        let text = if removed {
-            format!(
-                "Removed secret '{}' from plugin '{}'.",
-                self.name, self.plugin
-            )
-        } else {
-            format!(
-                "Plugin '{}' has no secret '{}' set; nothing was removed.",
-                self.plugin, self.name
-            )
-        };
-        Ok(Payload::detail(
-            json!({ "plugin": self.plugin, "name": self.name, "removed": removed }),
-            text,
-        )
-        .into())
-    }
 }

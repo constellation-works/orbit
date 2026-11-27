@@ -232,6 +232,94 @@ mod authority {
         }
     }
 
+    /// `orbit mcp serve` for one test, killed and reaped on drop.
+    struct McpServer {
+        _child: ChildGuard,
+        stdin: ChildStdin,
+        lines: mpsc::Receiver<String>,
+        next_id: u64,
+    }
+
+    impl McpServer {
+        fn start(host: &Host, flags: &[&str], env: &[(&str, &str)]) -> Self {
+            let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
+            test_env::clear_inherited_authority(|name| {
+                command.env_remove(name);
+            });
+            let mut child = command
+                .env_remove("AGENT_RUN_ID")
+                .envs(env.iter().copied())
+                .current_dir(&host.work)
+                .env("HOME", &host.home)
+                .env("USERPROFILE", &host.home)
+                .args(["mcp", "serve"])
+                .args(flags)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .map(ChildGuard::new)
+                .expect("start the MCP server");
+            let stdin = child.stdin.take().expect("server stdin");
+            let stdout = child.stdout.take().expect("server stdout");
+            let (sender, lines) = mpsc::channel();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    if sender.send(line).is_err() {
+                        break;
+                    }
+                }
+            });
+            let mut server = Self {
+                _child: child,
+                stdin,
+                lines,
+                next_id: 0,
+            };
+            let workspace = host.work.to_str().expect("utf8 work");
+            server.request(
+                "initialize",
+                json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": { "name": "plugin-authority", "version": "1" },
+                    "_meta": { "orbit": { "workspace": workspace } },
+                }),
+            );
+            server.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+            server
+        }
+
+        fn send(&mut self, message: &Value) {
+            writeln!(self.stdin, "{message}").expect("write to the server");
+            self.stdin.flush().expect("flush the server");
+        }
+
+        /// The `result` of one request, waiting at most [`CHILD_TIMEOUT`].
+        fn request(&mut self, method: &str, params: Value) -> Value {
+            self.next_id += 1;
+            let id = self.next_id;
+            self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
+            let deadline = std::time::Instant::now() + CHILD_TIMEOUT;
+            loop {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                let line = self
+                    .lines
+                    .recv_timeout(remaining)
+                    .unwrap_or_else(|error| panic!("no reply to {method}: {error}"));
+                let response: Value = serde_json::from_str(&line).expect("JSON-RPC line");
+                if response["id"] == id {
+                    assert!(response.get("error").is_none(), "{method}: {response}");
+                    return response["result"].clone();
+                }
+            }
+        }
+
+        fn call(&mut self, tool: &str) -> Value {
+            self.request("tools/call", json!({ "name": tool, "arguments": {} }))
+        }
+    }
+
     #[derive(Clone, Copy)]
     enum Backend<'a> {
         /// Appends `$ORBIT_TOOL_NAME` to the host's `calls` file.
@@ -692,94 +780,6 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
             ]
         );
     }
-
-    /// `orbit mcp serve` for one test, killed and reaped on drop.
-    struct McpServer {
-        _child: ChildGuard,
-        stdin: ChildStdin,
-        lines: mpsc::Receiver<String>,
-        next_id: u64,
-    }
-
-    impl McpServer {
-        fn start(host: &Host, flags: &[&str], env: &[(&str, &str)]) -> Self {
-            let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
-            test_env::clear_inherited_authority(|name| {
-                command.env_remove(name);
-            });
-            let mut child = command
-                .env_remove("AGENT_RUN_ID")
-                .envs(env.iter().copied())
-                .current_dir(&host.work)
-                .env("HOME", &host.home)
-                .env("USERPROFILE", &host.home)
-                .args(["mcp", "serve"])
-                .args(flags)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .spawn()
-                .map(ChildGuard::new)
-                .expect("start the MCP server");
-            let stdin = child.stdin.take().expect("server stdin");
-            let stdout = child.stdout.take().expect("server stdout");
-            let (sender, lines) = mpsc::channel();
-            std::thread::spawn(move || {
-                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                    if sender.send(line).is_err() {
-                        break;
-                    }
-                }
-            });
-            let mut server = Self {
-                _child: child,
-                stdin,
-                lines,
-                next_id: 0,
-            };
-            let workspace = host.work.to_str().expect("utf8 work");
-            server.request(
-                "initialize",
-                json!({
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {},
-                    "clientInfo": { "name": "plugin-authority", "version": "1" },
-                    "_meta": { "orbit": { "workspace": workspace } },
-                }),
-            );
-            server.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
-            server
-        }
-
-        fn send(&mut self, message: &Value) {
-            writeln!(self.stdin, "{message}").expect("write to the server");
-            self.stdin.flush().expect("flush the server");
-        }
-
-        /// The `result` of one request, waiting at most [`CHILD_TIMEOUT`].
-        fn request(&mut self, method: &str, params: Value) -> Value {
-            self.next_id += 1;
-            let id = self.next_id;
-            self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
-            let deadline = std::time::Instant::now() + CHILD_TIMEOUT;
-            loop {
-                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                let line = self
-                    .lines
-                    .recv_timeout(remaining)
-                    .unwrap_or_else(|error| panic!("no reply to {method}: {error}"));
-                let response: Value = serde_json::from_str(&line).expect("JSON-RPC line");
-                if response["id"] == id {
-                    assert!(response.get("error").is_none(), "{method}: {response}");
-                    return response["result"].clone();
-                }
-            }
-        }
-
-        fn call(&mut self, tool: &str) -> Value {
-            self.request("tools/call", json!({ "name": tool, "arguments": {} }))
-        }
-    }
 }
 
 use crate::{fixture_crew, git_repo};
@@ -808,6 +808,67 @@ use serde_json::Value;
 
 #[cfg(target_os = "linux")]
 const CHILD: &str = "ORBIT_SANDBOX_BROKER_FIXTURE";
+
+#[cfg(target_os = "linux")]
+const EXEC_BACKEND: &str = r#"#!/usr/bin/python3
+import json, os, sys
+request = json.load(sys.stdin)
+print(json.dumps({'ok': True, 'output': {'pid': os.getpid(), 'parent': os.getppid(), 'context': request['context']}}))
+"#;
+
+#[cfg(target_os = "linux")]
+const MCP_BACKEND: &str = r#"#!/usr/bin/python3
+import json, os, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get('method')
+    if method == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'fixture', 'version': '1'}}
+    elif method == 'tools/list':
+        result = {'tools': [{'name': 'echo', 'inputSchema': {'type': 'object'}}]}
+    elif method == 'tools/call':
+        result = {'content': [], 'structuredContent': {'pid': os.getpid(), 'parent': os.getppid(), 'context': request['params']['_meta']['orbit']}}
+    else:
+        continue
+    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
+"#;
+
+#[cfg(target_os = "linux")]
+const PROVIDER: &str = r#"import json, os, subprocess, sys
+orbit = sys.argv[1]
+rows = []
+for ns in ['execfixture', 'mcpfixture']:
+    result = subprocess.run([orbit, 'tool', 'run', ns + '.echo', '--input', '{}'], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    rows.append(json.loads(result.stdout))
+server = subprocess.Popen([orbit, 'mcp', 'serve', '--toolset', 'exec,plugins'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr, text=True)
+def send(message):
+    server.stdin.write(json.dumps(message) + '\n')
+    server.stdin.flush()
+def request(id, method, params):
+    send({'jsonrpc': '2.0', 'id': id, 'method': method, 'params': params})
+    while True:
+        line = server.stdout.readline()
+        assert line, 'MCP server exited before replying'
+        response = json.loads(line)
+        if response.get('id') == id:
+            assert 'error' not in response, response
+            return response['result']
+try:
+    request(1, 'initialize', {'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 'probe', 'version': '1'}, '_meta': {'orbit': {'workspace': os.getcwd()}}})
+    send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+    for id, ns in enumerate(['execfixture', 'mcpfixture'], 2):
+        result = request(id, 'tools/call', {'name': ns + '_echo', 'arguments': {}})
+        assert not result.get('isError'), result
+        output = result.get('structuredContent')
+        if output is None:
+            output = json.loads(result['content'][0]['text'])
+        rows.append(output)
+finally:
+    server.terminate()
+    server.wait(timeout=5)
+print(json.dumps(rows))
+"#;
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -1032,64 +1093,3 @@ fn sandbox_fixture() {
         "the run's MCP session was reclaimed"
     );
 }
-
-#[cfg(target_os = "linux")]
-const EXEC_BACKEND: &str = r#"#!/usr/bin/python3
-import json, os, sys
-request = json.load(sys.stdin)
-print(json.dumps({'ok': True, 'output': {'pid': os.getpid(), 'parent': os.getppid(), 'context': request['context']}}))
-"#;
-
-#[cfg(target_os = "linux")]
-const MCP_BACKEND: &str = r#"#!/usr/bin/python3
-import json, os, sys
-for line in sys.stdin:
-    request = json.loads(line)
-    method = request.get('method')
-    if method == 'initialize':
-        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'fixture', 'version': '1'}}
-    elif method == 'tools/list':
-        result = {'tools': [{'name': 'echo', 'inputSchema': {'type': 'object'}}]}
-    elif method == 'tools/call':
-        result = {'content': [], 'structuredContent': {'pid': os.getpid(), 'parent': os.getppid(), 'context': request['params']['_meta']['orbit']}}
-    else:
-        continue
-    print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
-"#;
-
-#[cfg(target_os = "linux")]
-const PROVIDER: &str = r#"import json, os, subprocess, sys
-orbit = sys.argv[1]
-rows = []
-for ns in ['execfixture', 'mcpfixture']:
-    result = subprocess.run([orbit, 'tool', 'run', ns + '.echo', '--input', '{}'], capture_output=True, text=True, timeout=20)
-    assert result.returncode == 0, result.stderr
-    rows.append(json.loads(result.stdout))
-server = subprocess.Popen([orbit, 'mcp', 'serve', '--toolset', 'exec,plugins'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr, text=True)
-def send(message):
-    server.stdin.write(json.dumps(message) + '\n')
-    server.stdin.flush()
-def request(id, method, params):
-    send({'jsonrpc': '2.0', 'id': id, 'method': method, 'params': params})
-    while True:
-        line = server.stdout.readline()
-        assert line, 'MCP server exited before replying'
-        response = json.loads(line)
-        if response.get('id') == id:
-            assert 'error' not in response, response
-            return response['result']
-try:
-    request(1, 'initialize', {'protocolVersion': '2025-06-18', 'capabilities': {}, 'clientInfo': {'name': 'probe', 'version': '1'}, '_meta': {'orbit': {'workspace': os.getcwd()}}})
-    send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
-    for id, ns in enumerate(['execfixture', 'mcpfixture'], 2):
-        result = request(id, 'tools/call', {'name': ns + '_echo', 'arguments': {}})
-        assert not result.get('isError'), result
-        output = result.get('structuredContent')
-        if output is None:
-            output = json.loads(result['content'][0]['text'])
-        rows.append(output)
-finally:
-    server.terminate()
-    server.wait(timeout=5)
-print(json.dumps(rows))
-"#;

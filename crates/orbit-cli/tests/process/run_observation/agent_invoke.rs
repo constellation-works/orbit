@@ -4,6 +4,12 @@ use super::*;
 
 const AGENT_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+const AGENT_TEST_ANSWER: &str = concat!(
+    r#"{"schemaVersion":1,"status":"success","result":{"summary":"fixture answer","#,
+    r#""findings":["fixture evidence"],"next_steps":["fixture action"],"#,
+    r#""details":{"ok":true}},"error":null}"#,
+);
+
 fn operator_json(fixture: &Fixture, args: &[&str]) -> Value {
     let output = fixture
         .orbit()
@@ -16,8 +22,6 @@ fn operator_json(fixture: &Fixture, args: &[&str]) -> Value {
     assert!(output.status.success(), "{args:?}: {output:?}");
     serde_json::from_slice(&output.stdout).unwrap()
 }
-
-const AGENT_TEST_ANSWER: &str = r#"{"schemaVersion":1,"status":"success","result":{"summary":"fixture answer","findings":["fixture evidence"],"next_steps":["fixture action"],"details":{"ok":true}},"error":null}"#;
 
 fn plant_invoke_provider(fixture: &Fixture, body: &str) {
     let executor_path = fixture.home.join(".orbit/resources/executors/codex.yaml");

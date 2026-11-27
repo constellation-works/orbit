@@ -27,6 +27,8 @@ use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 use toml_edit::DocumentMut;
 
+const MCP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// One machine with an external Orbit root and a single checkout registered
 /// against it.
 struct ExternalRootFixture {
@@ -273,6 +275,208 @@ impl ExternalRootFixture {
                 );
             }
         }
+    }
+}
+
+struct SharedRootCheckoutPairFixture {
+    _temp: TempDir,
+    home: PathBuf,
+    orbit_root: PathBuf,
+    checkout_a: PathBuf,
+    checkout_b: PathBuf,
+    elsewhere: PathBuf,
+}
+
+impl SharedRootCheckoutPairFixture {
+    fn init() -> Self {
+        // `--root` is recorded as given, and the assertions expect the resolved
+        // spelling, so root the fixture at a resolved temp directory.
+        let temp =
+            tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("tempdir");
+        let home = temp.path().join("home");
+        let orbit_root = temp.path().join("shared-root");
+        let checkout_a = temp.path().join("checkout-a");
+        let checkout_b = temp.path().join("checkout-b");
+        let elsewhere = temp.path().join("elsewhere");
+        for directory in [&home, &elsewhere] {
+            fs::create_dir_all(directory).expect("fixture directory");
+        }
+        crate::git_repo::SeededRepo::new(&checkout_a).build();
+        crate::git_repo::SeededRepo::new(&checkout_b).build();
+
+        let fixture = Self {
+            _temp: temp,
+            home,
+            orbit_root,
+            checkout_a,
+            checkout_b,
+            elsewhere,
+        };
+        let root = fixture.orbit_root.to_str().expect("utf8 shared Orbit root");
+        fixture
+            .orbit(
+                &fixture.checkout_a,
+                &argv(&[
+                    "--root",
+                    root,
+                    "init",
+                    "--non-interactive",
+                    "--machine-name",
+                    "shared-root-host",
+                    "--task-prefix",
+                    "SHR",
+                ]),
+            )
+            .success();
+        fixture
+            .orbit(
+                &fixture.checkout_a,
+                &argv(&["--root", root, "workspace", "init", "--name", "alpha"]),
+            )
+            .success();
+        fixture
+            .orbit(
+                &fixture.checkout_b,
+                &argv(&["--root", root, "workspace", "init", "--name", "beta"]),
+            )
+            .success();
+        fixture.assert_shared_root_layout();
+        fixture
+    }
+
+    fn orbit(&self, cwd: &Path, args: &[String]) -> assert_cmd::assert::Assert {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(cwd)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env_remove("ORBIT_ROOT")
+            .env_remove("ORBIT_WORKSPACE")
+            .args(args)
+            .assert()
+    }
+
+    fn assert_shared_root_layout(&self) {
+        for (checkout, workspace_id) in [
+            (&self.checkout_a, "ws_alpha"),
+            (&self.checkout_b, "ws_beta"),
+        ] {
+            let assert = self
+                .orbit(
+                    checkout,
+                    &argv(&[
+                        "--root",
+                        self.orbit_root.to_str().expect("utf8 shared Orbit root"),
+                        "workspace",
+                        "show",
+                        "--format",
+                        "json",
+                    ]),
+                )
+                .success();
+            let shown: Value =
+                serde_json::from_slice(&assert.get_output().stdout).expect("workspace show json");
+            assert_eq!(shown["workspace"]["id"], workspace_id);
+            assert_eq!(shown["checkout"]["repo_root"], canonical_str(checkout));
+            assert_eq!(
+                shown["checkout"]["orbit_dir"],
+                canonical_str(&self.orbit_root)
+            );
+            assert!(!checkout.join(".orbit").exists());
+        }
+    }
+}
+
+struct RegisteredCheckoutPairFixture {
+    _temp: TempDir,
+    home: PathBuf,
+    checkout_a: PathBuf,
+    checkout_b: PathBuf,
+}
+
+impl RegisteredCheckoutPairFixture {
+    fn init() -> Self {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let checkout_a = temp.path().join("checkout-a");
+        let checkout_b = temp.path().join("checkout-b");
+        fs::create_dir_all(&home).expect("fixture home");
+        crate::git_repo::SeededRepo::new(&checkout_a).build();
+        crate::git_repo::SeededRepo::new(&checkout_b).build();
+
+        let fixture = Self {
+            _temp: temp,
+            home,
+            checkout_a,
+            checkout_b,
+        };
+        fixture
+            .orbit(
+                &fixture.checkout_a,
+                &argv(&[
+                    "init",
+                    "--non-interactive",
+                    "--machine-name",
+                    "local-root-host",
+                    "--task-prefix",
+                    "LCL",
+                ]),
+            )
+            .success();
+        fixture
+            .orbit(
+                &fixture.checkout_a,
+                &argv(&["workspace", "init", "--name", "alpha"]),
+            )
+            .success();
+        fixture
+            .orbit(
+                &fixture.checkout_b,
+                &argv(&["workspace", "init", "--name", "beta"]),
+            )
+            .success();
+        fixture
+    }
+
+    fn orbit(&self, cwd: &Path, args: &[String]) -> assert_cmd::assert::Assert {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(cwd)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env_remove("ORBIT_ROOT")
+            .env_remove("ORBIT_WORKSPACE")
+            .args(args)
+            .assert()
+    }
+
+    fn orbit_with_env(
+        &self,
+        cwd: &Path,
+        args: &[String],
+        env: &[(&str, &Path)],
+    ) -> assert_cmd::assert::Assert {
+        let mut command = cargo_bin_cmd!("orbit");
+        test_env::clear_inherited_authority(|name| {
+            command.env_remove(name);
+        });
+        command
+            .current_dir(cwd)
+            .env("HOME", &self.home)
+            .env("USERPROFILE", &self.home)
+            .env_remove("ORBIT_ROOT")
+            .env_remove("ORBIT_WORKSPACE")
+            .args(args);
+        for (name, value) in env {
+            command.env(name, value);
+        }
+        command.assert()
     }
 }
 
@@ -979,208 +1183,6 @@ fn toml_client_home_config_without_other_entries_is_deleted_when_removal_empties
     );
 }
 
-struct SharedRootCheckoutPairFixture {
-    _temp: TempDir,
-    home: PathBuf,
-    orbit_root: PathBuf,
-    checkout_a: PathBuf,
-    checkout_b: PathBuf,
-    elsewhere: PathBuf,
-}
-
-impl SharedRootCheckoutPairFixture {
-    fn init() -> Self {
-        // `--root` is recorded as given, and the assertions expect the resolved
-        // spelling, so root the fixture at a resolved temp directory.
-        let temp =
-            tempfile::tempdir_in(orbit_common::test_env::canonical_temp_dir()).expect("tempdir");
-        let home = temp.path().join("home");
-        let orbit_root = temp.path().join("shared-root");
-        let checkout_a = temp.path().join("checkout-a");
-        let checkout_b = temp.path().join("checkout-b");
-        let elsewhere = temp.path().join("elsewhere");
-        for directory in [&home, &elsewhere] {
-            fs::create_dir_all(directory).expect("fixture directory");
-        }
-        crate::git_repo::SeededRepo::new(&checkout_a).build();
-        crate::git_repo::SeededRepo::new(&checkout_b).build();
-
-        let fixture = Self {
-            _temp: temp,
-            home,
-            orbit_root,
-            checkout_a,
-            checkout_b,
-            elsewhere,
-        };
-        let root = fixture.orbit_root.to_str().expect("utf8 shared Orbit root");
-        fixture
-            .orbit(
-                &fixture.checkout_a,
-                &argv(&[
-                    "--root",
-                    root,
-                    "init",
-                    "--non-interactive",
-                    "--machine-name",
-                    "shared-root-host",
-                    "--task-prefix",
-                    "SHR",
-                ]),
-            )
-            .success();
-        fixture
-            .orbit(
-                &fixture.checkout_a,
-                &argv(&["--root", root, "workspace", "init", "--name", "alpha"]),
-            )
-            .success();
-        fixture
-            .orbit(
-                &fixture.checkout_b,
-                &argv(&["--root", root, "workspace", "init", "--name", "beta"]),
-            )
-            .success();
-        fixture.assert_shared_root_layout();
-        fixture
-    }
-
-    fn orbit(&self, cwd: &Path, args: &[String]) -> assert_cmd::assert::Assert {
-        let mut command = cargo_bin_cmd!("orbit");
-        test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
-        command
-            .current_dir(cwd)
-            .env("HOME", &self.home)
-            .env("USERPROFILE", &self.home)
-            .env_remove("ORBIT_ROOT")
-            .env_remove("ORBIT_WORKSPACE")
-            .args(args)
-            .assert()
-    }
-
-    fn assert_shared_root_layout(&self) {
-        for (checkout, workspace_id) in [
-            (&self.checkout_a, "ws_alpha"),
-            (&self.checkout_b, "ws_beta"),
-        ] {
-            let assert = self
-                .orbit(
-                    checkout,
-                    &argv(&[
-                        "--root",
-                        self.orbit_root.to_str().expect("utf8 shared Orbit root"),
-                        "workspace",
-                        "show",
-                        "--format",
-                        "json",
-                    ]),
-                )
-                .success();
-            let shown: Value =
-                serde_json::from_slice(&assert.get_output().stdout).expect("workspace show json");
-            assert_eq!(shown["workspace"]["id"], workspace_id);
-            assert_eq!(shown["checkout"]["repo_root"], canonical_str(checkout));
-            assert_eq!(
-                shown["checkout"]["orbit_dir"],
-                canonical_str(&self.orbit_root)
-            );
-            assert!(!checkout.join(".orbit").exists());
-        }
-    }
-}
-
-struct RegisteredCheckoutPairFixture {
-    _temp: TempDir,
-    home: PathBuf,
-    checkout_a: PathBuf,
-    checkout_b: PathBuf,
-}
-
-impl RegisteredCheckoutPairFixture {
-    fn init() -> Self {
-        let temp = tempdir().expect("tempdir");
-        let home = temp.path().join("home");
-        let checkout_a = temp.path().join("checkout-a");
-        let checkout_b = temp.path().join("checkout-b");
-        fs::create_dir_all(&home).expect("fixture home");
-        crate::git_repo::SeededRepo::new(&checkout_a).build();
-        crate::git_repo::SeededRepo::new(&checkout_b).build();
-
-        let fixture = Self {
-            _temp: temp,
-            home,
-            checkout_a,
-            checkout_b,
-        };
-        fixture
-            .orbit(
-                &fixture.checkout_a,
-                &argv(&[
-                    "init",
-                    "--non-interactive",
-                    "--machine-name",
-                    "local-root-host",
-                    "--task-prefix",
-                    "LCL",
-                ]),
-            )
-            .success();
-        fixture
-            .orbit(
-                &fixture.checkout_a,
-                &argv(&["workspace", "init", "--name", "alpha"]),
-            )
-            .success();
-        fixture
-            .orbit(
-                &fixture.checkout_b,
-                &argv(&["workspace", "init", "--name", "beta"]),
-            )
-            .success();
-        fixture
-    }
-
-    fn orbit(&self, cwd: &Path, args: &[String]) -> assert_cmd::assert::Assert {
-        let mut command = cargo_bin_cmd!("orbit");
-        test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
-        command
-            .current_dir(cwd)
-            .env("HOME", &self.home)
-            .env("USERPROFILE", &self.home)
-            .env_remove("ORBIT_ROOT")
-            .env_remove("ORBIT_WORKSPACE")
-            .args(args)
-            .assert()
-    }
-
-    fn orbit_with_env(
-        &self,
-        cwd: &Path,
-        args: &[String],
-        env: &[(&str, &Path)],
-    ) -> assert_cmd::assert::Assert {
-        let mut command = cargo_bin_cmd!("orbit");
-        test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
-        command
-            .current_dir(cwd)
-            .env("HOME", &self.home)
-            .env("USERPROFILE", &self.home)
-            .env_remove("ORBIT_ROOT")
-            .env_remove("ORBIT_WORKSPACE")
-            .args(args);
-        for (name, value) in env {
-            command.env(name, value);
-        }
-        command.assert()
-    }
-}
-
 fn argv(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_string()).collect()
 }
@@ -1282,8 +1284,6 @@ fn without_root_arg(args: &[String]) -> Vec<String> {
     }
     omitted
 }
-
-const MCP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Speak one stdio MCP session to `orbit` launched with `args`.
 ///
