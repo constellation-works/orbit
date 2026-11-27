@@ -4,9 +4,9 @@ owner: claude
 created_date: 2026-11-27
 updated_date: 2026-11-27
 last_validated: 2026-11-27
-status: Draft
+status: Accepted
 stage: designing
-next: "Operator approval of this design [ORB-29504]"
+next: "Check the frame policy in three browser engines [ORB-29532]"
 feature: plugin-pages
 doc_role: overview
 type: design
@@ -22,8 +22,8 @@ A plugin page is a screen a plugin ships and the dashboard shows as a sub-tab un
 plugin supplies built static files. The dashboard serves them in a sandboxed frame, and the page
 gets data only by calling tools the plugin's manifest names. It exists so that a plugin such as
 Scribe or Formation can show the operator more than a table, without plugin code ever running
-with the dashboard's authority. It is a draft for the operator's approval ([ORB-29504]) and
-nothing in it is built.
+with the dashboard's authority. The operator approved the design on 2026-11-27
+([ORB-29504]). Nothing in it is built.
 
 ## 1. Motivation
 
@@ -88,19 +88,34 @@ phase that delivers it.
 | A page that changes something | [Phasing](./2_design.md#8-phasing) | 3 |
 | The Scribe and Formation pages | [Phasing](./2_design.md#8-phasing) | 4 |
 
-## 4. Open for approval
+## 4. Decided at approval
 
-1. **A static bundle, or a server per plugin?** The design recommends the bundle, for the
-   reasons in [Why no server per plugin](./2_design.md#6-why-no-server-per-plugin). The cost is
-   that a page cannot hold server-side state or push; it asks its tools.
-2. **Actions in the first build, or after?** The design recommends after, as phase 3. A page
-   that can settle a request or close a room is plugin code acting with the operator's
-   authority, and the confirmation drawn outside the frame is what keeps that honest. The cost
-   of waiting is that the first Formation page reads and does not answer.
+The operator approved the design as drafted on 2026-11-27. Two points were open questions in
+the draft and were approved with the recommendation. Both are recorded in the
+[decisions](./4_decisions.md):
+
+1. **A page is a static bundle; Orbit starts no server for it.** A page gets server-side work
+   only through its plugin's tools.
+2. **Pages read first; actions come later, behind a confirmation the dashboard draws.**
+
+## 5. Build
+
+| Phase | Task |
+|---|---|
+| 1. Local read-only pages | [ORB-29532] checks the frame policy in three browser engines; [ORB-29534] adds the manifest key, validation and the bundle digest; [ORB-29536] serves a page's files and runs its tool calls; [ORB-29537] adds the sub-tabs, the frame and the relay |
+| 2. Pages on other hosts | [ORB-29538] |
+| 3. Actions | [ORB-29539] |
+| 4. First pages | Designed in the Formation and Scribe repositories |
 
 ## Task References
 
 - [ORB-12738] — added the Plugins tab, the generic panel renderer and link tiles.
 - [ORB-29504] — this design.
+- [ORB-29532] — checks the frame policy in three browser engines and fixes the page contract.
+- [ORB-29534] — adds `spec.web.pages`, validation, the bundle digest and the listings.
+- [ORB-29536] — serves a page's files under the frame policy and runs its tool calls.
+- [ORB-29537] — adds the Plugins sub-tabs, the page frame and the bridge relay.
+- [ORB-29538] — shows another host's pages through the forwarder.
+- [ORB-29539] — adds actions behind a dashboard-drawn confirmation.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
