@@ -277,8 +277,13 @@ includes both the cache action and the `workspace_cache_unpack_seconds` line.
 
 The workspace test build (`scripts/check-ci-macos.sh --workspace-build`)
 compiles `--lib --bins --tests --examples` with
-`RUSTC_WORKSPACE_WRAPPER=clippy-driver` and the all-targets lint flags
-(`-D warnings`, allowing `clippy::disallowed_methods`). `clippy-driver` splits
+`RUSTC_WORKSPACE_WRAPPER=clippy-driver` through
+`scripts/with-test-build-lint.sh --check-json`. That wrapper's `CLIPPY_ARGS`
+allows `clippy::disallowed_methods` (crate-root `deny` attributes still reject
+it in production code) and does not pass `-D warnings`. The `--check-json`
+warning gate pipes Cargo's JSON output through
+`scripts/check-rust-source-order.py`, which fails on warnings outside the
+recorded source-order baseline. `clippy-driver` splits
 `CLIPPY_ARGS` on `__CLIPPY_HACKERY__`, which is how `cargo clippy` joins those
 arguments, so a space-separated value is one rustc argument and does not apply
 the flags. `scripts/with-test-build-lint.sh` holds that environment. The
@@ -288,8 +293,10 @@ through it too: Cargo fingerprints `RUSTC_WORKSPACE_WRAPPER` and the
 each would recompile every workspace member. Workspace doctests are disabled
 (`[lib] doctest = false`), so no doctest command runs;
 `scripts/check-doctest-fences.sh` statically fails any doc fence that rustdoc
-would run unless it is tagged `ignore`. `make ci-lint` still runs
-production Clippy and `cargo clippy --all-targets`. Keep the four native
+would run unless it is tagged `ignore`. `make ci-lint` runs the checked lint
+passes -- `cargo check --lib --bins` and `cargo check --all-targets` plus
+`cargo doc`, each through `scripts/with-test-build-lint.sh --check` (rustdoc
+additionally under `RUSTDOCFLAGS="-D warnings"`). Keep the four native
 delivery gates (`make ci-fast`, `make ci-lint`, `make goldens`,
 `make ci-test-affected`) and the ordinary hosted required checks.
 

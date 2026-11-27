@@ -11,8 +11,11 @@ evidence_output=""
 # 2), so on a runner that also runs the workspace-wide nextest pass they
 # recompile serde, tokio, hyper, reqwest and every workspace crate up to
 # orbit-core a second time. That build also lints workspace members with
-# clippy-driver and the flags the former `clippy-all-targets` phase passed
-# (`-D warnings -A clippy::disallowed_methods`). `--examples` is required
+# clippy-driver through `scripts/with-test-build-lint.sh --check-json`: its
+# `CLIPPY_ARGS` allows `clippy::disallowed_methods` (crate-root denies still
+# reject it in production) while the `--check-json` warning gate fails on
+# warnings outside the `scripts/check-rust-source-order.py` baseline.
+# `--examples` is required
 # because `--all-targets` lints examples and `--tests` does not. This repo has
 # no benches. Dependencies keep the configured sccache rustc wrapper; Cargo
 # chains it in front of clippy-driver for workspace members. The default keeps
