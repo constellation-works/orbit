@@ -28,3 +28,4 @@ use orbit_types::task::{
 pub(crate) use approve::DeferredApprovalEffects;
 pub(crate) use requeue::INFRA_BLOCK_CLEARED_EVENT;
 pub use requeue::InfraBlockedTask;
+pub use start::TaskStartRequest;

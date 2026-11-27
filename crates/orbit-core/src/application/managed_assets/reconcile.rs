@@ -20,6 +20,15 @@ use super::{
 use super::manifest::{validate_managed_asset_name, write_confined_asset};
 use super::retired::{ambiguous_legacy_yaml_files, unsafe_preservation_component};
 
+/// Where one managed-asset catalog lives on disk: its directory, the kind of
+/// asset it holds, and how each asset's file is named.
+#[derive(Clone, Copy)]
+pub(crate) struct ManagedAssetCatalog<'a> {
+    pub(crate) dir: &'a Path,
+    pub(crate) asset_kind: &'a str,
+    pub(crate) layout: ManagedAssetLayout,
+}
+
 /// The manifest an opt-out replaced, kept so the caller can put it back.
 #[must_use = "revert the opt-out when the operation it belongs to fails"]
 pub(crate) struct ManagedAssetOptOut {
@@ -96,9 +105,11 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
     render: impl FnMut(&'a str, &'a str) -> Result<Cow<'a, str>, OrbitError>,
 ) -> Result<ManagedAssetReconciliation, OrbitError> {
     reconcile_managed_assets_left_out(
-        dir,
-        asset_kind,
-        layout,
+        ManagedAssetCatalog {
+            dir,
+            asset_kind,
+            layout,
+        },
         files,
         &BTreeSet::new(),
         overwrite,
@@ -115,20 +126,19 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
 /// is removed by its recorded digest and a locally modified one is preserved
 /// outside the active catalog. Its operator opt-out is kept, so restoring the
 /// default policy later does not recreate a default the operator deleted.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "left-out reconcile takes the catalog, operator mode and render hook separately so each file can be retired or kept"
-)]
 pub(crate) fn reconcile_managed_assets_left_out<'a>(
-    dir: &Path,
-    asset_kind: &str,
-    layout: ManagedAssetLayout,
+    catalog: ManagedAssetCatalog<'_>,
     files: &'a [(&'a str, &'a str)],
     left_out: &BTreeSet<&str>,
     overwrite: bool,
     mode: ManagedAssetReconcileMode,
     mut render: impl FnMut(&'a str, &'a str) -> Result<Cow<'a, str>, OrbitError>,
 ) -> Result<ManagedAssetReconciliation, OrbitError> {
+    let ManagedAssetCatalog {
+        dir,
+        asset_kind,
+        layout,
+    } = catalog;
     validate_managed_asset_name(asset_kind, ManagedAssetLayout::YamlStem, "asset kind")?;
     for (name, _) in files {
         validate_managed_asset_name(name, layout, "embedded asset")?;

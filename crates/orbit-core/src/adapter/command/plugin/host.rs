@@ -69,12 +69,14 @@ pub fn execute_global_plugin_tool(
     drop(store);
     crate::adapter::command::dispatch::execute_global_plugin_dispatch(
         env,
-        opener,
-        global_root,
-        name,
-        input,
-        entry_point,
-        session_context,
+        crate::adapter::command::dispatch::GlobalToolCall {
+            opener,
+            global_root,
+            name,
+            input,
+            entry_point,
+            session_context,
+        },
         registry,
     )
 }

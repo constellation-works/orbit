@@ -1,16 +1,32 @@
 use super::*;
 
+/// What a caller asks of a task start: the status note and comment, the
+/// writing agent and model, the crew and plan, field edits applied with the
+/// start, and the run that owns its artifacts.
+#[derive(Default)]
+pub struct TaskStartRequest {
+    /// The status-change note.
+    pub note: Option<String>,
+    /// A comment appended with the start.
+    pub comment: Option<String>,
+    /// The writing agent.
+    pub agent: Option<String>,
+    /// The writing model.
+    pub model: Option<String>,
+    /// The crew to start under in place of the resolved one.
+    pub crew_override: Option<String>,
+    /// The plan recorded with the start.
+    pub plan: Option<String>,
+    /// Field edits applied with the start.
+    pub field_edits: TaskUpdateParams,
+    /// The run that owns the start's artifacts.
+    pub artifact_owner: Option<String>,
+}
+
 #[derive(Default)]
 struct StartTaskOptions {
-    note: Option<String>,
-    comment: Option<String>,
-    agent: Option<String>,
-    model: Option<String>,
+    request: TaskStartRequest,
     actor_label_override: Option<String>,
-    crew_override: Option<String>,
-    plan: Option<String>,
-    field_edits: TaskUpdateParams,
-    artifact_owner: Option<String>,
 }
 
 impl OrbitRuntime {
@@ -23,40 +39,25 @@ impl OrbitRuntime {
         self.start_task_with_actor_label_override(
             id,
             StartTaskOptions {
-                note,
-                comment,
+                request: TaskStartRequest {
+                    note,
+                    comment,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
         )
     }
 
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "this public start entry keeps note, actor, crew, plan and field edits as separate caller arguments"
-    )]
     pub fn start_task_with_identity_and_crew(
         &self,
         id: &str,
-        note: Option<String>,
-        comment: Option<String>,
-        agent: Option<String>,
-        model: Option<String>,
-        crew_override: Option<String>,
-        plan: Option<String>,
-        field_edits: TaskUpdateParams,
-        artifact_owner: Option<String>,
+        request: TaskStartRequest,
     ) -> Result<Task, OrbitError> {
         self.start_task_with_actor_label_override(
             id,
             StartTaskOptions {
-                note,
-                comment,
-                agent,
-                model,
-                crew_override,
-                plan,
-                field_edits,
-                artifact_owner,
+                request,
                 ..Default::default()
             },
         )
@@ -71,10 +72,12 @@ impl OrbitRuntime {
         self.start_task_with_actor_label_override(
             id,
             StartTaskOptions {
-                note,
-                comment,
+                request: TaskStartRequest {
+                    note,
+                    comment,
+                    ..Default::default()
+                },
                 actor_label_override: Some(SYSTEM_ACTOR_LABEL.to_string()),
-                ..Default::default()
             },
         )
     }
@@ -86,15 +89,18 @@ impl OrbitRuntime {
     ) -> Result<Task, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let StartTaskOptions {
-            note,
-            comment,
-            agent,
-            model,
+            request:
+                TaskStartRequest {
+                    note,
+                    comment,
+                    agent,
+                    model,
+                    crew_override,
+                    plan,
+                    field_edits,
+                    artifact_owner,
+                },
             actor_label_override,
-            crew_override,
-            plan,
-            field_edits,
-            artifact_owner,
         } = options;
         let note = note.map(|value| redact_all(&value));
         if comment

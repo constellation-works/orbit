@@ -35,10 +35,12 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::super::owner::{ClaimedOwnerRoute, bridge_through};
 use super::owner::broker::raw_call;
 use crate::OrbitRuntime;
 use crate::adapter::command::dispatch::brokered::RunDispatch;
+use crate::adapter::command::dispatch::claimed::owner::{
+    ClaimedOwnerCall, ClaimedOwnerRoute, bridge_through,
+};
 use crate::adapter::command::dispatch::execute::ToolEntryPoint;
 use crate::runtime::plugin::broker::{PeerAnchor, PluginBroker};
 
@@ -318,13 +320,15 @@ impl Fixture {
         bridge_through(
             socket,
             &self.global_root,
-            Some(&self.binding),
-            Some(FOLLOWER),
-            name,
-            &input,
-            &self.worktree,
-            &self.worktree,
-            ToolEntryPoint::Cli,
+            ClaimedOwnerCall {
+                binding: Some(&self.binding),
+                process_machine_id: Some(FOLLOWER),
+                name,
+                input: &input,
+                cwd: &self.worktree,
+                workspace_root: &self.worktree,
+                entry_point: ToolEntryPoint::Cli,
+            },
         )
     }
 

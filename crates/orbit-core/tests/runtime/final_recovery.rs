@@ -47,12 +47,14 @@ fn execute_tool_command_with_current_env(
     runtime
         .execute_tool_command_dispatch_with_session_context_and_env(
             &env,
-            name,
-            input,
-            None,
-            None,
-            orbit_core::adapter::command::ToolEntryPoint::Cli,
-            orbit_types::tool::ToolSessionContext::default(),
+            orbit_core::adapter::command::ToolCommandCall {
+                name,
+                input,
+                agent_override: None,
+                model_override: None,
+                entry_point: orbit_core::adapter::command::ToolEntryPoint::Cli,
+                session_context: orbit_types::tool::ToolSessionContext::default(),
+            },
         )
         .map(|outcome| outcome.value)
 }

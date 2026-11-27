@@ -367,17 +367,19 @@ fn call_refresh(runtime: &OrbitRuntime, task: &str, workspace: &str) -> Result<V
     runtime
         .execute_tool_command_dispatch_with_session_context_and_env(
             &env,
-            "orbit.workflow",
-            json!({
-                "action": "refresh",
-                "task_id": task,
-                "workspace": workspace,
-                "model": "codex"
-            }),
-            None,
-            None,
-            ToolEntryPoint::Mcp,
-            session(McpCapability::Agent),
+            orbit_core::adapter::command::ToolCommandCall {
+                name: "orbit.workflow",
+                input: json!({
+                    "action": "refresh",
+                    "task_id": task,
+                    "workspace": workspace,
+                    "model": "codex"
+                }),
+                agent_override: None,
+                model_override: None,
+                entry_point: ToolEntryPoint::Mcp,
+                session_context: session(McpCapability::Agent),
+            },
         )
         .map(|outcome| outcome.value)
         .map_err(|error| error.to_string())

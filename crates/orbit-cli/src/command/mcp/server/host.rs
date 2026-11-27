@@ -11,8 +11,9 @@ use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::{BoundWorkspaceRemedy, Env, NotFoundKind, OrbitError};
 use orbit_core::Core;
 use orbit_core::adapter::command::{
-    GlobalAuditStoreCache, HostPluginMcpCache, HostPluginMcpSurface, ToolEntryPoint,
-    execute_global_in_process_tool_dispatch_with_audit_writer, execute_global_plugin_tool,
+    GlobalAuditStoreCache, GlobalToolCall, HostPluginMcpCache, HostPluginMcpSurface,
+    ToolEntryPoint, execute_global_in_process_tool_dispatch_with_audit_writer,
+    execute_global_plugin_tool,
 };
 use orbit_core::app::{agent, plugin, tool};
 use orbit_core::runtime::HostLifetime;
@@ -382,12 +383,14 @@ impl ServerMcpHost {
     ) -> Result<Value, OrbitError> {
         execute_global_in_process_tool_dispatch_with_audit_writer(
             &self.env,
-            orbit_core::composition::store_opener(),
-            &self.global_root,
-            name,
-            input,
-            ToolEntryPoint::Mcp,
-            context,
+            GlobalToolCall {
+                opener: orbit_core::composition::store_opener(),
+                global_root: &self.global_root,
+                name,
+                input,
+                entry_point: ToolEntryPoint::Mcp,
+                session_context: context,
+            },
             |params, invocation| {
                 self.audit_store.insert_audit_event_record(
                     &self.env,
@@ -638,12 +641,14 @@ impl ServerMcpHost {
     ) -> Result<Value, OrbitError> {
         execute_global_in_process_tool_dispatch_with_audit_writer(
             &self.env,
-            orbit_core::composition::store_opener(),
-            &self.global_root,
-            name,
-            input,
-            ToolEntryPoint::Mcp,
-            context,
+            GlobalToolCall {
+                opener: orbit_core::composition::store_opener(),
+                global_root: &self.global_root,
+                name,
+                input,
+                entry_point: ToolEntryPoint::Mcp,
+                session_context: context,
+            },
             |params, invocation| {
                 self.audit_store.insert_audit_event_record(
                     &self.env,

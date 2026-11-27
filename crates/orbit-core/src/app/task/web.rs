@@ -11,8 +11,8 @@ use super::{
 };
 use crate::OrbitRuntime;
 use crate::application::task::{
-    ScreenedTaskWrite, TaskUpdateParams, TaskWriteResponsePolicy, TaskWriteScreen,
-    screened_task_write_response_json, with_task_write_provenance,
+    ScreenedTaskWrite, TaskUpdateIdentity, TaskUpdateParams, TaskWriteResponsePolicy,
+    TaskWriteScreen, screened_task_write_response_json, with_task_write_provenance,
 };
 
 /// What one dashboard write produced, before its answer is rendered.
@@ -85,8 +85,7 @@ fn apply(
             *params,
             &TaskWriteScreen::unbound(allow_missing_context),
             authority,
-            None,
-            model,
+            TaskUpdateIdentity { agent: None, model },
             status_note,
         )),
         DashboardAction::Comment {

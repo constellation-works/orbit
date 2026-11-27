@@ -5,7 +5,7 @@ use super::dependencies::DependencyPlan;
 use super::model::Delivery;
 use super::model::{self, Draw, FORECAST_SEED, ITERATIONS, Item, Resolved, Script};
 use super::outcomes::{Episode, MAX_ATTEMPTS};
-use super::rework::{self, ForecastArrivalStream, RegressionRework};
+use super::rework::{self, ForecastArrivalStream, GenerationLimit, RegressionRework};
 use super::schedule::{self, DrainStop, HORIZON_HOURS, Scenario, ScheduleState};
 use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
 use crate::application::statistics::SplitMix64;
@@ -38,6 +38,27 @@ pub(super) struct SimulationBounds {
     pub(super) max_generated: usize,
     pub(super) compute_budget: Duration,
     pub(super) deadline: Instant,
+}
+
+/// The forecast evidence one simulation draws from: the items and their
+/// resolved bases, delivery history, attempt episodes, regression rework and
+/// the cost correction.
+pub(super) struct SimulationInputs<'a> {
+    pub(super) items: &'a [Item],
+    pub(super) resolved: &'a [Resolved],
+    pub(super) history: &'a [Delivery],
+    pub(super) episodes: &'a [Episode],
+    pub(super) rework: &'a RegressionRework,
+    pub(super) correction: &'a Correction,
+}
+
+/// One scenario as its report serializes it: the scenario, its members,
+/// each member's exclusion reason, and whether arrivals were supported.
+struct ScenarioReport<'a> {
+    scenario: &'a Scenario<'a>,
+    members: &'a [usize],
+    reasons: &'a [Option<&'static str>],
+    arrivals_supported: bool,
 }
 
 /// The bound that ended a scenario with arrivals before all its iterations.
@@ -196,22 +217,21 @@ impl Outcome {
         }
     }
 
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "serialization needs scenario membership, rework and bases that the accumulator does not store itself"
-    )]
     fn into_json(
         mut self,
+        report: ScenarioReport<'_>,
         items: &[Item],
         resolved: &[Resolved],
-        scenario: &Scenario<'_>,
-        members: &[usize],
-        reasons: &[Option<&'static str>],
         rework: &RegressionRework,
-        arrivals_supported: bool,
         bases: &[Value],
         bounds: SimulationBounds,
     ) -> Value {
+        let ScenarioReport {
+            scenario,
+            members,
+            reasons,
+            arrivals_supported,
+        } = report;
         // A cut scenario's finished iterations are not a sample of all of
         // them, so nothing below may be computed from them.
         let cut = self.cut;
@@ -497,23 +517,22 @@ fn probability(count: u64, of: u64) -> Option<f64> {
 /// `plan` cannot schedule are left out of each scenario's simulation. With
 /// arrivals, a scenario that passes `deadline` or a generation or event bound
 /// stops and reports the cut instead of its totals.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "items, history, episodes, admission, plan, slots, rework, arrivals, correction and deadline are independent forecast inputs"
-)]
 pub(super) fn simulate_backlog_forecast(
-    items: &[Item],
-    resolved: &[Resolved],
-    history: &[Delivery],
-    episodes: &[Episode],
+    inputs: SimulationInputs<'_>,
     admission: &ForecastAdmission,
     plan: &DependencyPlan,
     slots: usize,
-    rework: &RegressionRework,
     arrivals: Option<&BTreeMap<&'static str, f64>>,
-    correction: &Correction,
     bounds: SimulationBounds,
 ) -> Forecast {
+    let SimulationInputs {
+        items,
+        resolved,
+        history,
+        episodes,
+        rework,
+        correction,
+    } = inputs;
     let frozen = admission;
     let initial_admission =
         frozen.with_forecast_generated_nodes(&(0..items.len()).collect::<Vec<_>>(), items.len());
@@ -635,8 +654,10 @@ pub(super) fn simulate_backlog_forecast(
                     episodes,
                     &mut rng,
                     correction,
-                    deadline,
-                    max_generated,
+                    GenerationLimit {
+                        deadline,
+                        max_generated,
+                    },
                 )
             } else {
                 (Vec::new(), false)
@@ -791,28 +812,33 @@ pub(super) fn simulate_backlog_forecast(
         .collect();
     let [backlog_outcome, approved_outcome] = outcomes;
     let backlog = backlog_outcome.into_json(
+        ScenarioReport {
+            scenario: &backlog_scenario,
+            members: &members(false),
+            reasons: &plan.backlog,
+            arrivals_supported: arrivals.is_none_or(|rates| {
+                rates.values().sum::<f64>() <= 0.0 || !rework.donors.is_empty()
+            }),
+        },
         items,
         resolved,
-        &backlog_scenario,
-        &members(false),
-        &plan.backlog,
         rework,
-        arrivals
-            .is_none_or(|rates| rates.values().sum::<f64>() <= 0.0 || !rework.donors.is_empty()),
         &bases,
         bounds,
     );
     let if_approved = approved_scenario.as_ref().map(|scenario| {
         approved_outcome.into_json(
+            ScenarioReport {
+                scenario,
+                members: &members(true),
+                reasons: &plan.approved,
+                arrivals_supported: arrivals.is_none_or(|rates| {
+                    rates.values().sum::<f64>() <= 0.0 || !rework.donors.is_empty()
+                }),
+            },
             items,
             resolved,
-            scenario,
-            &members(true),
-            &plan.approved,
             rework,
-            arrivals.is_none_or(|rates| {
-                rates.values().sum::<f64>() <= 0.0 || !rework.donors.is_empty()
-            }),
             &bases,
             bounds,
         )

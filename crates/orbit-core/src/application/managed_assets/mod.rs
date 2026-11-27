@@ -15,8 +15,9 @@ pub(super) use manifest::{
     encode_managed_asset_manifest, load_managed_asset_manifest, write_managed_asset_manifest,
 };
 pub(crate) use reconcile::{
-    ManagedAssetOptOut, reconcile_managed_assets, reconcile_managed_assets_in_mode,
-    reconcile_managed_assets_left_out, record_managed_asset_opt_out, restore_managed_asset,
+    ManagedAssetCatalog, ManagedAssetOptOut, reconcile_managed_assets,
+    reconcile_managed_assets_in_mode, reconcile_managed_assets_left_out,
+    record_managed_asset_opt_out, restore_managed_asset,
 };
 pub(super) use retired::preserve_modified_retired_asset;
 pub(crate) use retired::retired_preservation_path;

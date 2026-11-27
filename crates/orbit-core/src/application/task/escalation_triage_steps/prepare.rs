@@ -15,7 +15,7 @@ use super::{HeldPilotWarnings, PilotWarningCandidacy};
 use crate::OrbitRuntime;
 use crate::application::contracts::ESCALATION_TRIAGE_JOB;
 use crate::application::task::batch_prepare::{
-    BatchSpec, Qualification, held_by_run_detail, prepare_batch,
+    BatchHooks, BatchSpec, HeldRuns, Qualification, held_by_run_detail, prepare_batch,
 };
 use crate::application::task::pilot::input::requested_workspace_root;
 use crate::application::task::pilot::requested_base_branch;
@@ -146,40 +146,42 @@ pub(crate) fn prepare(
             before_workspace: vec![("subject", json!(subject.as_str()))],
             before_task_count: Vec::new(),
         },
-        |runtime| runtime.escalation_triage_holders(),
-        |_| true,
-        |task, held, _explicit| {
-            if held.contains_key(&task.id) {
-                return Ok(Qualification::Rejected("already_triaging"));
-            }
-            match qualify(runtime, subject, task)? {
-                Ok((row, author)) => Ok(Qualification::Selected((row, author))),
-                Err(reason) => Ok(Qualification::Rejected(reason)),
-            }
-        },
-        |task, (mut row, author): (Value, Option<String>)| {
-            let triager = triager(runtime, subject, task, author.as_deref())?;
-            let crew = triager.crew.clone();
-            row["crew"] = json!(crew);
-            row["tier"] = json!(triager.tier);
-            row["crew_source"] = json!(triager.source);
-            row["eligible_pool"] = json!(triager.eligible_pool);
-            Ok((row, crew))
-        },
-        skipped_detail,
-        |tasks, task_ids| {
-            let draws = tasks
-                .iter()
-                .filter(|task| task_ids.iter().any(|id| task["task_id"] == *id))
-                .map(|task| {
-                    json!({
-                        "task_id": task["task_id"],
-                        "source": task["crew_source"],
-                        "eligible_pool": task["eligible_pool"],
+        BatchHooks {
+            held: |runtime: &OrbitRuntime| runtime.escalation_triage_holders(),
+            keep_automatic: |_: &Task| true,
+            qualify: |task: &Task, held: &HeldRuns, _explicit: bool| {
+                if held.contains_key(&task.id) {
+                    return Ok(Qualification::Rejected("already_triaging"));
+                }
+                match qualify(runtime, subject, task)? {
+                    Ok((row, author)) => Ok(Qualification::Selected((row, author))),
+                    Err(reason) => Ok(Qualification::Rejected(reason)),
+                }
+            },
+            draw: |task: &Task, (mut row, author): (Value, Option<String>)| {
+                let triager = triager(runtime, subject, task, author.as_deref())?;
+                let crew = triager.crew.clone();
+                row["crew"] = json!(crew);
+                row["tier"] = json!(triager.tier);
+                row["crew_source"] = json!(triager.source);
+                row["eligible_pool"] = json!(triager.eligible_pool);
+                Ok((row, crew))
+            },
+            skipped_detail,
+            partition_extra: |tasks: &[Value], task_ids: &[String]| {
+                let draws = tasks
+                    .iter()
+                    .filter(|task| task_ids.iter().any(|id| task["task_id"] == *id))
+                    .map(|task| {
+                        json!({
+                            "task_id": task["task_id"],
+                            "source": task["crew_source"],
+                            "eligible_pool": task["eligible_pool"],
+                        })
                     })
-                })
-                .collect::<Vec<_>>();
-            Some(("draws", json!(draws)))
+                    .collect::<Vec<_>>();
+                Some(("draws", json!(draws)))
+            },
         },
     )
 }

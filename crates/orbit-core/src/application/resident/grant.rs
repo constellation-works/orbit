@@ -210,6 +210,14 @@ impl ResidentDashboardGrant {
     }
 }
 
+/// What a resident asks the operator to add: the rights, the workspaces, and
+/// the human's words, quoted verbatim.
+struct ResidentGrantAsk<'a> {
+    add: Vec<ResidentRight>,
+    workspaces: Vec<String>,
+    quote: Option<&'a str>,
+}
+
 impl OrbitRuntime {
     /// `orbit.resident.grant`: widen (as the operator, or as a grant request
     /// for anyone else) or narrow a mandate's authority.
@@ -306,9 +314,11 @@ impl OrbitRuntime {
                         self.raise_resident_grant_request(
                             &task,
                             authority,
-                            add,
-                            workspaces,
-                            params.quote.as_deref(),
+                            ResidentGrantAsk {
+                                add,
+                                workspaces,
+                                quote: params.quote.as_deref(),
+                            },
                             caller,
                             &writer,
                         )?
@@ -468,20 +478,19 @@ impl OrbitRuntime {
     }
 
     /// Raise, or return the open, grant request for exactly this addition.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "each argument feeds a different field of the stored grant request and its history: rights, workspaces, the verbatim quote, the relay caller and the history writer"
-    )]
     fn raise_resident_grant_request(
         &self,
         task: &orbit_types::task::Task,
         authority: ResidentAuthority,
-        add: Vec<ResidentRight>,
-        workspaces: Vec<String>,
-        quote: Option<&str>,
+        ask: ResidentGrantAsk<'_>,
         caller: &ResidentGrantCaller,
         writer: &str,
     ) -> Result<ResidentGrantOutcome, OrbitError> {
+        let ResidentGrantAsk {
+            add,
+            workspaces,
+            quote,
+        } = ask;
         let quote = quote.unwrap_or_default();
         if quote.trim().is_empty() {
             return Err(OrbitError::PolicyDenied(

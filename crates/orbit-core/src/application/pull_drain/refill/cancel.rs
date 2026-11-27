@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::DrainClaimedLeaf;
-use crate::application::distributed::OwnerAnswer;
+use crate::application::distributed::{OwnerAnswer, PullPassRecord};
 use crate::application::pull_drain::drain::PullDrain;
 
 /// One pass of a gracefully cancelled drain: release what never launched,
@@ -71,12 +71,14 @@ pub(super) fn cancelling_pass(
     }
     let health = runtime.record_pull_pass(
         run_id,
-        None,
-        None,
-        error.as_deref(),
-        None,
-        OwnerAnswer::None,
-        None,
+        PullPassRecord {
+            resource_throttle: None,
+            admission_refusal: None,
+            error: error.as_deref(),
+            error_code: None,
+            owner_answer: OwnerAnswer::None,
+            observation: None,
+        },
     )?;
     Ok(cancelling_answer(
         unsettled,

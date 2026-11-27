@@ -208,10 +208,12 @@ impl OrbitRuntime {
         let head_branch = blockers.pull.head_branch.clone();
         let outcome = self.refresh_open_delivery_head(
             id,
-            number,
-            &head_branch,
-            &expected_base,
-            &previous_head,
+            OpenDeliveryHead {
+                number,
+                head_branch: &head_branch,
+                base_branch: &expected_base,
+                previous_head: &previous_head,
+            },
             actor,
             REFRESH_TOOL_STEP,
         );
@@ -313,10 +315,12 @@ impl OrbitRuntime {
         }
         self.refresh_open_delivery_head(
             primary,
-            number,
-            &request.head_branch,
-            &request.base_branch,
-            &request.expected_head_sha,
+            OpenDeliveryHead {
+                number,
+                head_branch: &request.head_branch,
+                base_branch: &request.base_branch,
+                previous_head: &request.expected_head_sha,
+            },
             Some(&request.run_id),
             PIPELINE_REFRESH_STEP,
         )
@@ -328,20 +332,19 @@ impl OrbitRuntime {
     /// (`previous_head` on `head_branch`) as one conflict-free merge commit,
     /// recording `pr_refresh` audit rows before and after. Callers own the
     /// authority gate.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the refresh names the pull request's exact identity and its audit attribution"
-    )]
     pub(crate) fn refresh_open_delivery_head(
         &self,
         id: &str,
-        number: u64,
-        head_branch: &str,
-        base_branch: &str,
-        previous_head: &str,
+        head: OpenDeliveryHead<'_>,
         actor: Option<&str>,
         step: &str,
     ) -> Result<PullRequestRefreshOutcome, OrbitError> {
+        let OpenDeliveryHead {
+            number,
+            head_branch,
+            base_branch,
+            previous_head,
+        } = head;
         let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
         let pull_request = number.to_string();
@@ -410,6 +413,16 @@ impl OrbitRuntime {
         );
         outcome
     }
+}
+
+/// An open pull request's exact identity: its number, head and base
+/// branches, and the head commit the refresh expects to merge onto.
+#[derive(Clone, Copy)]
+pub(crate) struct OpenDeliveryHead<'a> {
+    pub(crate) number: u64,
+    pub(crate) head_branch: &'a str,
+    pub(crate) base_branch: &'a str,
+    pub(crate) previous_head: &'a str,
 }
 
 fn refresh_refused(id: &str, reason: impl std::fmt::Display) -> OrbitError {

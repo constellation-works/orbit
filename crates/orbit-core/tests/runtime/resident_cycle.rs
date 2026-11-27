@@ -160,12 +160,14 @@ pub(super) fn call(
     orbit_core::test_support::with_runtime_env(runtime.clone(), env.clone())
         .execute_tool_command_dispatch_with_session_context_and_env(
             &env,
-            &tool,
-            input,
-            None,
-            None,
-            ToolEntryPoint::Mcp,
-            session(capability),
+            orbit_core::adapter::command::ToolCommandCall {
+                name: &tool,
+                input,
+                agent_override: None,
+                model_override: None,
+                entry_point: ToolEntryPoint::Mcp,
+                session_context: session(capability),
+            },
         )
         .map(|outcome| outcome.value)
         .map_err(|error| error.to_string())

@@ -201,6 +201,18 @@ impl PullStartOptionsSupplied {
     }
 }
 
+/// What one pull pass records about itself: any resource throttle, why it
+/// requested no new claim, its error and code, the owner's answer, and the
+/// pass observation to count.
+pub(crate) struct PullPassRecord<'a> {
+    pub(crate) resource_throttle: Option<ResourceThrottle>,
+    pub(crate) admission_refusal: Option<&'a str>,
+    pub(crate) error: Option<&'a str>,
+    pub(crate) error_code: Option<&'a str>,
+    pub(crate) owner_answer: OwnerAnswer<'a>,
+    pub(crate) observation: Option<DrainPassObservation>,
+}
+
 impl crate::OrbitRuntime {
     /// Persist pass health atomically with the existing admission observation.
     /// Degradation latches for the window, so a successful settlement-only pass
@@ -220,17 +232,19 @@ impl crate::OrbitRuntime {
     /// `observation`, when given, counts the pass in the drain's pass
     /// counters in the same write, with every reason an idle answer gave for
     /// a task it kept off this host.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_pull_pass(
         &self,
         run_id: &str,
-        resource_throttle: Option<ResourceThrottle>,
-        admission_refusal: Option<&str>,
-        error: Option<&str>,
-        error_code: Option<&str>,
-        owner_answer: OwnerAnswer<'_>,
-        observation: Option<DrainPassObservation>,
+        pass: PullPassRecord<'_>,
     ) -> Result<DrainAdmissionPass, OrbitError> {
+        let PullPassRecord {
+            resource_throttle,
+            admission_refusal,
+            error,
+            error_code,
+            owner_answer,
+            observation,
+        } = pass;
         let mut recorded = None;
         let answer = match owner_answer {
             OwnerAnswer::Idle(receipt) => Some(PullWaiting::of(receipt)),

@@ -134,7 +134,17 @@ impl OrbitRuntime {
         let mut arms = record.arms.clone();
         apply_definition(&mut experiment, &mut arms, input)?;
         let detail = json!({ "fields": fields });
-        self.write_change(&record, experiment, Some(arms), "updated", detail, by, None)
+        self.write_change(
+            &record,
+            experiment,
+            Some(arms),
+            ExperimentRevisionEvent {
+                kind: "updated",
+                detail,
+                by,
+            },
+            None,
+        )
     }
 
     /// Copy an experiment's definition into a new draft named `name`.
@@ -280,7 +290,13 @@ impl OrbitRuntime {
                 ("abandoned", json!({}))
             }
         };
-        self.write_change(&record, experiment, arms, kind, detail, by, running_limit)
+        self.write_change(
+            &record,
+            experiment,
+            arms,
+            ExperimentRevisionEvent { kind, detail, by },
+            running_limit,
+        )
     }
 
     /// Delete a finished experiment that never applied a treatment, with its
@@ -439,20 +455,15 @@ impl OrbitRuntime {
         ))
     }
 
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "one revision write carries the row, optional arms, audit event and running cap in a single call"
-    )]
     fn write_change(
         &self,
         record: &ExperimentRecord,
         mut experiment: ExperimentRow,
         arms: Option<Vec<ExperimentArmRow>>,
-        kind: &str,
-        detail: Value,
-        by: ExperimentActor,
+        event: ExperimentRevisionEvent<'_>,
         running_limit: Option<u32>,
     ) -> Result<ExperimentView, OrbitError> {
+        let ExperimentRevisionEvent { kind, detail, by } = event;
         let current = &record.experiment;
         experiment.revision = current.revision + 1;
         experiment.updated_at = Utc::now();
@@ -486,6 +497,13 @@ impl OrbitRuntime {
             }
         }
     }
+}
+
+/// The event one revision write records: its kind, detail and actor.
+struct ExperimentRevisionEvent<'a> {
+    kind: &'a str,
+    detail: Value,
+    by: ExperimentActor,
 }
 
 fn validate_experiment_name(name: &str) -> Result<(), OrbitError> {

@@ -36,6 +36,15 @@ pub(crate) enum ShippedShape {
     Retired,
 }
 
+/// The template this release ships for one routine file: the file's stem,
+/// the template text and its digest.
+#[derive(Clone, Copy)]
+pub(super) struct ShippedRoutineTemplate<'a> {
+    pub(super) file_stem: &'a str,
+    pub(super) template: &'a str,
+    pub(super) template_digest: &'a str,
+}
+
 impl RoutineMaterializationBinding {
     /// The values this binding renders, for a drift report.
     pub(super) fn describe(&self) -> String {
@@ -167,17 +176,19 @@ pub(crate) fn is_orbit_written_routine(
 /// the current template with the operator's `enabled` kept. Returns the
 /// provenance to record, or `None` for a genuine local edit the caller
 /// preserves.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn reconcile_lifecycle_variant(
     identity: &RoutineSeedIdentity,
-    file_stem: &str,
-    template: &str,
-    template_digest: &str,
+    shipped: ShippedRoutineTemplate<'_>,
     path: &Path,
     existing: &str,
     mode: ManagedAssetReconcileMode,
     result: &mut ManagedAssetReconciliation,
 ) -> Result<Option<RoutineAssetProvenance>, OrbitError> {
+    let ShippedRoutineTemplate {
+        file_stem,
+        template,
+        template_digest,
+    } = shipped;
     let Some(shape) = shipped_shape_of(file_stem, existing) else {
         return Ok(None);
     };

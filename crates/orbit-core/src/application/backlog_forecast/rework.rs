@@ -67,6 +67,14 @@ pub(super) struct ForecastDonor {
     pub(super) recovered: bool,
 }
 
+/// How far one iteration's bundle draw may go: the deadline that discards
+/// the iteration, and the most nodes it may generate.
+#[derive(Clone, Copy)]
+pub(super) struct GenerationLimit {
+    pub(super) deadline: Option<Instant>,
+    pub(super) max_generated: usize,
+}
+
 /// Why a regression fix in the delivery lookback cannot be drawn. Each is
 /// real rework whose evidence is incomplete, so it counts against every pool
 /// its origins would have joined instead of being dropped: that pool is
@@ -614,10 +622,6 @@ pub(super) fn recorded_fix_footprint(
 
 /// Sample whole bundles once per iteration; both scenarios replay these
 /// draws. Donors already in the initial cohort cannot be duplicated.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "rework, cohort, episodes, rng, correction, deadline and generation bound are independent inputs"
-)]
 pub(super) fn draw_regression_bundles(
     rework: &RegressionRework,
     items: &[Item],
@@ -625,9 +629,12 @@ pub(super) fn draw_regression_bundles(
     episodes: &[Episode],
     rng: &mut SplitMix64,
     correction: &Correction,
-    deadline: Option<Instant>,
-    max_generated: usize,
+    limit: GenerationLimit,
 ) -> (Vec<ForecastGeneratedNode>, bool) {
+    let GenerationLimit {
+        deadline,
+        max_generated,
+    } = limit;
     let mut nodes = Vec::new();
     let mut seen = BTreeSet::new();
     for (index, item) in items.iter().enumerate() {

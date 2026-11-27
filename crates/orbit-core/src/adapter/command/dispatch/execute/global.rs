@@ -21,7 +21,8 @@ use super::super::callback::{
     read_proc_allowed_programs_from_env, read_proc_disallowed_programs_from_env,
 };
 use super::audit_store::{
-    ToolDispatchAuditContext, ToolDispatchOutcome, execute_tool_dispatch_with_audit_store,
+    AuditedToolCall, ToolDispatchAuditContext, ToolDispatchOutcome,
+    execute_tool_dispatch_with_audit_store,
 };
 use super::entry::ToolEntryPoint;
 #[cfg(unix)]
@@ -108,34 +109,43 @@ impl GlobalAuditStoreCache {
     }
 }
 
+/// One tool call with no workspace runtime behind it: the global root and the
+/// store opener its audit row goes through, and the call as its caller made
+/// it.
+pub struct GlobalToolCall<'a> {
+    /// Opens the global audit store.
+    pub opener: StoreOpener,
+    /// The global `~/.orbit/` root.
+    pub global_root: &'a Path,
+    /// The tool the caller names.
+    pub name: &'a str,
+    /// The call's input.
+    pub input: Value,
+    /// The entry point the call arrived through.
+    pub entry_point: ToolEntryPoint,
+    /// The caller's invocation envelope.
+    pub session_context: ToolSessionContext,
+}
+
 /// Execute a server-global implementation inside Core's ordinary tool audit
 /// boundary without constructing a workspace runtime.
 ///
 /// The callback owns its server-local projection. Core opens only the global
 /// audit store, records the supplied invocation context, and preserves the
 /// same fail-closed success semantics as runtime-backed tool dispatch.
-#[allow(clippy::too_many_arguments)]
 pub fn execute_global_in_process_tool_dispatch<F>(
     env: &orbit_common::Env,
-    opener: StoreOpener,
-    global_root: &Path,
-    name: &str,
-    input: Value,
-    entry_point: ToolEntryPoint,
-    session_context: ToolSessionContext,
+    call: GlobalToolCall<'_>,
     dispatch: F,
 ) -> Result<ToolDispatchOutcome, OrbitError>
 where
     F: FnOnce(Value) -> Result<Value, OrbitError>,
 {
+    let opener = call.opener;
+    let global_root = call.global_root;
     execute_global_in_process_tool_dispatch_with_audit_writer(
         env,
-        opener,
-        global_root,
-        name,
-        input,
-        entry_point,
-        session_context,
+        call,
         |params, invocation| {
             let audit_db = orbit_config::resolved_audit_db_path(
                 env,
@@ -154,18 +164,9 @@ where
 /// audit store across dispatches instead of opening it per call. The writer
 /// is invoked with the same params and invocation fields, and its result
 /// goes through the same fail-closed finalization as the open-per-call path.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "This adapter keeps runtime, dispatch, audit-writer, and callback inputs explicit."
-)]
 pub fn execute_global_in_process_tool_dispatch_with_audit_writer<F, S>(
     env: &orbit_common::Env,
-    opener: StoreOpener,
-    global_root: &Path,
-    name: &str,
-    input: Value,
-    entry_point: ToolEntryPoint,
-    session_context: ToolSessionContext,
+    call: GlobalToolCall<'_>,
     audit_writer: S,
     dispatch: F,
 ) -> Result<ToolDispatchOutcome, OrbitError>
@@ -173,12 +174,22 @@ where
     F: FnOnce(Value) -> Result<Value, OrbitError>,
     S: FnMut(&AuditEventInsertParams, AuditInvocationFields<'_>) -> Result<(), OrbitError>,
 {
-    execute_tool_dispatch_with_audit_store(
-        env,
+    let GlobalToolCall {
+        opener,
+        global_root,
         name,
         input,
-        ToolExecutionKind::Mutating,
-        None,
+        entry_point,
+        session_context,
+    } = call;
+    execute_tool_dispatch_with_audit_store(
+        env,
+        AuditedToolCall {
+            name,
+            input,
+            execution_kind: ToolExecutionKind::Mutating,
+            plugin: None,
+        },
         ToolDispatchAuditContext {
             agent_override: None,
             model_override: None,
@@ -209,17 +220,19 @@ where
 /// global` plugin tool has no workspace to open, so its execution context is
 /// this process's cwd and the registry the caller composed from the host's
 /// installed plugins.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
     env: &orbit_common::Env,
-    opener: StoreOpener,
-    global_root: &Path,
-    name: &str,
-    input: Value,
-    entry_point: ToolEntryPoint,
-    session_context: ToolSessionContext,
+    call: GlobalToolCall<'_>,
     registry: orbit_tools::ToolRegistry,
 ) -> Result<Value, OrbitError> {
+    let GlobalToolCall {
+        opener,
+        global_root,
+        name,
+        input,
+        entry_point,
+        session_context,
+    } = call;
     let binding = registry
         .plugin_binding(name)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
@@ -286,10 +299,12 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
     };
     execute_tool_dispatch_with_audit_store(
         env,
-        name,
-        input,
-        execution_kind,
-        Some(binding.provenance.clone()),
+        AuditedToolCall {
+            name,
+            input,
+            execution_kind,
+            plugin: Some(binding.provenance.clone()),
+        },
         ToolDispatchAuditContext {
             agent_override: None,
             model_override: None,

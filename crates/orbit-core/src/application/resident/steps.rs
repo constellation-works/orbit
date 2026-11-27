@@ -485,10 +485,6 @@ impl OrbitRuntime {
     }
 
     /// The brief a cycle's agent reads, in the checkpoint contract's order.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the brief is assembled from the mandate, grant, history, notices and launch worktree together"
-    )]
     fn resident_brief(
         &self,
         task_id: &str,

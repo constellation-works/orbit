@@ -13,7 +13,7 @@ use super::pass::{Pass, deterministic_failure};
 use super::record::{PullPass, record_admission_fit, record_breaker, refused_settlements};
 use super::refusal::{RefusalInputs, no_runnable_crew_refusal, pass_refusal};
 use super::request::RequestTrail;
-use crate::application::distributed::{OwnerAnswer, PullCrewWindow};
+use crate::application::distributed::{OwnerAnswer, PullCrewWindow, PullPassRecord};
 
 /// What the settlement phase worked out, for the report.
 pub(super) struct Settled {
@@ -363,12 +363,14 @@ impl Pass<'_, '_> {
             .runtime
             .record_pull_pass(
                 &self.refill.run_id,
-                gate.resource.throttle.clone(),
-                refusal.as_deref(),
-                ledger.error.as_deref(),
-                None,
-                owner_answer,
-                observation,
+                PullPassRecord {
+                    resource_throttle: gate.resource.throttle.clone(),
+                    admission_refusal: refusal.as_deref(),
+                    error: ledger.error.as_deref(),
+                    error_code: None,
+                    owner_answer,
+                    observation,
+                },
             )
             .map_err(|error| {
                 deterministic_failure(

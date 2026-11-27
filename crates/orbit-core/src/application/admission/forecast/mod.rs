@@ -33,5 +33,6 @@ mod task_set;
 pub(crate) use model::ForecastAdmission;
 pub(crate) use model::ForecastPassScratch;
 pub(crate) use model::ForecastWait;
+pub(crate) use pass::ForecastDrain;
 pub(crate) use resource_fit::{ForecastHostEvidence, RESOURCE_RECHECK_HOURS};
 pub(crate) use task_set::ForecastTaskSet;

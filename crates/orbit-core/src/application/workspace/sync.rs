@@ -18,8 +18,8 @@ use crate::application::auto_tasks::{
 };
 use crate::application::job::DEFAULT_JOB_FILES;
 use crate::application::managed_assets::{
-    ManagedAssetAction, ManagedAssetLayout, ManagedAssetOutcome, ManagedAssetReconcileMode,
-    ManagedAssetReconciliation, reconcile_managed_assets_in_mode,
+    ManagedAssetAction, ManagedAssetCatalog, ManagedAssetLayout, ManagedAssetOutcome,
+    ManagedAssetReconcileMode, ManagedAssetReconciliation, reconcile_managed_assets_in_mode,
     reconcile_managed_assets_left_out,
 };
 use crate::application::routines::materialize::reconcile_default_routines_for_policy;
@@ -316,9 +316,11 @@ fn reconcile_managed_artifacts(
             migrate_settings_only_forks(&auto_tasks_root, base_branch, mode)?
         };
         let mut auto_tasks = reconcile_managed_assets_left_out(
-            &auto_tasks_root,
-            "auto_task",
-            ManagedAssetLayout::YamlStem,
+            ManagedAssetCatalog {
+                dir: &auto_tasks_root,
+                asset_kind: "auto_task",
+                layout: ManagedAssetLayout::YamlStem,
+            },
             &seeded_auto_tasks,
             &left_out_auto_tasks,
             false,

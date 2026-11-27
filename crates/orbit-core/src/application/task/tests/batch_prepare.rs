@@ -1,14 +1,18 @@
 //! Automatic batch preparation hydrates tasks only until its cap is filled.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
-use orbit_types::task::{TASK_DESCRIPTION_FILE_NAME, TaskStatus};
-use serde_json::json;
+use orbit_types::task::{TASK_DESCRIPTION_FILE_NAME, Task, TaskStatus};
+use serde_json::{Value, json};
 
 use super::task::{enter_isolated_child, test_runtime};
+use crate::OrbitRuntime;
 use crate::application::task::TaskAddParams;
-use crate::application::task::batch_prepare::{BatchSpec, Qualification, prepare_batch};
+use crate::application::task::batch_prepare::{
+    BatchHooks, BatchSpec, HeldRuns, Qualification, prepare_batch,
+};
 use orbit_store::contract::TaskListFilter;
 
 #[test]
@@ -61,12 +65,14 @@ fn automatic_batch_stops_hydrating_once_max_tasks_are_selected() {
             before_workspace: Vec::new(),
             before_task_count: Vec::new(),
         },
-        |_| Ok(Default::default()),
-        |_| true,
-        |_task, _, _| Ok(Qualification::Selected(())),
-        |task, ()| Ok((json!({"task_id": task.id}), "implementer".to_string())),
-        |reason, _| reason.to_string(),
-        |_, _| None,
+        BatchHooks {
+            held: |_: &OrbitRuntime| Ok(Default::default()),
+            keep_automatic: |_: &Task| true,
+            qualify: |_task: &Task, _: &HeldRuns, _: bool| Ok(Qualification::Selected(())),
+            draw: |task: &Task, ()| Ok((json!({"task_id": task.id}), "implementer".to_string())),
+            skipped_detail: |reason: &str, _: Option<&BTreeSet<String>>| reason.to_string(),
+            partition_extra: |_: &[Value], _: &[String]| None,
+        },
     )
     .expect("tasks past the filled cap are not hydrated");
 

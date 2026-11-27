@@ -10,7 +10,7 @@ use orbit_types::workflow::{
 };
 
 use crate::OrbitRuntime;
-use crate::application::distributed::{OwnerAnswer, RefusedPullSettlement};
+use crate::application::distributed::{OwnerAnswer, PullPassRecord, RefusedPullSettlement};
 use crate::application::pull_drain::drain::{BreakerGate, PullDrain};
 
 /// The refusal code of a pass the load forecast held.
@@ -89,12 +89,14 @@ pub(super) fn protocol_skew_failure(
 ) -> DispatchError {
     match runtime.record_pull_pass(
         run_id,
-        throttle,
-        None,
-        Some(&format!("protocol_skew: {message}")),
-        Some("protocol_skew"),
-        OwnerAnswer::None,
-        None,
+        PullPassRecord {
+            resource_throttle: throttle,
+            admission_refusal: None,
+            error: Some(&format!("protocol_skew: {message}")),
+            error_code: Some("protocol_skew"),
+            owner_answer: OwnerAnswer::None,
+            observation: None,
+        },
     ) {
         Ok(_) => DispatchError::ProtocolSkew(message),
         Err(error) => DispatchError::DeterministicActionFailed {
