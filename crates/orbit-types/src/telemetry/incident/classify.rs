@@ -8,9 +8,9 @@ use super::types::{
 use crate::telemetry::{AuditEvent, AuditEventStatus};
 use crate::workflow::PROVIDER_LIMIT_MARKER;
 
-/// Message fragments that mark a documented negative path. Each mirrors an
-/// `OrbitError` variant's `Display` rendering in `orbit-common`, which every
-/// surface funnels its errors through before they reach `error_message`.
+/// Message fragments that mark a documented negative path. Most mirror an
+/// `OrbitError` variant's `Display` rendering in `orbit-common`; the
+/// auto-fix marker identifies a held stop recorded by the pipeline worker.
 /// Matching is lowercase substring, so a wrapped/prefixed message still
 /// classifies.
 const EXPECTED_FAILURE_MARKERS: &[&str] = &[
@@ -24,6 +24,7 @@ const EXPECTED_FAILURE_MARKERS: &[&str] = &[
     "not local to the current worktree",
     "artifact unavailable",
     "companion not installed",
+    "auto_fix_stopped:",
 ];
 
 /// Reporting surface of a bare `orbit doctor` audit row (no tool name).
