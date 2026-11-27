@@ -1,4 +1,4 @@
-//! SIGINT and SIGTERM future shared by the dashboard server and the lease listener.
+//! SIGINT and SIGTERM future the dashboard server awaits to begin graceful shutdown.
 
 use std::future::Future;
 
