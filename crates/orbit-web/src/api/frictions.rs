@@ -9,9 +9,11 @@
 
 use std::sync::Arc;
 
-use crate::state::WsCore;
+use crate::runtime_memo::FRICTION_STATS_TTL;
+use crate::state::{DashboardState, Ws, WsCore, WsRejection};
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, Query};
+use axum::extract::{FromRequestParts, Path, Query, State};
+use axum::http::request::Parts;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::friction::{FRICTION_LIST_RESPONSE_MODE_WITH_NOTES, FrictionVerb};
 use orbit_common::governance::operation::OperationVerb;
@@ -158,6 +160,57 @@ pub(super) struct FrictionPatchBody {
     extra: Map<String, Value>,
 }
 
+/// A friction request's per-request [`Core`] and the shared runtime it was
+/// derived from. The memo keys on the runtime, which every request of a
+/// workspace shares; the per-request core is what runs the verbs.
+pub(super) struct FrictionWs {
+    core: Arc<Core>,
+    runtime: Arc<Core>,
+}
+
+impl FrictionWs {
+    /// The workspace's friction rates, computed once for the Open list, the
+    /// Triaged list and the Stats read of one Frictions refresh. Keyed by the
+    /// workspace runtime, so one workspace never serves another's rates, and a
+    /// failed computation is not kept: the next read retries it.
+    async fn stats(&self, state: &DashboardState) -> Result<Value, Box<Response>> {
+        let core = Arc::clone(&self.core);
+        state
+            .friction_stats_memo()
+            .get_or_compute(&self.runtime, (), FRICTION_STATS_TTL, move || {
+                friction::exec(&core, FrictionCall::new(FrictionVerb::Stats).into_command())
+                    .map(Outcome::into_value)
+            })
+            .await
+            .map(|served| (*served.body).clone())
+            .map_err(|error| Box::new(map_runtime_error(error)))
+    }
+
+    /// Run a friction write and drop the workspace's memoized rates, so the
+    /// next read reflects it instead of waiting out the memo.
+    async fn write(&self, state: &DashboardState, call: FrictionCall) -> Response {
+        let result = run_friction(Arc::clone(&self.core), call).await;
+        state.friction_stats_memo().invalidate(&self.runtime);
+        match result {
+            Ok(friction) => Json(friction).into_response(),
+            Err(response) => *response,
+        }
+    }
+}
+
+impl FromRequestParts<DashboardState> for FrictionWs {
+    type Rejection = WsRejection;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &DashboardState,
+    ) -> Result<Self, Self::Rejection> {
+        let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
+        let WsCore(core) = WsCore::over(&runtime, state.session());
+        Ok(Self { core, runtime })
+    }
+}
+
 async fn run_friction(core: Arc<Core>, call: FrictionCall) -> Result<Value, Box<Response>> {
     blocking("friction tool", move || {
         friction::exec(&core, call.into_command()).map(Outcome::into_value)
@@ -166,7 +219,8 @@ async fn run_friction(core: Arc<Core>, call: FrictionCall) -> Result<Value, Box<
 }
 
 pub(super) async fn list_frictions(
-    WsCore(core): WsCore,
+    State(state): State<DashboardState>,
+    ws: FrictionWs,
     Query(query): Query<FrictionsQuery>,
 ) -> Response {
     let mut call = FrictionCall::new(FrictionVerb::List);
@@ -189,21 +243,26 @@ pub(super) async fn list_frictions(
         return map_runtime_error(e);
     }
 
-    let listed = match blocking("friction list", move || {
-        let run = |call: FrictionCall| {
-            friction::exec(&core, call.into_command()).map(Outcome::into_value)
-        };
-        let items = run(call)?;
-        let stats = run(FrictionCall::new(FrictionVerb::Stats))?;
-        let tags = run(FrictionCall::new(FrictionVerb::Tags))?;
-        Ok((items, stats, tags))
-    })
-    .await
-    {
+    let list_core = Arc::clone(&ws.core);
+    let (listed, stats) = tokio::join!(
+        blocking("friction list", move || {
+            let run = |call: FrictionCall| {
+                friction::exec(&list_core, call.into_command()).map(Outcome::into_value)
+            };
+            let items = run(call)?;
+            let tags = run(FrictionCall::new(FrictionVerb::Tags))?;
+            Ok((items, tags))
+        }),
+        ws.stats(&state),
+    );
+    let (items_json, tags) = match listed {
         Ok(listed) => listed,
         Err(response) => return *response,
     };
-    let (items_json, stats, tags) = listed;
+    let stats = match stats {
+        Ok(stats) => stats,
+        Err(response) => return *response,
+    };
     let (items, notes) = match items_json {
         Value::Array(items) => (items, Vec::new()),
         Value::Object(object) => {
@@ -248,7 +307,8 @@ pub(super) async fn list_frictions(
 /// (missing/empty `body`, bad fields) surface through [`map_runtime_error`] as
 /// 4xx carrying Orbit's own error text.
 pub(super) async fn create_friction_action(
-    WsCore(core): WsCore,
+    State(state): State<DashboardState>,
+    ws: FrictionWs,
     body: Result<Json<CreateFrictionBody>, JsonRejection>,
 ) -> Response {
     let Json(body) = match body {
@@ -276,10 +336,7 @@ pub(super) async fn create_friction_action(
         return map_runtime_error(e);
     }
 
-    match run_friction(core, call).await {
-        Ok(friction) => Json(friction).into_response(),
-        Err(response) => *response,
-    }
+    ws.write(&state, call).await
 }
 
 pub(super) async fn get_friction(WsCore(core): WsCore, Path(id): Path<String>) -> Response {
@@ -301,15 +358,19 @@ pub(super) async fn get_friction(WsCore(core): WsCore, Path(id): Path<String>) -
     Json(friction).into_response()
 }
 
-pub(super) async fn friction_stats(WsCore(core): WsCore) -> Response {
-    match run_friction(core, FrictionCall::new(FrictionVerb::Stats)).await {
+pub(super) async fn friction_stats(
+    State(state): State<DashboardState>,
+    ws: FrictionWs,
+) -> Response {
+    match ws.stats(&state).await {
         Ok(stats) => Json(stats).into_response(),
         Err(response) => *response,
     }
 }
 
 pub(super) async fn update_friction_action(
-    WsCore(core): WsCore,
+    State(state): State<DashboardState>,
+    ws: FrictionWs,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<FrictionPatchBody>,
 ) -> Response {
@@ -337,24 +398,19 @@ pub(super) async fn update_friction_action(
         Err(e) => return map_runtime_error(e),
     };
 
-    match run_friction(core, call).await {
-        Ok(friction) => Json(friction).into_response(),
-        Err(response) => *response,
-    }
+    ws.write(&state, call).await
 }
 
 pub(super) async fn resolve_friction_action(
-    WsCore(core): WsCore,
+    State(state): State<DashboardState>,
+    ws: FrictionWs,
     Path(id): Path<String>,
 ) -> Response {
     let call = match id_call(FrictionVerb::Resolve, id) {
         Ok(call) => call,
         Err(e) => return map_runtime_error(e),
     };
-    match run_friction(core, call).await {
-        Ok(friction) => Json(friction).into_response(),
-        Err(response) => *response,
-    }
+    ws.write(&state, call).await
 }
 
 /// Seed a call with the path-supplied record id.

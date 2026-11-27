@@ -7,7 +7,9 @@
 //! cutoffs such as `24h` still hit), audited plugin panel reads,
 //! `/api/diagnostics/errors` (keyed by its time range and row limit), and
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
-//! `/api/cost` (keyed by the canonical window), the Analytics Metrics trend
+//! `/api/cost` (keyed by the canonical window), the workspace friction rates
+//! the Frictions list and stats endpoints share within one poll (dropped by a
+//! dashboard friction write), the Analytics Metrics trend
 //! endpoints under `/api/diagnostics/` (`implement_one`, `completions`,
 //! `defects`, `task_tokens`, `turns_to_edit`, `diff_stats` and
 //! `delivery_friction`), and the codebase analytics scan behind
@@ -74,6 +76,13 @@ pub(crate) const AGENT_SCAN_TTL: Duration = Duration::from_secs(300);
 /// one background refresh runs. Older than this, a request waits for a fresh
 /// scan instead of reading hours-old rankings.
 pub(crate) const AGENT_SCAN_STALE_LIMIT: Duration = Duration::from_secs(3600);
+
+/// Freshness bound for a workspace's friction rates. The Frictions poll reads
+/// the Open list, the Triaged list and Stats together, and each carries the
+/// same workspace-wide rates; this is long enough for that cohort to share one
+/// computation and far shorter than the 30 s poll, so the next ordinary
+/// refresh recomputes. A dashboard friction write drops the entry at once.
+pub(crate) const FRICTION_STATS_TTL: Duration = Duration::from_secs(2);
 
 /// A memoized body and how long ago it was computed.
 pub(crate) struct Served<V> {
@@ -286,6 +295,16 @@ impl<K: Eq + Hash, V: Send + Sync + 'static> RuntimeMemo<K, V> {
         }
         self.compute_in(&slot, Some(runtime), ttl, stale_for, None, compute)
             .await
+    }
+
+    /// Drop every entry computed for `runtime`, so its next read recomputes.
+    /// A compute already running finishes into a slot no later read finds.
+    pub(crate) fn invalidate(&self, runtime: &Arc<Core>) {
+        let identity = Arc::as_ptr(runtime) as usize;
+        self.slots
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(owner, _), _| *owner != identity);
     }
 
     async fn compute<F>(

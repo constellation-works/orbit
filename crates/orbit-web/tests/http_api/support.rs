@@ -792,7 +792,16 @@ pub(super) fn walk_audit_pages(
 
 pub(super) fn serve_fixture() {
     let trace = std::env::var_os("ORBIT_HTTP_TASK_QUERY_TRACE")
-        .map(|path| (path, &["orbit.store.task_query", "orbit.core.codebase"][..]))
+        .map(|path| {
+            (
+                path,
+                &[
+                    "orbit.store.task_query",
+                    "orbit.core.codebase",
+                    "orbit.core.friction_stats",
+                ][..],
+            )
+        })
         .or_else(|| {
             std::env::var_os("ORBIT_HTTP_RUN_QUERY_TRACE")
                 .map(|path| (path, &["orbit.core.job_run.reconcile"][..]))
