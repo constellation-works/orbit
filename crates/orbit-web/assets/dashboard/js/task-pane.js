@@ -7,7 +7,7 @@ import * as taskShared from './task-shared.js';
 import { closeTaskPane, filterTasks, focusTaskRow, openTaskPage, revealTaskRow, selectTask, stopRowInteraction } from './task-nav.js';
 import { taskDetailState, taskDrainSignature, taskDrainState } from './task-data.js';
 import { buildTaskDetail, buildTaskDetailPlaceholder, detailFeedbackSignature } from './task-detail.js';
-import { buildHostPill } from './task-lifecycle.js';
+import { buildHostPill, sizeCrewSelect } from './task-lifecycle.js';
 import { buildCrewUpdateControl } from './task-status-controls.js';
 import { fixPrSignature, fixPrState, pilotSignature, recoverySignature, refreshFixPrControls, taskPullRequestNumber, triageSignature } from './task-agent-actions.js';
 import { crewOptionsSignature, feedbackSignature } from './task-crew.js';
@@ -118,6 +118,7 @@ function refreshDraftCrewControl(wrap, task, context) {
   select.title = refreshedSelect.title;
   select.dataset.currentValue = refreshedSelect.dataset.currentValue;
   select.dataset.staleCurrentValue = refreshedSelect.dataset.staleCurrentValue;
+  sizeCrewSelect(select);
 
   const oldFeedback = control.querySelector(":scope > .mutation-feedback");
   if (oldFeedback) oldFeedback.remove();
