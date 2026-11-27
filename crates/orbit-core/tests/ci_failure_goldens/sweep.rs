@@ -1108,6 +1108,221 @@ fn dependency_waiter_folds_into_its_shard_once_the_shard_log_is_collected() {
     assert_eq!(open_sweep_tasks(&runtime).len(), 1, "{filed:#}");
 }
 
+/// Run 8200 with a transitive waiter chain (`outer -> mid -> shard`) where
+/// `outer` precedes `mid` in the snapshot so single-pass deferral would leak
+/// `outer` alone.
+fn chained_waiters_beside_shard(checkout: &str, shard_collected: bool) -> Value {
+    let mid_record = json!({
+        "schema_version": 1, "kind": "dependency_failed", "run_id": 8_200,
+        "dependencies": [{
+            "job_id": 9_300, "job_name": "Test partition 9", "status": "completed",
+            "conclusion": "failure", "step": null,
+        }],
+    });
+    let outer_record = json!({
+        "schema_version": 1, "kind": "dependency_failed", "run_id": 8_200,
+        "dependencies": [{
+            "job_id": 9_301, "job_name": "Check / Clippy / Test / Await the middle aggregate",
+            "status": "completed", "conclusion": "failure", "step": null,
+        }],
+    });
+    let mut mid = crafted_job_run(
+        checkout,
+        9_301,
+        &format!(
+            "orbit-dependency-evidence:{mid_record}\nci-await-api: listings=1 not_modified=0 paginated=false\n"
+        ),
+    );
+    mid["failed_jobs"][0]["name"] = json!("Check / Clippy / Test / Await the middle aggregate");
+    mid["failed_jobs"][0]["failed_steps"][0]["name"] = json!("Await the middle aggregate");
+    let mut outer = crafted_job_run(
+        checkout,
+        9_302,
+        &format!(
+            "orbit-dependency-evidence:{outer_record}\nci-await-api: listings=1 not_modified=0 paginated=false\n"
+        ),
+    );
+    outer["failed_jobs"][0]["name"] = json!("Check / Clippy / Test / Await the outer aggregate");
+    outer["failed_jobs"][0]["failed_steps"][0]["name"] = json!("Await the outer aggregate");
+    let mut shard = crafted_job_run(
+        checkout,
+        9_300,
+        "FAIL [ 0.123s] suite::partition_nine_test\nthread 'partition_nine_test' panicked at src/lib.rs:9:1:\nboom\n",
+    );
+    shard["failed_jobs"][0]["name"] = json!("Test partition 9");
+    if !shard_collected {
+        shard["investigated"] = json!(false);
+        shard["evidence_state"] = json!("deferred");
+        shard["log_excerpt"] = json!("");
+    }
+    let errors = if shard_collected {
+        json!([])
+    } else {
+        json!([{
+            "stage": "investigation", "operation": "job_log_budget", "run_id": 8_200,
+            "job_id": 9_300, "retryable": true,
+            "message": "job evidence was not collected because max_job_log_reads was exhausted",
+        }])
+    };
+    json!({"runs": [outer, mid, shard], "retryable_errors": errors})
+}
+
+#[test]
+fn dependency_waiter_chain_is_deferred_while_its_leaf_shard_is_uncollected() {
+    if !super::isolated(
+        "sweep::dependency_waiter_chain_is_deferred_while_its_leaf_shard_is_uncollected",
+    ) {
+        return;
+    }
+    let (_root, runtime, commits) = super::operator_commits("", 1);
+    let deferred_fixture = chained_waiters_beside_shard(&commits[0], false);
+    let deferred = file_waiter_beside_shard(&runtime, &deferred_fixture);
+    assert_eq!(deferred["outcome"], json!("deferred"), "{deferred:#}");
+    assert_eq!(deferred["filed_count"], json!(0), "{deferred:#}");
+    assert_eq!(deferred["pilot_candidate_count"], json!(0), "{deferred:#}");
+    assert_eq!(deferred["deferred_count"], json!(3), "{deferred:#}");
+    let operations: Vec<_> = deferred["deferred"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|entry| entry["reasons"].as_array().unwrap())
+        .map(|reason| (reason["job_id"].clone(), reason["operation"].clone()))
+        .collect();
+    assert!(
+        operations.contains(&(json!(9_301), json!("dependency_log_pending")))
+            && operations.contains(&(json!(9_302), json!("dependency_log_pending"))),
+        "{deferred:#}"
+    );
+    assert!(open_sweep_tasks(&runtime).is_empty());
+
+    let collected_fixture = chained_waiters_beside_shard(&commits[0], true);
+    let collected = file_waiter_beside_shard(&runtime, &collected_fixture);
+    assert_eq!(collected["filed_count"], json!(1), "{collected:#}");
+    assert_eq!(collected["folded_count"], json!(2), "{collected:#}");
+    assert_eq!(collected["deferred_count"], json!(0), "{collected:#}");
+    assert_eq!(open_sweep_tasks(&runtime).len(), 1, "{collected:#}");
+}
+
+#[test]
+fn dependency_waiter_beside_escalated_incomplete_leaf_does_not_file_waiter_or_defer() {
+    if !super::isolated(
+        "sweep::dependency_waiter_beside_escalated_incomplete_leaf_does_not_file_waiter_or_defer",
+    ) {
+        return;
+    }
+    let (_root, runtime, commits) = super::operator_commits("", 1);
+    let fixture = chained_waiters_beside_shard(&commits[0], false);
+    let runs = fixture["runs"].as_array().unwrap();
+    let outer = runs[0].clone();
+    let mid = runs[1].clone();
+    let mut escalated_leaf = runs[2].clone();
+    escalated_leaf["consecutive_sweeps"] = json!(3);
+    escalated_leaf["evidence_gaps"] = json!([{
+        "stage": "investigation",
+        "operation": "job_log_budget",
+        "run_id": 8_200,
+        "job_id": 9_300,
+        "retryable": false,
+        "persistent": true,
+        "consecutive_sweeps": 3,
+        "message": "job evidence was not collected because max_job_log_reads was exhausted",
+    }]);
+
+    let input = super::evidence_input(
+        vec![outer.clone(), mid.clone()],
+        json!({
+            "persistently_incomplete": [escalated_leaf.clone()],
+            "landing_evidence_incomplete": [escalated_leaf.clone()],
+        }),
+    );
+    let filed = super::file_input(&runtime, input).expect("escalated leaf should not fail");
+    assert_eq!(filed["outcome"], json!("current_failures"), "{filed:#}");
+    assert_eq!(filed["filed_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["pilot_candidate_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["pilot_candidates"], json!([]), "{filed:#}");
+    assert_eq!(filed["deferred_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["folded_count"], json!(2), "{filed:#}");
+    assert_eq!(
+        filed["evidence_incomplete"][0]["outcome"],
+        json!("filed"),
+        "{filed:#}"
+    );
+    let escalation_id = filed["evidence_incomplete"][0]["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let tasks = open_sweep_tasks(&runtime);
+    assert_eq!(tasks.len(), 1, "{filed:#}");
+    assert_eq!(tasks[0].id, escalation_id);
+    assert!(
+        tasks[0]
+            .tags
+            .iter()
+            .any(|tag| tag == "ci-evidence-incomplete")
+    );
+    for folded in filed["folded"].as_array().unwrap() {
+        assert_eq!(folded["covered_by_task_id"], json!(escalation_id));
+    }
+
+    // A later sweep with the same persistent leaf reuses the escalation owner
+    // and keeps the sweep non-deferred without filing a waiter task.
+    let repeat_input = super::evidence_input(
+        vec![outer.clone(), mid.clone()],
+        json!({
+            "persistently_incomplete": [escalated_leaf.clone()],
+            "landing_evidence_incomplete": [escalated_leaf.clone()],
+        }),
+    );
+    let repeated = super::file_input(&runtime, repeat_input).expect("repeat sweep");
+    assert_eq!(
+        repeated["outcome"],
+        json!("current_failures"),
+        "{repeated:#}"
+    );
+    assert_eq!(repeated["filed_count"], json!(0), "{repeated:#}");
+    assert_eq!(repeated["pilot_candidate_count"], json!(0), "{repeated:#}");
+    assert_eq!(repeated["deferred_count"], json!(0), "{repeated:#}");
+    assert_eq!(
+        repeated["evidence_incomplete"][0]["outcome"],
+        json!("existing"),
+        "{repeated:#}"
+    );
+    assert_eq!(open_sweep_tasks(&runtime).len(), 1, "{repeated:#}");
+
+    // Even when a leaf appears only in `persistently_incomplete` beside an
+    // unrelated complete failure, the waiter still does not file alone.
+    let (_root2, runtime2, commits2) = super::operator_commits("", 1);
+    let other_failure = crafted_job_run(
+        &commits2[0],
+        9_400,
+        "thread 'unrelated_test' panicked at src/lib.rs:5:1:\nbroke\n",
+    );
+    let mut leaf_only = escalated_leaf;
+    leaf_only["run_id"] = json!(8_201);
+    let mut waiter_only = mid;
+    waiter_only["run_id"] = json!(8_201);
+    waiter_only["actual_checkout_shas"] = json!([commits2[0]]);
+    waiter_only["event_reported_head_sha"] = json!(commits2[0]);
+    let mixed_input = super::evidence_input(
+        vec![waiter_only, other_failure],
+        json!({
+            "persistently_incomplete": [leaf_only],
+        }),
+    );
+    let mixed = super::file_input(&runtime2, mixed_input).expect("mixed snapshot");
+    assert_eq!(mixed["outcome"], json!("current_failures"), "{mixed:#}");
+    assert_eq!(mixed["filed_count"], json!(1), "{mixed:#}");
+    assert_eq!(mixed["pilot_candidate_count"], json!(1), "{mixed:#}");
+    assert_eq!(mixed["deferred_count"], json!(0), "{mixed:#}");
+    assert_eq!(mixed["folded_count"], json!(1), "{mixed:#}");
+    assert_eq!(
+        mixed["pilot_candidates"][0]["job"],
+        json!("build"),
+        "{mixed:#}"
+    );
+    assert_eq!(open_sweep_tasks(&runtime2).len(), 1, "{mixed:#}");
+}
+
 #[test]
 fn dependency_waiter_with_a_specific_error_annotation_keeps_its_own_filing() {
     if !super::isolated(

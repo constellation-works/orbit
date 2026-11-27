@@ -30,7 +30,9 @@ use super::{
     DEFAULT_MAX_TASKS, MAX_MAX_TASKS, OUTCOME_CAPABILITY_UNAVAILABLE, OUTCOME_DEFERRED,
     OUTCOME_HINT_RATE_LIMITED, SUPPORTED_SCHEMA_VERSION,
 };
-use crate::application::sweep_filing::ci_failure::dependency_fold::split_waiters_of_deferred_leaves;
+use crate::application::sweep_filing::ci_failure::dependency_fold::{
+    IncompleteWaiter, split_waiters_of_deferred_leaves,
+};
 
 /// A prepared snapshot, or the outcome that ends the filing before any
 /// cluster is formed.
@@ -47,6 +49,7 @@ pub(super) struct FilingSnapshot<'a> {
     pub(super) audit: Value,
     pub(super) complete: Vec<Value>,
     pub(super) deferred: Vec<Value>,
+    pub(super) incomplete_waiters: Vec<IncompleteWaiter>,
     pub(super) evidence_incomplete: Vec<Value>,
     pub(super) inconclusive: Vec<Value>,
     pub(super) infrastructure: Vec<Value>,
@@ -277,9 +280,11 @@ where
         branch_observations,
         excluded_branch_failures,
     } = partition_branch_failures(runtime, evidence, complete, &mut deferred);
-    // A dependency-only waiter beside a deferred sibling has no diagnostic to
-    // file; hold it until the sibling's evidence is collected.
-    let complete = split_waiters_of_deferred_leaves(complete, &mut deferred);
+    // A dependency-only waiter beside a deferred or escalated-incomplete sibling
+    // has no diagnostic to file; defer it while the sibling is pending, or
+    // withhold it once the sibling escalated out of `current_failures`.
+    let (complete, incomplete_waiters) =
+        split_waiters_of_deferred_leaves(complete, &mut deferred, evidence);
     // A run-scoped retryable error whose run never made it into
     // `current_failures` at all — an in-flight run with an observed failed
     // job but logs collection could not read yet — has no failure row for
@@ -332,6 +337,7 @@ where
         audit,
         complete,
         deferred,
+        incomplete_waiters,
         evidence_incomplete,
         inconclusive,
         infrastructure,

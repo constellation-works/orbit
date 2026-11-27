@@ -36,6 +36,15 @@ pub(super) struct DependencyIdentity {
     pub(super) job_id: Option<u64>,
 }
 
+/// A dependency-only waiter withheld because its named failed dependency
+/// (or a transitive dependency) escalated out of `current_failures` into
+/// `persistently_incomplete` / `landing_evidence_incomplete`.
+pub(super) struct IncompleteWaiter {
+    pub(super) failure: Value,
+    pub(super) dependency_jobs: Vec<String>,
+    pub(super) leaf_jobs: Vec<String>,
+}
+
 pub(super) fn normalized_job_name(name: &str) -> String {
     let mut out = String::new();
     let mut in_digits = false;
@@ -153,64 +162,108 @@ fn failing_step(failure: &Value) -> String {
         .unwrap_or_default()
 }
 
-/// Hold back dependency-only waiters whose named failed sibling is deferred.
+/// Hold back dependency-only waiters whose named failed sibling is deferred
+/// or has escalated to `persistently_incomplete` / `landing_evidence_incomplete`.
 ///
 /// A waiter's only evidence is the record naming the sibling that failed; the
 /// diagnostic lives in the sibling's log. When that sibling is in `deferred`
 /// (its log was not collected), the waiter cannot fold into a cluster that
 /// does not exist yet, and filing it alone would produce a task with no
 /// failing-test evidence. The waiter moves to the deferred set instead, to be
-/// filed or folded once a later sweep collects the sibling.
+/// filed or folded once a later sweep collects the sibling. When that sibling
+/// has escalated to `persistently_incomplete` / `landing_evidence_incomplete`,
+/// the waiter is withheld into `incomplete_waiters` rather than filed alone or
+/// keeping the sweep deferred. Resolves transitive chains (`outer -> mid ->
+/// leaf`) to a fixpoint.
 pub(super) fn split_waiters_of_deferred_leaves(
     complete: Vec<Value>,
     deferred: &mut Vec<Value>,
-) -> Vec<Value> {
-    let mut remaining = Vec::new();
-    let mut held = Vec::new();
-    for failure in complete {
-        let Some(dependencies) = dependency_only_failed_jobs(&failure) else {
-            remaining.push(failure);
-            continue;
-        };
-        let run_id = run_id_key(&failure);
-        let pending = run_id.as_ref().and_then(|run_id| {
-            dependencies.iter().find(|dependency| {
-                deferred.iter().any(|entry| {
-                    run_id_key(entry).as_ref() == Some(run_id)
-                        && names_deferred_job(dependency, entry)
+    evidence: &Value,
+) -> (Vec<Value>, Vec<IncompleteWaiter>) {
+    let escalated_roots: Vec<&Value> = ["persistently_incomplete", "landing_evidence_incomplete"]
+        .into_iter()
+        .filter_map(|key| evidence.get(key).and_then(Value::as_array))
+        .flatten()
+        .collect();
+    let mut candidates = complete;
+    let mut incomplete_waiters: Vec<IncompleteWaiter> = Vec::new();
+    loop {
+        let mut remaining = Vec::new();
+        let mut held_deferred = Vec::new();
+        let mut held_incomplete: Vec<IncompleteWaiter> = Vec::new();
+        for failure in candidates {
+            let Some(dependencies) = dependency_only_failed_jobs(&failure) else {
+                remaining.push(failure);
+                continue;
+            };
+            let run_id = run_id_key(&failure);
+            let pending_deferred = run_id.as_ref().and_then(|run_id| {
+                dependencies.iter().find(|dependency| {
+                    deferred.iter().any(|entry| {
+                        run_id_key(entry).as_ref() == Some(run_id)
+                            && names_deferred_job(dependency, entry)
+                    })
                 })
-            })
-        });
-        let Some(pending) = pending else {
+            });
+            if let Some(pending) = pending_deferred {
+                held_deferred.push(json!({
+                    "job_id": failure.get("job_id"),
+                    "failed_jobs": failure.get("failed_jobs"),
+                    "run_id": failure.get("run_id"),
+                    "url": failure.get("url"),
+                    "workflow": failure.get("workflow"),
+                    "head_branch": failure.get("head_branch"),
+                    "ref_kind": failure.get("ref_kind"),
+                    "investigated": true,
+                    "retryable": true,
+                    "reasons": [{
+                        "stage": "investigation",
+                        "operation": "dependency_log_pending",
+                        "run_id": failure.get("run_id"),
+                        "job_id": failure.get("job_id"),
+                        "retryable": true,
+                        "message": format!(
+                            "dependency-only job waits on failed job `{}`, whose log was not \
+                             collected; the waiter is deferred until that job is investigated",
+                            pending.job_name
+                        ),
+                    }],
+                }));
+                continue;
+            }
+            let pending_incomplete = run_id.as_ref().and_then(|run_id| {
+                dependencies.iter().find(|dependency| {
+                    escalated_roots
+                        .iter()
+                        .copied()
+                        .chain(incomplete_waiters.iter().map(|item| &item.failure))
+                        .any(|entry| {
+                            run_id_key(entry).as_ref() == Some(run_id)
+                                && names_deferred_job(dependency, entry)
+                        })
+                })
+            });
+            if let Some(pending) = pending_incomplete {
+                let dependency_jobs = dependencies
+                    .iter()
+                    .map(|dependency| dependency.job_name.clone())
+                    .collect();
+                held_incomplete.push(IncompleteWaiter {
+                    failure,
+                    dependency_jobs,
+                    leaf_jobs: vec![pending.job_name.clone()],
+                });
+                continue;
+            }
             remaining.push(failure);
-            continue;
-        };
-        held.push(json!({
-            "job_id": failure.get("job_id"),
-            "failed_jobs": failure.get("failed_jobs"),
-            "run_id": failure.get("run_id"),
-            "url": failure.get("url"),
-            "workflow": failure.get("workflow"),
-            "head_branch": failure.get("head_branch"),
-            "ref_kind": failure.get("ref_kind"),
-            "investigated": true,
-            "retryable": true,
-            "reasons": [{
-                "stage": "investigation",
-                "operation": "dependency_log_pending",
-                "run_id": failure.get("run_id"),
-                "job_id": failure.get("job_id"),
-                "retryable": true,
-                "message": format!(
-                    "dependency-only job waits on failed job `{}`, whose log was not collected; \
-                     the waiter is deferred until that job is investigated",
-                    pending.job_name
-                ),
-            }],
-        }));
+        }
+        if held_deferred.is_empty() && held_incomplete.is_empty() {
+            return (remaining, incomplete_waiters);
+        }
+        deferred.extend(held_deferred);
+        incomplete_waiters.extend(held_incomplete);
+        candidates = remaining;
     }
-    deferred.extend(held);
-    remaining
 }
 
 /// Whether a deferred failure entry is the job a dependency record names: by
