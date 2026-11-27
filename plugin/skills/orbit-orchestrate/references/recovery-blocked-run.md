@@ -28,7 +28,9 @@ diff --cached --binary HEAD > .orbit/tmp/<task-id>-salvage.patch`. Attach the
 patch with `orbit task artifact put <task-id> .orbit/tmp/<task-id>-salvage.patch`,
 name it in a task comment, then return the task to backlog with `orbit task
 requeue <task-id> --reason '<why it can continue>'`. The refusal from
-`orbit job resume` and the blocker comment name the run's worktree and branch.
+`orbit job resume` names the run's worktree and branch; the blocker comment
+is one line pointing to `orbit run show <run-id> --json`, whose
+`pr_failure_handoff` step output (`worktree`, `branch`, `recovery`) names them.
 Requeue waits until the run has stopped, so retry it then.
 
 Every return from `blocked` to `backlog` is authenticated the same way.
