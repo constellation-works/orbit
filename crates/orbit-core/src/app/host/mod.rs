@@ -20,7 +20,7 @@
 
 pub mod browser_kit;
 
-mod dependents;
+mod dependent;
 
 mod doctor;
 
@@ -35,7 +35,7 @@ use orbit_registry::hosts::HostEntry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 use serde::Serialize;
 
-pub use dependents::dependents_of;
+pub use dependent::dependents_of;
 pub use doctor::doctor_hosts_row;
 pub use list::{
     entry_row, list_hosts, list_registered_hosts, require_local, show_host, show_registered_host,
@@ -44,7 +44,7 @@ pub use mutate::{
     HostChange, HostChangeEntry, add_host, remove_host, rename_host, set_host_offline,
 };
 
-use dependents::{host_dependents, replica_owners};
+use dependent::{host_dependents, replica_owners};
 
 /// The live probe of a remote host, implemented above this crate.
 pub trait Probe: Send + Sync {
