@@ -17,6 +17,10 @@ pub use lifecycle::RunLifecycle;
 pub use recovery::Recovery;
 pub use review::ReviewGate;
 
+use std::sync::Arc;
+
+use crate::context::RunSettings;
+
 /// The single capability boundary between the job executor and its runtime.
 ///
 /// Deterministic actions, task/run persistence, environment resolution, agent
@@ -57,4 +61,19 @@ impl<T> RuntimeHost for T where
 pub trait RuntimeHostProcessEnvironment: Send + Sync {
     /// Environment snapshot supplied by the embedding host.
     fn process_env(&self) -> orbit_common::Env;
+}
+
+/// The run's resolved settings, held by the host for the run's life.
+///
+/// Composition resolves [`RunSettings`] once, when it builds the host for a
+/// run, and the engine shares that value instead of asking the host to
+/// resolve configuration at every read. Each field is fixed for the run's
+/// life; an answer that can change during a run, or whose resolution does
+/// work, is a [`HostEnvironment`] method instead. It is a supertrait of
+/// [`HostEnvironment`], so every bound that reads the environment can read
+/// the settings.
+pub trait RuntimeHostRunSettings: Send + Sync {
+    /// The settings composition resolved when it built this host, shared
+    /// rather than resolved again.
+    fn run_settings(&self) -> Arc<RunSettings>;
 }

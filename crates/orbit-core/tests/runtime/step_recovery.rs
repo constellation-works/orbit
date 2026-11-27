@@ -322,6 +322,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for RecoveryHost<'_> {} }
+
 impl_test_host! {
     impl RunLifecycle for RecoveryHost<'_> {
         fn worker_invocation(&self) -> Option<WorkerInvocation> {

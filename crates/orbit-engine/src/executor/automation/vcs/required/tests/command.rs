@@ -26,6 +26,8 @@ struct CaptureHost;
 
 impl_test_host! { impl HostEnvironment for CaptureHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for CaptureHost {} }
+
 impl_test_host! {
     impl RuntimeHostProcessEnvironment for CaptureHost {}
 }

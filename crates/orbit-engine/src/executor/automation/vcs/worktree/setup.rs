@@ -752,14 +752,14 @@ fn branch_name_for_tasks<
         // checkout has been removed and only its candidate branch remains.
         let run_hash = lower_hex(Sha256::digest(run_id.as_bytes()));
         let run_hash = &run_hash[..BRANCH_HASH_LEN];
-        let template = host.run_settings().pr_config.conventions.branch_name;
+        let template = &host.run_settings().pr_config.conventions.branch_name;
         let task = if template.uses_external_ref() {
             // A task's external refs may change during the run, so a branch
             // this run already named is reused rather than renamed.
             if let Some(existing) = existing_run_branch(
                 &host.process_env(),
                 repo_root,
-                &template,
+                template,
                 branch_prefix,
                 task_id,
                 run_hash,

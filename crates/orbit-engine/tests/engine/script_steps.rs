@@ -136,6 +136,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for ScriptedRunHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for ScriptedRunHost {} }
+
 impl_test_host! { impl RunLifecycle for ScriptedRunHost {} }
 
 impl_test_host! { impl Recovery for ScriptedRunHost {} }
@@ -422,6 +424,8 @@ fn a_host_without_the_script_profile_refuses_before_spawn_and_records_the_refusa
     impl_test_host! { impl Dispatch for NullHost {} }
 
     impl_test_host! { impl HostEnvironment for NullHost {} }
+
+    impl_test_host! { impl RuntimeHostRunSettings for NullHost {} }
 
     impl_test_host! { impl RunLifecycle for NullHost {} }
 

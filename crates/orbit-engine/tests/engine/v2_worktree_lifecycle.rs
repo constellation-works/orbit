@@ -983,24 +983,6 @@ impl_test_host! {
 
 impl_test_host! {
     impl HostEnvironment for LifecycleHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
-                workspace_base_branch: BASE.to_string(),
-                unlocked_path_validation: self.unlocked_validation.lock().unwrap().clone(),
-                generated_paths: self.generated_paths.lock().unwrap().clone(),
-                validation_build_output_env: vec!["BUILD_OUTPUT_DIR".into()],
-                repo_root: Some(self.repo.to_string_lossy().into_owned()),
-                // Unset means the shipped default, as on a host without configuration.
-                worktree_reclaim_patterns: self.reclaim_patterns.clone().unwrap_or_else(|| {
-                    ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
-                        .map(String::from)
-                        .to_vec()
-                }),
-                pr_config: self.pr_config.lock().unwrap().clone(),
-                ..orbit_engine::RunSettings::default()
-            }
-        }
-
         fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
             let mut environment = orbit_exec::ValidationEnvironment::launcher(
                 HostEnvironment::agent_subprocess_environment(self, &[]),
@@ -1087,6 +1069,28 @@ impl_test_host! {
 
         fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
             stored_record(&self.settled_claims, run_id)
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for LifecycleHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
+                workspace_base_branch: BASE.to_string(),
+                unlocked_path_validation: self.unlocked_validation.lock().unwrap().clone(),
+                generated_paths: self.generated_paths.lock().unwrap().clone(),
+                validation_build_output_env: vec!["BUILD_OUTPUT_DIR".into()],
+                repo_root: Some(self.repo.to_string_lossy().into_owned()),
+                // Unset means the shipped default, as on a host without configuration.
+                worktree_reclaim_patterns: self.reclaim_patterns.clone().unwrap_or_else(|| {
+                    ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
+                        .map(String::from)
+                        .to_vec()
+                }),
+                pr_config: self.pr_config.lock().unwrap().clone(),
+                ..orbit_engine::RunSettings::default()
+            })
         }
     }
 }

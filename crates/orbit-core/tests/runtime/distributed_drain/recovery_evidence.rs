@@ -1,7 +1,7 @@
 //! A recovery host carries evidence to its claim owner without task-write tools.
 
 use orbit_engine::test_support::impl_test_host;
-use orbit_engine::{HostEnvironment, Recovery, RunLifecycle};
+use orbit_engine::{Recovery, RunLifecycle, RuntimeHostRunSettings};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::claimed_review::ToOwner;
@@ -186,9 +186,15 @@ impl_test_host! {
         fn required_validation_commands(&self) -> Vec<String> {
             orbit_core::test_support::EngineHost::new(&self.bound).required_validation_commands()
         }
+    }
+}
 
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            HostEnvironment::run_settings(&orbit_core::test_support::EngineHost::new(&self.bound))
+impl_test_host! {
+    impl RuntimeHostRunSettings for ClaimedRecoveryHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            RuntimeHostRunSettings::run_settings(&orbit_core::test_support::EngineHost::new(
+                &self.bound,
+            ))
         }
     }
 }

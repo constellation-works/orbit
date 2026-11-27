@@ -76,6 +76,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for DispatchHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for DispatchHost {} }
+
 impl_test_host! { impl RunLifecycle for DispatchHost {} }
 
 impl_test_host! { impl Recovery for DispatchHost {} }

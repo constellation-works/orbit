@@ -67,6 +67,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for BatchHost {} }
+
 impl_test_host! {
     impl RunLifecycle for BatchHost {
         fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {

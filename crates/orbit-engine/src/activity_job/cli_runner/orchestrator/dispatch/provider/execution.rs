@@ -504,7 +504,7 @@ pub(in super::super) fn dispatch_prepared_provider(
             activity_name: activity_name.to_string(),
             agent_name: tool_ctx.agent_name.clone(),
             model_name: tool_ctx.model_name.clone(),
-            workspace: host.run_settings().orbit_workspace_selector,
+            workspace: host.run_settings().orbit_workspace_selector.clone(),
             allowed_tools: match tool_disallow_list {
                 Some(_) => Vec::new(),
                 None => activity_tools.effective_tools.clone(),

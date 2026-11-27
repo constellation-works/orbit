@@ -301,11 +301,16 @@ impl_test_host! {
 
 impl_test_host! {
     impl HostEnvironment for ReplayHost<'_> {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for ReplayHost<'_> {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
                 repo_root: Some(path_str(&self.fx.repo).into()),
                 ..orbit_engine::RunSettings::default()
-            }
+            })
         }
     }
 }

@@ -20,7 +20,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::{CLAUDE_CREDENTIAL_ENV, crew_env_file_problem};
-use orbit_engine::HostEnvironment;
+use orbit_engine::RuntimeHostRunSettings;
 use orbit_engine::activity_job::cli_runner::{
     CLAUDE_WORKER_CREDENTIAL_REMEDY, claude_worker_credential_held,
 };
@@ -64,7 +64,8 @@ impl OrbitRuntime {
             }));
         }
         (is_claude(crew)
-            && HostEnvironment::run_settings(&self.engine_host()).requires_claude_worker_credential
+            && RuntimeHostRunSettings::run_settings(&self.engine_host())
+                .requires_claude_worker_credential
             && !claude_worker_credential_held(&policy.crew_agent_subprocess_env(&crew.env, &[])))
         .then_some(Unrunnable::NoClaudeCredential)
     }

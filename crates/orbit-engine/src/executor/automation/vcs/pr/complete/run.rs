@@ -51,7 +51,7 @@ where
     // [ORB-23322] `completion.hold` only ever lowers a granted `done`; a
     // watch-only auto-fix run has no completion to hold.
     let hold_rules = if input.get("completion").and_then(Value::as_str) == Some("done") {
-        host.run_settings().completion_hold_rules
+        host.run_settings().completion_hold_rules.clone()
     } else {
         Vec::new()
     };

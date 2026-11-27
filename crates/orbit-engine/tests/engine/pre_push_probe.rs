@@ -52,6 +52,8 @@ struct Host;
 
 impl_test_host! { impl HostEnvironment for Host {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for Host {} }
+
 impl_test_host! { impl RunLifecycle for Host {} }
 
 impl_test_host! { impl ReviewGate for Host {} }

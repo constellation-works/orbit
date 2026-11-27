@@ -9,17 +9,13 @@ use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::JobRun;
 use serde_json::Value;
 
-use crate::context::RunSettings;
 use crate::context::hosts::{ScratchGcReport, ValidatedTree, WorktreeGcTaskLookup};
 
-/// Host configuration and environment: resolved run settings, owed criteria,
+/// Host configuration and environment: the held run settings (through
+/// [`super::RuntimeHostRunSettings`]), owed criteria,
 /// validation gates, subprocess environments, events, worktree and scratch GC,
 /// provider telemetry, tool runs and model identity.
-pub trait HostEnvironment: Send + Sync {
-    /// Resolved host and workspace configuration for this run, delivered as one
-    /// value rather than individual configuration getters.
-    fn run_settings(&self) -> RunSettings;
-
+pub trait HostEnvironment: super::RuntimeHostRunSettings + Send + Sync {
     /// Admit an implementer's criteria owed after deploy against the task
     /// pilot's post-deploy finding, refusing any criterion the pilot did not
     /// type. An owner run records the admitted claim in task history; a

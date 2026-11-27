@@ -97,6 +97,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for GateHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for GateHost {} }
+
 impl_test_host! { impl RunLifecycle for GateHost {} }
 
 impl_test_host! { impl Recovery for GateHost {} }

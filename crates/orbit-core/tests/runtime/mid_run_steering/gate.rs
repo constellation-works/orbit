@@ -337,6 +337,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for Pipeline<'_> {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for Pipeline<'_> {} }
+
 impl_test_host! {
     impl RunLifecycle for Pipeline<'_> {
         fn apply_task_automation_update(

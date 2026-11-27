@@ -281,13 +281,12 @@ pub(super) fn completion_hold_stop<H: RunLifecycle + ReviewGate + HostEnvironmen
     if !context.owner_distributed_completion_done {
         return Ok(None);
     }
-    let rules = host.run_settings().completion_hold_rules;
+    let rules = &host.run_settings().completion_hold_rules;
     if rules.is_empty() {
         return Ok(None);
     }
     let task = host.get_task(&context.task_id)?;
-    let Some(hold) =
-        evaluate_completion_hold(&rules, std::slice::from_ref(&task), changed, run_id)?
+    let Some(hold) = evaluate_completion_hold(rules, std::slice::from_ref(&task), changed, run_id)?
     else {
         return Ok(None);
     };

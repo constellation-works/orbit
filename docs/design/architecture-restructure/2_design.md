@@ -336,7 +336,7 @@ The number of ports is not reduced by this design. §12 says why that matters.
 3. **Narrower bounds, one engine module at a time.** A function's bound names only the traits it uses (`H: RunLifecycle + Dispatch`). A test double then implements what the function under test needs, as the bounds narrow.
 4. **The implementor is an adapter, not the runtime**: `adapter::engine_host::EngineHost<'_>` holds `&Run` and answers each method by calling an app or a runtime mechanism.
 
-**Implemented.** Job execution, activity and CLI dispatch, and the deterministic action router compose all capabilities through `RuntimeHost`. The engine host adapter implements the individual traits. Fixtures implement the capabilities of the entry points they call using shared test-only defaults per trait. The duplicate fixture trait and its method-count ratchet are retired.
+**Implemented.** Job execution, activity and CLI dispatch, and the deterministic action router compose all capabilities through `RuntimeHost`. The engine host adapter implements the individual traits. Fixtures implement the capabilities of the entry points they call using shared test-only defaults per trait. The duplicate fixture trait and its method-count ratchet are retired. `adapter::engine_host::EngineHost` resolves `RunSettings` once, when it is built, and holds it; the engine reads that value through `RuntimeHostRunSettings`, a supertrait of `HostEnvironment`, and `HostEnvironment` has no settings getter.
 
 `OrbitToolHost` is already narrow and only changes its implementor in the same way. The MCP host trait stays implemented in the CLI and calls `exec`.
 

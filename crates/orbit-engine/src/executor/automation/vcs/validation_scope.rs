@@ -63,7 +63,7 @@ pub(super) fn validation_scope<
             record,
         }
     };
-    let unlocked = host.run_settings().unlocked_path_validation;
+    let unlocked = &host.run_settings().unlocked_path_validation;
     if unlocked.commands.is_empty() {
         return full_scope("unlocked_path_validation_unset", json!({}));
     }
@@ -139,7 +139,7 @@ pub(super) fn validation_scope<
         record.extend(extra.clone());
     }
     ValidationScope {
-        commands: unlocked.commands,
+        commands: unlocked.commands.clone(),
         full: false,
         record,
     }

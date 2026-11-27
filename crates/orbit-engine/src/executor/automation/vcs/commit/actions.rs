@@ -129,8 +129,8 @@ pub(super) fn commit_task_artifact_changes<
 
     let mut committed_task_ids = Vec::new();
     let mut skipped_task_ids = Vec::new();
-    let pr_config = host.run_settings().pr_config;
-    let landed = resolve_regression_landed_commits(host, &workspace_path, &tasks, &pr_config);
+    let pr_config = &host.run_settings().pr_config;
+    let landed = resolve_regression_landed_commits(host, &workspace_path, &tasks, pr_config);
 
     for task in tasks {
         let changed_files = assigned
@@ -144,8 +144,7 @@ pub(super) fn commit_task_artifact_changes<
         }
 
         stage_paths(&host.process_env(), &workspace_path, &changed_files)?;
-        let message =
-            delivery_commit_message(std::slice::from_ref(&task), &pr_config, &landed, &[]);
+        let message = delivery_commit_message(std::slice::from_ref(&task), pr_config, &landed, &[]);
         git_commit_paths_with_identity(
             &host.process_env(),
             &workspace_path,
@@ -213,11 +212,11 @@ pub(super) fn commit_finalize_artifact_changes<
 
     let files_to_commit: Vec<String> = files_to_commit.into_iter().collect();
     stage_paths(&host.process_env(), &workspace_path, &files_to_commit)?;
-    let pr_config = host.run_settings().pr_config;
+    let pr_config = &host.run_settings().pr_config;
     let landed =
-        resolve_regression_landed_commits(host, &workspace_path, &affected_tasks, &pr_config);
+        resolve_regression_landed_commits(host, &workspace_path, &affected_tasks, pr_config);
     let (_, coauthors) = commit_author_for_tasks(&affected_tasks);
-    let message = delivery_commit_message(&affected_tasks, &pr_config, &landed, &coauthors);
+    let message = delivery_commit_message(&affected_tasks, pr_config, &landed, &coauthors);
     let resolved_model = host.resolved_crew_model(batch_id)?;
     git_commit_paths_with_identity(
         &host.process_env(),
@@ -542,14 +541,14 @@ where
         std::slice::from_ref(&task),
         true,
     );
-    let pr_config = host.run_settings().pr_config;
+    let pr_config = &host.run_settings().pr_config;
     let landed = resolve_regression_landed_commits(
         host,
         &workspace_path,
         std::slice::from_ref(&task),
-        &pr_config,
+        pr_config,
     );
-    let message = delivery_commit_message(std::slice::from_ref(&task), &pr_config, &landed, &[]);
+    let message = delivery_commit_message(std::slice::from_ref(&task), pr_config, &landed, &[]);
     let resolved_model = host.resolved_crew_model(batch_id)?;
 
     git_commit_with_identity(
@@ -609,14 +608,14 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<
             std::slice::from_ref(task),
             true,
         );
-        let pr_config = host.run_settings().pr_config;
+        let pr_config = &host.run_settings().pr_config;
         let landed = resolve_regression_landed_commits(
             host,
             workspace_path,
             std::slice::from_ref(task),
-            &pr_config,
+            pr_config,
         );
-        let message = delivery_commit_message(std::slice::from_ref(task), &pr_config, &landed, &[]);
+        let message = delivery_commit_message(std::slice::from_ref(task), pr_config, &landed, &[]);
         let resolved_model = host.resolved_crew_model(run_id)?;
         git_commit_with_identity(
             &host.process_env(),

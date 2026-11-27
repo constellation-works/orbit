@@ -71,6 +71,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for BoundingHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for BoundingHost {} }
+
 impl_test_host! { impl RunLifecycle for BoundingHost {} }
 
 impl_test_host! {

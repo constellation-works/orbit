@@ -18,6 +18,8 @@ impl_test_host! { impl Dispatch for AcceptedLanding {} }
 
 impl_test_host! { impl HostEnvironment for AcceptedLanding {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for AcceptedLanding {} }
+
 impl_test_host! {
     impl RunLifecycle for AcceptedLanding {
         fn get_task_history(&self, id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {

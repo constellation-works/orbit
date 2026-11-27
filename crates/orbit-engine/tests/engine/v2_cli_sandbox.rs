@@ -80,6 +80,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for RecordingHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for RecordingHost {} }
+
 impl_test_host! {
     impl RunLifecycle for RecordingHost {
         fn start_plugin_broker(
@@ -198,6 +200,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for MissingWrapperHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for MissingWrapperHost {} }
+
 impl_test_host! {
     impl RunLifecycle for MissingWrapperHost {
         fn start_plugin_broker(
@@ -298,6 +302,8 @@ struct ProbeHost {
 
 impl_test_host! { impl HostEnvironment for ProbeHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for ProbeHost {} }
+
 impl_test_host! {
     impl Dispatch for ProbeHost {
         fn run_deterministic(
@@ -346,6 +352,8 @@ impl_test_host! {
 struct UnsupportedProbeHost;
 
 impl_test_host! { impl HostEnvironment for UnsupportedProbeHost {} }
+
+impl_test_host! { impl RuntimeHostRunSettings for UnsupportedProbeHost {} }
 
 impl_test_host! {
     impl Dispatch for UnsupportedProbeHost {

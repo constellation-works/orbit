@@ -155,13 +155,18 @@ impl CommitTestHost {
 
 impl_test_host! {
     impl HostEnvironment for CommitTestHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for CommitTestHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
                 repo_root: Some(self.repo_root.to_string_lossy().to_string()),
                 data_root: self.data_root.clone(),
                 pr_config: self.pr_config.clone(),
                 ..orbit_engine::RunSettings::default()
-            }
+            })
         }
     }
 }

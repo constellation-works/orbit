@@ -275,6 +275,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for CapacityHost {} }
+
 impl_test_host! { impl RunLifecycle for CapacityHost {} }
 
 impl_test_host! {

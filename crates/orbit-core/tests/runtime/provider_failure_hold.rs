@@ -864,6 +864,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for Pipeline<'_> {} }
+
 #[cfg(unix)]
 impl_test_host! { impl RunLifecycle for Pipeline<'_> {} }
 

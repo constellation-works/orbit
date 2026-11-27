@@ -263,13 +263,6 @@ impl_test_host! {
 
 impl_test_host! {
     impl HostEnvironment for ScriptHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
-                requires_claude_worker_credential: self.requires_claude_credential,
-                ..orbit_engine::RunSettings::default()
-            }
-        }
-
         fn agent_subprocess_environment(
             &self,
             required_env_vars: &[&str],
@@ -281,6 +274,17 @@ impl_test_host! {
             );
             env.extend(self.admitted_env.iter().cloned());
             env
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for ScriptHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
+                requires_claude_worker_credential: self.requires_claude_credential,
+                ..orbit_engine::RunSettings::default()
+            })
         }
     }
 }

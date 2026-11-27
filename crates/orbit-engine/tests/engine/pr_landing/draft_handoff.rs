@@ -3,7 +3,7 @@
 use super::*;
 use orbit_engine::test_support::impl_test_host;
 use orbit_engine::{HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate};
-use orbit_engine::{HostEnvironment, RunLifecycle};
+use orbit_engine::{RunLifecycle, RuntimeHostRunSettings};
 use orbit_types::workflow::{DeliveryConventions, PR_SECTIONS_ARTIFACT};
 
 struct DraftLanding<'a> {
@@ -16,11 +16,16 @@ impl_test_host! { impl Dispatch for DraftLanding<'_> {} }
 
 impl_test_host! {
     impl HostEnvironment for DraftLanding<'_> {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
-                pr_config: HostEnvironment::run_settings(self.follower).pr_config,
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for DraftLanding<'_> {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
+                pr_config: RuntimeHostRunSettings::run_settings(self.follower).pr_config.clone(),
                 ..orbit_engine::RunSettings::default()
-            }
+            })
         }
     }
 }

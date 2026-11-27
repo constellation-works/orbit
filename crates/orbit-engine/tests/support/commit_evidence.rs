@@ -73,16 +73,20 @@ impl_test_host! { impl Dispatch for VerifierHost {} }
 
 impl_test_host! {
     impl HostEnvironment for VerifierHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
+        fn required_validation_commands(&self) -> Vec<String> {
+            self.required_commands.lock().unwrap().clone()
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for VerifierHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
                 repo_root: Some(self.repo.to_string_lossy().into_owned()),
                 pr_config: self.pr_config.lock().unwrap().clone(),
                 ..orbit_engine::RunSettings::default()
-            }
-        }
-
-        fn required_validation_commands(&self) -> Vec<String> {
-            self.required_commands.lock().unwrap().clone()
+            })
         }
     }
 }

@@ -38,7 +38,7 @@ pub use review::{
 };
 pub use runtime_host::{
     Dispatch, HostEnvironment, Recovery, ReviewGate, RunLifecycle, RuntimeHost,
-    RuntimeHostProcessEnvironment,
+    RuntimeHostProcessEnvironment, RuntimeHostRunSettings,
 };
 pub use scratch_gc::{ScratchGcEntry, ScratchGcReport};
 pub use script_step::{

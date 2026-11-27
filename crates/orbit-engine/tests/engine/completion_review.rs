@@ -269,6 +269,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for CompletionReviewHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for CompletionReviewHost {} }
+
 impl_test_host! { impl RunLifecycle for CompletionReviewHost {} }
 
 impl_test_host! {
@@ -388,14 +390,19 @@ impl_test_host! {
 
 impl_test_host! {
     impl HostEnvironment for LocalCompletionHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for LocalCompletionHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
                 completion_hold_rules: vec![
                     serde_json::from_value(json!({ "tags": ["sensitive"] }))
                         .expect("hold rule fixture"),
                 ],
                 ..orbit_engine::RunSettings::default()
-            }
+            })
         }
     }
 }
@@ -545,14 +552,19 @@ impl_test_host! {
 
 impl_test_host! {
     impl HostEnvironment for NoDiffCompletionHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for NoDiffCompletionHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
                 completion_hold_rules: vec![
                     serde_json::from_value(json!({ "tags": ["sensitive"] }))
                         .expect("hold rule fixture"),
                 ],
                 ..orbit_engine::RunSettings::default()
-            }
+            })
         }
     }
 }

@@ -69,6 +69,8 @@ impl_test_host! {
     }
 }
 
+impl_test_host! { impl RuntimeHostRunSettings for NoticeHost {} }
+
 impl_test_host! { impl RunLifecycle for NoticeHost {} }
 
 impl_test_host! {

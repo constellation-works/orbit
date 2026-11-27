@@ -1,4 +1,25 @@
-//! Defaults for test fixtures implementing the HostEnvironment capability.
+//! Defaults for test fixtures implementing the HostEnvironment capability and
+//! the run settings it holds.
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __orbit_test_host_run_settings {
+    ($($implementation:tt)*) => {
+        $crate::__orbit_test_host_impl! {
+            $($implementation)*;
+            /// The default settings, with the build output bindings of this
+            /// fixture's validation environment.
+            fn run_settings(&self) -> fixture::Arc<$crate::RunSettings> {
+                fixture::Arc::new($crate::RunSettings {
+                    validation_build_output_env:
+                        $crate::HostEnvironment::validation_subprocess_environment(self)
+                            .build_output_env,
+                    ..$crate::RunSettings::default()
+                })
+            }
+        }
+    };
+}
 
 #[doc(hidden)]
 #[macro_export]
@@ -6,15 +27,6 @@ macro_rules! __orbit_test_host_environment {
     ($($implementation:tt)*) => {
         $crate::__orbit_test_host_impl! {
             $($implementation)*;
-            fn run_settings(&self) -> $crate::RunSettings {
-                $crate::RunSettings {
-                    validation_build_output_env:
-                        $crate::HostEnvironment::validation_subprocess_environment(self)
-                            .build_output_env,
-                    ..$crate::RunSettings::default()
-                }
-            }
-
             fn admit_owed_criteria(
                 &self,
                 _task_id: &str,

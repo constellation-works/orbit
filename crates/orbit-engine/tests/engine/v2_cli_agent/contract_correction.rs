@@ -62,6 +62,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for CorrectionHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for CorrectionHost {} }
+
 impl_test_host! { impl RunLifecycle for CorrectionHost {} }
 
 impl_test_host! {

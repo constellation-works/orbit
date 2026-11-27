@@ -82,6 +82,8 @@ impl_test_host! {
 
 impl_test_host! { impl HostEnvironment for InspectionHost {} }
 
+impl_test_host! { impl RuntimeHostRunSettings for InspectionHost {} }
+
 impl_test_host! { impl RunLifecycle for InspectionHost {} }
 
 impl_test_host! {

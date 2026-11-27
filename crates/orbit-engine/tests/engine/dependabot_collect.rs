@@ -85,11 +85,16 @@ struct RootHost {
 
 impl_test_host! {
     impl HostEnvironment for RootHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for RootHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
                 repo_root: Some(self.root.clone()),
                 ..orbit_engine::RunSettings::default()
-            }
+            })
         }
     }
 }

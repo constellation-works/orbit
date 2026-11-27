@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_agent::loop_engine::InMemorySink;
-use orbit_engine::HostEnvironment;
+use orbit_engine::RuntimeHostRunSettings;
 use orbit_engine::activity_job::load_activity_asset;
 use orbit_engine::{
     DispatchError, DispatchOutcome, ResolvedShellExecutor, V2AuditWriter, V2DispatchInput,
@@ -85,15 +85,6 @@ impl_test_host! {
 
 impl_test_host! {
     impl HostEnvironment for ShellHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
-                orbit_registry_root: Some("/authoritative/registry".to_string()),
-                orbit_workspace_selector: Some("ws_owner".to_string()),
-                repo_root: Some(self.root.to_string_lossy().into_owned()),
-                ..orbit_engine::RunSettings::default()
-            }
-        }
-
         fn agent_subprocess_environment(
             &self,
             _required_env_vars: &[&str],
@@ -105,6 +96,19 @@ impl_test_host! {
                 ),
                 ("ORBIT_BASELINE".to_string(), "from-policy".to_string()),
             ]
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for ShellHost {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
+                orbit_registry_root: Some("/authoritative/registry".to_string()),
+                orbit_workspace_selector: Some("ws_owner".to_string()),
+                repo_root: Some(self.root.to_string_lossy().into_owned()),
+                ..orbit_engine::RunSettings::default()
+            })
         }
     }
 }

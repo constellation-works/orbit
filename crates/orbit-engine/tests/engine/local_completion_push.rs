@@ -259,14 +259,6 @@ impl_test_host! {
 
 impl_test_host! {
     impl HostEnvironment for Host {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
-                completion_hold_rules: self.hold_rules.lock().expect("hold_rules").clone(),
-                repo_root: Some(self.repo.to_string_lossy().into_owned()),
-                ..orbit_engine::RunSettings::default()
-            }
-        }
-
         fn run_private_vcs_operation(
             &self,
             operation: &str,
@@ -277,6 +269,18 @@ impl_test_host! {
                 operation,
                 &input,
             )
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostRunSettings for Host {
+        fn run_settings(&self) -> std::sync::Arc<orbit_engine::RunSettings> {
+            std::sync::Arc::new(orbit_engine::RunSettings {
+                completion_hold_rules: self.hold_rules.lock().expect("hold_rules").clone(),
+                repo_root: Some(self.repo.to_string_lossy().into_owned()),
+                ..orbit_engine::RunSettings::default()
+            })
         }
     }
 }
