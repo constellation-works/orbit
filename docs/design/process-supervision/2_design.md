@@ -224,8 +224,8 @@ Tests that call a supervisor directly are left out.
 | `orbit-core/src/application/job/catalog/loading.rs` (`git check-ref-format`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-clock/src/manager.rs` (launchd/systemd) | `run_bounded_capped` | Deadline, prefix cap, timeout mapped to its own error |
 | `orbit-clock/src/inspect.rs` (version probe) | `run_bounded_capped` | Deadline, prefix cap |
-| `orbit-cmd/src/update/converge.rs` (install steps; probes) | `run_bounded_capped_typed`; `run_bounded_capped_complete_typed` | Spawn error kind (`ETXTBSY` retry); probes need both pipes at EOF |
-| `orbit-cmd/src/update/channel.rs` (`brew list`) | `run_bounded_capped` | Deadline, prefix cap |
+| `orbit-core/src/app/update/converge.rs` (install steps; probes) | `run_bounded_capped_typed`; `run_bounded_capped_complete_typed` | Spawn error kind (`ETXTBSY` retry); probes need both pipes at EOF |
+| `orbit-core/src/app/update/channel.rs` (`brew list`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/app/doctor/workspace.rs` (`git ls-files`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-exec/src/linux_sandbox/probe.rs` (bwrap probe) | `run_bounded_capped_typed` | Deadline, prefix cap, spawn error kind |
 | `orbit-exec/src/macos_sandbox/probe.rs` (Seatbelt probe) | `run_bounded_capped` | Deadline, prefix cap |

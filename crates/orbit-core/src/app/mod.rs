@@ -7,9 +7,9 @@
 //! `agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`,
 //! `config`, `crew_memory`, `doctor`, `evolution`, `experiment`, `friction`, `gc`,
 //! `host`, `notice`, `plugin`, `resident`, `review`, `routine`, `run`, `search`,
-//! `skill`, `task` and `workspace` are apps; `host` opens no workspace, so it has no `exec` and
-//! its surfaces call it directly. The other subjects still live in `application/` and
-//! are reached through `OrbitRuntime`.
+//! `skill`, `task`, `update` and `workspace` are apps; `host` and `update` open no
+//! workspace, so they have no `exec` and their surfaces call them directly. The other
+//! subjects still live in `application/` and are reached through `OrbitRuntime`.
 
 pub mod agent;
 
@@ -62,6 +62,8 @@ pub mod task;
 pub(crate) mod tool_call;
 
 pub(crate) mod tool_fields;
+
+pub mod update;
 
 pub mod workspace;
 

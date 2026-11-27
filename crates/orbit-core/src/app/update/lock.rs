@@ -23,7 +23,7 @@ impl UpdateLock {
     /// Take the update lock for `install_dir`, or report who holds it.
     #[allow(
         clippy::disallowed_methods,
-        reason = "the binary installation directory is external to Orbit state and retains its deployment permissions"
+        reason = "the external install directory retains its deployment permissions"
     )]
     pub fn acquire(install_dir: &Path) -> Result<Self, OrbitError> {
         std::fs::create_dir_all(install_dir).map_err(|error| {

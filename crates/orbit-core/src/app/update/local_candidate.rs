@@ -61,6 +61,10 @@ pub const OPERATOR_ATTESTED: &str = "operator_attested";
 /// The only executable name a local candidate may replace.
 const INSTALLED_NAME: &str = "orbit";
 
+/// Largest local candidate accepted. Debug builds run to hundreds of
+/// megabytes, well past the release archive limit.
+const MAX_CANDIDATE_BYTES: u64 = 1024 * 1024 * 1024;
+
 /// A v1 local-candidate manifest: which source commit the operator says the
 /// executable was built from, the platform it targets, and its exact digest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,176 +117,12 @@ impl CandidateManifest {
     }
 }
 
-/// Lowercase a full Git commit id, refusing abbreviations and anything else.
-///
-/// SHA-1 repositories name commits with 40 hex digits and SHA-256 ones with
-/// 64. A prefix is ambiguous by construction, so it never identifies a build.
-pub fn normalize_source_commit(value: &str) -> Result<String, OrbitError> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if !matches!(normalized.len(), 40 | 64) || !normalized.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(OrbitError::InvalidInput(format!(
-            "source commit '{value}' is not a full Git commit id; pass all 40 (SHA-1) or 64 \
-             (SHA-256) hex digits, e.g. `git rev-parse HEAD`"
-        )));
-    }
-    Ok(normalized)
+/// The installed executable's file identity, compared again before the swap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TargetIdentity {
+    device: u64,
+    inode: u64,
 }
-
-/// The release target triple an executable header names.
-///
-/// This establishes the object format and CPU architecture only. It does not
-/// establish the C library, so it is reported as header evidence rather than
-/// as proof the binary runs on this host.
-pub fn executable_target(bytes: &[u8]) -> Result<&'static str, OrbitError> {
-    let field = |offset: usize, width: usize| bytes.get(offset..offset + width);
-    match bytes {
-        [0x7f, b'E', b'L', b'F', ..] => {
-            if field(4, 2) != Some(&[2, 1]) {
-                return Err(OrbitError::InvalidInput(
-                    "the local candidate is not a 64-bit little-endian ELF executable".into(),
-                ));
-            }
-            match field(18, 2).map(|machine| u16::from_le_bytes([machine[0], machine[1]])) {
-                Some(62) => Ok("x86_64-unknown-linux-gnu"),
-                Some(183) => Ok("aarch64-unknown-linux-gnu"),
-                machine => Err(OrbitError::InvalidInput(format!(
-                    "the local candidate is an ELF executable for machine {machine:?}, which \
-                     orbit does not build for"
-                ))),
-            }
-        }
-        [0xcf, 0xfa, 0xed, 0xfe, ..] => {
-            match field(4, 4).map(|cpu| u32::from_le_bytes([cpu[0], cpu[1], cpu[2], cpu[3]])) {
-                Some(0x0100_0007) => Ok("x86_64-apple-darwin"),
-                Some(0x0100_000c) => Ok("aarch64-apple-darwin"),
-                cpu => Err(OrbitError::InvalidInput(format!(
-                    "the local candidate is a Mach-O executable for CPU type {cpu:?}, which \
-                     orbit does not build for"
-                ))),
-            }
-        }
-        [0xca, 0xfe, 0xba, 0xbe, ..] | [0xbe, 0xba, 0xfe, 0xca, ..] => {
-            Err(OrbitError::InvalidInput(
-                "the local candidate is a universal Mach-O binary; build and install a \
-                 single-architecture executable for this host"
-                    .into(),
-            ))
-        }
-        _ => Err(OrbitError::InvalidInput(
-            "the local candidate is not a native executable (no 64-bit ELF or Mach-O header)"
-                .into(),
-        )),
-    }
-}
-
-/// What `--write-candidate-manifest` records.
-#[derive(Debug, Clone)]
-pub struct CandidateManifestRequest {
-    /// The built executable to describe.
-    pub candidate: PathBuf,
-    /// The full commit the operator built it from.
-    pub source_commit: String,
-    /// Where to write the manifest. Never overwritten.
-    pub output: PathBuf,
-}
-
-/// Describe a built executable in a new v1 manifest.
-///
-/// The digest and target come from the bytes; the commit is the operator's.
-/// The manifest is created fresh, so it can neither clobber an existing file
-/// (the candidate itself, say) nor silently replace an earlier attestation.
-pub fn write_candidate_manifest(
-    request: &CandidateManifestRequest,
-) -> Result<CandidateManifest, OrbitError> {
-    let source_commit = normalize_source_commit(&request.source_commit)?;
-    drop(open_candidate(&request.candidate)?);
-    let candidate = AcceptedCandidate::describe(&request.candidate)?;
-    let manifest = CandidateManifest {
-        schema_version: MANIFEST_SCHEMA_VERSION,
-        kind: MANIFEST_KIND.to_string(),
-        trust: OPERATOR_ATTESTED.to_string(),
-        source_commit,
-        target: candidate.target.to_string(),
-        executable_sha256: candidate.sha256,
-    };
-    let mut document = serde_json::to_string_pretty(&manifest)
-        .map_err(|error| OrbitError::Execution(format!("serialize manifest: {error}")))?;
-    document.push('\n');
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&request.output)
-        .map_err(|error| {
-            OrbitError::Io(format!(
-                "cannot create the manifest '{}': {error}; manifests are never overwritten, so \
-                 choose a new path",
-                request.output.display()
-            ))
-        })?;
-    std::io::Write::write_all(&mut file, document.as_bytes())
-        .and_then(|()| orbit_common::fs::io::sync_file(&file))
-        .map_err(|error| {
-            OrbitError::Io(format!(
-                "failed to write the manifest '{}': {error}",
-                request.output.display()
-            ))
-        })?;
-    Ok(manifest)
-}
-
-/// What an operator asked a local-candidate update to install.
-#[derive(Debug, Clone)]
-pub struct LocalCandidateRequest {
-    /// The built executable whose bytes are installed.
-    pub candidate: PathBuf,
-    /// Its v1 manifest.
-    pub manifest: PathBuf,
-    /// The full commit the operator expects the manifest to attest.
-    pub source_commit: String,
-    /// Permit a candidate reporting an older version than the installed one.
-    pub allow_downgrade: bool,
-}
-
-/// One attested value and how the updater came to accept it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Evidence {
-    /// The accepted value.
-    pub value: String,
-    /// `operator_attested` for an assertion the updater cannot check, or the
-    /// check it ran.
-    pub evidence: &'static str,
-}
-
-/// The local-candidate section of an update report.
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalCandidateEvidence {
-    /// Always [`OPERATOR_ATTESTED`].
-    pub trust: &'static str,
-    /// Always false: a local candidate is never a signed release.
-    pub signed_release: bool,
-    /// The candidate path the accepted bytes were read from.
-    pub candidate: PathBuf,
-    /// The manifest that attested them.
-    pub manifest: PathBuf,
-    /// The full source commit, as expected on the command line and attested
-    /// by the manifest. Never verified against the bytes.
-    pub source_commit: Evidence,
-    /// SHA-256 of the accepted bytes, computed by the updater.
-    pub executable_sha256: Evidence,
-    /// Target triple, read from the accepted bytes' executable header.
-    pub target: Evidence,
-    /// Digest of the installed executable before this run.
-    pub installed_sha256_before: String,
-    /// Digest of the installed executable after this run, once verified.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub installed_sha256_after: Option<String>,
-    /// The exact command that retries this candidate.
-    pub retry_command: String,
-}
-
-/// Largest local candidate accepted. Debug builds run to hundreds of
-/// megabytes, well past the release archive limit.
-const MAX_CANDIDATE_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// What the updater observed about one executable's bytes.
 struct AcceptedCandidate {
@@ -347,6 +187,67 @@ impl AcceptedCandidate {
     }
 }
 
+/// What `--write-candidate-manifest` records.
+#[derive(Debug, Clone)]
+pub struct CandidateManifestRequest {
+    /// The built executable to describe.
+    pub candidate: PathBuf,
+    /// The full commit the operator built it from.
+    pub source_commit: String,
+    /// Where to write the manifest. Never overwritten.
+    pub output: PathBuf,
+}
+
+/// What an operator asked a local-candidate update to install.
+#[derive(Debug, Clone)]
+pub struct LocalCandidateRequest {
+    /// The built executable whose bytes are installed.
+    pub candidate: PathBuf,
+    /// Its v1 manifest.
+    pub manifest: PathBuf,
+    /// The full commit the operator expects the manifest to attest.
+    pub source_commit: String,
+    /// Permit a candidate reporting an older version than the installed one.
+    pub allow_downgrade: bool,
+}
+
+/// One attested value and how the updater came to accept it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Evidence {
+    /// The accepted value.
+    pub value: String,
+    /// `operator_attested` for an assertion the updater cannot check, or the
+    /// check it ran.
+    pub evidence: &'static str,
+}
+
+/// The local-candidate section of an update report.
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalCandidateEvidence {
+    /// Always [`OPERATOR_ATTESTED`].
+    pub trust: &'static str,
+    /// Always false: a local candidate is never a signed release.
+    pub signed_release: bool,
+    /// The candidate path the accepted bytes were read from.
+    pub candidate: PathBuf,
+    /// The manifest that attested them.
+    pub manifest: PathBuf,
+    /// The full source commit, as expected on the command line and attested
+    /// by the manifest. Never verified against the bytes.
+    pub source_commit: Evidence,
+    /// SHA-256 of the accepted bytes, computed by the updater.
+    pub executable_sha256: Evidence,
+    /// Target triple, read from the accepted bytes' executable header.
+    pub target: Evidence,
+    /// Digest of the installed executable before this run.
+    pub installed_sha256_before: String,
+    /// Digest of the installed executable after this run, once verified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed_sha256_after: Option<String>,
+    /// The exact command that retries this candidate.
+    pub retry_command: String,
+}
+
 /// Open a candidate path, which must name a regular file.
 fn open_candidate(path: &Path) -> Result<File, OrbitError> {
     let unreadable = |error: std::io::Error| {
@@ -364,11 +265,110 @@ fn open_candidate(path: &Path) -> Result<File, OrbitError> {
     File::open(path).map_err(unreadable)
 }
 
-/// The installed executable's file identity, compared again before the swap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TargetIdentity {
-    device: u64,
-    inode: u64,
+/// Lowercase a full Git commit id, refusing abbreviations and anything else.
+///
+/// SHA-1 repositories name commits with 40 hex digits and SHA-256 ones with
+/// 64. A prefix is ambiguous by construction, so it never identifies a build.
+pub fn normalize_source_commit(value: &str) -> Result<String, OrbitError> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if !matches!(normalized.len(), 40 | 64) || !normalized.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(OrbitError::InvalidInput(format!(
+            "source commit '{value}' is not a full Git commit id; pass all 40 (SHA-1) or 64 \
+             (SHA-256) hex digits, e.g. `git rev-parse HEAD`"
+        )));
+    }
+    Ok(normalized)
+}
+
+/// The release target triple an executable header names.
+///
+/// This establishes the object format and CPU architecture only. It does not
+/// establish the C library, so it is reported as header evidence rather than
+/// as proof the binary runs on this host.
+pub fn executable_target(bytes: &[u8]) -> Result<&'static str, OrbitError> {
+    let field = |offset: usize, width: usize| bytes.get(offset..offset + width);
+    match bytes {
+        [0x7f, b'E', b'L', b'F', ..] => {
+            if field(4, 2) != Some(&[2, 1]) {
+                return Err(OrbitError::InvalidInput(
+                    "the local candidate is not a 64-bit little-endian ELF executable".into(),
+                ));
+            }
+            match field(18, 2).map(|machine| u16::from_le_bytes([machine[0], machine[1]])) {
+                Some(62) => Ok("x86_64-unknown-linux-gnu"),
+                Some(183) => Ok("aarch64-unknown-linux-gnu"),
+                machine => Err(OrbitError::InvalidInput(format!(
+                    "the local candidate is an ELF executable for machine {machine:?}, which \
+                     orbit does not build for"
+                ))),
+            }
+        }
+        [0xcf, 0xfa, 0xed, 0xfe, ..] => {
+            match field(4, 4).map(|cpu| u32::from_le_bytes([cpu[0], cpu[1], cpu[2], cpu[3]])) {
+                Some(0x0100_0007) => Ok("x86_64-apple-darwin"),
+                Some(0x0100_000c) => Ok("aarch64-apple-darwin"),
+                cpu => Err(OrbitError::InvalidInput(format!(
+                    "the local candidate is a Mach-O executable for CPU type {cpu:?}, which \
+                     orbit does not build for"
+                ))),
+            }
+        }
+        [0xca, 0xfe, 0xba, 0xbe, ..] | [0xbe, 0xba, 0xfe, 0xca, ..] => {
+            Err(OrbitError::InvalidInput(
+                "the local candidate is a universal Mach-O binary; build and install a \
+                 single-architecture executable for this host"
+                    .into(),
+            ))
+        }
+        _ => Err(OrbitError::InvalidInput(
+            "the local candidate is not a native executable (no 64-bit ELF or Mach-O header)"
+                .into(),
+        )),
+    }
+}
+
+/// Describe a built executable in a new v1 manifest.
+///
+/// The digest and target come from the bytes; the commit is the operator's.
+/// The manifest is created fresh, so it can neither clobber an existing file
+/// (the candidate itself, say) nor silently replace an earlier attestation.
+pub fn write_candidate_manifest(
+    request: &CandidateManifestRequest,
+) -> Result<CandidateManifest, OrbitError> {
+    let source_commit = normalize_source_commit(&request.source_commit)?;
+    drop(open_candidate(&request.candidate)?);
+    let candidate = AcceptedCandidate::describe(&request.candidate)?;
+    let manifest = CandidateManifest {
+        schema_version: MANIFEST_SCHEMA_VERSION,
+        kind: MANIFEST_KIND.to_string(),
+        trust: OPERATOR_ATTESTED.to_string(),
+        source_commit,
+        target: candidate.target.to_string(),
+        executable_sha256: candidate.sha256,
+    };
+    let mut document = serde_json::to_string_pretty(&manifest)
+        .map_err(|error| OrbitError::Execution(format!("serialize manifest: {error}")))?;
+    document.push('\n');
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&request.output)
+        .map_err(|error| {
+            OrbitError::Io(format!(
+                "cannot create the manifest '{}': {error}; manifests are never overwritten, so \
+                 choose a new path",
+                request.output.display()
+            ))
+        })?;
+    std::io::Write::write_all(&mut file, document.as_bytes())
+        .and_then(|()| orbit_common::fs::io::sync_file(&file))
+        .map_err(|error| {
+            OrbitError::Io(format!(
+                "failed to write the manifest '{}': {error}",
+                request.output.display()
+            ))
+        })?;
+    Ok(manifest)
 }
 
 /// Confirm the explicit install target is an executable Orbit's installer owns

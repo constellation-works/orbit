@@ -28,30 +28,13 @@
 //! identified by its digest and an operator-attested source commit instead of
 //! a signed release version; see [`local_candidate`].
 
-mod admission;
 pub mod bundled_bwrap;
-pub mod channel;
-pub mod converge;
 mod environment;
-mod flow;
-pub mod local_candidate;
-pub mod lock;
-mod report;
 pub mod source;
-pub mod stage;
-mod trust;
-pub mod version;
 
-pub use admission::{acquire_admissions, admission_authorities, candidate_preflight};
-pub use environment::{UpdateEnvironment, UpdateWorkspace};
-pub use flow::{UpdateRequest, run_update};
-pub use local_candidate::{
-    CandidateManifestRequest, LocalCandidateRequest, run_local_candidate_update,
-    write_candidate_manifest,
-};
-pub use report::{
-    EXIT_NEEDS_RECOVERY, EXIT_UPDATE_AVAILABLE, HandoverProcess, UpdateOutcome, UpdateReport,
-};
+pub use environment::{for_install_target, from_process, workspace_for_preflight};
+
+pub use orbit_core::app::update::*;
 
 #[cfg(test)]
 mod tests;

@@ -7,9 +7,9 @@
 //! lets the update tests exercise download, signature, and checksum handling
 //! against fixtures instead of the network.
 
+mod unpack;
+
 use std::ffi::OsStr;
-use std::fmt::Debug;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -19,48 +19,12 @@ pub use orbit_common::env_vars::ORBIT_INSTALL_REPO as RELEASE_REPO_ENV;
 /// Environment variable naming a local release mirror directory.
 pub use orbit_common::env_vars::ORBIT_UPDATE_RELEASE_DIR as RELEASE_DIR_ENV;
 use orbit_common::observability::logging::format_error_chain;
-use orbit_common::security::release::{
-    RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME,
-};
 use orbit_common::{Env, OrbitError};
-
-/// Input ceilings apply before authentication and before any complete artifact is buffered.
-pub(super) const MAX_METADATA_BYTES: u64 = 64 * 1024;
-/// GitHub release JSON includes the release notes, unlike the small mirror marker.
-pub(super) const MAX_RELEASE_METADATA_BYTES: u64 = 256 * 1024;
-pub(super) const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
-pub(super) const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
-pub(super) const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
-
-fn asset_limit(asset: &str) -> u64 {
-    match asset {
-        RELEASE_CHECKSUMS_FILENAME => MAX_MANIFEST_BYTES,
-        RELEASE_CHECKSUMS_SIGNATURE_FILENAME => MAX_SIGNATURE_BYTES,
-        _ => MAX_ARCHIVE_BYTES,
-    }
-}
-
-fn too_large(what: &str, limit: u64) -> OrbitError {
-    OrbitError::Execution(format!(
-        "{what} exceeds the {limit}-byte release input limit"
-    ))
-}
-
-pub(super) fn read_bounded(
-    reader: impl Read,
-    what: &str,
-    limit: u64,
-) -> Result<Vec<u8>, OrbitError> {
-    let mut bytes = Vec::new();
-    reader
-        .take(limit + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| OrbitError::Execution(format!("failed to read {what}: {error}")))?;
-    if bytes.len() as u64 > limit {
-        return Err(too_large(what, limit));
-    }
-    Ok(bytes)
-}
+pub(super) use orbit_core::app::update::source::MAX_METADATA_BYTES;
+pub use orbit_core::app::update::source::ReleaseSource;
+use orbit_core::app::update::source::{
+    MAX_RELEASE_METADATA_BYTES, asset_limit, read_bounded, too_large,
+};
 
 /// Repository the HTTP source reads releases from unless overridden.
 pub const DEFAULT_RELEASE_REPO: &str = "constellation-works/orbit";
@@ -110,18 +74,6 @@ fn https_redirect_policy() -> reqwest::redirect::Policy {
             attempt.follow()
         }
     })
-}
-
-/// A source of published Orbit release artifacts.
-pub trait ReleaseSource: Debug + Send + Sync {
-    /// Where these artifacts come from, for diagnostics and reports.
-    fn describe(&self) -> String;
-
-    /// The newest published version, without a leading `v`.
-    fn latest_version(&self) -> Result<String, OrbitError>;
-
-    /// Fetch `asset` as published with `version`.
-    fn fetch(&self, version: &str, asset: &str) -> Result<Vec<u8>, OrbitError>;
 }
 
 /// Build the release source this process should use.
@@ -256,6 +208,10 @@ fn test_release_api_url(base: &str, path: &str) -> Result<reqwest::Url, OrbitErr
 }
 
 impl ReleaseSource for HttpReleaseSource {
+    fn unpack(&self, archive: &[u8], asset: &str) -> Result<Vec<u8>, OrbitError> {
+        unpack::extract_release_executable(archive, asset)
+    }
+
     fn describe(&self) -> String {
         format!("https://github.com/{}/releases", self.repo)
     }
@@ -329,6 +285,10 @@ impl DirectoryReleaseSource {
 }
 
 impl ReleaseSource for DirectoryReleaseSource {
+    fn unpack(&self, archive: &[u8], asset: &str) -> Result<Vec<u8>, OrbitError> {
+        unpack::extract_release_executable(archive, asset)
+    }
+
     fn describe(&self) -> String {
         format!("release mirror {}", self.root.display())
     }

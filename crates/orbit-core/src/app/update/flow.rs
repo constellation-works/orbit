@@ -37,7 +37,8 @@ pub fn run_update(
 }
 
 /// Run the full flow with an injectable restore for deterministic rollback failures.
-pub(super) fn run_update_with_restore(
+#[doc(hidden)]
+pub fn run_update_with_restore(
     environment: &UpdateEnvironment,
     request: &UpdateRequest,
     restore: impl FnOnce(&Path, &Path) -> Result<(), OrbitError>,
@@ -290,7 +291,8 @@ pub(super) fn assert_downgrade_is_compatible(
 }
 
 /// Where the outgoing executable is preserved.
-pub(super) fn backup_path(executable: &Path) -> PathBuf {
+#[doc(hidden)]
+pub fn backup_path(executable: &Path) -> PathBuf {
     let mut name = executable.as_os_str().to_os_string();
     name.push(".previous");
     PathBuf::from(name)

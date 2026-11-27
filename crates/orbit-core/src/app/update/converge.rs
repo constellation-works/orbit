@@ -53,15 +53,6 @@ const MAX_PROBE_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 /// version or contract is a few hundred bytes.
 const PROBE_OUTPUT_LIMIT: u64 = 1024 * 1024;
 
-/// The configured bound on one probe (see [`PROBE_TIMEOUT_ENV`]).
-pub(super) fn probe_timeout_from_env(env: &Env) -> Duration {
-    env.orbit_update_probe_timeout_secs()
-        .and_then(OsStr::to_str)
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map_or(DEFAULT_PROBE_TIMEOUT, Duration::from_secs)
-        .min(MAX_PROBE_TIMEOUT)
-}
-
 /// What happened to one post-replacement convergence step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +101,11 @@ impl ConvergenceStep {
         }
     }
 
+    /// Whether this step leaves the installation needing operator follow-up.
+    pub fn failed(&self) -> bool {
+        self.status == StepStatus::Failed
+    }
+
     /// Fail a step that ran, for what went wrong once it had: `reason`
     /// follows whatever it reported itself.
     pub(super) fn fail_after(&mut self, reason: &str) {
@@ -119,11 +115,33 @@ impl ConvergenceStep {
             None => reason.to_string(),
         });
     }
+}
 
-    /// Whether this step leaves the installation needing operator follow-up.
-    pub fn failed(&self) -> bool {
-        self.status == StepStatus::Failed
-    }
+/// A trusted release must implement admission before it can replace a protected
+/// installation. Older or unrecognized candidates fail before any installation,
+/// as does one that does not describe its contract within `timeout`.
+///
+/// What a candidate's `update --contract` report commits it to.
+#[doc(hidden)]
+pub struct AdmissionContract {
+    /// The compatibility the candidate reports under
+    /// `compatibility-generation-v2`, which its pin records so compatible
+    /// builds can join it; `None` for a candidate that only speaks
+    /// `executable-generation-v1`.
+    pub(super) identity: Option<CompatibilityIdentity>,
+    /// The resume capabilities a live process can hand over to it with; none
+    /// for an `executable-generation-v1` candidate.
+    pub(super) handover: HandoverCandidate,
+}
+
+/// The configured bound on one probe (see [`PROBE_TIMEOUT_ENV`]).
+#[doc(hidden)]
+pub fn probe_timeout_from_env(env: &Env) -> Duration {
+    env.orbit_update_probe_timeout_secs()
+        .and_then(OsStr::to_str)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map_or(DEFAULT_PROBE_TIMEOUT, Duration::from_secs)
+        .min(MAX_PROBE_TIMEOUT)
 }
 
 /// Run an Orbit convergence command in `cwd`, retaining an explicit root when selected.
@@ -388,24 +406,9 @@ pub(super) fn probe_writable_state(
         }))
 }
 
-/// A trusted release must implement admission before it can replace a protected
-/// installation. Older or unrecognized candidates fail before any installation,
-/// as does one that does not describe its contract within `timeout`.
-///
-/// What a candidate's `update --contract` report commits it to.
-pub(super) struct AdmissionContract {
-    /// The compatibility the candidate reports under
-    /// `compatibility-generation-v2`, which its pin records so compatible
-    /// builds can join it; `None` for a candidate that only speaks
-    /// `executable-generation-v1`.
-    pub(super) identity: Option<CompatibilityIdentity>,
-    /// The resume capabilities a live process can hand over to it with; none
-    /// for an `executable-generation-v1` candidate.
-    pub(super) handover: HandoverCandidate,
-}
-
 /// See [`AdmissionContract`] for what the report yields.
-pub(super) fn require_admission_contract(
+#[doc(hidden)]
+pub fn require_admission_contract(
     executable: &Path,
     timeout: Duration,
 ) -> Result<AdmissionContract, OrbitError> {

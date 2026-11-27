@@ -103,7 +103,7 @@ pub fn stage_bundled_bwrap_for_this_release(env: &Env) -> Result<StagedBwrap, Or
         release_source_from_env(env).as_ref(),
         env!("CARGO_PKG_VERSION"),
         &asset,
-        super::trust::trusted_keys_from_env(env)?,
+        orbit_core::app::update::trusted_keys_from_env(env)?,
         chrono::Utc::now().date_naive(),
     )
 }
