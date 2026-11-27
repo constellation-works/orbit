@@ -91,6 +91,7 @@ Open a file only when its condition holds; each stands alone.
 | Retired features and their leftover keys, commands or toolset names, or a removed command, MCP tool name or task input: what to delete, what replaces it, the deadline | [maintenance-retired-features](references/maintenance-retired-features.md) |
 | Deprecated keys that are translated, ignored or fixed; verify the cleanup with `orbit doctor` | [maintenance-deprecated-keys](references/maintenance-deprecated-keys.md) |
 | Store retention, admission receipt storage, audit events, logs, search indexes, what is evidence and must not be edited | [maintenance-storage](references/maintenance-storage.md) |
+| GitHub run-log cache: fixed behavior, retention, access boundary, inspection; no settings | [maintenance-storage](references/maintenance-storage.md#github-run-log-cache) |
 | Operator procedure for mid-run steering | [mid-run steering](../orbit-orchestrate/references/mid-run-steering.md) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [distributed drain setup](../orbit/references/setup/distributed-drain-setup.md) |
 | Compare implementer models or crews: `orbit agents rank` | [model ranking](../orbit-orchestrate/references/model-ranking.md) |
