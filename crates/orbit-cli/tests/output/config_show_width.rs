@@ -92,7 +92,7 @@ fn render_fixture_text(case: &str, text: &str) -> String {
 #[test]
 fn render_fixture_child() {
     use crate::output::{
-        payload::{Block, Payload},
+        payload::Payload,
         sink::{FormatArg, OutputSink, SinkEnv},
     };
     use std::io::Write as _;
@@ -119,7 +119,7 @@ fn render_fixture_child() {
     crate::output::common::render::emit(
         Payload::blocks(
             serde_json::json!({}),
-            vec![Block::config_show(child_text())],
+            vec![crate::output::config::config_show_block(child_text())],
         )
         .into(),
         &sink,

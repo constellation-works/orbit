@@ -19,11 +19,8 @@ use std::io::Write;
 use orbit_common::OrbitError;
 use serde_json::Value;
 
-use crate::output::attention::AttentionRow;
 use crate::output::common::payload::{Block, CommandOutput, View};
 use crate::output::common::sink::{OutputMode, OutputSink};
-use crate::output::config::config_show_text;
-use crate::output::doctor::doctor_findings;
 
 /// Project a command's output into the resolved mode and write it to stdout.
 pub fn emit(output: CommandOutput, sink: &OutputSink) -> Result<(), OrbitError> {
@@ -81,12 +78,10 @@ fn table_notices(view: &View) -> Vec<&str> {
         .filter_map(|block| match block {
             Block::Table(table) => Some(table.trailing_notices()),
             Block::Text(_)
-            | Block::ConfigShow(_)
             | Block::Prose(_)
             | Block::Notice(_)
             | Block::TerminalNotice(_)
-            | Block::Attention(_)
-            | Block::DoctorFindings(_) => None,
+            | Block::Custom(_) => None,
         })
         .flatten()
         .map(String::as_str)
@@ -107,12 +102,10 @@ fn block_notices(view: &View) -> Vec<&str> {
         .filter_map(|block| match block {
             Block::Notice(text) => Some(text.as_str()),
             Block::Text(_)
-            | Block::ConfigShow(_)
             | Block::Prose(_)
             | Block::Table(_)
             | Block::TerminalNotice(_)
-            | Block::Attention(_)
-            | Block::DoctorFindings(_) => None,
+            | Block::Custom(_) => None,
         })
         .collect()
 }
@@ -163,46 +156,12 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
             for block in blocks {
                 match block {
                     Block::Text(text) => println!("{text}"),
-                    Block::ConfigShow(text) => {
-                        if sink.mode() == OutputMode::Table {
-                            println!("{}", config_show_text(&text, sink.width()));
-                        } else {
-                            println!("{}", text.text);
-                        }
-                    }
                     Block::Prose(text) => println!("{}", sink.wrap_prose(&text)),
                     Block::Notice(text) | Block::TerminalNotice(text) => {
                         eprintln!("{}", sink.wrap_prose(&text));
                     }
                     Block::Table(table) => truncated |= table.emit(sink),
-                    Block::Attention(rows) => {
-                        if sink.mode() == OutputMode::Table {
-                            for row in rows {
-                                println!("{}", sink.wrap_prose(&row.attention_terminal_text()));
-                            }
-                        } else {
-                            if sink.plain_header() && !rows.is_empty() {
-                                println!("{}", AttentionRow::attention_plain_header(&rows));
-                            }
-                            for row in rows {
-                                let fields = row
-                                    .attention_plain_fields()
-                                    .into_iter()
-                                    .map(crate::output::common::table::escape_plain)
-                                    .collect::<Vec<_>>()
-                                    .join("\t");
-                                println!("{fields}");
-                            }
-                        }
-                    }
-                    Block::DoctorFindings(rows) => {
-                        if sink.mode() == OutputMode::Table {
-                            let findings = doctor_findings(&rows, sink.width());
-                            if !findings.is_empty() {
-                                println!("\n{findings}");
-                            }
-                        }
-                    }
+                    Block::Custom(render) => render(sink),
                 }
             }
             if truncated {

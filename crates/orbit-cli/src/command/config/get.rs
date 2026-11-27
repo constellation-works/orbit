@@ -1,11 +1,9 @@
 use clap::Args;
 use orbit_core::Core;
-use orbit_core::app::config::{Command, ConfigGetResult, Outcome, exec};
-use serde_json::json;
-
-use crate::command::{CommandOut, ExecuteCore, Payload};
+use orbit_core::app::config::{Command, Outcome, exec};
 
 use super::support::ConfigScopeArg;
+use crate::command::{CommandOut, ExecuteCore};
 
 #[derive(Args)]
 pub struct ConfigGetArgs {
@@ -29,50 +27,6 @@ impl ExecuteCore for ConfigGetArgs {
         else {
             unreachable!("config get returned an unrelated outcome");
         };
-        match result {
-            ConfigGetResult::Effective { value } => {
-                let text = format_value_for_display(&value);
-                Ok(Payload::detail(
-                    json!({
-                        "key": self.key,
-                        "scope": "effective",
-                        "value": value,
-                    }),
-                    text,
-                )
-                .into())
-            }
-            ConfigGetResult::Scoped {
-                scope,
-                path,
-                value,
-                exists,
-            } => {
-                let path = match path {
-                    Some(path) => serde_json::Value::String(path.to_string_lossy().into_owned()),
-                    None => serde_json::Value::Null,
-                };
-                let text = format_value_for_display(&value);
-                Ok(Payload::detail(
-                    json!({
-                        "key": self.key,
-                        "scope": scope,
-                        "path": path,
-                        "value": value,
-                        "exists": exists,
-                    }),
-                    text,
-                )
-                .into())
-            }
-        }
-    }
-}
-
-fn format_value_for_display(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Null => "null".to_string(),
-        other => other.to_string(),
+        Ok(crate::output::config::get_payload(&self.key, result).into())
     }
 }

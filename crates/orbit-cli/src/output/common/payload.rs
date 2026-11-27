@@ -16,10 +16,8 @@
 
 use serde_json::Value;
 
-use crate::output::attention::AttentionRow;
 use crate::output::common::sink::OutputSink;
 use crate::output::common::table::Table;
-use crate::output::config::ConfigShow;
 
 /// The result of a command: either a payload to render, or nothing.
 pub enum CommandOutput {
@@ -68,13 +66,11 @@ impl std::fmt::Debug for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Text(text) => f.debug_tuple("Text").field(text).finish(),
-            Self::ConfigShow(text) => f.debug_tuple("ConfigShow").field(text).finish(),
             Self::Prose(text) => f.debug_tuple("Prose").field(text).finish(),
             Self::Notice(text) => f.debug_tuple("Notice").field(text).finish(),
             Self::TerminalNotice(text) => f.debug_tuple("TerminalNotice").field(text).finish(),
-            Self::Attention(rows) => f.debug_tuple("Attention").field(rows).finish(),
             Self::Table(_) => f.write_str("Table"),
-            Self::DoctorFindings(rows) => f.debug_tuple("DoctorFindings").field(rows).finish(),
+            Self::Custom(_) => f.write_str("Custom"),
         }
     }
 }
@@ -121,6 +117,10 @@ pub struct Payload {
     audit_message: Option<String>,
 }
 
+/// A command-defined block evaluated against the resolved [`OutputSink`] in
+/// human modes (`table` and `plain`).
+pub type CustomBlockFn = Box<dyn FnOnce(&OutputSink)>;
+
 /// One piece of a human view. A detail command is usually prose with a grid
 /// or two inside it (`orbit tool show` labels a tool, then tabulates its
 /// parameters), so a view is a sequence rather than one or the other.
@@ -128,12 +128,6 @@ pub enum Block {
     /// Text the command formatted itself. Written verbatim; any color in it
     /// was already gated by the sink when the command built it.
     Text(String),
-    /// `orbit config show` text: aligned label/value/state/description rows
-    /// and section headings the renderer fits to the terminal width in table
-    /// mode (descriptions wrap aligned to their column). Plain and
-    /// machine-readable modes keep the text whole, so no information is lost
-    /// outside terminal fitting.
-    ConfigShow(ConfigShow),
     /// Human prose, word-wrapped to the sink width in terminal table mode.
     /// Explicit line breaks survive; pipes and plain mode keep the text whole.
     Prose(String),
@@ -147,15 +141,12 @@ pub enum Block {
     /// omit it because the document carries the same text. Use only when the
     /// document has the text.
     TerminalNotice(String),
-    /// Operator attention rows, wrapped as associated per-item details on a
-    /// terminal and rendered as one escaped tab-separated record per item in
-    /// plain mode.
-    Attention(Vec<AttentionRow>),
     /// A grid the renderer lays out: width, color, header suppression, and the
     /// plain form are applied here, not by the command.
     Table(Box<Table>),
-    /// Full doctor findings, shown only after the terminal table.
-    DoctorFindings(Vec<orbit_core::app::doctor::WorkspaceDoctorResult>),
+    /// A command-owned block evaluated against the resolved [`OutputSink`] in
+    /// human modes (`table` and `plain`).
+    Custom(CustomBlockFn),
 }
 
 impl Block {
@@ -166,15 +157,6 @@ impl Block {
             text.pop();
         }
         Self::Prose(text)
-    }
-
-    /// A `config show` block. Like [`Block::text`], one trailing newline is
-    /// dropped because the renderer adds its own when it prints the block.
-    pub fn config_show(mut text: ConfigShow) -> Self {
-        if text.text.ends_with('\n') {
-            text.text.pop();
-        }
-        Self::ConfigShow(text)
     }
 
     /// A text block, for the common single-`String` case.
@@ -214,6 +196,12 @@ impl Block {
     /// A grid block.
     pub fn table(table: Table) -> Self {
         Self::Table(Box::new(table))
+    }
+
+    /// A command-owned block evaluated against the resolved sink in human
+    /// modes (`table` and `plain`).
+    pub fn custom(render: impl FnOnce(&OutputSink) + 'static) -> Self {
+        Self::Custom(Box::new(render))
     }
 }
 

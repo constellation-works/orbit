@@ -1,18 +1,6 @@
 use orbit_common::OrbitError;
 use serde_json::{Map, Value, json};
 
-use super::support::{notice_detail, text};
-use crate::output::common::payload::Block;
-
-pub(super) fn block(value: &Value) -> Block {
-    Block::text(format!(
-        "{} {}\n{}",
-        text(&value["outcome"]),
-        text(&value["notice"]["id"]),
-        notice_detail(&value["notice"]),
-    ))
-}
-
 /// Fold the CLI-only post flags into the tool's input.
 pub(crate) fn post_cli_input(input: &mut Map<String, Value>) -> Result<(), OrbitError> {
     if let Some(path) = input.remove("body_file") {
