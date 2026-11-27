@@ -1,9 +1,9 @@
 // Admitted unit test: combinatorial pure logic over the doctor surface and its
 // message shapes — which side of "completed with findings" versus "crashed"
 // a message-bearing row lands on — and which rows are deferrals, not failures.
-use super::super::classify::classify_failure;
 use super::super::types::FailureClass;
 use crate::telemetry::AuditEventStatus;
+use crate::telemetry::incident::classify_failure;
 use crate::telemetry::incident::types::{DOCTOR_FINDINGS_MESSAGE_PREFIX, RUN_DEFERRED_SURFACE};
 
 #[test]
@@ -19,6 +19,18 @@ fn auto_fix_stops_are_expected_but_genuine_pr_complete_failures_stay_unexpected(
         ),
         FailureClass::Expected,
         "an auto-fix stop is a documented hold even when its audit row has failure status"
+    );
+
+    let verified_live_completion_refusal = "task 'ORB-28367' cannot move to done while linked run \
+                                            'jrun-20261125-095834' has a verified-live owner";
+    assert_eq!(
+        classify_failure(
+            "task.mutation",
+            AuditEventStatus::Failure,
+            Some(verified_live_completion_refusal),
+        ),
+        FailureClass::Expected,
+        "the verified-live completion guard is an expected refusal even when its audit row has failure status"
     );
 
     let genuine_failure = "execution failed: deterministic action pr_complete failed: \

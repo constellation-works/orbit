@@ -20,6 +20,7 @@ const EXPECTED_FAILURE_MARKERS: &[&str] = &[
     "validation failed",
     "sensitive input rejected",
     "invalid status transition",
+    "has a verified-live owner",
     "unsupported",
     "not local to the current worktree",
     "artifact unavailable",
