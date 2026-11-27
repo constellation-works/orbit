@@ -476,13 +476,15 @@ fn reserved_owner_retry_never_resends_an_unknown_reply() {
 fn claimed<'a>(fx: &Fixture, host: &'a DeliveryHost) -> ClaimedRetry<'a> {
     let mut candidate = orbit_engine::observe_candidate(
         &orbit_common::Env::capture(),
-        &fx.repo,
-        Some(BRANCH),
-        BASE,
-        BASE,
-        HandoffDelivery::PullRequest { number: 42 },
-        "ws_owner",
-        BaseSyncMode::Local,
+        orbit_engine::CandidateCheckout {
+            workspace_path: &fx.repo,
+            source: Some(BRANCH),
+            base_branch: BASE,
+            landing_branch: BASE,
+            delivery: HandoffDelivery::PullRequest { number: 42 },
+            fallback_repository: "ws_owner",
+            base_sync: BaseSyncMode::Local,
+        },
     )
     .unwrap();
     candidate.repository = "orbit/test".into();

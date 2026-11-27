@@ -9,7 +9,7 @@ use orbit_types::task::ContextWideningStep;
 use crate::context::RuntimeHost;
 
 use super::declared_pair::{
-    declared_workspace_path, exact_canonical_dir, git_top_level, task_id, worktree_mismatch_error,
+    WorktreeDispatch, declared_workspace_path, exact_canonical_dir, git_top_level, task_id,
 };
 use super::fingerprint::{
     GitPathState, GitWorktreeFingerprint, cached_primary_before_fingerprint, changed_paths,
@@ -21,21 +21,20 @@ use super::{DeclaredWorktreePair, DispatchError, V2AuditWriter, WorktreeBoundary
 impl WorktreeBoundaryGuard {
     /// `primary_base_branch` is the workspace's `workflow.base_branch`: the
     /// primary's baseline, whatever branch the primary has checked out.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "capture distinguishes the subprocess cwd, the registered primary and the declared pair before choosing a boundary"
-    )]
     pub(crate) fn capture(
         process_env: &orbit_common::Env,
-        input: &Value,
-        task_ctx: Option<&Value>,
-        run_id: &str,
-        provider: &str,
+        dispatch: WorktreeDispatch<'_>,
         subprocess_cwd: Option<&Path>,
         registered_primary_root: Option<&Path>,
         declared_pair: Option<&DeclaredWorktreePair>,
         primary_base_branch: &str,
     ) -> Result<Option<Self>, DispatchError> {
+        let WorktreeDispatch {
+            input,
+            task_ctx,
+            run_id,
+            provider,
+        } = dispatch;
         let Some(pair) = declared_pair else {
             let (Some(subprocess_cwd), Some(registered_primary_root)) =
                 (subprocess_cwd, registered_primary_root)
@@ -44,11 +43,7 @@ impl WorktreeBoundaryGuard {
             };
             let assigned_path =
                 exact_canonical_dir(subprocess_cwd, "subprocess cwd").map_err(|reason| {
-                    worktree_mismatch_error(
-                        input,
-                        task_ctx,
-                        run_id,
-                        provider,
+                    dispatch.mismatch(
                         declared_workspace_path(input, task_ctx).as_deref(),
                         None,
                         Some(subprocess_cwd),
@@ -59,11 +54,7 @@ impl WorktreeBoundaryGuard {
             let primary_path =
                 exact_canonical_dir(registered_primary_root, "registered primary root").map_err(
                     |reason| {
-                        worktree_mismatch_error(
-                            input,
-                            task_ctx,
-                            run_id,
-                            provider,
+                        dispatch.mismatch(
                             declared_workspace_path(input, task_ctx).as_deref(),
                             None,
                             Some(&assigned_path),
@@ -78,11 +69,7 @@ impl WorktreeBoundaryGuard {
 
             let assigned_git_root =
                 git_top_level(process_env, &assigned_path).map_err(|error| {
-                    worktree_mismatch_error(
-                        input,
-                        task_ctx,
-                        run_id,
-                        provider,
+                    dispatch.mismatch(
                         declared_workspace_path(input, task_ctx).as_deref(),
                         None,
                         Some(&assigned_path),
@@ -91,11 +78,7 @@ impl WorktreeBoundaryGuard {
                     )
                 })?;
             let primary_git_root = git_top_level(process_env, &primary_path).map_err(|error| {
-                worktree_mismatch_error(
-                    input,
-                    task_ctx,
-                    run_id,
-                    provider,
+                dispatch.mismatch(
                     declared_workspace_path(input, task_ctx).as_deref(),
                     None,
                     Some(&assigned_path),
@@ -106,11 +89,7 @@ impl WorktreeBoundaryGuard {
             if assigned_git_root.is_some() && assigned_git_root == primary_git_root {
                 return Ok(None);
             }
-            return Err(worktree_mismatch_error(
-                input,
-                task_ctx,
-                run_id,
-                provider,
+            return Err(dispatch.mismatch(
                 declared_workspace_path(input, task_ctx).as_deref(),
                 None,
                 assigned_git_root.as_deref().or(Some(&assigned_path)),
@@ -121,11 +100,7 @@ impl WorktreeBoundaryGuard {
         };
 
         let subprocess_cwd = subprocess_cwd.ok_or_else(|| {
-            worktree_mismatch_error(
-                input,
-                task_ctx,
-                run_id,
-                provider,
+            dispatch.mismatch(
                 Some(&pair.requested_workspace_path),
                 Some(&pair.requested_repo_root),
                 Some(&pair.assigned_root),
@@ -135,11 +110,7 @@ impl WorktreeBoundaryGuard {
         })?;
         let resolved_cwd =
             exact_canonical_dir(subprocess_cwd, "subprocess cwd").map_err(|reason| {
-                worktree_mismatch_error(
-                    input,
-                    task_ctx,
-                    run_id,
-                    provider,
+                dispatch.mismatch(
                     Some(&pair.requested_workspace_path),
                     Some(&pair.requested_repo_root),
                     Some(&pair.assigned_root),
@@ -148,11 +119,7 @@ impl WorktreeBoundaryGuard {
                 )
             })?;
         if resolved_cwd != pair.assigned_root {
-            return Err(worktree_mismatch_error(
-                input,
-                task_ctx,
-                run_id,
-                provider,
+            return Err(dispatch.mismatch(
                 Some(&pair.requested_workspace_path),
                 Some(&pair.requested_repo_root),
                 Some(&resolved_cwd),
@@ -161,11 +128,7 @@ impl WorktreeBoundaryGuard {
             ));
         }
         let registered_primary_root = registered_primary_root.ok_or_else(|| {
-            worktree_mismatch_error(
-                input,
-                task_ctx,
-                run_id,
-                provider,
+            dispatch.mismatch(
                 Some(&pair.requested_workspace_path),
                 Some(&pair.requested_repo_root),
                 Some(&pair.assigned_root),
@@ -176,11 +139,7 @@ impl WorktreeBoundaryGuard {
         let resolved_primary =
             exact_canonical_dir(registered_primary_root, "registered primary root").map_err(
                 |reason| {
-                    worktree_mismatch_error(
-                        input,
-                        task_ctx,
-                        run_id,
-                        provider,
+                    dispatch.mismatch(
                         Some(&pair.requested_workspace_path),
                         Some(&pair.requested_repo_root),
                         Some(&pair.assigned_root),
@@ -190,11 +149,7 @@ impl WorktreeBoundaryGuard {
                 },
             )?;
         if resolved_primary != pair.primary_root {
-            return Err(worktree_mismatch_error(
-                input,
-                task_ctx,
-                run_id,
-                provider,
+            return Err(dispatch.mismatch(
                 Some(&pair.requested_workspace_path),
                 Some(&pair.requested_repo_root),
                 Some(&pair.assigned_root),
@@ -443,15 +398,17 @@ impl WorktreeBoundaryGuard {
             // Only the checkpointed conflict-recovery leaf may finish a rebase.
             return Err(self.integrity_error(
                 process_env,
-                "worktree_content_conflict",
-                &assigned_after,
-                &primary_after,
-                &run_changed_paths,
-                &primary_changed_paths,
-                &primary_dirt_paths,
-                &conflicting_paths,
-                "the provider changed the assigned worktree HEAD or branch; providers may edit \
-                 files but must not create commits or move HEAD",
+                IntegrityEvidence {
+                    code: "worktree_content_conflict",
+                    assigned_after: &assigned_after,
+                    primary_after: &primary_after,
+                    reported_paths: &run_changed_paths,
+                    primary_changed_paths: &primary_changed_paths,
+                    primary_dirt_paths: &primary_dirt_paths,
+                    conflicting_paths: &conflicting_paths,
+                    reason: "the provider changed the assigned worktree HEAD or branch; providers \
+                             may edit files but must not create commits or move HEAD",
+                },
             ));
         }
 
@@ -499,30 +456,34 @@ impl WorktreeBoundaryGuard {
 
         Err(self.integrity_error(
             process_env,
-            "primary_checkout_drift",
-            &assigned_after,
-            &primary_after,
-            &primary_changed_paths,
-            &primary_changed_paths,
-            &primary_dirt_paths,
-            &conflicting_paths,
-            &self.primary_baseline.drift_reason(&self.primary_before),
+            IntegrityEvidence {
+                code: "primary_checkout_drift",
+                assigned_after: &assigned_after,
+                primary_after: &primary_after,
+                reported_paths: &primary_changed_paths,
+                primary_changed_paths: &primary_changed_paths,
+                primary_dirt_paths: &primary_dirt_paths,
+                conflicting_paths: &conflicting_paths,
+                reason: &self.primary_baseline.drift_reason(&self.primary_before),
+            },
         ))
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn integrity_error(
         &self,
         process_env: &orbit_common::Env,
-        code: &'static str,
-        assigned_after: &GitWorktreeFingerprint,
-        primary_after: &GitWorktreeFingerprint,
-        reported_paths: &[String],
-        primary_changed_paths: &[String],
-        primary_dirt_paths: &[String],
-        conflicting_paths: &[String],
-        reason: &str,
+        evidence: IntegrityEvidence<'_>,
     ) -> DispatchError {
+        let IntegrityEvidence {
+            code,
+            assigned_after,
+            primary_after,
+            reported_paths,
+            primary_changed_paths,
+            primary_dirt_paths,
+            conflicting_paths,
+            reason,
+        } = evidence;
         let recovery = match self.preserve_dirty_assigned_worktree(assigned_after) {
             Ok(Some(artifact)) => json!(artifact),
             Ok(None) => Value::Null,
@@ -592,6 +553,19 @@ impl WorktreeBoundaryGuard {
             HostContinuation::Absorbed => self.absorbed_authorized_rebase(after),
         }
     }
+}
+
+/// What a boundary violation observed after the provider ran: the typed
+/// code, the after-fingerprints and the path sets its diagnostic reports.
+struct IntegrityEvidence<'a> {
+    code: &'static str,
+    assigned_after: &'a GitWorktreeFingerprint,
+    primary_after: &'a GitWorktreeFingerprint,
+    reported_paths: &'a [String],
+    primary_changed_paths: &'a [String],
+    primary_dirt_paths: &'a [String],
+    conflicting_paths: &'a [String],
+    reason: &'a str,
 }
 
 /// Which host continuation of an admitted rebase, if any, the checkout shows.

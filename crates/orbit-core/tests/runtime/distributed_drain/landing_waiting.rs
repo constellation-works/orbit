@@ -50,13 +50,15 @@ impl WaitingOwner {
         git(repo, &["checkout", "-q", "main"]);
         delivered.candidate = orbit_engine::observe_candidate(
             &orbit_common::Env::capture(),
-            repo,
-            Some(&delivered.candidate.source_branch),
-            "main",
-            "main",
-            HandoffDelivery::PullRequest { number: 42 },
-            "owner/repository",
-            orbit_engine::BaseSyncMode::Local,
+            orbit_engine::CandidateCheckout {
+                workspace_path: repo,
+                source: Some(&delivered.candidate.source_branch),
+                base_branch: "main",
+                landing_branch: "main",
+                delivery: HandoffDelivery::PullRequest { number: 42 },
+                fallback_repository: "owner/repository",
+                base_sync: orbit_engine::BaseSyncMode::Local,
+            },
         )
         .unwrap();
         let forge = pair._root.path().join("waiting-forge");
@@ -445,13 +447,15 @@ fn two_approved_landings() -> (OwnerLocal, Vec<(String, String)>) {
         git(&repo, &["checkout", "-q", "main"]);
         delivered.candidate = orbit_engine::observe_candidate(
             &orbit_common::Env::capture(),
-            &repo,
-            Some(&branch),
-            "main",
-            "main",
-            HandoffDelivery::PullRequest { number },
-            "owner/repository",
-            orbit_engine::BaseSyncMode::Local,
+            orbit_engine::CandidateCheckout {
+                workspace_path: &repo,
+                source: Some(&branch),
+                base_branch: "main",
+                landing_branch: "main",
+                delivery: HandoffDelivery::PullRequest { number },
+                fallback_repository: "owner/repository",
+                base_sync: orbit_engine::BaseSyncMode::Local,
+            },
         )
         .unwrap();
         pair.wire.accept(delivered.clone()).unwrap();

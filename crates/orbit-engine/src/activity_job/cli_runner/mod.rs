@@ -20,6 +20,8 @@ pub use spawn::with_bwrap_probe_unavailable;
 #[cfg(feature = "test-support")]
 pub use supervisor::with_cli_supervision_clock;
 
+pub(crate) use orchestrator::CliDispatchContext;
+
 #[cfg(test)]
 mod tests;
 

@@ -35,7 +35,9 @@ use super::message::delivery_commit_message;
 use super::published_replay::final_recovery_published_candidate;
 use super::recovery::{RecoveryCommit, RecoveryCommitRequest, commit_recovery_repair};
 use super::regression::resolve_regression_landed_commits;
-use super::scope::{NewPathPolicy, attribute_candidate_paths, task_candidate_paths};
+use super::scope::{
+    NewPathPolicy, WideningProvenance, attribute_candidate_paths, task_candidate_paths,
+};
 use super::summary::ensure_durable_execution_summary;
 use super::tagged_no_diff;
 
@@ -108,9 +110,11 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
         task_candidate_paths(&host.process_env(), &workspace_path, NewPathPolicy::Owner)?;
     let mut assigned = attribute_candidate_paths(
         host,
-        batch_id,
-        ContextWideningStep::Implement,
-        "git_commit",
+        WideningProvenance {
+            run_id: batch_id,
+            step: ContextWideningStep::Implement,
+            activity: "git_commit",
+        },
         &candidate_paths,
         &workspace_path,
         &tasks,
@@ -174,9 +178,11 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
     }
     let assigned = attribute_candidate_paths(
         host,
-        batch_id,
-        ContextWideningStep::Implement,
-        "git_commit",
+        WideningProvenance {
+            run_id: batch_id,
+            step: ContextWideningStep::Implement,
+            activity: "git_commit",
+        },
         &changed_files,
         &workspace_path,
         &batch_tasks,
@@ -414,9 +420,11 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         };
         attribute_candidate_paths(
             host,
-            batch_id,
-            ContextWideningStep::Implement,
-            "git_commit",
+            WideningProvenance {
+                run_id: batch_id,
+                step: ContextWideningStep::Implement,
+                activity: "git_commit",
+            },
             &candidate_paths.iter().cloned().collect(),
             &workspace_path,
             std::slice::from_ref(&task),
@@ -516,9 +524,11 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
     // cover. A claimed leaf's host widens nothing: the owner does at handoff.
     attribute_candidate_paths(
         host,
-        batch_id,
-        ContextWideningStep::Implement,
-        "git_commit",
+        WideningProvenance {
+            run_id: batch_id,
+            step: ContextWideningStep::Implement,
+            activity: "git_commit",
+        },
         &changed_files.iter().cloned().collect(),
         &workspace_path,
         std::slice::from_ref(&task),
@@ -579,9 +589,11 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
     if !changed_files.is_empty() {
         attribute_candidate_paths(
             host,
-            run_id,
-            ContextWideningStep::Implement,
-            "pr_failure_handoff",
+            WideningProvenance {
+                run_id,
+                step: ContextWideningStep::Implement,
+                activity: "pr_failure_handoff",
+            },
             &changed_files.iter().cloned().collect(),
             workspace_path,
             std::slice::from_ref(task),

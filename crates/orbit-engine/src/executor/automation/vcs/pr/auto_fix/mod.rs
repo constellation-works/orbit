@@ -89,8 +89,8 @@ mod verdict;
 
 pub(super) use admission::{AutoFix, admit};
 pub(super) use checks::{
-    CheckRepair, CiRerunRecovery, base_tip_checks, failed_no_edit_rerun, recover_ci_rerun,
-    red_base_wait, repair_failed_checks,
+    AutoFixPull, CheckRepair, CiRerunRecovery, base_tip_checks, failed_no_edit_rerun,
+    recover_ci_rerun, red_base_wait, repair_failed_checks,
 };
 pub(super) use inherited_refresh::{InheritedRefresh, refresh_inherited_failure};
 pub(super) use ledger::{

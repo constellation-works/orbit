@@ -26,6 +26,17 @@ struct FastForwardLanding {
     after: String,
 }
 
+/// The base branch a batch worktree fast-forwards, the checkout holding it,
+/// and the worktree branch that lands.
+struct FastForwardTarget<'a> {
+    repo_root: &'a Path,
+    base_checkout: &'a Path,
+    workspace_path: &'a Path,
+    base: &'a str,
+    workspace_branch: &'a str,
+    base_sync_mode: BaseSyncMode,
+}
+
 pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -77,12 +88,14 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
     let landed = merge_with_rebase_retry(
         &host.process_env(),
         &|before, after| host.record_direct_landing_intent(&request(before, after)),
-        &repo_root,
-        &base_checkout,
-        &workspace_path,
-        &base,
-        &workspace_branch,
-        base_sync_mode,
+        FastForwardTarget {
+            repo_root: &repo_root,
+            base_checkout: &base_checkout,
+            workspace_path: &workspace_path,
+            base: &base,
+            workspace_branch: &workspace_branch,
+            base_sync_mode,
+        },
     )?;
     // A moved branch is a fact even if recording its diff stats fails.
     let FastForwardLanding { before, after } = landed;
@@ -134,17 +147,19 @@ fn checkout_base_branch(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn merge_with_rebase_retry(
     process_env: &orbit_common::Env,
     record_intent: &dyn Fn(String, String) -> Result<(), OrbitError>,
-    repo_root: &Path,
-    base_checkout: &Path,
-    workspace_path: &Path,
-    base: &str,
-    workspace_branch: &str,
-    base_sync_mode: BaseSyncMode,
+    target: FastForwardTarget<'_>,
 ) -> Result<FastForwardLanding, OrbitError> {
+    let FastForwardTarget {
+        repo_root,
+        base_checkout,
+        workspace_path,
+        base,
+        workspace_branch,
+        base_sync_mode,
+    } = target;
     for attempt in 0..=MAX_REBASE_RETRY_ATTEMPTS {
         let start_point =
             resolve_worktree_start_point(process_env, repo_root, base, base_sync_mode)?;

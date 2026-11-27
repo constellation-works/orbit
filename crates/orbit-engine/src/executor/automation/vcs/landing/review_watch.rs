@@ -38,7 +38,6 @@ use crate::context::{RuntimeHost, TaskAutomationUpdate};
 
 use super::super::super::ci::bounded_u64;
 use super::super::super::input::input_string_field;
-use super::super::checks::{classify_watched_failures, failed_checks};
 use super::super::completion_deadline::now_ms;
 use super::super::git;
 use super::super::pr::{
@@ -46,6 +45,9 @@ use super::super::pr::{
 };
 use super::super::remote_probe::fixed_wait;
 use super::run::transport_failure;
+use crate::executor::automation::vcs::checks::{
+    BaseComparison, classify_watched_failures, failed_checks,
+};
 
 const DEFAULT_MAX_WAIT_SECONDS: u64 = 3600;
 const MAX_WAIT_SECONDS: u64 = 6 * 60 * 60;
@@ -437,14 +439,18 @@ fn failed_observation<H: RuntimeHost + ?Sized>(
         ),
         (Some(head), Ok((base, base_branch, tip))) => {
             let watched = classify_watched_failures(
-                host,
-                workspace,
-                head,
-                &base,
-                &base_branch,
-                Some(&tip),
+                BaseComparison {
+                    host,
+                    workspace,
+                    head,
+                    base: &base,
+                    base_branch: &base_branch,
+                    moved_tip: Some(tip.as_str()).filter(|tip| *tip != base),
+                    deadline_ms: Some(deadline_ms),
+                    base_jobs: None,
+                    tip_jobs: None,
+                },
                 failed,
-                Some(deadline_ms),
             );
             (watched.class, watched.detail)
         }

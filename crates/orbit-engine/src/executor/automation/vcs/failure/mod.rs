@@ -84,3 +84,12 @@ const REVIEW_ADMISSION_STEPS: &[&str] = &[
     "re_review_gate_admit",
     "re_review_gate_admit_2",
 ];
+
+/// The pipeline step whose failure a handoff settles, and how it failed.
+#[derive(Clone, Copy)]
+struct PipelineFailure<'a> {
+    run_id: &'a str,
+    failed_step_id: &'a str,
+    error_code: &'a str,
+    error_message: &'a str,
+}

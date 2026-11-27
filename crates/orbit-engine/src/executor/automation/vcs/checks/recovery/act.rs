@@ -18,7 +18,7 @@ use super::super::base_update::contains;
 use super::super::head::onto_passing_tip;
 use super::super::jobs::describe;
 use super::super::suspect::green_base_proof;
-use super::classify::{ClassifiedFailures, classify_failed_checks, task_history};
+use super::classify::{ClassifiedFailures, LandingChecks, classify_failed_checks, task_history};
 use super::{CheckFailureClass, CheckRecovery, CheckRecoveryStep, FailedJob, unreadable_job_text};
 
 /// The requeue evidence for a failure whose automatic repair is already spent.
@@ -63,12 +63,14 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         has_aggregates,
     } = match classify_failed_checks(
         host,
-        context,
-        failed,
-        landing_tip,
+        LandingChecks {
+            context,
+            failed,
+            landing_tip,
+            head,
+            pr,
+        },
         recovery,
-        head,
-        pr,
         &unclassified,
         &history_cell,
     )? {
@@ -81,17 +83,19 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     } else {
         super::super::rerun::plan_ci_rerun(
             host,
-            workspace,
-            std::slice::from_ref(&context.task_id),
-            Some(&context.handoff_id),
-            status,
-            failed,
-            &context.candidate.base.commit,
-            landing_tip.unwrap_or(&context.candidate.base.commit),
-            &context.candidate.base_branch,
-            recovery.deadline_ms,
-            Some(&jobs),
-            false,
+            crate::executor::automation::vcs::checks::rerun::CiRerunPlanInputs {
+                workspace,
+                tasks: std::slice::from_ref(&context.task_id),
+                handoff: Some(&context.handoff_id),
+                status,
+                failed,
+                base: &context.candidate.base.commit,
+                tip: landing_tip.unwrap_or(&context.candidate.base.commit),
+                base_branch: &context.candidate.base_branch,
+                deadline_ms: recovery.deadline_ms,
+                classified: Some(&jobs),
+                allow_unreadable_log_rerun: false,
+            },
             &context.handoff_id,
             &mut recovery.rerun_diagnostic,
         )
@@ -214,13 +218,15 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     {
         match super::super::rerun::request_classification_rerun(
             host,
-            workspace,
-            std::slice::from_ref(&context.task_id),
+            crate::executor::automation::vcs::checks::rerun::RerunLanding {
+                workspace,
+                tasks: std::slice::from_ref(&context.task_id),
+                status,
+                base: &context.candidate.base.commit,
+                base_branch: &context.candidate.base_branch,
+                deadline_ms: recovery.deadline_ms,
+            },
             Some(&context.handoff_id),
-            status,
-            &context.candidate.base.commit,
-            &context.candidate.base_branch,
-            recovery.deadline_ms,
             &jobs,
         ) {
             Ok(Some(plan)) => {

@@ -14,8 +14,10 @@ use crate::context::RuntimeHost;
 use super::super::super::checks::verify_refreshed_head_from_base;
 use super::super::super::git::git_output;
 use super::super::answers::PullRequestStatus;
-use super::super::auto_fix::{AutoFix, InheritedRefresh, refresh_inherited_failure};
 use super::drive_phases::PollDriver;
+use crate::executor::automation::vcs::pr::auto_fix::{
+    AutoFix, AutoFixPull, InheritedRefresh, refresh_inherited_failure,
+};
 
 /// What the completion does after the no-edit rerun failed again.
 pub(super) enum RerunFailureStep {
@@ -116,11 +118,13 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     ) -> Result<RerunFailureStep, OrbitError> {
         match refresh_inherited_failure(
             self.host,
-            auto_fix,
-            self.input,
-            self.workspace_path,
-            self.pr_number,
-            status,
+            AutoFixPull {
+                auto_fix,
+                input: self.input,
+                workspace_path: self.workspace_path,
+                pr_number: self.pr_number,
+                status,
+            },
             rerun_failure,
             self.completion_deadline_ms,
         )? {

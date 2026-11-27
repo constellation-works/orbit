@@ -45,6 +45,8 @@ mod observe;
 mod published;
 mod validation;
 
+pub use observe::CandidateCheckout;
+
 #[cfg(test)]
 mod tests;
 

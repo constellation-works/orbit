@@ -35,10 +35,6 @@
     deny(clippy::disallowed_methods)
 )]
 
-#[cfg(test)]
-#[path = "../tests/support/git.rs"]
-mod git_test_support;
-
 pub mod activity_job;
 /// Scoped hooks and the null host base for test fixtures, enabled only in tests.
 #[cfg(feature = "test-support")]
@@ -60,6 +56,12 @@ mod context;
 mod executor;
 mod sandbox_spawn;
 mod template;
+
+pub use executor::automation::vcs::claim::CandidateCheckout;
+
+#[cfg(test)]
+#[path = "../tests/support/git.rs"]
+mod git_test_support;
 
 #[cfg(test)]
 mod tests;

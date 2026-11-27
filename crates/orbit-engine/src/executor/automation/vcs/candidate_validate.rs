@@ -74,7 +74,7 @@ use super::claim::{
     NO_REQUIRED_COMMANDS_NOTE, SKIPPED_LIGHT_DELIVERY, SKIPPED_NO_REQUIRED_COMMANDS,
     require_clean_checkout,
 };
-use super::commit::attribute_candidate_paths;
+use super::commit::{WideningProvenance, attribute_candidate_paths};
 use super::deferred_sandbox::{deferred_replays, with_replays};
 use super::flaky::rerun_failed_tests;
 use super::git::{git_output, git_output_paths};
@@ -500,9 +500,11 @@ fn attribute_reviewed_paths<H: RuntimeHost + ?Sized>(
     let run_id = required_job_run_id(input, "candidate_validate")?;
     attribute_candidate_paths(
         host,
-        run_id,
-        ContextWideningStep::Review,
-        "candidate_validate",
+        WideningProvenance {
+            run_id,
+            step: ContextWideningStep::Review,
+            activity: "candidate_validate",
+        },
         &changed,
         &workspace_path,
         &tasks,

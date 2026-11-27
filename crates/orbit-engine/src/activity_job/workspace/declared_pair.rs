@@ -7,6 +7,51 @@ use serde_json::{Value, json};
 use super::fingerprint::git_output_raw;
 use super::{DeclaredWorktreePair, DispatchError, canonicalize_dir};
 
+/// The dispatch a worktree-boundary refusal names: its input, task
+/// snapshot, run and provider.
+#[derive(Clone, Copy)]
+pub(crate) struct WorktreeDispatch<'a> {
+    pub(crate) input: &'a Value,
+    pub(crate) task_ctx: Option<&'a Value>,
+    pub(crate) run_id: &'a str,
+    pub(crate) provider: &'a str,
+}
+
+impl WorktreeDispatch<'_> {
+    /// The typed, non-retryable `worktree_mismatch` refusal for this dispatch.
+    pub(super) fn mismatch(
+        self,
+        requested_workspace_path: Option<&str>,
+        requested_repo_root: Option<&str>,
+        assigned_root: Option<&Path>,
+        primary_root: Option<&Path>,
+        reason: String,
+    ) -> DispatchError {
+        let Self {
+            input,
+            task_ctx,
+            run_id,
+            provider,
+        } = self;
+        let diagnostic = json!({
+            "code": "worktree_mismatch",
+            "reason": reason,
+            "task_id": task_id(input, task_ctx),
+            "run_id": run_id,
+            "provider": provider,
+            "requested_workspace_path": requested_workspace_path,
+            "requested_repo_root": requested_repo_root,
+            "resolved_assigned_root": assigned_root,
+            "registered_primary_root": primary_root,
+            "automatic_reconciliation": false,
+        });
+        DispatchError::WorktreeIntegrity {
+            code: "worktree_mismatch",
+            diagnostic: diagnostic.to_string(),
+        }
+    }
+}
+
 /// Validate the two independently rendered path fields used by task shipment.
 ///
 /// `workspace_path` controls the child cwd while `repo_root` is included in the
@@ -39,11 +84,13 @@ pub(crate) fn validate_declared_worktree_pair(
     let requested_workspace_path = workspace_path_value.map(declared_value_text);
     let requested_repo_root = declared_value_text(repo_root_value);
     let mismatch = |reason: String, assigned_root: Option<&Path>, primary_root: Option<&Path>| {
-        worktree_mismatch_error(
+        WorktreeDispatch {
             input,
             task_ctx,
             run_id,
             provider,
+        }
+        .mismatch(
             requested_workspace_path.as_deref(),
             Some(&requested_repo_root),
             assigned_root,
@@ -204,36 +251,6 @@ fn required_git_common_dir(
 ) -> Result<PathBuf, String> {
     canonical_git_common_dir(process_env, path)
         .map_err(|error| format!("cannot resolve Git common dir for {label}: {error}"))
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn worktree_mismatch_error(
-    input: &Value,
-    task_ctx: Option<&Value>,
-    run_id: &str,
-    provider: &str,
-    requested_workspace_path: Option<&str>,
-    requested_repo_root: Option<&str>,
-    assigned_root: Option<&Path>,
-    primary_root: Option<&Path>,
-    reason: String,
-) -> DispatchError {
-    let diagnostic = json!({
-        "code": "worktree_mismatch",
-        "reason": reason,
-        "task_id": task_id(input, task_ctx),
-        "run_id": run_id,
-        "provider": provider,
-        "requested_workspace_path": requested_workspace_path,
-        "requested_repo_root": requested_repo_root,
-        "resolved_assigned_root": assigned_root,
-        "registered_primary_root": primary_root,
-        "automatic_reconciliation": false,
-    });
-    DispatchError::WorktreeIntegrity {
-        code: "worktree_mismatch",
-        diagnostic: diagnostic.to_string(),
-    }
 }
 
 pub(super) fn declared_workspace_path(input: &Value, task_ctx: Option<&Value>) -> Option<String> {

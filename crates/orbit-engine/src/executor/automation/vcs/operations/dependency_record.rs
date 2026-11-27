@@ -9,23 +9,36 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path};
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "authentication binds the deadline, snapshot, failed jobs and workflow source to one log"
-)]
+/// The run a dependency record is authenticated against: its deadline,
+/// trusted checkout, pull request snapshot, failed jobs and accepted base.
+pub(super) struct DependencyRun<'a> {
+    pub(super) process_env: &'a orbit_common::Env,
+    pub(super) deadline: Deadline,
+    pub(super) workspace: &'a Path,
+    pub(super) snapshot: &'a Snapshot,
+    pub(super) run: &'a Value,
+    pub(super) failed: &'a [Value],
+    pub(super) accepted: &'a str,
+}
+
+/// Authentication binds the run, the failed job and its workflow source to
+/// one log.
 pub(super) fn authenticate_dependency_record(
-    process_env: &orbit_common::Env,
-    deadline: Deadline,
-    workspace: &Path,
-    snapshot: &Snapshot,
-    run: &Value,
+    dependency_run: DependencyRun<'_>,
     job: &Value,
-    failed: &[Value],
-    accepted: &str,
     workflow_path: &str,
     source: &str,
     log: &str,
 ) -> Result<Value, OrbitError> {
+    let DependencyRun {
+        process_env,
+        deadline,
+        workspace,
+        snapshot,
+        run,
+        failed,
+        accepted,
+    } = dependency_run;
     let records = classify_log_lines(log)
         .into_iter()
         .filter(|(kind, _)| {

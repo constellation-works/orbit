@@ -19,7 +19,6 @@ use crate::activity_job::dispatcher::{DispatchOutcome, ResolvedSandbox};
 use crate::context::PluginBrokerRun;
 
 use super::super::super::super::super::dispatcher::DispatchError;
-use super::super::super::super::super::workspace::WorktreeBoundaryGuard;
 use super::super::super::super::argv::{
     apply_provider_runtime_arg_fixups, codex_mcp_server_launch_args, try_audit_argv_for_dispatch,
 };
@@ -32,6 +31,7 @@ use super::super::super::prepare::{
     SourceCheckout, prepare_dispatch_sandbox, resolve_dispatch_sandbox,
 };
 use super::super::{CliDispatchContext, post_run, preparation as dispatch_preparation, subprocess};
+use crate::activity_job::workspace::{WorktreeBoundaryGuard, WorktreeDispatch};
 
 use super::{environment, preparation};
 
@@ -390,10 +390,12 @@ pub(in super::super) fn dispatch_prepared_provider(
     // branch it has checked out [ORB-19177].
     let mut worktree_boundary = WorktreeBoundaryGuard::capture(
         process_env,
-        input,
-        task_ctx.as_ref(),
-        run_id,
-        &provider,
+        WorktreeDispatch {
+            input,
+            task_ctx: task_ctx.as_ref(),
+            run_id,
+            provider: &provider,
+        },
         source_cwd.as_deref(),
         tool_ctx.workspace_root.as_deref(),
         declared_worktree_pair.as_ref(),

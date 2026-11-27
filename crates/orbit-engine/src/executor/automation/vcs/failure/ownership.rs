@@ -23,7 +23,7 @@ use super::super::resume::ensure_retry_descends_from;
 use super::super::review_gate::{commit_reviewer_repairs, uncommitted_paths};
 use super::conflict::{pipeline_checkpoint_string, pipeline_step};
 use super::preserve::recorded_spec_digest;
-use super::{FOREIGN_REBASE_EVENT, LANDING_REVIEW_STEPS, REVIEW_ADMISSION_STEPS};
+use super::{FOREIGN_REBASE_EVENT, LANDING_REVIEW_STEPS, PipelineFailure, REVIEW_ADMISSION_STEPS};
 
 pub(super) fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -395,19 +395,21 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &orbit_types::task::Task,
-    run_id: &str,
-    failed_step_id: &str,
-    error_code: &str,
-    error_message: &str,
+    failure: PipelineFailure<'_>,
     pr_number: &str,
     reviewer_push: Option<&Value>,
     reviewer_preservation: Option<&Value>,
     preservation_artifact: Option<TaskArtifact>,
 ) -> Result<Value, OrbitError> {
+    let PipelineFailure {
+        run_id,
+        failed_step_id,
+        error_code,
+        error_message,
+    } = failure;
     let pr_url = task
         .external_refs
         .iter()

@@ -6,8 +6,10 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-use super::super::checks::{HeadCheckEvidence, head_check_evidence};
 use super::answers::{CheckState, read_required_checks};
+use crate::executor::automation::vcs::checks::{
+    HeadCheckEvidence, HeadCheckRead, head_check_evidence,
+};
 
 /// Whether current checks authorize a complete recovery diagnosis.
 pub(crate) enum CompletionRecoveryChecks {
@@ -60,19 +62,21 @@ pub(crate) fn completion_recovery_checks<H: RuntimeHost + ?Sized>(
         let failed = (check.workflow_name.clone(), name.to_string());
         let detail = match head_check_evidence(
             host,
-            workspace,
-            &[task_id.to_string()],
-            pr,
-            &required.head_sha,
-            input
-                .get("base_branch")
-                .or_else(|| input.get("base"))
-                .and_then(Value::as_str),
-            &[failed],
-            &required,
-            false,
-            None,
-            None,
+            HeadCheckRead {
+                workspace,
+                tasks: &[task_id.to_string()],
+                pr,
+                head: &required.head_sha,
+                base_branch: input
+                    .get("base_branch")
+                    .or_else(|| input.get("base"))
+                    .and_then(Value::as_str),
+                failed: &[failed],
+                required: &required,
+                allow_suspect_repair: false,
+                deadline_ms: None,
+                dependency_context: None,
+            },
         ) {
             HeadCheckEvidence::Repair { evidence, .. } => evidence,
             HeadCheckEvidence::Stop(reason) | HeadCheckEvidence::Inconclusive(reason) => reason,

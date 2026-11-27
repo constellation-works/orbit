@@ -18,7 +18,7 @@ use super::super::git::{git_output, git_output_raw};
 use super::super::push::push_batch_changes_inner;
 use super::conflict::{pipeline_checkpoint_string, pipeline_step};
 use super::preserve::recorded_spec_digest;
-use super::{REVIEW_GATE_EVENT, REVIEW_VALIDATION_STEP};
+use super::{PipelineFailure, REVIEW_GATE_EVENT, REVIEW_VALIDATION_STEP};
 
 /// A fresh run resets its review ledger; bound automatic continuations across
 /// those lineages by the preserved tree instead of the rewritten commit.
@@ -31,17 +31,19 @@ const REVIEW_TIMEOUT_MAX_REQUEUES: usize = 1;
 /// commits stay as they are; the branch is pushed so partial fixes and
 /// evidence are recoverable. The task records the bounded timeout requeue,
 /// evidence hold or substantive escalation. No PR is opened.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
     task: &orbit_types::task::Task,
-    run_id: &str,
-    failed_step_id: &str,
-    error_code: &str,
-    error_message: &str,
+    failure: PipelineFailure<'_>,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
+    let PipelineFailure {
+        run_id,
+        failed_step_id,
+        error_code,
+        error_message,
+    } = failure;
     let admission = pipeline_step(input, "review_gate_admit")
         .ok()
         .and_then(|output| ReviewGateAdmissionOutput::from_value(output).ok());

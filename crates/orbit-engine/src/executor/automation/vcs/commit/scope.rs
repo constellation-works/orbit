@@ -37,6 +37,13 @@ pub(super) enum NewPathPolicy {
     Recovery,
 }
 
+/// The run, pipeline step and activity a selector widening records.
+pub(in crate::executor::automation::vcs) struct WideningProvenance<'a> {
+    pub(in crate::executor::automation::vcs) run_id: &'a str,
+    pub(in crate::executor::automation::vcs) step: ContextWideningStep,
+    pub(in crate::executor::automation::vcs) activity: &'a str,
+}
+
 /// Resolve the concrete paths a task run delivers: every tracked change and
 /// every untracked path outside the scratch root. Gitignored output is never
 /// listed. Refusing a path whose name is not UTF-8, a protected claimed path,
@@ -371,17 +378,19 @@ pub fn validate_claim_new_paths(
 /// the first owner in bundle order. A path no selector covers goes to the
 /// task whose agent changed it, else the first task, and that task's
 /// selectors widen to cover it with `step` provenance.
-#[allow(clippy::too_many_arguments)]
 pub(in crate::executor::automation::vcs) fn attribute_candidate_paths<H: RuntimeHost + ?Sized>(
     host: &H,
-    run_id: &str,
-    step: ContextWideningStep,
-    activity: &str,
+    provenance: WideningProvenance<'_>,
     candidate_paths: &BTreeSet<String>,
     workspace_path: &Path,
     tasks: &[Task],
     unique: bool,
 ) -> BTreeMap<String, BTreeSet<String>> {
+    let WideningProvenance {
+        run_id,
+        step,
+        activity,
+    } = provenance;
     let mut assigned = tasks
         .iter()
         .map(|task| (task.id.clone(), BTreeSet::new()))

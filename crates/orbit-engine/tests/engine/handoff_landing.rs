@@ -23,8 +23,8 @@ use std::sync::{Arc, Mutex};
 use orbit_common::{Env, OrbitError};
 use orbit_engine::test_support::{NullRuntimeHost, with_prerequisite_clock, with_vcs_retry_wait};
 use orbit_engine::{
-    BaseSyncMode, DispatchError, HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate,
-    PrConfig, RuntimeHost, TaskAutomationUpdate, dispatch_error_to_orbit,
+    BaseSyncMode, CandidateCheckout, DispatchError, HandoffLandingContext, HandoffLandingStep,
+    HandoffLandingUpdate, PrConfig, RuntimeHost, TaskAutomationUpdate, dispatch_error_to_orbit,
     execute_deterministic_action, execute_job_with_resume, observe_candidate,
 };
 use orbit_types::task::TaskHistoryEntry;
@@ -740,13 +740,15 @@ fn observe_local(
 ) -> orbit_types::workflow::handoff::HandoffCandidate {
     observe_candidate(
         &Env::capture(),
-        repo,
-        Some(src),
-        base,
-        base,
-        HandoffDelivery::LocalCandidate,
-        "workspace",
-        BaseSyncMode::Local,
+        CandidateCheckout {
+            workspace_path: repo,
+            source: Some(src),
+            base_branch: base,
+            landing_branch: base,
+            delivery: HandoffDelivery::LocalCandidate,
+            fallback_repository: "workspace",
+            base_sync: BaseSyncMode::Local,
+        },
     )
     .unwrap()
 }

@@ -1,8 +1,7 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_tools::ToolContext;
-use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider, V2AuditEventKind};
+use orbit_types::workflow::activity_job::{Provider, V2AuditEventKind};
 use orbit_types::workflow::{ExperimentActivityOverlay, ExperimentOverlayRecord};
 use serde_json::Value;
 
@@ -10,10 +9,9 @@ use crate::activity_job::cli_runner::image_input::{ImageInputPlan, admit_image_i
 use crate::activity_job::cli_runner::inspection::InspectionTools;
 use crate::activity_job::dispatcher::ResolvedCliExecutor;
 use crate::activity_job::workspace::DeclaredWorktreePair;
-use crate::context::{ResolvedActivityTools, RuntimeHost};
+use crate::context::ResolvedActivityTools;
 use crate::executor::automation::vcs::git::{GitTimeoutBudget, GitTimeoutBudgetGuard};
 
-use super::super::super::super::audit_writer::V2AuditWriter;
 use super::super::super::super::dispatcher::{DispatchError, DispatchOutcome};
 use super::super::super::super::workspace::validate_declared_worktree_pair;
 use super::super::super::envelope::{task_id_from_input, task_ids_from_input};
@@ -88,21 +86,21 @@ fn fleet_notice_text<'a>(
 /// carries the block; the posting instruction is independent of the brief
 /// and rides whenever the resolved callable set carries
 /// `orbit.notice.post`, so an empty board never suppresses it.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "notice delivery needs the step identity, the mutable task context and the audit writer together"
-)]
 fn attach_fleet_notices<'a>(
-    host: &dyn RuntimeHost,
-    spec: &'a AgentLoopSpec,
-    run_id: &str,
-    step_id: &str,
-    activity_name: &str,
-    input: &Value,
+    context: CliDispatchContext<'a>,
     task_ctx: &mut Option<Value>,
     effective_tools: &[String],
-    audit: &V2AuditWriter,
 ) -> FleetNoticeInstructions<'a> {
+    let CliDispatchContext {
+        host,
+        spec,
+        step_id,
+        activity_name,
+        run_id,
+        audit,
+        input,
+        ..
+    } = context;
     let notice_posting_instruction = fleet_notice_text(
         spec.notice_posting_instruction.as_deref(),
         spec.fleet_notices.posts(),
@@ -159,20 +157,19 @@ fn attach_fleet_notices<'a>(
 /// subprocess and its completion projection. The step entry
 /// (`continuation::run_cli_backend_for_step`) may call it again for a
 /// bounded implementation continuation [ORB-21837].
-#[allow(
-    clippy::too_many_arguments,
-    reason = "policy authorizes the activity name while audit and the worktree boundary report the step id"
-)]
 pub(crate) fn dispatch_cli_invocation(
-    host: &dyn RuntimeHost,
-    spec: &AgentLoopSpec,
-    step_id: &str,
-    activity_name: &str,
-    run_id: &str,
-    audit: Arc<V2AuditWriter>,
-    input: &Value,
-    fs_profile: Option<&str>,
+    context: CliDispatchContext<'_>,
 ) -> Result<DispatchOutcome, DispatchError> {
+    let CliDispatchContext {
+        host,
+        spec,
+        step_id,
+        activity_name,
+        run_id,
+        audit,
+        input,
+        fs_profile,
+    } = context;
     let budget = GitTimeoutBudget::from_input(input)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let _git_timeout_budget = GitTimeoutBudgetGuard::install(budget);
@@ -239,17 +236,7 @@ pub(crate) fn dispatch_cli_invocation(
     let FleetNoticeInstructions {
         notice_instruction,
         notice_posting_instruction,
-    } = attach_fleet_notices(
-        host,
-        spec,
-        run_id,
-        step_id,
-        activity_name,
-        input,
-        &mut task_ctx,
-        &activity_tools.effective_tools,
-        &audit,
-    );
+    } = attach_fleet_notices(context, &mut task_ctx, &activity_tools.effective_tools);
     let tool_ctx = activity_tool_context(host, spec, run_id, fs_profile, &provider);
     // A shipment pipeline renders the assigned checkout twice: once as the
     // child cwd and once inside the agent contract. Validate that pair against
@@ -272,16 +259,7 @@ pub(crate) fn dispatch_cli_invocation(
     )?;
     super::provider::dispatch_prepared_provider(
         &process_env,
-        CliDispatchContext {
-            host,
-            spec,
-            step_id,
-            activity_name,
-            run_id,
-            audit: &audit,
-            input,
-            fs_profile,
-        },
+        context,
         PreparedCliDispatch {
             provider,
             provider_enum,

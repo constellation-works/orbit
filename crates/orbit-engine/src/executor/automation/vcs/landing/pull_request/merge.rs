@@ -27,14 +27,16 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
         let context = self.context;
         super::super::super::base::refresh::recover(
             self.host,
-            &self.workspace,
-            std::slice::from_ref(&context.task_id),
-            &context.handoff_id,
-            &context.candidate,
+            crate::executor::automation::vcs::base::refresh::BaseRefreshOwner {
+                workspace: &self.workspace,
+                tasks: std::slice::from_ref(&context.task_id),
+                execution: &context.handoff_id,
+                candidate: &context.candidate,
+                handoff_id: Some(&context.handoff_id),
+            },
             status,
             self.deadline_ms,
             diagnose,
-            Some(&context.handoff_id),
         )
         .map_err(|error| self.stop_on(error))
     }

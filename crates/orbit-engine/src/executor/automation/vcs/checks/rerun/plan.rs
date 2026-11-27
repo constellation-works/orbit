@@ -3,7 +3,7 @@
 use super::super::super::pr_answers::PullRequestStatus;
 use super::super::rerun_diagnostic::{self, CiRerunDiagnostic, CiRerunStage};
 use super::super::{
-    head::classify_logged_job,
+    head::{BaseComparison, classify_logged_job},
     jobs::{answers, commit_jobs, job_label, unsuccessful},
     log::job_log,
     recovery::CheckFailureClass,
@@ -14,7 +14,8 @@ use super::send::{
     record_retry_history, send_reserved_rerun,
 };
 use super::unreadable_log::{
-    UNREADABLE_LOG_RERUN_PENDING, retry_unreadable_log, unreadable_log_rerun_pending,
+    UNREADABLE_LOG_RERUN_PENDING, UnreadableLogRetry, retry_unreadable_log,
+    unreadable_log_rerun_pending,
 };
 use super::{
     CiRerunStep, PlanMismatch, RerunPlanRequest, authenticated_plan, is_no_authenticated_plan_error,
@@ -31,42 +32,34 @@ use std::{
     path::Path,
 };
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the rerun planner takes pull status, failed jobs, base tip and the caller diagnostic together"
-)]
+/// What one unchanged-head retry plan reads: the owner tasks or handoff,
+/// the pull status and its failed checks, the candidate's base, the base
+/// branch and its tip, and the jobs a landing already classified.
+#[derive(Clone, Copy)]
+pub(in crate::executor::automation::vcs) struct CiRerunPlanInputs<'a> {
+    pub(in crate::executor::automation::vcs) workspace: &'a Path,
+    pub(in crate::executor::automation::vcs) tasks: &'a [String],
+    pub(in crate::executor::automation::vcs) handoff: Option<&'a str>,
+    pub(in crate::executor::automation::vcs) status: &'a PullRequestStatus,
+    pub(in crate::executor::automation::vcs) failed: &'a [(Option<String>, String)],
+    pub(in crate::executor::automation::vcs) base: &'a str,
+    pub(in crate::executor::automation::vcs) tip: &'a str,
+    pub(in crate::executor::automation::vcs) base_branch: &'a str,
+    pub(in crate::executor::automation::vcs) deadline_ms: u64,
+    pub(in crate::executor::automation::vcs) classified:
+        Option<&'a [crate::executor::automation::vcs::checks::recovery::FailedJob]>,
+    pub(in crate::executor::automation::vcs) allow_unreadable_log_rerun: bool,
+}
+
 pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Sized>(
     host: &H,
-    workspace: &Path,
-    tasks: &[String],
-    handoff: Option<&str>,
-    status: &PullRequestStatus,
-    failed: &[(Option<String>, String)],
-    base: &str,
-    tip: &str,
-    base_branch: &str,
-    deadline_ms: u64,
-    classified: Option<&[super::super::recovery::FailedJob]>,
-    allow_unreadable_log_rerun: bool,
+    inputs: CiRerunPlanInputs<'_>,
     execution: &str,
     observation: &mut Option<CiRerunDiagnostic>,
 ) -> Result<CiRerunStep, OrbitError> {
+    let CiRerunPlanInputs { tasks, status, .. } = inputs;
     let mut diagnostic = CiRerunDiagnostic::for_status(status);
-    let result = plan_ci_rerun_observed(
-        host,
-        workspace,
-        tasks,
-        handoff,
-        status,
-        failed,
-        base,
-        tip,
-        base_branch,
-        deadline_ms,
-        classified,
-        allow_unreadable_log_rerun,
-        &mut diagnostic,
-    );
+    let result = plan_ci_rerun_observed(host, inputs, &mut diagnostic);
     *observation = match &result {
         Ok(CiRerunStep::Wait(reason) | CiRerunStep::Unreadable(reason)) => {
             Some(diagnostic.with_reason(reason))
@@ -84,25 +77,24 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
     result
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the observed planner shares those landing inputs and writes into the caller-owned diagnostic"
-)]
 fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
     host: &H,
-    workspace: &Path,
-    tasks: &[String],
-    handoff: Option<&str>,
-    status: &PullRequestStatus,
-    failed: &[(Option<String>, String)],
-    base: &str,
-    tip: &str,
-    base_branch: &str,
-    deadline_ms: u64,
-    classified: Option<&[super::super::recovery::FailedJob]>,
-    allow_unreadable_log_rerun: bool,
+    inputs: CiRerunPlanInputs<'_>,
     diagnostic: &mut CiRerunDiagnostic,
 ) -> Result<CiRerunStep, OrbitError> {
+    let CiRerunPlanInputs {
+        workspace,
+        tasks,
+        handoff,
+        status,
+        failed,
+        base,
+        tip,
+        base_branch,
+        deadline_ms,
+        classified,
+        allow_unreadable_log_rerun,
+    } = inputs;
     let (Some(head), Some(pr), Some(branch)) = (
         status.head_sha.as_deref(),
         status.number,
@@ -157,17 +149,19 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
         {
             match retry_unreadable_log(
                 host,
-                workspace,
-                tasks,
-                pr,
-                head,
-                branch,
-                base,
-                base_branch,
+                UnreadableLogRetry {
+                    workspace,
+                    tasks,
+                    pr,
+                    head,
+                    head_branch: branch,
+                    accepted_base: base,
+                    base_branch,
+                    deadline_ms,
+                },
                 &jobs,
                 failed,
                 job,
-                deadline_ms,
             ) {
                 Ok(Some(step)) => return Ok(step),
                 Ok(None) => {}
@@ -180,8 +174,17 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
     };
     let mut conclusion_set = false;
     let mut roots = BTreeMap::<u64, Vec<CiRerunRoot>>::new();
-    let mut base_jobs = None;
-    let mut tip_jobs = None;
+    let mut comparison = BaseComparison {
+        host,
+        workspace,
+        head,
+        base,
+        base_branch,
+        moved_tip: (base != tip).then_some(tip),
+        deadline_ms: Some(deadline_ms),
+        base_jobs: None,
+        tip_jobs: None,
+    };
     let mut uncertain = false;
     let mut independent_candidate = false;
     let mut dependency_record = false;
@@ -283,19 +286,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
             {
                 (prior.class, prior.signature.clone())
             } else {
-                let classification = classify_logged_job(
-                    host,
-                    workspace,
-                    job,
-                    &log,
-                    head,
-                    base,
-                    base_branch,
-                    (base != tip).then_some(tip),
-                    &mut base_jobs,
-                    &mut tip_jobs,
-                    Some(deadline_ms),
-                );
+                let classification = classify_logged_job(&mut comparison, job, &log);
                 let (class, _, _, signature) = match classification {
                     Ok(classification) => classification,
                     Err(deferred) => {
