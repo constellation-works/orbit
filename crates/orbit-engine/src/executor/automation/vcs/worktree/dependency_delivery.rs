@@ -155,7 +155,7 @@ pub(in crate::executor::automation) fn ensure_dependencies_delivered_into_base<
     }
 }
 
-/// The read-only form of [`ensure_dependencies_delivered_into_base`] for backlog
+/// The read-only form of `ensure_dependencies_delivered_into_base` for backlog
 /// selection: the first done dependency of `task_id` whose commits exist only
 /// on other refs than `base`, or `None` when every dependency is delivered.
 ///
