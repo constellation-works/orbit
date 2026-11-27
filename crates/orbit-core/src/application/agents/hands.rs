@@ -16,7 +16,7 @@
 //!
 //! Nothing here is stored on the task; the stored `created_by`,
 //! `planned_by`, `implemented_by` and `orchestrator` fields stay the
-//! dashboard's own, with their crews named by [`super::hand_crews`]. Each
+//! dashboard's own, with their crews named by [`super::crew_name`]. Each
 //! hand's `crew` is a bare crew name: the recorded crew without its effort,
 //! else the one crew running the recorded model, else null.
 
@@ -25,18 +25,19 @@ use std::collections::HashMap;
 use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contract::{InvocationQuery, TaskRow};
-use orbit_types::identity::infer_agent_family_from_model;
+use orbit_types::identity::{crew_reference_base, infer_agent_family_from_model};
 use orbit_types::task::{
     FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery, TaskDecision, TaskHistoryEntry, TaskStatus,
 };
 use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate};
 use serde_json::{Map, Value, json};
 
+use super::crew_name::CrewNames;
 use super::facts::{self, FindingState};
-use super::hand_crews::CrewNames;
 use super::records::is_operator_requeue;
 use super::roles::pilot_warnings;
 use crate::OrbitRuntime;
+use crate::Task;
 use crate::application::codebase::{PilotRuns, actor_kind};
 use crate::application::task::BLOCKED_TASK_TRIAGED_EVENT;
 use crate::application::task::blocked_recovery::{
@@ -137,11 +138,49 @@ impl OrbitRuntime {
         hands.sort_by_key(|hand| hand.at);
         // The crew each hand shows: its recorded crew without the effort,
         // else the one crew running its recorded model, else none.
-        let names = CrewNames::load(self);
+        let names = self.crew_names();
         for hand in &mut hands {
             hand.crew = names.recorded(hand.crew.as_deref(), hand.model.as_deref());
         }
         hands.iter().map(Hand::to_json).collect()
+    }
+
+    /// The crew each stored attribution field of `task` names, as the task
+    /// detail's `recorded_crews`: `created_by`, `planned_by`,
+    /// `implemented_by` and `orchestrator`, each present only when the
+    /// stored record establishes a crew. The task's current `crew` is never
+    /// consulted, so a reassignment cannot rewrite who did earlier work.
+    pub fn task_recorded_crews(&self, task: &Task) -> Map<String, Value> {
+        let names = self.crew_names();
+        let mut crews = Map::new();
+        let mut put = |field: &str, crew: Option<String>| {
+            if let Some(crew) = crew {
+                crews.insert(field.to_string(), Value::String(crew));
+            }
+        };
+        let label = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .and_then(|value| names.by_label(value))
+        };
+        put(
+            "created_by",
+            label(&task.created_by_model).or_else(|| label(&task.created_by)),
+        );
+        put("planned_by", label(&task.planned_by));
+        put("implemented_by", label(&task.implemented_by));
+        // The orchestrator is a validated crew name when it is recorded.
+        put(
+            "orchestrator",
+            task.orchestrator
+                .as_deref()
+                .map(crew_reference_base)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string),
+        );
+        crews
     }
 
     fn piloted_hands(&self, row: &TaskRow) -> Vec<Hand> {
@@ -320,6 +359,11 @@ impl OrbitRuntime {
             .filter(|record| record.activity_id.contains("recover"))
             .max_by_key(|record| record.ts)
             .and_then(|record| record.model)
+    }
+
+    /// The configured crews that recorded attribution is matched against.
+    fn crew_names(&self) -> CrewNames {
+        CrewNames::from_registry(&self.configured_crew_registry_projection())
     }
 }
 

@@ -12,10 +12,7 @@
 //! shows the action alone rather than a guess.
 
 use orbit_types::identity::{all_agent_families, crew_reference_base};
-use serde_json::{Map, Value};
 
-use crate::OrbitRuntime;
-use crate::Task;
 use crate::runtime::engine::ConfiguredCrewRegistryProjection;
 
 /// The configured crews a recorded model id is matched against.
@@ -26,11 +23,7 @@ pub(super) struct CrewNames {
 }
 
 impl CrewNames {
-    pub(super) fn load(runtime: &OrbitRuntime) -> Self {
-        Self::from_registry(&runtime.configured_crew_registry_projection())
-    }
-
-    fn from_registry(registry: &ConfiguredCrewRegistryProjection) -> Self {
+    pub(super) fn from_registry(registry: &ConfiguredCrewRegistryProjection) -> Self {
         Self {
             agents: registry
                 .crews
@@ -57,7 +50,7 @@ impl CrewNames {
     /// The crew a stored attribution label names: a registered crew
     /// reference, else the one crew that runs the label as its model. A
     /// provider-level label (`claude`) is never a crew.
-    fn by_label(&self, label: &str) -> Option<String> {
+    pub(super) fn by_label(&self, label: &str) -> Option<String> {
         let base = crew_reference_base(label);
         if base.is_empty() || all_agent_families().contains(&base.to_ascii_lowercase().as_str()) {
             return None;
@@ -80,45 +73,5 @@ impl CrewNames {
             .filter(|(_, crew_model)| !model.is_empty() && crew_model == model);
         let (name, _) = matches.next()?;
         matches.next().is_none().then(|| name.clone())
-    }
-}
-
-impl OrbitRuntime {
-    /// The crew each stored attribution field of `task` names, as the task
-    /// detail's `recorded_crews`: `created_by`, `planned_by`,
-    /// `implemented_by` and `orchestrator`, each present only when the
-    /// stored record establishes a crew. The task's current `crew` is never
-    /// consulted, so a reassignment cannot rewrite who did earlier work.
-    pub fn task_recorded_crews(&self, task: &Task) -> Map<String, Value> {
-        let names = CrewNames::load(self);
-        let mut crews = Map::new();
-        let mut put = |field: &str, crew: Option<String>| {
-            if let Some(crew) = crew {
-                crews.insert(field.to_string(), Value::String(crew));
-            }
-        };
-        let label = |value: &Option<String>| {
-            value
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .and_then(|value| names.by_label(value))
-        };
-        put(
-            "created_by",
-            label(&task.created_by_model).or_else(|| label(&task.created_by)),
-        );
-        put("planned_by", label(&task.planned_by));
-        put("implemented_by", label(&task.implemented_by));
-        // The orchestrator is a validated crew name when it is recorded.
-        put(
-            "orchestrator",
-            task.orchestrator
-                .as_deref()
-                .map(crew_reference_base)
-                .filter(|name| !name.is_empty())
-                .map(str::to_string),
-        );
-        crews
     }
 }
