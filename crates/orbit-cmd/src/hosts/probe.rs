@@ -2,6 +2,7 @@
 //! probe session.
 
 use std::path::Path;
+use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_core::app::host::{local_binary_version, local_protocol_fingerprint};
@@ -12,6 +13,9 @@ use orbit_mcp::federated::{
 use orbit_mcp::{HostFacts, McpSessionAuthority};
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::workspace::Workspace;
+
+// Doctor reports a snapshot, so it does not need the longer routing budget.
+const DOCTOR_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// What a remote host said about itself on one probe.
 pub(super) struct LiveHost {
@@ -46,9 +50,21 @@ pub fn local_host_facts(global_root: &Path, machine_id: &str) -> HostFacts {
 /// Transport errors name the host by its SSH target, which an operator can
 /// check with `ssh` itself, and carry the tail of ssh's stderr.
 pub(super) fn probe_ssh(ssh: &str, caller_machine_id: &str) -> Result<LiveHost, OrbitError> {
+    probe_ssh_with_timeout(ssh, caller_machine_id, DEFAULT_PROBE_TIMEOUT)
+}
+
+pub(super) fn doctor_probe_ssh(ssh: &str, caller_machine_id: &str) -> Result<LiveHost, OrbitError> {
+    probe_ssh_with_timeout(ssh, caller_machine_id, DOCTOR_PROBE_TIMEOUT)
+}
+
+fn probe_ssh_with_timeout(
+    ssh: &str,
+    caller_machine_id: &str,
+    timeout: Duration,
+) -> Result<LiveHost, OrbitError> {
     let probe = SshDestinationProbe::new(
         caller_machine_id.to_string(),
-        DEFAULT_PROBE_TIMEOUT,
+        timeout,
         DEFAULT_ROUTED_DELIVERY_TIMEOUT,
         None,
         McpSessionAuthority::Agent,

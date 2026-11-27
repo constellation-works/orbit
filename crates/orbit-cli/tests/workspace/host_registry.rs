@@ -16,6 +16,65 @@ use serde_json::{Value, json};
 use crate::git_repo;
 use crate::host_fleet::{Fleet, host_row};
 
+#[test]
+fn doctor_bounds_one_nonresponsive_probe_per_peer() {
+    let fleet = Fleet::new();
+    let healthy = fleet.install("healthy", "healthy", "HE");
+    let stalled = fleet.install("stalled", "stalled", "ST");
+    fleet.route("healthy", &healthy, "plain");
+    fleet.route("stalled", &stalled, "plain");
+    fleet.json(&["host", "add", "healthy", "--json"]);
+    fleet.json(&["host", "add", "stalled", "--json"]);
+    fleet.orbit(&fleet.local_repo, &["task", "list"]);
+    let run = || {
+        let output = fleet.orbit(&fleet.local_repo, &["doctor", "--json"]);
+        serde_json::from_slice::<Value>(&output.stdout).expect("doctor JSON")
+    };
+    let control = run();
+    fleet.route("stalled", &stalled, "no-response");
+    let calls = fleet.routes.with_extension("calls");
+    let before = fs::read_to_string(&calls)
+        .expect("probe log")
+        .lines()
+        .count();
+    let start = std::time::Instant::now();
+    let delayed = run();
+    let elapsed = start.elapsed();
+    let log = fs::read_to_string(calls).expect("probe log");
+    let new_calls: Vec<_> = log.lines().skip(before).collect();
+    tracing::info!(%control, %delayed, ?elapsed, ?new_calls, "doctor fixture timings");
+    assert_eq!(
+        new_calls.iter().filter(|name| **name == "stalled").count(),
+        1
+    );
+    assert_eq!(
+        new_calls.iter().filter(|name| **name == "healthy").count(),
+        1
+    );
+    let host = |rows: &Value| {
+        rows.as_array()
+            .expect("rows")
+            .iter()
+            .find(|row| row["check"] == "hosts" || row["check_name"] == "hosts")
+            .expect("hosts row")
+            .clone()
+    };
+    assert_eq!(host(&control)["status"], "ok");
+    assert_eq!(host(&delayed)["status"], "warning");
+    assert!(
+        host(&delayed)["message"]
+            .as_str()
+            .expect("message")
+            .contains("stalled")
+    );
+    assert!(
+        host(&delayed)["message"]
+            .as_str()
+            .expect("message")
+            .contains("timed out")
+    );
+}
+
 fn tilde_root_host_list_matches_the_absolute_root_with_a_registered_remote() {
     let fleet = Fleet::new();
     let alpha = fleet.install("alpha", "alpha", "AL");

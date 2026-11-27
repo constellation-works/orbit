@@ -39,6 +39,10 @@ impl Probe for FederatedProbe {
         remote::remote_row(target, caller_machine_id, probe)
     }
 
+    fn doctor_row(&self, target: &HostEntry, caller_machine_id: &str) -> HostRow {
+        remote::doctor_row(target, caller_machine_id)
+    }
+
     fn probe_ssh(&self, ssh: &str, caller_machine_id: &str) -> Result<ProbedHost, OrbitError> {
         let live = probe::probe_ssh(ssh, caller_machine_id)?;
         let facts = live.facts;

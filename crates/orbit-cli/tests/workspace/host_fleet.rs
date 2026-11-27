@@ -338,6 +338,10 @@ host = json.load(open({routes})).get(target)
 if host is None:
     sys.stderr.write('ssh: Could not resolve hostname %s\n' % target)
     sys.exit(255)
+if host['mode'] == 'no-response':
+    import time
+    time.sleep(5)
+    sys.exit(255)
 argv = shlex.split(command)
 assert argv.pop(0) == 'orbit'
 env = dict(os.environ, HOME=host['home'], USERPROFILE=host['home'])

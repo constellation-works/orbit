@@ -75,7 +75,10 @@ machine's, and `orbit doctor` reports it in its `hosts` row.
 The doctor's `hosts` row warns on unreachable transports
 (`unreachable_destination`), local or other probe failures (`probe_failed`),
 missing replica owners, and version/protocol differences on other hosts. A
-message such as `probe failed (probe_failed): write SSH defaults …` means
+Doctor probe has a two-second session budget per host; a slow but reachable
+host can therefore appear unreachable in this snapshot. `orbit host list`
+uses the ordinary, longer probe budget. SSH configuration remains in effect.
+A message such as `probe failed (probe_failed): write SSH defaults …` means
 local SSH setup failed before Orbit contacted the destination; check the local
 path and error named in the diagnostic. It does not establish whether the
 destination is reachable. By contrast, `… is unreachable
