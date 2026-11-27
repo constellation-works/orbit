@@ -372,6 +372,27 @@ The dashboard exposes orchestration metrics as a separate dimension from executo
 - Direct Codex and Claude orchestration-session overhead is excluded from the initial metric and must be instrumented independently later.
 - Cost: task creation and update surfaces, bundle persistence, validation, invocation accounting, API, dashboard, fixtures, and compatibility documentation all require coordinated changes.
 
+
+## JSONL append lock-refusal fixture
+
+The existing `append_under_symlinked_bundle_dir_leaves_target_directory_untouched`
+unit fixture is admitted as a narrow exception to the public-boundary rule in
+`docs/agents/test-and-qa-rules.md` and to STD-04@2 §R1. It drives
+`TaskBundleStoreV2::append_comments` with a symlinked bundle directory and
+asserts both refusal and an unchanged target directory. The public history
+mutation reads the bundle under its commit boundary first and refuses that
+symlink before reaching JSONL append, so it cannot isolate the append
+preflight. Without that preflight, the inner lock creates a file in the
+symlink target before the later check refuses the append. The private fixture
+therefore protects this independent no-write invariant; the public symlink
+regression remains responsible for the caller-facing behavior.
+
+This exception admits only that existing fixture, not private tests generally.
+Its identity remains in `scripts/unit-test-baseline.json`; remove the exception
+and inventory entry if an equally sensitive public-boundary regression can
+replace it. The cost is coupling one security regression to an internal
+boundary.
+
 ## Task References
 
 - [ORB-00273] — Bind the retired review-thread hook to the active task.
