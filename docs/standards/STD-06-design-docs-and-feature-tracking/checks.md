@@ -14,7 +14,7 @@ Each gate below is real and can be adopted. "Orbit:" says whether Orbit enforces
 | R6 | review-only. The generator renders a missing `next` as `—`, so an absent line shows on the board. |
 | R7 | review-only. A reviewer of a change that approves, lands or parks feature work checks the entry doc's `stage` and `next`. |
 | R8 | review-only. |
-| R9 | `<generator> --check` in CI (STD-04 §R11). Orbit: `scripts/generate-doc-indexes.sh --check` in `ci-guardrails.sh`. |
+| R9 | Review the generator output path and CI check; the generator rejects missing or unknown stages. |
 | R10 | review-only. Optional lints: every entry has a `Cost:` line; every `Code anchors`/`Paths` path exists. Orbit: none (CONVENTIONS §11 checks 2 to 4). |
 | R11 | review-only. A link checker resolves title anchors. Orbit: none for decision anchors. |
 | R12 | review-only. The filing checklist of whoever files tasks (in the constellation, the `orchestration-session` skill §4) requires the slug. A tracker query for open tasks whose footprint touches a feature's `paths` but lack its tag can flag misses. Orbit: none. |
