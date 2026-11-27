@@ -29,7 +29,7 @@ use std::collections::BinaryHeap;
 use std::time::Instant;
 
 use crate::application::admission::forecast::{
-    ForecastAdmission, ForecastPassScratch, ForecastTaskSet, ForecastWait,
+    ForecastAdmission, ForecastDrain, ForecastPassScratch, ForecastTaskSet, ForecastWait,
 };
 
 use super::model::{Draw, Script, Step};
@@ -455,12 +455,14 @@ pub(super) fn simulate_drain(
             state.selected.clear();
             let reason = &mut state.reason;
             admission.pass(
-                &state.ready,
-                &state.running,
-                &state.admitted_at,
-                scenario.slots.saturating_sub(running),
-                scenario.slots,
-                at,
+                ForecastDrain {
+                    ready: &state.ready,
+                    running: &state.running,
+                    admitted_at: &state.admitted_at,
+                    free_slots: scenario.slots.saturating_sub(running),
+                    slots: scenario.slots,
+                    at_hours: at,
+                },
                 &mut state.scratch,
                 &mut state.selected,
                 |index, wait| reason[index] = wait,

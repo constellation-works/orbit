@@ -33,7 +33,7 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::super::owner::{ClaimedOwnerRoute, bridge_through};
+use super::super::owner::{ClaimedOwnerCall, ClaimedOwnerRoute, bridge_through};
 use super::review::{FOLLOWER, GET, OWNER, Owner, PUT, TASK};
 use crate::OrbitRuntime;
 use crate::adapter::command::dispatch::brokered::RunDispatch;
@@ -332,13 +332,15 @@ impl Leaf {
         bridge_through(
             Some(socket),
             &self.global_root,
-            Some(binding),
-            Some(FOLLOWER),
-            name,
-            &input,
-            &self.worktree,
-            &self.worktree,
-            ToolEntryPoint::Cli,
+            ClaimedOwnerCall {
+                binding: Some(binding),
+                process_machine_id: Some(FOLLOWER),
+                name,
+                input: &input,
+                cwd: &self.worktree,
+                workspace_root: &self.worktree,
+                entry_point: ToolEntryPoint::Cli,
+            },
         )
     }
 

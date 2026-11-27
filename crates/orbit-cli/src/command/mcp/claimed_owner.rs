@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_core::adapter::command::{
-    ClaimedOwnerRoute, ToolEntryPoint, bridge_claimed_owner_call,
+    ClaimedOwnerCall, ClaimedOwnerRoute, GlobalToolCall, ToolEntryPoint, bridge_claimed_owner_call,
     execute_global_in_process_tool_dispatch,
 };
 use orbit_core::application::task::{TaskListResultPolicy, TaskListResultProfile};
@@ -66,13 +66,15 @@ impl McpHost for ClaimedOwnerBridge {
         if let Some(route) = bridge_claimed_owner_call(
             &self.env,
             &self.global_root,
-            session_context.worker_invocation.as_ref(),
-            Some(&self.process_machine_id),
-            name,
-            &forwarded_input,
-            &cwd,
-            &cwd,
-            ToolEntryPoint::Mcp,
+            ClaimedOwnerCall {
+                binding: session_context.worker_invocation.as_ref(),
+                process_machine_id: Some(&self.process_machine_id),
+                name,
+                input: &forwarded_input,
+                cwd: &cwd,
+                workspace_root: &cwd,
+                entry_point: ToolEntryPoint::Mcp,
+            },
         ) {
             return match route {
                 // The owner's answer bypasses the wrapped host, so it gets
@@ -96,12 +98,14 @@ impl McpHost for ClaimedOwnerBridge {
                     let (operation, input) = tool_family_operation_call(name, input);
                     execute_global_in_process_tool_dispatch(
                         &self.env,
-                        orbit_core::composition::store_opener(),
-                        &self.global_root,
-                        &operation,
-                        input,
-                        ToolEntryPoint::Mcp,
-                        session_context,
+                        GlobalToolCall {
+                            opener: orbit_core::composition::store_opener(),
+                            global_root: &self.global_root,
+                            name: &operation,
+                            input,
+                            entry_point: ToolEntryPoint::Mcp,
+                            session_context,
+                        },
                         move |_| Err(error),
                     )
                     .map(|outcome| outcome.value)

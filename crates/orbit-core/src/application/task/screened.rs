@@ -114,6 +114,15 @@ pub enum TaskUpdateAuthority {
     Forced,
 }
 
+/// Who an update names as its writer: the agent and model, when known.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TaskUpdateIdentity {
+    /// The writing agent.
+    pub agent: Option<String>,
+    /// The writing model.
+    pub model: Option<String>,
+}
+
 impl OrbitRuntime {
     /// Create a task for an operator or agent surface.
     ///
@@ -188,24 +197,27 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
-        self.update_task_screened_with_note(id, params, screen, authority, agent, model, None)
+        self.update_task_screened_with_note(
+            id,
+            params,
+            screen,
+            authority,
+            TaskUpdateIdentity { agent, model },
+            None,
+        )
     }
 
     /// Update a task for an operator surface with an optional status-change note.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "keeps status note explicit alongside the screened update authority and identity"
-    )]
     pub fn update_task_screened_with_note(
         &self,
         id: &str,
         params: TaskUpdateParams,
         screen: &TaskWriteScreen,
         authority: TaskUpdateAuthority,
-        agent: Option<String>,
-        model: Option<String>,
+        identity: TaskUpdateIdentity,
         status_note: Option<String>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
+        let TaskUpdateIdentity { agent, model } = identity;
         self.write_screened_update(id, params, screen, false, |params| match authority {
             TaskUpdateAuthority::Lifecycle => self.update_task_with_identity_and_note_applied(
                 id,
@@ -256,14 +268,16 @@ impl OrbitRuntime {
         self.write_screened_update(id, params, screen, true, |params| {
             self.start_task_with_identity_and_crew(
                 id,
-                note,
-                params.comment.clone(),
-                agent,
-                model,
-                params.crew.clone().flatten(),
-                params.plan.clone(),
-                params,
-                owner,
+                super::TaskStartRequest {
+                    note,
+                    comment: params.comment.clone(),
+                    agent,
+                    model,
+                    crew_override: params.crew.clone().flatten(),
+                    plan: params.plan.clone(),
+                    field_edits: params,
+                    artifact_owner: owner,
+                },
             )
             .map(|task| (task, None))
         })

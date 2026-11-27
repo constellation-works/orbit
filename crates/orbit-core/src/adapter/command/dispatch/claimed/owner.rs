@@ -144,6 +144,26 @@ pub enum ClaimedOwnerRoute {
     Refused(OrbitError),
 }
 
+/// A claimed worker's coordination call as the nested `orbit` (CLI or MCP)
+/// makes it: who calls, from which machine, and the call itself.
+#[derive(Debug, Clone, Copy)]
+pub struct ClaimedOwnerCall<'a> {
+    /// The worker's claim binding, when the process runs one.
+    pub binding: Option<&'a WorkerInvocation>,
+    /// This process's machine identity.
+    pub process_machine_id: Option<&'a str>,
+    /// The tool the worker calls.
+    pub name: &'a str,
+    /// The call's input.
+    pub input: &'a Value,
+    /// The caller's working directory.
+    pub cwd: &'a Path,
+    /// The caller's workspace root.
+    pub workspace_root: &'a Path,
+    /// The entry point the call arrived through.
+    pub entry_point: ToolEntryPoint,
+}
+
 /// Whether this process is a claimed worker whose owner is another machine:
 /// the only caller whose coordination calls need the bridge. A worker on its
 /// owner's machine reaches the owner store in process and keeps that route.
@@ -163,24 +183,52 @@ pub(super) fn remote_owner<'a>(
 /// tool, a local owner's call other than a `review-*` read or put, no remote
 /// owner, or an unsandboxed worker without a broker, which can reach the
 /// owner itself.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "The bridge boundary carries independent caller, claim, request, path, and entry-point context."
-)]
 pub fn bridge_claimed_owner_call(
     env: &orbit_common::Env,
     global_root: &Path,
-    binding: Option<&WorkerInvocation>,
-    process_machine_id: Option<&str>,
-    name: &str,
-    input: &Value,
-    cwd: &Path,
-    workspace_root: &Path,
-    entry_point: ToolEntryPoint,
+    call: ClaimedOwnerCall<'_>,
 ) -> Option<ClaimedOwnerRoute> {
-    bridge_claimed_owner_call_with_env(
-        env,
+    bridge_claimed_owner_call_with_env(env, global_root, call)
+}
+
+pub(in crate::adapter::command::dispatch) fn bridge_claimed_owner_call_with_env(
+    env: &Env,
+    global_root: &Path,
+    call: ClaimedOwnerCall<'_>,
+) -> Option<ClaimedOwnerRoute> {
+    let socket = env.orbit_plugin_broker().map(Path::new);
+    // The bridge and the broker behind it key on the operation a family
+    // call reaches; the owner's dispatch receives the family call again.
+    let (name, input) = if tool_family(call.name).is_some() {
+        let (operation, input) = tool_family_operation_call(call.name, call.input.clone());
+        (
+            std::borrow::Cow::Owned(operation),
+            std::borrow::Cow::Owned(input),
+        )
+    } else {
+        (
+            std::borrow::Cow::Borrowed(call.name),
+            std::borrow::Cow::Borrowed(call.input),
+        )
+    };
+    bridge_through(
+        socket,
         global_root,
+        ClaimedOwnerCall {
+            name: &name,
+            input: &input,
+            ..call
+        },
+    )
+}
+
+/// [`bridge_claimed_owner_call`] with the broker socket, if any, given.
+pub(super) fn bridge_through(
+    socket: Option<&Path>,
+    global_root: &Path,
+    call: ClaimedOwnerCall<'_>,
+) -> Option<ClaimedOwnerRoute> {
+    let ClaimedOwnerCall {
         binding,
         process_machine_id,
         name,
@@ -188,62 +236,7 @@ pub fn bridge_claimed_owner_call(
         cwd,
         workspace_root,
         entry_point,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(in crate::adapter::command::dispatch) fn bridge_claimed_owner_call_with_env(
-    env: &Env,
-    global_root: &Path,
-    binding: Option<&WorkerInvocation>,
-    process_machine_id: Option<&str>,
-    name: &str,
-    input: &Value,
-    cwd: &Path,
-    workspace_root: &Path,
-    entry_point: ToolEntryPoint,
-) -> Option<ClaimedOwnerRoute> {
-    let socket = env.orbit_plugin_broker().map(Path::new);
-    // The bridge and the broker behind it key on the operation a family
-    // call reaches; the owner's dispatch receives the family call again.
-    let (name, input) = if tool_family(name).is_some() {
-        let (operation, input) = tool_family_operation_call(name, input.clone());
-        (
-            std::borrow::Cow::Owned(operation),
-            std::borrow::Cow::Owned(input),
-        )
-    } else {
-        (
-            std::borrow::Cow::Borrowed(name),
-            std::borrow::Cow::Borrowed(input),
-        )
-    };
-    bridge_through(
-        socket,
-        global_root,
-        binding,
-        process_machine_id,
-        &name,
-        &input,
-        cwd,
-        workspace_root,
-        entry_point,
-    )
-}
-
-/// [`bridge_claimed_owner_call`] with the broker socket, if any, given.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn bridge_through(
-    socket: Option<&Path>,
-    global_root: &Path,
-    binding: Option<&WorkerInvocation>,
-    process_machine_id: Option<&str>,
-    name: &str,
-    input: &Value,
-    cwd: &Path,
-    workspace_root: &Path,
-    entry_point: ToolEntryPoint,
-) -> Option<ClaimedOwnerRoute> {
+    } = call;
     if !crate::runtime::is_coordination_tool(name) {
         return None;
     }

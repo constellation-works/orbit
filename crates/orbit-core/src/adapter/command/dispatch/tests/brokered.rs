@@ -87,12 +87,14 @@ impl FamilyDispatch for OrbitRuntime {
         let env = orbit_common::Env::capture();
         self.execute_tool_command_dispatch_with_session_context_and_env(
             &env,
-            &tool,
-            input,
-            None,
-            None,
-            ToolEntryPoint::Mcp,
-            orbit_types::tool::ToolSessionContext::default(),
+            super::super::execute::ToolCommandCall {
+                name: &tool,
+                input,
+                agent_override: None,
+                model_override: None,
+                entry_point: ToolEntryPoint::Mcp,
+                session_context: orbit_types::tool::ToolSessionContext::default(),
+            },
         )
     }
 }
@@ -990,13 +992,15 @@ fn a_sandboxed_resident_landing_and_completion_are_decided_on_the_host() {
     let completed = runtime
         .execute_tool_command_dispatch_with_session_context_and_env(
             &env,
-            UPDATE,
-            json!({"id": delivered, "status": "done", "execution_summary": "Delivered.",
+            super::super::execute::ToolCommandCall {
+                name: UPDATE,
+                input: json!({"id": delivered, "status": "done", "execution_summary": "Delivered.",
                    "model": "codex"}),
-            None,
-            None,
-            ToolEntryPoint::Mcp,
-            orbit_types::tool::ToolSessionContext::default(),
+                agent_override: None,
+                model_override: None,
+                entry_point: ToolEntryPoint::Mcp,
+                session_context: orbit_types::tool::ToolSessionContext::default(),
+            },
         )
         .expect("the host completes the task")
         .value;

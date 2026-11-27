@@ -284,6 +284,7 @@ use tempfile::TempDir;
 
 use crate::application::job::pipeline::worker::delivery_class::DeliveryResourceClass;
 use crate::application::job::pipeline::worker::usage::sampler::RunResourceSampler;
+use crate::application::job::pipeline::worker::usage::tree::TreeSampler;
 
 struct Fixture {
     store: Arc<Store>,
@@ -394,8 +395,7 @@ fn recorded_with(
     let mut queue = VecDeque::from(script);
     let mut sampler = RunResourceSampler::from_process_tree(
         Arc::clone(&fixture.store),
-        move || queue.pop_front().unwrap_or(None),
-        locate,
+        TreeSampler::new(move || queue.pop_front().unwrap_or(None), locate),
         fixture.proc_root.clone(),
         "ws_test".into(),
         "jrun-tree".into(),
@@ -669,8 +669,10 @@ fn macos_worker_records_a_spawned_child_tree() {
     let fixture = Fixture::new();
     let mut sampler = RunResourceSampler::from_process_tree(
         Arc::clone(&fixture.store),
-        || orbit_common::process::ancestry::process_tree(std::process::id()),
-        orbit_common::process::ancestry::process_start_and_parent,
+        TreeSampler::new(
+            || orbit_common::process::ancestry::process_tree(std::process::id()),
+            orbit_common::process::ancestry::process_start_and_parent,
+        ),
         fixture.proc_root.clone(),
         "ws_test".into(),
         "jrun-live".into(),

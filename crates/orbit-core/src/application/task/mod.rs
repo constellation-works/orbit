@@ -195,7 +195,7 @@ pub(in crate::application) use resident_port::{
     DisabledCycleRoutine, ResidentMandateAttachment, TaskResidentPort,
 };
 pub(in crate::application) use review_port::TaskReviewPort;
-pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
+pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskUpdateIdentity, TaskWriteScreen};
 pub(crate) use selector_match::task_selectors_contain_path;
 pub(in crate::application) use sweep_filing_port::TaskSweepFilingPort;
 pub(crate) use sweep_filing_port::{
@@ -203,7 +203,7 @@ pub(crate) use sweep_filing_port::{
     CiSweepFilingEvidence, CiSweepFilingSource, PromotionDecision,
 };
 pub use transient_infra::TransientInfraBlockedTask;
-pub use transitions::InfraBlockedTask;
+pub use transitions::{InfraBlockedTask, TaskStartRequest};
 pub(crate) use validation_tools::positive_validation_tools;
 pub(in crate::application) use workspace_auto_port::TaskWorkspaceAutoPort;
 pub use write_response::{

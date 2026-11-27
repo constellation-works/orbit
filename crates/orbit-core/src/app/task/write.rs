@@ -26,8 +26,8 @@ use crate::OrbitRuntime;
 use crate::application::resident::ResidentActionTicket;
 use crate::application::task::{
     ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskFieldProjection,
-    TaskUpdateAuthority, TaskUpdateParams, TaskWriteResponsePolicy, TaskWriteScreen,
-    is_operator_rescue_close, screened_task_write_response_json,
+    TaskUpdateAuthority, TaskUpdateIdentity, TaskUpdateParams, TaskWriteResponsePolicy,
+    TaskWriteScreen, is_operator_rescue_close, screened_task_write_response_json,
 };
 
 use super::ToolCaller;
@@ -475,8 +475,7 @@ fn cli_update(
             reservation_owner,
         ),
         authority,
-        agent,
-        model,
+        TaskUpdateIdentity { agent, model },
         note,
     )?;
     screened_write_response(runtime, &written, response_fields.as_ref())

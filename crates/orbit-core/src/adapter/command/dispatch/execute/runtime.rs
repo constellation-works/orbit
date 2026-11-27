@@ -23,12 +23,30 @@ use super::super::callback::{
     read_proc_spawn_budget_from_env,
 };
 use super::audit_store::{
-    BrokeredAudit, ToolDispatchAuditContext, ToolDispatchOutcome,
+    AuditedToolCall, BrokeredAudit, ToolDispatchAuditContext, ToolDispatchOutcome,
     execute_tool_dispatch_with_audit_store,
 };
 #[cfg(unix)]
 use super::entry::broker_entry_point;
 use super::entry::{ToolEntryPoint, mark_tool_audit_recorded, tool_suggestion_context};
+
+/// One tool command as its caller makes it: the tool, its input, the
+/// caller's identity overrides, the entry point and the invocation envelope.
+#[derive(Debug)]
+pub struct ToolCommandCall<'a> {
+    /// The tool or tool-family name the caller gave.
+    pub name: &'a str,
+    /// The call's input.
+    pub input: Value,
+    /// The agent the caller names in place of the resolved one.
+    pub agent_override: Option<String>,
+    /// The model the caller names in place of the resolved one.
+    pub model_override: Option<String>,
+    /// The entry point the call arrived through.
+    pub entry_point: ToolEntryPoint,
+    /// The caller's invocation envelope.
+    pub session_context: ToolSessionContext,
+}
 
 impl OrbitRuntime {
     /// Execute a tool by name and return its JSON value. CLI-callers use this
@@ -106,12 +124,14 @@ impl OrbitRuntime {
         let env = self.execution_env_policy().process_env();
         self.execute_tool_command_dispatch_with_session_context_and_env(
             env,
-            name,
-            input,
-            agent_override,
-            model_override,
-            entry_point,
-            session_context,
+            ToolCommandCall {
+                name,
+                input,
+                agent_override,
+                model_override,
+                entry_point,
+                session_context,
+            },
         )
     }
 
@@ -121,17 +141,19 @@ impl OrbitRuntime {
     /// snapshot here. Runtime-only callers can use
     /// [`Self::execute_tool_command_dispatch_with_session_context`], which uses
     /// the environment captured when the runtime was composed.
-    #[allow(clippy::too_many_arguments)]
     pub fn execute_tool_command_dispatch_with_session_context_and_env(
         &self,
         env: &Env,
-        name: &str,
-        input: Value,
-        agent_override: Option<String>,
-        model_override: Option<String>,
-        entry_point: ToolEntryPoint,
-        mut session_context: ToolSessionContext,
+        call: ToolCommandCall<'_>,
     ) -> Result<ToolDispatchOutcome, OrbitError> {
+        let ToolCommandCall {
+            name,
+            input,
+            agent_override,
+            model_override,
+            entry_point,
+            mut session_context,
+        } = call;
         // The authorization decision and entry-point row describe one call.
         // CLI invocations have no transport-minted trace, so create it here
         // before either path receives the session (and preserve MCP's trace).
@@ -302,13 +324,15 @@ impl OrbitRuntime {
             super::super::claimed::bridge_claimed_owner_call_with_env(
                 env,
                 &self.global_root(),
-                self.run().claim_owner().map(|owner| owner.binding()),
-                self.automation_machine_identity(),
-                name,
-                &input,
-                &std::env::current_dir()?,
-                &self.paths().repo_root,
-                entry_point,
+                super::super::claimed::ClaimedOwnerCall {
+                    binding: self.run().claim_owner().map(|owner| owner.binding()),
+                    process_machine_id: self.automation_machine_identity(),
+                    name,
+                    input: &input,
+                    cwd: &std::env::current_dir()?,
+                    workspace_root: &self.paths().repo_root,
+                    entry_point,
+                },
             )
         } {
             Some(super::super::claimed::ClaimedOwnerRoute::Forwarded(result)) => {
@@ -569,10 +593,12 @@ impl OrbitRuntime {
         };
         execute_tool_dispatch_with_audit_store(
             env,
-            name,
-            input,
-            execution_kind,
-            plugin,
+            AuditedToolCall {
+                name,
+                input,
+                execution_kind,
+                plugin,
+            },
             audit,
             |params, invocation| self.record_audit_event_with_invocation(params, invocation),
             |input| {

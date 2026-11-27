@@ -11,7 +11,7 @@ use orbit_tools::OwnerCoordinator;
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use serde_json::{Value, json};
 
-use super::super::super::owner::bridge_through;
+use super::super::super::owner::{ClaimedOwnerCall, bridge_through};
 use super::super::review::{FOLLOWER, Fixture, OWNER};
 use super::broker::refused;
 use crate::OrbitRuntime;
@@ -276,13 +276,15 @@ fn claimed_follower_posts_shows_and_closes_its_notice_on_the_owner_through_the_b
         bridge_through(
             None,
             &notice.fixture.global_root,
-            Some(&local),
-            Some(FOLLOWER),
-            name,
-            input,
-            &notice.fixture.worktree,
-            &notice.fixture.worktree,
-            ToolEntryPoint::Cli,
+            ClaimedOwnerCall {
+                binding: Some(&local),
+                process_machine_id: Some(FOLLOWER),
+                name,
+                input,
+                cwd: &notice.fixture.worktree,
+                workspace_root: &notice.fixture.worktree,
+                entry_point: ToolEntryPoint::Cli,
+            },
         )
     };
     assert!(bridge(POST, &json!({"kind": "info", "title": "Local"})).is_none());

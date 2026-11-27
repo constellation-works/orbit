@@ -1,6 +1,6 @@
 //! Task writes scrub prose and reject invalid artifacts atomically [ORB-14345].
 
-use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::application::task::{TaskAddParams, TaskStartRequest, TaskUpdateParams};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_types::task::{TaskArtifact, TaskComplexity, TaskStatus};
 use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
@@ -98,20 +98,22 @@ fn guarded_start_and_activity_notes_redact_before_persistence() {
     runtime
         .start_task_with_identity_and_crew(
             &task.id,
-            Some(text.clone()),
-            Some(text.clone()),
-            None,
-            Some("codex".into()),
-            None,
-            Some(text.clone()),
-            TaskUpdateParams {
-                title: Some(text.clone()),
-                description: Some(text.clone()),
-                acceptance_criteria: Some(vec![text.clone()]),
-                execution_summary: Some(text.clone()),
-                ..Default::default()
+            TaskStartRequest {
+                note: Some(text.clone()),
+                comment: Some(text.clone()),
+                agent: None,
+                model: Some("codex".into()),
+                crew_override: None,
+                plan: Some(text.clone()),
+                field_edits: TaskUpdateParams {
+                    title: Some(text.clone()),
+                    description: Some(text.clone()),
+                    acceptance_criteria: Some(vec![text.clone()]),
+                    execution_summary: Some(text.clone()),
+                    ..Default::default()
+                },
+                artifact_owner: None,
             },
-            None,
         )
         .unwrap();
     runtime
@@ -715,21 +717,23 @@ fn claim_refused_start_leaves_document_status_history_and_artifacts_unchanged() 
     let artifact_refusal = runtime
         .start_task_with_identity_and_crew(
             &target.id,
-            None,
-            None,
-            None,
-            Some("claude".into()),
-            None,
-            Some("Refused plan.".into()),
-            TaskUpdateParams {
-                title: Some("Refused title".into()),
-                upsert_artifacts: vec![TaskArtifact::from_text(
-                    "notes/refused.txt",
-                    "must not persist",
-                )],
-                ..Default::default()
+            TaskStartRequest {
+                note: None,
+                comment: None,
+                agent: None,
+                model: Some("claude".into()),
+                crew_override: None,
+                plan: Some("Refused plan.".into()),
+                field_edits: TaskUpdateParams {
+                    title: Some("Refused title".into()),
+                    upsert_artifacts: vec![TaskArtifact::from_text(
+                        "notes/refused.txt",
+                        "must not persist",
+                    )],
+                    ..Default::default()
+                },
+                artifact_owner: None,
             },
-            None,
         )
         .expect_err("a direct start overlapping a protecting claim must be refused");
     assert!(

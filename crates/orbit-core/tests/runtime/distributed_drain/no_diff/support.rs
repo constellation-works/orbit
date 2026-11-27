@@ -235,6 +235,13 @@ impl From<bool> for EvidenceSeed<'_> {
         }
     }
 }
+/// The hosts a clean-leaf fixture runs on: the follower's extra config and
+/// each side's host OS, when the case pins one.
+pub(crate) struct FixtureHosts<'a> {
+    pub(crate) follower_config: &'a str,
+    pub(crate) owner_os: Option<orbit_types::task::HostOs>,
+    pub(crate) follower_os: Option<orbit_types::task::HostOs>,
+}
 pub(crate) struct CleanLeaf {
     pub(crate) pair: Pair,
     pub(crate) gate: Option<Gate>,
@@ -343,9 +350,11 @@ impl CleanLeaf {
             },
             None,
             CHECK,
-            "",
-            None,
-            None,
+            FixtureHosts {
+                follower_config: "",
+                owner_os: None,
+                follower_os: None,
+            },
         )
     }
 
@@ -424,9 +433,11 @@ impl CleanLeaf {
             report.into(),
             gated,
             CHECK,
-            "",
-            None,
-            None,
+            FixtureHosts {
+                follower_config: "",
+                owner_os: None,
+                follower_os: None,
+            },
         )
     }
 
@@ -450,9 +461,11 @@ impl CleanLeaf {
             true.into(),
             None,
             &red.command(),
-            "",
-            owner,
-            follower,
+            FixtureHosts {
+                follower_config: "",
+                owner_os: owner,
+                follower_os: follower,
+            },
         )
     }
 
@@ -474,9 +487,11 @@ impl CleanLeaf {
             },
             Some(GateOn::Both),
             &check.command(),
-            "",
-            None,
-            None,
+            FixtureHosts {
+                follower_config: "",
+                owner_os: None,
+                follower_os: None,
+            },
         )
     }
 
@@ -492,9 +507,11 @@ impl CleanLeaf {
             true.into(),
             None,
             CHECK,
-            &replay.config(),
-            None,
-            None,
+            FixtureHosts {
+                follower_config: &replay.config(),
+                owner_os: None,
+                follower_os: None,
+            },
         );
         fixture.input["implementation"]["already_resolved"] = json!({"selectors": selectors});
         fixture
@@ -511,9 +528,11 @@ impl CleanLeaf {
             false.into(),
             None,
             CHECK,
-            &replay.config(),
-            None,
-            None,
+            FixtureHosts {
+                follower_config: &replay.config(),
+                owner_os: None,
+                follower_os: None,
+            },
         );
         fixture.input["implementation"]["already_resolved"] = json!({"selectors": selectors});
         fixture
@@ -528,15 +547,16 @@ impl CleanLeaf {
             false.into(),
             None,
             "",
-            &replay.config(),
-            None,
-            None,
+            FixtureHosts {
+                follower_config: &replay.config(),
+                owner_os: None,
+                follower_os: None,
+            },
         );
         fixture.input["implementation"]["already_resolved"] = json!({"selectors": selectors});
         fixture
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn build_requiring(
         already_landed: bool,
         completion: &str,
@@ -544,10 +564,13 @@ impl CleanLeaf {
         evidence: EvidenceSeed<'_>,
         gated: Option<GateOn>,
         required: &str,
-        follower_config: &str,
-        owner_os: Option<orbit_types::task::HostOs>,
-        follower_os: Option<orbit_types::task::HostOs>,
+        hosts: FixtureHosts<'_>,
     ) -> Self {
+        let FixtureHosts {
+            follower_config,
+            owner_os,
+            follower_os,
+        } = hosts;
         let config = format!(
             "[workflow]\ndistributed_completion = \"{completion}\"\nrequired_validation_commands = [\"{required}\"]\n[review]\nbefore_pr = true\n[operation]\nreview_crew = \"sol\"\n"
         );

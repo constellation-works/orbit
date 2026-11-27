@@ -34,6 +34,17 @@ const CHILD_DISPATCH_AUDIT: &str = "pipeline.child_dispatch";
 /// Audit command for the parent's observation of a child's terminal state.
 const CHILD_WAIT_AUDIT: &str = "pipeline.child_wait";
 
+/// One child-dispatch audit row: the command it records, its outcome, the
+/// parent and child runs, and the payload it carries.
+struct ChildAudit<'a> {
+    command: &'a str,
+    status: AuditEventStatus,
+    parent_run_id: Option<&'a str>,
+    child_run_id: Option<&'a str>,
+    payload: Value,
+    error_message: Option<&'a str>,
+}
+
 /// The parent step that is dispatching, as the engine named it.
 pub(super) fn parent_step_id(input: &Value) -> Option<String> {
     input
@@ -78,22 +89,24 @@ pub(super) fn checkpoint_submitted_child(
     record_child_audit(
         runtime,
         action,
-        CHILD_DISPATCH_AUDIT,
-        AuditEventStatus::Success,
-        parent_run_id,
-        Some(&dispatch.child_run_id),
-        serde_json::json!({
-            "parent_run_id": parent_run_id,
-            "parent_step_id": dispatch.parent_step_id,
-            "child_run_id": dispatch.child_run_id,
-            "job_name": dispatch.job_name,
-            "action": dispatch.action,
-            "blocking": dispatch.blocking,
-            "queued": dispatch.queued,
-            "phase": dispatch.phase.as_str(),
-            "submitted_at": dispatch.submitted_at.to_rfc3339(),
-        }),
-        None,
+        ChildAudit {
+            command: CHILD_DISPATCH_AUDIT,
+            status: AuditEventStatus::Success,
+            parent_run_id,
+            child_run_id: Some(&dispatch.child_run_id),
+            payload: serde_json::json!({
+                "parent_run_id": parent_run_id,
+                "parent_step_id": dispatch.parent_step_id,
+                "child_run_id": dispatch.child_run_id,
+                "job_name": dispatch.job_name,
+                "action": dispatch.action,
+                "blocking": dispatch.blocking,
+                "queued": dispatch.queued,
+                "phase": dispatch.phase.as_str(),
+                "submitted_at": dispatch.submitted_at.to_rfc3339(),
+            }),
+            error_message: None,
+        },
     )?;
 
     let Some(parent_run_id) = parent_run_id else {
@@ -199,18 +212,20 @@ pub(super) fn record_child_wait_outcome(
     record_child_audit(
         runtime,
         action,
-        CHILD_WAIT_AUDIT,
-        audit_status,
-        parent_run_id,
-        Some(child_run_id),
-        serde_json::json!({
-            "parent_run_id": parent_run_id,
-            "child_run_id": child_run_id,
-            "status": status,
-            "error": error_message,
-            "message": message,
-        }),
-        message.as_deref().filter(|_| !settled),
+        ChildAudit {
+            command: CHILD_WAIT_AUDIT,
+            status: audit_status,
+            parent_run_id,
+            child_run_id: Some(child_run_id),
+            payload: serde_json::json!({
+                "parent_run_id": parent_run_id,
+                "child_run_id": child_run_id,
+                "status": status,
+                "error": error_message,
+                "message": message,
+            }),
+            error_message: message.as_deref().filter(|_| !settled),
+        },
     )
 }
 
@@ -257,34 +272,38 @@ pub(super) fn record_dispatch_failure(
     if let Err(error) = record_child_audit(
         runtime,
         action,
-        CHILD_DISPATCH_AUDIT,
-        AuditEventStatus::Failure,
-        parent_run_id,
-        None,
-        serde_json::json!({
-            "parent_run_id": parent_run_id,
-            "parent_step_id": parent_step_id,
-            "job_name": job_name,
-            "action": action,
-            "error": error_message,
-        }),
-        Some(error_message),
+        ChildAudit {
+            command: CHILD_DISPATCH_AUDIT,
+            status: AuditEventStatus::Failure,
+            parent_run_id,
+            child_run_id: None,
+            payload: serde_json::json!({
+                "parent_run_id": parent_run_id,
+                "parent_step_id": parent_step_id,
+                "job_name": job_name,
+                "action": action,
+                "error": error_message,
+            }),
+            error_message: Some(error_message),
+        },
     ) {
         tracing::warn!(%error, job_name, "could not record child dispatch failure audit");
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn record_child_audit(
     runtime: &OrbitRuntime,
     action: &str,
-    command: &str,
-    status: AuditEventStatus,
-    parent_run_id: Option<&str>,
-    child_run_id: Option<&str>,
-    payload: Value,
-    error_message: Option<&str>,
+    audit: ChildAudit<'_>,
 ) -> Result<(), DispatchError> {
+    let ChildAudit {
+        command,
+        status,
+        parent_run_id,
+        child_run_id,
+        payload,
+        error_message,
+    } = audit;
     let arguments_json = serde_json::to_string(&payload)
         .map_err(|error| action_failed(action, format!("serialize {command} payload: {error}")))?;
     runtime

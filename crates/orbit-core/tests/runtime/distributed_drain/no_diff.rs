@@ -2010,9 +2010,11 @@ fn overlapping_required_command_and_replay_settle_with_separate_valid_evidence()
                 report.into(),
                 None,
                 &Replay::host_command(),
-                &replay.config(),
-                None,
-                None,
+                FixtureHosts {
+                    follower_config: &replay.config(),
+                    owner_os: None,
+                    follower_os: None,
+                },
             );
             fixture.input["implementation"]["already_resolved"] =
                 json!({"selectors": [Replay::SELECTOR]});

@@ -14,6 +14,7 @@ pub use entry::{
 };
 pub(in crate::adapter::command) use global::execute_global_plugin_dispatch;
 pub use global::{
-    GlobalAuditStoreCache, execute_global_in_process_tool_dispatch,
+    GlobalAuditStoreCache, GlobalToolCall, execute_global_in_process_tool_dispatch,
     execute_global_in_process_tool_dispatch_with_audit_writer,
 };
+pub use runtime::ToolCommandCall;

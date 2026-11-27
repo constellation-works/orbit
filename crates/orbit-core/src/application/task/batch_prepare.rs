@@ -53,24 +53,47 @@ pub(crate) struct BatchSpec {
     pub before_task_count: Vec<(&'static str, Value)>,
 }
 
+/// The selection a loaded candidate is admitted against: whether the caller
+/// named the tasks, the cap, and the reasons automatic mode drops silently.
+#[derive(Clone, Copy)]
+struct CandidateAdmission<'a> {
+    explicit: bool,
+    max_tasks: usize,
+    silent_reasons: &'a [&'static str],
+}
+
+/// The hooks that carry [`prepare_batch`]'s per-step differences: `held`
+/// is fetched where the copies fetched it, `keep_automatic` filters
+/// automatic candidates after their task read, `qualify` decides one
+/// candidate, `draw` returns its row and crew key, `skipped_detail` renders
+/// a superseded detail, and `partition_extra` optionally adds one partition
+/// key from the rows and its task IDs.
+pub(crate) struct BatchHooks<H, K, Q, D, S, P> {
+    pub held: H,
+    pub keep_automatic: K,
+    pub qualify: Q,
+    pub draw: D,
+    pub skipped_detail: S,
+    pub partition_extra: P,
+}
+
 /// Classify one loaded candidate. The caller applies `max_tasks` before the
 /// load in automatic mode; this still defers a qualifier that arrives after
 /// the cap, which is how an explicit list that somehow exceeds it settles.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one loaded candidate's qualification shares the prepare pass's hooks and accumulators"
-)]
 fn admit_loaded_candidate<T>(
     task: Task,
-    explicit: bool,
-    max_tasks: usize,
+    admission: CandidateAdmission<'_>,
     held: &HeldRuns,
-    silent_reasons: &[&'static str],
     qualify: &mut impl FnMut(&Task, &HeldRuns, bool) -> Result<Qualification<T>, OrbitError>,
     skipped_detail: &impl Fn(&str, Option<&BTreeSet<String>>) -> String,
     failed: &impl Fn(OrbitError) -> DispatchError,
     prepared: &mut PreparedSelection<T>,
 ) -> Result<(), DispatchError> {
+    let CandidateAdmission {
+        explicit,
+        max_tasks,
+        silent_reasons,
+    } = admission;
     match qualify(&task, held, explicit).map_err(failed)? {
         Qualification::Selected(_) if prepared.selected.len() >= max_tasks => {
             *prepared
@@ -90,29 +113,32 @@ fn admit_loaded_candidate<T>(
     Ok(())
 }
 
-/// Run the shared batch-selection skeleton. The hooks carry the steps'
-/// behavioural differences: `held` is fetched where the copies fetched it,
-/// `keep_automatic` filters automatic candidates after their task read,
-/// `qualify` decides one candidate, `draw` returns its row and crew key,
-/// `skipped_detail` renders a superseded detail, and `partition_extra`
-/// optionally adds one partition key from the rows and its task IDs.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the shared skeleton takes one hook per selection step so callers do not duplicate the batch loop"
-)]
-pub(crate) fn prepare_batch<T>(
+/// Run the shared batch-selection skeleton; [`BatchHooks`] carry the steps'
+/// behavioural differences.
+pub(crate) fn prepare_batch<T, H, K, Q, D, S, P>(
     runtime: &OrbitRuntime,
     action: &str,
     input: &Value,
     run_id: Option<&str>,
     spec: BatchSpec,
-    held: impl FnOnce(&OrbitRuntime) -> Result<HeldRuns, OrbitError>,
-    keep_automatic: impl Fn(&Task) -> bool,
-    mut qualify: impl FnMut(&Task, &HeldRuns, bool) -> Result<Qualification<T>, OrbitError>,
-    mut draw: impl FnMut(&Task, T) -> Result<(Value, String), OrbitError>,
-    skipped_detail: impl Fn(&str, Option<&BTreeSet<String>>) -> String,
-    partition_extra: impl Fn(&[Value], &[String]) -> Option<(&'static str, Value)>,
-) -> Result<Value, DispatchError> {
+    hooks: BatchHooks<H, K, Q, D, S, P>,
+) -> Result<Value, DispatchError>
+where
+    H: FnOnce(&OrbitRuntime) -> Result<HeldRuns, OrbitError>,
+    K: Fn(&Task) -> bool,
+    Q: FnMut(&Task, &HeldRuns, bool) -> Result<Qualification<T>, OrbitError>,
+    D: FnMut(&Task, T) -> Result<(Value, String), OrbitError>,
+    S: Fn(&str, Option<&BTreeSet<String>>) -> String,
+    P: Fn(&[Value], &[String]) -> Option<(&'static str, Value)>,
+{
+    let BatchHooks {
+        held,
+        keep_automatic,
+        mut qualify,
+        mut draw,
+        skipped_detail,
+        partition_extra,
+    } = hooks;
     let failed = |error: OrbitError| DispatchError::action_failed(action, error.to_string());
     if let Some(claim) = &spec.claim
         && (spec.source_revision.as_deref() != Some(claim.member.source.commit.as_str())
@@ -153,6 +179,11 @@ pub(crate) fn prepare_batch<T>(
 
     // An explicitly named task that no longer qualifies settles superseded
     // with its reason, so a claimed member is released rather than failed.
+    let admission = CandidateAdmission {
+        explicit,
+        max_tasks,
+        silent_reasons: spec.silent_reasons,
+    };
     let mut prepared = PreparedSelection {
         selected: Vec::new(),
         superseded: Vec::new(),
@@ -179,10 +210,8 @@ pub(crate) fn prepare_batch<T>(
             })?;
             admit_loaded_candidate(
                 task,
-                explicit,
-                max_tasks,
+                admission,
                 &held,
-                spec.silent_reasons,
                 &mut qualify,
                 &skipped_detail,
                 &failed,
@@ -214,10 +243,8 @@ pub(crate) fn prepare_batch<T>(
             if keep_automatic(&task) {
                 admit_loaded_candidate(
                     task,
-                    explicit,
-                    max_tasks,
+                    admission,
                     &held,
-                    spec.silent_reasons,
                     &mut qualify,
                     &skipped_detail,
                     &failed,

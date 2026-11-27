@@ -19,7 +19,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::super::super::owner::{ClaimedOwnerRoute, bridge_through};
+use super::super::super::owner::{ClaimedOwnerCall, ClaimedOwnerRoute, bridge_through};
 use super::super::review::{FOLLOWER, Fixture, GET, PUT};
 use super::broker::{SHOW, TaskOwner, refused};
 use crate::adapter::command::dispatch::execute::ToolEntryPoint;
@@ -339,13 +339,15 @@ fn a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refu
         bridge_through(
             None,
             &fixture.global_root,
-            Some(&local),
-            Some(FOLLOWER),
-            name,
-            input,
-            &fixture.worktree,
-            &fixture.worktree,
-            ToolEntryPoint::Cli,
+            ClaimedOwnerCall {
+                binding: Some(&local),
+                process_machine_id: Some(FOLLOWER),
+                name,
+                input,
+                cwd: &fixture.worktree,
+                workspace_root: &fixture.worktree,
+                entry_point: ToolEntryPoint::Cli,
+            },
         )
     };
     // The local owner route, which a call the bridge leaves alone takes.

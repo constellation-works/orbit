@@ -37,16 +37,18 @@ pub(super) fn calculate_backlog_forecast(
     };
     let simulation_started = std::time::Instant::now();
     let mut forecast = simulation::simulate_backlog_forecast(
-        &prepared.items,
-        &prepared.resolved,
-        &cohorts.history,
-        &cohorts.episodes,
+        simulation::SimulationInputs {
+            items: &prepared.items,
+            resolved: &prepared.resolved,
+            history: &cohorts.history,
+            episodes: &cohorts.episodes,
+            rework: &prepared.rework,
+            correction: &correction,
+        },
         &prepared.admission,
         &prepared.plan,
         prepared.slots,
-        &prepared.rework,
         options.arrivals.then_some(&prepared.arrival_rates),
-        &correction,
         bounds,
     );
     let simulation_ms = simulation_started.elapsed().as_secs_f64() * 1000.0;

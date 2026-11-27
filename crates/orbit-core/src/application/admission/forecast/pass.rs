@@ -16,6 +16,17 @@ use super::model::{ForecastAdmission, ForecastPassScratch, ForecastWait};
 use super::task_set::ForecastTaskSet;
 use super::{ForecastHostEvidence, RESOURCE_RECHECK_HOURS, resource_fit};
 
+/// The drain as one forecast pass sees it: the ready and running tasks, the
+/// running tasks' admission hours, the free and total slots, and the hour.
+pub(crate) struct ForecastDrain<'a> {
+    pub(crate) ready: &'a [usize],
+    pub(crate) running: &'a ForecastTaskSet,
+    pub(crate) admitted_at: &'a [f64],
+    pub(crate) free_slots: usize,
+    pub(crate) slots: usize,
+    pub(crate) at_hours: f64,
+}
+
 impl ForecastAdmission {
     pub(crate) fn len(&self) -> usize {
         self.tasks.len()
@@ -99,22 +110,21 @@ impl ForecastAdmission {
     /// single-slot drain applies no unknown-footprint rule. `admitted_at`
     /// holds each running task's admission hour, which gap fit ages its
     /// profile by.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the forecast pass threads the drain snapshot, slot ceiling and caller-owned scratch, selected and wait buffers"
-    )]
     pub(crate) fn pass(
         &self,
-        ready: &[usize],
-        running: &ForecastTaskSet,
-        admitted_at: &[f64],
-        free_slots: usize,
-        slots: usize,
-        at_hours: f64,
+        drain: ForecastDrain<'_>,
         scratch: &mut ForecastPassScratch,
         selected: &mut Vec<usize>,
         mut wait: impl FnMut(usize, ForecastWait),
     ) {
+        let ForecastDrain {
+            ready,
+            running,
+            admitted_at,
+            free_slots,
+            slots,
+            at_hours,
+        } = drain;
         // Held locks, as `backlog_snapshot` applies them: a direct conflict
         // excludes its whole root group, and the first lock-blocked
         // critical/high tasks reserve their surface.

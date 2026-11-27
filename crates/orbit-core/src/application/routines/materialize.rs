@@ -15,8 +15,8 @@ use orbit_config::SeedingPolicy;
 
 use super::seed::{DEFAULT_ROUTINE_FILES, RoutineSeedIdentity};
 use super::template::{
-    ShippedShape, adoptable_binding, binding_of, reconcile_lifecycle_variant, render_refresh,
-    render_routine_template, shipped_shape_of,
+    ShippedRoutineTemplate, ShippedShape, adoptable_binding, binding_of,
+    reconcile_lifecycle_variant, render_refresh, render_routine_template, shipped_shape_of,
 };
 use crate::application::managed_assets::{
     MANAGED_ASSET_MANIFEST_FILE, ManagedAssetAction, ManagedAssetLayout, ManagedAssetManifest,
@@ -314,9 +314,11 @@ pub(crate) fn reconcile_default_routines_for_policy(
                 if existing_digest != provenance.rendered_digest && !overwrite_bindings {
                     if let Some(outcome) = reconcile_lifecycle_variant(
                         identity,
-                        name,
-                        template,
-                        &template_digest,
+                        ShippedRoutineTemplate {
+                            file_stem: name,
+                            template,
+                            template_digest: &template_digest,
+                        },
                         &path,
                         &existing,
                         mode,
@@ -418,9 +420,11 @@ pub(crate) fn reconcile_default_routines_for_policy(
             if sha256_hex(existing.as_bytes()) != *legacy_digest {
                 if let Some(outcome) = reconcile_lifecycle_variant(
                     identity,
-                    name,
-                    template,
-                    &template_digest,
+                    ShippedRoutineTemplate {
+                        file_stem: name,
+                        template,
+                        template_digest: &template_digest,
+                    },
                     &path,
                     &existing,
                     mode,
@@ -504,9 +508,11 @@ pub(crate) fn reconcile_default_routines_for_policy(
                     .is_ok_and(|definition| definition.name == requested_binding.name)
                     && let Some(outcome) = reconcile_lifecycle_variant(
                         identity,
-                        name,
-                        template,
-                        &template_digest,
+                        ShippedRoutineTemplate {
+                            file_stem: name,
+                            template,
+                            template_digest: &template_digest,
+                        },
                         &path,
                         &existing,
                         mode,

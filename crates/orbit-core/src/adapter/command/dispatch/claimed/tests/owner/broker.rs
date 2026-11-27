@@ -21,7 +21,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::super::super::owner::{ClaimedOwnerRoute, bridge_through};
+use super::super::super::owner::{ClaimedOwnerCall, ClaimedOwnerRoute, bridge_through};
 use super::super::review::{FOLLOWER, Fixture, GET, PUT, TASK};
 use crate::OrbitRuntime;
 use crate::adapter::command::dispatch::brokered::RunDispatch;
@@ -359,13 +359,15 @@ fn the_nested_orbit_keeps_other_routes_outside_a_masked_sandbox() {
             bridge_through(
                 None,
                 &fixture.global_root,
-                binding,
-                Some(FOLLOWER),
-                SHOW,
-                &input,
-                &fixture.worktree,
-                &fixture.worktree,
-                ToolEntryPoint::Cli
+                ClaimedOwnerCall {
+                    binding,
+                    process_machine_id: Some(FOLLOWER),
+                    name: SHOW,
+                    input: &input,
+                    cwd: &fixture.worktree,
+                    workspace_root: &fixture.worktree,
+                    entry_point: ToolEntryPoint::Cli,
+                },
             )
             .is_none(),
             "an owner on this machine, or an unbound caller, is reached directly"

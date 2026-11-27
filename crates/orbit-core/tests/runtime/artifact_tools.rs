@@ -1,7 +1,7 @@
 //! Artifact diagnostics and the reviewer's list-before-read procedure, through
 //! the public tool boundary. Mutable fixtures run in isolated child processes.
 
-use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::application::task::{TaskAddParams, TaskStartRequest, TaskUpdateParams};
 use orbit_core::{NotFoundKind, OrbitError, OrbitRuntime, TaskStatus};
 use orbit_engine::{ReviewLandingRequest, RuntimeHost};
 use orbit_types::task::{
@@ -40,21 +40,23 @@ fn task_starts_admit_artifacts_before_any_persistence() {
             // cannot be satisfied by that transport-only rejection.
             fixture.runtime.start_task_with_identity_and_crew(
                 &task.id,
-                None,
-                Some("Admitted artifacts".into()),
-                None,
-                Some("codex".into()),
-                None,
-                None,
-                TaskUpdateParams {
-                    description: Some("Admitted start".into()),
-                    upsert_artifacts: vec![
-                        TaskArtifact::from_text("ordinary.txt", "ordinary evidence"),
-                        TaskArtifact::from_text(path, content),
-                    ],
-                    ..Default::default()
+                TaskStartRequest {
+                    note: None,
+                    comment: Some("Admitted artifacts".into()),
+                    agent: None,
+                    model: Some("codex".into()),
+                    crew_override: None,
+                    plan: None,
+                    field_edits: TaskUpdateParams {
+                        description: Some("Admitted start".into()),
+                        upsert_artifacts: vec![
+                            TaskArtifact::from_text("ordinary.txt", "ordinary evidence"),
+                            TaskArtifact::from_text(path, content),
+                        ],
+                        ..Default::default()
+                    },
+                    artifact_owner: None,
                 },
-                None,
             )
         };
         for reserved in [

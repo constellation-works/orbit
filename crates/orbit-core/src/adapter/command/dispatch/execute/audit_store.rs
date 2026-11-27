@@ -89,13 +89,18 @@ impl Drop for DispatchAuditFrame {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The tool call an audited dispatch runs: its name and input, how the
+/// registry classifies it, and the plugin behind it, if any.
+pub(super) struct AuditedToolCall<'a> {
+    pub(super) name: &'a str,
+    pub(super) input: Value,
+    pub(super) execution_kind: ToolExecutionKind,
+    pub(super) plugin: Option<PluginProvenance>,
+}
+
 pub(super) fn execute_tool_dispatch_with_audit_store<F, S>(
     env: &Env,
-    name: &str,
-    input: Value,
-    execution_kind: ToolExecutionKind,
-    plugin: Option<PluginProvenance>,
+    call: AuditedToolCall<'_>,
     audit: ToolDispatchAuditContext,
     mut persist_audit: S,
     dispatch: F,
@@ -104,6 +109,12 @@ where
     F: FnOnce(Value) -> Result<Value, OrbitError>,
     S: FnMut(&AuditEventInsertParams, AuditInvocationFields<'_>) -> Result<(), OrbitError>,
 {
+    let AuditedToolCall {
+        name,
+        input,
+        execution_kind,
+        plugin,
+    } = call;
     let ToolDispatchAuditContext {
         agent_override,
         model_override,
