@@ -12,6 +12,7 @@
 //! closure, which the flow calls only once the caller is admitted.
 
 mod dashboard;
+
 mod toggle;
 
 use orbit_common::OrbitError;

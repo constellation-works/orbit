@@ -91,6 +91,10 @@ const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ("breaker", RoutineField::Breaker),
 ];
 
+/// The error a clock control answers with when the clock changed while it was pending.
+const CLOCK_CHANGED_ERROR: &str =
+    "clock state changed while this action was pending; refresh before retrying";
+
 /// Inputs routine health reads that a live drain rewrites constantly: job runs
 /// and the task registry files. Keying on them recomputed synchronously, about
 /// 1-2 s each, whenever any run anywhere started or finished; a change instead
@@ -294,6 +298,18 @@ pub(super) fn statuses_read(state: &DashboardState) -> routine::Statuses {
     Box::new(move || routine_statuses(&global_root))
 }
 
+/// The sweep clock's state and the routine status report a clock control
+/// reads before it changes anything. `routine_write` runs it on the blocking
+/// pool once the caller is admitted.
+fn clock_observation(state: &DashboardState) -> routine::ClockObservation {
+    let state = state.clone();
+    Box::new(move || {
+        let before = state.clock_status()?;
+        let report = routine_statuses(state.global_root())?;
+        Ok((before, report))
+    })
+}
+
 /// Run one governed routine write on the blocking pool and return what the
 /// admitted write did, or the response that already answers the request.
 pub(super) async fn routine_write(
@@ -396,14 +412,7 @@ pub(super) async fn control_clock(
         Ok(workspace) => workspace,
         Err(rejection) => return rejection.into_response(),
     };
-    let observe = {
-        let state = state.clone();
-        Box::new(move || {
-            let before = state.clock_status()?;
-            let report = routine_statuses(state.global_root())?;
-            Ok((before, report))
-        })
-    };
+    let observe = clock_observation(&state);
     #[cfg(test)]
     let stand_in: Option<routine::ClockStandIn> = {
         let state = state.clone();
@@ -437,7 +446,7 @@ pub(super) async fn control_clock(
             return (
                 StatusCode::CONFLICT,
                 Json(json!({
-                    "error": "clock state changed while this action was pending; refresh before retrying",
+                    "error": CLOCK_CHANGED_ERROR,
                     "code": "stale_clock_state",
                     "actual_enabled": before.enabled,
                     "actual_cadence_seconds": before.configured_cadence_seconds,

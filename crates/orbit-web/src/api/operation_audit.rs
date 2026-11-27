@@ -156,6 +156,11 @@ impl<'a> OperationAudit<'a> {
             Ok(Err(error)) => error.to_string(),
             Err(join_error) => join_error.to_string(),
         };
-        tracing::error!(operation, target, error = %error, "failed to persist dashboard operation audit");
+        tracing::error!(
+            operation,
+            target,
+            error = %error,
+            "failed to persist dashboard operation audit",
+        );
     }
 }

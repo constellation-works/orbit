@@ -56,7 +56,9 @@ pub(super) fn dispatch(
             retire: input.optional_string_list("retire")?.unwrap_or_default(),
         }),
         ExperimentVerb::Assign => Ok(json!({"experiments": runtime.force_experiment_assignment(
-            &input.required_string("id")?, &input.required_string("task_id")?, &input.required_string("arm")?,
+            &input.required_string("id")?,
+            &input.required_string("task_id")?,
+            &input.required_string("arm")?,
         )?})),
         ExperimentVerb::Conclude => change(ExperimentChange::Conclude {
             arm: input.optional_string("arm")?,

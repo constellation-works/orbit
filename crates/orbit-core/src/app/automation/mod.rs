@@ -13,6 +13,7 @@
 //! have no registry verb and no tool: they read the store directly.
 
 mod operation;
+
 mod read;
 
 use orbit_common::OrbitError;

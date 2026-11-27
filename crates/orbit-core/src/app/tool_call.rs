@@ -19,15 +19,6 @@ pub struct Input {
     caller: Box<Caller>,
 }
 
-/// The caller the generic tool entry resolved before it reached a handler.
-#[derive(Default)]
-pub(crate) struct Caller {
-    pub(crate) session: ToolSessionContext,
-    pub(crate) run_id: Option<String>,
-    pub(crate) agent: Option<String>,
-    pub(crate) model: Option<String>,
-}
-
 impl Input {
     /// Fields from a caller the process identifies.
     pub fn new(fields: Map<String, Value>) -> Self {
@@ -57,6 +48,15 @@ impl Input {
             caller: Box::new(caller),
         }
     }
+}
+
+/// The caller the generic tool entry resolved before it reached a handler.
+#[derive(Default)]
+pub(crate) struct Caller {
+    pub(crate) session: ToolSessionContext,
+    pub(crate) run_id: Option<String>,
+    pub(crate) agent: Option<String>,
+    pub(crate) model: Option<String>,
 }
 
 /// The session the dashboard calls a registry tool with.

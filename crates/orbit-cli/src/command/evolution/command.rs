@@ -12,6 +12,7 @@ pub struct EvolutionCommand {
     #[command(subcommand)]
     pub command: Invocation<EvolutionVerb>,
 }
+
 impl ExecuteCore for EvolutionCommand {
     fn execute(self, core: &Core) -> CommandOut {
         let Invocation { spec, input } = self.command;

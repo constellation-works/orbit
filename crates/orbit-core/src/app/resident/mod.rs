@@ -15,6 +15,7 @@
 //! dashboard's resident operation and leaves one `dashboard.operations` row.
 
 mod dashboard;
+
 mod operation;
 
 use std::path::PathBuf;
