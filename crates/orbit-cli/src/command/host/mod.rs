@@ -1,6 +1,6 @@
 //! `orbit host` — the remote Orbit hosts this machine reaches over SSH.
 //!
-//! Each command loads `~/.orbit/hosts.toml` through `orbit_cmd::hosts`, which
+//! Each command loads `~/.orbit/hosts.toml` through `orbit_core::app::host`, which
 //! the dashboard also calls, and opens no workspace runtime. Reachability,
 //! version, protocol and workspaces are read from each host live and never
 //! persisted. The registry stores identity, routing and offline acknowledgements.

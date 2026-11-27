@@ -9,11 +9,11 @@ tags: [architecture, orbit-cmd]
 
 ## What it owns
 
-Composes the application for CLI and web: command groups, runtime assembly, routines, managed-worker transports, `orbit doctor`, `orbit host`, update, browser-kit.
+Composes the application for CLI and web: command groups, runtime assembly, routines, managed-worker transports, the doctor and host apps' ports, host routing, update.
 
 ## Main modules and types
 
-`doctor` (`DoctorCommands`), `hosts`, `update`, `browser_kit`, `mcp_clients`, `log_format`, `registry`, `task`. See ``crates/orbit-cmd/src/lib.rs``.
+`doctor_host`, `hosts`, `update`, `mcp_clients`, `log_format`, `registry`, `task`. See ``crates/orbit-cmd/src/lib.rs``.
 
 ## Dependencies
 
@@ -31,9 +31,8 @@ Design intent: [docs/design/terminal-interface/](../../docs/design/terminal-inte
 ## Ownership by module
 
 - `agent_rules`: Opt-in injection of Orbit workflow rules into workspace `CLAUDE.md` and `AGENTS.md` files; imports `orbit-common` only.
-- `browser_kit`: Installation, reporting, verification, and removal of the host's headless browser kit (`orbit config browser-kit`); imports `orbit-common` and `orbit-core`.
-- `doctor_host`: The doctor app's `Host` port: the host registry, MCP client registrations, fleet routine statuses, the browser kit, task-store partitions and managed-service environments that `orbit-core`'s `app::doctor` cannot reach; imports `browser_kit`, `hosts`, `mcp_clients`, `registry`, `service_environment`, `task`, `orbit-common`, `orbit-core`, and `orbit-types`.
-- `hosts`: Registered remote host management (`orbit host`) joining registry records to federated MCP probes; imports `registry`, `task`, `orbit-common`, `orbit-core`, `orbit-mcp`, `orbit-registry`, `orbit-store`, and `orbit-types`.
+- `doctor_host`: The doctor app's `Host` port: the host registry, MCP client registrations, fleet routine statuses, the browser kit, task-store partitions and managed-service environments that `orbit-core`'s `app::doctor` cannot reach; imports `hosts`, `mcp_clients`, `registry`, `service_environment`, `task`, `orbit-common`, `orbit-core`, and `orbit-types`.
+- `hosts`: The host app's `Probe` port over the federated MCP probe and its `PullDrains` port over each replica checkout's runtime, and task-id and `--host` routing to registered hosts; imports `registry`, `task`, `orbit-common`, `orbit-core`, `orbit-mcp`, `orbit-registry`, `orbit-store`, and `orbit-types`.
 - `log_format`: Process-log filters, path resolution, and plain-text source/code columns shared by `orbit log` and the dashboard; imports `orbit-common` and `orbit-core`.
 - `mcp_clients`: Supported MCP client configuration paths and registration checks for `orbit mcp init/remove`; imports `orbit-common` only.
 - `migrate`: Versioned `.orbit/` upgrade surface behind `orbit migrate`; imports `orbit-common`, `orbit-config`, `orbit-core`, and `orbit-store`.

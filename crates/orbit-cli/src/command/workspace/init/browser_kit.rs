@@ -5,8 +5,8 @@
 use std::io::{BufRead, Write};
 use std::path::Path;
 
-use orbit_cmd::browser_kit::{self, InstallOptions};
 use orbit_common::Env;
+use orbit_core::app::host::browser_kit::{self, InstallOptions};
 use orbit_core::bootstrap::browser_kit::{KitInspection, KitLayout};
 use serde_json::{Value, json};
 

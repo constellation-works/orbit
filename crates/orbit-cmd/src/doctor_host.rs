@@ -10,6 +10,7 @@ use orbit_core::app::doctor::{
     BrowserKit, Host, KitProblem, OrphanTaskStoreRemoval, TaskStorePartition, TaskStorePartitions,
     UnreachableTaskStorePartition, WorkspaceDoctorResult,
 };
+use orbit_core::app::host::browser_kit;
 use orbit_core::application::routines::RoutineStatusReport;
 use orbit_core::bootstrap::browser_kit::KitLayout;
 use orbit_types::identity::CrewEnvVar;
@@ -23,7 +24,7 @@ pub(crate) struct DoctorHost;
 
 impl Host for DoctorHost {
     fn hosts_row(&self, global_root: &Path) -> WorkspaceDoctorResult {
-        crate::hosts::doctor_hosts_row(global_root)
+        orbit_core::app::host::doctor_hosts_row(crate::hosts::ports().probe, global_root)
     }
 
     fn registered_mcp_clients(
@@ -50,8 +51,8 @@ impl Host for DoctorHost {
     }
 
     fn browser_kit(&self, layout: &KitLayout, env: &Env) -> BrowserKit {
-        let status = crate::browser_kit::kit_status(layout, env);
-        let problem = |problem: crate::browser_kit::KitProblem| KitProblem {
+        let status = browser_kit::kit_status(layout, env);
+        let problem = |problem: browser_kit::KitProblem| KitProblem {
             problem: problem.problem,
             fix: problem.fix,
         };
@@ -60,12 +61,12 @@ impl Host for DoctorHost {
             library_problem: status.library_problem().map(problem),
             libraries_checked: status.unresolved_libraries.is_some(),
             inspection: status.inspection,
-            node_fix: crate::browser_kit::NODE_FIX,
+            node_fix: browser_kit::NODE_FIX,
         }
     }
 
     fn find_in_path(&self, program: &str, path: &str) -> Option<PathBuf> {
-        crate::browser_kit::find_in_path_value(program, path)
+        browser_kit::find_in_path_value(program, path)
     }
 
     fn task_store_partitions(

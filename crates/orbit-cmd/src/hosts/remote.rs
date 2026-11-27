@@ -3,36 +3,17 @@
 //! closed and is never attributed to the entry.
 
 use orbit_common::{HostRegistryCode, OrbitError};
+use orbit_core::app::host::{
+    HostProbeError, HostRow, HostWorkspace, entry_row, local_binary_version,
+    local_protocol_fingerprint,
+};
 use orbit_registry::hosts::HostEntry;
 use orbit_types::workspace::Workspace;
 
-use super::probe::{
-    self, LiveHost, error_class, error_detail, local_binary_version, local_protocol_fingerprint,
-};
-use super::{HostProbeError, HostRow, HostWorkspace};
+use super::probe::{self, LiveHost, error_class, error_detail};
 
 pub(super) fn remote_row(target: &HostEntry, caller_machine_id: &str, probe: bool) -> HostRow {
-    let mut row = HostRow {
-        name: target.name.clone(),
-        machine_id: target.machine_id.clone(),
-        ssh: Some(target.ssh.clone()),
-        task_prefix: Some(target.task_prefix.clone()),
-        local: false,
-        legacy: false,
-        reachable: None,
-        offline: target
-            .offline
-            .as_ref()
-            .filter(|mark| mark.active_at(chrono::Utc::now()))
-            .cloned(),
-        error: None,
-        binary_version: None,
-        protocol_fingerprint: None,
-        host_os: target.host_os.map(|os| os.as_str().to_string()),
-        skew: false,
-        skew_fields: Vec::new(),
-        workspaces: Vec::new(),
-    };
+    let mut row = entry_row(target);
     if !probe {
         return row;
     }

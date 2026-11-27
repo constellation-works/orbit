@@ -9,12 +9,12 @@
 use std::path::Path;
 use std::process::Command;
 
-use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
-use orbit_common::{Env, OrbitError};
-use orbit_core::bootstrap::browser_kit::{
+use crate::bootstrap::browser_kit::{
     BROWSERS_PATH_ENV, KitInspection, KitLayout, MANAGED_ENV_SCRIPT_HEADER, MODULE_ENV,
     PIXEL_HELPER_PACKAGE, PIXEL_HELPER_VERSION, PLAYWRIGHT_VERSION,
 };
+use orbit_common::fs::io::{atomic_write_text, create_private_dir_all};
+use orbit_common::{Env, OrbitError};
 use serde::Serialize;
 
 use super::host::{require_host_operator, require_tool, run_streaming, sh_quote};

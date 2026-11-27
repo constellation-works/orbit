@@ -30,8 +30,6 @@ orbit_common::isolate_test_process!();
 
 pub mod agent_rules;
 
-pub mod browser_kit;
-
 pub mod doctor_host;
 
 pub mod hosts;
