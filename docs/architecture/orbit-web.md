@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Architecture map for orbit-web: what it owns, main modules, dependencies and entry points.
-last_validated: 2026-11-25
+last_validated: 2026-11-27
 tags: [architecture, orbit-web]
 ---
 
@@ -37,13 +37,13 @@ Design intent: [docs/design/user-interface/](../../docs/design/user-interface/) 
 - `health`: `/healthz` liveness and opt-in readiness diagnostics; imports `log_format`, `state`, `orbit-cmd`, `orbit-common`, and `orbit-core` (never `api` or `serve`).
 - `heap`: Heap allocation policy for the long-running dashboard server; imports `axum`, `tokio`, and platform/libc bindings only (never `api` or `serve`).
 - `host_tunnels`: Per-host SSH tunnels backing `/api/on/<host>/...` dashboard forwarding; imports `connect`, `ssh_tunnel`, and `orbit-common` (never `api` or `serve`).
-- `lease`: Lease listener and operator-owned Unix-socket intake transport; imports `api::leases`, `shutdown`, `state`, `orbit-auth`, `orbit-common`, `orbit-core`, and `orbit-types` (never `serve`).
+- `lease`: Lease listener and operator-owned Unix-socket intake transport; imports `api::leases`, `state`, `orbit-auth`, `orbit-common`, `orbit-core`, and `orbit-types` (never `serve`).
 - `log_format`: Web log scanning and HTML rendering for `/api/log` and `/api/diagnostics`; imports `parse`, `orbit-cmd`, `orbit-common`, and `orbit-core` (never `api` or `serve`).
 - `parse`: Dashboard query duration and timestamp parsers; imports `orbit-common` and `orbit-core` (never `api` or `serve`).
 - `permalink`: Dashboard task and run permalinks, resolved through the host registry; imports `assets`, `state`, `orbit-registry`, and `orbit-types` (never `api` or `serve`).
 - `projections`: The audit event JSON the API serves and the cached task riskiness model lent to the task app; imports `runtime_memo`, `state`, `orbit-core`, and `orbit-types` (never `api` or `serve`).
 - `runtime_memo`: Process-local single-flight TTL cache keyed by runtime identity or host inputs; imports `axum`, `orbit-core`, and `serde_json` only (never `api` or `serve`).
 - `serve`: Axum HTTP server bootstrap, loopback bind enforcement, middleware, and graceful shutdown; imports `api`, `assets`, `connect`, `health`, `heap`, `lease`, `shutdown`, `state`, and composition/core crates.
-- `shutdown`: SIGINT and SIGTERM future shared by the dashboard server and lease listener; imports `orbit-core` only (never `api` or `serve`).
+- `shutdown`: SIGINT and SIGTERM future the dashboard server awaits to begin graceful shutdown; imports `tokio` and `orbit-common` only (never `api` or `serve`).
 - `ssh_tunnel`: Client-side SSH local-forward tunnel implementation for `orbit web connect`; imports `host_tunnels`, `orbit-common`, and `orbit-core` (never `api` or `serve`).
 - `state`: Multi-workspace dashboard state and registry reconciliation; imports `doctor_report`, `host_tunnels`, `runtime_memo`, and lower workspace crates (never `api` or `serve`).
