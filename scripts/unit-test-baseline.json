@@ -194,6 +194,7 @@
         "app/agent/tests/api.rs::memory_evidence_charges_implementers_only_for_judged_implementation_faults",
         "app/agent/tests/api.rs::pilot_interval_resamples_settled_warnings_on_unassessed_tasks",
         "app/agent/tests/api.rs::pilot_rows_keep_each_rounds_own_effort",
+        "app/agent/tests/api.rs::pilot_selectors_cover_the_generated_feature_board_from_design_docs",
         "app/agent/tests/api.rs::provider_default_report_survives_stored_facts_reuse",
         "app/agent/tests/api.rs::recorded_effort_wins_over_a_crew_label_effort",
         "app/agent/tests/api.rs::reviewer_interval_resamples_review_units_not_task_groups",

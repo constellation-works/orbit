@@ -141,6 +141,7 @@ const DERIVED: &[(&str, Source)] = &[
         Source::Within(CLI_MCP_SOURCES),
     ),
     ("docs/INDEX.md", Source::Within(&["docs/"])),
+    ("docs/design/FEATURES.md", Source::Within(&["docs/"])),
 ];
 
 /// Where a generated or mirrored output comes from.

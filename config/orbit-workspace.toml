@@ -27,6 +27,7 @@ ui = ["visual-fixture"]
 
 [workflow.generated_paths]
 "docs/INDEX.md" = "make docs-index"
+"docs/design/FEATURES.md" = "make docs-index"
 
 [workflow.validation_env]
 build_output_env = ["CARGO_TARGET_DIR"]

@@ -58,7 +58,7 @@ help:
 	@echo "  make check-ci-macos  Verify native macOS CI filters still select compiled tests"
 	@echo "  make ci-lint      Pre-handoff clippy gate for agents (compiles all workspace targets)"
 	@echo "  make goldens      Pre-handoff golden gate (CLI/MCP, CI logs, and sandbox profiles; UPDATE=1 regenerates)"
-	@echo "  make docs-index   Regenerate docs/INDEX.md"
+	@echo "  make docs-index   Regenerate docs/INDEX.md and docs/design/FEATURES.md"
 	@echo "  make stability    Verify per-crate stability tier markers"
 	@echo "  make release-check  Verify Cargo/npm/release version lockstep (see docs/runbooks/release.md)"
 	@echo "  make install      Install CLI locally (INSTALL_PROFILE=debug optional)"
