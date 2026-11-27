@@ -49,7 +49,11 @@ impl OrbitRuntime {
         self.with_task_write_locked(id, || {
             let task = self.get_task(id)?;
             if task.status == TaskStatus::Proposed {
-                ensure_status_change_not_run_owned(self, id)?;
+                ensure_status_change_not_run_owned(
+                    self,
+                    id,
+                    RunOwnershipRecovery::WaitOrAskOperator,
+                )?;
                 self.approve_task_with_identity(id, note, comment, agent, model)
             } else {
                 if note.is_some() {
@@ -58,7 +62,7 @@ impl OrbitRuntime {
                             .to_string(),
                     ));
                 }
-                self.update_task_with_identity(
+                self.update_task_with_owner(
                     id,
                     TaskUpdateParams {
                         comment,
@@ -67,7 +71,10 @@ impl OrbitRuntime {
                     },
                     agent,
                     model,
+                    None,
+                    None,
                 )
+                .map(|(task, _)| task)
             }
         })
     }
@@ -243,7 +250,13 @@ impl OrbitRuntime {
             if guard_run_ownership
                 && matches!(task.status, TaskStatus::Proposed | TaskStatus::Review)
             {
-                ensure_status_change_not_run_owned(self, id)?;
+                let recovery = run_ownership_recovery_for_identity(
+                    self.actor().kind,
+                    canonical_agent.as_deref(),
+                    canonical_model.as_deref(),
+                    effective_label.as_str(),
+                );
+                ensure_status_change_not_run_owned(self, id, recovery)?;
             }
             let implemented_by =
                 implementation_label(&task, effective_label.as_str(), canonical_model.as_deref());

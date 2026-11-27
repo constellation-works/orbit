@@ -965,6 +965,222 @@ fn tool_status_notes_use_shared_validation() {
     }
 }
 
+fn run_owned_status_refusal_adapts_recovery_by_caller_class() {
+    use chrono::Utc;
+    use orbit_common::ForceOverridableKind;
+    use orbit_core::adapter::command::ToolEntryPoint;
+    use orbit_core::application::task::{TaskUpdateAuthority, TaskWriteScreen};
+    use orbit_core::runtime::context::ActorIdentity;
+    use orbit_core::test_support::fixture_engine::RunLifecycle;
+    use orbit_types::tool::{McpTransport, ToolSessionContext};
+    use orbit_types::workflow::JobRunState;
+    use serde_json::json;
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace)
+        .unwrap()
+        .with_actor(ActorIdentity::human("human:operator"));
+
+    let proposed = runtime
+        .add_task(TaskAddParams {
+            title: "Run-owned proposed task".into(),
+            plan: "Wait for owning run.".into(),
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Proposed),
+            ..Default::default()
+        })
+        .unwrap();
+    let backlog = runtime
+        .add_task(TaskAddParams {
+            title: "Run-owned backlog task".into(),
+            plan: "Wait for owning run.".into(),
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let run = RunLifecycle::insert_job_run(
+        &orbit_core::test_support::EngineHost::new(&runtime),
+        "local-run-ownership-fixture",
+        1,
+        Utc::now(),
+        Some(json!({ "task_ids": [proposed.id, backlog.id] })),
+        None,
+    )
+    .unwrap();
+    RunLifecycle::mark_job_run_running(
+        &orbit_core::test_support::EngineHost::new(&runtime),
+        &run.run_id,
+        Utc::now(),
+        std::process::id(),
+    )
+    .unwrap();
+
+    let assert_refusal = |error: OrbitError, expect_force: bool, context: &str| {
+        let refusal = error
+            .force_overridable()
+            .unwrap_or_else(|| panic!("{context}: expected ForceOverridable, got {error}"));
+        assert_eq!(
+            refusal.kind,
+            ForceOverridableKind::RunStillOwnsTask,
+            "{context}"
+        );
+        assert_eq!(
+            refusal.run_id.as_deref(),
+            Some(run.run_id.as_str()),
+            "{context}"
+        );
+        let message = error.to_string();
+        assert!(message.contains(&run.run_id), "{context}: {message}");
+        assert!(message.contains("running"), "{context}: {message}");
+        if expect_force {
+            assert!(
+                message.contains("stop the run first or use --force to override"),
+                "{context}: expected --force guidance, got: {message}"
+            );
+        } else {
+            assert!(
+                !message.contains("--force"),
+                "{context}: agent/MCP refusal must not mention --force: {message}"
+            );
+            assert!(
+                message.contains("wait for the run to finish or ask the operator to stop it"),
+                "{context}: expected agent/MCP recovery guidance, got: {message}"
+            );
+        }
+    };
+
+    // 1. Agent and MCP callers through the public runtime API never see `--force`.
+    let agent_tool_error = runtime
+        .execute_tool_command(
+            "orbit.task.update",
+            json!({ "id": backlog.id, "status": "someday", "model": "claude" }),
+            None,
+            Some("claude".into()),
+        )
+        .expect_err("agent tool status change must be refused");
+    assert_refusal(agent_tool_error, false, "agent orbit.task.update someday");
+
+    // MCP caller with no model/agent on a human host (e.g. stdio / ssh-mcp)
+    // reaches every orbit.task.update branch without `--force`.
+    let mcp_session = || ToolSessionContext {
+        origin_session_id: Some("mcp-session-1".into()),
+        transport: Some(McpTransport::SshMcp),
+        ..Default::default()
+    };
+    let mcp_proposed_to_backlog = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.update",
+            json!({ "id": proposed.id, "status": "backlog" }),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            mcp_session(),
+        )
+        .expect_err("MCP proposed->backlog must be refused");
+    assert_refusal(mcp_proposed_to_backlog, false, "mcp proposed->backlog");
+
+    let mcp_start = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.update",
+            json!({ "id": backlog.id, "status": "in-progress" }),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            mcp_session(),
+        )
+        .expect_err("MCP ->in-progress must be refused");
+    assert_refusal(mcp_start, false, "mcp ->in-progress");
+
+    let mcp_someday = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.task.update",
+            json!({ "id": backlog.id, "status": "someday" }),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            mcp_session(),
+        )
+        .expect_err("MCP ->someday must be refused");
+    assert_refusal(mcp_someday, false, "mcp ->someday");
+
+    let agent_identity_error = runtime
+        .update_task_with_identity(
+            &backlog.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Someday),
+                ..Default::default()
+            },
+            None,
+            Some("codex".into()),
+        )
+        .expect_err("attributed agent runtime update must be refused");
+    assert_refusal(
+        agent_identity_error,
+        false,
+        "update_task_with_identity agent",
+    );
+
+    let agent_actor_error = runtime
+        .clone()
+        .with_actor(ActorIdentity::agent("codex"))
+        .update_task_with_identity(
+            &backlog.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Someday),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect_err("agent actor runtime update must be refused");
+    assert_refusal(
+        agent_actor_error,
+        false,
+        "agent actor update_task_with_identity",
+    );
+
+    // 2. Human operator surface keeps naming `--force`.
+    let human_update_error = runtime
+        .update_task_screened(
+            &backlog.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Someday),
+                ..Default::default()
+            },
+            &TaskWriteScreen::unbound(false),
+            TaskUpdateAuthority::Lifecycle,
+            None,
+            None,
+        )
+        .expect_err("human update_task_screened must be refused");
+    assert_refusal(human_update_error, true, "human update_task_screened");
+
+    let human_approve_error = runtime
+        .approve_task_screened(&proposed.id, None, None, None, None)
+        .expect_err("human approve_task_screened must be refused");
+    assert_refusal(human_approve_error, true, "human approve_task_screened");
+
+    // 3. Refused status changes leave both tasks and the owning run unchanged.
+    assert_eq!(
+        runtime.get_task(&proposed.id).unwrap().status,
+        TaskStatus::Proposed
+    );
+    assert_eq!(
+        runtime.get_task(&backlog.id).unwrap().status,
+        TaskStatus::Backlog
+    );
+    assert_eq!(
+        runtime.show_job_run(&run.run_id).unwrap().state,
+        JobRunState::Running
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     claim_refused_start_leaves_document_status_history_and_artifacts_unchanged_scenarios,
@@ -980,7 +1196,8 @@ crate::scenario_table!(
     pr_status_updates_share_admission_and_trim_before_storage,
     muse_identity_is_accepted_and_mismatches_refused,
     tag_changes_record_previous_and_new_tags_in_history,
-    delete_outside_proposed_or_rejected_carries_the_force_overridable_code
+    delete_outside_proposed_or_rejected_carries_the_force_overridable_code,
+    run_owned_status_refusal_adapts_recovery_by_caller_class
 );
 crate::scenario_table!(
     show_and_title_update_bound_bundle_reads_scenarios,

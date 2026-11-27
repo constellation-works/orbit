@@ -142,7 +142,13 @@ impl OrbitRuntime {
             #[cfg(test)]
             self.apply_transition_read_hook(id)?;
             if allow_blocked {
-                ensure_status_change_not_run_owned(self, id)?;
+                let recovery = run_ownership_recovery_for_identity(
+                    self.actor().kind,
+                    canonical_agent.as_deref(),
+                    canonical_model.as_deref(),
+                    effective_label.as_str(),
+                );
+                ensure_status_change_not_run_owned(self, id, recovery)?;
             }
             let previous_status = task.status;
             let status_event = match task.status {
@@ -202,7 +208,13 @@ impl OrbitRuntime {
                 )
                 .map(|_| ());
         }
-        ensure_status_change_not_run_owned(self, id)?;
+        let recovery = run_ownership_recovery_for_identity(
+            self.actor().kind,
+            None,
+            None,
+            self.actor().label.as_str(),
+        );
+        ensure_status_change_not_run_owned(self, id, recovery)?;
         // The preflight can go stale while a local run starts owning the
         // task. Re-read ownership under the task write lock and hold it
         // through the archive write, like `delete_task_guarded` does.
@@ -211,7 +223,7 @@ impl OrbitRuntime {
             self.apply_transition_read_hook(id)?;
             #[cfg(any(test, feature = "test-support"))]
             self.apply_transition_run_hook(id)?;
-            ensure_status_change_not_run_owned(self, id)?;
+            ensure_status_change_not_run_owned(self, id, recovery)?;
             self.archive_task(id)
         })
     }
