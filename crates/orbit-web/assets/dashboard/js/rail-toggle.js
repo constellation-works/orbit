@@ -4,7 +4,8 @@
 //   browser in localStorage.
 // - Medium (761px..1315px): 56px icon rail by default with scope pickers in the
 //   header; toggling expands the labelled rail as a transient overlay over the
-//   content without shifting layout (closed by Esc, outside click or resize).
+//   content without shifting layout. Esc, an outside click or a resize that
+//   leaves the medium band closes it; a resize within the band keeps it open.
 // - Small (<=760px): bottom bar replaces the rail; the toggle is withdrawn.
 const RAIL_COLLAPSED_PREFS_KEY = "orbit.dashboard.railCollapsed";
 const PHONE_QUERY = "(max-width: 760px)";
