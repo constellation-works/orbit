@@ -3,6 +3,7 @@
 //! blocked-task backstop names it to its agent and in every escalation; it
 //! only ever reads it.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration as StdDuration;
@@ -270,6 +271,29 @@ impl OrbitRuntime {
         if truncated {
             return Err(format!(
                 "the retained edits exceed the {RETAINED_PATCH_LIMIT}-byte adoption limit"
+            ));
+        }
+        // The patch is read with submodule inspection off, so it can omit a
+        // gitlink that status still lists. A patch that skips a listed path
+        // would carry that path only by name; refuse instead.
+        let (diffed, diffed_truncated) = read_only_git(
+            &worktree,
+            &["diff", "--name-only", "-z", "--no-renames", "HEAD", "--"],
+            candidate_status_limit(),
+        )?;
+        if diffed_truncated {
+            return Err("the retained checkout's changed-path listing is truncated".into());
+        }
+        let diffed: BTreeSet<&[u8]> = diffed
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .collect();
+        if let Some(omitted) = changed
+            .iter()
+            .find(|path| !diffed.contains(path.as_bytes()))
+        {
+            return Err(format!(
+                "the retained edit to {omitted} is a Git link (submodule) change or is otherwise absent from the patch, so it cannot be adopted exactly; commit or revert it in the retained checkout and inspect again"
             ));
         }
         if bytes.is_empty() {

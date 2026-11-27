@@ -89,7 +89,7 @@ after final recovery escalated:
     `retained_patch` (digest, size, base and paths) and the reply carries the
     exact patch to review. Submit that binding unchanged; the successor
     applies those bytes over the same candidate, then commits, validates and
-    reviews them on the same PR. Changed, untracked, unmerged or unreadable
+    reviews them on the same PR. Changed, untracked, unmerged, Git-link (submodule) or unreadable
     edits refuse before any reservation; the original checkout stays as it was.
 - **Final recovery resumed the publishing run in place and it failed again.**
   Select that same run. Its checkpoints must hold the host's applied `resume`
