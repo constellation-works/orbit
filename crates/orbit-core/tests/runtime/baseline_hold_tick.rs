@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
-use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions, SweepOutcome};
+use orbit_core::app::routine::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
+use orbit_core::app::routine::{RoutineMachineIdentity, SweepOptions, SweepOutcome};
 use orbit_core::application::task::BASELINE_HOLD_REFRESH_JOB;
 use orbit_core::runtime::OrbitRuntime;
 use orbit_store::contract::JobRunQuery;

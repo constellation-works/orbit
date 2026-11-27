@@ -4,63 +4,18 @@
 //! a catalog target, and a retry/overlap policy — living under
 //! `.orbit/routines/` in a registered owner checkout. That directory is
 //! per-user state, not a repository artifact. The stateless
-//! [`run_sweep`] pass, invoked every minute by the OS clock
-//! (see [`clock`]), fires whatever is due on this host through the existing
+//! [`run_sweep`](super::run_sweep) pass, invoked every minute by the OS clock
+//! (see [`orbit_clock`]), fires whatever is due on this host through the existing
 //! v2 run machinery. Every owner checkout is an independent schedule; a
 //! replica checkout schedules only host-local worktree GC [ORB-14173] and
 //! store GC [ORB-16354] (design in `docs/design/routines/`).
 
-pub mod edit_contract;
-mod guarded_edit;
-mod leases;
-pub mod loader;
-pub(crate) mod materialize;
-mod resident_port;
-pub(crate) mod seed;
-pub mod status;
-pub mod sweep;
-pub(crate) mod template;
-pub mod trigger_edit;
+use std::path::Path;
 
-use crate::application::store_opener::StoreOpener;
-pub use clock::{
-    ClockHealth, ClockInstallReport, ClockSettings, ClockStatus, ClockUnitConvergence,
-    ClockUnitDrift, ClockUnitInspection, ClockUnitReload, ClockUnitRewrite, ClockUnitVerdict,
-    DEFAULT_CLOCK_CADENCE_SECONDS, RunningBinary, clock_status, clock_unit_drift_warning,
-    converge_clock_unit, doctor_clock_not_running_issue, inspect_clock_unit, install_clock,
-    load_clock_settings, probe_program_version, save_clock_settings, set_clock_cadence,
-    set_clock_enabled,
-};
-pub use due::{DueDecision, due_decision, minimum_cron_interval, parse_cron};
-pub use edit_contract::{RoutineEditOutcome, RoutineEditRefusal};
-pub use loader::{
-    DiscoveredWorkspaces, HostRoutines, LoadedRoutine, OwnerOnlyRoutine, REPLICA_LOCAL_ROUTINE_JOB,
-    RetiredRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin, RoutineWorkspaceProvider,
-    collect_host_routines, declares_any_routine_name, runs_in_replica,
-};
-pub use orbit_automation::routines::due;
-pub use orbit_automation::routines::{breaker::request_breaker_bypass, sweep::record_fire_intent};
-/// The host's OS clock, owned by the `orbit-clock` crate [ORB-22688]; this
-/// path is kept for existing consumers.
-pub use orbit_clock as clock;
 use orbit_common::OrbitError;
 use orbit_store::Store;
-pub(crate) use status::rewrite_enabled_line;
-pub use status::{
-    FireField, RoutineBreakerAction, RoutineBreakerOutcome, RoutineField, RoutineStatus,
-    RoutineStatusReport, ScheduleDisplayState, breaker_json, control_listed_routine_breaker,
-    pause_routine, project_fire, recent_fires, resume_routine, routine_breaker_events,
-    routine_statuses_with_providers, select_listed_routine, set_routine_enabled,
-    toggle_listed_routine,
-};
-use std::path::Path;
-pub use sweep::{
-    AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepContext, SweepOptions,
-    SweepOutcome, run_sweep, run_sweep_pass,
-};
-pub use trigger_edit::{
-    RoutineTriggerOptions, edit_listed_routine_trigger, set_routine_trigger, trigger_options,
-};
+
+use crate::application::store_opener::StoreOpener;
 
 /// Who this machine is, as reported by routine status and sweep output.
 /// Routine eligibility no longer consults it: it identifies the machine whose
@@ -75,7 +30,10 @@ pub struct RoutineMachineIdentity {
 
 /// Open the config-resolved machine-local scheduler store for a mutating route.
 /// Creates and migrates it on first use.
-fn open_routine_store(opener: StoreOpener, global_root: &Path) -> Result<Store, OrbitError> {
+pub(super) fn open_routine_store(
+    opener: StoreOpener,
+    global_root: &Path,
+) -> Result<Store, OrbitError> {
     let database = orbit_config::resolved_audit_db_path(
         &orbit_common::Env::capture(),
         &orbit_config::ConfigRoots::global_only(global_root),
@@ -104,7 +62,7 @@ pub fn ensure_routine_store(opener: StoreOpener, global_root: &Path) -> Result<(
 /// Open the existing scheduler store for a read-only projection. A read never
 /// creates or migrates it (STD-01 R31): a missing store is setup that has not
 /// been done, and the error names `orbit init`, which owns first-run creation.
-fn open_existing_routine_store(
+pub(super) fn open_existing_routine_store(
     opener: StoreOpener,
     global_root: &Path,
 ) -> Result<Store, OrbitError> {
@@ -120,6 +78,3 @@ fn open_existing_routine_store(
     }
     opener.open_read_only(&database)
 }
-
-#[cfg(test)]
-mod tests;

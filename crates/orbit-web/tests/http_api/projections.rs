@@ -7,9 +7,9 @@ use std::path::Path;
 
 use chrono::{DateTime, Duration, Timelike, Utc};
 use orbit_common::storage::blob_store::BlobStore;
+use orbit_core::app::routine::pause_routine;
 use orbit_core::application::auto_tasks::AutoTaskAddParams;
 use orbit_core::application::auto_tasks::cursor_state_path;
-use orbit_core::application::routines::pause_routine;
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TaskAddParams,
     TaskUpdateParams,

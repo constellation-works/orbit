@@ -9,9 +9,9 @@
 //! pause/resume, cadence, convergence, inspection and health. It depends only on
 //! `orbit-common`, so it compiles beside the `orbit-store` → `orbit-engine` →
 //! `orbit-runtime` chain instead of inside the serial `orbit-core` library
-//! [ORB-22688]. `orbit-core` re-exports it as `application::routines::clock`
-//! and its settings through `application::contracts`; the sweep pass that the
-//! clock wakes stays in `orbit-core`.
+//! [ORB-22688]. `orbit-core` re-exports clock operations through
+//! `app::routine` and shared settings through `application::contracts`. The
+//! sweep pass that the clock wakes stays in `orbit-core`.
 
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.

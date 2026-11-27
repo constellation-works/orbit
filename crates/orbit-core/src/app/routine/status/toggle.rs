@@ -232,7 +232,7 @@ pub fn pause_routine(
     name: &str,
     actor: &str,
 ) -> Result<bool, OrbitError> {
-    let store = super::super::open_routine_store(opener, global_root)?;
+    let store = crate::app::routine::store::open_routine_store(opener, global_root)?;
     store.write(|tx| tx.routine().insert_pause(name, actor))
 }
 
@@ -242,7 +242,7 @@ pub fn resume_routine(
     global_root: &Path,
     name: &str,
 ) -> Result<bool, OrbitError> {
-    let store = super::super::open_routine_store(opener, global_root)?;
+    let store = crate::app::routine::store::open_routine_store(opener, global_root)?;
     store.write(|tx| tx.routine().delete_pause(name))
 }
 
@@ -254,7 +254,7 @@ fn reset_routine_breaker(
     name: &str,
     actor: &str,
 ) -> Result<bool, OrbitError> {
-    let store = super::super::open_routine_store(opener, global_root)?;
+    let store = crate::app::routine::store::open_routine_store(opener, global_root)?;
     orbit_automation::routines::breaker::reset_breaker(&store, name, actor)
 }
 
@@ -267,7 +267,7 @@ fn bypass_routine_breaker(
     name: &str,
     actor: &str,
 ) -> Result<bool, OrbitError> {
-    let store = super::super::open_routine_store(opener, global_root)?;
+    let store = crate::app::routine::store::open_routine_store(opener, global_root)?;
     orbit_automation::routines::breaker::request_breaker_bypass(&store, name, actor)
 }
 
@@ -311,6 +311,6 @@ pub fn routine_breaker_events(
     name: &str,
     limit: usize,
 ) -> Result<Vec<orbit_store::contract::RoutineBreakerEvent>, OrbitError> {
-    let store = super::super::open_existing_routine_store(opener, global_root)?;
+    let store = crate::app::routine::store::open_existing_routine_store(opener, global_root)?;
     store.read()?.routine().breaker_events(name, limit)
 }

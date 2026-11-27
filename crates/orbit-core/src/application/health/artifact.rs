@@ -62,6 +62,7 @@ use super::artifact_diagnosis;
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::auto_tasks_dir;
 
+use crate::app::routine::DEFAULT_ROUTINE_FILES;
 use crate::application::auto_tasks::{
     DEFAULT_AUTO_TASK_FILES, REFERENCE_AUTO_TASK_FILES, render_default_auto_task,
 };
@@ -70,7 +71,6 @@ use crate::application::managed_assets::{
     ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout,
     load_managed_asset_manifest, preserve_modified_retired_asset, resolve_confined_asset_path,
 };
-use crate::application::routines::seed::DEFAULT_ROUTINE_FILES;
 use crate::application::seeding_policy::SeedingPolicyExclusions;
 use crate::application::skill::{
     DEFAULT_SKILL_FILES, dangling_client_skill_links, inject_skill_template_tokens,
@@ -548,9 +548,7 @@ pub(super) fn provenance(
         }
         Some(digest)
             if kind == ArtifactKind::Routine
-                && crate::application::routines::template::is_orbit_written_routine(
-                    name, digest, on_disk,
-                ) =>
+                && crate::app::routine::is_orbit_written_routine(name, digest, on_disk) =>
         {
             ArtifactProvenance::OrbitWritten
         }

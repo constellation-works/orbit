@@ -22,9 +22,9 @@ use orbit_config::{
 use serde::Serialize;
 
 use crate::OrbitRuntime;
+use crate::app::routine::{DEFAULT_ROUTINE_FILES, RETIRED_ROUTINE_FILES};
 use crate::application::auto_tasks::retired::{RETIRED_AUTO_TASK_FILES, RetiredAutoTask};
 use crate::application::auto_tasks::{DEFAULT_AUTO_TASK_FILES, REFERENCE_AUTO_TASK_FILES};
-use crate::application::routines::seed::{DEFAULT_ROUTINE_FILES, RETIRED_ROUTINE_FILES};
 
 // `orbit-config` admits policy names against its own lists; these keep them
 // equal to the embedded asset tables, so a default added or retired here

@@ -119,8 +119,8 @@ The current code shapes the fix in four ways:
   checkouts, but a pull follower's clock still evaluates its replica-local cron
   worktree GC (`worktree_gc_pipeline`) and store GC (`store_gc_pipeline`); every
   other routine, auto-task and recovery stays owner-only (`runs_in_replica`,
-  `crates/orbit-core/src/application/routines/loader.rs`; `collect_host_routines`
-  consumed at `crates/orbit-core/src/application/routines/sweep/tick.rs`).
+  `crates/orbit-core/src/app/routine/loader.rs`; `collect_host_routines`
+  consumed at `crates/orbit-core/src/app/routine/sweep/tick.rs`).
 - **Any path to tag or publish must keep release authority with Daniel.** RELEASING.md
   and the constellation rules forbid an agent from tagging or publishing unasked.
   npm publish needs Daniel's OTP.
@@ -466,8 +466,8 @@ is the shipped exception:
   new condition kind, not the shipped clock rule: the routine loader collects
   both owner entries and replica checkouts and keeps only the replica-local cron
   routines targeting worktree GC or store GC (`collect_host_routines` and
-  `runs_in_replica`, `crates/orbit-core/src/application/routines/loader.rs`,
-  consumed at `crates/orbit-core/src/application/routines/sweep/tick.rs::run_sweep_pass`).
+  `runs_in_replica`, `crates/orbit-core/src/app/routine/loader.rs`,
+  consumed at `crates/orbit-core/src/app/routine/sweep/tick.rs::run_sweep_pass`).
   Delivery and state triggers stay owner-only even for those jobs.
 - Every coordination-state action write passes `ensure_coordination_task_write_permitted`
   (`crates/orbit-runtime/src/run/identity.rs`), so a replica checkout

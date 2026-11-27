@@ -12,7 +12,7 @@ doc_role: overview
 type: design
 summary: Bounded delivery and preparation triggers for routines and auto-tasks, with durable work identity and honest coverage.
 tags: [automation-triggers, routines, auto-tasks, scheduling]
-paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/application/task/pilot/**"]
+paths: ["crates/orbit-core/src/app/routine/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/application/task/pilot/**"]
 related_features: [routines, auto-tasks, review-gate, condition-triggers]
 related_artifacts: [ORB-11315, ORB-11295, ORB-11314, ORB-11316]
 ---

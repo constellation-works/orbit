@@ -43,7 +43,7 @@ SCAN_DIRECTORIES = (
     f"{CORE_APPLICATION}/notice",
     f"{CORE_APPLICATION}/evolution",
     f"{CORE_APPLICATION}/landing",
-    f"{CORE_APPLICATION}/routines",
+    "crates/orbit-core/src/app/routine",
     f"{CORE_APPLICATION}/job/pipeline",
     "crates/orbit-core/src/composition",
     "crates/orbit-core/src/runtime",

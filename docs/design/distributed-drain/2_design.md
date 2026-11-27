@@ -1654,7 +1654,7 @@ automatic re-backlogging would hide host-specific failures. The triage job, its 
 recursion guard are gone, and the routine survives only as the provenance shape
 `crates/orbit-core/assets/routines/retired/task_triage.yaml`, which lets `orbit workspace sync`
 tell a seeded copy from an operator's (`RETIRED_ROUTINE_FILES` in
-`crates/orbit-core/src/application/routines/seed.rs`). That name stays reserved.
+`crates/orbit-core/src/app/routine/seed.rs`). That name stays reserved.
 
 A failed run parks its task in `blocked` with the failure and `job_run_machine` attached. Final
 recovery (or, outside a pipeline, the blocked-task backstop) is the single decider for each block

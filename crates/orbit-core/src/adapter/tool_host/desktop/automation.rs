@@ -5,19 +5,14 @@ use orbit_common::{OrbitError, protocol::tool_input::required_string};
 use orbit_types::workflow::{JobRunTrigger, RoutineTrigger};
 use serde_json::{Value, json};
 
-use crate::runtime::audit::run_logs::bounded_redacted_text;
-use crate::{
-    OrbitRuntime,
-    application::{
-        auto_tasks::AutoTaskToggleProfile,
-        job::JobCatalogFilter,
-        routines::{
-            FireField, RoutineField,
-            status::{checkout_routine_statuses, toggle_checkout_routine},
-            trigger_edit::edit_checkout_routine_trigger,
-        },
-    },
+use crate::OrbitRuntime;
+use crate::app::routine::{
+    FireField, RoutineField, checkout_routine_statuses, edit_checkout_routine_trigger,
+    toggle_checkout_routine,
 };
+use crate::application::auto_tasks::AutoTaskToggleProfile;
+use crate::application::job::JobCatalogFilter;
+use crate::runtime::audit::run_logs::bounded_redacted_text;
 
 /// A routine list item's status columns; `description` is bounded on render.
 const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[

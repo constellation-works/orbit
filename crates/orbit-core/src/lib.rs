@@ -188,7 +188,7 @@ pub mod test_support {
     /// on this thread, for tests of what follows a lock timeout.
     pub use orbit_store::test_support::with_task_commit_lock_timeout;
 
-    use crate::application::routines::{
+    use crate::app::routine::{
         RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions, SweepOutcome,
     };
 
@@ -266,14 +266,11 @@ pub mod test_support {
         workspace_provider: &dyn RoutineWorkspaceProvider,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<SweepOutcome, crate::OrbitError> {
-        crate::application::routines::sweep::run_sweep_pass(
+        crate::app::routine::run_sweep_pass(
             crate::composition::store_opener(),
-            crate::application::routines::sweep::SweepContext {
+            crate::app::routine::SweepContext {
                 now_utc: now,
-                ..crate::application::routines::sweep::SweepContext::production(
-                    global_root,
-                    workspace_provider,
-                )
+                ..crate::app::routine::SweepContext::production(global_root, workspace_provider)
             },
             options,
             local_machine,
@@ -287,6 +284,7 @@ pub use composition::Core;
 pub use orbit_common::OrbitError as Error;
 
 // Crate-private shorthands the modules below name as `crate::…`.
+pub(crate) use app::routine::RoutineSeedIdentity;
 pub(crate) use application::backlog_forecast::BacklogForecastHistory;
 pub(crate) use application::contracts::DrainEntryPoint;
 pub(crate) use application::distributed::WorkspacePullRequest;
@@ -295,7 +293,6 @@ pub(crate) use application::job::{
     DrainWindowExtensionRequest, DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry,
     PipelineWaitStatus, ShipModeResolutionProfile, ShipRunRequest,
 };
-pub(crate) use application::routines::seed::RoutineSeedIdentity;
 pub(crate) use application::search::{GlobalSearchKind, SearchRequest, SearchRequestProfile};
 pub(crate) use application::workflow::{
     CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode,

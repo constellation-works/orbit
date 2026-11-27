@@ -27,25 +27,20 @@ const NO_ARRIVALS_SCAN_SKEW_SECONDS: i64 = 3600;
 
 struct ForecastWorkspace<'a>(&'a Fixture);
 
-impl orbit_core::application::routines::loader::RoutineWorkspaceProvider for ForecastWorkspace<'_> {
+impl orbit_core::app::routine::RoutineWorkspaceProvider for ForecastWorkspace<'_> {
     fn discover_workspaces(
         &self,
         _: &std::path::Path,
-    ) -> Result<
-        orbit_core::application::routines::loader::DiscoveredWorkspaces,
-        orbit_common::OrbitError,
-    > {
+    ) -> Result<orbit_core::app::routine::DiscoveredWorkspaces, orbit_common::OrbitError> {
         let registry = orbit_registry::workspace_registry::load_registry_from(
             &orbit_registry::workspace_registry::registry_path_for(&self.0.global),
         )?;
         // Deliberately include even a replica in entries: the write boundary
         // must defend ownership as well as production discovery's partition.
-        Ok(
-            orbit_core::application::routines::loader::DiscoveredWorkspaces {
-                entries: vec![(registry.workspaces[0].clone(), self.0.runtime.clone())],
-                ..Default::default()
-            },
-        )
+        Ok(orbit_core::app::routine::DiscoveredWorkspaces {
+            entries: vec![(registry.workspaces[0].clone(), self.0.runtime.clone())],
+            ..Default::default()
+        })
     }
 }
 
@@ -59,11 +54,11 @@ struct RiskinessScanWindow {
 pub(super) fn forecast_tick(fixture: &Fixture, now: DateTime<Utc>, dry_run: bool) {
     let outcome = orbit_core::test_support::run_sweep_at(
         &fixture.global,
-        orbit_core::application::routines::SweepOptions {
+        orbit_core::app::routine::SweepOptions {
             dry_run,
             ..Default::default()
         },
-        orbit_core::application::routines::RoutineMachineIdentity {
+        orbit_core::app::routine::RoutineMachineIdentity {
             machine_id: "forecast-fixture".into(),
             machine_name: "forecast-fixture".into(),
         },

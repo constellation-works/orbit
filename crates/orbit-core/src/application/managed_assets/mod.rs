@@ -11,7 +11,7 @@ pub(crate) mod test_support;
 pub(crate) use manifest::{
     ConfinedAssetPath, record_managed_manifest_write, resolve_confined_asset_path,
 };
-pub(super) use manifest::{
+pub(crate) use manifest::{
     encode_managed_asset_manifest, load_managed_asset_manifest, write_managed_asset_manifest,
 };
 pub(crate) use reconcile::{
@@ -19,7 +19,7 @@ pub(crate) use reconcile::{
     reconcile_managed_assets_in_mode, reconcile_managed_assets_left_out,
     record_managed_asset_opt_out, restore_managed_asset,
 };
-pub(super) use retired::preserve_modified_retired_asset;
+pub(crate) use retired::preserve_modified_retired_asset;
 pub(crate) use retired::retired_preservation_path;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,7 +29,8 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const MANAGED_ASSET_MANIFEST_FILE: &str = ".orbit-managed-assets.json";
 const MANAGED_ASSET_MANIFEST_SCHEMA_VERSION: u32 = 1;
-pub(super) const ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION: u32 = 2;
+
+pub(crate) const ROUTINE_MANAGED_ASSET_MANIFEST_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ManagedAssetReconciliation {
@@ -122,17 +123,17 @@ impl ManagedAssetLayout {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct ManagedAssetManifest {
-    pub(super) schema_version: u32,
-    pub(super) asset_kind: String,
-    pub(super) assets: BTreeMap<String, String>,
+pub(crate) struct ManagedAssetManifest {
+    pub(crate) schema_version: u32,
+    pub(crate) asset_kind: String,
+    pub(crate) assets: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(super) routine_provenance: BTreeMap<String, RoutineAssetProvenance>,
+    pub(crate) routine_provenance: BTreeMap<String, RoutineAssetProvenance>,
     /// Shipped defaults an operator deleted. Reconciliation leaves them
     /// absent instead of re-creating them, and doctor does not report them
     /// missing. A name drops out once the binary stops shipping it.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub(super) opted_out: BTreeSet<String>,
+    pub(crate) opted_out: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

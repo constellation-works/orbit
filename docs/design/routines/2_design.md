@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: Contract for routine definitions, clock-tick dispatch, host-local state, and OS clock integration.
 tags: [routines, scheduler]
-paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/repository/routine.rs", "crates/orbit-store/src/repository/routine/**"]
+paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/app/routine/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/repository/routine.rs", "crates/orbit-store/src/repository/routine/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082, ORB-11315, ORB-12236, ORB-12237, ORB-12745]
 ---
@@ -827,7 +827,7 @@ The implementation boundary is vertical: `crates/orbit-cmd/src/registry/routines
 the `[machine]` identity from `config.toml` and `workspaces.json` through `orbit-registry`,
 validates local checkout paths, and constructs registered runtimes through `registry_runtime`.
 It projects those inputs through `RoutineWorkspaceProvider` into
-`crates/orbit-core/src/application/routines/`. Core supplies task facts and dispatch to the registry-neutral kernels in
+`crates/orbit-core/src/app/routine/`. Core supplies task facts and dispatch to the registry-neutral kernels in
 `crates/orbit-automation/src/routines/` and does not read either registry file directly. There is no hub snapshot, satellite cache, fleet
 health, or remote placement service in the v1 path.
 

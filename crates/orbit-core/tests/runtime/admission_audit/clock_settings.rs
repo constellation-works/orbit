@@ -1,8 +1,6 @@
 use tempfile::tempdir_in;
 
-use orbit_core::application::routines::clock::{
-    ClockSettings, load_clock_settings, save_clock_settings,
-};
+use orbit_core::app::routine::{ClockSettings, load_clock_settings, save_clock_settings};
 
 #[cfg(unix)]
 #[test]
