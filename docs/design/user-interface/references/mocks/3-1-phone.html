@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Mock 3.1: Small viewports</title>
+<!-- Mock for docs/design/user-interface/specs/compact-viewports.md. Each frame is a
+     375x812 viewport. Tokens come from the dashboard's base.css; the layout is
+     mock-only CSS in compact.css. -->
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/base.css">
+<link rel="stylesheet" href="mock.css">
+<link rel="stylesheet" href="compact.css">
+</head>
+<body class="mock-page">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-search" viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.5"/><path d="M17 17l-3.6-3.6"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"/></symbol>
+  <symbol id="i-tasks" viewBox="0 0 20 20"><path d="M3 5h14M3 10h14M3 15h9"/></symbol>
+  <symbol id="i-drain" viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></symbol>
+  <symbol id="i-jobs" viewBox="0 0 20 20"><path d="M6 4.5l9 5.5-9 5.5z"/></symbol>
+  <symbol id="i-health" viewBox="0 0 20 20"><path d="M2 11h4l2-5 4 9 2-4h4"/></symbol>
+  <symbol id="i-more" viewBox="0 0 20 20"><path d="M4 6h12M4 10h12M4 14h12"/></symbol>
+  <symbol id="i-open" viewBox="0 0 20 20"><path d="M8 4H4v12h12v-4M11 3h6v6M17 3l-8 8"/></symbol>
+  <symbol id="i-up" viewBox="0 0 20 20"><path d="M5 12l5-5 5 5"/></symbol>
+  <symbol id="i-down" viewBox="0 0 20 20"><path d="M5 8l5 5 5-5"/></symbol>
+  <symbol id="i-dest" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2"/></symbol>
+</svg>
+
+<h1 class="mock-title">Mock 3.1: Small viewports (760px and below)</h1>
+<p class="mock-note">One 48px header row and one 56px bottom bar are the only fixed chrome. The board gets about 660px of an 812px screen, against 474px today. Row text sits 20px from each edge, against 37px.</p>
+
+<div class="cv-frames">
+
+<div class="mock-col"><p class="mock-label new">Tasks</p>
+<div class="cv-frame cv-phone">
+  <div class="cv-head">
+    <span class="cv-mark" role="img" aria-label="Orbit"></span>
+    <span class="cv-select host" style="flex: 0 1 auto"><span>dk-server-2</span></span>
+    <span class="cv-select" style="flex: 0 1 auto"><span>orbit</span></span>
+    <span class="cv-spacer"></span>
+    <span class="cv-iconbtn" role="img" aria-label="Search"><svg class="cv-ico"><use href="#i-search"/></svg></span>
+    <span class="cv-iconbtn primary" role="img" aria-label="New task"><svg class="cv-ico"><use href="#i-plus"/></svg></span>
+  </div>
+  <div class="cv-main">
+    <div class="cv-pills">
+      <span class="cv-pill" title="In progress"><span class="cv-dot" style="--dot: var(--status-in-progress)"></span><b>11</b></span>
+      <span class="cv-pill" title="Review"><span class="cv-dot" style="--dot: var(--status-review)"></span><b>2</b></span>
+      <span class="cv-pill" title="Blocked"><span class="cv-dot" style="--dot: var(--status-blocked)"></span><b>0</b></span>
+      <span class="cv-pill off" title="Proposed"><span class="cv-dot" style="--dot: var(--status-proposed)"></span></span>
+      <span class="cv-pill" title="Backlog"><span class="cv-dot" style="--dot: var(--status-backlog)"></span><b>18</b></span>
+      <span class="cv-pill more">More</span>
+    </div>
+    <div class="cv-card">
+      <div class="cv-group"><span class="cv-dot" style="--dot: var(--status-review)"></span>Ready for review <b>2</b></div>
+      <div class="cv-row"><span class="cv-title">Include parent modules when filing Rust moves</span><span class="cv-meta">ORB-29210 · risk 11% · hydrogen@high</span><span class="cv-act">PR #11463</span></div>
+      <div class="cv-row"><span class="cv-title">Delete NullRuntimeHost and the supertrait</span><span class="cv-meta">ORB-28414 · risk 85% · sol</span><span class="cv-act">PR #11455</span></div>
+    </div>
+    <div class="cv-card">
+      <div class="cv-group"><span class="cv-dot" style="--dot: var(--status-in-progress)"></span>In progress <b>11</b></div>
+      <div class="cv-row"><span class="cv-title">Review a frozen delivery batch</span><span class="cv-meta">ORB-29224 · 2m · hydrogen@high</span><span class="cv-act">View run</span></div>
+      <div class="cv-row"><span class="cv-title">Mandate attachment in write_screened_update checks</span><span class="cv-meta">ORB-29222 · 2m · risk 11% · sonnet@high</span><span class="cv-act">View run</span></div>
+      <div class="cv-row"><span class="cv-title">Fix REQUEST_WINDOW doc comment limit (901 vs 900)</span><span class="cv-meta">ORB-29219 · 6m · risk 8% · muse-spark</span><span class="cv-act">View run</span></div>
+      <div class="cv-row"><span class="cv-title">Narrow crate-internal paths in the engine's job module</span><span class="cv-meta">ORB-29208 · 9m · risk 28% · terra</span><span class="cv-act">View run</span></div>
+      <div class="cv-row"><span class="cv-title">Close orbit-store's exports to its app boundary</span><span class="cv-meta">ORB-29201 · 14m · risk 31% · opus</span><span class="cv-act">View run</span></div>
+    </div>
+    <div class="cv-card">
+      <div class="cv-group"><span class="cv-dot" style="--dot: var(--status-proposed)"></span>Awaiting approval <b>3</b></div>
+      <div class="cv-row"><span class="cv-title">Document the recovery runbook</span><span class="cv-meta">ORB-29226 · gemini-flash</span><span class="cv-act approve">Approve</span></div>
+      <div class="cv-row"><span class="cv-title">Quarterly dependency sweep</span><span class="cv-meta">ORB-29225 · haiku</span><span class="cv-act approve">Approve</span></div>
+      <div class="cv-row"><span class="cv-title">Backfill provider usage readings</span><span class="cv-meta">ORB-29223 · terra</span><span class="cv-act approve">Approve</span></div>
+    </div>
+  </div>
+  <div class="cv-bar">
+    <span class="cv-slot on"><svg class="cv-ico"><use href="#i-tasks"/></svg><span>Tasks <b>31</b></span></span>
+    <span class="cv-slot"><svg class="cv-ico run"><use href="#i-drain"/></svg><span>Drain <b class="run">13/15</b></span></span>
+    <span class="cv-slot"><svg class="cv-ico"><use href="#i-jobs"/></svg><span>Jobs <b>40</b></span></span>
+    <span class="cv-slot"><svg class="cv-ico"><use href="#i-health"/></svg><span>Health <b class="alert">2</b></span></span>
+    <span class="cv-slot"><svg class="cv-ico"><use href="#i-more"/></svg><span>More</span></span>
+  </div>
+</div>
+<ul class="mock-changes"><li>Header: mark, the two existing selects, search and New task as icons. No search row, no scope row, no bell.</li><li>Pills: dot and count on one row. More keeps its label.</li><li>Rows: two lines, crew as text, one action column.</li><li>Bottom bar replaces the navigation strip and the log line.</li></ul></div>
+
+<div class="mock-col"><p class="mock-label new">Task open</p>
+<div class="cv-frame cv-phone">
+  <div class="cv-task">
+    <div class="cv-task-head">
+      <span>ORB-29226</span>
+      <span class="cv-spacer"></span>
+      <span class="cv-iconbtn" role="img" aria-label="Previous task"><svg class="cv-ico"><use href="#i-up"/></svg></span>
+      <span class="cv-iconbtn" role="img" aria-label="Next task"><svg class="cv-ico"><use href="#i-down"/></svg></span>
+      <span class="cv-iconbtn" role="img" aria-label="Open full page"><svg class="cv-ico"><use href="#i-open"/></svg></span>
+      <span class="cv-esc">esc</span>
+    </div>
+    <div class="cv-task-body">
+      <h2>Document the recovery runbook</h2>
+      <div class="cv-props">
+        <span class="cv-pill"><span class="cv-dot" style="--dot: var(--status-proposed)"></span>Proposed</span>
+        <span class="cv-pill">Low</span>
+        <span class="cv-pill">Crew gemini-flash</span>
+        <span class="cv-pill">Risk <b>4%</b></span>
+      </div>
+      <div class="cv-tabs"><span class="on">Overview</span><span>Context files</span><span>Runs</span><span>Activity</span></div>
+      <div class="cv-block"><div class="cv-kv">
+        <span>Scheduled</span><span>not scheduled</span>
+        <span>Handled by</span><span>human:daniel created</span>
+        <span>Readiness</span><span>Waiting · awaits approval</span>
+      </div></div>
+      <div class="cv-block"><h3>Acceptance criteria</h3>The runbook names each recovery step and the command that performs it.<br><br>Every command was run against a scratch root before it was written down.</div>
+      <div class="cv-block"><h3>Description</h3>Recovery after a failed store migration is known only from two incident records. Write it down as a runbook.</div>
+    </div>
+    <div class="cv-foot"><span class="cv-act approve">Approve</span><span class="cv-btn">Reject</span><span class="cv-btn">Run pilot</span><span class="cv-btn">Archive</span></div>
+  </div>
+</div>
+<ul class="mock-changes"><li>The task takes the whole viewport. Header and bottom bar are covered.</li><li>The pane's head and footer are today's, with previous and next added while the list is covered.</li><li>esc or the browser's Back returns to the list where it was.</li></ul></div>
+
+<div class="mock-col"><p class="mock-label new">More</p>
+<div class="cv-frame cv-phone">
+  <div class="cv-head">
+    <span class="cv-mark" role="img" aria-label="Orbit"></span>
+    <span class="cv-select host" style="flex: 0 1 auto"><span>dk-server-2</span></span>
+    <span class="cv-select" style="flex: 0 1 auto"><span>orbit</span></span>
+    <span class="cv-spacer"></span>
+    <span class="cv-iconbtn" role="img" aria-label="Search"><svg class="cv-ico"><use href="#i-search"/></svg></span>
+    <span class="cv-iconbtn primary" role="img" aria-label="New task"><svg class="cv-ico"><use href="#i-plus"/></svg></span>
+  </div>
+  <div class="cv-main"></div>
+  <div class="cv-scrim"></div>
+  <div class="cv-sheet">
+    <div class="cv-sheet-head"><span>More</span><span class="cv-esc">esc</span></div>
+    <div class="cv-dest"><svg class="cv-ico"><use href="#i-dest"/></svg>Fleet</div>
+    <div class="cv-dest"><svg class="cv-ico"><use href="#i-health"/></svg>Health</div>
+    <div class="cv-views"><span class="cv-view">Incidents</span><span class="cv-view">Doctor</span></div>
+    <div class="cv-dest"><svg class="cv-ico"><use href="#i-dest"/></svg>Analytics</div>
+    <div class="cv-views"><span class="cv-view">Metrics</span><span class="cv-view">Reliability</span><span class="cv-view">Codebase</span><span class="cv-view">Resources</span><span class="cv-view">Forecast</span><span class="cv-view">Cost</span><span class="cv-view">Agents</span><span class="cv-view">Experiments</span></div>
+    <div class="cv-dest"><svg class="cv-ico"><use href="#i-dest"/></svg>Automation</div>
+    <div class="cv-views"><span class="cv-view">Routines</span><span class="cv-view">Auto-tasks</span><span class="cv-view">Scripts</span></div>
+    <div class="cv-dest"><svg class="cv-ico"><use href="#i-dest"/></svg>Knowledge</div>
+    <div class="cv-dest"><svg class="cv-ico"><use href="#i-dest"/></svg>Plugins</div>
+    <div class="cv-dest"><svg class="cv-ico"><use href="#i-dest"/></svg>Settings</div>
+    <div class="cv-views"><span class="cv-view">Workflow</span><span class="cv-view">Execution</span><span class="cv-view">Review</span><span class="cv-view">Crews</span><span class="cv-view">Machine</span><span class="cv-view">Other</span></div>
+  </div>
+  <div class="cv-bar">
+    <span class="cv-slot"><svg class="cv-ico"><use href="#i-tasks"/></svg><span>Tasks <b>31</b></span></span>
+    <span class="cv-slot"><svg class="cv-ico run"><use href="#i-drain"/></svg><span>Drain <b class="run">13/15</b></span></span>
+    <span class="cv-slot"><svg class="cv-ico"><use href="#i-jobs"/></svg><span>Jobs <b>40</b></span></span>
+    <span class="cv-slot"><svg class="cv-ico"><use href="#i-health"/></svg><span>Health <b class="alert">2</b></span></span>
+    <span class="cv-slot on"><svg class="cv-ico"><use href="#i-more"/></svg><span>More</span></span>
+  </div>
+</div>
+<ul class="mock-changes"><li>Every destination outside the bar, each with its views.</li><li>Destination icons here are placeholders; the build uses the rail's.</li></ul></div>
+
+</div>
+</body>
+</html>
