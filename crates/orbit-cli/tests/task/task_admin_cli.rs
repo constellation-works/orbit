@@ -160,6 +160,150 @@ fn task_update_with_non_canonical_mandate_path_syncs_crew_and_activates() {
     }
 }
 
+#[test]
+fn task_artifact_put_with_non_canonical_mandate_path_matches_control_and_refuses_traversal() {
+    let (fixture, mandate) = mandate_fixture();
+    let routine = fixture.repo.join(".orbit/routines/resident_cycle.yaml");
+    fs::create_dir_all(routine.parent().unwrap()).unwrap();
+    fs::write(
+        routine,
+        "schemaVersion: 1\nname: artifact-cycle\nenabled: false\ntrigger:\n  cron: '0 * * * *'\ntarget: job:resident_cycle_pipeline\n",
+    )
+    .unwrap();
+    let source = fixture.repo.join(".orbit/tmp/mandate.json");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(&source, &mandate).unwrap();
+    let source = source.to_str().unwrap();
+
+    let control_id = add_plain_task(&fixture, "backlog", "resident");
+    let control = fixture
+        .command(&[
+            "task",
+            "artifact",
+            "put",
+            &control_id,
+            source,
+            "--path",
+            "resident/mandate.json",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let control: Value = serde_json::from_slice(&control).unwrap();
+
+    let alternate_id = add_plain_task(&fixture, "backlog", "resident");
+    let alternate = fixture
+        .command(&[
+            "task",
+            "artifact",
+            "put",
+            &alternate_id,
+            source,
+            "--path",
+            "./resident/mandate.json",
+            "--json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let alternate: Value = serde_json::from_slice(&alternate).unwrap();
+
+    let control_task = fixture.json(&["task", "show", &control_id, "--json"]);
+    let alternate_task = fixture.json(&["task", "show", &alternate_id, "--json"]);
+    let control_resident = fixture.json(&["resident", "show", &control_id, "--json"]);
+    let alternate_resident = fixture.json(&["resident", "show", &alternate_id, "--json"]);
+    let disabled_warning = |result: &Value| {
+        result["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|warning| {
+                warning.contains("resident cycle routine") && warning.contains(" is disabled")
+            })
+            .and_then(|warning| {
+                warning
+                    .split_once(", but ")
+                    .map(|(_, detail)| detail.to_string())
+            })
+    };
+    let metadata = |result: &Value, task: &Value, resident: &Value| {
+        json!({
+            "crew": task["crew"],
+            "task_status": task["status"],
+            "resident_status": resident["status"],
+            "cycle_routine_disabled": resident["cycle_routine_disabled"],
+            "cycle_routine_name": resident["cycle_routine_name"],
+            "warning": disabled_warning(result),
+        })
+    };
+    assert_eq!(
+        metadata(&alternate, &alternate_task, &alternate_resident),
+        metadata(&control, &control_task, &control_resident)
+    );
+    for (result, task, resident) in [
+        (&control, &control_task, &control_resident),
+        (&alternate, &alternate_task, &alternate_resident),
+    ] {
+        assert_eq!(task["crew"], "mandate-fixture", "{task}");
+        assert_eq!(task["status"], "in-progress", "{task}");
+        assert_eq!(resident["status"], "in_progress", "{resident}");
+        assert_eq!(resident["cycle_routine_disabled"], true, "{resident}");
+        let routine_name = resident["cycle_routine_name"].as_str().unwrap();
+        assert!(
+            disabled_warning(result)
+                .is_some_and(|warning| warning.contains(&format!("`{routine_name}` is disabled"))),
+            "{result}"
+        );
+        assert!(
+            task["artifacts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|artifact| { artifact["path"] == "resident/mandate.json" }),
+            "{task}"
+        );
+    }
+
+    let invalid_id = add_plain_task(&fixture, "backlog", "resident");
+    let before = fixture.json(&["task", "show", &invalid_id, "--json"]);
+    let before_state = json!({
+        "crew": before["crew"],
+        "status": before["status"],
+        "artifacts": before["artifacts"],
+    });
+    fixture
+        .command(&[
+            "task",
+            "artifact",
+            "put",
+            &invalid_id,
+            source,
+            "--path",
+            "../resident/mandate.json",
+            "--json",
+        ])
+        .assert()
+        .failure();
+    let after = fixture.json(&["task", "show", &invalid_id, "--json"]);
+    assert_eq!(
+        json!({
+            "crew": after["crew"],
+            "status": after["status"],
+            "artifacts": after["artifacts"],
+        }),
+        before_state,
+        "invalid artifact paths must not write or activate the resident"
+    );
+    assert_eq!(after["crew"], "sol", "{after}");
+    assert_eq!(after["status"], "backlog", "{after}");
+}
+
 fn task_updates_and_approval_redact_prose_before_persistence() {
     let fixture = Fixture::new();
     let token = format!("ghp_{}", "a".repeat(36));
