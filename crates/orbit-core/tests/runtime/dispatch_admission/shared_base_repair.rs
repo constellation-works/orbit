@@ -13,13 +13,14 @@
 
 use chrono::Utc;
 use orbit_core::application::task::{AgentDecisionRaise, TaskAddParams};
-use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{
     AgentDecisionOptionInput, CiFailureIdentity, CiFailureSource, ContextWideningStep,
     DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskDecision, TaskHistoryEntry,
 };
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::{
     PR_AUTO_FIX_BASE_RED_EVENT, PR_AUTO_FIX_HEAD_FAILURE_EVENT, PR_AUTO_FIX_PUSHED_EVENT,
     PrAutoFixBaseRed, PrAutoFixFailedCheck, PrAutoFixHeadFailure,
@@ -48,7 +49,7 @@ fn sweep_repair(runtime: &OrbitRuntime, title: &str, signature: &str) -> Task {
             tags: vec!["ci-failure-sweep".into()],
             context_files: vec!["file:Cargo.lock".into()],
             complexity: TaskComplexity::Low,
-            task_type: Some(orbit_core::TaskType::Bug),
+            task_type: Some(orbit_types::task::TaskType::Bug),
             status: Some(TaskStatus::Backlog),
             creation_decision: Some(TaskDecision::CiFailureIdentity(CiFailureIdentity {
                 failure_key: format!("key-{title}"),

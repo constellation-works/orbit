@@ -9,11 +9,11 @@ use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
 use super::task_support::test_runtime;
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound,
     TaskAddParams, TaskUpdateParams,
 };
+use orbit_core::runtime::OrbitRuntime;
 
 const RUN_ID: &str = "jrun-20261004-1200-t1";
 

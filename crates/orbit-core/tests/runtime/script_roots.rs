@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::scripts::{ScriptGrantOptions, ScriptGrantState};
 use orbit_engine::Dispatch;
 use orbit_engine::{ScriptStepRequest, ScriptStepRun};
@@ -71,7 +71,7 @@ fn fixture(global_config: &str) -> Fixture {
     }
 }
 
-fn grant_outbox(fixture: &Fixture, outbox: PathBuf) -> Result<(), orbit_core::OrbitError> {
+fn grant_outbox(fixture: &Fixture, outbox: PathBuf) -> Result<(), orbit_common::OrbitError> {
     fixture
         .runtime
         .grant_script(

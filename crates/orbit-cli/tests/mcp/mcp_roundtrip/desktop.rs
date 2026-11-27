@@ -887,7 +887,7 @@ fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
     const INVOCATIONS: usize = 600;
     let secret = format!("ghp_{}", "E".repeat(36));
     let workspace = McpWorkspace::init();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &workspace.home.join(".orbit"),
         &workspace.work.join(".orbit"),
     )
@@ -1116,7 +1116,7 @@ fn bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history() {
 fn full_run_show_signals_incomplete_progress_past_the_lifecycle_window() {
     const RUN_ID: &str = "jrun-20261011-0000-lc";
     let workspace = McpWorkspace::init();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &workspace.home.join(".orbit"),
         &workspace.work.join(".orbit"),
     )

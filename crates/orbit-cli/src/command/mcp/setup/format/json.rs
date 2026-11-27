@@ -2,8 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use orbit_common::Env;
+use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
-use orbit_core::OrbitError;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::audit::{orbit_server_args, record_config_write};

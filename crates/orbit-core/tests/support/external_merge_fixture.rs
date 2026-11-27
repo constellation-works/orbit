@@ -12,11 +12,11 @@ use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions, Sw
 use orbit_core::application::task::{
     EXTERNAL_MERGE_SETTLED_EVENT, ExternalMergeSettlement, TaskAddParams,
 };
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::task_pr_forge::{
     ForgePullRequest, LeasePullRequest, MergedPullRequest, PullRequestBlockers,
     PullRequestMergeOutcome, TaskPrForge,
 };
-use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
 use orbit_store::contract::{
@@ -27,6 +27,7 @@ use orbit_store::contract::{
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_store::{AdmissionCall, TaskCommitBoundary};
 use orbit_types::task::ExternalRef;
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::ReviewTiming;
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::handoff::{

@@ -5,17 +5,18 @@ use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
+use orbit_core::Core;
 use orbit_core::app::run::{Command, exec};
-use orbit_core::application::job::{
+use orbit_core::app::run::{
     JobFailureStreak, JobRunListParams, JobRunOrder, ResumeSubmissionProfile,
     ResumeSubmissionReceipt,
 };
-use orbit_core::{Core, JobRunState};
+use orbit_types::workflow::JobRunState;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{OptionalJson, bad_request, blocking, bounded_limit, map_runtime_error, validate_id};
-use orbit_core::application::job::job_catalog_to_json_with_last_run;
+use orbit_core::app::run::job_catalog_to_json_with_last_run;
 
 use super::routines::{OperationsQuery, explicit_workspace};
 
@@ -245,7 +246,7 @@ fn job_runs_page(
     state: JobRunListState,
     limit: usize,
     include_running: bool,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let params = job_run_list_params(scope, state, Some(limit));
     let running = include_running.then(|| {
         job_run_list_params(
@@ -274,7 +275,7 @@ pub(super) fn task_runs_page(
     core: &Core,
     task_id: &str,
     limit: usize,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let scope = JobRunScope {
         task_id: Some(task_id.to_string()),
         ..Default::default()

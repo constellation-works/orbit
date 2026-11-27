@@ -27,7 +27,7 @@ impl ExecuteCore for ToolShowArgs {
             .filter(|value| value.as_object().is_some_and(|rules| !rules.is_empty()))
             .map(serde_json::to_string_pretty)
             .transpose()
-            .map_err(|error| orbit_core::OrbitError::Execution(error.to_string()))?
+            .map_err(|error| orbit_common::OrbitError::Execution(error.to_string()))?
             .map(|value| format!("Input constraints (JSON Schema):\n{value}"));
         if let Some(name) = self.parameter {
             let parameter = tool
@@ -35,7 +35,7 @@ impl ExecuteCore for ToolShowArgs {
                 .iter()
                 .find(|parameter| parameter.name == name)
                 .ok_or_else(|| {
-                    orbit_core::OrbitError::InvalidInput(format!(
+                    orbit_common::OrbitError::InvalidInput(format!(
                         "tool '{}' has no parameter '{name}'",
                         tool.name
                     ))

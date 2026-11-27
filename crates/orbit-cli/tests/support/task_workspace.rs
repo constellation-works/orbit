@@ -11,8 +11,8 @@ use std::process::Output;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use orbit_core::application::task::TaskAddParams;
-use orbit_engine::RunLifecycle;
-use orbit_engine::TaskAutomationUpdate;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
 use orbit_types::task::{TaskComplexity, TaskHistoryEntry, TaskStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -346,7 +346,9 @@ fn seed_if_requested() -> bool {
     let runtime = orbit_cmd::test_support::open_resolved_roots(roots)
         .map(orbit_core::composition::Opening::into_runtime)
         .unwrap()
-        .with_actor(orbit_core::ActorIdentity::human("fixture"));
+        .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+            "fixture",
+        ));
     let seeded: Vec<Value> = tasks
         .into_iter()
         .map(|task| {

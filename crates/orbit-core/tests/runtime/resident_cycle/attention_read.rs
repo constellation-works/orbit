@@ -7,7 +7,9 @@
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_core::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
+use orbit_core::runtime::workspace::catalog::{
+    FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope,
+};
 
 use super::*;
 

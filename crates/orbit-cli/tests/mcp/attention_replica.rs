@@ -1,6 +1,7 @@
 //! Real replica and owner attention candidates through the federated mux.
-use orbit_core::OrbitRuntime;
+
 use orbit_core::adapter::command::ToolEntryPoint;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Value, json};
 

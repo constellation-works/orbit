@@ -828,7 +828,7 @@ fn a_fresh_install_that_does_not_satisfy_its_pin_is_not_enabled() {
     assert_eq!(again[0].status, PluginStatus::Inactive, "{again:?}");
 }
 
-fn build_findings(runtime: &orbit_core::OrbitRuntime) -> usize {
+fn build_findings(runtime: &orbit_core::runtime::OrbitRuntime) -> usize {
     plugin_doctor(runtime)
         .expect("doctor")
         .iter()
@@ -915,7 +915,7 @@ pub(super) fn attach_build(fixture: &PluginFixture, build: &PluginBuildRecord) {
 }
 
 fn workspace_plugin_toggles(
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
 ) -> Result<std::collections::BTreeMap<String, bool>, OrbitError> {
     orbit_config::load_workspace_plugin_enablement(&orbit_config::ConfigRoots::new(
         runtime.global_root(),

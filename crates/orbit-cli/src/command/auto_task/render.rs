@@ -2,8 +2,8 @@
 
 use std::fmt::Write as _;
 
+use orbit_common::OrbitError;
 use orbit_common::governance::auto_task::AutoTaskVerb;
-use orbit_core::OrbitError;
 use orbit_types::workflow::automation::recovery::{AutomationStall, RecoveryPreview, ResetPreview};
 use serde_json::Value;
 
@@ -223,7 +223,7 @@ fn is_plugin_inactive(record: &Value) -> bool {
 }
 
 fn show(value: Value) -> CommandOut {
-    let mut doc = orbit_core::application::auto_tasks::projection::AutoTaskListingProfile::Cli
+    let mut doc = orbit_core::app::auto_task::AutoTaskListingProfile::Cli
         .project_auto_task_tool_document(value);
     if let Some(object) = doc.as_object_mut() {
         object.entry("inactive_plugin").or_insert(Value::Null);

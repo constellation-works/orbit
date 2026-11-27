@@ -4,8 +4,8 @@
 //! row also carries its built-in default, removal fallback, equality and,
 //! for the global file, its reach into the bound workspace.
 
-use orbit_core::OrbitRuntime;
 use orbit_core::application::config::{self, ConfigScope, ConfigWriteInit};
+use orbit_core::runtime::OrbitRuntime;
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 

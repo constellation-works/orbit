@@ -7,7 +7,7 @@
 use orbit_engine::RunLifecycle;
 use std::time::{Duration, Instant};
 
-use orbit_core::DrainAdmissionsStopRequest;
+use orbit_core::application::job::DrainAdmissionsStopRequest;
 
 use super::*;
 

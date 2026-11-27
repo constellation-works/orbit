@@ -1,7 +1,7 @@
 use clap::Args;
 use orbit_common::Env;
+use orbit_core::app::host::KitLayout;
 use orbit_core::app::host::browser_kit::{self, InstallOptions, InstallReport};
-use orbit_core::bootstrap::browser_kit::KitLayout;
 
 use super::support::{status_text, to_json, verify_text};
 use crate::command::{CommandOut, Payload};

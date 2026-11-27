@@ -6,11 +6,14 @@
 //! Pool and crew names are fixture policy.
 
 use chrono::{Duration, Utc};
+use orbit_core::application::auto_tasks::AutoTaskAddParams;
 use orbit_core::runtime::JobRuns;
-use orbit_core::{
-    AutoTaskAddParams, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType,
-};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Recovery;
+use orbit_types::task::TaskComplexity;
+use orbit_types::task::TaskPriority;
+use orbit_types::task::TaskStatus;
+use orbit_types::task::TaskType;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{
     ActivityCrewDraw, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, FINAL_RECOVERY_CREWS_KEY,
@@ -115,7 +118,12 @@ impl Fixture {
             .activity_crew_draws
     }
 
-    fn mint(&self, name: &str, complexity: TaskComplexity, crew: Option<&str>) -> orbit_core::Task {
+    fn mint(
+        &self,
+        name: &str,
+        complexity: TaskComplexity,
+        crew: Option<&str>,
+    ) -> orbit_types::task::Task {
         self.runtime
             .auto_task_add(AutoTaskAddParams {
                 name: name.into(),

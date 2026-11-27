@@ -8,10 +8,14 @@
 use std::path::Path;
 
 use chrono::Utc;
-use orbit_core::TaskStatus;
-use orbit_engine::{Dispatch, RunLifecycle};
-use orbit_engine::{DispatchError, TaskAutomationUpdate, V2AuditWriter, execute_job_with_resume};
+use orbit_engine::Dispatch;
+use orbit_engine::DispatchError;
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
+use orbit_engine::V2AuditWriter;
+use orbit_engine::execute_job_with_resume;
 use orbit_types::resource::ExecutorResource;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::activity_job::{JobV2, Provider, V2AuditEvent, V2AuditEventKind};
 use orbit_types::workflow::{
     ExecutorDef, ExecutorSandboxKind, FOOTPRINT_UNAVAILABLE_ERROR_CODE, HeldFailure, JobRunState,
@@ -407,7 +411,7 @@ fn init_candidate_repo(
     (base_sha, candidate_sha)
 }
 
-fn install_activities(runtime: &orbit_core::OrbitRuntime) {
+fn install_activities(runtime: &orbit_core::runtime::OrbitRuntime) {
     let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/activities");
     let activities = runtime.global_root().join("resources/activities");
     std::fs::create_dir_all(&activities).unwrap();

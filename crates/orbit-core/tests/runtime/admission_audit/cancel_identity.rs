@@ -12,7 +12,7 @@ use rusqlite::{Connection, params};
 
 use super::run_support::{insert_pending_run, test_runtime};
 use orbit_common::process::identity::process_is_alive;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 
 use crate::scenarios::Outcome;
 

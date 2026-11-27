@@ -7,7 +7,7 @@
 //! every platform.
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::TaskStatus;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{ProviderFailureClass, ProviderLimitFailure};
 
 use super::dispatch_admission::isolated;

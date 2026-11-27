@@ -4,10 +4,12 @@ use std::time::Instant;
 
 use chrono::{Duration, Utc};
 use orbit_common::test_env::FixtureProgress;
+use orbit_core::application::auto_tasks::AutoTaskAddParams;
 use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{AuditEventStatus, AutoTaskAddParams, Task};
+use orbit_types::task::Task;
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
 use serde_json::{Value, json};
 
@@ -495,7 +497,7 @@ fn list_keeps_delivery_schedules_independent_of_corrupt_time_cursors() {
                     tx.connection().execute(
                         "INSERT INTO automation_consumers (consumer, generation, state_json) VALUES (?1, 1, ?2)",
                         [consumer.as_str(), "{broken-trigger"],
-                    ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    ).map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                     Ok(())
                 }).unwrap();
             }
@@ -625,7 +627,10 @@ fn listed_names(server: &super::support::Server) -> Vec<String> {
         .collect()
 }
 
-fn delete_audits(fixture: &Fixture, status: AuditEventStatus) -> Vec<orbit_core::AuditEvent> {
+fn delete_audits(
+    fixture: &Fixture,
+    status: AuditEventStatus,
+) -> Vec<orbit_types::telemetry::AuditEvent> {
     fixture
         .runtime
         .list_audit_events_with_kind(

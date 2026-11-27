@@ -1,9 +1,9 @@
 use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::JobRunState;
 use orbit_core::runtime::audit::run::AuditStepOutcome;
 use orbit_core::test_support::V2AuditEventInsertParams;
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -31,7 +31,7 @@ fn fill_stderr_audit_budget(fixture: &Fixture, count: usize, ts: DateTime<Utc>) 
                             'heartbeat', ?2, 'filler', 'http-fixture', '{}' FROM filler",
                     (i64::try_from(count).unwrap(), ts.to_rfc3339()),
                 )
-                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
             Ok(())
         })
         .unwrap();
@@ -78,7 +78,7 @@ fn stderr_audit_budget_discloses_truncation_and_distinguishes_exact_exhaustion()
                         tx.connection().execute(
                             "UPDATE v2_audit_events SET payload_json = '[' WHERE event_id = 'boundary'",
                             [],
-                        ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                        ).map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                         Ok(())
                     }).unwrap();
                     seeded += 1;

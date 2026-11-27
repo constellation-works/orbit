@@ -28,8 +28,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use clap::Args;
+use orbit_common::OrbitError;
 use orbit_common::process::shell::quote_posix_arg;
-use orbit_core::OrbitError;
 
 use crate::ssh_tunnel::{self, ProbeLimit, SshTunnel, TunnelOrigin, TunnelSpec};
 

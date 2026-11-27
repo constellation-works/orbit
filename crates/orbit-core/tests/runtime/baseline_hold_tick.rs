@@ -9,11 +9,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
 use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
 use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions, SweepOutcome};
 use orbit_core::application::task::BASELINE_HOLD_REFRESH_JOB;
-use orbit_core::{JobRunState, OrbitError, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_store::contract::JobRunQuery;
+use orbit_types::workflow::JobRunState;
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::Value;
 

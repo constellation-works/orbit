@@ -1,6 +1,6 @@
 # orbit-runtime
 
-The runtime kernel `orbit-core` builds `OrbitRuntime` on: `RuntimeKernel` and the mechanisms it owns (tool dispatch, audit, plugins, workspace binding, host probes, worker coordination), plus the actor context, root paths and cost types. It's an internal crate, split out so an application or adapter edit doesn't recompile the kernel. `orbit-core` re-exports it as `orbit_core::runtime`, and consumers keep using that path.
+The runtime kernel `orbit-core` builds `OrbitRuntime` on: `RuntimeKernel` and the mechanisms it owns (tool dispatch, audit, plugins, workspace binding, host probes, worker coordination), plus the actor context, root paths and cost types. It's an internal crate, split out so an application or adapter edit doesn't recompile the kernel. `orbit-core` re-exports it inside the crate as `crate::runtime`; outside `orbit-core`, only `orbit-cmd` names it, directly, and integration fixtures reach it as `orbit_core::runtime` under `orbit-core`'s `test-support` feature.
 
 ## Rules
 

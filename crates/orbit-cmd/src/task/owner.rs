@@ -15,8 +15,9 @@ use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_core::{ActorIdentity, Core};
+use orbit_core::Core;
 use orbit_registry::workspace_registry;
+use orbit_runtime::context::ActorIdentity;
 use orbit_store::maintenance::task_registry::{
     TaskRegistryStore, read_workspace_config_optional, task_registry_path,
 };

@@ -11,11 +11,11 @@ use std::io::Write as _;
 use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::TaskStatus;
 use orbit_core::application::agents::{
     AgentFacts, AgentQuery, AgentRole, Owner, Problem, agent_scorecard,
 };
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_types::task::TaskStatus;
 use orbit_types::task::{
     DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME, TaskCommentRowV2, TaskComplexity,
@@ -291,39 +291,41 @@ fn recorded_invocation(
 ) {
     fixture
         .runtime
-        .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
-            agent_execution_id: Some(
-                fixture
-                    .runtime
-                    .sqlite_store()
-                    .unwrap()
-                    .write(|tx| {
-                        tx.invocation().insert_agent_execution(
-                            fixture.runtime.stores().jobs().workspace_id(),
-                            run_id,
-                            activity,
-                            "codex",
-                            Some(model),
-                            &orbit_types::telemetry::AgentExecutionIdentity {
-                                crew: Some(crew.into()),
-                                reasoning_effort: Some(effort),
-                            },
-                        )
-                    })
-                    .unwrap(),
-            ),
-            job_run_id: run_id.into(),
-            account: None,
-            activity_id: activity.into(),
-            agent: "codex".into(),
-            provider: None,
-            model: Some(model.into()),
-            task_ids: vec![task_id.into()],
-            trace: orbit_types::telemetry::InvocationTrace {
-                duration_ms,
-                ..Default::default()
+        .insert_invocation_trace_record(
+            &orbit_core::test_support::fixture_store::InvocationInsertParams {
+                agent_execution_id: Some(
+                    fixture
+                        .runtime
+                        .sqlite_store()
+                        .unwrap()
+                        .write(|tx| {
+                            tx.invocation().insert_agent_execution(
+                                fixture.runtime.stores().jobs().workspace_id(),
+                                run_id,
+                                activity,
+                                "codex",
+                                Some(model),
+                                &orbit_types::telemetry::AgentExecutionIdentity {
+                                    crew: Some(crew.into()),
+                                    reasoning_effort: Some(effort),
+                                },
+                            )
+                        })
+                        .unwrap(),
+                ),
+                job_run_id: run_id.into(),
+                account: None,
+                activity_id: activity.into(),
+                agent: "codex".into(),
+                provider: None,
+                model: Some(model.into()),
+                task_ids: vec![task_id.into()],
+                trace: orbit_types::telemetry::InvocationTrace {
+                    duration_ms,
+                    ..Default::default()
+                },
             },
-        })
+        )
         .unwrap();
 }
 

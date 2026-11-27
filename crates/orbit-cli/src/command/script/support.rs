@@ -1,4 +1,4 @@
-use orbit_core::runtime::scripts::ScriptStatus;
+use orbit_core::app::run::ScriptStatus;
 use orbit_types::workflow::activity_job::ScriptGrant;
 use serde_json::{Value, json};
 

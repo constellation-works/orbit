@@ -6,9 +6,11 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use orbit_core::{ActorIdentity, OrbitRuntime};
-use orbit_engine::RunLifecycle;
-use orbit_engine::{TaskAutomationUpdate, blocked_workflow_failure_update};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
+use orbit_core::test_support::fixture_engine::blocked_workflow_failure_update;
 use serde_json::Value;
 
 use crate::isolated_cli_fixture;

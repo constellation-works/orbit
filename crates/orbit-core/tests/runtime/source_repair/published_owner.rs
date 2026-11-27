@@ -605,7 +605,7 @@ fn successful_publication_with_no_local_commands_stays_review_only() {
         "required_validation_commands = []",
     );
     std::fs::write(&config, configured).unwrap();
-    f.runtime = orbit_core::OrbitRuntime::from_roots(
+    f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &f._root.path().join("global"),
         &f.repo.join(".orbit"),
     )
@@ -908,7 +908,7 @@ fn successful_rework_binds_current_policy_before_submission_and_source_effects()
     );
     std::fs::write(&config, changed).unwrap();
     let reload = |f: &mut Fixture| {
-        f.runtime = orbit_core::OrbitRuntime::from_roots(
+        f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
             &f._root.path().join("global"),
             &f.repo.join(".orbit"),
         )
@@ -1445,7 +1445,7 @@ pub(super) fn published_requeue_is_admitted_past_held_locks_and_reuses_its_pr() 
             acceptance_criteria: vec!["Observable".into()],
             plan: "Fixture".into(),
             context_files: vec!["file:source.txt".into()],
-            complexity: orbit_core::TaskComplexity::Medium,
+            complexity: orbit_types::task::TaskComplexity::Medium,
             status: Some(TaskStatus::Backlog),
             ..Default::default()
         })
@@ -1600,7 +1600,7 @@ pub(super) fn operator_shipped_published_requeue_overrides_held_local_lock() {
             acceptance_criteria: vec!["Observable".into()],
             plan: "Fixture".into(),
             context_files: vec!["file:source.txt".into()],
-            complexity: orbit_core::TaskComplexity::Medium,
+            complexity: orbit_types::task::TaskComplexity::Medium,
             status: Some(TaskStatus::Backlog),
             ..Default::default()
         })
@@ -1696,7 +1696,7 @@ pub(super) fn footprint_held_resume_keeps_the_preserved_publication() {
             acceptance_criteria: vec!["Observable".into()],
             plan: "Fixture".into(),
             context_files: vec!["file:source.txt".into()],
-            complexity: orbit_core::TaskComplexity::Medium,
+            complexity: orbit_types::task::TaskComplexity::Medium,
             status: Some(TaskStatus::Backlog),
             ..Default::default()
         })
@@ -1856,7 +1856,7 @@ pub(super) fn deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn
                 acceptance_criteria: vec!["Observable".into()],
                 plan: "Fixture".into(),
                 context_files: vec!["file:source.txt".into()],
-                complexity: orbit_core::TaskComplexity::Medium,
+                complexity: orbit_types::task::TaskComplexity::Medium,
                 status: Some(TaskStatus::Backlog),
                 ..Default::default()
             })

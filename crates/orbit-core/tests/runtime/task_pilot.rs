@@ -48,10 +48,11 @@ use orbit_core::application::automation::{
 };
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
-use orbit_core::{OrbitRuntime, Task, TaskStatus};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_store::contract::KeyedJobRunAdmission;
 use orbit_tools::ToolContext;
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::automation::AutomationState;
 use orbit_types::workflow::automation::members::{MemberAttempt, StateTriggerKind};
 use orbit_types::workflow::{JobRunState, PipelineState, RoutineDefinition};

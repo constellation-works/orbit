@@ -9,9 +9,11 @@ use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest,
 };
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{ActorIdentity, OrbitRuntime};
-use orbit_engine::RunLifecycle;
-use orbit_engine::{TaskAutomationUpdate, blocked_workflow_failure_update};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
+use orbit_core::test_support::fixture_engine::blocked_workflow_failure_update;
 use orbit_types::task::{
     ExecutionLocation, ExternalRef, TaskComplexity, TaskHistoryEntry, TaskStatus,
 };

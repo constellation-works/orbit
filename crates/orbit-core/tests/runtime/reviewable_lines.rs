@@ -4,10 +4,11 @@ use std::path::Path;
 use std::process::Output;
 
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
 use orbit_store::contract::ReviewableLines;
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 use orbit_types::workflow::automation::DirectLandingRequest;
 
 fn git(repo: &Path, args: &[&str]) -> Output {

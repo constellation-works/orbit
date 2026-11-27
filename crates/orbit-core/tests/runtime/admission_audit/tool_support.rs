@@ -11,7 +11,7 @@ use serde_json::Value;
 use tempfile::tempdir_in;
 
 use crate::task_params_test_support::task_create_params;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 
 /// Run a tool with an explicit operator session context.
 ///

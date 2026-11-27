@@ -4,13 +4,13 @@
 use orbit_core::application::task::{
     DecisionSubmitCaller, DecisionSubmitParams, TaskAddParams, TaskUpdateParams,
 };
-use orbit_core::{Task, TaskComplexity, TaskPriority, TaskStatus};
 use orbit_engine::RunLifecycle;
 use orbit_store::contract::TaskHistoryUpdateParams;
 use orbit_types::task::{
     DecisionGate, DecisionRequest, DecisionRequestState, PilotAdmissionVerdict, TaskArtifact,
     TaskComment, TaskDecision, TaskHistoryEntry,
 };
+use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus};
 use serde_json::json;
 
 use super::Workspace;
@@ -28,7 +28,12 @@ fn hu_by(workspace: &Workspace, task: &Task, params: TaskUpdateParams, by: &str)
         .update_task_as_human(&task.id, params, by.into())
         .unwrap();
 }
-fn hu_err(workspace: &Workspace, task: &Task, params: TaskUpdateParams) -> orbit_core::OrbitError {
+
+fn hu_err(
+    workspace: &Workspace,
+    task: &Task,
+    params: TaskUpdateParams,
+) -> orbit_common::OrbitError {
     workspace
         .runtime
         .update_task_as_human(&task.id, params, "human:fixture".into())
@@ -48,7 +53,7 @@ fn human_comment_err(
     workspace: &Workspace,
     task: &Task,
     comment: String,
-) -> orbit_core::OrbitError {
+) -> orbit_common::OrbitError {
     hu_err(
         workspace,
         task,
@@ -855,9 +860,12 @@ fn human_approved_validation_task_with_tools(
 fn operator_validation_holds_human_approved_work_and_requires_an_evidenced_decision() {
     for decision in ["evaluated", "approve-anyway", "clear"] {
         let mut workspace = Workspace::new();
-        workspace.runtime = workspace
-            .runtime
-            .with_actor(orbit_core::ActorIdentity::human("human:fixture"));
+        workspace.runtime =
+            workspace
+                .runtime
+                .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+                    "human:fixture",
+                ));
         let task = human_approved_validation_task_with_tools(
             &workspace,
             "Run the live evaluation with `orbit.pipeline.invoke`.",
@@ -1732,7 +1740,7 @@ fn submit_pilot_answer(
     request_id: &str,
     token: &str,
     caller: DecisionSubmitCaller,
-) -> Result<DecisionRequest, orbit_core::OrbitError> {
+) -> Result<DecisionRequest, orbit_common::OrbitError> {
     workspace
         .runtime
         .submit_decision_via_channel(DecisionSubmitParams {

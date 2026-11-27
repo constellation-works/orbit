@@ -7,9 +7,9 @@
 //! reported as accepted on a drain that has already decided to end.
 
 use chrono::{DateTime, Duration, SecondsFormat};
-use orbit_core::DrainWindowExtensionRequest;
 use orbit_core::application::job::DrainWindowExtensionChange;
 use orbit_core::application::job::DrainWindowExtensionOutcome;
+use orbit_core::application::job::DrainWindowExtensionRequest;
 use orbit_engine::Dispatch;
 
 use super::*;
@@ -155,7 +155,7 @@ fn a_closed_pull_window_ends_the_drain_and_refuses_a_later_extension() {
     let open = Utc::now() + Duration::minutes(10);
     let stopped = timed_drain(&pair, open);
     pair.follower
-        .stop_workspace_auto_admissions(orbit_core::DrainAdmissionsStopRequest {
+        .stop_workspace_auto_admissions(orbit_core::application::job::DrainAdmissionsStopRequest {
             actor: "operator",
             source: "run_auto_stop",
             reason: None,

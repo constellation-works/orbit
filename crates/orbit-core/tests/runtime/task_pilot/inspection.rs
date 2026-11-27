@@ -17,7 +17,7 @@ impl RoutineWorkspaceProvider for SingleWorkspace {
     fn discover_workspaces(
         &self,
         _: &Path,
-    ) -> Result<DiscoveredWorkspaces, orbit_core::OrbitError> {
+    ) -> Result<DiscoveredWorkspaces, orbit_common::OrbitError> {
         Ok(DiscoveredWorkspaces {
             entries: vec![(
                 WorkspaceRecord {

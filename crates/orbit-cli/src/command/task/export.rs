@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use clap::Args;
 use orbit_core::Core;
+use orbit_core::app::task::ExportSelection;
 use orbit_core::app::task::{self, Command, Outcome};
-use orbit_core::application::task_bundle::migration::ExportSelection;
 use serde_json::json;
 
 use crate::command::{CommandOut, ExecuteCore, Payload};

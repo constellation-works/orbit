@@ -28,6 +28,6 @@ pub fn positive_limit(raw: &str) -> Result<usize, String> {
 /// Parses a duration-relative string like "1h", "90d", "30m", "2w"
 /// or an RFC3339/naive timestamp into a `DateTime<Utc>`.
 /// For bare durations, the result is `now - duration`.
-pub(crate) fn parse_since(raw: &str) -> Result<DateTime<Utc>, orbit_core::OrbitError> {
+pub(crate) fn parse_since(raw: &str) -> Result<DateTime<Utc>, orbit_common::OrbitError> {
     orbit_common::protocol::tool_input::parse_since_with(raw, parse_duration_seconds)
 }

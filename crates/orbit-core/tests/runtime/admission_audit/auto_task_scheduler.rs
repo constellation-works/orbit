@@ -2,10 +2,10 @@
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
-use orbit_core::OrbitRuntime;
 use orbit_core::application::auto_tasks::scheduler::{
     SchedulerOptions, run_auto_task_scheduler_at,
 };
+use orbit_core::runtime::OrbitRuntime;
 
 use super::interval_params;
 

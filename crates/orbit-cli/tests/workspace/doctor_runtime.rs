@@ -4,11 +4,11 @@
 
 use std::fs;
 
-use orbit_core::OrbitRuntime;
 use orbit_core::app::doctor::{
     DoctorCommands, WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_report_probes,
 };
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::task::{TaskRelation, TaskRelationType};
 
 const FOREIGN_TARGET: &str = "ZZZ-00001";
@@ -288,9 +288,9 @@ fn browser_kit_backlog_warns_while_ui_tasks_wait_for_this_hosts_kit() {
                 acceptance_criteria: vec!["Doctor names the wait.".to_string()],
                 plan: "Render the change.".to_string(),
                 tags: vec![tag.to_string()],
-                complexity: orbit_core::TaskComplexity::Medium,
+                complexity: orbit_types::task::TaskComplexity::Medium,
                 context_files: vec![format!("file:{file}")],
-                status: Some(orbit_core::TaskStatus::Backlog),
+                status: Some(orbit_types::task::TaskStatus::Backlog),
                 ..Default::default()
             })
             .expect("add task")

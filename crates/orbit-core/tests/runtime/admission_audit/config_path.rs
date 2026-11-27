@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use tempfile::tempdir_in;
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 
 fn test_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf, PathBuf) {
     let root = tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");

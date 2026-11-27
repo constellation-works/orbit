@@ -260,7 +260,7 @@ fn bind_pr_ship_mode(workspace: &mut Workspace) {
             owner_machine_id: None,
             checkout_role: None,
             repo_root: workspace.repo.clone(),
-            ship_mode: orbit_core::ShipMode::Pr,
+            ship_mode: orbit_core::app::run::ShipMode::Pr,
             base_branch: Some("main".into()),
         },
     )
@@ -522,7 +522,9 @@ fn explicit_repilot_tool_and_update_submit_once_with_live_dedup() {
             ),
             orbit_common::Env::capture(),
         )
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+        .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+            "human:operator",
+        ));
         if update {
             let mut unsupported = input.clone();
             unsupported["status"] = json!("someday");
@@ -760,7 +762,9 @@ fn held_warning_keeps_one_decision_until_explicit_decision_repilot() {
         &workspace.runtime.global_root(),
         &workspace.repo.join(".orbit"),
     )
-    .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+    .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+        "human:operator",
+    ));
     let answered = human
         .answer_decision_request_as_human(
             &request.id,

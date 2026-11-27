@@ -77,7 +77,7 @@ fn registered_checkout_denies_live_orbit_versioned_stores() {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_registered_host_stores_denied(
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     resolved: &orbit_engine::ResolvedSandbox,
     provider: &str,
 ) {
@@ -140,7 +140,7 @@ fn assert_registered_host_stores_denied(
 /// resolution that denies the registered host-clock stores.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_registered_checkout_boundaries_unchanged(
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     resolved: &orbit_engine::ResolvedSandbox,
     repo_root: &std::path::Path,
 ) {

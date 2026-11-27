@@ -58,7 +58,7 @@ fn fixture_with_command(command: &str) -> Fixture {
         "default_crew = \"reviewers\"\nfinal_recovery_crews = [\"reviewers\"]",
     );
     std::fs::write(path, config).unwrap();
-    fixture.runtime = orbit_core::OrbitRuntime::from_roots(
+    fixture.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &fixture.runtime.paths().global_dir,
         &fixture.repo.join(".orbit"),
     )

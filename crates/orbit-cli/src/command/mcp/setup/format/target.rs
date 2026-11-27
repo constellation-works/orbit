@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 /// Longest symlink chain followed before the path is treated as a loop.
 const MAX_LINK_HOPS: usize = 40;

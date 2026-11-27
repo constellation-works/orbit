@@ -20,7 +20,7 @@ use orbit_common::governance::authorization::{
     DASHBOARD_EXPERIMENT_START, DASHBOARD_EXPERIMENT_UPDATE, GovernedOperation,
 };
 use orbit_core::Core;
-use orbit_core::application::experiment::{
+use orbit_core::app::experiment::{
     EXPERIMENT_COMPLEXITIES, ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
     ExperimentView, experiment_metric_names, step_local_metric_names,
 };
@@ -94,7 +94,7 @@ pub(in crate::api) struct ExperimentReasonBody {
 pub(super) fn experiment_authoring(
     runtime: &Core,
     operator_session: bool,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let capability = |operation: &'static GovernedOperation| {
         crate::api::routines::action_capability(operation, operator_session)
     };
@@ -111,7 +111,7 @@ pub(super) fn experiment_authoring(
         "pause": capability(&DASHBOARD_EXPERIMENT_PAUSE),
         "resume": capability(&DASHBOARD_EXPERIMENT_RESUME),
         "enabled": settings.enabled,
-        "max_running": orbit_core::application::experiment::EXPERIMENTS_MAX_RUNNING,
+        "max_running": orbit_core::app::experiment::EXPERIMENTS_MAX_RUNNING,
         "config_keys": settings.config_keys,
         "metrics": experiment_metric_names().collect::<Vec<_>>(),
         "step_local_metrics": step_local_metric_names().collect::<Vec<_>>(),
@@ -276,11 +276,11 @@ fn refuse_unauthorized(
 /// core's text.
 async fn experiment_write<F>(runtime: Arc<Core>, label: &'static str, write: F) -> Response
 where
-    F: FnOnce(&Core) -> Result<ExperimentView, orbit_core::OrbitError> + Send + 'static,
+    F: FnOnce(&Core) -> Result<ExperimentView, orbit_common::OrbitError> + Send + 'static,
 {
     match crate::api::blocking(label, move || Ok(write(&runtime))).await {
         Ok(Ok(view)) => Json(view).into_response(),
-        Ok(Err(orbit_core::OrbitError::PolicyDenied(message))) => (
+        Ok(Err(orbit_common::OrbitError::PolicyDenied(message))) => (
             StatusCode::CONFLICT,
             Json(json!({ "error": message, "code": "experiment_policy_denied" })),
         )

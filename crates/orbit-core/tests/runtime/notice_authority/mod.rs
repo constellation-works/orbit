@@ -5,10 +5,12 @@ mod posting;
 
 use std::path::Path;
 
-use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::task::TaskAddParams;
-use orbit_engine::{Dispatch, Recovery, RunLifecycle};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_engine::Dispatch;
+use orbit_engine::Recovery;
+use orbit_engine::RunLifecycle;
 use orbit_types::task::ExecutionLocation;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext, WorkerInvocation};
@@ -1092,7 +1094,7 @@ fn attention_lists_notices_under_a_registry_id_that_differs_from_the_store_id() 
                 owner_machine_id: None,
                 checkout_role: None,
                 repo_root: root.path().join(name),
-                ship_mode: orbit_core::ShipMode::Local,
+                ship_mode: orbit_core::app::run::ShipMode::Local,
                 base_branch: Some("main".into()),
             },
         )

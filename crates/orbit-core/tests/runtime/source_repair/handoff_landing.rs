@@ -4,12 +4,13 @@
 use super::decision_answer::raise_block_triage;
 use super::failed_publication::{escalated_completion_fixture, escalated_handoff_fixture};
 use super::*;
+use orbit_common::OrbitError;
 use orbit_core::application::task::DecisionListProfile;
+use orbit_core::runtime::context::ActorIdentity;
 use orbit_core::runtime::task_pr_forge::{
     ForgePullRequest, HandoffLandingPullRequest, LeasePullRequest, MergedPullRequest,
     PullRequestBlockers, PullRequestMergeOutcome, TaskPrForge,
 };
-use orbit_core::{ActorIdentity, OrbitError};
 use orbit_engine::RunLifecycle;
 use orbit_types::task::{DecisionRequest, DecisionRequestState};
 use std::path::Path;
@@ -170,7 +171,7 @@ fn owner_lands_green_handoff_and_refusals_change_nothing() {
     let config_path = f.repo.join(".orbit/config.toml");
     let config = std::fs::read_to_string(&config_path).unwrap();
     std::fs::write(&config_path, format!("{config}\n[[completion.hold]]\nname = \"owner sign-off\"\ntypes = [\"feature\", \"bug\", \"chore\", \"refactor\"]\n")).unwrap();
-    f.runtime = orbit_core::OrbitRuntime::from_roots(
+    f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &f._root.path().join("global"),
         &f.repo.join(".orbit"),
     )

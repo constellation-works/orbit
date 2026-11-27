@@ -1,8 +1,8 @@
 use std::fs;
 
 use chrono::Utc;
-use orbit_core::AuditEventStatus;
 use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
+use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::AutoTaskSchedule;
 use serde_json::{Value, json};
 
@@ -200,7 +200,10 @@ fn dashboard_timing_edits_persist_guards_and_refuse_stale_values() {
     );
 }
 
-fn denied_schedule_audits(fixture: &Fixture, operation: &str) -> Vec<orbit_core::AuditEvent> {
+fn denied_schedule_audits(
+    fixture: &Fixture,
+    operation: &str,
+) -> Vec<orbit_types::telemetry::AuditEvent> {
     fixture
         .runtime
         .list_audit_events_with_kind(
@@ -214,7 +217,7 @@ fn denied_schedule_audits(fixture: &Fixture, operation: &str) -> Vec<orbit_core:
         .unwrap()
 }
 
-fn arguments_of(event: &orbit_core::AuditEvent) -> Value {
+fn arguments_of(event: &orbit_types::telemetry::AuditEvent) -> Value {
     serde_json::from_str(event.arguments_json.as_deref().unwrap_or("{}")).unwrap()
 }
 

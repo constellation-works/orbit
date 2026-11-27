@@ -8,9 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::Utc;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::{DrainAdmissionForecast, JobRunState, PipelineState};
 use serde_json::{Value, json};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
@@ -81,7 +82,7 @@ fn add(
                 .iter()
                 .map(|file| (*file).to_string())
                 .collect(),
-            task_type: Some(orbit_core::TaskType::Chore),
+            task_type: Some(orbit_types::task::TaskType::Chore),
             status: Some(status),
             ..Default::default()
         })
@@ -90,7 +91,10 @@ fn add(
         .to_string()
 }
 
-fn readiness(runtime: &OrbitRuntime, task_ids: &[String]) -> Result<Value, orbit_core::OrbitError> {
+fn readiness(
+    runtime: &OrbitRuntime,
+    task_ids: &[String],
+) -> Result<Value, orbit_common::OrbitError> {
     runtime.workspace_auto_readiness(task_ids, None, 50, &[])
 }
 

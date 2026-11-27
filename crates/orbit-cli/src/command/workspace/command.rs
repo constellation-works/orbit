@@ -58,7 +58,7 @@ impl ExecuteCore for WorkspaceCommand {
             WorkspaceSubcommand::Sync(_) => {
                 unreachable!("workspace sync should be handled before runtime initialization")
             }
-            WorkspaceSubcommand::Rebind(_) => Err(orbit_core::OrbitError::Execution(
+            WorkspaceSubcommand::Rebind(_) => Err(orbit_common::OrbitError::Execution(
                 "workspace rebind requires runtime-free dispatch".into(),
             )),
             WorkspaceSubcommand::List(args) => args.execute(core),

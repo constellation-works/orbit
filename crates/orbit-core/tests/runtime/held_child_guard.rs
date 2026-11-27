@@ -3,7 +3,7 @@
 //! does not end failed while the task stays in progress. Real failures still
 //! fail the guard.
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use serde_json::{Value, json};

@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_core::adapter::HubCoordinationExecutor;
+use orbit_core::app::run::ShipMode;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{OrbitRuntime, ShipMode};
 use orbit_engine::HostEnvironment;
 use orbit_store::contract::{V2AuditEventFilter, V2AuditEventInsertParams};
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};
@@ -32,7 +33,11 @@ fn tool(runtime: &OrbitRuntime, name: &str, input: Value) -> Value {
     call(runtime, name, input).unwrap_or_else(|error| panic!("{name}: {error}"))
 }
 
-fn call(runtime: &OrbitRuntime, name: &str, input: Value) -> Result<Value, orbit_core::OrbitError> {
+fn call(
+    runtime: &OrbitRuntime,
+    name: &str,
+    input: Value,
+) -> Result<Value, orbit_common::OrbitError> {
     runtime.run_tool_with_context(
         name,
         input,
@@ -167,7 +172,7 @@ fn selected_shared_root_isolates_records_reservations_and_claims() {
     )
     .unwrap_err();
     assert!(
-        matches!(error, orbit_core::OrbitError::NotFound { .. }),
+        matches!(error, orbit_common::OrbitError::NotFound { .. }),
         "{error:?}"
     );
 

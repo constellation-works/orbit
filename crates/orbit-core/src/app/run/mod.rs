@@ -75,6 +75,51 @@ pub use read::RunRead;
 pub use script::DashboardScriptGrant;
 pub use show::{RunDetail, ShownRun, WaitingTasks};
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::application::change_watch::{RunStateStamp, TaskChangeStamp};
+pub use crate::application::contracts::{
+    ClaimedLeafStage, DrainClaimedLeaf, PULL_DRAIN_JOB, PullSettlementEntry, PullSettlementOutcome,
+};
+pub use crate::application::distributed::{
+    FollowerRunObserver, LeafHydrationOutcome, LeafHydrationRequest, PULL_START_CONFLICT_ARG_IDS,
+    PULL_START_HOST_REQUIRES_ARG_ID, PullStartOptionsSupplied, WorkspacePullRequest,
+    pull_start_review_refusal,
+};
+pub use crate::application::job::{
+    ActivityInvocationEvidence, AutoDrainRequest, AutoDrainSubmissionProfile,
+    AutoDrainSubmissionReceipt, CatalogReferenceLayer, DrainAdmissionsStopOutcome,
+    DrainAdmissionsStopRequest, DrainWindowExtensionOutcome, DrainWindowExtensionRequest,
+    DrainWorkerLimitChangeProfile, DrainWorkerLimitOutcome, DrainWorkerLimitRequest,
+    EscalationTriageSubmitError, JobCatalogEntry, JobCatalogFilter, JobFailureStreak,
+    JobRunCancelOutcome, JobRunCancelResultProfile, JobRunHolder, JobRunListParams, JobRunOrder,
+    JobRunProjectionEvidence, JobRunProjectionProfile, PipelineInvokeResult, PipelineWaitEntry,
+    PipelineWorkerLogSnapshot, ResumeSubmissionProfile, ResumeSubmissionReceipt, RunDisplayStep,
+    RunFailureCause, RunStepSource, ShipRunRequest, ShipSubmissionProfile, ShipSubmissionReceipt,
+    TaskAutoFixError, TaskCrewBackfill, agent_invoke_result,
+    display_steps_with_agent_execution_to_json, fold_run_incidents,
+    job_catalog_to_json_with_last_run, job_run_task_ids, project_job_run, run_error_step,
+    run_upgrade_paused,
+};
+pub use crate::application::workflow::{CompletionPolicy, ShipMode, resolved_ship_mode};
+pub use crate::application::workspace_live_runs::workspace_live_run_ids;
+pub use orbit_runtime::HostLifetime;
+pub use orbit_runtime::audit::run::{
+    AuditStepOutcome, RunAuditEvent, RunAuditStep, RunProviderProcess, RunScriptExecution,
+};
+pub use orbit_runtime::audit::run_events::{RunEventsPage, RunEventsPageResult};
+pub use orbit_runtime::audit::run_logs::{HTTP_PREVIEW_MAX_BYTES, RunCliInvocationProfile};
+pub use orbit_runtime::host_resource::accuracy::{
+    AccuracySelection, DrainLimiters, DrainShadowDecisions, ErrorSummary, ForecastAccuracy,
+    OffsetAccuracy,
+};
+pub use orbit_runtime::host_resource::forecast::HostCapacity;
+pub use orbit_runtime::host_resource::profile::{
+    BUILD_LIKE_CORES, BUILD_LIKE_MINUTES, ResourceProfile,
+};
+pub use orbit_runtime::host_resource::{HostResourceMonitor, HostResourceStatus};
+pub use orbit_runtime::scripts::{ScriptGrantOptions, ScriptGrantState, ScriptStatus};
+pub use orbit_store::contract::LandedDiffStats;
+
 /// A run operation whose result has type `T`.
 pub struct Command<'a, T> {
     operation: Operation,
@@ -158,4 +203,11 @@ impl<'a, T: 'a> App for RunApp<'a, T> {
 /// Authorize, audit and execute one run command.
 pub fn exec<'a, T: 'a>(core: &Core, command: Command<'a, T>) -> Result<Outcome<T>, Error> {
     exec::run::<RunApp<'a, T>>(core, command)
+}
+
+/// Allow this production Orbit binary to re-execute itself as a pipeline
+/// worker. Call once from its `main` before it can submit any runs. Tests in
+/// other crates must install the `test-support` worker override instead.
+pub fn mark_process_as_pipeline_worker_binary() {
+    crate::application::job::pipeline::mark_process_as_pipeline_worker_binary();
 }

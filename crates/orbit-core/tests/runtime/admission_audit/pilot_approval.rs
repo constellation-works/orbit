@@ -9,8 +9,8 @@ use orbit_types::workflow::{ChildDispatch, PipelineState};
 use serde_json::{Value, json};
 
 use super::pilot_persist::{Workspace, workspace};
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::OrbitRuntime;
 
 /// A running run of `job`, as the drain and its pilot child are.
 fn running(runtime: &OrbitRuntime, job: &str, input: Value) -> String {

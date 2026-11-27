@@ -68,7 +68,7 @@ pub(super) async fn pipeline_reliability(
 fn pipeline_reliability_json(
     state: &DashboardState,
     window: ReliabilityWindow,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let pinned = state.pin();
     let aggregate_start = std::time::Instant::now();
     // Resolve and query every workspace concurrently (its own runtime and

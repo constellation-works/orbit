@@ -1,5 +1,8 @@
 use clap::ValueEnum;
-use orbit_core::adapter::command::{self, PluginSeedOutcome, PluginSkillLink, PluginSummary};
+use orbit_core::app::plugin::{
+    PluginSeedOutcome, PluginSkillLink, PluginSummary, PluginSummaryJsonProfile,
+    plugin_summary_json,
+};
 use orbit_types::plugin::{PluginDisabledLayer, PluginGrant, PluginStatus};
 use serde_json::{Value, json};
 
@@ -54,7 +57,7 @@ pub(super) fn host_state(summary: &PluginSummary) -> &'static str {
 
 /// JSON projection shared by every CLI plugin record and mutation receipt.
 pub(super) fn plugin_record(summary: &PluginSummary) -> Value {
-    command::plugin_summary_json(summary, command::PluginSummaryJsonProfile::Cli)
+    plugin_summary_json(summary, PluginSummaryJsonProfile::Cli)
 }
 
 /// The individual manifest declarations shown beside agent consent.

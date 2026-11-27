@@ -5,13 +5,14 @@
 //! host could serve is refused. The fixture composes the host OS and labels,
 //! so each test behaves the same on every machine CI runs it on.
 
+use orbit_common::OrbitError;
+use orbit_core::app::run::{CompletionPolicy, ShipMode};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{
-    CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, Task, TaskComplexity, TaskStatus,
-};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use orbit_types::task::HostOs;
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -154,7 +155,7 @@ fn a_host_without_the_labels_withholds_the_task_and_names_the_wait() {
     assert_eq!(row["placement_wait"], placement, "{listed}");
 
     let refused = plain
-        .submit_ship_run(orbit_core::ShipRunRequest {
+        .submit_ship_run(orbit_core::application::job::ShipRunRequest {
             mode: ShipMode::Local,
             base_branch: Some("main"),
             task_ids: std::slice::from_ref(&labelled.id),

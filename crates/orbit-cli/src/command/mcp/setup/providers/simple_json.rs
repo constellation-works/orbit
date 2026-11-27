@@ -1,5 +1,5 @@
 use orbit_common::Env;
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::super::dispatch::ConfigTarget;

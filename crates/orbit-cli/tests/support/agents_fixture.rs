@@ -7,8 +7,10 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{ActorIdentity, JobRun, JobRunState, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
 use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use crate::isolated_cli_fixture::Fixture;
@@ -263,20 +265,22 @@ impl AgentsFixture {
         execution: Option<i64>,
     ) {
         self.runtime
-            .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
-                agent_execution_id: execution,
-                job_run_id: run_id.into(),
-                account: None,
-                activity_id: activity.into(),
-                agent: "claude".into(),
-                provider: None,
-                model: Some(model.into()),
-                task_ids: vec![task_id.into()],
-                trace: orbit_types::telemetry::InvocationTrace {
-                    duration_ms: 60_000,
-                    ..Default::default()
+            .insert_invocation_trace_record(
+                &orbit_core::test_support::fixture_store::InvocationInsertParams {
+                    agent_execution_id: execution,
+                    job_run_id: run_id.into(),
+                    account: None,
+                    activity_id: activity.into(),
+                    agent: "claude".into(),
+                    provider: None,
+                    model: Some(model.into()),
+                    task_ids: vec![task_id.into()],
+                    trace: orbit_types::telemetry::InvocationTrace {
+                        duration_ms: 60_000,
+                        ..Default::default()
+                    },
                 },
-            })
+            )
             .unwrap();
     }
 

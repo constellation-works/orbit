@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::AutoTaskAddParams;
-use orbit_store::contract::{
+use orbit_core::application::auto_tasks::AutoTaskAddParams;
+use orbit_core::test_support::fixture_store::contract::{
     RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState, RoutineFireIntentParams,
     RoutineFireState,
 };
@@ -71,7 +71,7 @@ fn seed(fixture: &Fixture, state: &AutomationState) {
         tx.connection().execute(
             "INSERT INTO automation_consumers (consumer, generation, state_json) VALUES (?1, 1, ?2)",
             [state.consumer.as_str(), encoded.as_str()],
-        ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+        ).map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
         Ok(())
     }).unwrap();
 }
@@ -285,7 +285,10 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
                 "schemaVersion: 1\nname: pilot\nenabled: false\ntarget: job:task_pilot_pipeline\ntrigger:\n  state:\n    kind: preparation_eligible\n    owner_machine: {}\n    branch: agent-main\n    debounce_minutes: 2\n    max_wait_minutes: 10\n    max_items: 50\n    retries: 1\n    deadline_minutes: 90\n",
                 fixture.runtime.automation_machine_identity().unwrap()
             )).unwrap();
-            let store = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+            let store = orbit_core::test_support::fixture_store::Store::open(
+                &fixture.global.join("orbit.db"),
+            )
+            .unwrap();
             let slot = "2026-09-20T23:00:00+00:00";
             orbit_core::application::routines::record_fire_intent(
                 &store,
@@ -583,7 +586,7 @@ fn routine_last_fire_reports_condition_triggered_runs() {
 // Public HTTP projection: a fire is a scheduled slot, not each retry attempt.
 // Timestamps are seeded explicitly so chronology never depends on host timing.
 fn record_fire(
-    store: &orbit_store::Store,
+    store: &orbit_core::test_support::fixture_store::Store,
     fixture: &Fixture,
     name: &str,
     at: DateTime<Utc>,
@@ -620,12 +623,14 @@ fn record_fire(
                 .update_fire((name, &slot, attempt), state, None, None)
         })
         .unwrap();
-    let global = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+    let global =
+        orbit_core::test_support::fixture_store::Store::open(&fixture.global.join("orbit.db"))
+            .unwrap();
     global.with_transaction(|tx| {
         tx.connection().execute(
             "UPDATE routine_fires SET created_at = ?1, updated_at = ?2 WHERE routine_name = ?3 AND slot = ?1 AND attempt = ?4",
             (&slot, (at + Duration::minutes(1)).to_rfc3339(), name, attempt),
-        ).map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+        ).map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
         Ok(())
     }).unwrap();
 }
@@ -644,7 +649,10 @@ fn routine_fire_history_counts_slots_and_stops_at_non_failures() {
                     "schemaVersion: 1\nname: {name}\nenabled: true\ntarget: job:watch_pipeline\ntrigger: {{cron: '*/20 * * * *'}}\n"
                 )).unwrap();
             }
-            let store = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+            let store = orbit_core::test_support::fixture_store::Store::open(
+                &fixture.global.join("orbit.db"),
+            )
+            .unwrap();
             let start = DateTime::parse_from_rfc3339("2026-10-10T06:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc);
@@ -755,7 +763,10 @@ fn routine_streak_merges_automation_history_and_marks_bounded_history() {
             fs::write(routines.join("review.yaml"),
                 "schemaVersion: 1\nname: review\nenabled: false\ntarget: job:review_pipeline\ntrigger:\n  deliveries_landed: {branch: agent-main, threshold: 1, max_wait_minutes: 10, coverage: landed_code_review_v1, max_items: 20, retries: 0}\n"
             ).unwrap();
-            let store = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+            let store = orbit_core::test_support::fixture_store::Store::open(
+                &fixture.global.join("orbit.db"),
+            )
+            .unwrap();
             let start = DateTime::parse_from_rfc3339("2026-10-10T06:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc);
@@ -924,7 +935,10 @@ fn routine_health_memo_ignores_unrelated_audit_writes_but_sees_new_fires() {
                 );
             }
 
-            let store = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+            let store = orbit_core::test_support::fixture_store::Store::open(
+                &fixture.global.join("orbit.db"),
+            )
+            .unwrap();
             let slot = "2026-10-10T06:00:00+00:00";
             orbit_core::application::routines::record_fire_intent(
                 &store,
@@ -1018,7 +1032,10 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
             )
             .unwrap();
 
-            let store = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+            let store = orbit_core::test_support::fixture_store::Store::open(
+                &fixture.global.join("orbit.db"),
+            )
+            .unwrap();
             let now = Utc::now();
             let admitted_at = now - Duration::minutes(2);
             let set_breaker = |record: RoutineBreakerRecord, event: &str| {
@@ -1125,7 +1142,10 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
                     )
                 })
                 .unwrap();
-            let global = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
+            let global = orbit_core::test_support::fixture_store::Store::open(
+                &fixture.global.join("orbit.db"),
+            )
+            .unwrap();
             global
                 .with_transaction(|tx| {
                     tx.connection()
@@ -1134,7 +1154,7 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
                              WHERE routine_name = 'cron_trial' AND slot = ?1 AND attempt = 1",
                             [&trial_slot],
                         )
-                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                        .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                     Ok(())
                 })
                 .unwrap();

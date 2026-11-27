@@ -1,6 +1,7 @@
 use clap::Args;
+use orbit_core::Core;
 use orbit_core::app::audit::{Command, Outcome, exec};
-use orbit_core::{AuditStats, Core};
+use orbit_types::telemetry::AuditStats;
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, ExecuteCore, Payload};

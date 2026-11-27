@@ -22,7 +22,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::{DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::resource::ExecutorResource;
 use orbit_types::workflow::ExecutorDef;

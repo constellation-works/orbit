@@ -7,11 +7,15 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use orbit_core::application::job::DrainAdmissionsStopRequest;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
-use orbit_core::{DrainAdmissionsStopRequest, OrbitRuntime, Task, TaskComplexity, TaskStatus};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
+use orbit_types::task::Task;
+use orbit_types::task::TaskComplexity;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 use std::sync::Arc;

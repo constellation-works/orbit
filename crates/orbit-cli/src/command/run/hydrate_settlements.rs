@@ -3,11 +3,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::Args;
+use orbit_common::OrbitError;
+use orbit_core::Core;
 use orbit_core::app::run::{Command, exec};
-use orbit_core::application::distributed::{
-    FollowerRunObserver, LeafHydrationOutcome, LeafHydrationRequest,
-};
-use orbit_core::{Core, OrbitError};
+use orbit_core::app::run::{FollowerRunObserver, LeafHydrationOutcome, LeafHydrationRequest};
 use orbit_mcp::federated::FederatedMcpHost;
 use orbit_mcp::{McpHost, McpSessionAuthority};
 use orbit_types::tool::ToolSessionContext;

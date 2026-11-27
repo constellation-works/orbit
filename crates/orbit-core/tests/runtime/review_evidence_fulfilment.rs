@@ -18,11 +18,11 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use orbit_common::security::release::sha256_hex;
-use orbit_core::TaskStatus;
 use orbit_core::application::review::{EVIDENCE_FULFILMENT_AUDIT, REVIEW_EVIDENCE_FULFILMENT_JOB};
 use orbit_engine::RunLifecycle;
 use orbit_engine::execute_deterministic_action;
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+use orbit_types::task::TaskStatus;
 use orbit_types::task::{ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
@@ -55,7 +55,11 @@ fn seed_persisted_hold(fixture: &Fixture, hold: &ReviewEvidenceHold) {
     seed_runtime_hold(&fixture.runtime, &fixture.task_id, hold);
 }
 
-fn seed_runtime_hold(runtime: &orbit_core::OrbitRuntime, task_id: &str, hold: &ReviewEvidenceHold) {
+fn seed_runtime_hold(
+    runtime: &orbit_core::runtime::OrbitRuntime,
+    task_id: &str,
+    hold: &ReviewEvidenceHold,
+) {
     let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root())).unwrap();
     let bundle = registry
         .canonical_task_bundle_path(&runtime.workspace_id().unwrap(), task_id)

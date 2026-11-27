@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use clap::{Args, ValueEnum};
 use orbit_cmd::mcp_clients::{McpClient, McpClientScope};
 use orbit_common::Env;
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 use super::dispatch::{
     ConfigTarget, McpActionContext, action_payload, auto_detected_providers, run_action,

@@ -1,6 +1,7 @@
 use clap::{Args, Subcommand};
+use orbit_common::OrbitError;
+use orbit_core::Core;
 use orbit_core::app::gc::{self, Command, Outcome};
-use orbit_core::{Core, OrbitError};
 
 use super::audit::AuditGcArgs;
 use super::deployments::DeploymentGcArgs;

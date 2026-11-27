@@ -38,7 +38,7 @@ const AUDIT_HTTP_POST_FILTER_SCAN_CAP: usize = 10_000;
 const AUDIT_HTTP_MAX_EXACT_IDS: usize = 10_000;
 
 /// Column filters both audit listing surfaces accept. A surface decides how
-/// its own input maps onto them; [`OrbitRuntime::audit_listing_page`] runs them.
+/// its own input maps onto them; `OrbitRuntime::audit_listing_page` runs them.
 #[derive(Default)]
 pub struct AuditListingColumns {
     pub since: Option<DateTime<Utc>>,
@@ -159,7 +159,7 @@ impl AuditListingExactIds {
 }
 
 /// HTTP listing predicates with no store column, as requested. Blank values
-/// request nothing; [`OrbitRuntime::audit_listing_page`] normalizes the rest.
+/// request nothing; `OrbitRuntime::audit_listing_page` normalizes the rest.
 #[derive(Default)]
 pub struct AuditListingPredicates {
     pub agent_family: Option<String>,

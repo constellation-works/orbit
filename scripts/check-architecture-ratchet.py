@@ -3,7 +3,7 @@
 
 The restructure (docs/design/architecture-restructure/2_design.md §10) moves
 about a thousand operations over many weeks while unrelated work lands daily,
-so the old shape can regrow. This check holds twelve counts of that shape at
+so the old shape can regrow. This check holds nine counts of that shape at
 or below scripts/architecture-ratchet-baseline.json, the pattern of
 scripts/check-dashboard-css-literals.py:
 
@@ -36,7 +36,6 @@ SCHEMA_VERSION = 1
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent
 BASELINE = "scripts/architecture-ratchet-baseline.json"
 CRATES = "crates"
-SURFACE_CRATES = ("orbit-cli", "orbit-web", "orbit-cmd")
 RUNTIME_SRC = "crates/orbit-runtime/src"
 RUNTIME_LAYERS = ("base", "stored", "host", "run")
 APPLICATION_PORT = "crates/orbit-runtime/src/application_port.rs"
@@ -45,12 +44,6 @@ RUNTIME_HOST_MOD = f"{RUNTIME_HOST_DIR}/mod.rs"
 DEFINITIONS = {
     "impl_orbit_runtime_files":
         "non-test files with an inherent `impl OrbitRuntime` block",
-    "orbit_runtime_naming_files.orbit-cli":
-        "orbit-cli files that name `OrbitRuntime` in code",
-    "orbit_runtime_naming_files.orbit-web":
-        "orbit-web files that name `OrbitRuntime` in code",
-    "orbit_runtime_naming_files.orbit-cmd":
-        "orbit-cmd files that name `OrbitRuntime` in code",
     "orbit_runtime_ref_param_fns":
         "functions with a `&OrbitRuntime` or `&mut OrbitRuntime` parameter",
     "runtime_host_required_methods":
@@ -90,7 +83,6 @@ FnDecl = namedtuple("FnDecl", "name offset params body")
 
 # Count patterns.
 IMPL_ORBIT_RUNTIME = re.compile(r"\bimpl\s*(?:<[^{;]*?>\s*)?(?:\w+\s*::\s*)*OrbitRuntime\s*\{")
-ORBIT_RUNTIME_NAME = re.compile(r"\bOrbitRuntime\b")
 RUNTIME_PARAM = re.compile(r"&\s*(?:'\w+\s+)?(?:mut\s+)?(?:\w+\s*::\s*)*OrbitRuntime\b")
 FROM_KERNEL_REF = re.compile(r"\bfrom_kernel_ref\s*\(")
 OWNER_READ = re.compile(
@@ -264,9 +256,8 @@ def preceded_by_dot(masked, start):
 
 
 class Source:
-    def __init__(self, path, crate, masked):
+    def __init__(self, path, masked):
         self.path = path
-        self.crate = crate
         self.masked = masked
         self._newlines = [match.start() for match in re.finditer("\n", masked)]
 
@@ -286,7 +277,7 @@ def rust_sources(root):
         if any(is_test_name(part) for part in relative.split("/")):
             continue
         masked = strip_test_items(mask_source(path.read_text(encoding="utf-8")))
-        sources.append(Source(relative, relative.split("/")[1], masked))
+        sources.append(Source(relative, masked))
     return sources
 
 
@@ -352,9 +343,6 @@ def measure(root):
     sources = rust_sources(root)
     by_path = {source.path: source for source in sources}
     counts = {"impl_orbit_runtime_files": files_matching(sources, IMPL_ORBIT_RUNTIME)}
-    for crate in SURFACE_CRATES:
-        counts[f"orbit_runtime_naming_files.{crate}"] = files_matching(
-            [source for source in sources if source.crate == crate], ORBIT_RUNTIME_NAME)
     counts["orbit_runtime_ref_param_fns"] = [
         source.location(decl.offset, decl.name)
         for source in sources for decl in fn_decls(source.masked)

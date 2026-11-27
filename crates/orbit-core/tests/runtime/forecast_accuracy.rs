@@ -1,7 +1,7 @@
 //! Forecast maturity through the public read-only runtime API at a fixed time.
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::host_resource::accuracy::AccuracySelection;
 use orbit_store::contract::{
     AdmissionForecastPoint, AdmissionForecastRecord, ForecastDelivery, HostResourceMinute,

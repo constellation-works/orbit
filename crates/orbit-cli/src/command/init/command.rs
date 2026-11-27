@@ -1,7 +1,7 @@
 use clap::Args;
+use orbit_common::OrbitError;
 use orbit_common::{Env, env_vars};
-use orbit_core::OrbitError;
-use orbit_core::bootstrap::init::{InitOptions, allocated_task_prefix, init_global};
+use orbit_core::app::workspace::{InitOptions, allocated_task_prefix, init_global};
 use orbit_registry::{
     MachineIdentityOutcome, MachineIdentityState, NewMachineIdentity, ensure_machine_identity,
     inspect_machine_identity, os_hostname,
@@ -198,8 +198,8 @@ impl InitCommand {
         // routine reads that follow find it (STD-01 R31). The store rejects
         // parent-relative paths, so it takes the canonical root.
         let global_root = std::fs::canonicalize(resolve_global_root(root_override, resolved)?)?;
-        orbit_core::application::routines::ensure_routine_store(
-            orbit_core::composition::store_opener(),
+        orbit_core::app::routine::ensure_routine_store(
+            orbit_core::app::workspace::store_opener(),
             &global_root,
         )?;
         // A release that ships a workspace routine or auto-task must reach
@@ -676,7 +676,9 @@ fn init_payload(
 }
 
 fn reported_init_paths(root_override: Option<&Path>, env: &Env) -> ReportedInitPaths {
-    if root_override.is_some_and(|path| !orbit_core::runtime::is_global_orbit_root(env, path)) {
+    if root_override
+        .is_some_and(|path| !orbit_core::app::workspace::is_global_orbit_root(env, path))
+    {
         ReportedInitPaths {
             skills_root: "<custom orbit root>/skills",
             config_path: "<custom orbit root>/config.toml",

@@ -5,10 +5,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_cmd::registry_runtime::ConfigLayerStamp;
 use orbit_common::Env;
+use orbit_common::OrbitError;
+use orbit_core::Core;
+use orbit_core::app::routine::ClockStatus;
 use orbit_core::app::run;
-use orbit_core::application::routines::ClockStatus;
-use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{Core, OrbitError, ShipMode};
+use orbit_core::app::run::ShipMode;
+use orbit_core::app::workspace::WorkspaceRuntimeBinding;
 
 #[cfg(test)]
 use super::super::PrePublishHook;
@@ -36,7 +38,7 @@ pub(in crate::state) struct StateInner {
     /// The served Orbit root: an explicit `--root`, else `~/.orbit`. Passed as
     /// `global_root` when building per-workspace runtimes and observing host resources.
     pub(super) global_root: PathBuf,
-    host_resources: Mutex<Option<Arc<orbit_core::runtime::host_resource::HostResourceMonitor>>>,
+    host_resources: Mutex<Option<Arc<orbit_core::app::run::HostResourceMonitor>>>,
     host_disk_paths: Vec<PathBuf>,
     /// Atomically-swapped registered workspace set + default selection.
     pub(super) snapshot: Mutex<Arc<Snapshot>>,
@@ -88,13 +90,13 @@ pub(in crate::state) struct StateInner {
     metrics_trends: RuntimeMemo<(String, String)>,
     /// Per-server cache of the codebase analytics scan, one per workspace
     /// runtime: history-only analytics or related delivery facts per window.
-    codebase: RuntimeMemo<Option<String>, orbit_core::application::codebase::CodebaseFacts>,
+    codebase: RuntimeMemo<Option<String>, orbit_core::app::codebase::CodebaseFacts>,
     /// Per-server cache of the task riskiness model, one per workspace
     /// runtime; task list rows and task detail estimate from it.
-    riskiness: RuntimeMemo<(), orbit_core::application::codebase::TaskRiskinessModel>,
+    riskiness: RuntimeMemo<(), orbit_core::app::codebase::TaskRiskinessModel>,
     /// Per-server cache of the agent scorecard scan, one per workspace
     /// runtime. Every role, window, detail and the attribution strip slice it.
-    agents: RuntimeMemo<(), orbit_core::application::agents::AgentFacts>,
+    agents: RuntimeMemo<(), orbit_core::app::agent::AgentFacts>,
     /// Per-server cache of the last `orbit doctor` report for each workspace
     /// runtime, behind `/api/doctor`.
     doctor_reports: DoctorReports,
@@ -305,7 +307,7 @@ impl DashboardState {
     pub(crate) fn host_resource_status_pinned(
         &self,
         pinned: &Pinned,
-    ) -> Result<orbit_core::runtime::host_resource::HostResourceStatus, OrbitError> {
+    ) -> Result<orbit_core::app::run::HostResourceStatus, OrbitError> {
         let mut paths = self.inner.host_disk_paths.clone();
         paths.push(self.inner.global_root.clone());
         for entry in &pinned.snapshot.entries {
@@ -324,7 +326,7 @@ impl DashboardState {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             if guard.is_none() {
-                *guard = Some(Arc::new(orbit_core::composition::host_resource_monitor(
+                *guard = Some(Arc::new(orbit_core::app::host::host_resource_monitor(
                     &self.inner.global_root,
                 )?));
             }
@@ -389,21 +391,19 @@ impl DashboardState {
     /// Process-local codebase analytics scan cache for this server instance.
     pub(crate) fn codebase_memo(
         &self,
-    ) -> &RuntimeMemo<Option<String>, orbit_core::application::codebase::CodebaseFacts> {
+    ) -> &RuntimeMemo<Option<String>, orbit_core::app::codebase::CodebaseFacts> {
         &self.inner.codebase
     }
 
     /// Process-local task riskiness model cache for this server instance.
     pub(crate) fn riskiness_memo(
         &self,
-    ) -> &RuntimeMemo<(), orbit_core::application::codebase::TaskRiskinessModel> {
+    ) -> &RuntimeMemo<(), orbit_core::app::codebase::TaskRiskinessModel> {
         &self.inner.riskiness
     }
 
     /// Process-local agent scorecard scan cache for this server instance.
-    pub(crate) fn agent_memo(
-        &self,
-    ) -> &RuntimeMemo<(), orbit_core::application::agents::AgentFacts> {
+    pub(crate) fn agent_memo(&self) -> &RuntimeMemo<(), orbit_core::app::agent::AgentFacts> {
         &self.inner.agents
     }
 
@@ -482,7 +482,7 @@ impl DashboardState {
         {
             return hook();
         }
-        orbit_core::application::routines::clock_status(&self.inner.global_root)
+        orbit_core::app::routine::clock_status(&self.inner.global_root)
     }
 
     /// Install a test-only override for native clock observations.

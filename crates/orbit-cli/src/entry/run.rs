@@ -1,6 +1,6 @@
 use orbit_cmd::registry_runtime::{PreOpenRoute, RegisteredRuntimeFactory};
 use orbit_core::app::InvocationAuditScope;
-use orbit_core::composition::pin_executable_generation_as;
+use orbit_core::app::host::pin_executable_generation_as;
 
 use super::classify::{
     claimed_owner_tool, command_rotates_jsonl_on_start, handover_capability, is_clock_tick,
@@ -18,8 +18,8 @@ use crate::root_check;
 pub(crate) fn run(env: orbit_common::Env) {
     // This is the production entry point for CLI, MCP, sweep clock, and the
     // dashboard (`orbit web serve`). Test harnesses never execute this main.
-    orbit_core::composition::install_captured_env(env.clone());
-    orbit_core::mark_process_as_pipeline_worker_binary();
+    orbit_core::app::host::install_captured_env(env.clone());
+    orbit_core::app::run::mark_process_as_pipeline_worker_binary();
     // Provider lines are retained for `run logs --follow`, while diagnostics
     // stay quiet on stderr. An explicit RUST_LOG still overrides both defaults.
     orbit_common::observability::logging::init_subscriber_with_file_filter(
@@ -69,7 +69,7 @@ pub(crate) fn run(env: orbit_common::Env) {
             })
         {
             print_error(
-                &orbit_core::OrbitError::CapabilityDenied(
+                &orbit_common::OrbitError::CapabilityDenied(
                     "application credentials may invoke only workspace tool calls".into(),
                 ),
                 &sink,
@@ -247,11 +247,11 @@ pub(crate) fn run(env: orbit_common::Env) {
         orbit_common::observability::logging::exit(1);
     }
     let bootstrapped = if let RuntimeNeed::UnusableToolInput { message } = &runtime_need {
-        Err(orbit_core::OrbitError::InvalidInput(message.clone()))
+        Err(orbit_common::OrbitError::InvalidInput(message.clone()))
     } else if let PreOpenRoute::Selected(selection) = route {
         match &runtime_need {
             RuntimeNeed::UnusableToolInput { message } => {
-                Err(orbit_core::OrbitError::InvalidInput(message.clone()))
+                Err(orbit_common::OrbitError::InvalidInput(message.clone()))
             }
             RuntimeNeed::Forbidden => {
                 // A runtime-forbidden command has no store to audit against.

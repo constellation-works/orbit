@@ -8,8 +8,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use chrono::{Duration, Utc};
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::AutoTaskAdmission;
 use orbit_engine::Recovery;
 use orbit_types::task::TaskStatus;

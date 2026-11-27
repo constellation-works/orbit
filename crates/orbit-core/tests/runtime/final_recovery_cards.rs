@@ -19,7 +19,7 @@ use super::recovery_fixture::{Fixture, fixture};
 /// handle is a runtime without this forge installed, so the forge never
 /// retains the runtime that holds it.
 struct ObservingForge {
-    runtime: orbit_core::OrbitRuntime,
+    runtime: orbit_core::runtime::OrbitRuntime,
     task: String,
     request: String,
     seen: std::sync::Mutex<Vec<(TaskStatus, DecisionRequestState)>>,
@@ -51,7 +51,7 @@ impl orbit_core::runtime::task_pr_forge::TaskPrForge for ObservingForge {
 }
 
 struct ReconsideringForge {
-    runtime: orbit_core::OrbitRuntime,
+    runtime: orbit_core::runtime::OrbitRuntime,
     task: String,
     request: String,
     reconsider: bool,

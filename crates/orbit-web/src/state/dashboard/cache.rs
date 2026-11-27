@@ -4,9 +4,11 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError};
 
 use orbit_cmd::registry_runtime::{ConfigLayerStamp, RegisteredRuntimeFactory};
+use orbit_common::OrbitError;
+use orbit_core::Core;
 use orbit_core::app::run;
-use orbit_core::runtime::{HostLifetime, WorkspaceRuntimeBinding};
-use orbit_core::{Core, OrbitError};
+use orbit_core::app::run::HostLifetime;
+use orbit_core::app::workspace::WorkspaceRuntimeBinding;
 
 use super::super::{Snapshot, SnapshotData, WsRejection};
 use super::StateInner;

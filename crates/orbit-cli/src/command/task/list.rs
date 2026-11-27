@@ -1,6 +1,6 @@
 //! `orbit task list` rendering.
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use serde_json::{Map, Value};
 
 use super::operation::ListView;

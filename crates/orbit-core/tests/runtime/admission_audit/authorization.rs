@@ -19,7 +19,7 @@ use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::json;
 
 use crate::task_params_test_support::task_create_params;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 
 fn context_with(capabilities: [McpCapability; 1]) -> ToolContext {
     ToolContext {
@@ -103,7 +103,7 @@ fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
     assert!(
         events.iter().any(|event| event.command == "authorization"
             && event.target_id.as_deref() == Some("orbit.task.grant_tools")
-            && event.status == orbit_core::AuditEventStatus::Success),
+            && event.status == orbit_types::telemetry::AuditEventStatus::Success),
         "{events:#?}"
     );
     let mut context = context_with([McpCapability::Agent]);
@@ -125,7 +125,7 @@ fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
     assert!(
         events.iter().any(|event| event.command == "authorization"
             && event.target_id.as_deref() == Some("orbit.auto_task.update")
-            && event.status == orbit_core::AuditEventStatus::Denied),
+            && event.status == orbit_types::telemetry::AuditEventStatus::Denied),
         "{events:#?}"
     );
     let denials = runtime.audit_denials_by_operation(None).unwrap();

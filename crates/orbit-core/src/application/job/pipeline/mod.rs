@@ -131,7 +131,7 @@ impl PipelineInvokeResult {
 
 /// [ORB-12038] A run's own `<run_id>.worker.log`, read for inspection when no
 /// audited CLI-invocation blob exists to explain a terminal outcome. See
-/// [`OrbitRuntime::read_pipeline_worker_log`].
+/// `OrbitRuntime::read_pipeline_worker_log`.
 #[derive(Debug, Clone, Serialize)]
 pub struct PipelineWorkerLogSnapshot {
     pub path: PathBuf,

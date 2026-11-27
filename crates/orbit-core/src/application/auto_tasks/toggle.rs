@@ -40,16 +40,16 @@ pub enum AutoTaskToggleOutcome {
     /// The definition was written and stamped; it holds what now loads.
     Written(AutoTaskDefinition),
     /// The effective switch already matched the request, so nothing was
-    /// written ([`AutoTaskToggleProfile::Observed`] only).
+    /// written (`AutoTaskToggleProfile::Observed` only).
     AlreadySet(AutoTaskDefinition),
     /// The observed raw flag was stale before any write was attempted
-    /// ([`AutoTaskToggleProfile::Observed`] only).
+    /// (`AutoTaskToggleProfile::Observed` only).
     Stale {
         /// The definition's current raw `enabled` flag.
         actual_enabled: bool,
     },
     /// No definition of that name was found before any write was attempted
-    /// ([`AutoTaskToggleProfile::Observed`] only).
+    /// (`AutoTaskToggleProfile::Observed` only).
     NotFound,
 }
 

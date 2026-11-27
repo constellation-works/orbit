@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use serde_json::{Value, json};
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};

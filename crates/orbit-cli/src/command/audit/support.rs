@@ -1,4 +1,4 @@
-use orbit_core::AuditEvent;
+use orbit_types::telemetry::AuditEvent;
 use orbit_types::telemetry::audit_event_base_json;
 use serde_json::{Value, json};
 

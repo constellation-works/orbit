@@ -62,17 +62,18 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
+use orbit_common::OrbitError;
+use orbit_core::app::run::{CompletionPolicy, ShipMode};
 use orbit_core::application::contracts::DrainEntryPoint;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::host_resource::{DiskSample, HostResourceProbe, HostResourceSample};
-use orbit_core::{
-    CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, Task, TaskComplexity, TaskPriority,
-    TaskStatus, TaskType,
-};
+use orbit_engine::Dispatch;
 use orbit_engine::HostEnvironment;
-use orbit_engine::{Dispatch, RunLifecycle};
+use orbit_engine::RunLifecycle;
 use orbit_tools::ToolContext;
 use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextWideningStep, TaskDecision};
+use orbit_types::task::{Task, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
@@ -973,7 +974,7 @@ fn as_operator(runtime: &OrbitRuntime, tool: &str, input: Value) -> Value {
 /// submission that passes the claim gate fails next on the missing asset.
 fn ship(runtime: &OrbitRuntime, claim_token: Option<&str>) -> OrbitError {
     runtime
-        .submit_ship_run(orbit_core::ShipRunRequest {
+        .submit_ship_run(orbit_core::application::job::ShipRunRequest {
             mode: ShipMode::Local,
             base_branch: Some("main"),
             task_ids: &[],
@@ -1117,8 +1118,8 @@ fn an_expired_workspace_claim_stops_gating_dispatch() {
 /// intervention, including replay and the coupled-repair selector write.
 fn review_gate_writes_system_provenance_without_borrowing_the_operator() {
     use chrono::Utc;
-    use orbit_core::ActorIdentity;
     use orbit_core::application::task::TaskUpdateParams;
+    use orbit_core::runtime::context::ActorIdentity;
     use orbit_types::workflow::{
         REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
         REVIEW_REPORT_ARTIFACT, ReviewAdmission, ReviewCertificate, ReviewTiming, ReviewVerdict,
@@ -1646,7 +1647,7 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
         "explicit selection carries the throttle warning"
     );
     let explicit_submission = runtime
-        .submit_ship_run(orbit_core::ShipRunRequest {
+        .submit_ship_run(orbit_core::application::job::ShipRunRequest {
             mode: ShipMode::Local,
             base_branch: Some("main"),
             task_ids: std::slice::from_ref(&queued.id),

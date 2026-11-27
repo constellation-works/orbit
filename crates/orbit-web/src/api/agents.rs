@@ -13,11 +13,10 @@
 
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_core::app::agent::{self as agent_app, Command, Outcome};
-use orbit_core::application::agents::{
-    self, AgentFacts, AgentQuery, AgentRole, CiFailureQuery, RankQuery,
-};
+use orbit_core::app::agent::{AgentFacts, AgentQuery, AgentRole, CiFailureQuery, RankQuery};
+
 use serde::Deserialize;
 
 use super::{bad_request, blocking, map_runtime_error};
@@ -111,7 +110,7 @@ pub(super) async fn agent_scorecard(
     match facts(&state, &ws).await {
         Ok(served) => (
             served.age_header(),
-            Json(agents::agent_scorecard(
+            Json(agent_app::agent_scorecard(
                 &served.body,
                 role,
                 &selection,
@@ -141,7 +140,7 @@ pub(super) async fn agent_by_type(
     match facts(&state, &ws).await {
         Ok(served) => (
             served.age_header(),
-            Json(agents::agent_by_type_scorecard(
+            Json(agent_app::agent_by_type_scorecard(
                 &served.body,
                 &selection,
                 &types,
@@ -168,7 +167,7 @@ pub(super) async fn agent_size_curves(
         Ok(served) => served,
         Err(error) => return error_response(error),
     };
-    match agents::agent_size_curves(
+    match agent_app::agent_size_curves(
         &served.body,
         &selection,
         query.complexity.as_deref(),
@@ -197,7 +196,7 @@ pub(super) async fn agent_detail(
         Ok(served) => served,
         Err(error) => return error_response(error),
     };
-    match agents::agent_detail_with_effort(
+    match agent_app::agent_detail_with_effort(
         &served.body,
         role,
         &selection,
@@ -223,7 +222,7 @@ pub(super) async fn agent_attribution(
     match facts(&state, &ws).await {
         Ok(served) => (
             served.age_header(),
-            Json(agents::agent_attribution(
+            Json(agent_app::agent_attribution(
                 &served.body,
                 &selection,
                 AGENT_SCAN_TTL,
@@ -259,7 +258,7 @@ pub(super) async fn agent_rank(
     match facts(&state, &ws).await {
         Ok(served) => (
             served.age_header(),
-            Json(agents::agent_rank(
+            Json(agent_app::agent_rank(
                 &served.body,
                 &selection,
                 &seasons,

@@ -4,9 +4,11 @@ use std::path::Path;
 
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
-use orbit_core::{
-    ManagedArtifactOutcome, ManagedArtifactScope, OrbitError, RoutineSeedIdentity,
-    WorkspaceManagedArtifactSyncReport, reconcile_workspace_managed_artifacts,
+use orbit_common::OrbitError;
+use orbit_core::app::routine::RoutineSeedIdentity;
+use orbit_core::app::workspace::{
+    ManagedArtifactOutcome, ManagedArtifactScope, WorkspaceManagedArtifactSyncReport,
+    reconcile_workspace_managed_artifacts,
 };
 use orbit_registry::workspace_registry;
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};

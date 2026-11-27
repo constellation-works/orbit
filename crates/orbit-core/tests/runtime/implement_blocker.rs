@@ -10,7 +10,7 @@ use orbit_common::security::child_env::{
     ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV, ACTIVITY_TOOLS_DENY_ENV,
 };
 use orbit_common::{OrbitError, test_env};
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

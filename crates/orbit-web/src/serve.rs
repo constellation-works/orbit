@@ -14,9 +14,10 @@ use axum::routing::get;
 use clap::Args;
 use orbit_cmd::registry_runtime;
 use orbit_common::Env;
+use orbit_common::OrbitError;
 /// Set on a dashboard exec'd to take over from a replaced image.
 use orbit_common::env_vars::ORBIT_DASHBOARD_HANDOVER as HANDOVER_ENV;
-use orbit_core::{Core, OrbitError};
+use orbit_core::Core;
 use orbit_registry::workspace_registry;
 use tokio::sync::Notify;
 use tower_http::compression::CompressionLayer;
@@ -451,7 +452,7 @@ async fn lifecycle_boundary() -> Option<std::path::PathBuf> {
         let decision = tokio::task::spawn_blocking(|| {
             generation::process_participation()?;
             if let Some(executable) =
-                generation::handover_target(&orbit_core::composition::composition_env(), None)
+                generation::handover_target(&orbit_core::app::host::composition_env(), None)
             {
                 return Some(Some(executable));
             }

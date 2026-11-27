@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::command::{CommandOut, Payload};
 use clap::Args;
-use orbit_core::application::routines::resume_routine;
+use orbit_core::app::routine::resume_routine;
 use serde_json::json;
 
 #[derive(Args)]
@@ -14,7 +14,7 @@ pub struct RoutineResumeArgs {
 impl RoutineResumeArgs {
     pub fn execute_without_runtime(self, global_root: &Path) -> CommandOut {
         let changed = resume_routine(
-            orbit_core::composition::store_opener(),
+            orbit_core::app::workspace::store_opener(),
             global_root,
             &self.name,
         )?;

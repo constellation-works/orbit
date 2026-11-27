@@ -16,7 +16,7 @@ use orbit_common::governance::authorization::{
 };
 use orbit_core::Core;
 use orbit_core::app::task::{DashboardAction, Outcome};
-use orbit_core::application::task::{PostDeployOperatorRecord, PostDeployRecordRefusal};
+use orbit_core::app::task::{PostDeployOperatorRecord, PostDeployRecordRefusal};
 use orbit_types::task::{PilotAdmissionOperatorRecord, PilotAdmissionRecordRefusal};
 use orbit_types::workflow::PostDeployOutcome;
 use serde_json::json;

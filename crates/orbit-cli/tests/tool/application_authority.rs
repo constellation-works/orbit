@@ -437,7 +437,8 @@ fn application_host_route_refuses_changed_inputs_and_revoked_consent() {
         );
         return;
     }
-    use orbit_core::{OrbitError, OrbitRuntime};
+    use orbit_common::OrbitError;
+    use orbit_core::runtime::OrbitRuntime;
     use orbit_tools::plugin::PluginCallbackSession;
     use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, ReservationOwnerContext};
     use orbit_types::tool::ApplicationInvocation;

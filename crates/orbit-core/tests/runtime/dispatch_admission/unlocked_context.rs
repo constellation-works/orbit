@@ -6,9 +6,10 @@
 //! that declares only matching paths still locks them, the build and CI
 //! definitions keep locking, and `[]` restores the lock on every entry.
 
-use orbit_core::{OrbitRuntime, TaskStatus};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
+use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

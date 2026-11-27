@@ -212,20 +212,20 @@ pub(super) fn current_year_month_utc() -> String {
 }
 
 /// Validates a `YYYY-MM` string with month range 01..=12.
-pub(super) fn validate_year_month(raw: &str) -> Result<(), orbit_core::OrbitError> {
+pub(super) fn validate_year_month(raw: &str) -> Result<(), orbit_common::OrbitError> {
     let bytes = raw.as_bytes();
     let format_ok = bytes.len() == 7
         && bytes[4] == b'-'
         && bytes[..4].iter().all(u8::is_ascii_digit)
         && bytes[5..].iter().all(u8::is_ascii_digit);
     if !format_ok {
-        return Err(orbit_core::OrbitError::InvalidInput(format!(
+        return Err(orbit_common::OrbitError::InvalidInput(format!(
             "month must be in YYYY-MM format, got '{raw}'"
         )));
     }
     let month: u32 = raw[5..].parse().unwrap_or(0);
     if !(1..=12).contains(&month) {
-        return Err(orbit_core::OrbitError::InvalidInput(format!(
+        return Err(orbit_common::OrbitError::InvalidInput(format!(
             "month component must be 01-12, got '{raw}'"
         )));
     }
@@ -234,19 +234,19 @@ pub(super) fn validate_year_month(raw: &str) -> Result<(), orbit_core::OrbitErro
 
 pub(super) fn month_bounds_utc(
     raw: &str,
-) -> Result<(DateTime<Utc>, DateTime<Utc>), orbit_core::OrbitError> {
+) -> Result<(DateTime<Utc>, DateTime<Utc>), orbit_common::OrbitError> {
     validate_year_month(raw)?;
     let year = raw[..4].parse::<i32>().map_err(|_| {
-        orbit_core::OrbitError::InvalidInput(format!("invalid year component in '{raw}'"))
+        orbit_common::OrbitError::InvalidInput(format!("invalid year component in '{raw}'"))
     })?;
     let month = raw[5..].parse::<u32>().map_err(|_| {
-        orbit_core::OrbitError::InvalidInput(format!("invalid month component in '{raw}'"))
+        orbit_common::OrbitError::InvalidInput(format!("invalid month component in '{raw}'"))
     })?;
     let start = Utc
         .with_ymd_and_hms(year, month, 1, 0, 0, 0)
         .single()
         .ok_or_else(|| {
-            orbit_core::OrbitError::InvalidInput(format!("invalid month boundary for '{raw}'"))
+            orbit_common::OrbitError::InvalidInput(format!("invalid month boundary for '{raw}'"))
         })?;
     let (next_year, next_month) = if month == 12 {
         (year + 1, 1)
@@ -257,7 +257,7 @@ pub(super) fn month_bounds_utc(
         .with_ymd_and_hms(next_year, next_month, 1, 0, 0, 0)
         .single()
         .ok_or_else(|| {
-            orbit_core::OrbitError::InvalidInput(format!("invalid month boundary for '{raw}'"))
+            orbit_common::OrbitError::InvalidInput(format!("invalid month boundary for '{raw}'"))
         })?;
     Ok((start, next_start - Duration::nanoseconds(1)))
 }
@@ -290,12 +290,12 @@ pub(super) fn non_empty_string(raw: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
+pub(super) fn map_runtime_error(e: orbit_common::OrbitError) -> Response {
     match e {
-        orbit_core::OrbitError::AuthorizationDenied(denial) => {
+        orbit_common::OrbitError::AuthorizationDenied(denial) => {
             super::routines::authorization_denied(*denial)
         }
-        orbit_core::OrbitError::DecisionRefused { code, message } => {
+        orbit_common::OrbitError::DecisionRefused { code, message } => {
             let status = if code == orbit_common::DecisionRefusalCode::RequestNotFound {
                 StatusCode::NOT_FOUND
             } else if code.is_retryable() {
@@ -307,7 +307,7 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
             };
             (status, Json(json!({"error": message, "code": code.as_str()}))).into_response()
         }
-        orbit_core::OrbitError::NoticeRefused { code, message } => {
+        orbit_common::OrbitError::NoticeRefused { code, message } => {
             let status = if code == orbit_common::NoticeRefusalCode::NotFound {
                 StatusCode::NOT_FOUND
             } else if code.is_policy_denial() {
@@ -317,23 +317,23 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
             };
             (status, Json(json!({"error": message, "code": code.as_str()}))).into_response()
         }
-        orbit_core::OrbitError::TaskPilotRefused { code, message } => (
+        orbit_common::OrbitError::TaskPilotRefused { code, message } => (
             StatusCode::CONFLICT,
             Json(json!({"error": message, "code": code.as_str()})),
         )
             .into_response(),
-        error @ orbit_core::OrbitError::ForceOverridable(_) => {
+        error @ orbit_common::OrbitError::ForceOverridable(_) => {
             force_overridable_response(error)
         }
-        orbit_core::OrbitError::InvalidInput(msg)
-        | orbit_core::OrbitError::ClaimRefused { message: msg, .. } => bad_request_shown(msg),
-        orbit_core::OrbitError::UnknownWorkspaceSelector(unknown) => {
+        orbit_common::OrbitError::InvalidInput(msg)
+        | orbit_common::OrbitError::ClaimRefused { message: msg, .. } => bad_request_shown(msg),
+        orbit_common::OrbitError::UnknownWorkspaceSelector(unknown) => {
             bad_request_shown(unknown.message())
         }
-        orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => {
+        orbit_common::OrbitError::InvalidInputDiagnostic { message, .. } => {
             bad_request_shown(message)
         }
-        orbit_core::OrbitError::TaskCompletionLiveRun { task_id, run_id } => (
+        orbit_common::OrbitError::TaskCompletionLiveRun { task_id, run_id } => (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": format!("task '{task_id}' cannot move to done while linked run '{run_id}' has a verified-live owner"),
@@ -343,45 +343,45 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
             })),
         )
             .into_response(),
-        orbit_core::OrbitError::NotFound {
-            kind: orbit_core::NotFoundKind::Task,
+        orbit_common::OrbitError::NotFound {
+            kind: orbit_common::NotFoundKind::Task,
             id,
             guidance,
         } => not_found(format!(
             "task not found: {id}{}",
             guidance.as_deref().unwrap_or_default()
         )),
-        orbit_core::OrbitError::NotFound {
-            kind: orbit_core::NotFoundKind::Friction,
+        orbit_common::OrbitError::NotFound {
+            kind: orbit_common::NotFoundKind::Friction,
             id,
             ..
         } => not_found(format!("friction record not found: {id}")),
-        orbit_core::OrbitError::NotFound {
-            kind: orbit_core::NotFoundKind::Job,
+        orbit_common::OrbitError::NotFound {
+            kind: orbit_common::NotFoundKind::Job,
             id,
             ..
         } => not_found(format!("job not found: {id}")),
-        orbit_core::OrbitError::NotFound {
-            kind: orbit_core::NotFoundKind::JobRun,
+        orbit_common::OrbitError::NotFound {
+            kind: orbit_common::NotFoundKind::JobRun,
             id,
             ..
         } => not_found(format!("run not found: {id}")),
-        error @ orbit_core::OrbitError::RemoteArtifactUnavailable { .. } => {
+        error @ orbit_common::OrbitError::RemoteArtifactUnavailable { .. } => {
             artifact_conflict(error, "remote_artifact_unavailable")
         }
-        error @ orbit_core::OrbitError::ArtifactNotLocal { .. } => {
+        error @ orbit_common::OrbitError::ArtifactNotLocal { .. } => {
             artifact_conflict(error, "artifact_not_local")
         }
-        error @ orbit_core::OrbitError::FrictionNotLocal(_) => friction_not_local_conflict(error),
-        error @ orbit_core::OrbitError::ShipRunInFlight { .. } => {
+        error @ orbit_common::OrbitError::FrictionNotLocal(_) => friction_not_local_conflict(error),
+        error @ orbit_common::OrbitError::ShipRunInFlight { .. } => {
             ship_run_in_flight_conflict(error)
         }
-        error @ orbit_core::OrbitError::ResumeRunInFlight { .. } => {
+        error @ orbit_common::OrbitError::ResumeRunInFlight { .. } => {
             resume_run_in_flight_conflict(error)
         }
         // A well-formed ship the workspace's remotes cannot deliver as a PR:
         // the caller rebinds the ship mode or tags the task, then retries.
-        error @ orbit_core::OrbitError::PrForgeRemoteMissing { .. } => (
+        error @ orbit_common::OrbitError::PrForgeRemoteMissing { .. } => (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": error.to_string(),
@@ -390,7 +390,7 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
         )
             .into_response(),
         // A scheduled task waits for its time; the dashboard has no override.
-        error @ orbit_core::OrbitError::TaskScheduled { .. } => (
+        error @ orbit_common::OrbitError::TaskScheduled { .. } => (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": error.to_string(),
@@ -402,13 +402,13 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
         // the same reason a duplicate dispatch is one: the request is
         // well-formed, and the caller can retry once the claim lapses or is
         // released.
-        error @ orbit_core::OrbitError::WorkspaceClaimHeld(_) => {
+        error @ orbit_common::OrbitError::WorkspaceClaimHeld(_) => {
             workspace_claim_held_conflict(error)
         }
         // [ORB-10965] A duplicate run start that lost to the incumbent owner is
         // a conflict, not a server fault: the request was well-formed and
         // another worker simply got there first.
-        orbit_core::OrbitError::JobRunStartConflict(message) => (
+        orbit_common::OrbitError::JobRunStartConflict(message) => (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": message,
@@ -423,7 +423,7 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
 /// [ORB-10544] The stable 409 the ship endpoint has always returned for a
 /// duplicate dispatch, now projected from the shared submission path's typed
 /// conflict rather than from an endpoint-local policy.
-fn ship_run_in_flight_conflict(error: orbit_core::OrbitError) -> Response {
+fn ship_run_in_flight_conflict(error: orbit_common::OrbitError) -> Response {
     let (task_id, run_id) = error
         .ship_run_in_flight()
         .map_or_else(Default::default, |(task_id, run_id)| {
@@ -441,7 +441,7 @@ fn ship_run_in_flight_conflict(error: orbit_core::OrbitError) -> Response {
         .into_response()
 }
 
-fn resume_run_in_flight_conflict(error: orbit_core::OrbitError) -> Response {
+fn resume_run_in_flight_conflict(error: orbit_common::OrbitError) -> Response {
     let (source_run_id, run_id) = error
         .resume_run_in_flight()
         .map_or_else(Default::default, |(source_run_id, run_id)| {
@@ -463,7 +463,7 @@ fn resume_run_in_flight_conflict(error: orbit_core::OrbitError) -> Response {
 /// same reason a duplicate dispatch is one: the request is well-formed, and the
 /// caller can retry once the claim lapses or is released. The body names the
 /// holder and the expiry — never the holder's token.
-fn workspace_claim_held_conflict(error: orbit_core::OrbitError) -> Response {
+fn workspace_claim_held_conflict(error: orbit_common::OrbitError) -> Response {
     let claim = error.workspace_claim_held();
     let body = json!({
         "error": error.to_string(),
@@ -476,7 +476,7 @@ fn workspace_claim_held_conflict(error: orbit_core::OrbitError) -> Response {
     (StatusCode::CONFLICT, Json(body)).into_response()
 }
 
-fn friction_not_local_conflict(error: orbit_core::OrbitError) -> Response {
+fn friction_not_local_conflict(error: orbit_common::OrbitError) -> Response {
     let details = error.friction_not_local_details();
     (
         StatusCode::CONFLICT,
@@ -492,7 +492,7 @@ fn friction_not_local_conflict(error: orbit_core::OrbitError) -> Response {
         .into_response()
 }
 
-fn artifact_conflict(error: orbit_core::OrbitError, code: &'static str) -> Response {
+fn artifact_conflict(error: orbit_common::OrbitError, code: &'static str) -> Response {
     let artifact_origin = error.artifact_origin().cloned();
     (
         StatusCode::CONFLICT,
@@ -507,7 +507,7 @@ fn artifact_conflict(error: orbit_core::OrbitError, code: &'static str) -> Respo
 
 /// A refusal `--force` overrides: the dashboard matches on `code` (never
 /// the message) and names the guard from `guard` plus its facts.
-fn force_overridable_response(error: orbit_core::OrbitError) -> Response {
+fn force_overridable_response(error: orbit_common::OrbitError) -> Response {
     let refusal = error.force_overridable();
     let mut body = json!({
         "error": refusal.map_or_else(|| error.to_string(), |refusal| refusal.message.clone()),
@@ -572,7 +572,7 @@ pub(super) fn not_found(message: String) -> Response {
     (StatusCode::NOT_FOUND, Json(json!({ "error": message }))).into_response()
 }
 
-pub(super) fn server_error(e: orbit_core::OrbitError) -> Response {
+pub(super) fn server_error(e: orbit_common::OrbitError) -> Response {
     let stored = e.to_string();
     let body = match source_repair_body(&stored) {
         Some(body) => body,
@@ -620,7 +620,7 @@ pub(super) async fn json_client_error(response: Response) -> Response {
 /// F2026-07-119. `label` names the operation in the panic-propagation error.
 pub(super) async fn blocking<T, F>(label: &str, op: F) -> Result<T, Box<Response>>
 where
-    F: FnOnce() -> Result<T, orbit_core::OrbitError> + Send + 'static,
+    F: FnOnce() -> Result<T, orbit_common::OrbitError> + Send + 'static,
     T: Send + 'static,
 {
     blocking_join(label, op)
@@ -638,7 +638,7 @@ where
     T: Send + 'static,
 {
     tokio::task::spawn_blocking(op).await.map_err(|join_err| {
-        Box::new(server_error(orbit_core::OrbitError::Execution(format!(
+        Box::new(server_error(orbit_common::OrbitError::Execution(format!(
             "{label} panicked: {join_err}"
         ))))
     })

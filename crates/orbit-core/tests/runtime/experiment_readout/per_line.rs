@@ -8,11 +8,12 @@ use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_store::contract::{
     DiffClassCounts, ExperimentAssignment, LandedDiffSource, LandedDiffStats, ReviewableLines,
 };
 use orbit_types::task::TaskHistoryEntry;
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::json;
 

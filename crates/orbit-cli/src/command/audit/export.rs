@@ -1,8 +1,10 @@
 use std::io::Write;
 
 use clap::{Args, ValueEnum};
+use orbit_common::OrbitError;
+use orbit_core::Core;
 use orbit_core::app::audit::{Command, Outcome, exec};
-use orbit_core::{AuditEvent, Core, OrbitError};
+use orbit_types::telemetry::AuditEvent;
 use serde_json::Value;
 
 use crate::command::{CommandOut, ExecuteCore, Payload};

@@ -39,7 +39,7 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
     // reflect the same generation (add/remove/rebind observed atomically).
     let pinned = state.pin();
     let default = pinned.default_workspace();
-    let home = orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
+    let home = orbit_common::fs::path::home_dir(&orbit_core::app::host::composition_env()).ok();
     let entries = pinned.entries();
     // `lease_enabled` lets the dashboard hide its Leases destination where
     // leases are off; null when the workspace's runtime can't be opened, so an

@@ -9,8 +9,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use orbit_common::OrbitError;
-use orbit_core::composition::Opening;
-use orbit_core::runtime::{
+use orbit_core::app::workspace::Opening;
+use orbit_runtime::{
     HostLifetime, OrbitRuntimeRoots, ResolvedOrbitRoots, WorkspaceRootHint,
     WorkspaceRuntimeBinding, managed_workspace_selector_from_env,
 };

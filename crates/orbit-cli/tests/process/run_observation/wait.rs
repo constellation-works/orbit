@@ -133,7 +133,8 @@ fn invalid_wait_deadline_does_not_submit_work() {
 #[cfg(unix)]
 fn explicit_task_pilot_refuses_unsupported_status_before_submission() {
     use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-    use orbit_core::{OrbitRuntime, TaskStatus};
+    use orbit_core::runtime::OrbitRuntime;
+    use orbit_types::task::TaskStatus;
     use std::os::unix::fs::PermissionsExt;
 
     let fixture = Fixture::terminal();
@@ -369,7 +370,7 @@ fn explicit_task_pilot_refuses_unsupported_status_before_submission() {
 /// Installs a fake codex provider that assesses every task id its prompt
 /// names, so a pilot run completes without a real provider.
 #[cfg(unix)]
-fn install_pilot_provider(fixture: &Fixture, runtime: &orbit_core::OrbitRuntime) {
+fn install_pilot_provider(fixture: &Fixture, runtime: &orbit_core::runtime::OrbitRuntime) {
     use orbit_types::resource::ExecutorResource;
     use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind};
     use std::os::unix::fs::PermissionsExt;
@@ -447,7 +448,8 @@ sys.stdout.write(json.dumps({
 #[cfg(unix)]
 fn explicit_task_pilot_partitions_mixed_crews_before_submission() {
     use orbit_core::application::task::TaskAddParams;
-    use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
+    use orbit_core::runtime::OrbitRuntime;
+    use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
     use orbit_types::workflow::JobRunState;
 
     let fixture = Fixture::terminal();
@@ -557,7 +559,7 @@ fn explicit_task_pilot_partitions_mixed_crews_before_submission() {
 #[cfg(unix)]
 fn explicit_task_pilot_honors_job_default_max_tasks() {
     use orbit_core::application::task::TaskAddParams;
-    use orbit_core::{TaskComplexity, TaskStatus, TaskType};
+    use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 
     let fixture = Fixture::terminal();
     fs::write(fixture.work.join("README.md"), "fixture\n").unwrap();
@@ -679,7 +681,8 @@ fn explicit_task_pilot_honors_job_default_max_tasks() {
 #[cfg(unix)]
 fn task_pilot_wait_held_provider_capacity_exits_nonzero() {
     use orbit_core::application::task::TaskAddParams;
-    use orbit_core::{OrbitRuntime, TaskStatus};
+    use orbit_core::runtime::OrbitRuntime;
+    use orbit_types::task::TaskStatus;
     use std::os::unix::fs::PermissionsExt;
 
     let fixture = Fixture::terminal();

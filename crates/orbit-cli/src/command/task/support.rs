@@ -2,7 +2,7 @@
 //! `orbit.task.show`.
 
 use orbit_cmd::task_owner::WorkspaceIdentity;
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
 /// Name the owning workspace on an unprojected `orbit.task.show` result.
@@ -109,7 +109,7 @@ fn local_not_before(raw: &str) -> Result<Option<String>, OrbitError> {
 
 /// The line `orbit task add|update` prints for a scheduled task: the time in
 /// UTC and in this host's time zone.
-pub(crate) fn not_before_line(task: &orbit_core::Task) -> Option<String> {
+pub(crate) fn not_before_line(task: &orbit_types::task::Task) -> Option<String> {
     let not_before = task.not_before?;
     let local = not_before.with_timezone(&chrono::Local);
     Some(format!(

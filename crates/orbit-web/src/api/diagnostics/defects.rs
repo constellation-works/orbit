@@ -150,7 +150,10 @@ fn origin(tags: &[String]) -> &'static str {
     }
 }
 
-fn defect_trend(runtime: &Core, range: &DiagnosticsRange) -> Result<Value, orbit_core::OrbitError> {
+fn defect_trend(
+    runtime: &Core,
+    range: &DiagnosticsRange,
+) -> Result<Value, orbit_common::OrbitError> {
     let filings = run_read(
         runtime,
         RunCommand::task_defect_filings(TrendWindow::read_since_with_day_lead(range)),

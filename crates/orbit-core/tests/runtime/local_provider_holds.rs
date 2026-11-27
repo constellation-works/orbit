@@ -8,11 +8,13 @@ use orbit_common::OrbitError;
 use orbit_core::app::run::ReliabilityWindow;
 use orbit_core::application::job::{JobRunListParams, job_run_to_json};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_engine::Dispatch;
+use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
-use orbit_engine::{Dispatch, RunLifecycle};
 use orbit_tools::ToolContext;
 use orbit_types::resource::ExecutorResource;
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{
     ExecutorDef, ExecutorSandboxKind, IMPLEMENT_ONE_STEP_ID, JobRunState,
@@ -854,7 +856,7 @@ fn local_provider_outcome(detail: &str, class: Option<ProviderFailureClass>) {
             .unwrap();
         assert_eq!(
             waited.results[0].status,
-            orbit_core::PipelineWaitStatus::Held
+            orbit_core::application::job::PipelineWaitStatus::Held
         );
         assert!(waited.results[0].error.is_none());
         let parent_path = jobs_dir.join("provider_hold_parent.yaml");

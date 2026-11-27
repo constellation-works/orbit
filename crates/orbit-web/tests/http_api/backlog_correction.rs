@@ -7,8 +7,9 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
-use orbit_store::contract::InvocationInsertParams;
-use orbit_store::contract::StoredBacklogForecast;
+use orbit_core::test_support::fixture_store;
+use orbit_core::test_support::fixture_store::contract::InvocationInsertParams;
+use orbit_core::test_support::fixture_store::contract::StoredBacklogForecast;
 use orbit_types::task::{TaskComplexity, TaskEventRowV2, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};
@@ -84,8 +85,8 @@ fn failed_attempt(fixture: &Fixture, at: DateTime<Utc>) {
         .unwrap()
         .id
         .to_string();
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
+    let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+        &fixture_store::maintenance::task_registry::task_registry_path(
             &fixture.runtime.global_root(),
         ),
     )
@@ -167,7 +168,7 @@ fn failed_attempt(fixture: &Fixture, at: DateTime<Utc>) {
                         format!("failed-{id}"),
                     ),
                 )
-                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
             Ok(())
         })
         .unwrap();

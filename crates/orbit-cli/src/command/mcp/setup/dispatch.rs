@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_cmd::mcp_clients::{self, require_home_dir, vscode_home_user_dir};
 use orbit_common::Env;
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 use crate::command::mcp::ORBIT_MCP_SERVER_ID;
 use crate::command::{CommandOutput, Payload};
@@ -319,7 +319,7 @@ pub(super) fn auto_detected_providers(
     let claude_repo = repo_root.is_some_and(|root| root.join(".claude").is_dir());
     // A bare `~/.claude` directory is not evidence that Claude Code is
     // installed: `orbit init` creates `~/.claude/skills/` for its own skill
-    // links (`orbit_core::bootstrap::init`), so a directory test would detect
+    // links (orbit-core's workspace init), so a directory test would detect
     // Claude on every host Orbit has ever touched. Require a config file
     // Claude Code itself writes, the way every other home probe below does.
     let claude_home = home_dir

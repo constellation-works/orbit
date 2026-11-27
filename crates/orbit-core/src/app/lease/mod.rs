@@ -16,6 +16,10 @@ pub use crate::runtime::stored::locks::lease::{
 };
 pub use flow::LeaseNoticeFeed;
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use orbit_runtime::stored::locks::lease;
+pub use orbit_runtime::stored::locks::lease::LeasePolicy;
+
 /// What the lease app can be asked to do: one variant per lease verb, plus
 /// opening a live notice feed.
 pub enum Command {

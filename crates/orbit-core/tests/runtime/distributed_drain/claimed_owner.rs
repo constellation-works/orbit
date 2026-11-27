@@ -625,7 +625,9 @@ fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
     // with an omitted model and a human-looking runtime actor (ORB-16220).
     bound
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+            "human:operator",
+        ))
         .run_tool(
             "orbit.task.artifact.put",
             json!({
@@ -725,7 +727,7 @@ fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
 /// same mutation commits nothing and duplicates no comment, and a
 /// settlement's comment is searchable on the same terms.
 fn claim_evidence_is_searchable_without_reindex() {
-    use orbit_core::{GlobalSearchKind, GlobalSearchParams};
+    use orbit_core::app::search::{GlobalSearchKind, GlobalSearchParams};
     use orbit_store::contract::ClaimWorkerUpdate;
 
     let pair = Pair::new(1);

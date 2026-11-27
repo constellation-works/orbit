@@ -5,14 +5,16 @@
 
 use std::path::{Path, PathBuf};
 
+use orbit_common::OrbitError;
+use orbit_core::app::run::{CompletionPolicy, ShipMode};
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{
-    CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, TaskComplexity, TaskStatus,
-};
-use orbit_engine::{Dispatch, RunLifecycle};
+use orbit_engine::Dispatch;
+use orbit_engine::RunLifecycle;
 use orbit_tools::ToolContext;
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -101,7 +103,7 @@ fn seed(runtime: &OrbitRuntime, title: &str, tags: &[&str]) -> String {
 /// task admission lets through fails next, on the missing asset.
 fn ship(runtime: &OrbitRuntime, task: &str) -> OrbitError {
     runtime
-        .submit_ship_run(orbit_core::ShipRunRequest {
+        .submit_ship_run(orbit_core::application::job::ShipRunRequest {
             mode: ShipMode::Pr,
             base_branch: Some("main"),
             task_ids: &[task.to_string()],
@@ -583,7 +585,7 @@ fn bundled_pr_submission_refuses_before_any_delivery_effect() {
     // Ship selects several tasks for separate singleton leaves; its coordinator
     // remains admissible and does not bind either task during submission.
     let ship_error = runtime
-        .submit_ship_run(orbit_core::ShipRunRequest {
+        .submit_ship_run(orbit_core::application::job::ShipRunRequest {
             mode: ShipMode::Pr,
             base_branch: Some("main"),
             task_ids: &ids,

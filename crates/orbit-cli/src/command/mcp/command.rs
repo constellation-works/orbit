@@ -3,8 +3,8 @@ use std::path::Path;
 
 use clap::{Args, Subcommand, ValueEnum};
 use orbit_common::Env;
+use orbit_common::OrbitError;
 use orbit_common::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV;
-use orbit_core::OrbitError;
 use orbit_mcp::{McpSessionAuthority, RemoteProxyArgs};
 use orbit_types::tool::{McpRole, McpToolset, McpToolsetSelection};
 

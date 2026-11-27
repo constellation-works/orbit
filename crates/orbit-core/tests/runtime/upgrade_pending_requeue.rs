@@ -3,8 +3,8 @@
 //! it, and admission takes it again, so its next run resumes the candidate the
 //! failure handoff held.
 
-use orbit_core::TaskStatus;
 use orbit_types::task::TaskDecision;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{AgentBlocker, UPGRADE_PENDING_REQUEUED_EVENT};
 
 use super::dispatch_admission::isolated;

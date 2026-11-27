@@ -1,6 +1,6 @@
-use orbit_core::TaskStatus;
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
+use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, error_code, isolated};

@@ -3,9 +3,9 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use orbit_core::application::task::TaskListFilter;
-use orbit_core::{DEFAULT_TASK_LIST_LIMIT, TaskStatus, TaskType};
+use orbit_core::app::task::TaskListFilter;
 use orbit_types::task::TaskOrigin;
+use orbit_types::task::{DEFAULT_TASK_LIST_LIMIT, TaskStatus, TaskType};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 

@@ -2,7 +2,7 @@
 
 use super::{LeaseListenerLimits, tls};
 use orbit_auth::client_address::{LeaseClientAddressPolicy, TrustedProxies};
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;

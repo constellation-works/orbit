@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use orbit_common::OrbitError;
 use orbit_common::fs::io::create_dir_symlink;
 use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactKind};
 use orbit_core::application::plugin::{
@@ -9,7 +10,7 @@ use orbit_core::application::plugin::{
     plugin_doctor, sync_plugins, upgrade_plugin,
 };
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::plugin::PluginStatus;
 
 fn git(repo: &Path, args: &[&str]) {

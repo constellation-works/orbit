@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use orbit_common::OrbitError;
 use orbit_core::application::agents::AgentQuery;
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
@@ -14,12 +15,13 @@ use orbit_core::application::job::TaskPilotSubmitError;
 use orbit_core::application::task::{
     TaskAddParams, TaskUpdateAuthority, TaskUpdateParams, TaskWriteScreen,
 };
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::engine::crew::BundleCrews;
-use orbit_core::{JobRunState, OrbitError, OrbitRuntime};
-use orbit_core::{TaskComplexity, TaskStatus};
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use orbit_types::task::Task;
+use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::{JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -100,7 +102,7 @@ impl HumanCrewFixture {
         &self,
         task: &str,
         status: TaskStatus,
-    ) -> Result<Task, orbit_core::OrbitError> {
+    ) -> Result<Task, orbit_common::OrbitError> {
         self.runtime
             .update_task_screened(
                 task,
@@ -116,7 +118,7 @@ impl HumanCrewFixture {
             .map(|written| written.task)
     }
 
-    fn update(&self, input: Value) -> Result<Value, orbit_core::OrbitError> {
+    fn update(&self, input: Value) -> Result<Value, orbit_common::OrbitError> {
         self.runtime.run_tool("orbit.task.update", input)
     }
 
@@ -508,8 +510,8 @@ fn named_human_work_reports_its_hold_at_submission() {
     let human = fx.task("Renew the domain", Some("dk"));
     let error = fx
         .runtime
-        .submit_ship_run(orbit_core::ShipRunRequest {
-            mode: orbit_core::ShipMode::Local,
+        .submit_ship_run(orbit_core::application::job::ShipRunRequest {
+            mode: orbit_core::app::run::ShipMode::Local,
             task_ids: std::slice::from_ref(&human),
             operator_override: true,
             ..Default::default()

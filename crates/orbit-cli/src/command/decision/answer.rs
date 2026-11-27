@@ -1,4 +1,4 @@
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_core::app::task::Outcome;
 
 use crate::command::{CommandOut, Payload};

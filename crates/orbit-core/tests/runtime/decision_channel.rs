@@ -11,11 +11,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use orbit_common::OrbitError;
 use orbit_core::application::task::{
     DecisionDigest, DecisionSubmitCaller, DecisionSubmitParams, DkimTxtResolver,
     FinalRecoveryCompletion, FinalRecoveryRequest, TaskUpdateParams,
 };
-use orbit_core::{ActorIdentity, OrbitError, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
 use orbit_engine::HostEnvironment;
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;

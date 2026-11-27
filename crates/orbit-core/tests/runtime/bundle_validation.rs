@@ -3,7 +3,7 @@
 //! An explicit empty `known_task_ids` allows no task, so only an empty plan
 //! passes. A nonempty set admits its members and refuses every other ID.
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_engine::DispatchError;
 use orbit_tools::ToolContext;

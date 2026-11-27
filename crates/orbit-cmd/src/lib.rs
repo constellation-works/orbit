@@ -3,17 +3,18 @@
 //!
 //! Given the flags and an optional workspace selection, the registry runtime
 //! factory resolves which registered checkout to open, attaches what the
-//! registry knows about it to an [`orbit_core::composition::Opening`], and
+//! registry knows about it to an [`orbit_core::app::workspace::Opening`], and
 //! returns the `Core` a surface passes to an app's `exec`. The remaining
 //! modules are command groups and the ports the apps call back through.
 //!
 //! # Role
-//! Depends on `orbit-core` (runtime/context) and `orbit-registry`. Core reads
+//! Depends on `orbit-core` (its apps), `orbit-runtime` (the kernel traits it
+//! implements) and `orbit-registry`. Core reads
 //! the registry read-only for store retention; this crate still assembles
 //! commands. Neither registry nor core depends on `orbit-cmd`. Consumed by
 //! `orbit-cli` and `orbit-web`. Command groups that orbit-core's runtime
 //! internals (tool hosts, engine hosts, bootstrap seeding) invoke remain in
-//! `orbit_core::adapter::command`; see `ARCHITECTURE.md` for the boundary.
+//! orbit-core's command adapter; see `ARCHITECTURE.md` for the boundary.
 
 // ORB-10016: command modules moved from orbit-core keep their documentation
 // posture; the legacy surfaces still need a focused documentation pass.

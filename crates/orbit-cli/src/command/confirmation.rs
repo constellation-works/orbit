@@ -1,6 +1,6 @@
 //! Shared confirmation checks for irreversible command actions.
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 /// Require the standard non-interactive confirmation flag before an
 /// irreversible CLI operation proceeds.

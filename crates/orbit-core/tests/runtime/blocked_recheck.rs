@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use super::recovery_fixture::{Fixture, fixture};
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_core::application::task::RecheckKind;
 use orbit_core::runtime::task_pr_forge::{
     ForgePullRequest, MergedPullRequest, PullRequestBlockers, TaskPrForge,

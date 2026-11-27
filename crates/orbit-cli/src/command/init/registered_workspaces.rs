@@ -4,9 +4,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use orbit_core::{
-    ManagedArtifactOutcome, RoutineSeedIdentity, seed_absent_workspace_managed_artifacts,
-};
+use orbit_core::app::routine::RoutineSeedIdentity;
+use orbit_core::app::workspace::{ManagedArtifactOutcome, seed_absent_workspace_managed_artifacts};
 use orbit_registry::workspace_registry;
 
 /// The defaults `orbit init` created in one registered workspace.

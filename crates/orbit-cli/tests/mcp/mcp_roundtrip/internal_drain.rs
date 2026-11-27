@@ -565,9 +565,9 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
     // Bind this isolated test process as the agent provider. Its descendants
     // retain the immutable binding even when their activity env is removed,
     // so the agent cannot launch the host channel itself.
-    use orbit_engine::RunLifecycle;
+    use orbit_core::test_support::fixture_engine::RunLifecycle;
 
-    let runtime = orbit_core::OrbitRuntime::from_roots(
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &owner.home.join(".orbit"),
         &owner.work.join(".orbit"),
     )

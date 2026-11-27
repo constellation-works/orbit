@@ -1103,13 +1103,15 @@ fn an_operator_stop_during_pull_reconciliation_is_counted_as_stopped() {
                     .unwrap();
             } else {
                 operator
-                    .stop_workspace_auto_admissions(orbit_core::DrainAdmissionsStopRequest {
-                        actor: "operator",
-                        source: "run_auto_stop",
-                        reason: None,
-                        claim_token: None,
-                        force: false,
-                    })
+                    .stop_workspace_auto_admissions(
+                        orbit_core::application::job::DrainAdmissionsStopRequest {
+                            actor: "operator",
+                            source: "run_auto_stop",
+                            reason: None,
+                            claim_token: None,
+                            force: false,
+                        },
+                    )
                     .unwrap();
             }
         }));

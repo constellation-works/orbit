@@ -46,6 +46,18 @@ pub use mutate::{
 
 use dependent::{host_dependents, replica_owners};
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::bootstrap::browser_kit::{KitInspection, KitLayout, PLAYWRIGHT_VERSION};
+pub use crate::bootstrap::linux_sandbox_host::{
+    BUNDLED_BWRAP_PATH, BUNDLED_BWRAP_VERSION, BwrapProbeOutcome, BwrapSource, probe_bwrap_fresh,
+    probe_bwrap_fresh_for_user,
+};
+pub use crate::composition::{
+    captured_env, compiled_compatibility, composition_env, host_resource_monitor,
+    install_captured_env, pin_executable_generation_as,
+};
+pub use orbit_runtime::enable_github_quota_guard;
+
 /// The live probe of a remote host, implemented above this crate.
 pub trait Probe: Send + Sync {
     /// `target`'s row: its stored fields, joined with what a live probe from

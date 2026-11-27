@@ -28,6 +28,22 @@ pub use crate::application::routines::{
 };
 pub use crate::application::store_opener::StoreOpener;
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::application::routines::seed::{
+    RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
+};
+pub use crate::application::routines::{
+    AutoTaskSweepReport, ClockHealth, ClockUnitConvergence, ClockUnitDrift, ClockUnitInspection,
+    ClockUnitVerdict, DiscoveredWorkspaces, ExternalMergeSweepReport, FireField, OwnerOnlyRoutine,
+    RetiredRoutine, RoutineField, RoutineLoadError, RoutineMachineIdentity, RoutineStatus,
+    RoutineSweepReport, RoutineWorkspaceProvider, SweepContext, SweepOptions, SweepOutcome,
+    clock_status, clock_unit_drift_warning, control_listed_routine_breaker, converge_clock_unit,
+    declares_any_routine_name, ensure_routine_store, inspect_clock_unit, install_clock,
+    pause_routine, project_fire, recent_fires, resume_routine, routine_breaker_events,
+    routine_statuses_with_providers, run_sweep, run_sweep_pass, set_clock_cadence,
+    set_clock_enabled, trigger_options,
+};
+
 /// Reads the host's routine status report.
 pub type Statuses = Box<dyn FnOnce() -> Result<RoutineStatusReport, OrbitError> + Send>;
 

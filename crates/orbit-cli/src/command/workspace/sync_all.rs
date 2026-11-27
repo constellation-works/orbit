@@ -4,7 +4,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use orbit_core::{OrbitError, WorkspaceManagedArtifactSyncReport, workspace_live_run_ids};
+use orbit_common::OrbitError;
+use orbit_core::app::run::workspace_live_run_ids;
+use orbit_core::app::workspace::WorkspaceManagedArtifactSyncReport;
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 use serde::Serialize;
@@ -170,7 +172,7 @@ fn sync_registered_checkout(
     // must not rewrite the managed definitions a drain or run is executing.
     if !check {
         match workspace_live_run_ids(
-            orbit_core::composition::store_opener(),
+            orbit_core::app::workspace::store_opener(),
             global_root,
             &checkout.orbit_dir,
         ) {
@@ -249,8 +251,8 @@ fn converged_record(
         .filter(|action| action.outcome.requires_write())
     {
         let scope = match action.scope {
-            orbit_core::ManagedArtifactScope::HostGlobal => "host-global",
-            orbit_core::ManagedArtifactScope::WorkspaceLocal => "workspace-local",
+            orbit_core::app::workspace::ManagedArtifactScope::HostGlobal => "host-global",
+            orbit_core::app::workspace::ManagedArtifactScope::WorkspaceLocal => "workspace-local",
         };
         *counts
             .entry(format!(

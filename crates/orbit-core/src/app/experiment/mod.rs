@@ -21,6 +21,13 @@ use super::tool_call;
 pub use super::tool_call::Input;
 use crate::Core;
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::application::experiment::{
+    EXPERIMENT_COMPLEXITIES, EXPERIMENTS_MAX_RUNNING, ExperimentActor, ExperimentChange,
+    ExperimentDefinitionInput, ExperimentReadout, ExperimentView, experiment_metric_names,
+    step_local_metric_names,
+};
+
 /// One experiment verb and the fields it is called with.
 pub struct Command {
     verb: ExperimentVerb,

@@ -4,7 +4,7 @@
 
 use std::fs;
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 
 #[test]
 fn workspace_layout_newer_than_binary_refuses_to_open() {

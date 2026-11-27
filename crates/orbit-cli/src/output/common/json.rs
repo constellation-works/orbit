@@ -1,4 +1,4 @@
-use orbit_core::{NotFoundKind, OrbitError};
+use orbit_common::{NotFoundKind, OrbitError};
 use serde_json::{Value, json};
 
 pub fn print_with_format(value: &Value, pretty: bool) -> Result<(), OrbitError> {
@@ -15,7 +15,7 @@ pub fn render(value: &Value, pretty: bool) -> Result<String, OrbitError> {
 }
 
 pub fn error_payload(error: &OrbitError) -> Value {
-    let action_key = orbit_core::application::resident::take_failed_resident_action_key();
+    let action_key = orbit_core::app::resident::take_failed_resident_action_key();
     if let OrbitError::RemoteTool { payload, .. } = error {
         let mut payload = payload.clone();
         if let (Some(key), Some(fields)) = (action_key, payload.as_object_mut()) {

@@ -2,9 +2,10 @@
 
 use chrono::Utc;
 use clap::Args;
+use orbit_common::OrbitError;
+use orbit_core::Core;
 use orbit_core::app::run::{Command, exec};
-use orbit_core::application::task::ProviderLimitReading;
-use orbit_core::{Core, OrbitError};
+use orbit_core::app::task::{ProviderLimitReading, ProviderUsageStatus};
 use orbit_types::workflow::ResourceThrottle;
 use serde_json::Value;
 
@@ -181,9 +182,8 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
     ));
     lines.extend(provider_limit_lines(&payload["provider_limits"]));
     let now = Utc::now();
-    if let Ok(providers) = serde_json::from_value::<
-        Vec<orbit_core::application::task::ProviderUsageStatus>,
-    >(payload["provider_pressures"].clone())
+    if let Ok(providers) =
+        serde_json::from_value::<Vec<ProviderUsageStatus>>(payload["provider_pressures"].clone())
     {
         lines.extend(providers.iter().map(|provider| {
             format!(
@@ -193,7 +193,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
             )
         }));
     }
-    if let Ok(crews) = serde_json::from_value::<Vec<orbit_core::application::task::CrewUsagePressure>>(
+    if let Ok(crews) = serde_json::from_value::<Vec<orbit_core::app::task::CrewUsagePressure>>(
         payload["crew_pressures"].clone(),
     ) {
         lines.extend(

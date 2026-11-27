@@ -5,7 +5,7 @@
 //! Undeclared `rollup` and regression-filter values are not related parameters.
 
 use chrono::{DateTime, Utc};
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use serde_json::json;
 
 use super::dispatch_admission::isolated;

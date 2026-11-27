@@ -16,7 +16,7 @@
 
 use std::io::Write;
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use serde_json::Value;
 
 use crate::output::attention::AttentionRow;

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{parse_duration_seconds, parse_since_with};
-use orbit_store::contract::{AuditEventFilter, V2AuditEventFilter};
+use orbit_store::contract::AuditEventFilter;
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
 use orbit_types::workflow::activity_job::V2_DENIAL_EVENT_TYPES;
 
@@ -21,6 +21,14 @@ pub use crate::application::audit_event::{
 };
 pub use orbit_store::contract::V2AuditEventRow;
 pub use summary::{AuditSummary, AuditToolDuration};
+
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use orbit_runtime::context::ActorIdentity;
+pub use orbit_store::contract::V2AuditEventFilter;
+pub use orbit_store::{
+    AuditToolAggregate, AuditToolModelAggregate, InvocationInsertParams, InvocationQuery,
+    InvocationRecord,
+};
 
 /// One audit event plus its application callback rows when it is an
 /// application entry invocation.

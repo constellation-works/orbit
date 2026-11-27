@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use axum::extract::RawQuery;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::{GlobalSearchKind, SearchRequest, SearchRequestProfile};
+use orbit_core::app::search::{GlobalSearchKind, SearchRequest, SearchRequestProfile};
 
 use crate::state::Ws;
 

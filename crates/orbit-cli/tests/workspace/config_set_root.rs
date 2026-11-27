@@ -482,7 +482,8 @@ fn config_set_refusals_match_shared_admission_without_writes() {
     )
     .unwrap();
     let runtime =
-        orbit_core::OrbitRuntime::from_roots(&fixture.root, workspace.parent().unwrap()).unwrap();
+        orbit_core::runtime::OrbitRuntime::from_roots(&fixture.root, workspace.parent().unwrap())
+            .unwrap();
     for (key, value, flags, typed) in [
         (
             "workflow.base_brunch",
@@ -533,7 +534,9 @@ fn config_set_refusals_match_shared_admission_without_writes() {
         );
     }
     let events = runtime
-        .list_audit_events_filtered(&orbit_core::AuditEventFilter::default())
+        .list_audit_events_filtered(
+            &orbit_core::test_support::fixture_store::AuditEventFilter::default(),
+        )
         .unwrap();
     assert!(
         events

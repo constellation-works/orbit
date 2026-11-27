@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 
 use orbit_cmd::registry_runtime::{PreOpenRoute, PreOpenWorkerBinding, replay_refusal};
 use orbit_common::Env;
-use orbit_core::{ActorIdentity, OrbitError};
+use orbit_common::OrbitError;
+use orbit_core::app::audit::ActorIdentity;
 use orbit_types::tool::WorkerInvocation;
 
 /// The values the entry resolves from the `Env` for one invocation.
@@ -34,13 +35,13 @@ impl Resolved {
         Self {
             global_root: global_root(env),
             generation_root: generation_root(env, root),
-            process_generation_root: orbit_core::runtime::resolve_process_generation_root(
+            process_generation_root: orbit_core::app::workspace::resolve_process_generation_root(
                 env, root,
             ),
             global_orbit_dir: orbit_common::fs::path::global_orbit_dir(env),
             worker_binding: PreOpenWorkerBinding::default(),
             actor: ActorIdentity::from_env(env),
-            managed_workspace: orbit_core::runtime::managed_workspace_selector_from_env(env),
+            managed_workspace: orbit_core::app::workspace::managed_workspace_selector_from_env(env),
         }
     }
 
@@ -113,10 +114,10 @@ impl Resolved {
 
 /// The host-global Orbit root for `env`.
 pub(super) fn global_root(env: &Env) -> Result<PathBuf, OrbitError> {
-    orbit_core::runtime::resolve_global_root(env)
+    orbit_core::app::workspace::resolve_global_root(env)
 }
 
 /// The Orbit root `root` (`--root`) or `env` selects.
 pub(super) fn generation_root(env: &Env, root: Option<&Path>) -> Result<PathBuf, OrbitError> {
-    orbit_core::runtime::resolve_generation_root(env, root)
+    orbit_core::app::workspace::resolve_generation_root(env, root)
 }

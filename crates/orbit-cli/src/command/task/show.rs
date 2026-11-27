@@ -10,7 +10,7 @@
 use std::fmt::Write as _;
 
 use orbit_cmd::task_owner::WorkspaceIdentity;
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_core::app::task::{Outcome, Shown};
 use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskComment, TaskHistoryEntry};
 use orbit_types::workflow::JobRun;

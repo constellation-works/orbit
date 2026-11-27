@@ -1,7 +1,7 @@
 use clap::Args;
 use orbit_core::Core;
 use orbit_core::app::task::{self, Command, Outcome, SettleMerged};
-use orbit_core::application::task::{ExternalMergeSettlement, ExternalMergeSettlementProfile};
+use orbit_core::app::task::{ExternalMergeSettlement, ExternalMergeSettlementProfile};
 use serde_json::{Value, json};
 
 use crate::command::{CommandOut, ExecuteCore, Payload};
@@ -46,7 +46,7 @@ impl ExecuteCore for TaskSettleMergedArgs {
                 }
             }
             (_, Some(_), _, _) | (_, _, Some(_), _) | (_, _, _, Some(_)) => {
-                return Err(orbit_core::OrbitError::InvalidInput(
+                return Err(orbit_common::OrbitError::InvalidInput(
                     "rescued settlement requires a task, --recovered-claim, --pull-request and --published-head".into(),
                 ));
             }

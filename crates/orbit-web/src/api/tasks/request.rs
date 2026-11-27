@@ -2,7 +2,7 @@
 
 use crate::api::bad_request;
 use axum::response::Response;
-use orbit_core::{
+use orbit_types::task::{
     ExternalRef, TaskComplexity, TaskCreateStatus, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_types::task::{TaskOrigin, TaskRelation};

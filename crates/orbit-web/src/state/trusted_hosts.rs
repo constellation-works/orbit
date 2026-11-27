@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 /// Non-loopback Hosts the dashboard admits, from `machine.web.trusted_hosts`,
 /// and the `Tailscale-User-Login` values admitted through them, from

@@ -9,7 +9,7 @@ tags: [architecture, orbit-core]
 
 ## What it owns
 
-Composes the runtime. `OrbitRuntime` owns a `RuntimeKernel` and derefs to it. Internal graph `runtime ← application ← adapter`, `composition` joins config/bootstrap/runtime/adapters. Surfaces are being moved off `OrbitRuntime`: a converted surface holds a `Core` and calls an app's `exec` (see [Core, apps and the chokepoint](#core-apps-and-the-chokepoint)).
+Composes the runtime. `OrbitRuntime` owns a `RuntimeKernel` and derefs to it. Internal graph `runtime ← application ← adapter`, `composition` joins config/bootstrap/runtime/adapters. The crate exports `app`, `Core` and `Error` and nothing else (see [Public face](#public-face)): a surface holds a `Core` and calls an app's `exec` (see [Core, apps and the chokepoint](#core-apps-and-the-chokepoint)).
 
 ## Layering
 
@@ -23,6 +23,12 @@ Composes the runtime. `OrbitRuntime` owns a `RuntimeKernel` and derefs to it. In
 ## Main modules and types
 
 `application` (task, job, review, landing, distributed, pull_drain, admission, routines, search, notice), `app` (`agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`, `config`, `crew_memory`, `doctor`, `evolution`, `experiment`, `friction`, `gc`, `host`, `lease`, `notice`, `plugin`, `remote_command`, `resident`, `review`, `routine`, `run`, `search`, `skill`, `task`, `tool`, `workspace`), `adapter`, `composition` (`Core` in `crates/orbit-core/src/composition/core.rs`), `bootstrap`, `runtime` (`OrbitRuntime` in `crates/orbit-core/src/runtime/mod.rs`). See ``crates/orbit-core/src/lib.rs``.
+
+## Public face
+
+- `lib.rs` declares `app` public and re-exports `Core` and `Error`. `adapter`, `application`, `bootstrap`, `composition` and `runtime` are crate-private in a shipped build, so a surface that names the runtime, the store or an application module does not compile; `orbit-cli` and `orbit-web` also have no edge to `orbit-runtime`, `orbit-store` or `orbit-engine`.
+- A type or function a surface or `orbit-cmd` names is re-exported from the app that owns its subject, in the block headed "Surface re-exports" in `app/<subject>/mod.rs`. Composition's opening (`Opening`, `store_opener`, `core_for_request`) is re-exported from `app::workspace`, and the captured process environment from `app::host`. `orbit-cmd` names kernel items (the workspace catalog, root resolution) from `orbit-runtime` directly.
+- The dev-only `test-support` feature makes the internal modules public, hidden from the docs, for integration fixtures, and `test_support` re-exports `orbit-store` and `orbit-engine` as `fixture_store` and `fixture_engine` for the CLI and dashboard fixtures. A shipped build has no such consumer, so it does not report an item only a fixture reaches as unused; a `test-support` build still reports a dead crate-private item.
 
 ## Core, apps and the chokepoint
 

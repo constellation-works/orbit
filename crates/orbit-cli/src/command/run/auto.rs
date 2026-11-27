@@ -1,13 +1,14 @@
 //! `orbit run auto` workspace logistics entrypoint.
 
 use clap::Args;
-use orbit_core::app::run::{Command, exec};
-use orbit_core::application::distributed::{
-    PULL_START_CONFLICT_ARG_IDS, PULL_START_HOST_REQUIRES_ARG_ID, pull_start_review_refusal,
+use orbit_core::Core;
+use orbit_core::app::run::{
+    AutoDrainRequest, CompletionPolicy, DrainAdmissionsStopRequest, WorkspacePullRequest,
 };
-use orbit_core::application::job::{AutoDrainSubmissionProfile, DrainAdmissionsStopOutcome};
-use orbit_core::{
-    AutoDrainRequest, CompletionPolicy, Core, DrainAdmissionsStopRequest, WorkspacePullRequest,
+use orbit_core::app::run::{AutoDrainSubmissionProfile, DrainAdmissionsStopOutcome};
+use orbit_core::app::run::{Command, exec};
+use orbit_core::app::run::{
+    PULL_START_CONFLICT_ARG_IDS, PULL_START_HOST_REQUIRES_ARG_ID, pull_start_review_refusal,
 };
 
 use crate::command::{CommandOut, ExecuteCore, Payload};
@@ -94,7 +95,7 @@ impl ExecuteCore for AutoCommand {
         }
         if let Some(selector) = self.pull.as_deref() {
             if let Some(refusal) = pull_start_review_refusal(self.review.is_some()) {
-                return Err(orbit_core::OrbitError::InvalidInput(refusal.into()));
+                return Err(orbit_common::OrbitError::InvalidInput(refusal.into()));
             }
             let for_seconds = self
                 .for_duration
@@ -155,7 +156,7 @@ impl ExecuteCore for AutoCommand {
                         .map(str::parse)
                         .transpose()
                         .map_err(|message: &str| {
-                            orbit_core::OrbitError::InvalidInput(message.into())
+                            orbit_common::OrbitError::InvalidInput(message.into())
                         })?,
                     review: self.review,
                 },
@@ -231,7 +232,7 @@ fn execute_stop(core: &Core, claim_token: Option<&str>) -> CommandOut {
                     child.run_id, child.job_name, child.phase, status
                 ));
             }
-            lines.push(if change.job_id == orbit_core::application::contracts::PULL_DRAIN_JOB {
+            lines.push(if change.job_id == orbit_core::app::run::PULL_DRAIN_JOB {
                 format!(
                     "Claimed leaves finish and settle on their own. `orbit run cancel {} --confirm` \
                      waits for them and then ends the drain; add `--force` to stop them and return \

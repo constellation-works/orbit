@@ -1,7 +1,7 @@
 use super::support::{Fixture, error_code, isolated};
 use orbit_core::application::task::TaskAddParams;
-use orbit_engine::RunLifecycle;
-use orbit_engine::TaskAutomationUpdate;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
 use orbit_types::task::{
     DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, TaskStatus,
 };
@@ -10,7 +10,9 @@ use serde_json::json;
 #[test]
 fn decision_listing_warns_when_a_bundle_has_a_missing_artifact() {
     use orbit_core::application::task::TaskUpdateParams;
-    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    use orbit_core::test_support::fixture_store::maintenance::task_registry::{
+        TaskRegistryStore, task_registry_path,
+    };
     use orbit_types::task::TaskArtifact;
 
     isolated(
@@ -143,7 +145,10 @@ fn decision_answer_refusals_keep_structured_client_errors() {
 
 /// A blocked task holding one open block-triage request, as block triage
 /// raises it, and that request.
-fn blocked_task_with_request(runtime: &orbit_core::OrbitRuntime, title: &str) -> DecisionRequest {
+fn blocked_task_with_request(
+    runtime: &orbit_core::runtime::OrbitRuntime,
+    title: &str,
+) -> DecisionRequest {
     let task = runtime
         .add_task(TaskAddParams {
             title: title.into(),
@@ -154,7 +159,10 @@ fn blocked_task_with_request(runtime: &orbit_core::OrbitRuntime, title: &str) ->
     raise_block_triage(runtime, &task.id)
 }
 
-fn raise_block_triage(runtime: &orbit_core::OrbitRuntime, task_id: &str) -> DecisionRequest {
+fn raise_block_triage(
+    runtime: &orbit_core::runtime::OrbitRuntime,
+    task_id: &str,
+) -> DecisionRequest {
     let blocked_at = runtime
         .get_task_history(task_id)
         .unwrap()
@@ -212,7 +220,9 @@ fn listed_ids(listed: &serde_json::Value) -> Vec<String> {
 #[test]
 fn decision_listing_rereads_only_bundles_changed_since_a_clean_read() {
     use orbit_core::application::task::TaskUpdateParams;
-    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    use orbit_core::test_support::fixture_store::maintenance::task_registry::{
+        TaskRegistryStore, task_registry_path,
+    };
     use orbit_types::task::TaskArtifact;
     use std::os::unix::fs::PermissionsExt;
 

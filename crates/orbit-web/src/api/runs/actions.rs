@@ -6,10 +6,10 @@ use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::protocol::tool_input::parse_duration_seconds;
 use orbit_core::Core;
-use orbit_core::WorkspacePullRequest;
+use orbit_core::app::run::PullStartOptionsSupplied;
+use orbit_core::app::run::WorkspacePullRequest;
+use orbit_core::app::run::{AutoDrainSubmissionProfile, ShipSubmissionProfile};
 use orbit_core::app::run::{Command, exec};
-use orbit_core::application::distributed::PullStartOptionsSupplied;
-use orbit_core::application::job::{AutoDrainSubmissionProfile, ShipSubmissionProfile};
 use orbit_types::workflow::{JobRunTrigger, ReviewLayer};
 use serde_json::{Value, json};
 
@@ -124,8 +124,8 @@ pub(in crate::api) struct AutoDrainBody {
 }
 
 impl AutoDrainBody {
-    fn complexity_crews(&self) -> orbit_core::ComplexityCrewPools {
-        orbit_core::ComplexityCrewPools {
+    fn complexity_crews(&self) -> orbit_config::ComplexityCrewPools {
+        orbit_config::ComplexityCrewPools {
             low: self.low_complexity_crews.clone(),
             medium: self.medium_complexity_crews.clone(),
             hard: self.hard_complexity_crews.clone(),
@@ -207,7 +207,7 @@ pub(in crate::api) async fn ship_workflow_action(
     OptionalJson(body): OptionalJson<ShipBody>,
 ) -> Response {
     let explicit = match body.mode.as_deref() {
-        Some(raw) => match orbit_core::ShipMode::parse(raw) {
+        Some(raw) => match orbit_core::app::run::ShipMode::parse(raw) {
             Ok(mode) => Some(mode),
             Err(e) => return bad_request(e.to_string()),
         },
@@ -218,13 +218,13 @@ pub(in crate::api) async fn ship_workflow_action(
             &core,
             Command::ship(
                 explicit,
-                orbit_core::ShipRunRequest {
+                orbit_core::app::run::ShipRunRequest {
                     base_branch: body.base.as_deref(),
                     task_ids: &body.task_ids,
                     // [ORB-11187] Completion authority is granted per invocation at the CLI
                     // (`orbit run ship --complete`); the dashboard does not offer it, so
                     // this endpoint always ends successful work at `review`.
-                    completion: orbit_core::CompletionPolicy::Review,
+                    completion: orbit_core::app::run::CompletionPolicy::Review,
                     allowed_crews: &[],
                     actor: Some("dashboard"),
                     claim_token: body.claim_token.as_deref(),
@@ -265,7 +265,7 @@ fn parse_drain_duration_seconds(raw: &str) -> Result<u64, String> {
         return Err("for_duration must not be empty".to_string());
     }
     let seconds = parse_duration_seconds(raw).map_err(|error| match error {
-        orbit_core::OrbitError::InvalidInput(message) => message,
+        orbit_common::OrbitError::InvalidInput(message) => message,
         other => other.to_string(),
     })?;
     if seconds < MIN_AUTO_DRAIN_SECONDS {
@@ -291,8 +291,8 @@ fn drain_window_seconds(body: &AutoDrainBody) -> Result<Option<u64>, String> {
 /// A refusal the runtime raises before any run exists keeps the words the CLI
 /// prints for it. Checkout-role and owner-route refusals are a conflict with
 /// this host, not a server fault.
-fn map_start_refusal(error: orbit_core::OrbitError) -> Response {
-    use orbit_core::OrbitError;
+fn map_start_refusal(error: orbit_common::OrbitError) -> Response {
+    use orbit_common::OrbitError;
     match error {
         error @ (OrbitError::CapabilityRefused(_)
         | OrbitError::UnknownSelector(_)
@@ -360,13 +360,13 @@ pub(in crate::api) async fn auto_drain_workflow_action(
     }
     match helpers::blocking_join("auto-drain workflow", move || {
         let completion = if body.complete {
-            orbit_core::CompletionPolicy::Done
+            orbit_core::app::run::CompletionPolicy::Done
         } else {
-            orbit_core::CompletionPolicy::Review
+            orbit_core::app::run::CompletionPolicy::Review
         };
         exec(
             &core,
-            Command::dashboard_auto(orbit_core::AutoDrainRequest {
+            Command::dashboard_auto(orbit_core::app::run::AutoDrainRequest {
                 for_seconds,
                 max_active_leaf_runs: body.concurrency,
                 completion,
@@ -396,7 +396,7 @@ pub(in crate::api) async fn auto_drain_workflow_action(
 /// refusal [`map_start_refusal`] words.
 async fn start_blocking<F>(label: &'static str, op: F) -> Response
 where
-    F: FnOnce() -> Result<Value, orbit_core::OrbitError> + Send + 'static,
+    F: FnOnce() -> Result<Value, orbit_common::OrbitError> + Send + 'static,
 {
     match helpers::blocking_join(label, op).await {
         Ok(Ok(started)) => Json(started).into_response(),
@@ -414,7 +414,7 @@ fn pull_drain_start(
     global_root: &std::path::Path,
     body: &AutoDrainBody,
     for_seconds: Option<u64>,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let pull = body.pull.as_deref().unwrap_or_default();
     let selector = orbit_cmd::hosts::pull_selector(global_root, body.host.as_deref(), pull)?;
     let receipt = exec(

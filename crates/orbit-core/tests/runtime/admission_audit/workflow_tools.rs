@@ -6,7 +6,7 @@ use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use super::tool_support::{managed_tool_env_guard, run_tool_as_operator, test_runtime};
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::test_support::V2AuditEventInsertParams;
 use orbit_tools::ToolContext;
 use orbit_types::tool::{McpCapability, ToolSessionContext};

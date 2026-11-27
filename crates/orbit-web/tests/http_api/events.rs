@@ -2,12 +2,14 @@
 //! a separate process, so every write below, made through this test's own
 //! runtime as the CLI makes it, is another process's write to the server.
 
+use orbit_core::test_support::fixture_store;
 use std::io::{BufRead, BufReader};
 use std::time::{Duration, Instant};
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{JobRun, JobRunState, TaskStatus};
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{ActivityCrewDraw, FINAL_RECOVERY_CREWS_KEY, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState};
 use reqwest::blocking::Response;
 use serde_json::{Value, json};
 
@@ -259,9 +261,9 @@ fn change_stream_notices_other_process_writes_and_resumes_after_reconnect() {
                     .runtime
                     .stores()
                     .tasks()
-                    .record_executor_census(&orbit_store::contract::ExecutorCensusEntry {
+                    .record_executor_census(&fixture_store::contract::ExecutorCensusEntry {
                         machine_id: "hm_remote_mac".into(),
-                        capability: orbit_store::contract::ExecutorCapability {
+                        capability: fixture_store::contract::ExecutorCapability {
                             os: Some(orbit_types::task::HostOs::Macos),
                             ..Default::default()
                         },

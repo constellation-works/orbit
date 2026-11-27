@@ -4,14 +4,15 @@ use std::sync::Arc;
 use std::sync::mpsc::{RecvTimeoutError, sync_channel};
 use std::time::Duration;
 
+use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
+use orbit_core::application::auto_tasks::AutoTaskAddParams;
 use orbit_core::application::auto_tasks::{
     AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile, AutoTaskTemplatePatch,
     AutoTaskUpdateParams, cursor_state_path,
 };
-use orbit_core::{
-    AutoTaskAddParams, OrbitError, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType,
-};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 
 #[test]

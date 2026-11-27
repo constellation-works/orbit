@@ -26,7 +26,8 @@ use std::sync::Arc;
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::app::codebase::{self as codebase_app, Command, Outcome};
-use orbit_core::application::codebase::{self, CodebaseQuery, RegressionFilter};
+use orbit_core::app::codebase::{CodebaseFacts, RelatedQuery};
+use orbit_core::app::codebase::{CodebaseQuery, RegressionFilter};
 use serde::Deserialize;
 
 use super::{bad_request, blocking_join, map_runtime_error};
@@ -69,7 +70,7 @@ pub(super) struct CodebaseAnalyticsQuery {
 /// Query string for `GET /api/codebase/related`.
 ///
 /// Rollup and regression filters are not parameters. An omitted window or
-/// `top` is resolved by [`orbit_core::application::codebase::RelatedQuery`].
+/// `top` is resolved by [`orbit_core::app::codebase::RelatedQuery`].
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct CodebaseRelatedQuery {
     /// `7d`, `30d`, `90d` or `all`.
@@ -112,7 +113,7 @@ fn codebase_selection(
     });
     selection.map_err(|error| {
         Box::new(match error {
-            orbit_core::OrbitError::InvalidInput(message) => bad_request(message),
+            orbit_common::OrbitError::InvalidInput(message) => bad_request(message),
             error => map_runtime_error(error),
         })
     })
@@ -123,7 +124,7 @@ fn codebase_selection(
 async fn cached_codebase_scan(
     state: &DashboardState,
     ws: &CodebaseWs,
-) -> Result<crate::runtime_memo::Served<codebase::CodebaseFacts>, Box<Response>> {
+) -> Result<crate::runtime_memo::Served<CodebaseFacts>, Box<Response>> {
     let core = Arc::clone(&ws.core);
     ws.cached_scan(state, move || facts(&core, Command::Scan))
         .await
@@ -132,8 +133,8 @@ async fn cached_codebase_scan(
 
 /// The codebase app's answer to a read, which is always the model it was
 /// asked for.
-fn mismatched(read: &str) -> orbit_core::OrbitError {
-    orbit_core::OrbitError::Execution(format!(
+fn mismatched(read: &str) -> orbit_common::OrbitError {
+    orbit_common::OrbitError::Execution(format!(
         "the codebase {read} read answered with another model"
     ))
 }
@@ -142,7 +143,7 @@ fn mismatched(read: &str) -> orbit_core::OrbitError {
 fn facts(
     core: &orbit_core::Core,
     command: Command,
-) -> Result<codebase::CodebaseFacts, orbit_core::OrbitError> {
+) -> Result<CodebaseFacts, orbit_common::OrbitError> {
     match codebase_app::exec(core, command)? {
         Outcome::Facts(facts) => Ok(facts),
         Outcome::Value(_) | Outcome::RegressionLayers(_) => Err(mismatched("scan")),
@@ -170,7 +171,7 @@ pub(super) async fn codebase_analytics(
     let age = served.age_header();
     let facts = Arc::clone(&served.body);
     let payload = match blocking_join("codebase analytics", move || {
-        codebase::codebase_analytics(&facts, &query, CODEBASE_ANALYTICS_TTL)
+        codebase_app::codebase_analytics(&facts, &query, CODEBASE_ANALYTICS_TTL)
     })
     .await
     {
@@ -206,7 +207,7 @@ pub(super) async fn codebase_show(
     let facts = Arc::clone(&served.body);
     let path = path.to_owned();
     let detail = match blocking_join("codebase path detail", move || {
-        codebase::codebase_path_detail(&facts, &selection, &path)
+        codebase_app::codebase_path_detail(&facts, &selection, &path)
     })
     .await
     {
@@ -215,7 +216,7 @@ pub(super) async fn codebase_show(
     };
     match detail {
         Ok(value) => (age, Json(value)).into_response(),
-        Err(orbit_core::OrbitError::InvalidInput(message)) => bad_request(message),
+        Err(orbit_common::OrbitError::InvalidInput(message)) => bad_request(message),
         Err(error) => map_runtime_error(error),
     }
 }
@@ -225,13 +226,10 @@ pub(super) async fn codebase_related(
     ws: CodebaseWs,
     Query(query): Query<CodebaseRelatedQuery>,
 ) -> Response {
-    let selection = match codebase::RelatedQuery::parse(
-        query.window.as_deref(),
-        query.min_support,
-        query.top,
-    ) {
+    let selection = match RelatedQuery::parse(query.window.as_deref(), query.min_support, query.top)
+    {
         Ok(selection) => selection,
-        Err(orbit_core::OrbitError::InvalidInput(message)) => return bad_request(message),
+        Err(orbit_common::OrbitError::InvalidInput(message)) => return bad_request(message),
         Err(error) => return map_runtime_error(error),
     };
     let Some(path) = query.path else {
@@ -248,9 +246,14 @@ pub(super) async fn codebase_related(
         Ok(served) => served.body,
         Err(error) => return map_runtime_error(error),
     };
-    match codebase::codebase_related(&facts, &selection.codebase_query(), &path, selection.top()) {
+    match codebase_app::codebase_related(
+        &facts,
+        &selection.codebase_query(),
+        &path,
+        selection.top(),
+    ) {
         Ok(value) => Json(value).into_response(),
-        Err(orbit_core::OrbitError::InvalidInput(message)) => bad_request(message),
+        Err(orbit_common::OrbitError::InvalidInput(message)) => bad_request(message),
         Err(error) => map_runtime_error(error),
     }
 }

@@ -21,7 +21,7 @@ pub(super) const OPENED_WORKSPACE_RUNTIME_LOG: &str = "opened a workspace runtim
 
 /// The runtimes this process has built, keyed by logical workspace ID.
 ///
-/// [`orbit_core::runtime::HostLifetime::LongLived`] promises the host keeps what it opens, but the
+/// [`orbit_core::app::run::HostLifetime::LongLived`] promises the host keeps what it opens, but the
 /// server used to drop each runtime at the end of the call that built it — so
 /// every workspace-scoped call re-parsed the host identity, reopened the task
 /// registry and all workspace stores, and started a fresh embed worker. An

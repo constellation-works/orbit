@@ -9,8 +9,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use orbit_common::Env;
+use orbit_common::OrbitError;
 use orbit_config::ConfigSeed;
-use orbit_core::OrbitError;
 
 use super::agent_detect::{DetectedAgents, available_crew_families, detect};
 use crate::entry::resolved::Resolved;

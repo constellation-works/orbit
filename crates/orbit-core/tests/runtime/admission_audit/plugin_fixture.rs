@@ -8,7 +8,7 @@ use std::process::{Command, Output};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use tempfile::TempDir;
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 
 const ISOLATED_CHILD_ENV: &str = "ORBIT_TEST_PLUGIN_FIXTURE_CHILD";
 

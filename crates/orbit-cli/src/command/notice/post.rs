@@ -1,4 +1,4 @@
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use serde_json::{Map, Value, json};
 
 use super::support::{notice_detail, text};

@@ -1,9 +1,10 @@
 //! `orbit run concurrency` — retune a live drain's worker ceiling [ORB-11253].
 
 use clap::Args;
+use orbit_core::Core;
+use orbit_core::app::run::DrainWorkerLimitRequest;
 use orbit_core::app::run::{Command, exec};
-use orbit_core::application::job::{DrainWorkerLimitChangeProfile, DrainWorkerLimitOutcome};
-use orbit_core::{Core, DrainWorkerLimitRequest};
+use orbit_core::app::run::{DrainWorkerLimitChangeProfile, DrainWorkerLimitOutcome};
 
 use crate::command::{CommandOut, ExecuteCore, Payload};
 

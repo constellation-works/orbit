@@ -5,7 +5,7 @@ use super::router::build_listener_router;
 use super::{LeaseListenerConfig, LeaseListenerSettings, transport};
 use orbit_auth::environment::{LISTENER_USER, check_listener_execution_environment};
 use orbit_auth::store::LeaseTokenStore;
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
@@ -18,7 +18,7 @@ use std::path::Path;
 /// bind address, so it refuses to start.
 pub fn run_lease_listener() -> Result<(), OrbitError> {
     let orbit_home =
-        orbit_common::fs::path::global_orbit_dir(&orbit_core::composition::composition_env())?;
+        orbit_common::fs::path::global_orbit_dir(&orbit_core::app::host::composition_env())?;
     check_listener_execution_environment(&orbit_home)?;
     let config = LeaseListenerConfig::from_settings(&LeaseListenerSettings::default())?;
     refuse_intake_socket_owner(&config.intake_socket)?;

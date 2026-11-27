@@ -12,7 +12,7 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_core::app::run::Command as RunCommand;
-use orbit_core::runtime::host_resource::forecast::HostCapacity;
+use orbit_core::app::run::HostCapacity;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::value::RawValue;
@@ -96,7 +96,7 @@ pub(super) async fn resource_profiles(
             profiles: &profiles,
         })
         .map_err(|error| {
-            orbit_core::OrbitError::Execution(format!("encode resource profiles: {error}"))
+            orbit_common::OrbitError::Execution(format!("encode resource profiles: {error}"))
         })
     })
     .await

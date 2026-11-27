@@ -42,8 +42,6 @@ tracing.workspace = true
 # Enable the loopback-only latest-release endpoint seam in CLI process tests,
 # and the registered opens the integration fixtures seed through.
 orbit-cmd = { path = "../orbit-cmd", features = ["test-release-api-base", "test-support"] }
-# Real sandbox broker integration against the built CLI and MCP transport.
-orbit-engine = { path = "../orbit-engine" }
 orbit-exec = { path = "../orbit-exec", features = ["test-support"] }
 orbit-tools = { path = "../orbit-tools" }
 # With the feature entries above and below, these resolve a test build of this

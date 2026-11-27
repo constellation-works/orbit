@@ -2,8 +2,8 @@
 //! it can be one: globs, placeholders and host paths are skipped, and a real
 //! missing path is still an error [ORB-14903].
 
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{TaskAddParams, TaskLintFinding, TaskLintSeverity};
+use orbit_core::runtime::OrbitRuntime;
 
 /// Token classes a description names legitimately but that never sit in the
 /// checkout.

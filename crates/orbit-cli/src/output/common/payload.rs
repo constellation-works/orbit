@@ -232,7 +232,7 @@ pub enum View {
 
 /// A payload rendered by writing to stdout as records arrive.
 pub type StreamFn =
-    Box<dyn FnOnce(&OutputSink, &mut dyn std::io::Write) -> Result<(), orbit_core::OrbitError>>;
+    Box<dyn FnOnce(&OutputSink, &mut dyn std::io::Write) -> Result<(), orbit_common::OrbitError>>;
 
 impl Payload {
     /// A list command's payload: a JSON array plus the table of the same

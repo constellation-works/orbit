@@ -14,10 +14,10 @@ use crate::state::run_read;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_core::app::run::Command as RunCommand;
-use orbit_core::runtime::host_resource::accuracy::{
+use orbit_core::app::run::HostCapacity;
+use orbit_core::app::run::{
     AccuracySelection, DrainLimiters, DrainShadowDecisions, OffsetAccuracy,
 };
-use orbit_core::runtime::host_resource::forecast::HostCapacity;
 use serde::Serialize;
 
 use crate::state::Ws;
@@ -75,7 +75,7 @@ pub(in crate::api) async fn diagnostics_resource_forecast(Ws(runtime): Ws) -> Re
             },
         })
         .map_err(|error| {
-            orbit_core::OrbitError::Execution(format!("encode resource forecast: {error}"))
+            orbit_common::OrbitError::Execution(format!("encode resource forecast: {error}"))
         })
     })
     .await

@@ -16,13 +16,15 @@ use orbit_common::fs::io::{
 };
 use orbit_common::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
 use orbit_common::security::release::sha256_hex;
+use orbit_core::app::routine::RoutineSeedIdentity;
 use orbit_core::application::auto_tasks::{AutoTaskBody, AutoTaskDeleteParams};
-use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
-use orbit_core::test_support::with_auto_task_manifest_read_hook;
-use orbit_core::{
-    ManagedArtifactOutcome, ManagedArtifactScope, OrbitRuntime, RoutineSeedIdentity,
-    reconcile_workspace_managed_artifacts, seed_absent_workspace_managed_artifacts,
+use orbit_core::application::workspace_sync::{
+    ManagedArtifactOutcome, ManagedArtifactScope, reconcile_workspace_managed_artifacts,
+    seed_absent_workspace_managed_artifacts,
 };
+use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::test_support::with_auto_task_manifest_read_hook;
 use orbit_store::compose::auto_task::cursor_state_path;
 use orbit_types::workflow::AutoTaskSchedule;
 
@@ -849,13 +851,14 @@ fn unmanifested_crew_memory_dream_retires_without_retiring_its_job() {
         )
         .expect("sync")
     };
-    let retired = |report: &orbit_core::WorkspaceManagedArtifactSyncReport| {
-        report.actions.iter().any(|action| {
-            action.kind == "routine"
-                && action.name == name
-                && action.outcome == ManagedArtifactOutcome::Retired
-        })
-    };
+    let retired =
+        |report: &orbit_core::application::workspace_sync::WorkspaceManagedArtifactSyncReport| {
+            report.actions.iter().any(|action| {
+                action.kind == "routine"
+                    && action.name == name
+                    && action.outcome == ManagedArtifactOutcome::Retired
+            })
+        };
     assert!(retired(&sync(true)), "preview reports retirement");
     assert_eq!(std::fs::read_to_string(&active).unwrap(), body);
     assert!(retired(&sync(false)), "apply reports retirement");

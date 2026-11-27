@@ -17,9 +17,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::Utc;
-use orbit_core::OrbitRuntime;
 use orbit_core::runtime::JobRuns;
-use orbit_engine::{Dispatch, Recovery, RunLifecycle};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_engine::Dispatch;
+use orbit_engine::Recovery;
+use orbit_engine::RunLifecycle;
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied,
@@ -43,7 +45,7 @@ fn execute_tool_command_with_current_env(
     runtime: &OrbitRuntime,
     name: &str,
     input: Value,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let env = orbit_common::Env::capture();
     runtime
         .execute_tool_command_dispatch_with_session_context_and_env(
@@ -203,7 +205,7 @@ impl Fixture {
         task: &str,
         decision: FinalRecoveryDecision,
         resume_step_index: Option<u32>,
-    ) -> Result<FinalRecoveryApplied, orbit_core::OrbitError> {
+    ) -> Result<FinalRecoveryApplied, orbit_common::OrbitError> {
         // Named through the trait: `OrbitRuntime` also has the applier's own
         // `apply_final_recovery`, which the host method calls after recording.
         Recovery::apply_final_recovery(

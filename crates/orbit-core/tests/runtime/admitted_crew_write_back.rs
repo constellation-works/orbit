@@ -7,14 +7,14 @@
 //! ran grok under a codex capacity hold while still naming sol, and the
 //! explicitly crewed ORB-19386 ran luna in the control arm.
 
-use orbit_core::OrbitRuntime;
-use orbit_core::TaskComplexity;
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::job::{JobRunCancelOutcome, JobRunListParams};
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::test_support::{WorkerReapPhase, install_worker_reap_hook};
+use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::{JobRunState, ProviderFailureClass};
 use serde_json::{Value, json};
 

@@ -1,6 +1,6 @@
 //! Canonical evidence locators cannot alias protected review artifacts.
 
-use orbit_core::TaskStatus;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT, REVIEW_MANIFEST_ARTIFACT,
     REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT, ReviewEvidenceHold,

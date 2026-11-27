@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
-use orbit_core::OrbitError;
 
 /// The Orbit-managed `.gitignore` block written by `orbit workspace init`.
 ///

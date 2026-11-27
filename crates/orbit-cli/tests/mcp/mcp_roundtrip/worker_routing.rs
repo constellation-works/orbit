@@ -217,7 +217,7 @@ fn claimed_worker_reads_owner_records_and_preserves_workspace_routing() {
         bound_run_id: "run-test-1".into(),
     };
 
-    let runtime = orbit_core::OrbitRuntime::from_roots(
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &worker.home.join(".orbit"),
         &worker.work.join(".orbit"),
     )
@@ -225,7 +225,7 @@ fn claimed_worker_reads_owner_records_and_preserves_workspace_routing() {
     .with_worker_invocation(binding, std::sync::Arc::new(DummyOwner))
     .expect("bind worker invocation");
 
-    orbit_engine::RunLifecycle::register_worker_process(&runtime, std::process::id())
+    orbit_core::test_support::fixture_engine::RunLifecycle::register_worker_process(&runtime, std::process::id())
         .expect("register worker process");
 
     let mut client = worker.serve();

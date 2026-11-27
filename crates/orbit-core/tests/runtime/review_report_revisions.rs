@@ -6,7 +6,7 @@
 //! issues the certificate, and the shared coverage rules spend it.
 
 use orbit_automation::review::certificate_acceptable;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{ArtifactManifestV2, TASK_ARTIFACT_MANIFEST_FILE_NAME};
 use orbit_types::workflow::{

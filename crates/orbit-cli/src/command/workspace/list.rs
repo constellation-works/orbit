@@ -54,7 +54,7 @@ fn workspace_list_records(registry: &WorkspaceRegistry, include_replicas: bool) 
                 "id": workspace.id,
                 "name": workspace.name,
                 "status": workspace.status.to_string(),
-                "ship_mode": orbit_core::resolved_ship_mode(workspace).as_input_value(),
+                "ship_mode": orbit_core::app::run::resolved_ship_mode(workspace).as_input_value(),
                 "owner_machine_id": workspace.owner_machine_id,
                 "role": checkout.and_then(|checkout| checkout.role.map(|role| role.to_string())),
                 "repo_root": checkout.map(|checkout| checkout.repo_root.to_string_lossy()),
@@ -96,7 +96,7 @@ fn workspace_list_table(registry: &WorkspaceRegistry, include_replicas: bool) ->
             workspace.name.clone(),
             workspace.id.clone(),
             workspace.status.to_string(),
-            orbit_core::resolved_ship_mode(workspace)
+            orbit_core::app::run::resolved_ship_mode(workspace)
                 .as_input_value()
                 .to_string(),
             owner.to_string(),

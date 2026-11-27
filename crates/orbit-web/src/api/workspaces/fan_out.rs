@@ -61,8 +61,9 @@ pub(in crate::api) fn read_opened<T>(
     query: impl FnOnce(
         &orbit_core::Core,
         &[&orbit_core::Core],
-    ) -> Result<Vec<Result<T, orbit_core::OrbitError>>, orbit_core::OrbitError>,
-) -> Result<Vec<Result<T, String>>, orbit_core::OrbitError> {
+    )
+        -> Result<Vec<Result<T, orbit_common::OrbitError>>, orbit_common::OrbitError>,
+) -> Result<Vec<Result<T, String>>, orbit_common::OrbitError> {
     let cores: Vec<_> = opened
         .iter()
         .filter_map(|entry| entry.as_ref().ok().map(AsRef::as_ref))
@@ -80,7 +81,7 @@ pub(in crate::api) fn read_opened<T>(
                 .next()
                 .map(|value| value.map_err(|error| error.to_string()))
                 .ok_or_else(|| {
-                    orbit_core::OrbitError::Execution("missing workspace query result".into())
+                    orbit_common::OrbitError::Execution("missing workspace query result".into())
                 }),
         })
         .collect()

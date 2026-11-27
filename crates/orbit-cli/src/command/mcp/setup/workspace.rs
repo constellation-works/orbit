@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, global_root_for};
 use orbit_common::Env;
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{WorkspaceCheckout, WorkspaceRegistry};
 
@@ -85,7 +85,7 @@ fn explicit_orbit_root(
                 .filter(|value| !value.trim().is_empty())
                 .map(std::borrow::Cow::Borrowed)
         });
-    raw.map(|raw| orbit_core::runtime::resolve_root_path_value(env, &raw, cwd))
+    raw.map(|raw| orbit_core::app::workspace::resolve_root_path_value(env, &raw, cwd))
         .transpose()
 }
 

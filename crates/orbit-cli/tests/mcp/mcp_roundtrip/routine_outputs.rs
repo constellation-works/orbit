@@ -102,7 +102,7 @@ fn routine_command_results_survive_failure_and_resume_without_becoming_completed
 
     // Historical successful commands stored the captured streams but no tail.
     // Start with this real command's checkpoint, rather than inventing output.
-    let runtime = orbit_core::OrbitRuntime::from_roots(
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &workspace.home.join(".orbit"),
         &workspace.work.join(".orbit"),
     )

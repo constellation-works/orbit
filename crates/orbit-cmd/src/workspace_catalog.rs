@@ -13,10 +13,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_common::{Env, OrbitError};
-use orbit_core::composition::Opening;
-use orbit_core::runtime::RuntimeKernel;
-use orbit_core::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
+use orbit_core::app::workspace::Opening;
 use orbit_registry::workspace_registry;
+use orbit_runtime::RuntimeKernel;
+use orbit_runtime::workspace::catalog::{
+    FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope,
+};
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 
 use crate::registry_runtime::RegisteredRuntimeFactory;
@@ -63,7 +65,7 @@ impl RegistryWorkspaceCatalog {
     pub fn new(global_root: impl Into<PathBuf>) -> Self {
         Self {
             global_root: global_root.into(),
-            env: orbit_core::composition::captured_env()
+            env: orbit_core::app::host::captured_env()
                 .cloned()
                 .unwrap_or_default(),
             resolved: Arc::new(Mutex::new(BTreeMap::new())),
@@ -131,9 +133,8 @@ impl RegistryWorkspaceCatalog {
 impl WorkspaceCatalog for RegistryWorkspaceCatalog {
     fn attention_registered_hosts(
         &self,
-    ) -> Result<Vec<orbit_core::runtime::workspace::catalog::RegisteredAttentionHost>, OrbitError>
-    {
-        use orbit_core::runtime::workspace::catalog::RegisteredAttentionHost;
+    ) -> Result<Vec<orbit_runtime::workspace::catalog::RegisteredAttentionHost>, OrbitError> {
+        use orbit_runtime::workspace::catalog::RegisteredAttentionHost;
         let registry = orbit_registry::hosts::load_host_registry(&self.global_root)?;
         Ok(registry
             .hosts()
@@ -151,7 +152,7 @@ impl WorkspaceCatalog for RegistryWorkspaceCatalog {
 
     fn attention_doctor_checks(
         &self,
-        runtime: &orbit_core::runtime::RuntimeKernel,
+        runtime: &orbit_runtime::RuntimeKernel,
     ) -> Result<Option<Vec<orbit_types::tool::AttentionHealthCheck>>, OrbitError> {
         use orbit_core::app::doctor::{WorkspaceDoctorStatus, kernel_workspace_doctor};
         Ok(Some(

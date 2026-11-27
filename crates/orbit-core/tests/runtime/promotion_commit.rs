@@ -1,8 +1,8 @@
 //! A promotion that also records attribution publishes one durable commit.
 
 use chrono::Utc;
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, TaskStatus};

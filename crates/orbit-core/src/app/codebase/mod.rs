@@ -23,7 +23,13 @@ use super::exec::{self, App, Operation};
 use super::tool_call;
 pub use super::tool_call::Input;
 use crate::Core;
-use crate::application::codebase::{CodebaseFacts, CodebaseQuery};
+
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::application::codebase::{
+    CodebaseFacts, CodebaseQuery, DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill,
+    RegressionFilter, RelatedQuery, TaskRiskinessModel, codebase_analytics, codebase_path_detail,
+    codebase_related,
+};
 
 /// What the codebase app can be asked to do.
 pub enum Command {
