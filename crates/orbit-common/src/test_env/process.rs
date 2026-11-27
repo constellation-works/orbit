@@ -198,6 +198,10 @@ pub fn ps_denied_deferral_notice(test: &str, reason: &str) -> String {
 /// Write [`ps_denied_deferral_notice`] straight to this process's stderr,
 /// past the test harness's output capture, so a passing test's deferral shows
 /// in any run's output, with or without `--nocapture`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "ps-denied deferrals bypass libtest capture so they show with or without --nocapture"
+)]
 pub fn report_ps_denied(test: &str, reason: &str) {
     use std::io::Write;
     let _ = writeln!(
