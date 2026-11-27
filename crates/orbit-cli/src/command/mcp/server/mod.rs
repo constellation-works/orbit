@@ -11,5 +11,5 @@ mod serve;
 
 pub(crate) use serve::{ID_RESOLVED_WORKSPACE_TOOLS, federated_aggregate_client};
 pub(super) use serve::{
-    StdioLaunch, serve_mcp_federated_stdio, serve_mcp_listener, serve_mcp_stdio,
+    McpServerConfig, StdioLaunch, serve_mcp_federated_stdio, serve_mcp_listener, serve_mcp_stdio,
 };

@@ -227,18 +227,21 @@ impl ServeArgs {
                     )?
                 };
                 super::server::serve_mcp_stdio(
-                    global_root,
-                    self.remote_caller_machine_id,
-                    requested_authority(self.operator),
-                    self.workspace
-                        .or_else(|| resolved.managed_workspace().map(ToOwned::to_owned)),
-                    self.orchestrator,
+                    super::server::McpServerConfig {
+                        global_root,
+                        remote_caller_machine_id: self.remote_caller_machine_id,
+                        authority: requested_authority(self.operator),
+                        bound_workspace: self
+                            .workspace
+                            .or_else(|| resolved.managed_workspace().map(ToOwned::to_owned)),
+                        bound_orchestrator: self.orchestrator,
+                        toolsets,
+                        worker_invocation: worker,
+                    },
                     super::server::StdioLaunch {
                         internal_drain: self.internal_drain,
                         worker_host: self.worker_host,
                     },
-                    toolsets,
-                    worker,
                     env,
                 )?
             }

@@ -35,34 +35,37 @@ pub(in super::super) struct StdioLaunch {
     pub(in super::super) worker_host: bool,
 }
 
+/// Configuration for composing one local MCP server and its trusted session
+/// envelope.
+pub(in crate::command::mcp) struct McpServerConfig {
+    /// Global Orbit root holding machine identity and host registry state.
+    pub(in crate::command::mcp) global_root: PathBuf,
+    /// Caller machine label forwarded by Orbit's SSH routes, if any.
+    pub(in crate::command::mcp) remote_caller_machine_id: Option<String>,
+    /// Authority granted to sessions this server answers.
+    pub(in crate::command::mcp) authority: McpSessionAuthority,
+    /// Optional default workspace selector bound at launch.
+    pub(in crate::command::mcp) bound_workspace: Option<String>,
+    /// Optional default orchestrator attribution selector bound at launch.
+    pub(in crate::command::mcp) bound_orchestrator: Option<String>,
+    /// Toolsets this server advertises.
+    pub(in crate::command::mcp) toolsets: McpToolsetSelection,
+    /// Managed worker invocation context, when launched by a worker.
+    pub(in crate::command::mcp) worker_invocation: Option<WorkerInvocation>,
+}
+
 /// Serve one stdio MCP session.
 ///
 /// This is the entry point an SSH caller reaches, and its `--operator` is a
 /// statement there exactly as it is locally: the caller composed that argv over
 /// an SSH login to this machine, which is ownership of it, so there is no
 /// second authorization for the destination to make [ORB-12564].
-#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn serve_mcp_stdio(
-    global_root: PathBuf,
-    remote_caller_machine_id: Option<String>,
-    authority: McpSessionAuthority,
-    bound_workspace: Option<String>,
-    bound_orchestrator: Option<String>,
+    config: McpServerConfig,
     launch: StdioLaunch,
-    toolsets: McpToolsetSelection,
-    worker_invocation: Option<WorkerInvocation>,
     env: &Env,
 ) -> Result<(), OrbitError> {
-    let (host, mut session_context) = compose_server(
-        global_root,
-        remote_caller_machine_id,
-        authority,
-        bound_workspace,
-        bound_orchestrator,
-        toolsets,
-        worker_invocation,
-        env,
-    )?;
+    let (host, mut session_context) = compose_server(config, env)?;
     session_context.worker_host_call = launch.worker_host;
     let exit = if launch.internal_drain {
         block_on_server(orbit_mcp::serve_internal_drain_stdio(
@@ -298,13 +301,15 @@ pub(in super::super) fn serve_mcp_listener(
     // only when its local user id matches this process; that check does not
     // make the listener an operator session [ORB-12564].
     let (host, session_context) = compose_server(
-        global_root,
-        None,
-        McpSessionAuthority::Agent,
-        bound_workspace,
-        None,
-        toolsets,
-        worker_invocation,
+        McpServerConfig {
+            global_root,
+            remote_caller_machine_id: None,
+            authority: McpSessionAuthority::Agent,
+            bound_workspace,
+            bound_orchestrator: None,
+            toolsets,
+            worker_invocation,
+        },
         env,
     )?;
     block_on_server(async move {
@@ -327,30 +332,27 @@ pub(in super::super) fn serve_mcp_listener(
 /// trusted `ORBIT_WORKSPACE` envelope. It is still just a selector: it is
 /// resolved against this machine's registry on every call and overridden by an
 /// explicit per-call `workspace`.
-#[allow(clippy::too_many_arguments)]
 fn compose_server(
-    global_root: PathBuf,
-    remote_caller_machine_id: Option<String>,
-    authority: McpSessionAuthority,
-    bound_workspace: Option<String>,
-    bound_orchestrator: Option<String>,
-    toolsets: McpToolsetSelection,
-    worker_invocation: Option<WorkerInvocation>,
+    config: McpServerConfig,
     env: &Env,
 ) -> Result<(Arc<dyn McpHost>, ToolSessionContext), OrbitError> {
-    let mut identity =
-        orbit_mcp::mcp_server_identity(&global_root, remote_caller_machine_id, authority, env)?;
-    identity.session_context.worker_invocation = worker_invocation;
+    let mut identity = orbit_mcp::mcp_server_identity(
+        &config.global_root,
+        config.remote_caller_machine_id,
+        config.authority,
+        env,
+    )?;
+    identity.session_context.worker_invocation = config.worker_invocation;
     if identity.session_context.worker_invocation.is_some() {
         identity
             .session_context
             .effective_capabilities
             .remove(&orbit_types::tool::McpCapability::Operator);
     }
-    identity.session_context.workspace = normalized_selector(bound_workspace);
-    identity.session_context.orchestrator = normalized_selector(bound_orchestrator);
+    identity.session_context.workspace = normalized_selector(config.bound_workspace);
+    identity.session_context.orchestrator = normalized_selector(config.bound_orchestrator);
     let host: Arc<dyn McpHost> = Arc::new(ServerMcpHost::new(
-        global_root.clone(),
+        config.global_root.clone(),
         identity.process_machine_id.clone(),
         identity.process_machine_name,
         env,
@@ -358,12 +360,12 @@ fn compose_server(
     let host = with_claimed_owner_bridge(
         host,
         &identity.session_context,
-        &global_root,
+        &config.global_root,
         &identity.process_machine_id,
         env,
     );
     Ok((
-        orbit_mcp::with_mcp_toolsets(host, toolsets),
+        orbit_mcp::with_mcp_toolsets(host, config.toolsets),
         identity.session_context,
     ))
 }
