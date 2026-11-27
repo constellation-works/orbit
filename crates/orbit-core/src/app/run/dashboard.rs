@@ -55,7 +55,8 @@ use crate::{
 macro_rules! dashboard_reads {
     ($(
         $(#[$doc:meta])*
-        $name:ident($($arg:ident: $ty:ty),* $(,)?) -> $out:ty = $subcommand:literal, |$rt:ident| $body:expr;
+        $name:ident($($arg:ident: $ty:ty),* $(,)?) -> $out:ty = $subcommand:literal,
+        |$rt:ident| $body:expr;
     )*) => {$(
         impl<'a> Command<'a, $out> {
             $(#[$doc])*

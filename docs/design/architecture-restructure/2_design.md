@@ -178,7 +178,7 @@ pub(crate) fn run<A: App>(core: &Core, command: A::Command) -> Result<A::Outcome
 - **`Operation` in three parts:** its identity (command, subcommand, tool row), what it requires, and how its row is attributed (target, run, role, the declared row). `admit` reads the first two and `audit` the first and third, so an option added for one stage is not in the other's way.
 - **`App` shrinks** to `operation`, `run`, `exit_code` and the session's audit hooks: `session_audit`, which only the task app implements, and `dashboard_row`. The task app's two former hooks fold into its writer.
 - **It is a move plus one error variant.** Every audit row keeps its fields and every refusal its text. The frozen surface fixtures and `crates/orbit-web/tests/http_api/guards.rs` are the net.
-- **When.** Built in [ORB-28970], after [ORB-28407] and [ORB-28962]; [ORB-28415] followed it and removed `orbit-web`'s own copy of the dashboard row (`OperationAudit`): the script grant and the routine breaker now declare their row on the command.
+- **When.** Built in [ORB-28970], after [ORB-28407] and [ORB-28962]; [ORB-28415] followed it and removed `orbit-web`'s own copy of the dashboard row: the script grant and the routine breaker now declare their row on the command.
 
 **Where delivery differs.**
 

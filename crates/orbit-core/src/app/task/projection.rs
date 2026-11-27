@@ -329,7 +329,11 @@ pub(super) fn task_detail_json(
                     object.insert("published_candidate".to_string(), Value::Bool(published));
                 }
                 Err(error) => {
-                    tracing::warn!(%error, task_id = %row.task.id, "task candidate evidence unreadable");
+                    tracing::warn!(
+                        %error,
+                        task_id = %row.task.id,
+                        "task candidate evidence unreadable"
+                    );
                 }
             }
         }

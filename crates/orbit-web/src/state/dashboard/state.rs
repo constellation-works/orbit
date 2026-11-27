@@ -17,10 +17,10 @@ use super::super::{
     RegistryFingerprint, RegistrySource, SINGLE_WORKSPACE_ID, Snapshot, SnapshotData, WsEntry,
     WsRejection, checkout_fingerprints,
 };
-use super::super::{HostTunnels, TunnelConfig, run_read};
 use super::cache::CachedRuntime;
 use crate::doctor_report::DoctorReports;
 use crate::runtime_memo::RuntimeMemo;
+use crate::state::{HostTunnels, TunnelConfig, run_read};
 
 /// Test override for native clock status reads.
 #[cfg(test)]

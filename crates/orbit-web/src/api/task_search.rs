@@ -60,7 +60,10 @@ pub(super) async fn search_dashboard_tasks(
                     continue;
                 }
             };
-            let mut candidates = match run_read(&runtime, RunCommand::task_candidates(&filter, usize::MAX)) {
+            let mut candidates = match run_read(
+                &runtime,
+                RunCommand::task_candidates(&filter, usize::MAX),
+            ) {
                 Ok(page) => page.items,
                 Err(error) => {
                     tracing::warn!(workspace = %entry.id, %error, "dashboard search skipped a workspace");

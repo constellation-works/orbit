@@ -372,6 +372,25 @@ impl RegisteredRuntimeFactory {
             .map(|runtime| Self::core_for_service(runtime.with_workspace_explicitly_selected(true)))
     }
 
+    /// Open a resolved checkout as the [`orbit_core::Core`] a long-lived
+    /// server keeps for it.
+    pub fn open_resolved_checkout_core_for(
+        global_root: &Path,
+        shared_root: &Path,
+        local_root: &Path,
+        binding: WorkspaceRuntimeBinding,
+        host_lifetime: HostLifetime,
+    ) -> Result<orbit_core::Core, OrbitError> {
+        Self::open_resolved_checkout_for(
+            global_root,
+            shared_root,
+            local_root,
+            binding,
+            host_lifetime,
+        )
+        .map(Self::core_for_service)
+    }
+
     /// Normalize an explicit CLI owner selector without changing the opened core.
     ///
     /// Registered names, logical IDs and paths must resolve to the selected
@@ -870,25 +889,6 @@ impl RegisteredRuntimeFactory {
                 registry,
             )
         })
-    }
-
-    /// Open a resolved checkout as the [`orbit_core::Core`] a long-lived
-    /// server keeps for it.
-    pub fn open_resolved_checkout_core_for(
-        global_root: &Path,
-        shared_root: &Path,
-        local_root: &Path,
-        binding: WorkspaceRuntimeBinding,
-        host_lifetime: HostLifetime,
-    ) -> Result<orbit_core::Core, OrbitError> {
-        Self::open_resolved_checkout_for(
-            global_root,
-            shared_root,
-            local_root,
-            binding,
-            host_lifetime,
-        )
-        .map(Self::core_for_service)
     }
 
     pub fn open_resolved_checkout_for(

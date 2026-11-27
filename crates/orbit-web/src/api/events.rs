@@ -104,6 +104,34 @@ struct WorkspaceWatch {
 }
 
 impl WorkspaceWatch {
+    /// Notices a reconnect missed since `resume`, read after the first scan:
+    /// each task and run stamped since then, and `locks`. An unreadable or
+    /// future id, a failed read, or more than [`MAX_NOTICES_PER_SCAN`] notices
+    /// is one `resync`.
+    fn replay(&self, runtime: &Core, resume: Option<DateTime<Utc>>) -> Vec<Value> {
+        let Some(resume) = resume.filter(|at| *at <= self.scanned_at) else {
+            return vec![resync_notice("unknown_event_id")];
+        };
+        let since = resume - Duration::seconds(RESUME_SLACK_SECONDS);
+        let Some(tasks) = self.tasks.as_ref().map(|baseline| &baseline.by_id) else {
+            return vec![resync_notice("unavailable")];
+        };
+        let Ok(runs) = run_read(runtime, RunCommand::state_stamps(since)) else {
+            return vec![resync_notice("unavailable")];
+        };
+        let mut notices = tasks
+            .iter()
+            .filter(|(_, (_, updated_at))| *updated_at >= since)
+            .map(|(id, (status, updated_at))| task_notice(id, Some(*status), Some(*updated_at)))
+            .collect::<Vec<_>>();
+        notices.extend(runs.iter().map(run_notice));
+        notices.push(json!({"kind": "locks"}));
+        if notices.len() > MAX_NOTICES_PER_SCAN {
+            return vec![resync_notice("too_many_changes")];
+        }
+        notices
+    }
+
     /// Compare the store with the previous scan and name what changed. A read
     /// that fails keeps its previous baseline, so its changes surface on the
     /// next scan that reads it.
@@ -253,34 +281,6 @@ impl WorkspaceWatch {
         }
 
         self.scanned_at = started;
-        notices
-    }
-
-    /// Notices a reconnect missed since `resume`, read after the first scan:
-    /// each task and run stamped since then, and `locks`. An unreadable or
-    /// future id, a failed read, or more than [`MAX_NOTICES_PER_SCAN`] notices
-    /// is one `resync`.
-    fn replay(&self, runtime: &Core, resume: Option<DateTime<Utc>>) -> Vec<Value> {
-        let Some(resume) = resume.filter(|at| *at <= self.scanned_at) else {
-            return vec![resync_notice("unknown_event_id")];
-        };
-        let since = resume - Duration::seconds(RESUME_SLACK_SECONDS);
-        let Some(tasks) = self.tasks.as_ref().map(|baseline| &baseline.by_id) else {
-            return vec![resync_notice("unavailable")];
-        };
-        let Ok(runs) = run_read(runtime, RunCommand::state_stamps(since)) else {
-            return vec![resync_notice("unavailable")];
-        };
-        let mut notices = tasks
-            .iter()
-            .filter(|(_, (_, updated_at))| *updated_at >= since)
-            .map(|(id, (status, updated_at))| task_notice(id, Some(*status), Some(*updated_at)))
-            .collect::<Vec<_>>();
-        notices.extend(runs.iter().map(run_notice));
-        notices.push(json!({"kind": "locks"}));
-        if notices.len() > MAX_NOTICES_PER_SCAN {
-            return vec![resync_notice("too_many_changes")];
-        }
         notices
     }
 }
