@@ -37,6 +37,18 @@ impl<T: NullRuntimeHost> HostEnvironment for T {
         NullRuntimeHost::outstanding_owed_criteria(self, task_id, run_id)
     }
 
+    fn required_validation_commands(&self) -> Vec<String> {
+        NullRuntimeHost::required_validation_commands(self)
+    }
+
+    fn review_baseline_commands(&self) -> Vec<String> {
+        NullRuntimeHost::review_baseline_commands(self)
+    }
+
+    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
+        NullRuntimeHost::validation_gates(self)
+    }
+
     fn record_validated_tree(
         &self,
         tree: &crate::context::ValidatedTree,

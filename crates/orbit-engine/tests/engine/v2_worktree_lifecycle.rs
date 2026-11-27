@@ -922,17 +922,6 @@ impl LifecycleHost {
 impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
     fn run_settings(&self) -> orbit_engine::RunSettings {
         orbit_engine::RunSettings {
-            validation_gates: orbit_types::workflow::HostValidationGates {
-                gates: orbit_types::workflow::ValidationGates {
-                    required_validation_commands: self.required_commands.lock().unwrap().clone(),
-                    baseline_commands: Vec::new(),
-                    light_delivery_paths: None,
-                    review_skip_tags: None,
-                },
-                source: self
-                    .gate_source
-                    .unwrap_or(orbit_types::workflow::ValidationGateSource::LocalConfig),
-            },
             workspace_base_branch: BASE.to_string(),
             unlocked_path_validation: self.unlocked_validation.lock().unwrap().clone(),
             generated_paths: self.generated_paths.lock().unwrap().clone(),
@@ -1094,6 +1083,24 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
 
     fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
         Ok(stored_record(&self.run_states, run_id))
+    }
+
+    fn required_validation_commands(&self) -> Vec<String> {
+        self.required_commands.lock().unwrap().clone()
+    }
+
+    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
+        orbit_types::workflow::HostValidationGates {
+            gates: orbit_types::workflow::ValidationGates {
+                required_validation_commands: self.required_commands.lock().unwrap().clone(),
+                baseline_commands: Vec::new(),
+                light_delivery_paths: None,
+                review_skip_tags: None,
+            },
+            source: self
+                .gate_source
+                .unwrap_or(orbit_types::workflow::ValidationGateSource::LocalConfig),
+        }
     }
 
     fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {

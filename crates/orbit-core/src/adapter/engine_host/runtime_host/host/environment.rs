@@ -22,7 +22,6 @@ impl HostEnvironment for OrbitRuntime {
     fn run_settings(&self) -> RunSettings {
         let settings = self.settings();
         RunSettings {
-            validation_gates: self.host_validation_gates(),
             completion_hold_rules: crate::runtime::RuntimeKernel::completion_hold_rules(self)
                 .to_vec(),
             workspace_base_branch: crate::runtime::RuntimeKernel::workspace_base_branch(self)
@@ -84,6 +83,20 @@ impl HostEnvironment for OrbitRuntime {
         run_id: Option<&str>,
     ) -> Result<Vec<usize>, OrbitError> {
         validation::outstanding_owed_criteria(self, task_id, run_id)
+    }
+
+    fn required_validation_commands(&self) -> Vec<String> {
+        self.host_validation_gates()
+            .gates
+            .required_validation_commands
+    }
+
+    fn review_baseline_commands(&self) -> Vec<String> {
+        self.host_validation_gates().gates.baseline_commands
+    }
+
+    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
+        self.host_validation_gates()
     }
 
     fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {

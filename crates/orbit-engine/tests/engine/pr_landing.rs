@@ -1605,14 +1605,6 @@ impl DeliveryHost {
 impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
     fn run_settings(&self) -> orbit_engine::RunSettings {
         orbit_engine::RunSettings {
-            validation_gates: orbit_types::workflow::HostValidationGates::local(
-                orbit_types::workflow::ValidationGates {
-                    required_validation_commands: locked(&self.required_commands).clone(),
-                    baseline_commands: locked(&self.baseline_commands).clone(),
-                    light_delivery_paths: None,
-                    review_skip_tags: None,
-                },
-            ),
             completion_hold_rules: locked(&self.completion_hold_rules).clone(),
             host_os: *locked(&self.os),
             validation_build_output_env: HostEnvironment::validation_subprocess_environment(self)
@@ -1621,6 +1613,12 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             pr_config: locked(&self.pr_config).clone(),
             ..orbit_engine::RunSettings::default()
         }
+    }
+    fn required_validation_commands(&self) -> Vec<String> {
+        locked(&self.required_commands).clone()
+    }
+    fn review_baseline_commands(&self) -> Vec<String> {
+        locked(&self.baseline_commands).clone()
     }
     fn get_job_run(&self, run_id: &str) -> Res<Option<JobRun>> {
         Ok(locked(&self.runs).get(run_id).cloned())
@@ -2121,10 +2119,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             ship_mode: locked(&self.ship_mode).clone(),
             base_branch: BASE.to_string(),
             landing_branch: BASE.to_string(),
-            required_commands: HostEnvironment::run_settings(self)
-                .validation_gates
-                .gates
-                .required_validation_commands,
+            required_commands: HostEnvironment::required_validation_commands(self),
         })
     }
     fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Res<()> {

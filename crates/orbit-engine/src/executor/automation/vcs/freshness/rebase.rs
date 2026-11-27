@@ -137,8 +137,7 @@ pub(in crate::executor::automation) fn rebase_pr_branch<H: RuntimeHost + ?Sized>
         Err(OrbitError::CandidateAbsorbed(candidate))
             if input.get("final_validation").and_then(Value::as_bool) == Some(true)
                 && host
-                    .run_settings()
-                    .validation_gates
+                    .validation_gates()
                     .captured_required_commands()
                     .is_some()
                 && !context

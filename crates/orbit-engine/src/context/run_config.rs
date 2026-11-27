@@ -10,9 +10,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::{
-    CompletionHoldRule, EvidenceHostOs, HostValidationGates, ValidationGates,
-};
+use orbit_types::workflow::{CompletionHoldRule, EvidenceHostOs};
 
 use crate::context::{AGENT_STALL_MINUTES, GeneratedPath, PrConfig, UnlockedPathValidation};
 
@@ -28,12 +26,6 @@ const DEFAULT_WORKTREE_RECLAIM_PATTERNS: [&str; 3] =
 /// rather than invoking individual configuration getters on the host trait.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunSettings {
-    /// Commands and review baselines this host holds a candidate to, with
-    /// provenance (`workflow.required_validation_commands`,
-    /// `review.baseline_commands`, `workflow.light_delivery_paths`,
-    /// `workflow.review_skip_tags`; or the owner's captured gates on a
-    /// claimed leaf).
-    pub validation_gates: HostValidationGates,
     /// `completion.hold`: admitted rules, in configured order, that keep a
     /// completion-authorized run's task in `review`. Empty holds nothing.
     pub completion_hold_rules: Vec<CompletionHoldRule>,
@@ -99,29 +91,11 @@ impl RunSettings {
             OrbitError::Execution("runtime host capability 'repo_root' is unavailable".into())
         })
     }
-
-    /// Commands every delivered candidate must pass
-    /// (`validation_gates.gates.required_validation_commands`).
-    pub fn required_validation_commands(&self) -> &[String] {
-        &self.validation_gates.gates.required_validation_commands
-    }
-
-    /// The owner's review baseline commands
-    /// (`validation_gates.gates.baseline_commands`).
-    pub fn review_baseline_commands(&self) -> &[String] {
-        &self.validation_gates.gates.baseline_commands
-    }
 }
 
 impl Default for RunSettings {
     fn default() -> Self {
         Self {
-            validation_gates: HostValidationGates::local(ValidationGates {
-                required_validation_commands: Vec::new(),
-                baseline_commands: Vec::new(),
-                light_delivery_paths: None,
-                review_skip_tags: None,
-            }),
             completion_hold_rules: Vec::new(),
             workspace_base_branch: "main".to_string(),
             unlocked_path_validation: UnlockedPathValidation::default(),
