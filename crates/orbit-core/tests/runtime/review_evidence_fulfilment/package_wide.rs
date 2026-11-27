@@ -905,6 +905,41 @@ fn opaque_affected_test_record_names_all_uncovered_deferrals() {
     }
 }
 
+fn opaque_required_deferrals_are_reported_without_named_evidence() {
+    let make = "CI_TEST_BASE=be2bcfec0caa9e97cec61461bfe4a076bf5721d9 make ci-test-affected";
+    let notice = "DEFERRED: bubblewrap unavailable: sandbox_test_1: namespace unavailable";
+    let (fixture, _bin) = fixture();
+    fixture.put_report(&json!({
+        "schema_version": 1,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "incomplete",
+        "summary": "The opaque package check deferred a sandbox test.",
+        "findings": [],
+        "validation": [
+            {"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"},
+            {"id": "V8", "command": make, "outcome": "passed", "role": "required",
+             "deferred": [notice]},
+        ],
+        "external_evidence": [],
+    }));
+
+    let stop = fixture
+        .settle()
+        .expect_err("an opaque required deferral stays blocked")
+        .to_string();
+    let cert = certificate(&fixture);
+    let escalation = cert.escalation.as_deref().unwrap_or_default();
+    for text in ["`V8`", make, notice] {
+        assert!(
+            escalation.contains(text) && stop.contains(text),
+            "{text}: escalation={escalation}; stop={stop}"
+        );
+    }
+    assert_eq!(broad_record(&cert, make).deferred, [notice]);
+    assert!(cert.host_evidence.is_empty());
+    assert!(!cert.verdict.passed());
+}
+
 /// A captured host-required opaque command must itself be established, so
 /// its escalation gives the native rerun and never the fresh Cargo-record route.
 fn host_required_opaque_deferral_offers_only_the_native_rerun() {
@@ -1095,6 +1130,7 @@ crate::scenario_table!(
     budgeted_library_v9_v12_pair_holds_and_settles_with_authenticated_linux_evidence,
     unreconciled_v9_v12_library_pairs_refuse_and_name_v9_with_runnable_route,
     opaque_affected_test_record_names_all_uncovered_deferrals,
+    opaque_required_deferrals_are_reported_without_named_evidence,
     host_required_opaque_deferral_offers_only_the_native_rerun,
     integration_deferral_with_lib_requirement_skips_library_diagnostic,
 );

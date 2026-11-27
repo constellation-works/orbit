@@ -40,13 +40,16 @@ impl Judgement {
             repair,
             scope,
         } = inputs;
-        if context.task_ids.len() != 1
-            || self.external_evidence.is_empty()
-            || self.has_open_findings()
-        {
+        if context.task_ids.len() != 1 || self.has_open_findings() {
             return Ok(());
         }
         let owners = CargoOwners::at(&context.workspace_path, &candidate.tree);
+        if self.external_evidence.is_empty() {
+            if self.verdict == ReviewVerdict::Incomplete {
+                self.record_unreconciled_library_deferrals(&owners);
+            }
+            return Ok(());
+        }
         let Some(requirements) =
             crate::application::review::evidence::canonical_requirements(&self.external_evidence)
         else {
