@@ -10,7 +10,9 @@ use crate::workflow::PROVIDER_LIMIT_MARKER;
 
 /// Message fragments that mark a documented negative path. Most mirror an
 /// `OrbitError` variant's `Display` rendering in `orbit-common`; the
-/// auto-fix marker identifies a held stop recorded by the pipeline worker.
+/// auto-fix marker identifies a held stop recorded by the pipeline worker,
+/// as does the stale-base marker for a `delivery_stale_branch` worktree
+/// setup refusal whose audit row carries no typed code.
 /// Matching is lowercase substring, so a wrapped/prefixed message still
 /// classifies.
 const EXPECTED_FAILURE_MARKERS: &[&str] = &[
@@ -26,6 +28,7 @@ const EXPECTED_FAILURE_MARKERS: &[&str] = &[
     "artifact unavailable",
     "companion not installed",
     "auto_fix_stopped:",
+    "worktree setup refusing stale base:",
 ];
 
 /// Reporting surface of a bare `orbit doctor` audit row (no tool name).

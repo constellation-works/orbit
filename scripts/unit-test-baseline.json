@@ -722,6 +722,7 @@
         "telemetry/incident/tests/classify.rs::auto_fix_stops_are_expected_but_genuine_pr_complete_failures_stay_unexpected",
         "telemetry/incident/tests/classify.rs::deferral_rows_and_provider_usage_limits_classify_as_deferred",
         "telemetry/incident/tests/classify.rs::doctor_findings_are_expected_but_a_doctor_crash_stays_unexpected",
+        "telemetry/incident/tests/classify.rs::stale_base_refusals_are_expected_but_unrelated_setup_failures_stay_unexpected",
         "telemetry/incident/tests/grouping.rs::cached_citations_preserve_recorded_folds_and_combinatorial_precedence"
       ]
     },
