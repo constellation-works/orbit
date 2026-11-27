@@ -57,6 +57,8 @@ provider = "claude"
 model = "opus-model"
 "#;
 
+const HOLD_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// The control arm keeps ordinary routing; `cheap-pool` runs luna.
 fn started_crew_experiment(runtime: &OrbitRuntime) -> String {
     let actor = ExperimentActor {
@@ -798,8 +800,6 @@ fn submit_and_cancel_before_the_worker_settles(
     release.send(()).unwrap();
     submitted.run_id
 }
-
-const HOLD_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// [ORB-19602] The backfill skips a latest run cancelled before it
 /// implemented: its crew selection never ran, so it must not replace the
