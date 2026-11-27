@@ -52,7 +52,8 @@ pub mod schedule_edit;
 pub mod scheduler;
 pub mod settings;
 pub mod state;
-pub mod step_observation;
+
+mod step_observation;
 pub mod toggle;
 
 #[cfg(feature = "test-support")]
