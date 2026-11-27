@@ -188,7 +188,7 @@ is not a sufficient deployment.
   in a home the operator cannot write.
 - The deployment contract for "agents cannot mint tokens" is the prerequisite above. The
   disposable-guest recipe
-  [path-leases-listener-sudo.md](../../dev/qa/path-leases-listener-sudo.md) shows a warmed
+  [path-leases-listener-sudo.md](../../agents/records/qa/path-leases-listener-sudo.md) shows a warmed
   timestamp being reused and the unattended denial under `timestamp_timeout=0`.
 - Rejected alternatives: treating "sudo asks for a password" as the boundary; requiring the
   documented command to include `sudo -k`; scoping `timestamp_timeout=0` only to the listener

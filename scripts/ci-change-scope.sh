@@ -12,7 +12,7 @@
 #             docs/design/auto-tasks/1_overview.md and the configuration
 #             reference page, so those prefixes are not a docs-only run.
 #             scripts/test-* self-tests execute or digest RELEASING.md,
-#             npm/README.md and docs/dev/qa/path-leases-listener-sudo.md, and
+#             npm/README.md and docs/agents/records/qa/path-leases-listener-sudo.md, and
 #             ci-guardrails.sh selects its self-tests for docs/standards/*,
 #             AGENTS.md and CLAUDE.md (the vendored-standards guard); none of
 #             these are FILE_READERS entries, so each is not a docs-only run
@@ -83,7 +83,7 @@ docs_only() {
       # ci-guardrails.sh also runs its self-tests for docs/standards/*,
       # AGENTS.md and CLAUDE.md (test_ci_gates_reject_modified_vendored_standards).
       # These are not FILE_READERS entries.
-      RELEASING.md | npm/README.md | docs/dev/qa/path-leases-listener-sudo.md | \
+      RELEASING.md | npm/README.md | docs/agents/records/qa/path-leases-listener-sudo.md | \
         docs/standards/* | AGENTS.md | CLAUDE.md) return 1 ;;
       *.md)
         # Exact file or any Markdown under a directory prefix. Derived from

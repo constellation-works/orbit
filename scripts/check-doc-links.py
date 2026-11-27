@@ -18,7 +18,7 @@ EXCLUSIONS = (
     "docs/design/*/4_decisions.md",
     "docs/design/_templates/*",
     "docs/design/CONVENTIONS.md",
-    "docs/dev/rca/*",
+    "docs/agents/records/rca/*",
     "CHANGELOG.md",
     "crates/*/tests/fixtures/*",
     # Read-only copies vendored from the constellation canon by sync-standards.sh.

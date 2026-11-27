@@ -269,7 +269,7 @@ The two independent, handwritten examples are version controlled and disabled:
 | Source | Owner installation path |
 | --- | --- |
 | `crates/orbit-core/assets/jobs/examples/release_readiness.yaml` | `.orbit/resources/jobs/release-readiness.yaml` |
-| `docs/dev/examples/release-readiness/routines/release-readiness.yaml` | `.orbit/routines/release-readiness.yaml` |
+| `docs/development/examples/release-readiness/routines/release-readiness.yaml` | `.orbit/routines/release-readiness.yaml` |
 
 The current catalog loads jobs from `.orbit/resources/jobs/`; the earlier
 illustrative `.orbit/jobs/` path is not a catalog installation directory.
@@ -354,7 +354,7 @@ compatible deployment. This task changes no live configuration or release state.
    validation, and the workspace layout must all be supported. A local load or
    explain is not fleet compatibility or deployment evidence. Older clients must
    refuse these assets, not silently drop guards.
-2. Follow [the adapter installation guide](../../../dev/examples/release-readiness/README.md).
+2. Follow [the adapter installation guide](../../../development/examples/release-readiness/README.md).
    Install its script manifest and disabled `security-review` and `release-prep`
    examples only after comparing owner overrides. Keep the repository adapter,
    inventory, QA harness, helper and macOS workflow inputs at their declared

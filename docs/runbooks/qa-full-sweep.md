@@ -39,7 +39,7 @@ usable host kit nor an applicable permitted recipe exists.
 ## Release-readiness evidence
 
 The native definition is also the full-QA target of a release-readiness job
-step, once its owner opts in. [`docs/dev/examples/release-readiness`](../dev/examples/release-readiness/README.md)
+step, once its owner opts in. [`docs/development/examples/release-readiness`](../development/examples/release-readiness/README.md)
 holds the disabled security and preparation examples, the adapter manifest and
 the `completion` block to add to the native file. There is no duplicate QA
 definition and no change to the harness or inventory.
