@@ -878,7 +878,16 @@ fn remote_access_overlapping_reads_bound_whois_waits() {
             fs::write(&script, source).unwrap();
             let config = fixture.global.join("config.toml");
             let base = fs::read_to_string(&config).unwrap();
-            fs::write(&config, format!("{base}\n[machine.web]\ntrusted_hosts = [\"dash.tailnet.ts.net\"]\ntrusted_logins = [\"alice@example.com\"]\n")).unwrap();
+            fs::write(
+                &config,
+                format!(
+                    "{base}\n\
+                    [machine.web]\n\
+                    trusted_hosts = [\"dash.tailnet.ts.net\"]\n\
+                    trusted_logins = [\"alice@example.com\"]\n"
+                ),
+            )
+            .unwrap();
             let server = fixture.server_with_path(false, &bin);
             serve_json(&bin, "dash.tailnet.ts.net", &server.origin, "127.0.0.1");
             let record = |ip: &str| {
@@ -949,10 +958,8 @@ fn remote_access_overlapping_reads_bound_whois_waits() {
                 "one subprocess per IP: {calls:?}"
             );
             gate.release().unwrap();
-            assert_eq!(
-                super::support::json_ok(first.join().unwrap())["connections"]["devices"][0]["device"],
-                "phone"
-            );
+            let first_body = super::support::json_ok(first.join().unwrap());
+            assert_eq!(first_body["connections"]["devices"][0]["device"], "phone");
 
             // All nine cached names fit even though the request budget is eight.
             let body = super::support::json_ok(server.get("/api/remote-access"));
