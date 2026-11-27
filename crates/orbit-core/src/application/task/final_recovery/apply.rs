@@ -29,6 +29,7 @@ pub(in super::super) const FINAL_RECOVERY_COMPLETED_EVENT: &str = "final_recover
 const REJECTED_EVENT: &str = "final_recovery_rejected";
 const ARCHIVED_EVENT: &str = "final_recovery_archived";
 const ESCALATED_EVENT: &str = "final_recovery_escalated";
+
 /// The one answer a held completion observation's request offers: it keeps
 /// the task blocked for this episode and applies nothing.
 const HELD_OBSERVATION_ANSWER_ID: &str = "dismiss";
