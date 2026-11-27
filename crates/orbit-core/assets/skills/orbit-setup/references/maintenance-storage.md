@@ -243,10 +243,12 @@ directory, so a confined worker reads a cached log only through the tool's
 bounded, redacted response.
 
 - **Inspection.** The cache has no command and its responses carry no hit
-flag. List the directory to see entries and the sibling lock; read `source`
-and `source_jobs` on a `github.run.logs` response to tell a run-scoped read
-from a job-log recovery; use `github.auth.status` for quota state, which is
-not cache state. Do not expect a hit indicator the tool does not report.
+flag. List `<Orbit data root>/state/github-run-logs/` to see cached entries;
+the sibling lock, `<Orbit data root>/state/github-run-logs.lock`, sits beside
+that directory under `<Orbit data root>/state/`. Read `source` and
+`source_jobs` on a `github.run.logs` response to tell a run-scoped read from a
+job-log recovery; use `github.auth.status` for quota state, which is not cache
+state. Do not expect a hit indicator the tool does not report.
 
 - **No settings.** There is nothing to configure. Do not invent keys for it.
 
