@@ -42,8 +42,9 @@ pub(super) struct DashboardRowSpec {
 pub(super) enum AuditRole {
     /// A fixed static role label (such as `"admin"`).
     Fixed(&'static str),
-    /// Resolved with `tool_run_actor_role` precedence: input identity,
-    /// `--agent`/`--model` flags, then `ORBIT_AGENT_*` env.
+    /// Resolved with `audit_role_label` precedence: with `ORBIT_AGENT_*` set,
+    /// flags > envelope > tool-JSON `model`; otherwise tool-JSON `model` >
+    /// flags.
     ToolRun {
         input: Value,
         agent: Option<String>,
@@ -237,8 +238,8 @@ impl Operation {
         self
     }
 
-    /// Resolve the command's invocation audit `role` with `tool_run_actor_role`
-    /// precedence (input identity, `--agent`/`--model` flags, then `ORBIT_AGENT_*` env).
+    /// Resolve the command's invocation audit `role` with `audit_role_label`
+    /// precedence, the same rule a plain `orbit tool run` uses.
     pub(crate) fn tool_run_audit_role(
         mut self,
         input: Value,

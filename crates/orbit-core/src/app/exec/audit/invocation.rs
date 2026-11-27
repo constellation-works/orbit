@@ -79,7 +79,7 @@ impl AuditGuard {
                     input,
                     agent,
                     model,
-                }) => crate::adapter::command::dry_run_audit_role_label(
+                }) => crate::adapter::command::audit_role_label(
                     env,
                     input,
                     agent.as_deref(),
