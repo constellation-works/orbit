@@ -214,6 +214,8 @@ task's notice with `orbit.notice.close` when it stops being true.
 
 Persist `execution_summary` via `orbit.task.update` **first**.
 
+Before handoff, record each golden or named expected result the diff changed on the task, in the execution summary: its path or test name, and the criterion or decision that justifies the new value. Reviewers check the diff against that record.
+
 Then consider friction: if the task surfaced a contradicted assumption, a
 recurring failure mode, a non-obvious gotcha, or an incident root cause, record
 it — see [friction.md](friction.md). Then:
