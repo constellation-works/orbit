@@ -11,13 +11,14 @@
 
 use clap::Args;
 use orbit_common::governance::auto_task::AutoTaskVerb;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::auto_task::{self, Command, Input};
 use serde_json::Value;
 
 use super::super::operation_args::Invocation;
 use super::prepare::prepare;
 use super::render::render;
-use crate::command::{CommandOut, Execute};
+use crate::command::{CommandOut, ExecuteCore};
 
 #[derive(Args)]
 #[command(about = orbit_common::governance::auto_task::AUTO_TASK.cli_about)]
@@ -26,8 +27,8 @@ pub struct AutoTaskCommand {
     pub command: Invocation<AutoTaskVerb>,
 }
 
-impl Execute for AutoTaskCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for AutoTaskCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         let Invocation { spec, mut input } = self.command;
         let filter = prepare(spec.verb, &mut input)?;
         let name = input
@@ -35,9 +36,10 @@ impl Execute for AutoTaskCommand {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
-        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        let value =
+            auto_task::exec(core, Command::Operation(spec.verb, Input::new(input)))?.into_value();
         let value = if spec.verb == AutoTaskVerb::List {
-            orbit_core::application::auto_tasks::projection::AutoTaskListingProfile::Cli
+            orbit_core::app::auto_task::AutoTaskListingProfile::Cli
                 .project_auto_task_tool_document(value)
         } else {
             value

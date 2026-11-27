@@ -1,14 +1,14 @@
 use clap::Args;
 use orbit_common::governance::experiment::ExperimentVerb;
-use orbit_core::OrbitRuntime;
-use serde_json::Value;
+use orbit_core::Core;
+use orbit_core::app::experiment::{self, Command, Input};
 
 use super::{
     abandon, assign, clone, conclude, create, delete, list, pause, readout, resume, reweight, show,
     start, update,
 };
 use crate::command::operation_args::Invocation;
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 #[derive(Args)]
 #[command(about = orbit_common::governance::experiment::EXPERIMENT.cli_about)]
@@ -17,10 +17,11 @@ pub struct ExperimentCommand {
     pub command: Invocation<ExperimentVerb>,
 }
 
-impl Execute for ExperimentCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for ExperimentCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         let Invocation { spec, input } = self.command;
-        let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
+        let value =
+            experiment::exec(core, Command::new(spec.verb, Input::new(input)))?.into_value();
         let blocks = match spec.verb {
             ExperimentVerb::Assign => assign::blocks(&value),
             ExperimentVerb::Delete => delete::blocks(&value),

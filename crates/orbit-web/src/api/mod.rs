@@ -29,6 +29,8 @@ pub(crate) mod leases;
 mod log;
 mod metrics;
 mod notices;
+
+mod operation_audit;
 mod origin;
 mod pagination;
 mod plugins;

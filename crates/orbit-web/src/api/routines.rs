@@ -1,6 +1,5 @@
 //! Routine and machine clock operations for the dashboard [ORB-10875].
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -17,26 +16,28 @@ use orbit_cmd::registry_routines::{
 };
 use orbit_common::Env;
 use orbit_common::governance::authorization::{
-    AuthorizationDenial, CallerCapabilities, DASHBOARD_CLOCK_CADENCE, DASHBOARD_CLOCK_SERVICE,
-    DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_BREAKER, DASHBOARD_ROUTINE_TOGGLE,
-    DASHBOARD_ROUTINE_TRIGGER, GovernedOperation,
+    AuthorizationDenial, DASHBOARD_CLOCK_CADENCE, DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN,
+    DASHBOARD_ROUTINE_BREAKER, DASHBOARD_ROUTINE_TOGGLE, DASHBOARD_ROUTINE_TRIGGER,
+    GovernedOperation,
 };
-use orbit_common::observability::audit_id::audit_execution_id;
+use orbit_core::Core;
+use orbit_core::app::DashboardCaller;
 pub(super) use orbit_core::app::dashboard_authorize as authorized_caller;
+use orbit_core::app::routine::{
+    self, ClockAction, ClockControl, ClockControlled, Command, DashboardWrite, DashboardWritten,
+    ListedRoutine, Outcome,
+};
 use orbit_core::application::routines::{
     ClockHealth, ClockStatus, FireField, RoutineEditRefusal, RoutineField, RoutineStatus,
-    RoutineStatusReport, set_clock_cadence, set_clock_enabled, toggle_listed_routine,
-    trigger_options,
+    RoutineStatusReport, trigger_options,
 };
-use orbit_core::{AuditEventInsertParams, OrbitRuntime};
-use orbit_types::telemetry::AuditEventStatus;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{blocking, map_runtime_error};
 // Compatibility shim. Retirement: callers import `crate::runtime_memo::RoutineMemoKey`.
 pub(crate) use crate::runtime_memo::RoutineMemoKey;
-use crate::state::{DashboardState, Ws};
+use crate::state::{DashboardState, WsCore};
 
 /// Freshness bound of a served routine health body. Sampled fires, pauses and
 /// definition or config edits change the memo key and recompute at once. Job
@@ -90,6 +91,10 @@ const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ("breaker", RoutineField::Breaker),
 ];
 
+/// The error a clock control answers with when the clock changed while it was pending.
+const CLOCK_CHANGED_ERROR: &str =
+    "clock state changed while this action was pending; refresh before retrying";
+
 /// Inputs routine health reads that a live drain rewrites constantly: job runs
 /// and the task registry files. Keying on them recomputed synchronously, about
 /// 1-2 s each, whenever any run anywhere started or finished; a change instead
@@ -110,159 +115,6 @@ pub(super) struct OperationsQuery {
     pub(super) include_inactive_plugins: bool,
 }
 
-/// One governed dashboard operation, ready to audit any of its outcomes.
-///
-/// The invariant part (runtime, workspace, operation, target, machine and
-/// arguments) is carried once; each method records exactly one outcome, so
-/// a caller and a denial can never be recorded together or both be absent.
-/// `machine_name` defaults to empty.
-pub(super) struct OperationAudit<'a> {
-    runtime: &'a Arc<OrbitRuntime>,
-    host: Option<String>,
-    workspace: &'a str,
-    operation: &'a str,
-    target: Cow<'a, str>,
-    machine_name: &'a str,
-    arguments: Value,
-}
-
-impl<'a> OperationAudit<'a> {
-    pub(super) fn new(
-        runtime: &'a Arc<OrbitRuntime>,
-        env: &Env,
-        workspace: &'a str,
-        operation: &'a str,
-        target: impl Into<Cow<'a, str>>,
-        arguments: Value,
-    ) -> Self {
-        Self {
-            runtime,
-            host: env.hostname().and_then(OsStr::to_str).map(str::to_string),
-            workspace,
-            operation,
-            target: target.into(),
-            machine_name: "",
-            arguments,
-        }
-    }
-
-    pub(super) fn with_machine_name(mut self, machine_name: &'a str) -> Self {
-        self.machine_name = machine_name;
-        self
-    }
-
-    pub(super) fn with_target(mut self, target: impl Into<Cow<'a, str>>) -> Self {
-        self.target = target.into();
-        self
-    }
-
-    pub(super) fn with_arguments(mut self, arguments: Value) -> Self {
-        self.arguments = arguments;
-        self
-    }
-
-    pub(super) async fn denied(&self, denial: &AuthorizationDenial, started: Instant) {
-        self.record(None, Some(denial), None, started).await;
-    }
-
-    pub(super) async fn failed(
-        &self,
-        caller: &CallerCapabilities,
-        failure: &str,
-        started: Instant,
-    ) {
-        self.record(Some(caller), None, Some(failure), started)
-            .await;
-    }
-
-    pub(super) async fn succeeded(&self, caller: &CallerCapabilities, started: Instant) {
-        self.record(Some(caller), None, None, started).await;
-    }
-
-    pub(super) async fn settled(
-        &self,
-        caller: &CallerCapabilities,
-        failure: Option<&str>,
-        started: Instant,
-    ) {
-        self.record(Some(caller), None, failure, started).await;
-    }
-
-    async fn record(
-        &self,
-        caller: Option<&CallerCapabilities>,
-        denial: Option<&AuthorizationDenial>,
-        failure: Option<&str>,
-        started: Instant,
-    ) {
-        let operation = self.operation;
-        let target = &*self.target;
-        let status = if denial.is_some() {
-            AuditEventStatus::Denied
-        } else if failure.is_some() {
-            AuditEventStatus::Failure
-        } else {
-            AuditEventStatus::Success
-        };
-        let capabilities = caller
-            .map(|caller| caller.grants().clone())
-            .unwrap_or_default();
-        let provenance = caller
-            .map(|caller| caller.provenance().to_string())
-            .or_else(|| denial.map(|denial| denial.provenance.to_string()));
-        let params = AuditEventInsertParams {
-            execution_id: audit_execution_id("dashboard-operations"),
-            command: "dashboard.operations".to_string(),
-            subcommand: provenance,
-            tool_name: None,
-            target_type: Some(operation.to_string()),
-            target_id: Some(target.to_string()),
-            role: "operator".to_string(),
-            status,
-            exit_code: i32::from(status != AuditEventStatus::Success),
-            duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
-            working_directory: self
-                .runtime
-                .workspace_runtime_binding()
-                .map(|binding| binding.repo_root.display().to_string())
-                .unwrap_or_else(|| self.runtime.shared_root().display().to_string()),
-            arguments_json: serde_json::to_string(&self.arguments).ok(),
-            stdout_truncated: None,
-            stderr_truncated: None,
-            error_message: denial
-                .map(ToString::to_string)
-                .or_else(|| failure.map(str::to_string)),
-            host: self.host.clone(),
-            pid: std::process::id(),
-            session_id: None,
-            workspace_id: Some(self.workspace.to_string()),
-            caller_machine_id: None,
-            caller_machine_name: Some(self.machine_name.to_string()),
-            process_machine_id: None,
-            process_machine_name: Some(self.machine_name.to_string()),
-            transport: None,
-            effective_capabilities: capabilities,
-            origin_session_id: None,
-            mcp_call_id: None,
-            lease_id: None,
-            task_id: None,
-            job_run_id: None,
-            activity_id: None,
-            step_index: None,
-        };
-        // A SQLite insert can wait out the busy timeout; keep it off the async
-        // worker like every other store access in this crate.
-        let writer = Arc::clone(self.runtime);
-        let result = tokio::task::spawn_blocking(move || writer.record_audit_event(&params)).await;
-        let error = match result {
-            Ok(Ok(())) => return,
-            Ok(Err(error)) => error.to_string(),
-            Err(join_error) => join_error.to_string(),
-        };
-        tracing::error!(operation, target, error = %error, "failed to persist dashboard operation audit");
-    }
-}
-
 #[derive(Debug, Deserialize)]
 pub(super) struct RoutineToggleRequest {
     name: String,
@@ -274,14 +126,6 @@ pub(super) struct RoutineToggleRequest {
     machine_name: String,
     expected_enabled: bool,
     enabled: bool,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum ClockAction {
-    Enable,
-    Disable,
-    SetCadence,
 }
 
 #[derive(Debug, Deserialize)]
@@ -420,75 +264,111 @@ fn compute_routine_health(
     Ok(body)
 }
 
+/// The authenticated session a governed write arrived on, as the app that
+/// runs it records it: the serving host, the workspace selector the request
+/// addressed and the machine the browser acted from.
+pub(super) fn dashboard_caller(
+    state: &DashboardState,
+    workspace: Option<&str>,
+    machine_name: &str,
+) -> DashboardCaller {
+    DashboardCaller {
+        operator_session: state.operator_session(),
+        host: state
+            .env()
+            .hostname()
+            .and_then(OsStr::to_str)
+            .map(str::to_string),
+        workspace: workspace.map(str::to_string),
+        machine_name: machine_name.to_string(),
+    }
+}
+
+/// An app answered one command with another command's outcome.
+pub(super) fn unexpected_outcome(label: &str) -> Response {
+    super::server_error(orbit_core::OrbitError::Execution(format!(
+        "{label} answered with another command's outcome"
+    )))
+}
+
+/// The host's routine status read a routine command runs once its caller is
+/// admitted.
+pub(super) fn statuses_read(state: &DashboardState) -> routine::Statuses {
+    let global_root = state.global_root().to_path_buf();
+    Box::new(move || routine_statuses(&global_root))
+}
+
+/// The sweep clock's state and the routine status report a clock control
+/// reads before it changes anything. `routine_write` runs it on the blocking
+/// pool once the caller is admitted.
+fn clock_observation(state: &DashboardState) -> routine::ClockObservation {
+    let state = state.clone();
+    Box::new(move || {
+        let before = state.clock_status()?;
+        let report = routine_statuses(state.global_root())?;
+        Ok((before, report))
+    })
+}
+
+/// Run one governed routine write on the blocking pool and return what the
+/// admitted write did, or the response that already answers the request.
+pub(super) async fn routine_write(
+    label: &'static str,
+    core: Arc<Core>,
+    caller: DashboardCaller,
+    write: DashboardWrite,
+) -> Result<DashboardWritten, Box<Response>> {
+    match blocking(label, move || {
+        routine::exec(&core, Command::Dashboard(caller, write))
+    })
+    .await?
+    {
+        Outcome::Dashboard(Ok(written)) => Ok(written),
+        Outcome::Dashboard(Err(denial)) => Err(Box::new(authorization_denied(denial))),
+        Outcome::EnabledSet(_) => Err(Box::new(unexpected_outcome(label))),
+    }
+}
+
 /// `POST /api/routines/toggle` — atomically change one selected workspace's
 /// versioned `enabled` field. Browser input never supplies a path.
+///
+/// The routine app authorizes, edits and audits: an unlisted routine is a
+/// 404 with nothing to audit, and every other refusal (owner authority,
+/// workspace, stale state, retargeted definition) wrote nothing, is audited
+/// and answers 409.
 pub(super) async fn toggle_routine(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Json(body): Json<RoutineToggleRequest>,
 ) -> Response {
     let workspace = match explicit_workspace(&query) {
         Ok(workspace) => workspace,
         Err(rejection) => return rejection.into_response(),
     };
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        workspace,
-        "routine.toggle",
-        body.name.as_str(),
-        json!({"source": body.source, "target": body.target, "enabled": body.enabled}),
+    let written = routine_write(
+        "routine toggle",
+        core,
+        dashboard_caller(&state, Some(workspace), &body.machine_name),
+        DashboardWrite::Toggle {
+            routine: ListedRoutine {
+                name: body.name.clone(),
+                source: body.source.clone(),
+                target: body.target.clone(),
+            },
+            expected_enabled: body.expected_enabled,
+            enabled: body.enabled,
+            statuses: statuses_read(&state),
+        },
     )
-    .with_machine_name(&body.machine_name);
-    let caller = match authorized_caller(&DASHBOARD_ROUTINE_TOGGLE, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, Instant::now()).await;
-            return authorization_denied(denial);
-        }
-    };
-    let started = Instant::now();
-    let selected = match blocking("routine toggle", {
-        let global_root = state.global_root().to_path_buf();
-        let shared_root = runtime.shared_root();
-        let (name, source, target) = (body.name.clone(), body.source.clone(), body.target.clone());
-        let (expected_enabled, enabled) = (body.expected_enabled, body.enabled);
-        move || {
-            let report = routine_statuses(&global_root)?;
-            Ok(toggle_listed_routine(
-                &report,
-                &name,
-                Some((&source, &shared_root)),
-                &target,
-                expected_enabled,
-                enabled,
-            ))
-        }
-    })
-    .await
-    {
-        Ok(selected) => selected,
+    .await;
+    let outcome = match written {
+        Ok(DashboardWritten::Edited(Ok(Ok(outcome)))) => outcome,
+        Ok(DashboardWritten::Edited(Ok(Err(refusal)))) => return routine_edit_refused(&refusal),
+        Ok(DashboardWritten::Edited(Err(error))) => return map_runtime_error(error),
+        Ok(_) => return unexpected_outcome("routine toggle"),
         Err(response) => return *response,
     };
-    let outcome = match selected {
-        Ok(Ok(outcome)) => outcome,
-        // An unlisted routine is a 404 with nothing to audit.
-        Ok(Err(refusal @ RoutineEditRefusal::NotFound { .. })) => {
-            return routine_edit_refused(&refusal);
-        }
-        // Every other refusal (owner authority, workspace, stale state,
-        // retargeted definition) wrote nothing; audit it and answer 409.
-        Ok(Err(refusal)) => {
-            return refuse_routine_toggle(&audit, &caller, started, &refusal).await;
-        }
-        Err(error) => {
-            let error_message = error.to_string();
-            audit.failed(&caller, &error_message, started).await;
-            return map_runtime_error(error);
-        }
-    };
-    audit.succeeded(&caller, started).await;
     Json(json!({
         "name": body.name,
         "source": body.source,
@@ -517,124 +397,72 @@ pub(super) fn routine_edit_refusal_reason(refusal: &RoutineEditRefusal) -> Strin
     format!("{}: {}", refusal.code(), refusal.message())
 }
 
-/// Audit an authorized toggle that was refused without writing, then answer
-/// with the refusal.
-async fn refuse_routine_toggle(
-    audit: &OperationAudit<'_>,
-    caller: &CallerCapabilities,
-    started: Instant,
-    refusal: &RoutineEditRefusal,
-) -> Response {
-    let reason = routine_edit_refusal_reason(refusal);
-    audit.failed(caller, &reason, started).await;
-    routine_edit_refused(refusal)
-}
-
 /// `POST /api/routines/clock` — typed native-service or cadence control.
+///
+/// The routine app authorizes the control, checks it against the machine
+/// and clock state the browser observed, applies it and audits an applied
+/// change.
 pub(super) async fn control_clock(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Json(body): Json<ClockControlRequest>,
 ) -> Response {
     let workspace = match explicit_workspace(&query) {
         Ok(workspace) => workspace,
         Err(rejection) => return rejection.into_response(),
     };
-    let governed = match body.action {
-        ClockAction::Enable | ClockAction::Disable => &DASHBOARD_CLOCK_SERVICE,
-        ClockAction::SetCadence => &DASHBOARD_CLOCK_CADENCE,
+    let observe = clock_observation(&state);
+    #[cfg(test)]
+    let stand_in: Option<routine::ClockStandIn> = {
+        let state = state.clone();
+        Some(Box::new(move || state.test_clock_mutation()))
     };
-    let operation = governed.id;
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        workspace,
-        operation,
-        "clock",
-        json!({"action": body.action, "cadence_seconds": body.cadence_seconds}),
+    #[cfg(not(test))]
+    let stand_in = None;
+    let written = routine_write(
+        "clock control",
+        core,
+        dashboard_caller(&state, Some(workspace), &body.machine_name),
+        DashboardWrite::Clock(ClockControl {
+            action: body.action,
+            cadence_seconds: body.cadence_seconds,
+            expected_enabled: body.expected_enabled,
+            expected_cadence_seconds: body.expected_cadence_seconds,
+            global_root: state.global_root().to_path_buf(),
+            observe,
+            stand_in,
+        }),
     )
-    .with_machine_name(&body.machine_name);
-    let caller = match authorized_caller(governed, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, Instant::now()).await;
-            return authorization_denied(denial);
+    .await;
+    let before = match written {
+        Ok(DashboardWritten::Clock(ClockControlled::MachineMismatch { machine_name })) => {
+            return selection_conflict(
+                "machine_mismatch",
+                format!("select machine '{machine_name}' before changing its clock"),
+            );
         }
-    };
-    let started = Instant::now();
-    let (before, report) = match blocking("clock status", {
-        let state = state.clone();
-        move || {
-            let before = state.clock_status()?;
-            let report = routine_statuses(state.global_root())?;
-            Ok((before, report))
+        Ok(DashboardWritten::Clock(ClockControlled::Stale(before))) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": CLOCK_CHANGED_ERROR,
+                    "code": "stale_clock_state",
+                    "actual_enabled": before.enabled,
+                    "actual_cadence_seconds": before.configured_cadence_seconds,
+                })),
+            )
+                .into_response();
         }
-    })
-    .await
-    {
-        Ok(pair) => pair,
-        Err(response) => return *response,
-    };
-    if body.machine_name != report.machine_name {
-        return selection_conflict(
-            "machine_mismatch",
-            format!(
-                "select machine '{}' before changing its clock",
-                report.machine_name
-            ),
-        );
-    }
-    if before.enabled != body.expected_enabled
-        || before.configured_cadence_seconds != body.expected_cadence_seconds
-    {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "clock state changed while this action was pending; refresh before retrying",
-                "code": "stale_clock_state",
-                "actual_enabled": before.enabled,
-                "actual_cadence_seconds": before.configured_cadence_seconds,
-            })),
-        )
-            .into_response();
-    }
-
-    let mutation = match blocking("clock control", {
-        let state = state.clone();
-        let action = body.action;
-        let cadence_seconds = body.cadence_seconds;
-        move || {
-            #[cfg(test)]
-            if let Some(result) = state.test_clock_mutation() {
-                return Ok(result);
+        Ok(DashboardWritten::Clock(ClockControlled::Applied { before, result })) => {
+            if let Err(error) = result {
+                return map_runtime_error(error);
             }
-            Ok(match action {
-                ClockAction::Enable => set_clock_enabled(state.global_root(), true).map(|_| ()),
-                ClockAction::Disable => set_clock_enabled(state.global_root(), false).map(|_| ()),
-                ClockAction::SetCadence => cadence_seconds
-                    .ok_or_else(|| {
-                        orbit_core::OrbitError::InvalidInput(
-                            "cadence_seconds is required for set_cadence".to_string(),
-                        )
-                    })
-                    .and_then(|cadence| {
-                        set_clock_cadence(state.global_root(), cadence).map(|_| ())
-                    }),
-            })
+            *before
         }
-    })
-    .await
-    {
-        Ok(inner) => inner,
+        Ok(_) => return unexpected_outcome("clock control"),
         Err(response) => return *response,
     };
-    if let Err(error) = mutation {
-        let error_message = error.to_string();
-        audit.failed(&caller, &error_message, started).await;
-        return map_runtime_error(error);
-    }
-    audit.succeeded(&caller, started).await;
     let state_after = state.clone();
     let after = tokio::task::spawn_blocking(move || state_after.clock_status()).await;
     let (clock, changed) = match after {

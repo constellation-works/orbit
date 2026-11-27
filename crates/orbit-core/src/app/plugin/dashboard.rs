@@ -79,6 +79,9 @@ pub(super) fn exec(core: &Core, toggle: DashboardToggle) -> Result<Outcome, Orbi
             arguments,
             operator_session,
             host,
+            workspace: None,
+            machine_name: String::new(),
+            recorded_as: None,
         },
         || {
             let scope = scope?;

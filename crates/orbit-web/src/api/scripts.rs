@@ -16,7 +16,8 @@ use orbit_common::governance::authorization::DASHBOARD_SCRIPT_GRANT;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::routines::{OperationAudit, action_capability, authorization_denied, authorized_caller};
+use super::operation_audit::OperationAudit;
+use super::routines::{action_capability, authorization_denied, authorized_caller};
 use super::tasks::human_comment_author;
 use super::{bad_request, blocking, non_empty_string, workspace_label};
 use crate::state::{DashboardState, Ws};

@@ -323,8 +323,8 @@ impl Commands {
             ),
             Commands::Routine(command) => {
                 use super::super::routine::RoutineSubcommand;
-                // The two governed verbs open a runtime so the authorization
-                // chokepoint can decide and audit; the rest stay runtime-free.
+                // The two governed verbs open a runtime so the routine app's
+                // `exec` can decide and audit; the rest stay runtime-free.
                 let (subcommand, target_id, toggle) = match &command.command {
                     RoutineSubcommand::List(_) => ("list", None, None),
                     RoutineSubcommand::Show(_) => ("show", None, None),
@@ -353,12 +353,8 @@ impl Commands {
                     meta.arguments_json =
                         Some(serde_json::json!({ "action": args.action() }).to_string());
                 }
-                let mut operation =
-                    CommandOperation::new(runtime_need, Some(meta), None, dispatch_routine);
-                if let Some(toggle) = toggle {
-                    operation = operation.governed_when(true, "routine", toggle);
-                }
-                operation
+                // The routine app's `exec` authorizes `enable` and `disable`.
+                CommandOperation::new(runtime_need, Some(meta), None, dispatch_routine)
             }
             Commands::Script(command) => {
                 use super::super::script::ScriptSubcommand;
@@ -492,14 +488,14 @@ impl Commands {
             }
             // Resident mandates are registry-driven like notices.
             Commands::Evolution(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Evolution))
+                registry_operation(&command.command, core_dispatch!(Evolution))
             }
             Commands::Resident(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Resident))
+                registry_operation(&command.command, core_dispatch!(Resident))
             }
             // Experiments are registry-driven like friction.
             Commands::Experiment(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Experiment))
+                registry_operation(&command.command, core_dispatch!(Experiment))
             }
             // Codebase analytics is registry-driven like friction.
             Commands::Attention(command) => {
@@ -611,11 +607,11 @@ impl Commands {
                 )
             }
             Commands::AutoTask(command) => {
-                registry_operation(&command.command, runtime_dispatch!(AutoTask))
+                registry_operation(&command.command, core_dispatch!(AutoTask))
             }
             // Condition explain is registry-driven like crew.
             Commands::Automation(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Automation))
+                registry_operation(&command.command, core_dispatch!(Automation))
             }
             Commands::Job(command) => {
                 use super::super::job::JobSubcommand;

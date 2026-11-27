@@ -3,8 +3,8 @@ use std::path::Path;
 use crate::command::{CommandOut, Payload};
 use clap::Args;
 use orbit_cmd::registry_routines::routine_statuses;
-use orbit_core::application::routines::{RoutineEditRefusal, toggle_listed_routine};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::app::routine::{self, Command, Outcome, RoutineEditOutcome};
+use orbit_core::{Core, OrbitError};
 use serde_json::json;
 
 #[derive(Args)]
@@ -20,85 +20,46 @@ pub struct RoutineDisableArgs {
 }
 
 impl RoutineEnableArgs {
-    pub fn execute_without_runtime(
-        self,
-        global_root: &Path,
-        runtime: Option<&OrbitRuntime>,
-    ) -> CommandOut {
-        set_enabled(global_root, runtime, &self.name, true)
+    pub fn execute_without_runtime(self, global_root: &Path, core: Option<&Core>) -> CommandOut {
+        set_enabled(global_root, core, self.name, true)
     }
 }
 
 impl RoutineDisableArgs {
-    pub fn execute_without_runtime(
-        self,
-        global_root: &Path,
-        runtime: Option<&OrbitRuntime>,
-    ) -> CommandOut {
-        set_enabled(global_root, runtime, &self.name, false)
+    pub fn execute_without_runtime(self, global_root: &Path, core: Option<&Core>) -> CommandOut {
+        set_enabled(global_root, core, self.name, false)
     }
 }
 
-/// Flip the routine's versioned `enabled` field through the selection and
-/// atomic edit the dashboard toggle uses. The caller already passed the
-/// operator-only `routine enable`/`routine disable` authorization at the CLI
-/// chokepoint (which needs a runtime, so these two verbs open one) and the
-/// command audit row is written around the call.
-///
-/// Routine names are selected host-wide, but the audit row is recorded under
-/// the workspace the runtime is bound to (the `--workspace` selection, else the
-/// cwd's). A routine from any other workspace is refused before any write, so
-/// the file that changes and the workspace the audit row names cannot differ.
-fn set_enabled(
-    global_root: &Path,
-    runtime: Option<&OrbitRuntime>,
-    name: &str,
-    enabled: bool,
-) -> CommandOut {
-    let runtime = runtime.ok_or_else(|| {
+/// Flip the routine's versioned `enabled` field through the routine app,
+/// which holds the caller to the operator-only `routine enable`/`routine
+/// disable` authorization, writes the command audit row and runs the
+/// selection and atomic edit the dashboard toggle uses. The app reads the
+/// host's routine status only once the caller is admitted.
+fn set_enabled(global_root: &Path, core: Option<&Core>, name: String, enabled: bool) -> CommandOut {
+    let core = core.ok_or_else(|| {
         OrbitError::Execution(
             "routine enable/disable requires a workspace runtime for authorization and audit"
                 .to_string(),
         )
     })?;
-    let shared_root = runtime.shared_root();
-    let report = routine_statuses(global_root)?;
-    // Observe the definition's current source, state and target, then hand them
-    // back as the expectation the atomic edit re-checks against the file it
-    // rewrites. An unlisted name observes nothing; the shared selection refuses it.
-    let (source_workspace, target, expected_enabled) = report
-        .statuses
-        .iter()
-        .find(|status| status.routine.definition.name == name)
-        .map(|status| {
-            let routine = &status.routine;
-            (
-                routine.source_workspace.clone(),
-                routine.definition.target.as_ref_string(),
-                routine.definition.enabled,
-            )
-        })
-        .unwrap_or_default();
-    let changed = toggle_listed_routine(
-        &report,
-        name,
-        Some((&source_workspace, &shared_root)),
-        &target,
-        expected_enabled,
-        enabled,
-    )?
-    .map_err(|refusal| match refusal {
-        RoutineEditRefusal::WorkspaceMismatch {
-            ref source_workspace,
-            ..
-        } => OrbitError::InvalidInput(format!(
-            "{}: routine '{name}' belongs to workspace '{source_workspace}', not the selected \
-             workspace; rerun with `--workspace {source_workspace}`",
-            refusal.code()
-        )),
-        other => other.into(),
-    })?
-    .changed;
+    let statuses = {
+        let global_root = global_root.to_path_buf();
+        Box::new(move || routine_statuses(&global_root))
+    };
+    let outcome = routine::exec(
+        core,
+        Command::SetEnabled {
+            name: name.clone(),
+            enabled,
+            statuses,
+        },
+    )?;
+    let Outcome::EnabledSet(RoutineEditOutcome { changed }) = outcome else {
+        return Err(OrbitError::Execution(
+            "routine enable/disable answered with another command's outcome".to_string(),
+        ));
+    };
     let state = if enabled { "enabled" } else { "disabled" };
     let text = if changed {
         format!("{state} '{name}'")

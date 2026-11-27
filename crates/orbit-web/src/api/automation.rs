@@ -6,6 +6,7 @@ use axum::{
     extract::{Path, Query, State},
     response::{IntoResponse, Response},
 };
+use orbit_core::app::automation::{Command, Consumer, Outcome, exec};
 use serde_json::json;
 
 pub(super) use orbit_core::application::automation::projection::automation_summary as summary;
@@ -32,14 +33,16 @@ pub(super) async fn full_state(
         return not_found("automation state not found".into());
     }
     match blocking("automation state", move || {
-        let runtime = match super::auto_tasks::resolve_workspace(&state, &workspace) {
-            Ok((_, runtime)) => runtime,
+        let core = match super::auto_tasks::resolve_workspace(&state, &workspace) {
+            Ok((_, core)) => core,
             Err(reason) => return Ok(Err(reason)),
         };
-        let consumer = orbit_core::application::automation::consumer_key(&runtime, &kind, &name)?;
-        Ok(Ok(runtime.sqlite_store()?.read().and_then(|snapshot| {
-            snapshot.automation().state(&consumer)
-        })?))
+        Ok(Ok(
+            match exec(&core, Command::State(Consumer { kind, name }))? {
+                Outcome::State(state) => state,
+                Outcome::Value(_) | Outcome::Evidence(_) => None,
+            },
+        ))
     })
     .await
     {
@@ -63,22 +66,17 @@ pub(super) async fn accepted_evidence(
     }
     let workspace = workspace.to_string();
     match blocking("coverage evidence", move || {
-        let runtime = match super::auto_tasks::resolve_workspace(&state, &workspace) {
-            Ok((_, runtime)) => runtime,
+        let core = match super::auto_tasks::resolve_workspace(&state, &workspace) {
+            Ok((_, core)) => core,
             Err(reason) => return Ok(EvidenceLookup::UnknownWorkspace(reason)),
         };
-        match (|| {
-            let consumer =
-                orbit_core::application::automation::consumer_key(&runtime, &kind, &name)?;
-            runtime
-                .sqlite_store()?
-                .read()
-                .and_then(|snapshot| snapshot.automation().receipt(&consumer, &batch))
-        })() {
-            Ok(Some(receipt)) => Ok(EvidenceLookup::Body(receipt.evidence)),
-            Ok(None) => Ok(EvidenceLookup::Missing),
-            Err(error) => Err(error),
-        }
+        let consumer = Consumer { kind, name };
+        Ok(match exec(&core, Command::Evidence { consumer, batch })? {
+            Outcome::Evidence(Some(evidence)) => EvidenceLookup::Body(evidence),
+            Outcome::Evidence(None) | Outcome::Value(_) | Outcome::State(_) => {
+                EvidenceLookup::Missing
+            }
+        })
     })
     .await
     {

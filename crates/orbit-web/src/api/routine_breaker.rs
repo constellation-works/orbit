@@ -16,8 +16,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::blocking;
+use super::operation_audit::OperationAudit;
 use super::routines::{
-    OperationAudit, OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
+    OperationsQuery, authorization_denied, authorized_caller, explicit_workspace,
     named_entity_not_found, routine_edit_refusal_reason, routine_edit_refused, selection_conflict,
 };
 use crate::state::{DashboardState, Ws};
