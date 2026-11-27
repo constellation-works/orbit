@@ -62,7 +62,7 @@ pub fn doctor_hosts_row(probe: &dyn Probe, global_root: &Path) -> WorkspaceDocto
             ));
         }
     }
-    let rows = in_parallel(targets, |target| probe.remote_row(target, &local.id, true));
+    let rows = in_parallel(targets, |target| probe.doctor_row(target, &local.id));
     for (target, host) in targets.iter().zip(&rows) {
         if let Some(mark) = &host.offline {
             let name = &target.name;

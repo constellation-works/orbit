@@ -65,6 +65,9 @@ pub trait Probe: Send + Sync {
     /// `caller_machine_id` reports when `probe` is set.
     fn remote_row(&self, target: &HostEntry, caller_machine_id: &str, probe: bool) -> HostRow;
 
+    /// Probe a peer within Doctor's shorter reporting budget.
+    fn doctor_row(&self, target: &HostEntry, caller_machine_id: &str) -> HostRow;
+
     /// What `ssh` reports about itself on one probe from `caller_machine_id`.
     fn probe_ssh(&self, ssh: &str, caller_machine_id: &str) -> Result<ProbedHost, OrbitError>;
 }

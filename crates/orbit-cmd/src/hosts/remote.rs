@@ -13,12 +13,27 @@ use orbit_types::workspace::Workspace;
 use super::probe::{self, LiveHost, error_class, error_detail};
 
 pub(super) fn remote_row(target: &HostEntry, caller_machine_id: &str, probe: bool) -> HostRow {
+    remote_row_with_probe(target, probe, || {
+        probe::probe_ssh(&target.ssh, caller_machine_id)
+    })
+}
+
+pub(super) fn doctor_row(target: &HostEntry, caller_machine_id: &str) -> HostRow {
+    remote_row_with_probe(target, true, || {
+        probe::doctor_probe_ssh(&target.ssh, caller_machine_id)
+    })
+}
+
+fn remote_row_with_probe(
+    target: &HostEntry,
+    probe: bool,
+    live_probe: impl FnOnce() -> Result<LiveHost, OrbitError>,
+) -> HostRow {
     let mut row = entry_row(target);
     if !probe {
         return row;
     }
-    let live = probe::probe_ssh(&target.ssh, caller_machine_id)
-        .and_then(|live| verify_identity(target, live));
+    let live = live_probe().and_then(|live| verify_identity(target, live));
     match live {
         Ok(live) => {
             row.reachable = Some(true);
