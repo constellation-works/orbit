@@ -21,6 +21,19 @@ use super::{
     local_protocol_fingerprint,
 };
 
+// One slot bounds retention even when callers inspect many roots. Only the
+// workspace projection is memoized: host facts and remote probe policy remain
+// fresh. Read bytes (rather than trusting mtime/length) to observe equal-size
+// atomic replacements even on filesystems with coarse timestamp resolution.
+static LOCAL_WORKSPACE_PROJECTION: Mutex<Option<LocalWorkspaceProjection>> = Mutex::new(None);
+
+struct LocalWorkspaceProjection {
+    path: PathBuf,
+    content: String,
+    context: WorkspaceRegistryMachineContext,
+    workspaces: Vec<HostWorkspace>,
+}
+
 /// `orbit host list`.
 pub fn list_hosts(
     ports: Ports<'_>,
@@ -140,19 +153,6 @@ fn local_row(global_root: &Path, identity: &MachineIdentity) -> HostRow {
         workspaces: local_workspaces(global_root),
     }
 }
-
-// One slot bounds retention even when callers inspect many roots. Only the
-// workspace projection is memoized: host facts and remote probe policy remain
-// fresh. Read bytes (rather than trusting mtime/length) to observe equal-size
-// atomic replacements even on filesystems with coarse timestamp resolution.
-struct LocalWorkspaceProjection {
-    path: PathBuf,
-    content: String,
-    context: WorkspaceRegistryMachineContext,
-    workspaces: Vec<HostWorkspace>,
-}
-
-static LOCAL_WORKSPACE_PROJECTION: Mutex<Option<LocalWorkspaceProjection>> = Mutex::new(None);
 
 fn local_workspaces(global_root: &Path) -> Vec<HostWorkspace> {
     // Serialize sampling and publication too: an older reader must not publish

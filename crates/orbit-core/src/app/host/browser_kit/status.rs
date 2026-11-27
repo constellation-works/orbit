@@ -30,64 +30,6 @@ pub struct KitStatus {
     pub worker_env: Vec<&'static str>,
 }
 
-/// One thing wrong with an installed kit, and the command that fixes it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct KitProblem {
-    pub problem: String,
-    pub fix: String,
-}
-
-pub fn kit_status(layout: &KitLayout, env: &Env) -> KitStatus {
-    let inspection = KitInspection::inspect(layout);
-    let verified = inspection.is_verified();
-    let state = if !inspection.present {
-        "not_installed"
-    } else if !inspection.module_present
-        || !inspection.browser_installed
-        || inspection.executable.is_none()
-        || !inspection.env_script_present
-    {
-        "incomplete"
-    } else if verified {
-        "verified"
-    } else {
-        "unverified"
-    };
-    let unresolved_libraries = unresolved_libraries(layout, &inspection, env);
-    KitStatus {
-        matches_pin: inspection.matches_pin(),
-        verified,
-        state,
-        node: find_on_path(env, "node"),
-        unresolved_libraries,
-        worker_env: if verified {
-            WORKER_ENV_NAMES.to_vec()
-        } else {
-            Vec::new()
-        },
-        inspection,
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn unresolved_libraries(
-    layout: &KitLayout,
-    inspection: &KitInspection,
-    env: &Env,
-) -> Option<Vec<String>> {
-    let executable = inspection.executable.as_deref()?;
-    super::libraries::unresolved(layout, executable, env).ok()
-}
-
-#[cfg(not(target_os = "linux"))]
-fn unresolved_libraries(
-    _layout: &KitLayout,
-    _inspection: &KitInspection,
-    _env: &Env,
-) -> Option<Vec<String>> {
-    None
-}
-
 impl KitStatus {
     /// Everything wrong with an installed kit except its libraries, which
     /// [`Self::library_problem`] reports. Empty for a verified kit on the pin
@@ -176,6 +118,65 @@ impl KitStatus {
             fix: library_fix(unresolved),
         })
     }
+}
+
+/// One thing wrong with an installed kit, and the command that fixes it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct KitProblem {
+    pub problem: String,
+    pub fix: String,
+}
+
+pub fn kit_status(layout: &KitLayout, env: &Env) -> KitStatus {
+    let inspection = KitInspection::inspect(layout);
+    let verified = inspection.is_verified();
+    let state = if !inspection.present {
+        "not_installed"
+    } else if !inspection.module_present
+        || !inspection.browser_installed
+        || inspection.executable.is_none()
+        || !inspection.env_script_present
+    {
+        "incomplete"
+    } else if verified {
+        "verified"
+    } else {
+        "unverified"
+    };
+    let unresolved_libraries = unresolved_libraries(layout, &inspection, env);
+    let matches_pin = inspection.matches_pin();
+    KitStatus {
+        inspection,
+        state,
+        matches_pin,
+        verified,
+        node: find_on_path(env, "node"),
+        unresolved_libraries,
+        worker_env: if verified {
+            WORKER_ENV_NAMES.to_vec()
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn unresolved_libraries(
+    layout: &KitLayout,
+    inspection: &KitInspection,
+    env: &Env,
+) -> Option<Vec<String>> {
+    let executable = inspection.executable.as_deref()?;
+    super::libraries::unresolved(layout, executable, env).ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn unresolved_libraries(
+    _layout: &KitLayout,
+    _inspection: &KitInspection,
+    _env: &Env,
+) -> Option<Vec<String>> {
+    None
 }
 
 #[cfg(target_os = "linux")]

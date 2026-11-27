@@ -26,6 +26,25 @@ const PROBE_DEADLINE: Duration = Duration::from_secs(60);
 const FONT_PACKAGES: [&str; 3] = ["fontconfig-config", "libfontconfig1", "fonts-dejavu-core"];
 const NO_ROOT_TOOLS: [&str; 4] = ["apt-get", "apt-cache", "dpkg-deb", "dpkg-query"];
 
+/// What a missing font is named as in [`LibraryOutcome::unresolved`].
+pub(super) const FONT_UNRESOLVED: &str = "fonts: no usable font found";
+
+/// What Playwright's `install-deps --dry-run chromium` names.
+#[derive(Debug, Default)]
+struct DryRun {
+    packages: Vec<String>,
+    /// The list is apt's simulated install: every missing package,
+    /// dependencies included.
+    resolved: bool,
+}
+
+/// One archive `apt-get download` would write for a selected package.
+struct SelectedArchive {
+    package: String,
+    /// File name only, as apt prints it: `<package>_<version>_<architecture>.deb`.
+    file_name: String,
+}
+
 /// Libraries the headless shell at `executable` cannot resolve.
 pub(super) fn unresolved(
     layout: &KitLayout,
@@ -175,9 +194,6 @@ pub(super) fn resolve(
     ))
 }
 
-/// What a missing font is named as in [`LibraryOutcome::unresolved`].
-pub(super) const FONT_UNRESOLVED: &str = "fonts: no usable font found";
-
 /// The fix for a font gap left by the no-install-path branch.
 fn font_fix() -> String {
     "Install a font package so Chromium has a font to render with (for example \
@@ -216,8 +232,8 @@ pub(super) fn library_outcome(
     LibraryOutcome {
         method: if fix_needed { "unresolved" } else { method },
         unpacked_packages,
-        fix,
         unresolved,
+        fix,
     }
 }
 
@@ -295,15 +311,6 @@ fn unpack(
     unpacked.sort();
     unpacked.dedup();
     Ok(unpacked)
-}
-
-/// What Playwright's `install-deps --dry-run chromium` names.
-#[derive(Debug, Default)]
-struct DryRun {
-    packages: Vec<String>,
-    /// The list is apt's simulated install: every missing package,
-    /// dependencies included.
-    resolved: bool,
 }
 
 /// The Debian packages Playwright's `install-deps --dry-run chromium` lists.
@@ -464,13 +471,6 @@ fn download(
         ));
     }
     Ok(())
-}
-
-/// One archive `apt-get download` would write for a selected package.
-struct SelectedArchive {
-    package: String,
-    /// File name only, as apt prints it: `<package>_<version>_<architecture>.deb`.
-    file_name: String,
 }
 
 /// The current archive for each package apt can resolve. A name it cannot

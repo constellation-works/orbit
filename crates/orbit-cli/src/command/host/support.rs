@@ -8,6 +8,8 @@ use super::list::list_payload;
 use super::show::show_payload;
 use crate::command::{CommandOut, Payload};
 
+pub(super) const UNKNOWN: &str = "unknown";
+
 /// Run one host command and render what it produced.
 pub(super) fn run(command: Command) -> CommandOut {
     match host::run(orbit_cmd::hosts::ports(), command).map_err(OrbitError::from)? {
@@ -71,8 +73,6 @@ fn change_payload(change: HostChange) -> CommandOut {
     }
     Ok(Payload::detail(to_json(&change)?, text).into())
 }
-
-pub(super) const UNKNOWN: &str = "unknown";
 
 /// The host name with its `local` and `SKEW` marks.
 pub(super) fn marked_name(host: &HostRow) -> String {
