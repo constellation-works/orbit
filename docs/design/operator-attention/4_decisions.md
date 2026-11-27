@@ -282,7 +282,7 @@ Rejected:
 ## A shell waits on attention only through a grant its own session mints
 
 **Recorded:** 2026-11 · [ORB-25277]
-**Code anchors:** `crates/orbit-core/src/application/attention/wait.rs`, `crates/orbit-core/src/application/attention/wait_grant.rs`, `crates/orbit-cli/src/command/attention.rs`
+**Code anchors:** `crates/orbit-core/src/app/attention/wait.rs::wait_for_attention_delta`, `crates/orbit-core/src/app/attention/wait_grant.rs::AttentionWaitScope`, `crates/orbit-core/src/app/attention/wait_grant.rs::with_wait_grant`, `crates/orbit-core/src/adapter/attention_wait.rs::attention_wait`, `crates/orbit-cli/src/command/attention.rs`
 
 ### Context
 
