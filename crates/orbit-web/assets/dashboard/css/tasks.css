@@ -981,7 +981,13 @@ main.task-pane-resizing { cursor: col-resize; user-select: none; }
   /* The head is the top of the detail's darker band; the edge keeps the
      head's height and shows only where the band's colour ends. */
   border-bottom: 1px solid var(--bg);
-  background: var(--bg);
+  /* Always-on hairline at the head's bottom edge, inset to the horizontal
+     padding so its ends line up with the id and title. It is a background
+     layer, not a border, so the head's height is unchanged; it also works on
+     the comments tab, where the head is static rather than sticky. */
+  background:
+    linear-gradient(var(--hair), var(--hair)) var(--space-20) 100% / calc(100% - 2 * var(--space-20)) 1px no-repeat,
+    var(--bg);
 }
 .task-pane-bar { display: flex; align-items: center; gap: var(--space-10); min-height: 32px; }
 .task-pane-bar .id { font-size: var(--text-md); color: var(--fg-dim); }
