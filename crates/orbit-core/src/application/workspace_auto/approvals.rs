@@ -221,12 +221,7 @@ pub(super) fn approval_snapshot(
             && !(classification == "changed_since_pilot" && !claimed_tasks.contains(&task.id))
         {
             let findings = if matches!(classification, "warnings" | FOOTPRINT_UNRESOLVED) {
-                task_pilot_warnings(
-                    task.status,
-                    &runtime.get_task_pilot_comments(&task.id)?,
-                    &task.dependencies(),
-                    &|id: &str| runtime.warning_prerequisite_is_done(id),
-                )
+                held_task_pilot_warnings(runtime, &task)?
             } else {
                 Vec::new()
             };
@@ -290,12 +285,7 @@ pub(super) fn approval_snapshot(
                     // Fall through to the unresolved checks and candidacy.
                 } else {
                     let findings = if matches!(reason, "warnings" | FOOTPRINT_UNRESOLVED) {
-                        task_pilot_warnings(
-                            task.status,
-                            &runtime.get_task_pilot_comments(&task.id)?,
-                            &task.dependencies(),
-                            &|id: &str| runtime.warning_prerequisite_is_done(id),
-                        )
+                        held_task_pilot_warnings(runtime, &task)?
                     } else {
                         Vec::new()
                     };
@@ -374,6 +364,20 @@ pub(super) fn approval_snapshot(
         });
     }
     Ok(snapshot)
+}
+
+fn held_task_pilot_warnings(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Result<Vec<DrainHoldFinding>, OrbitError> {
+    let comments = runtime.get_task_pilot_comments(&task.id)?;
+    let dependencies = runtime.pilot_dependency_closure(task)?;
+    Ok(task_pilot_warnings(
+        task.status,
+        &comments,
+        &dependencies,
+        &|id: &str| runtime.warning_prerequisite_is_done(id),
+    ))
 }
 
 pub(super) fn held_json(snapshot: &ApprovalSnapshot) -> Value {

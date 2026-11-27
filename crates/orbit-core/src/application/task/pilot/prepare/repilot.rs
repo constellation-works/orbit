@@ -200,8 +200,9 @@ pub(super) fn stale_repilot_candidate(
     if !super::super::freshness::pilot_context_files_edited(&history, receipt.operation_id) {
         return Ok(Some(false));
     }
+    let dependencies = runtime.pilot_dependency_closure(&task).map_err(failed)?;
     let warned = audit.get("assessment").is_some_and(|assessment| {
-        !super::super::promotion::warning_hold_findings(assessment, &task.dependencies(), &|id| {
+        !crate::application::task::warning_hold_findings(assessment, &dependencies, &|id| {
             runtime.warning_prerequisite_is_done(id)
         })
         .is_empty()

@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskComment, TaskDecision, TaskHistoryEntry};
+use orbit_types::task::{Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus};
 use serde_json::Value;
 
 use super::super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
@@ -75,10 +75,16 @@ impl OrbitRuntime {
     ) -> Result<PilotWarningCandidacy, OrbitError> {
         let comments = self.get_task_pilot_comments(&task.id)?;
         let history = self.get_task_history(&task.id)?;
+        let dependencies = if task.status == TaskStatus::Proposed {
+            self.pilot_dependency_closure(task)?
+        } else {
+            Vec::new()
+        };
         Ok(pilot_warning_candidacy(
             task,
             &comments,
             &history,
+            &dependencies,
             &|id: &str| self.task_is_done(id),
         ))
     }
@@ -95,10 +101,10 @@ pub(crate) fn pilot_warning_candidacy(
     task: &Task,
     comments: &[TaskComment],
     history: &[TaskHistoryEntry],
+    dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
 ) -> PilotWarningCandidacy {
-    let Some(held) = held_pilot_warnings(task.status, comments, &task.dependencies(), is_done)
-    else {
+    let Some(held) = held_pilot_warnings(task.status, comments, dependencies, is_done) else {
         return PilotWarningCandidacy::NotHeld;
     };
     if let Some(at) = triaged_at(history, &held.operation_id) {
