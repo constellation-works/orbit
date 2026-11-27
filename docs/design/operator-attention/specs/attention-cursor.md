@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: attention fingerprints and the stateless --since cursor: format, delta semantics, validity, expiry and the caller polling protocol"
-last_validated: 2026-11-04
+last_validated: 2026-11-27
 title: Spec — Attention fingerprint and cursor
 owner: claude
 status: Draft

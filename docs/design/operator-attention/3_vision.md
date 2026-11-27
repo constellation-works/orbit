@@ -8,7 +8,7 @@ status: Draft
 feature: operator-attention
 doc_role: vision
 type: design
-summary: "Deferred directions for orbit attention: acknowledge and snooze, dashboard feed, notifications, plugin kinds, resolved feed, approval kind"
+summary: "Deferred directions for orbit attention: dashboard feed, notifications, plugin kinds, resolved feed and approval kind; acknowledgement has an accepted follow-up scope"
 tags: [operator-attention, vision]
 paths: ["crates/orbit-core/src/application/attention/**"]
 related_features: [operator-attention, human-decision-channel, plugins, user-interface]
@@ -17,21 +17,19 @@ related_artifacts: [ORB-21164]
 
 # Operator Attention — Vision
 
-This document records what v1 does not build and what the design deliberately keeps open.
-The remaining questions are speculative; the committed scope is in
-[2_design.md](./2_design.md).
+This document records directions outside the implemented attention scope and its open
+questions. Acknowledgement has an accepted follow-up scope, but implementation has not
+started. The implemented attention scope is in [2_design.md](./2_design.md).
 
 ## 1. Open Questions
 
-1. **Acknowledge and snooze.** An operator who has seen an item and chosen to leave it will see
-   it again at the next full list. Silencing it needs state (who, until when, for which
-   fingerprint). That is a store, so it is a separate decision that must answer where the state
-   lives, whether it replicates, and whether an acknowledgement is bound to a fingerprint (so a
-   material change un-silences it). The v1 design does not preclude it: ids are stable and
-   fingerprints exist, so an acknowledgement table could key on `(id, fingerprint)` and be
-   joined into the derivation without changing the item schema.
-   [signal-acknowledgement](../signal-acknowledgement/1_scope.md) proposes the mechanism
-   (ORB-27670), approved; its implementation (ORB-27754) is not started.
+1. **Acknowledge and snooze.** The accepted follow-up scope defines operator-only records with
+   exact signal signatures, reason, author and expiry, and specifies how attention items return
+   when their fingerprint changes. Daniel approved the scope (ORB-27670); phase 1
+   (ORB-27754) remains in `someday`, so the new acknowledgement records and `orbit ack`
+   behavior have not been implemented. The scope leaves resident write authority and the
+   30-day expiry cap as open questions:
+   [signal-acknowledgement](../signal-acknowledgement/1_scope.md).
 2. **Dashboard reading the same feed.** The derivation is a pure function of a runtime and a
    filter ([2_design.md §3](./2_design.md#3-placement-in-the-code)), so a dashboard endpoint
    can call it. Open: whether the dashboard wants severity-grouped views or live updates, and
@@ -109,6 +107,6 @@ shared store.
 - [ORB-21164] — recorded the deferred directions
 - [ORB-21091] — added decision-request risk tier and category
 - ORB-27670 — proposed the acknowledgement mechanism for question 1
-- ORB-27754 — will implement phase 1 of the acknowledgement mechanism
+- ORB-27754 — phase 1 of the acknowledgement mechanism, parked in `someday`
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
