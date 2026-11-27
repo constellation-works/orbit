@@ -11,14 +11,6 @@ use crate::command::CommandOut;
 use crate::output::doctor::DoctorReportFilter;
 
 impl DoctorCommand {
-    fn report_filter(&self) -> DoctorReportFilter {
-        if self.problems {
-            DoctorReportFilter::ProblemsOnly
-        } else {
-            DoctorReportFilter::AllChecks
-        }
-    }
-
     /// The report `orbit doctor` can still give when the runtime would not
     /// open, or `None` to let the bootstrap error stand.
     ///
@@ -77,6 +69,14 @@ impl DoctorCommand {
             self.report_filter(),
             self.check.as_deref(),
         ))
+    }
+
+    fn report_filter(&self) -> DoctorReportFilter {
+        if self.problems {
+            DoctorReportFilter::ProblemsOnly
+        } else {
+            DoctorReportFilter::AllChecks
+        }
     }
 
     /// The bare `orbit doctor` body: optional repairs, then the workspace report.
