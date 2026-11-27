@@ -637,8 +637,8 @@ fn set_equivalent_legacy_pairing(home: &Path, partition: &str) {
 fn native_artifact_put_preserves_operator_evidence_and_requeues_once() {
     use chrono::Utc;
     use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::test_support::fixture_engine::Dispatch;
-use orbit_core::test_support::fixture_engine::RunLifecycle;
+    use orbit_core::test_support::fixture_engine::Dispatch;
+    use orbit_core::test_support::fixture_engine::RunLifecycle;
     use orbit_types::task::ArtifactWriter;
     use orbit_types::task::TaskStatus;
     use orbit_types::workflow::{

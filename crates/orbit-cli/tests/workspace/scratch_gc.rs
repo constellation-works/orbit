@@ -465,7 +465,10 @@ fn unreadable_retrying_inventory_or_state_prevents_all_scratch_deletion() {
         // Use the public GC host boundary so corrupt inventory cannot be
         // rejected earlier by the CLI's own run submission or observation.
         let error = HostEnvironment::gc_scratch(&runtime, 0).unwrap_err();
-        assert!(matches!(error, orbit_common::OrbitError::Store(_)), "{error}");
+        assert!(
+            matches!(error, orbit_common::OrbitError::Store(_)),
+            "{error}"
+        );
         for name in ["from-input", "from-state", "unrelated"] {
             assert_eq!(fs::read(fixture.tmp().join(name)).unwrap(), name.as_bytes());
         }
