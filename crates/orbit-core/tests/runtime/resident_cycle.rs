@@ -22,6 +22,7 @@ mod recover;
 mod refresh;
 mod wake_scope;
 
+use orbit_core::app::resident;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -490,7 +491,7 @@ impl Fixture {
     }
 
     fn begin_cycle(&self, run: &str, at: DateTime<Utc>) -> Value {
-        self.runtime.begin_resident_cycle(run, at).unwrap()
+        resident::begin_resident_cycle(&self.runtime, run, at).unwrap()
     }
 
     // Seed historical state in the isolated fixture through the coordinated store.
@@ -546,7 +547,7 @@ impl Fixture {
     }
 
     fn finish_cycle(&self, run: &str) {
-        self.runtime.finish_resident_cycle(run).unwrap();
+        resident::finish_resident_cycle(&self.runtime, run).unwrap();
         self.stop_run(run, JobRunState::Success);
     }
 
@@ -570,9 +571,14 @@ impl Fixture {
             .as_object_mut()
             .unwrap()
             .extend(overrides.as_object().unwrap().clone());
-        self.runtime
-            .append_resident_checkpoint(mandate, checkpoint, Some("codex".into()), None)
-            .unwrap()
+        resident::append_resident_checkpoint(
+            &self.runtime,
+            mandate,
+            checkpoint,
+            Some("codex".into()),
+            None,
+        )
+        .unwrap()
     }
 
     fn checkpoint(&self, brief: &Value, run: &str) {
@@ -678,7 +684,7 @@ print(json.dumps({{"schemaVersion": 1, "status": "success", "result": {{"outcome
         let brief = self.begin_cycle(&run, at);
         assert_eq!(brief["cycle_count"], 1, "{brief}");
         self.checkpoint(&brief, &run);
-        let finished = self.runtime.finish_resident_cycle(&run).unwrap();
+        let finished = resident::finish_resident_cycle(&self.runtime, &run).unwrap();
         self.stop_run(&run, JobRunState::Success);
         (brief, finished)
     }
@@ -1000,7 +1006,7 @@ fn a_cycle_launches_in_a_managed_worktree_that_finalize_removes() {
     );
 
     fx.checkpoint(&brief, &run);
-    fx.runtime.finish_resident_cycle(&run).unwrap();
+    resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     assert!(
         !worktree.exists(),
         "finalize removes the cycle's managed worktree"
@@ -1125,7 +1131,7 @@ fn a_locked_resident_worktree_stays_and_finalize_reports_gits_refusal() {
         .unwrap();
     assert!(lock.success(), "git worktree lock");
 
-    let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+    let finished = resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     assert_eq!(finished["finalized"], true, "{finished}");
     let error = finished["worktree_removal_error"]
         .as_str()
@@ -1199,7 +1205,7 @@ fn a_locked_resident_worktree_is_registered_under_ordinary_and_multiline_roots()
             .unwrap();
         assert!(lock.success(), "{label}: git worktree lock");
 
-        let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+        let finished = resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
         assert_eq!(finished["finalized"], true, "{label}: {finished}");
         let error = finished["worktree_removal_error"]
             .as_str()
@@ -1254,7 +1260,7 @@ fn a_preexisting_resident_directory_is_preserved_without_ownership_proof() {
         "preserve"
     );
 
-    let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+    let finished = resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     assert_eq!(finished["finalized"], true, "{finished}");
     let removal = finished["worktree_removal_error"]
         .as_str()
@@ -1333,7 +1339,7 @@ fn a_preexisting_registered_worktree_is_preserved_without_ownership_proof() {
         "observe reports the foreign worktree: {brief}"
     );
 
-    let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+    let finished = resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     assert_eq!(finished["finalized"], true, "{finished}");
     assert!(
         finished["worktree_removal_error"]
@@ -1531,7 +1537,7 @@ fn a_cycle_reaches_only_its_granted_rights_and_workspaces() {
     });
 
     // Outside its run binding, the same caller is not a resident cycle.
-    fx.runtime.finish_resident_cycle(&run).unwrap();
+    resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     fx.as_cycle_agent(&run, || {
         let error = fx
             .agent_call(
@@ -1698,7 +1704,7 @@ fn a_cycle_with_dispatch_ships_a_leaf_run_and_every_other_caller_is_refused() {
 
     // After its cycle, the same run is no longer dispatching anything.
     let later = leaf("After the cycle");
-    fx.runtime.finish_resident_cycle(&run).unwrap();
+    resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     fx.as_brokered_cycle(&mandate, &run, || {
         let error = ship(&later, &workspace).expect_err("a lapsed cycle may only read");
         assert!(error.contains("resident_cycle_stale"), "{error}");
@@ -1780,7 +1786,7 @@ fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
             // Advance only persisted lease time, never wall-clock sleeps.
             fx.expire_cycle(&mandate, &run, &brief);
         } else if state == "finished" {
-            fx.runtime.finish_resident_cycle(&run).unwrap();
+            resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
         }
         let before: Vec<_> = [&named, &swept, &mandate]
             .into_iter()
@@ -1961,7 +1967,7 @@ fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
         "the recovered action did not run again"
     );
     fx.checkpoint(&brief, &run);
-    let finished = fx.runtime.finish_resident_cycle(&run).unwrap();
+    let finished = resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     assert_eq!(finished["synthesized"], false, "{finished}");
 }
 
@@ -2303,7 +2309,7 @@ fn a_stopped_assignment_whose_live_cycle_dies_is_handed_to_review_without_a_new_
             .all(|checkpoint| checkpoint.cycle != format!("rcy-{recovery_run}")),
         "no new agent cycle was started: {checkpoints:?}"
     );
-    let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
+    let shown = resident::show_resident_mandate(&fx.runtime, &mandate).unwrap();
     assert!(shown["live_cycle"].is_null(), "{shown}");
 }
 
@@ -2374,8 +2380,7 @@ fn a_transient_run_lookup_error_keeps_a_live_cycle_while_a_missing_or_expired_ru
     // The lookup error surfaces instead of marking the live cycle dead:
     // no takeover, no synthesized checkpoint.
     let takeover_run = fx.cycle_run(&mandate, "resident-cycle-takeover");
-    fx.runtime
-        .begin_resident_cycle(&takeover_run, now + Duration::minutes(11))
+    resident::begin_resident_cycle(&fx.runtime, &takeover_run, now + Duration::minutes(11))
         .expect_err("a lookup error is not a dead cycle");
     fx.set_run_state(&live_run, &state);
 

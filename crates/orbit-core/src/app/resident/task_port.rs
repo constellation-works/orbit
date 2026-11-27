@@ -3,18 +3,24 @@
 use orbit_common::OrbitError;
 use orbit_types::task::{DecisionRequest, Task};
 
-use super::comments::ensure_resident_comment_redaction_safe;
+use super::assignment::finish_resident_mandate_attachment;
+use super::comment::{ensure_resident_comment_redaction_safe, validate_resident_comment_write};
+use super::grant::apply_resident_grant_answer;
+use super::read::check_resident_mandate;
 use crate::OrbitRuntime;
 use crate::application::task::{ResidentMandateAttachment, TaskResidentPort};
 
-impl TaskResidentPort for OrbitRuntime {
+/// Binds task's resident policy to the current workspace runtime.
+pub(crate) struct TaskPort<'a>(pub(crate) &'a OrbitRuntime);
+
+impl TaskResidentPort for TaskPort<'_> {
     fn apply_resident_authority_decision_answer(
         &self,
         request: &DecisionRequest,
         answer_id: &str,
         actor_label: &str,
     ) -> Result<(), OrbitError> {
-        self.apply_resident_grant_answer(request, answer_id, actor_label)
+        apply_resident_grant_answer(self.0, request, answer_id, actor_label)
     }
 
     fn admit_locked_resident_comment(
@@ -23,7 +29,7 @@ impl TaskResidentPort for OrbitRuntime {
         message: Option<&str>,
         human_writer: bool,
     ) -> Result<(), OrbitError> {
-        self.validate_resident_comment_write(task, message, human_writer)
+        validate_resident_comment_write(self.0, task, message, human_writer)
     }
 
     fn refuse_resident_comment_needing_redaction(&self, message: &str) -> Result<(), OrbitError> {
@@ -31,11 +37,11 @@ impl TaskResidentPort for OrbitRuntime {
     }
 
     fn resident_mandate_error(&self, task_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(super::resident_mandate_from_artifact(self, task_id)?.err())
+        Ok(super::resident_mandate_from_artifact(self.0, task_id)?.err())
     }
 
     fn resident_crew_from_mandate(&self, content: &[u8]) -> Option<String> {
-        self.check_resident_mandate(content)
+        check_resident_mandate(self.0, content)
             .ok()
             .map(|mandate| mandate.crew)
     }
@@ -44,6 +50,6 @@ impl TaskResidentPort for OrbitRuntime {
         &self,
         task_id: &str,
     ) -> (Option<Task>, ResidentMandateAttachment) {
-        self.finish_resident_mandate_attachment(task_id)
+        finish_resident_mandate_attachment(self.0, task_id)
     }
 }

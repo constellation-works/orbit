@@ -76,7 +76,7 @@ impl OrbitRuntime {
             }
             DesktopTaskOperation::Edit { fields, .. } => sanitize(fields),
             DesktopTaskOperation::Comment { comment, .. } => {
-                resident_redaction_error = self
+                resident_redaction_error = crate::app::port::TaskResident(self)
                     .refuse_resident_comment_needing_redaction(comment.as_str())
                     .err();
                 *comment = redact_all(comment);
@@ -280,7 +280,11 @@ impl OrbitRuntime {
                     bounded_text(c, true)?;
                     // Desktop writes carry no operator-decision grant, so the
                     // resident human-writer exemption never applies here.
-                    self.admit_locked_resident_comment(&task, Some(c.as_str()), false)?;
+                    crate::app::port::TaskResident(self).admit_locked_resident_comment(
+                        &task,
+                        Some(c.as_str()),
+                        false,
+                    )?;
                     comment = Some(c.clone());
                 }
                 DesktopTaskOperation::Review {

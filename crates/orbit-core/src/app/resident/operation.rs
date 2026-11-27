@@ -7,12 +7,19 @@ use orbit_common::governance::operation::OperationInput;
 use orbit_common::governance::resident::ResidentVerb;
 use serde_json::Value;
 
+use super::comment::append_resident_checkpoint_for_run;
+use super::control::{
+    ResidentChannelCaller, ResidentControlAction, ResidentControlParams, ResidentRelayParams,
+    control_resident, relay_to_resident,
+};
+use super::digest::resident_digest;
+use super::grant::{
+    ResidentGrantCaller, grant_resident_authority, resident_grant_params_from_input,
+};
+use super::metric::resident_metrics;
+use super::read::{list_resident_mandates, show_resident_mandate};
 use crate::OrbitRuntime;
 use crate::app::tool_call::Caller;
-use crate::application::resident::{
-    ResidentChannelCaller, ResidentControlAction, ResidentControlParams, ResidentGrantCaller,
-    ResidentRelayParams, resident_grant_params_from_input,
-};
 
 /// Run one resident verb for the caller the tool entry resolved. The entry
 /// checked `input` against the verb's spec.
@@ -34,14 +41,16 @@ pub(super) fn dispatch(
                     .or_else(|| model.map(ToOwned::to_owned)),
                 orchestrator: input.optional_string("orchestrator")?,
             };
-            let outcome = runtime.grant_resident_authority(
+            let outcome = grant_resident_authority(
+                runtime,
                 &grant_caller,
                 resident_grant_params_from_input(input)?,
             )?;
             serde_json::to_value(outcome)
                 .map_err(|error| OrbitError::Execution(format!("serialize grant: {error}")))
         }
-        ResidentVerb::Relay => runtime.relay_to_resident(
+        ResidentVerb::Relay => relay_to_resident(
+            runtime,
             &channel_caller(input, agent, model)?,
             ResidentRelayParams {
                 task_id: input.required_string("task_id")?,
@@ -58,7 +67,8 @@ pub(super) fn dispatch(
                     "unknown action `{name}`; actions are pause, resume, stop, wake, takeover and release"
                 ))
             })?;
-            runtime.control_resident(
+            control_resident(
+                runtime,
                 &channel_caller(input, agent, model)?,
                 ResidentControlParams {
                     task_id: input.required_string("task_id")?,
@@ -69,7 +79,8 @@ pub(super) fn dispatch(
                 },
             )
         }
-        ResidentVerb::Checkpoint => runtime.append_resident_checkpoint_for_run(
+        ResidentVerb::Checkpoint => append_resident_checkpoint_for_run(
+            runtime,
             &input.required_string("task_id")?,
             input.as_value()["record"].clone(),
             agent.map(ToOwned::to_owned),
@@ -92,17 +103,19 @@ pub(super) fn dispatch(
                 })
                 .transpose()?
                 .unwrap_or(5);
-            runtime.resident_digest(input.optional_string("since")?.as_deref(), top)
+            resident_digest(runtime, input.optional_string("since")?.as_deref(), top)
         }
-        ResidentVerb::Metrics => runtime.resident_metrics(
+        ResidentVerb::Metrics => resident_metrics(
+            runtime,
             input.optional_string("mandate")?.as_deref(),
             input.optional_string("since")?.as_deref(),
             input.optional_string("baseline")?.as_deref(),
         ),
-        ResidentVerb::Show => runtime.show_resident_mandate(&input.required_string("task_id")?),
-        ResidentVerb::List => {
-            runtime.list_resident_mandates(input.optional_bool("include_ended")?.unwrap_or(false))
-        }
+        ResidentVerb::Show => show_resident_mandate(runtime, &input.required_string("task_id")?),
+        ResidentVerb::List => list_resident_mandates(
+            runtime,
+            input.optional_bool("include_ended")?.unwrap_or(false),
+        ),
     }
 }
 

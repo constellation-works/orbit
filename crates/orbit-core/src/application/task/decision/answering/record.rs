@@ -424,7 +424,11 @@ impl OrbitRuntime {
                 ),
             )),
             DecisionGate::ResidentAuthority => {
-                self.apply_resident_authority_decision_answer(request, answer_id, actor_label)?;
+                crate::app::port::TaskResident(self).apply_resident_authority_decision_answer(
+                    request,
+                    answer_id,
+                    actor_label,
+                )?;
                 Ok(DecisionAnswerEffects::default())
             }
             DecisionGate::ScriptGrant => {

@@ -1,5 +1,4 @@
-//! The dashboard's resident reads and writes. Each calls the runtime method
-//! or resident tool the dashboard's handler called before.
+//! The dashboard's resident reads and writes.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::DASHBOARD_RESIDENT_WRITE;
@@ -7,16 +6,19 @@ use orbit_common::governance::resident::ResidentVerb;
 use orbit_types::task::TaskComplexity;
 use serde_json::{Map, Value, json};
 
-use super::{Cards, CycleRoutineScope, DashboardWrite, DashboardWritten};
+use super::create::{ResidentMandateCreateParams, create_resident_mandate};
+use super::grant::grant_resident_authority_as_dashboard_operator;
+use super::read::{attach_resident_card_fields, list_resident_mandate_cards};
+use super::{
+    Cards, CycleRoutineScope, DashboardWrite, DashboardWritten, ResidentDashboardGrant,
+    ResidentDashboardGrantOutcome,
+};
 use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
 use crate::app::tool_call::{self, Input};
-use crate::application::resident::{
-    ResidentDashboardGrant, ResidentDashboardGrantOutcome, ResidentMandateCreateParams,
-};
 use crate::{Core, OrbitRuntime};
 
 pub(super) fn cards(runtime: &OrbitRuntime, include_ended: bool) -> Result<Cards, OrbitError> {
-    let mandates = runtime.list_resident_mandate_cards(include_ended)?;
+    let mandates = list_resident_mandate_cards(runtime, include_ended)?;
     let crews =
         serde_json::to_value(runtime.configured_crew_registry_projection()).unwrap_or(Value::Null);
     // The selector is the logical catalog ID the dashboard addressed. The
@@ -49,7 +51,7 @@ pub(super) fn card(core: &Core, task_id: String, operator: bool) -> Result<Value
         ResidentVerb::Show,
         Input::from_dashboard(fields, operator),
     )?;
-    runtime.attach_resident_card_fields(&mut shown);
+    attach_resident_card_fields(runtime, &mut shown);
     Ok(shown)
 }
 
@@ -132,18 +134,21 @@ pub(super) fn write(core: &Core, write: DashboardWrite) -> Result<DashboardWritt
                 .unwrap_or("medium")
                 .parse::<TaskComplexity>()
                 .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-            runtime
-                .create_resident_mandate(ResidentMandateCreateParams {
+            create_resident_mandate(
+                runtime,
+                ResidentMandateCreateParams {
                     title,
                     description,
                     complexity,
                     mandate,
-                })
-                .map(DashboardWritten::Value)
+                },
+            )
+            .map(DashboardWritten::Value)
         }
-        DashboardWrite::Grant(params) => runtime
-            .grant_resident_authority_as_dashboard_operator(params)
-            .map(|grant| DashboardWritten::Granted(Box::new(grant))),
+        DashboardWrite::Grant(params) => {
+            grant_resident_authority_as_dashboard_operator(runtime, params)
+                .map(|grant| DashboardWritten::Granted(Box::new(grant)))
+        }
         DashboardWrite::Control(fields) => {
             channel(core, ResidentVerb::Control, fields).map(DashboardWritten::Value)
         }

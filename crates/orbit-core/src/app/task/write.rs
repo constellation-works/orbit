@@ -7,6 +7,7 @@
 //! the operator command's semantics (its screening, `--approve`, `--force`),
 //! which no MCP request can reach.
 
+use crate::app::resident;
 use std::collections::BTreeSet;
 
 use orbit_common::governance::authorization::agent_context_declared;
@@ -23,7 +24,7 @@ use orbit_types::task::{
 use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
-use crate::application::resident::ResidentActionTicket;
+use crate::app::resident::ResidentActionTicket;
 use crate::application::task::{
     ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskFieldProjection,
     TaskUpdateAuthority, TaskUpdateIdentity, TaskUpdateParams, TaskWriteResponsePolicy,
@@ -253,8 +254,13 @@ pub(super) fn update(
         let tags = optional_csv_or_string_list_alias(input, &["tags"])?;
         return runtime.with_task_write_locked(&id, || {
             let current = runtime.get_task(&id)?;
-            let audit =
-                runtime.resident_task_update_audit(ticket, &current, status, tags.as_deref())?;
+            let audit = resident::resident_task_update_audit(
+                runtime,
+                ticket,
+                &current,
+                status,
+                tags.as_deref(),
+            )?;
             if let Some(audit) = audit {
                 reject_fields_for_approval_transition(input)?;
                 let response_fields = write_response_fields(input)?;

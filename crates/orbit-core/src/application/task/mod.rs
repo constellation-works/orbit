@@ -190,9 +190,7 @@ pub(crate) use record_json::task_listing_field_json;
 pub(crate) use record_json::task_record_json;
 pub use record_json::task_show_json;
 pub(crate) use records::TaskRecords;
-pub(in crate::application) use resident_port::{
-    DisabledCycleRoutine, ResidentMandateAttachment, TaskResidentPort,
-};
+pub(crate) use resident_port::{DisabledCycleRoutine, ResidentMandateAttachment, TaskResidentPort};
 pub(in crate::application) use review_port::TaskReviewPort;
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskUpdateIdentity, TaskWriteScreen};
 pub(crate) use selector_match::task_selectors_contain_path;

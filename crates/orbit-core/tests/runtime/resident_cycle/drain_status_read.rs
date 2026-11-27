@@ -4,6 +4,7 @@
 //! controls and callers outside a live resident cycle keep the operator
 //! requirement (ORB-26832).
 
+use orbit_core::app::resident;
 use std::sync::{Arc, OnceLock};
 
 use orbit_common::OrbitError;
@@ -134,7 +135,7 @@ fn a_resident_cycle_reads_drain_status_for_covered_workspaces_without_any_right(
             .expect("a cycle with no granted rights still reads its own workspace drain status");
         assert_status_payload(&reply, &home_id, false);
     });
-    fx.runtime.finish_resident_cycle(&run_no_grant).unwrap();
+    resident::finish_resident_cycle(&fx.runtime, &run_no_grant).unwrap();
 
     // Mandate covering both `home` and `other`, with `workspaces` granted and
     // zero rights (`add: []`).
@@ -180,7 +181,7 @@ fn a_resident_cycle_reads_drain_status_for_covered_workspaces_without_any_right(
             .expect("reads covered workspace drain status without rights");
         assert_status_payload(&other_reply, &other_id, false);
     });
-    fx.runtime.finish_resident_cycle(&run_multi).unwrap();
+    resident::finish_resident_cycle(&fx.runtime, &run_multi).unwrap();
 
     // Also succeeds when the cycle holds a right (e.g. `dispatch`).
     let dispatch_mandate = fx.mandate(&watched);
@@ -305,7 +306,7 @@ fn drain_controls_from_a_cycle_and_status_outside_a_cycle_keep_operator_requirem
     });
 
     // (c) A finished (no longer live) resident cycle run.
-    fx.runtime.finish_resident_cycle(&run).unwrap();
+    resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     fx.as_cycle_agent(&run, || {
         let error = drain_status(&fx.runtime, &workspace, McpCapability::Agent)
             .expect_err("finished resident cycle is refused");

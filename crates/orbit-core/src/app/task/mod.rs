@@ -63,7 +63,7 @@ pub use projection::stamp_human_crew;
 use super::exec::{self, App, Operation, SessionAudit};
 use crate::Core;
 use crate::app::codebase::TaskRiskinessModel;
-use crate::application::resident::ResidentActionTicket;
+use crate::app::resident::ResidentActionTicket;
 use crate::application::task::{DecisionChannelInfo, ScreenedTaskWrite, TaskPage, TaskRow};
 use crate::application::task_bundle::migration::{ExportOutcome, ImportOutcome, ReindexOutcome};
 use crate::application::task_bundle::publication::PublicationRestoreOutcome;

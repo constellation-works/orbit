@@ -68,7 +68,8 @@ impl OrbitRuntime {
         // boundary, including CLI/dashboard callers that bypass tool-host
         // sanitization. Scrub prose before it enters a bundle or write journal.
         if let Some(comment) = &params.comment {
-            self.refuse_resident_comment_needing_redaction(comment)?;
+            crate::app::port::TaskResident(self)
+                .refuse_resident_comment_needing_redaction(comment)?;
         }
         for value in [
             &mut params.title,

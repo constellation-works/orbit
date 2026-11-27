@@ -3,6 +3,7 @@
 //! list (ORB-27590), and each mapped action still meets the cycle guard's
 //! live-grant, workspace and recovery gates when it is called.
 
+use orbit_core::app::resident;
 use orbit_engine::Recovery;
 use orbit_engine::load_activity_asset;
 
@@ -72,7 +73,7 @@ fn the_cycle_tool_list_follows_the_rights_its_grant_holds() {
                 .any(|tool| tool.starts_with("orbit.auto_task:add")),
             "auto-task writes stay denied for {rights:?}"
         );
-        fx.runtime.finish_resident_cycle(&run).unwrap();
+        resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     }
 }
 
@@ -103,7 +104,7 @@ fn a_cycle_without_a_live_grant_receives_neither_guarded_tool() {
         granted("agent_implement").is_empty(),
         "ordinary agent activities receive no resident tools"
     );
-    fx.runtime.finish_resident_cycle(&run).unwrap();
+    resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     assert!(granted("resident_cycle").is_empty());
 }
 
@@ -172,7 +173,7 @@ fn each_mapped_action_keeps_the_live_grant_workspace_and_recovery_gates() {
             assert!(error.contains("resident_scope_refused"), "{tool}: {error}");
         }
     });
-    fx.runtime.finish_resident_cycle(&run).unwrap();
+    resident::finish_resident_cycle(&fx.runtime, &run).unwrap();
     fx.as_brokered_cycle(&all, &run, || {
         for (tool, input) in mapped(&workspace) {
             let error = fx.agent_call(tool, input).expect_err(tool);

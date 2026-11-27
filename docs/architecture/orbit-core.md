@@ -14,8 +14,8 @@ Composes the runtime. `OrbitRuntime` owns a `RuntimeKernel` and derefs to it. In
 ## Layering
 
 - `bootstrap` depends on `application` and never the reverse; application and adapter never name `bootstrap` or `composition`. Runtime names no higher layer.
-- Application modules are ordered `contracts < task < job < automation < review < distributed < pull_drain < admission < workspace_auto < backlog_forecast < sweep_filing`. A lower module reaches a higher one only through a port trait the lower module owns. Moved apps implement those traits on runtime-backed adapters bound in `app::port`, including the adapters for `task::TaskNoticePort` and `job::JobExperimentPort`.
-- Modules outside that chain (`app::routine`, `app::codebase`, `auto_tasks`, `app::experiment`, `landing`, `resident`, `notice`, `evolution`, `agent_corpus`, `tag_instructions`) call downward freely and are reached from below only through such ports, except the one authorized forecast call in the next bullet.
+- Application modules are ordered `contracts < task < job < automation < review < distributed < pull_drain < admission < workspace_auto < backlog_forecast < sweep_filing`. A lower module reaches a higher one only through a port trait the lower module owns. Moved apps implement those traits on runtime-backed adapters bound in `app::port`, including the adapters for `task::TaskNoticePort`, `task::TaskResidentPort` and `job::JobExperimentPort`.
+- Modules outside that chain (`app::routine`, `app::codebase`, `auto_tasks`, `app::experiment`, `landing`, `app::resident`, `notice`, `evolution`, `agent_corpus`, `tag_instructions`) call downward freely and are reached from below only through such ports, except the one authorized forecast call in the next bullet.
 - `backlog_forecast` has one authorized direct call into `app::codebase`: `crate::app::codebase::task_riskiness_model(runtime)` in `application/backlog_forecast/assembly.rs`, the codebase risk model whose result answers `forecast_regression_prior`. The guard admits exactly `let risk_model = crate::app::codebase::task_riskiness_model(runtime)?;` in that file. It refuses every other forecast-to-codebase path, grouped import, alias or `super::` chain, and every `app::codebase` path or inherent call back into `backlog_forecast`. Its path checks cover production code, not `tests/`.
 - The adapter sits above all of application, which reaches it only through application-owned ports (`contracts::EngineHostPort`, `contracts::ToolInvocationPort`, `pull_drain::drain::PullTransportPort`). `adapter::engine_host::EngineHost` is the sole production implementor of `orbit-engine`'s host traits.
 - `scripts/check-dependency-direction.sh` refuses paths, grouped trees, `super::` chains and calls to higher-module inherent methods that break these rules. Core never depends on `orbit-agent`, `orbit-cmd` or transport crates.
@@ -110,7 +110,6 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `managed_assets` | `unit::managed_assets` | leaf |
 | `operator_input.rs` | `app::review` | 4 |
 | `pull_drain` | `unit::pull_drain` | 6 |
-| `resident` | `app::resident` | above task |
 | `review` | `app::review` | 4 |
 | `seeding_policy.rs` | `unit::seeding_policy` | above task |
 | `statistics.rs` | `unit::statistics` | leaf |

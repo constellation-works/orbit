@@ -1,3 +1,4 @@
+use crate::app::resident;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
@@ -85,7 +86,7 @@ impl OrbitToolHost for CoreOrbitToolHost {
         self.task_scope
             .run_id
             .as_deref()
-            .is_some_and(|run_id| runtime.is_live_resident_cycle_run(run_id))
+            .is_some_and(|run_id| resident::is_live_resident_cycle_run(runtime, run_id))
     }
 
     /// A routed decision-channel callback runs here, outside the plugin

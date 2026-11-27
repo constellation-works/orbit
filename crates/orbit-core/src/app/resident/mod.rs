@@ -10,13 +10,56 @@
 //! reaches the resident tool handler. The handler calls [`exec`] again from
 //! inside that entry, and that call runs the flow.
 //!
+//! Task decision answers and resident comment admission enter through
+//! the task-owned `TaskResidentPort`, bound in `app::port`. A cycle fires
+//! through the `resident_due` trigger, runs as `resident_cycle_pipeline`
+//! and reaches tools through the cycle guard.
+//!
 //! The dashboard's commands have no registry verb. Its two reads answer the
 //! Residents view's models; each of its writes is decided against the
 //! dashboard's resident operation and leaves one `dashboard.operations` row.
 
+mod assignment;
+
+mod comment;
+
+mod control;
+
+mod create;
+
+mod cycle;
+
+mod cycle_tool;
+
 mod dashboard;
 
+mod digest;
+
+mod due;
+
+mod grant;
+
+mod guard;
+
+mod mandate;
+
+mod read;
+
+mod metric;
+
 mod operation;
+
+mod routine_status_port;
+
+mod step;
+
+mod task_port;
+
+mod view;
+
+mod wake;
+
+mod worktree;
 
 use std::path::PathBuf;
 
@@ -28,13 +71,72 @@ use super::exec::{self, App, DashboardOrigin, DashboardRow, Operation};
 use super::tool_call;
 pub use super::tool_call::Input;
 use crate::Core;
-pub use crate::application::resident::{
-    ResidentDashboardGrant, ResidentDashboardGrantOutcome, ResidentDashboardGrantParams,
+pub(crate) use comment::{
+    clear_resident_checkpoint_refusal_on_accept, ensure_resident_comment_redaction_safe,
+    is_checkpoint_comment_json, record_resident_checkpoint_refusal_if_live,
 };
+pub(crate) use control::{
+    ResidentControlState, hand_off_stopped_resident_at, resident_control_state,
+};
+pub(crate) use cycle_tool::resident_cycle_granted_tools;
+pub(crate) use due::{ResidentDue, resident_due};
+pub(crate) use guard::{
+    ResidentActionTicket, ResidentCallAdmission, ResidentCallClass, admit_resident_cycle_call,
+    clear_failed_resident_action_key, close_resident_action, is_live_resident_cycle_run,
+    resident_cycle_attention_scope, resident_cycle_drain_status_allowed,
+    resident_recovery_workspace, resident_task_update_audit, resident_workspace_is_local,
+};
+pub(crate) use mandate::{RESIDENT_CYCLE_ROUTINE_TARGET, ResidentMandateState};
+use mandate::{resident_cycle_routine_disabled_reason, resident_mandate_ended};
+pub(crate) use read::{resident_cycle_routine_disabled, resident_stall_of, resident_view};
+pub(crate) use routine_status_port::ResidentRoutineStatusPort;
+pub(crate) use step::{
+    record_resident_continuity_rebuilt_for_run, resident_cycle_id, resident_cycle_mandate_of_run,
+};
+pub(crate) use task_port::TaskPort;
+use view::ResidentView;
+pub(crate) use view::resident_mandate_from_artifact;
+
+#[cfg(not(feature = "test-support"))]
+pub(crate) use control::expire_resident_mandates_past_deadline;
+#[cfg(not(feature = "test-support"))]
+pub(crate) use step::{begin_resident_cycle, finish_resident_cycle};
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
-pub use crate::application::resident::take_failed_resident_action_key;
+pub use grant::{
+    ResidentDashboardGrant, ResidentDashboardGrantOutcome, ResidentDashboardGrantParams,
+};
+pub use guard::take_failed_resident_action_key;
+pub use mandate::ResidentEffectiveAuthority;
 pub use orbit_runtime::authorization::route_resident_delivery_recovery_to_broker;
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use comment::append_resident_checkpoint;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use control::{
+    ResidentChannelCaller, ResidentControlAction, ResidentControlParams, control_resident,
+    expire_resident_mandates_past_deadline,
+};
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use cycle::{set_resident_live_cycle, with_resident_cycle_admission_checkpoint};
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use grant::grant_resident_authority_as_dashboard_operator;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use guard::with_resident_action_close_failure;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use metric::resident_metrics;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use read::{list_resident_mandate_cards, show_resident_mandate};
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use step::{begin_resident_cycle, finish_resident_cycle};
 
 /// What the resident app can be asked to do.
 pub enum Command {

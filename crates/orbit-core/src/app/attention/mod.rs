@@ -37,6 +37,7 @@ mod wait;
 
 mod wait_grant;
 
+use crate::app::resident;
 use orbit_common::OrbitError;
 use orbit_common::governance::attention::AttentionVerb;
 use serde_json::{Map, Value};
@@ -124,7 +125,7 @@ impl App for AttentionApp {
                 input,
                 |runtime, input, caller| {
                     let resident_scope =
-                        runtime.resident_cycle_attention_scope(caller.run_id.as_deref());
+                        resident::resident_cycle_attention_scope(runtime, caller.run_id.as_deref());
                     let mint = input.get("wait_grant").and_then(Value::as_bool) == Some(true);
                     query::attention_query(runtime, input, &caller.session, resident_scope.as_ref())
                         .and_then(|response| {

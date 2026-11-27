@@ -1,3 +1,4 @@
+use crate::app::resident;
 use chrono::Duration;
 use orbit_common::{NoticeRefusalCode, OrbitError};
 use orbit_store::contract::{NoticePosterEventFilter, NoticeScopeFilter};
@@ -13,7 +14,7 @@ use crate::app::notice::authority::{
     NoticeCaller, NoticePoster, resident_control_line_poster, resolve_notice_poster,
 };
 use crate::app::notice::{NoticeAudit, limit as limits, parse_notice_row, read, refuse};
-use crate::application::resident::ResidentControlState;
+use crate::app::resident::ResidentControlState;
 
 /// What a post did, and the notice it left.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -148,7 +149,7 @@ fn post_notice_as(
     if post.status_line
         && poster.run_id.is_some()
         && let Some(task_id) = poster.task_id.as_deref()
-        && rt.resident_control_state(task_id)? != ResidentControlState::Active
+        && resident::resident_control_state(rt, task_id)? != ResidentControlState::Active
     {
         // An admitted cycle may still report and checkpoint after
         // pause, takeover or stop. Keep the manager's final status,

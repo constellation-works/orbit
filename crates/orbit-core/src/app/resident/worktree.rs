@@ -38,220 +38,14 @@ use orbit_common::security::token;
 use crate::OrbitRuntime;
 
 const OWNER_RECORD_VERSION: &str = "resident-cycle-worktree-owner/v1";
+
 const OWNER_RECORD_DIR: &str = "resident-cycle-worktree-owners";
+
 const OWNER_NONCE_FILE: &str = ".resident-cycle-owner";
+
 const OWNER_RECORD_MAX_BYTES: usize = 1024;
+
 const OWNER_NONCE_HEX_LEN: usize = 64;
-
-impl OrbitRuntime {
-    /// Create (or reuse, for a resumed run) this cycle's managed worktree
-    /// at the workspace `HEAD`.
-    ///
-    /// Best-effort: a workspace whose `HEAD` cannot be checked out (not a
-    /// Git repository, no commit yet) yields `None` and the cycle launches
-    /// as it did before, in the registered checkout. On a Git workspace —
-    /// the launch that was refused — the worktree is created and the
-    /// sandbox marks the launch managed. The error string is the reason a
-    /// worktree was not created, including a preserved pre-existing directory.
-    pub(crate) fn create_resident_cycle_worktree(
-        &self,
-        run_id: &str,
-    ) -> (Option<PathBuf>, Option<String>) {
-        match self.create_resident_cycle_worktree_inner(run_id) {
-            Ok(path) => (Some(path), None),
-            Err(error) => {
-                tracing::warn!(
-                    run_id,
-                    %error,
-                    "resident cycle launches without a managed worktree"
-                );
-                (None, Some(error.to_string()))
-            }
-        }
-    }
-
-    fn create_resident_cycle_worktree_inner(&self, run_id: &str) -> Result<PathBuf, OrbitError> {
-        let path =
-            resident_cycle_worktree_path(&self.paths().worktrees_dir, run_id).ok_or_else(|| {
-                OrbitError::InvalidInput(format!("run id '{run_id}' cannot name a worktree"))
-            })?;
-        refuse_if_symlink(&path)?;
-        // A resumed run re-enters its live cycle: keep the worktree it
-        // already holds, scratch included, rather than replacing it.
-        if path.join(".git").exists() {
-            let registered = worktree_is_registered(&self.paths().repo_root, &path)?;
-            if registered
-                && matches!(
-                    ownership(&self.paths().state_dir, run_id, &path),
-                    Ownership::Proven
-                )
-            {
-                return path
-                    .canonicalize()
-                    .map_err(|error| OrbitError::Execution(format!("resolve worktree: {error}")));
-            }
-            let reason = if registered {
-                "it has no matching owner record"
-            } else {
-                "it is not a registered worktree"
-            };
-            return Err(preserved(&path_text(&path), reason));
-        }
-        let head = run_git(
-            &orbit_common::Env::capture(),
-            &self.paths().repo_root,
-            &["rev-parse", "HEAD"],
-        )
-        .map_err(|error| OrbitError::Execution(error.to_string()))?;
-        if !head.success {
-            return Err(OrbitError::Execution(format!(
-                "resolve workspace HEAD for the cycle worktree: {}",
-                head.stderr.trim()
-            )));
-        }
-        let head = head.stdout.trim();
-        self.remove_resident_cycle_worktree(run_id)?;
-        if worktree_path_kind(&path)? != WorktreePathKind::Absent {
-            return Err(preserved(
-                &path_text(&path),
-                "the path was still present after cleanup",
-            ));
-        }
-        if let Some(parent) = path.parent() {
-            orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
-                OrbitError::Execution(format!(
-                    "create worktree directory {}: {error}",
-                    parent.display()
-                ))
-            })?;
-        }
-        match orbit_common::fs::io::create_private_dir(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(preserved(
-                    &path_text(&path),
-                    "it appeared before this run could create it",
-                ));
-            }
-            Err(error) => {
-                return Err(OrbitError::Execution(format!(
-                    "create cycle worktree directory {}: {error}",
-                    path.display()
-                )));
-            }
-        }
-        if let Err(error) = record_created_directory(&self.paths().state_dir, run_id, &path) {
-            rollback_empty_created_directory(&path);
-            return Err(error);
-        }
-        let target = utf8_path(&path)?;
-        let workers = format!(
-            "checkout.workers={}",
-            std::thread::available_parallelism().map_or(1, |count| count.get().clamp(1, 16))
-        );
-        let output = run_git_within(
-            &orbit_common::Env::capture(),
-            &self.paths().repo_root,
-            &[
-                "-c", &workers, "worktree", "add", "--detach", "--quiet", &target, head,
-            ],
-            GIT_CHECKOUT_TIMEOUT,
-        )
-        .map_err(|error| OrbitError::Execution(error.to_string()))?;
-        if !output.success {
-            return Err(OrbitError::Execution(format!(
-                "create cycle worktree {target} at {head}: {}",
-                output.stderr.trim()
-            )));
-        }
-        record_checkout_owner(&self.paths().state_dir, run_id, &path)?;
-        path.canonicalize()
-            .map_err(|error| OrbitError::Execution(format!("resolve worktree {target}: {error}")))
-    }
-
-    /// Remove `run_id`'s cycle worktree, if it exists and this run may.
-    ///
-    /// A registered worktree is removed by `git worktree remove --force`. An
-    /// unlocked one has its contents cleared first, so Git only unregisters
-    /// and removes the near-empty directory. A locked one is never cleared, and
-    /// Git's refusal leaves it untouched. If Git refuses an unlocked worktree
-    /// after the clear, its contents are already gone while its registration
-    /// remains. An unregistered directory is removed only with the owner record
-    /// written when this run created it.
-    pub(crate) fn remove_resident_cycle_worktree(&self, run_id: &str) -> Result<(), OrbitError> {
-        let Some(path) = resident_cycle_worktree_path(&self.paths().worktrees_dir, run_id) else {
-            return Ok(());
-        };
-        let target = path_text(&path);
-        match worktree_path_kind(&path)? {
-            WorktreePathKind::Absent => {
-                return clear_owner_record(&self.paths().state_dir, run_id);
-            }
-            WorktreePathKind::NotDirectory => {
-                return Err(preserved(&target, "it is not a directory this run created"));
-            }
-            WorktreePathKind::Directory => {}
-        }
-        let state_dir = &self.paths().state_dir;
-        let repo_root = &self.paths().repo_root;
-        match registered_worktree_state(repo_root, &path)? {
-            RegisteredWorktree::Registered { locked } => {
-                self.remove_registered_worktree(run_id, &path, &target, locked)
-            }
-            RegisteredWorktree::NotRegistered => {
-                remove_if_owned(repo_root, state_dir, run_id, &path, &target)
-            }
-        }
-    }
-
-    fn remove_registered_worktree(
-        &self,
-        run_id: &str,
-        path: &Path,
-        target: &str,
-        locked: bool,
-    ) -> Result<(), OrbitError> {
-        if let Ownership::Denied(reason) = ownership(&self.paths().state_dir, run_id, path) {
-            return Err(preserved(target, &reason));
-        }
-        // Git refuses a locked worktree and that refusal must leave its
-        // contents untouched, so only an unlocked worktree is cleared
-        // first. Clearing is best-effort: on any failure Git's own removal
-        // below still runs and reports the outcome.
-        if !locked {
-            let _ = clear_worktree_contents(path);
-        }
-        let path_arg = utf8_path(path)?;
-        let output = run_git_within(
-            &orbit_common::Env::capture(),
-            &self.paths().repo_root,
-            &["worktree", "remove", "--force", &path_arg],
-            GIT_CHECKOUT_TIMEOUT,
-        )
-        .map_err(|error| OrbitError::Execution(error.to_string()))?;
-        if output.success {
-            return clear_owner_record(&self.paths().state_dir, run_id);
-        }
-        let detail = git_failure_detail(&output);
-        Err(OrbitError::Execution(format!(
-            "refused to remove registered resident cycle worktree {target}: {detail}"
-        )))
-    }
-
-    /// Best-effort removal for a superseded cycle: a leftover costs disk,
-    /// never correctness, so a failure is recorded instead of raised.
-    ///
-    /// The returned string is the refusal, when the worktree was kept.
-    pub(crate) fn discard_resident_cycle_worktree(&self, run_id: &str) -> Option<String> {
-        match self.remove_resident_cycle_worktree(run_id) {
-            Ok(()) => None,
-            Err(error) => {
-                tracing::warn!(run_id, %error, "resident cycle worktree removal failed");
-                Some(error.to_string())
-            }
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WorktreePathKind {
@@ -290,6 +84,220 @@ struct OwnerRecord {
 enum Ownership {
     Proven,
     Denied(String),
+}
+
+/// Create (or reuse, for a resumed run) this cycle's managed worktree
+/// at the workspace `HEAD`.
+///
+/// Best-effort: a workspace whose `HEAD` cannot be checked out (not a
+/// Git repository, no commit yet) yields `None` and the cycle launches
+/// as it did before, in the registered checkout. On a Git workspace —
+/// the launch that was refused — the worktree is created and the
+/// sandbox marks the launch managed. The error string is the reason a
+/// worktree was not created, including a preserved pre-existing directory.
+pub(crate) fn create_resident_cycle_worktree(
+    rt: &OrbitRuntime,
+    run_id: &str,
+) -> (Option<PathBuf>, Option<String>) {
+    match create_resident_cycle_worktree_inner(rt, run_id) {
+        Ok(path) => (Some(path), None),
+        Err(error) => {
+            tracing::warn!(
+                run_id,
+                %error,
+                "resident cycle launches without a managed worktree"
+            );
+            (None, Some(error.to_string()))
+        }
+    }
+}
+
+fn create_resident_cycle_worktree_inner(
+    rt: &OrbitRuntime,
+    run_id: &str,
+) -> Result<PathBuf, OrbitError> {
+    let path =
+        resident_cycle_worktree_path(&rt.paths().worktrees_dir, run_id).ok_or_else(|| {
+            OrbitError::InvalidInput(format!("run id '{run_id}' cannot name a worktree"))
+        })?;
+    refuse_if_symlink(&path)?;
+    // A resumed run re-enters its live cycle: keep the worktree it
+    // already holds, scratch included, rather than replacing it.
+    if path.join(".git").exists() {
+        let registered = worktree_is_registered(&rt.paths().repo_root, &path)?;
+        if registered
+            && matches!(
+                ownership(&rt.paths().state_dir, run_id, &path),
+                Ownership::Proven
+            )
+        {
+            return path
+                .canonicalize()
+                .map_err(|error| OrbitError::Execution(format!("resolve worktree: {error}")));
+        }
+        let reason = if registered {
+            "it has no matching owner record"
+        } else {
+            "it is not a registered worktree"
+        };
+        return Err(preserved(&path_text(&path), reason));
+    }
+    let head = run_git(
+        &orbit_common::Env::capture(),
+        &rt.paths().repo_root,
+        &["rev-parse", "HEAD"],
+    )
+    .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    if !head.success {
+        return Err(OrbitError::Execution(format!(
+            "resolve workspace HEAD for the cycle worktree: {}",
+            head.stderr.trim()
+        )));
+    }
+    let head = head.stdout.trim();
+    remove_resident_cycle_worktree(rt, run_id)?;
+    if worktree_path_kind(&path)? != WorktreePathKind::Absent {
+        return Err(preserved(
+            &path_text(&path),
+            "the path was still present after cleanup",
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
+            OrbitError::Execution(format!(
+                "create worktree directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    match orbit_common::fs::io::create_private_dir(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(preserved(
+                &path_text(&path),
+                "it appeared before this run could create it",
+            ));
+        }
+        Err(error) => {
+            return Err(OrbitError::Execution(format!(
+                "create cycle worktree directory {}: {error}",
+                path.display()
+            )));
+        }
+    }
+    if let Err(error) = record_created_directory(&rt.paths().state_dir, run_id, &path) {
+        rollback_empty_created_directory(&path);
+        return Err(error);
+    }
+    let target = utf8_path(&path)?;
+    let workers = format!(
+        "checkout.workers={}",
+        std::thread::available_parallelism().map_or(1, |count| count.get().clamp(1, 16))
+    );
+    let output = run_git_within(
+        &orbit_common::Env::capture(),
+        &rt.paths().repo_root,
+        &[
+            "-c", &workers, "worktree", "add", "--detach", "--quiet", &target, head,
+        ],
+        GIT_CHECKOUT_TIMEOUT,
+    )
+    .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    if !output.success {
+        return Err(OrbitError::Execution(format!(
+            "create cycle worktree {target} at {head}: {}",
+            output.stderr.trim()
+        )));
+    }
+    record_checkout_owner(&rt.paths().state_dir, run_id, &path)?;
+    path.canonicalize()
+        .map_err(|error| OrbitError::Execution(format!("resolve worktree {target}: {error}")))
+}
+
+/// Remove `run_id`'s cycle worktree, if it exists and this run may.
+///
+/// A registered worktree is removed by `git worktree remove --force`. An
+/// unlocked one has its contents cleared first, so Git only unregisters
+/// and removes the near-empty directory. A locked one is never cleared, and
+/// Git's refusal leaves it untouched. If Git refuses an unlocked worktree
+/// after the clear, its contents are already gone while its registration
+/// remains. An unregistered directory is removed only with the owner record
+/// written when this run created it.
+pub(crate) fn remove_resident_cycle_worktree(
+    rt: &OrbitRuntime,
+    run_id: &str,
+) -> Result<(), OrbitError> {
+    let Some(path) = resident_cycle_worktree_path(&rt.paths().worktrees_dir, run_id) else {
+        return Ok(());
+    };
+    let target = path_text(&path);
+    match worktree_path_kind(&path)? {
+        WorktreePathKind::Absent => {
+            return clear_owner_record(&rt.paths().state_dir, run_id);
+        }
+        WorktreePathKind::NotDirectory => {
+            return Err(preserved(&target, "it is not a directory this run created"));
+        }
+        WorktreePathKind::Directory => {}
+    }
+    let state_dir = &rt.paths().state_dir;
+    let repo_root = &rt.paths().repo_root;
+    match registered_worktree_state(repo_root, &path)? {
+        RegisteredWorktree::Registered { locked } => {
+            remove_registered_worktree(rt, run_id, &path, &target, locked)
+        }
+        RegisteredWorktree::NotRegistered => {
+            remove_if_owned(repo_root, state_dir, run_id, &path, &target)
+        }
+    }
+}
+
+fn remove_registered_worktree(
+    rt: &OrbitRuntime,
+    run_id: &str,
+    path: &Path,
+    target: &str,
+    locked: bool,
+) -> Result<(), OrbitError> {
+    if let Ownership::Denied(reason) = ownership(&rt.paths().state_dir, run_id, path) {
+        return Err(preserved(target, &reason));
+    }
+    // Git refuses a locked worktree and that refusal must leave its
+    // contents untouched, so only an unlocked worktree is cleared
+    // first. Clearing is best-effort: on any failure Git's own removal
+    // below still runs and reports the outcome.
+    if !locked {
+        let _ = clear_worktree_contents(path);
+    }
+    let path_arg = utf8_path(path)?;
+    let output = run_git_within(
+        &orbit_common::Env::capture(),
+        &rt.paths().repo_root,
+        &["worktree", "remove", "--force", &path_arg],
+        GIT_CHECKOUT_TIMEOUT,
+    )
+    .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    if output.success {
+        return clear_owner_record(&rt.paths().state_dir, run_id);
+    }
+    let detail = git_failure_detail(&output);
+    Err(OrbitError::Execution(format!(
+        "refused to remove registered resident cycle worktree {target}: {detail}"
+    )))
+}
+
+/// Best-effort removal for a superseded cycle: a leftover costs disk,
+/// never correctness, so a failure is recorded instead of raised.
+///
+/// The returned string is the refusal, when the worktree was kept.
+pub(crate) fn discard_resident_cycle_worktree(rt: &OrbitRuntime, run_id: &str) -> Option<String> {
+    match remove_resident_cycle_worktree(rt, run_id) {
+        Ok(()) => None,
+        Err(error) => {
+            tracing::warn!(run_id, %error, "resident cycle worktree removal failed");
+            Some(error.to_string())
+        }
+    }
 }
 
 /// The managed worktree for `run_id`'s cycle, or `None` when the run id

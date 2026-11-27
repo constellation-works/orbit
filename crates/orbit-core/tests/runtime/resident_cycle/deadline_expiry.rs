@@ -5,6 +5,7 @@
 //! with an enable-or-stop next action.
 
 use super::*;
+use orbit_core::app::resident;
 
 fn mandate_with_deadline(fx: &Fixture, watched: &str, deadline: Option<DateTime<Utc>>) -> String {
     let id = fx.add_task(TaskAddParams {
@@ -99,10 +100,9 @@ fn a_passed_deadline_hands_off_without_a_live_cycle_when_the_routine_is_disabled
     );
 
     // The sweep clock's tick on the owner: no resident cycle runs.
-    let expired = fx
-        .runtime
-        .expire_resident_mandates_past_deadline(now + Duration::days(2))
-        .unwrap();
+    let expired =
+        resident::expire_resident_mandates_past_deadline(&fx.runtime, now + Duration::days(2))
+            .unwrap();
     assert_eq!(expired, vec![mandate.clone()]);
 
     let after = shown(&fx, &mandate);
@@ -144,8 +144,7 @@ fn a_passed_deadline_hands_off_without_a_live_cycle_when_the_routine_is_disabled
     );
     assert_eq!(shown(&fx, &ahead)["state"], "active");
     assert!(
-        fx.runtime
-            .expire_resident_mandates_past_deadline(Utc::now())
+        resident::expire_resident_mandates_past_deadline(&fx.runtime, Utc::now())
             .unwrap()
             .is_empty()
     );

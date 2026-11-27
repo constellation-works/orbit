@@ -64,10 +64,7 @@ const PILOT_ASSESSMENT_UNAVAILABLE_KIND: &str = "pilot_assessment_unavailable";
 impl crate::OrbitRuntime {
     /// Certify the latest assessment while the caller holds the proposal's
     /// write lock and can commit the corresponding approval in that lock.
-    pub(in crate::application) fn resident_promotion_assessment(
-        &self,
-        task: &Task,
-    ) -> Result<String, OrbitError> {
+    pub(crate) fn resident_promotion_assessment(&self, task: &Task) -> Result<String, OrbitError> {
         let refused = |reason: &str| {
             OrbitError::PolicyDenied(format!("resident_held_promotion_refused: {reason}"))
         };

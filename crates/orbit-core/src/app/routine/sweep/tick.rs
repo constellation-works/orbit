@@ -1,3 +1,4 @@
+use crate::app::resident;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -420,7 +421,7 @@ fn run_pre_admission_maintenance(
         skipped_workspaces,
         Some("sweep.resident_deadline_expiry_failed"),
         |workspace, runtime| {
-            let expired = runtime.expire_resident_mandates_past_deadline(now_utc)?;
+            let expired = resident::expire_resident_mandates_past_deadline(runtime, now_utc)?;
             if !expired.is_empty() {
                 tracing::info!(
                     target: "orbit.core.sweep",

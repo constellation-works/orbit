@@ -1,3 +1,4 @@
+use crate::app::resident;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -172,7 +173,7 @@ pub(super) fn resolve_activity_tool_denials(
             .filter(|tool| !suppressed_tools.contains(tool))
             .collect(),
         resident_tools: run_id.map_or_else(Vec::new, |run_id| {
-            runtime.resident_cycle_granted_tools(run_id, activity)
+            resident::resident_cycle_granted_tools(runtime, run_id, activity)
         }),
         suppressed_tools,
     })

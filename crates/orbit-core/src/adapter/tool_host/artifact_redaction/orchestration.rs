@@ -6,7 +6,7 @@ use orbit_tools::OrbitBuiltinAction;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::resident;
+use crate::app::resident;
 
 use super::policy::{self, TextMode};
 use super::{ArtifactRedactionReport, audit, sanitize};

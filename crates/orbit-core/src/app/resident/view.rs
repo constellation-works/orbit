@@ -99,7 +99,10 @@ pub(crate) fn resident_mandate_from_artifact(
             "the task has no {RESIDENT_MANDATE_ARTIFACT} artifact"
         )));
     };
-    Ok(runtime.check_resident_mandate(&artifact.content))
+    Ok(super::read::check_resident_mandate(
+        runtime,
+        &artifact.content,
+    ))
 }
 
 /// The open grant requests in a task's decision requests.
