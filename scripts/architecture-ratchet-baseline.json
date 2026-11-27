@@ -9,8 +9,8 @@
     "orbit_runtime_naming_files.orbit-cli": 0,
     "orbit_runtime_naming_files.orbit-cmd": 0,
     "orbit_runtime_naming_files.orbit-web": 0,
-    "orbit_runtime_ref_param_fns": 1121,
-    "runtime_host_required_methods": 153,
+    "orbit_runtime_ref_param_fns": 1114,
+    "runtime_host_required_methods": 134,
     "runtime_top_level_modules_outside_layers": 2,
     "worker_or_owner_reads": 19
   }

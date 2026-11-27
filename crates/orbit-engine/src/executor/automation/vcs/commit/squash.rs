@@ -135,7 +135,7 @@ pub(in crate::executor::automation::vcs) fn squash_merge_fields<H: RuntimeHost +
         &host.process_env(),
         repo,
         tasks,
-        &host.pr_config(),
+        &host.run_settings().pr_config,
         base,
         head,
         number,

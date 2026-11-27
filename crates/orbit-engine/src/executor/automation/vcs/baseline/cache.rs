@@ -132,7 +132,7 @@ pub(in super::super) fn cached_base_check<H: RuntimeHost + ?Sized>(
         base_sha,
         command,
         selection,
-        &host.validation_build_output_env(),
+        &host.run_settings().validation_build_output_env,
     )
     .ok()?;
     let result = read_cached(&cache.result, selection)?;

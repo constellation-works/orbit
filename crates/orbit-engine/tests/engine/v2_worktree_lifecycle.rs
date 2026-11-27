@@ -920,12 +920,33 @@ impl LifecycleHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
-    fn pr_config(&self) -> orbit_engine::PrConfig {
-        self.pr_config.lock().unwrap().clone()
-    }
-
-    fn workspace_base_branch(&self) -> String {
-        BASE.to_string()
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            validation_gates: orbit_types::workflow::HostValidationGates {
+                gates: orbit_types::workflow::ValidationGates {
+                    required_validation_commands: self.required_commands.lock().unwrap().clone(),
+                    baseline_commands: Vec::new(),
+                    light_delivery_paths: None,
+                    review_skip_tags: None,
+                },
+                source: self
+                    .gate_source
+                    .unwrap_or(orbit_types::workflow::ValidationGateSource::LocalConfig),
+            },
+            workspace_base_branch: BASE.to_string(),
+            unlocked_path_validation: self.unlocked_validation.lock().unwrap().clone(),
+            generated_paths: self.generated_paths.lock().unwrap().clone(),
+            validation_build_output_env: vec!["BUILD_OUTPUT_DIR".into()],
+            repo_root: Some(self.repo.to_string_lossy().into_owned()),
+            // Unset means the shipped default, as on a host without configuration.
+            worktree_reclaim_patterns: self.reclaim_patterns.clone().unwrap_or_else(|| {
+                ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
+                    .map(String::from)
+                    .to_vec()
+            }),
+            pr_config: self.pr_config.lock().unwrap().clone(),
+            ..orbit_engine::RunSettings::default()
+        }
     }
 
     fn task_context_for_agent_input(
@@ -1075,34 +1096,8 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         Ok(stored_record(&self.run_states, run_id))
     }
 
-    fn required_validation_commands(&self) -> Vec<String> {
-        self.required_commands.lock().unwrap().clone()
-    }
-
-    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
-        orbit_types::workflow::HostValidationGates {
-            gates: orbit_types::workflow::ValidationGates {
-                required_validation_commands: self.required_commands.lock().unwrap().clone(),
-                baseline_commands: Vec::new(),
-                light_delivery_paths: None,
-                review_skip_tags: None,
-            },
-            source: self
-                .gate_source
-                .unwrap_or(orbit_types::workflow::ValidationGateSource::LocalConfig),
-        }
-    }
-
     fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
         self.worker.clone()
-    }
-
-    fn unlocked_path_validation(&self) -> orbit_engine::UnlockedPathValidation {
-        self.unlocked_validation.lock().unwrap().clone()
-    }
-
-    fn generated_paths(&self) -> Vec<orbit_engine::GeneratedPath> {
-        self.generated_paths.lock().unwrap().clone()
     }
 
     fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {
@@ -1191,19 +1186,6 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         _task_id: &str,
     ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
         Ok(self.kept_claim.lock().unwrap().clone())
-    }
-
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Ok(self.repo.to_string_lossy().into_owned())
-    }
-
-    fn worktree_reclaim_patterns(&self) -> Vec<String> {
-        // Unset means the shipped default, as on a host without configuration.
-        self.reclaim_patterns.clone().unwrap_or_else(|| {
-            ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
-                .map(String::from)
-                .to_vec()
-        })
     }
 
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {

@@ -30,6 +30,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::context::RunSettings;
 use crate::context::dispatch_contract::{
     DispatchError, DispatchInvocationTrace, ResolvedCliExecutor, ResolvedSandbox,
     ResolvedShellExecutor,
@@ -43,12 +44,11 @@ use super::super::super::{
     ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
     FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
     HandoffLandingContext, HandoffLandingUpdate, PluginBrokerHandle, PluginBrokerRun,
-    PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
-    ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport, SteeringGateReading,
-    SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
-    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, TaskActivityUpdate,
-    TaskAutomationUpdate, WorktreeGcTaskLookup,
+    PrAutoFixAdmission, PrAutoFixRequest, RebaseRecoveryAttemptScope, ResolvedActivityTools,
+    ReviewLandingRequest, ReviewReleaseRequest, ReviewReportCorrectionRequest,
+    ReviewerInvocationRequest, ScratchGcReport, SteeringGateReading, SteeringRoundAdmission,
+    StepRecoveryAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
+    StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate, WorktreeGcTaskLookup,
 };
 
 /// A [`RuntimeHost`](super::super::super::RuntimeHost) base for test doubles.
@@ -57,18 +57,23 @@ use super::super::super::{
 /// capability. A test double implements this trait instead, overriding only
 /// what its test exercises; the blanket impl makes it a `RuntimeHost`.
 /// Each default is the answer of a host without that capability: a no-op, an
-/// empty read, or an `unsupported` refusal. Two are live: `host_os` reports
-/// this process's OS and `run_private_vcs_operation` runs the real `git` and
-/// `gh` operations. Available only to tests, through
+/// empty read, or an `unsupported` refusal. Two are live: `run_settings`'s
+/// default `host_os` reports this process's OS and `run_private_vcs_operation`
+/// runs the real `git` and `gh` operations. Available only to tests, through
 /// `orbit_engine::test_support`.
 pub trait NullRuntimeHost: Send + Sync {
     fn process_env(&self) -> orbit_common::Env {
         orbit_common::Env::capture()
     }
 
-    fn validation_build_output_env(&self) -> Vec<String> {
-        NullRuntimeHost::validation_subprocess_environment(self).build_output_env
+    fn run_settings(&self) -> RunSettings {
+        RunSettings {
+            validation_build_output_env: NullRuntimeHost::validation_subprocess_environment(self)
+                .build_output_env,
+            ..RunSettings::default()
+        }
     }
+
     fn mid_run_steering_enabled(&self) -> bool {
         false
     }
@@ -581,31 +586,6 @@ pub trait NullRuntimeHost: Send + Sync {
 
     // ── Config accessors (implementors provide these) ──────────────────
 
-    fn required_validation_commands(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
-        Vec::new()
-    }
-
-    fn review_baseline_commands(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    /// The `workflow.base_branch` default.
-    fn workspace_base_branch(&self) -> String {
-        "main".to_string()
-    }
-
-    fn unlocked_path_validation(&self) -> crate::context::UnlockedPathValidation {
-        crate::context::UnlockedPathValidation::default()
-    }
-
-    fn generated_paths(&self) -> Vec<crate::context::GeneratedPath> {
-        Vec::new()
-    }
-
     fn record_validated_tree(
         &self,
         _tree: &crate::context::ValidatedTree,
@@ -620,29 +600,8 @@ pub trait NullRuntimeHost: Send + Sync {
         Ok(None)
     }
 
-    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
-        orbit_types::workflow::HostValidationGates::local(orbit_types::workflow::ValidationGates {
-            required_validation_commands: NullRuntimeHost::required_validation_commands(self),
-            baseline_commands: NullRuntimeHost::review_baseline_commands(self),
-            light_delivery_paths: None,
-            review_skip_tags: None,
-        })
-    }
-
-    fn host_os(&self) -> Option<orbit_types::workflow::EvidenceHostOs> {
-        orbit_types::workflow::EvidenceHostOs::current()
-    }
-
     fn agent_provider_config(&self) -> HashMap<String, String> {
         HashMap::new()
-    }
-    fn activity_wall_clock_timeout_seconds(&self, _activity_name: &str) -> Option<u64> {
-        None
-    }
-    fn agent_stall_window(&self) -> Option<std::time::Duration> {
-        Some(std::time::Duration::from_secs(
-            crate::context::AGENT_STALL_MINUTES * 60,
-        ))
     }
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
         allowlisted_child_env(&NullRuntimeHost::process_env(self), &[], required_env_vars)
@@ -657,20 +616,11 @@ pub trait NullRuntimeHost: Send + Sync {
         let env = NullRuntimeHost::agent_subprocess_environment(self, required_env_vars);
         execution::overlay_crew_env(&NullRuntimeHost::process_env(self), env, crew_env)
     }
-    fn requires_claude_worker_credential(&self) -> bool {
-        false
-    }
     fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
         orbit_exec::ValidationEnvironment::launcher(NullRuntimeHost::agent_subprocess_environment(
             self,
             &[],
         ))
-    }
-    fn orbit_registry_root(&self) -> Option<String> {
-        None
-    }
-    fn orbit_workspace_selector(&self) -> Option<String> {
-        None
     }
     fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
         Ok(())
@@ -681,21 +631,10 @@ pub trait NullRuntimeHost: Send + Sync {
     fn record_event(&self, _event: OrbitEvent) -> Result<(), OrbitError> {
         Ok(())
     }
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Err(unsupported_runtime_capability("repo_root"))
-    }
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
         Err(OrbitError::Execution(
             "worktree GC is not implemented for this runtime host".to_string(),
         ))
-    }
-    fn worktree_reclaim_patterns(&self) -> Vec<String> {
-        ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
-            .map(String::from)
-            .to_vec()
-    }
-    fn worktree_parked_reclaim_after_hours(&self) -> Option<u64> {
-        None
     }
     fn lookup_task_for_worktree_gc(&self, _run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
         match NullRuntimeHost::get_task(self, task_id) {
@@ -718,9 +657,6 @@ pub trait NullRuntimeHost: Send + Sync {
     }
     fn gc_scratch(&self, _retention_hours: u64) -> Result<Option<ScratchGcReport>, OrbitError> {
         Ok(None)
-    }
-    fn data_root(&self) -> &Path {
-        Path::new("")
     }
     fn cancel_job_run(&self, run_id: &str) -> Result<(), OrbitError> {
         Err(OrbitError::Execution(format!(
@@ -780,12 +716,6 @@ pub trait NullRuntimeHost: Send + Sync {
     fn resolved_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair> {
         let _ = agent_cli;
         None
-    }
-    fn actor_model_identity(&self) -> Option<String> {
-        None
-    }
-    fn pr_config(&self) -> PrConfig {
-        PrConfig::default()
     }
 
     fn run_deterministic(

@@ -1253,10 +1253,12 @@ fn a_replica_lacking_the_owners_baseline_gate_accepts_and_replays_its_deferral()
         let mut fixture = CleanLeaf::gated_on("done", GateOn::OwnerOnly);
         let gate = fixture.gate.as_ref().unwrap().command();
         assert!(
-            HostEnvironment::review_baseline_commands(&fixture.pair.follower).is_empty(),
+            HostEnvironment::run_settings(&fixture.pair.follower)
+                .review_baseline_commands()
+                .is_empty(),
             "{job}: the replica's own configuration names no baseline gate"
         );
-        let gates = HostEnvironment::validation_gates(&fixture.bound);
+        let gates = HostEnvironment::run_settings(&fixture.bound).validation_gates;
         assert_eq!(
             gates.source,
             orbit_types::workflow::ValidationGateSource::OwnerContract,
@@ -1295,7 +1297,7 @@ fn a_deferral_of_a_replica_only_gate_is_refused_naming_the_owners_gates() {
         let mut fixture = CleanLeaf::gated_on("done", GateOn::FollowerOnly);
         let refusal = check_deferral(
             &fixture.deferral(false),
-            &HostEnvironment::validation_gates(&fixture.bound),
+            &HostEnvironment::run_settings(&fixture.bound).validation_gates,
             &fixture.base,
         )
         .unwrap_err();

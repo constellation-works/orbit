@@ -30,7 +30,7 @@ pub(super) fn query_root<H: RuntimeHost + ?Sized>(
 ) -> Result<PathBuf, OrbitError> {
     match input_string_field(input, "workspace_path") {
         Some(path) => canonicalize_existing_dir(&path, "workspace_path"),
-        None => Ok(PathBuf::from(host.repo_root()?)),
+        None => Ok(PathBuf::from(host.run_settings().repo_root()?)),
     }
 }
 

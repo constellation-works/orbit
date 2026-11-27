@@ -155,7 +155,7 @@ fn local_completion_hold<H: RuntimeHost + ?Sized>(
     if input.get("completion").and_then(Value::as_str) != Some("done") {
         return Ok(None);
     }
-    let rules = host.completion_hold_rules();
+    let rules = host.run_settings().completion_hold_rules;
     if rules.is_empty() {
         return Ok(None);
     }
@@ -337,7 +337,7 @@ fn resolve_batch_workspace_path<H: RuntimeHost + ?Sized>(
     match input_string_field(input, "workspace_path") {
         Some(path) => canonicalize_existing_dir(&path, "workspace_path"),
         None => {
-            let repo_root = host.repo_root()?;
+            let repo_root = host.run_settings().repo_root()?.to_owned();
             super::super::worktree::resolve_shared_worktree_path(
                 &host.process_env(),
                 Path::new(&repo_root),

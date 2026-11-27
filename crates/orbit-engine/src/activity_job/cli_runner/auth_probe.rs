@@ -173,7 +173,7 @@ pub fn run_auth_probe(
             on_progress: None,
             stopped_descendants: None,
             spawned_child: Some(spawned),
-            stall_window: host.agent_stall_window(),
+            stall_window: host.run_settings().agent_stall_window,
         },
     )
     .map_err(|SpawnError { message, .. }| DispatchError::CliInvocationPermanent(message))?;

@@ -15,6 +15,8 @@ mod env;
 mod hosts;
 mod outcome;
 
+mod run_config;
+
 pub(crate) use env::{ProvenanceEnv, default_python_cache_prefix, provenance_env};
 #[cfg(feature = "test-support")]
 pub use hosts::NullRuntimeHost;
@@ -41,3 +43,4 @@ pub use outcome::{
     blocked_workflow_failure_update, blocked_workflow_interruption_update,
     blocked_workflow_owner_signoff_update,
 };
+pub use run_config::RunSettings;

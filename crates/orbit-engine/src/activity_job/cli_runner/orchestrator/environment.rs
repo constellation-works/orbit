@@ -67,7 +67,7 @@ pub(super) fn require_claude_worker_credential(
     child_env: &[(String, String)],
 ) -> Result<(), DispatchError> {
     if provider != "claude"
-        || !host.requires_claude_worker_credential()
+        || !host.run_settings().requires_claude_worker_credential
         || claude_worker_credential_held(child_env)
     {
         return Ok(());

@@ -2,7 +2,6 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::RemoteToolCode;
-use orbit_engine::HostEnvironment;
 use orbit_engine::{
     WORKTREE_IDENTITY_INPUT_KEYS, WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup,
     collect_worktrees, run_worktree_has_reclaim_output,
@@ -31,7 +30,7 @@ impl OrbitRuntime {
             self,
             &WorktreeGcOptions {
                 target_only: true,
-                reclaim_patterns: Some(self.worktree_reclaim_patterns()),
+                reclaim_patterns: Some(self.settings().worktree_reclaim().to_vec()),
                 ..WorktreeGcOptions::default()
             },
         )
@@ -61,12 +60,12 @@ impl OrbitRuntime {
         };
         // Skip empty history before sorting or paying for a full collection's
         // Git queries. Keep all runs in `runs` to protect shared active paths.
-        let patterns = self.worktree_reclaim_patterns();
+        let patterns = self.settings().worktree_reclaim();
         let repo_root = &self.paths().repo_root;
         let mut oldest = runs
             .iter()
             .filter(|run| run.state.is_terminal())
-            .filter(|run| run_worktree_has_reclaim_output(self.env(), repo_root, run, &patterns))
+            .filter(|run| run_worktree_has_reclaim_output(self.env(), repo_root, run, patterns))
             .collect::<Vec<_>>();
         oldest.sort_by_key(|run| (run.finished_at.unwrap_or(run.created_at), &run.run_id));
         for run in oldest {
@@ -136,7 +135,7 @@ impl OrbitRuntime {
                 older_than: None,
                 estimate_bytes: false,
                 target_only: false,
-                reclaim_patterns: Some(self.worktree_reclaim_patterns()),
+                reclaim_patterns: Some(self.settings().worktree_reclaim().to_vec()),
                 reclaim_kept: false,
                 rescue_dirty: false,
                 parked_older_than: None,
@@ -390,7 +389,7 @@ impl OrbitRuntime {
                 older_than: None,
                 estimate_bytes: false,
                 target_only: true,
-                reclaim_patterns: Some(self.worktree_reclaim_patterns()),
+                reclaim_patterns: Some(self.settings().worktree_reclaim().to_vec()),
                 reclaim_kept: false,
                 rescue_dirty: false,
                 parked_older_than: None,
@@ -432,7 +431,7 @@ impl OrbitRuntime {
                 older_than,
                 estimate_bytes,
                 target_only,
-                reclaim_patterns: Some(self.worktree_reclaim_patterns()),
+                reclaim_patterns: Some(self.settings().worktree_reclaim().to_vec()),
                 reclaim_kept: false,
                 rescue_dirty: false,
                 parked_older_than,

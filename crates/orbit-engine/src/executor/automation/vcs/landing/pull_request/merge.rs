@@ -105,7 +105,7 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
         }
         let context = self.context;
         let pr_number = &self.pr_number;
-        let configured = self.host.pr_config().conventions.draft;
+        let configured = self.host.run_settings().pr_config.conventions.draft;
         // Only an explicit draft carries a body to repair. A DRAFT merge
         // state without isDraft is an older answer without body evidence,
         // so refuse without an extra view.

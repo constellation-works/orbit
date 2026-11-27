@@ -331,8 +331,14 @@ impl orbit_engine::test_support::NullRuntimeHost for LocalCompletionHost {
         Ok(vec![self.task()])
     }
 
-    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
-        vec![serde_json::from_value(json!({ "tags": ["sensitive"] })).expect("hold rule fixture")]
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            completion_hold_rules: vec![
+                serde_json::from_value(json!({ "tags": ["sensitive"] }))
+                    .expect("hold rule fixture"),
+            ],
+            ..orbit_engine::RunSettings::default()
+        }
     }
 
     fn apply_task_automation_update(
@@ -461,8 +467,14 @@ impl orbit_engine::test_support::NullRuntimeHost for NoDiffCompletionHost {
         Ok(self.history())
     }
 
-    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
-        vec![serde_json::from_value(json!({ "tags": ["sensitive"] })).expect("hold rule fixture")]
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            completion_hold_rules: vec![
+                serde_json::from_value(json!({ "tags": ["sensitive"] }))
+                    .expect("hold rule fixture"),
+            ],
+            ..orbit_engine::RunSettings::default()
+        }
     }
 
     fn apply_task_automation_update(

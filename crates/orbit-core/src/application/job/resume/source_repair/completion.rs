@@ -298,7 +298,10 @@ impl OrbitRuntime {
             return Err(refuse("completion candidate or checkout changed"));
         }
         let validation = checkpoint("validate", "candidate_validate")?;
-        let commands = self.required_validation_commands();
+        let commands = self
+            .host_validation_gates()
+            .gates
+            .required_validation_commands;
         let policy = self
             .published_completion_policy(run_id, &[task_id.into()])?
             .ok_or_else(|| refuse("completion policy unavailable"))?;

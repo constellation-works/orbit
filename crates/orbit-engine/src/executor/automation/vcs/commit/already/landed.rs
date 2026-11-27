@@ -492,10 +492,10 @@ fn verify_checks<H: RuntimeHost + ?Sized>(
     Ok(logs)
 }
 
-/// `host.required_validation_commands`, trimmed, with blanks and repeats dropped.
+/// `host.run_settings().required_validation_commands()`, trimmed, with blanks and repeats dropped.
 fn workspace_required_commands<H: RuntimeHost + ?Sized>(host: &H) -> Vec<String> {
     let mut commands = Vec::new();
-    for command in host.required_validation_commands() {
+    for command in host.run_settings().required_validation_commands() {
         let command = command.trim();
         if command.is_empty() || commands.iter().any(|seen| seen == command) {
             continue;

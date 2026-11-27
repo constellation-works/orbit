@@ -264,6 +264,11 @@ impl OrbitRuntimeSettings {
         }
     }
 
+    /// All configured per-activity CLI wall-clock budget overrides, in seconds.
+    pub fn activity_wall_clock_timeouts(&self) -> &std::collections::BTreeMap<String, u64> {
+        &self.activity_timeouts
+    }
+
     pub(crate) fn tag_label_requirements(&self) -> &orbit_types::task::TagLabelRequirements {
         &self.tag_label_requirements
     }

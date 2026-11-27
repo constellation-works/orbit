@@ -154,7 +154,7 @@ pub(super) fn classify_failed_checks<'a, H: RuntimeHost + ?Sized>(
     // [ORB-23813] Every failed job stopped in a declared dependency-handoff
     // step: each is transient from its failed-step name, without a log read.
     let handoff_roots = super::super::rerun::handoff_step_set(
-        &host.pr_config().ci_handoff_steps,
+        &host.run_settings().pr_config.ci_handoff_steps,
         &head_jobs,
         failed,
     )

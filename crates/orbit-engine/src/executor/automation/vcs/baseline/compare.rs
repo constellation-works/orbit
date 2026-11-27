@@ -483,7 +483,7 @@ fn compare_base<H: RuntimeHost + ?Sized>(
         base_sha,
         command,
         selection,
-        &host.validation_build_output_env(),
+        &host.run_settings().validation_build_output_env,
     ) {
         Ok(cache) => cache,
         Err(error) => return inconclusive(format!("locate the base result cache: {error}")),

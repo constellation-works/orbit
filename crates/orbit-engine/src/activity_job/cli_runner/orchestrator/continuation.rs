@@ -71,8 +71,10 @@ pub(crate) fn run_cli_backend_for_step(
     } = step;
     // Resolve workspace policy once. Per-invocation dispatch must keep the
     // reduced spec a continuation/correction supplies instead of refilling it.
-    let mut wall_clock_bound =
-        wall_clock_bound.or_else(|| host.activity_wall_clock_timeout_seconds(activity_name));
+    let mut wall_clock_bound = wall_clock_bound.or_else(|| {
+        host.run_settings()
+            .activity_wall_clock_timeout_seconds(activity_name)
+    });
     if let Some(deadline) = host
         .source_repair_admission(run_id)
         .map_err(|error| DispatchError::JobExecution(error.to_string()))?

@@ -63,7 +63,7 @@ impl OrbitRuntime {
             }));
         }
         (is_claude(crew)
-            && HostEnvironment::requires_claude_worker_credential(self)
+            && HostEnvironment::run_settings(self).requires_claude_worker_credential
             && !claude_worker_credential_held(&policy.crew_agent_subprocess_env(&crew.env, &[])))
         .then_some(Unrunnable::NoClaudeCredential)
     }

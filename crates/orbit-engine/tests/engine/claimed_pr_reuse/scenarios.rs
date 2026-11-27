@@ -592,14 +592,14 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
         Ok(())
     }
 
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Ok(self.repo.to_string_lossy().into_owned())
-    }
-
-    fn pr_config(&self) -> PrConfig {
-        PrConfig {
-            close_superseded: self.close_superseded,
-            ..PrConfig::default()
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            repo_root: Some(self.repo.to_string_lossy().into_owned()),
+            pr_config: PrConfig {
+                close_superseded: self.close_superseded,
+                ..PrConfig::default()
+            },
+            ..orbit_engine::RunSettings::default()
         }
     }
 }

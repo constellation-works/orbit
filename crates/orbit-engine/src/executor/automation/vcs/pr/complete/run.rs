@@ -45,7 +45,7 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
     // [ORB-23322] `completion.hold` only ever lowers a granted `done`; a
     // watch-only auto-fix run has no completion to hold.
     let hold_rules = if input.get("completion").and_then(Value::as_str) == Some("done") {
-        host.completion_hold_rules()
+        host.run_settings().completion_hold_rules
     } else {
         Vec::new()
     };

@@ -279,7 +279,7 @@ pub(super) fn completion_hold_stop<H: RuntimeHost + ?Sized>(
     if !context.owner_distributed_completion_done {
         return Ok(None);
     }
-    let rules = host.completion_hold_rules();
+    let rules = host.run_settings().completion_hold_rules;
     if rules.is_empty() {
         return Ok(None);
     }

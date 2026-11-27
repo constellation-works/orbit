@@ -61,7 +61,7 @@ pub(super) fn validation_scope<H: RuntimeHost + ?Sized>(
             record,
         }
     };
-    let unlocked = host.unlocked_path_validation();
+    let unlocked = host.run_settings().unlocked_path_validation;
     if unlocked.commands.is_empty() {
         return full_scope("unlocked_path_validation_unset", json!({}));
     }

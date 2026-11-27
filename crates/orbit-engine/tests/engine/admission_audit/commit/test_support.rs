@@ -153,8 +153,13 @@ impl CommitTestHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
-    fn pr_config(&self) -> orbit_engine::PrConfig {
-        self.pr_config.clone()
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            repo_root: Some(self.repo_root.to_string_lossy().to_string()),
+            data_root: self.data_root.clone(),
+            pr_config: self.pr_config.clone(),
+            ..orbit_engine::RunSettings::default()
+        }
     }
 
     fn get_job_run(&self, _run_id: &str) -> Result<Option<JobRun>, OrbitError> {
@@ -238,14 +243,6 @@ impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
             task.execution_summary = execution_summary;
         }
         Ok(())
-    }
-
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Ok(self.repo_root.to_string_lossy().to_string())
-    }
-
-    fn data_root(&self) -> &Path {
-        &self.data_root
     }
 
     fn worker_invocation(&self) -> Option<WorkerInvocation> {

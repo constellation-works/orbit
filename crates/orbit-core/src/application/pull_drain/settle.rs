@@ -61,7 +61,6 @@ use crate::OrbitRuntime;
 use crate::application::contracts::{PULL_DRAIN_JOB, PullSettlementEntry, PullSettlementOutcome};
 use crate::application::distributed::{PendingPullSettlements, is_owner_transport_failure};
 use orbit_common::OrbitError;
-use orbit_engine::HostEnvironment;
 use orbit_engine::{WORKTREE_IDENTITY_INPUT_KEYS, run_worktree_has_reclaim_output};
 use orbit_store::contract::{
     JobRunQuery, LocalPullAdmission, LocalPullMutation, LocalPullPhase, PullDestination,
@@ -582,7 +581,7 @@ impl OrbitRuntime {
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
         // Skip settled history with no output before paying for Git queries.
-        let patterns = self.worktree_reclaim_patterns();
+        let patterns = self.settings().worktree_reclaim();
         let repo_root = &self.paths().repo_root;
         let mut leaves = Vec::new();
         for leaf in pending {
@@ -592,7 +591,7 @@ impl OrbitRuntime {
             if !run.state.is_terminal() {
                 continue;
             }
-            if run_worktree_has_reclaim_output(self.env(), repo_root, &run, &patterns) {
+            if run_worktree_has_reclaim_output(self.env(), repo_root, &run, patterns) {
                 leaves.push(leaf);
                 continue;
             }

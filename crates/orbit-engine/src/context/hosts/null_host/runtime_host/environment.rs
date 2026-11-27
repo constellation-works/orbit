@@ -1,5 +1,7 @@
 //! The [`HostEnvironment`] answers of every [`NullRuntimeHost`].
 
+use std::collections::HashMap;
+
 use orbit_common::OrbitError;
 use orbit_store::contract::{InvocationQuery, InvocationRecord};
 use orbit_tools::ToolContext;
@@ -8,16 +10,14 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::JobRun;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::path::Path;
 
-use crate::context::hosts::{PrConfig, ScratchGcReport, WorktreeGcTaskLookup};
-
+use crate::context::RunSettings;
 use crate::context::hosts::{HostEnvironment, NullRuntimeHost};
+use crate::context::hosts::{ScratchGcReport, WorktreeGcTaskLookup};
 
 impl<T: NullRuntimeHost> HostEnvironment for T {
-    fn validation_build_output_env(&self) -> Vec<String> {
-        NullRuntimeHost::validation_build_output_env(self)
+    fn run_settings(&self) -> RunSettings {
+        NullRuntimeHost::run_settings(self)
     }
 
     fn admit_owed_criteria(
@@ -37,34 +37,6 @@ impl<T: NullRuntimeHost> HostEnvironment for T {
         NullRuntimeHost::outstanding_owed_criteria(self, task_id, run_id)
     }
 
-    fn required_validation_commands(&self) -> Vec<String> {
-        NullRuntimeHost::required_validation_commands(self)
-    }
-
-    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
-        NullRuntimeHost::completion_hold_rules(self)
-    }
-
-    fn review_baseline_commands(&self) -> Vec<String> {
-        NullRuntimeHost::review_baseline_commands(self)
-    }
-
-    fn workspace_base_branch(&self) -> String {
-        NullRuntimeHost::workspace_base_branch(self)
-    }
-
-    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
-        NullRuntimeHost::validation_gates(self)
-    }
-
-    fn unlocked_path_validation(&self) -> crate::context::UnlockedPathValidation {
-        NullRuntimeHost::unlocked_path_validation(self)
-    }
-
-    fn generated_paths(&self) -> Vec<crate::context::GeneratedPath> {
-        NullRuntimeHost::generated_paths(self)
-    }
-
     fn record_validated_tree(
         &self,
         tree: &crate::context::ValidatedTree,
@@ -79,20 +51,8 @@ impl<T: NullRuntimeHost> HostEnvironment for T {
         NullRuntimeHost::validated_tree(self, run_id)
     }
 
-    fn host_os(&self) -> Option<orbit_types::workflow::EvidenceHostOs> {
-        NullRuntimeHost::host_os(self)
-    }
-
     fn agent_provider_config(&self) -> HashMap<String, String> {
         NullRuntimeHost::agent_provider_config(self)
-    }
-
-    fn activity_wall_clock_timeout_seconds(&self, activity_name: &str) -> Option<u64> {
-        NullRuntimeHost::activity_wall_clock_timeout_seconds(self, activity_name)
-    }
-
-    fn agent_stall_window(&self) -> Option<std::time::Duration> {
-        NullRuntimeHost::agent_stall_window(self)
     }
 
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
@@ -107,20 +67,8 @@ impl<T: NullRuntimeHost> HostEnvironment for T {
         NullRuntimeHost::crew_agent_subprocess_environment(self, crew_env, required_env_vars)
     }
 
-    fn requires_claude_worker_credential(&self) -> bool {
-        NullRuntimeHost::requires_claude_worker_credential(self)
-    }
-
     fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
         NullRuntimeHost::validation_subprocess_environment(self)
-    }
-
-    fn orbit_registry_root(&self) -> Option<String> {
-        NullRuntimeHost::orbit_registry_root(self)
-    }
-
-    fn orbit_workspace_selector(&self) -> Option<String> {
-        NullRuntimeHost::orbit_workspace_selector(self)
     }
 
     fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
@@ -131,20 +79,8 @@ impl<T: NullRuntimeHost> HostEnvironment for T {
         NullRuntimeHost::record_event(self, event)
     }
 
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        NullRuntimeHost::repo_root(self)
-    }
-
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
         NullRuntimeHost::list_job_runs_for_gc(self)
-    }
-
-    fn worktree_reclaim_patterns(&self) -> Vec<String> {
-        NullRuntimeHost::worktree_reclaim_patterns(self)
-    }
-
-    fn worktree_parked_reclaim_after_hours(&self) -> Option<u64> {
-        NullRuntimeHost::worktree_parked_reclaim_after_hours(self)
     }
 
     fn lookup_task_for_worktree_gc(&self, run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
@@ -165,10 +101,6 @@ impl<T: NullRuntimeHost> HostEnvironment for T {
 
     fn gc_scratch(&self, retention_hours: u64) -> Result<Option<ScratchGcReport>, OrbitError> {
         NullRuntimeHost::gc_scratch(self, retention_hours)
-    }
-
-    fn data_root(&self) -> &Path {
-        NullRuntimeHost::data_root(self)
     }
 
     fn cancel_job_run(&self, run_id: &str) -> Result<(), OrbitError> {
@@ -226,13 +158,5 @@ impl<T: NullRuntimeHost> HostEnvironment for T {
 
     fn resolved_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair> {
         NullRuntimeHost::resolved_agent_model_pair(self, agent_cli)
-    }
-
-    fn actor_model_identity(&self) -> Option<String> {
-        NullRuntimeHost::actor_model_identity(self)
-    }
-
-    fn pr_config(&self) -> PrConfig {
-        NullRuntimeHost::pr_config(self)
     }
 }

@@ -106,7 +106,8 @@ pub(super) fn collect_ci_evidence<H: RuntimeHost + ?Sized>(
     // A sweep before the last rate limit's reset reads nothing from GitHub.
     let now = chrono::Utc::now();
     let now_ms = u64::try_from(now.timestamp_millis()).unwrap_or_default();
-    let rate_limit_path = rate_limit::rate_limit_path(host.data_root());
+    let data_root = host.run_settings().data_root;
+    let rate_limit_path = rate_limit::rate_limit_path(&data_root);
     if let Some(pending) = rate_limit_path
         .as_deref()
         .and_then(|path| rate_limit::pending_rate_limit(path, now_ms))
@@ -126,7 +127,7 @@ pub(super) fn collect_ci_evidence<H: RuntimeHost + ?Sized>(
             ),
         }));
     }
-    let history_path = history::history_path(host.data_root());
+    let history_path = history::history_path(&data_root);
     let mut history = history_path
         .as_deref()
         .map(history::load)

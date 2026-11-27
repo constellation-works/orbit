@@ -246,7 +246,8 @@ pub(super) fn prepare_provider_environment(
     // the global registry. Workspace selection is the separate logical
     // `ORBIT_WORKSPACE` selector below, not the linked-worktree cwd.
     // [ORB-10980] [ORB-11066] [ORB-11117]
-    let registry_locator_injected = if let Some(registry_root) = host.orbit_registry_root() {
+    let run_settings = host.run_settings();
+    let registry_locator_injected = if let Some(registry_root) = run_settings.orbit_registry_root {
         dispatch_env.push((MCP_MANAGED_REGISTRY_ROOT_ENV.to_string(), registry_root));
         true
     } else {
@@ -258,7 +259,7 @@ pub(super) fn prepare_provider_environment(
     // source-inspection invocation identity;
     // an explicit `--workspace` or tool-payload selector still wins and still
     // fails closed. [ORB-11117]
-    if let Some(workspace) = host.orbit_workspace_selector() {
+    if let Some(workspace) = run_settings.orbit_workspace_selector {
         dispatch_env.push((MCP_MANAGED_WORKSPACE_ENV.to_string(), workspace));
     }
     // Canonical before the provider starts, so the Linux post-run guard's

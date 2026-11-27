@@ -104,7 +104,8 @@ fn apply_task_automation_update_under_lock(
         update.agent.as_deref(),
         update.model.as_deref(),
     );
-    let runtime_model_identity = <OrbitRuntime as HostEnvironment>::actor_model_identity(runtime);
+    let runtime_model_identity =
+        <OrbitRuntime as HostEnvironment>::run_settings(runtime).actor_model_identity;
     let attribution = assemble_task_attribution(
         &existing_task,
         TaskAttributionInput {

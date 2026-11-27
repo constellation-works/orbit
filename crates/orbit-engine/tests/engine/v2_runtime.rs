@@ -1835,8 +1835,11 @@ fn null_runtime_host_forwards_capability_overrides() {
     use orbit_engine::{Dispatch, HostEnvironment, Recovery};
     struct OverrideHost;
     impl orbit_engine::test_support::NullRuntimeHost for OverrideHost {
-        fn validation_build_output_env(&self) -> Vec<String> {
-            vec!["override".into()]
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                validation_build_output_env: vec!["override".into()],
+                ..orbit_engine::RunSettings::default()
+            }
         }
         fn mid_run_steering_enabled(&self) -> bool {
             true
@@ -1865,7 +1868,7 @@ fn null_runtime_host_forwards_capability_overrides() {
     }
     let host = OverrideHost;
     assert_eq!(
-        HostEnvironment::validation_build_output_env(&host),
+        HostEnvironment::run_settings(&host).validation_build_output_env,
         ["override"]
     );
     assert!(Dispatch::mid_run_steering_enabled(&host));

@@ -193,7 +193,7 @@ pub(crate) fn dispatch_cli_invocation(
     let image_input = admit_image_input(&provider, spec, input, cli_executor.image_input.as_ref())?;
     let timeout_seconds = invocation_timeout_seconds(spec);
     let wall_clock_timeout = Duration::from_secs(timeout_seconds);
-    let stall_window = host.agent_stall_window();
+    let stall_window = host.run_settings().agent_stall_window;
 
     let task_ids = task_ids_from_input(input);
     let task_id = task_id_from_input(input);

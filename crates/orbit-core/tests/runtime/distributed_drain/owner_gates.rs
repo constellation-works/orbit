@@ -105,16 +105,17 @@ fn a_claimed_leaf_applies_the_owners_captured_gates_over_its_own() {
     assert!(receipt.request.ship.review.is_none(), "review is off");
     assert_eq!(receipt.gates, Some(owner_gates()));
 
-    let gates = HostEnvironment::validation_gates(&leaf.bound);
+    let settings = HostEnvironment::run_settings(&leaf.bound);
+    let gates = settings.validation_gates.clone();
     assert_eq!(gates.source, ValidationGateSource::OwnerContract);
     assert_eq!(gates.gates, owner_gates());
     assert_eq!(
-        HostEnvironment::required_validation_commands(&leaf.bound),
-        vec!["make owner-check".to_string()]
+        settings.required_validation_commands(),
+        &["make owner-check".to_string()]
     );
     assert_eq!(
-        HostEnvironment::review_baseline_commands(&leaf.bound),
-        vec!["make owner-affected".to_string()]
+        settings.review_baseline_commands(),
+        &["make owner-affected".to_string()]
     );
     let base = leaf.base.commit.as_str();
     let record = derive_deferral("make owner-affected", base, &gates)
@@ -122,7 +123,9 @@ fn a_claimed_leaf_applies_the_owners_captured_gates_over_its_own() {
     assert_eq!(record.command, "make owner-affected");
     // The owner itself still validates its own runs against its own config.
     assert_eq!(
-        HostEnvironment::validation_gates(&leaf.pair.wire.owner).source,
+        HostEnvironment::run_settings(&leaf.pair.wire.owner)
+            .validation_gates
+            .source,
         ValidationGateSource::LocalConfig
     );
 
@@ -167,7 +170,7 @@ fn a_claim_without_captured_gates_falls_back_to_the_replica_config() {
     });
     assert_eq!(leaf.pair.admission(&leaf.leaf).receipt.unwrap().gates, None);
 
-    let gates = HostEnvironment::validation_gates(&leaf.bound);
+    let gates = HostEnvironment::run_settings(&leaf.bound).validation_gates;
     assert_eq!(gates.source, ValidationGateSource::ReplicaConfig);
     assert_eq!(gates.gates, replica_gates());
     assert!(

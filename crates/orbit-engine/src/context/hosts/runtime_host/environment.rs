@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use orbit_common::OrbitError;
 use orbit_store::contract::{InvocationQuery, InvocationRecord};
 use orbit_tools::ToolContext;
@@ -6,16 +8,18 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::JobRun;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::path::Path;
 
-use crate::context::hosts::{GeneratedPath, UnlockedPathValidation, ValidatedTree};
-use crate::context::hosts::{PrConfig, ScratchGcReport, WorktreeGcTaskLookup};
+use crate::context::RunSettings;
+use crate::context::hosts::{ScratchGcReport, ValidatedTree, WorktreeGcTaskLookup};
 
-/// Host configuration and environment: owed criteria, config accessors,
+/// Host configuration and environment: resolved run settings, owed criteria,
 /// subprocess environments, events, worktree and scratch GC, provider
 /// telemetry, tool runs and model identity.
 pub trait HostEnvironment: Send + Sync {
+    /// Resolved host and workspace configuration for this run, delivered as one
+    /// value rather than individual configuration getters.
+    fn run_settings(&self) -> RunSettings;
+
     /// Admit an implementer's criteria owed after deploy against the task
     /// pilot's post-deploy finding, refusing any criterion the pilot did not
     /// type. An owner run records the admitted claim in task history; a
@@ -37,47 +41,6 @@ pub trait HostEnvironment: Send + Sync {
         run_id: Option<&str>,
     ) -> Result<Vec<usize>, OrbitError>;
 
-    // ── Config accessors ───────────────────────────────────────────────
-
-    /// Commands every delivered candidate must pass
-    /// (`workflow.required_validation_commands`). Empty means no required
-    /// check: the owner delivery path validates nothing.
-    fn required_validation_commands(&self) -> Vec<String>;
-
-    /// `completion.hold`: the admitted rules, in configured order, that
-    /// keep a completion-authorized run's task in `review` [ORB-23322].
-    /// Empty holds nothing.
-    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule>;
-
-    /// The owner's review gates (`review.baseline_commands`). With the
-    /// required commands they are the gates whose Bubblewrap deferrals an
-    /// implementer may hand off for a native replay [ORB-15287].
-    fn review_baseline_commands(&self) -> Vec<String>;
-
-    /// The branch this workspace integrates into: the registered workspace
-    /// base branch, else `workflow.base_branch`. The provider boundary
-    /// guard keys the registered primary checkout's baseline on it, so a
-    /// primary that sits on another branch never becomes a run's base
-    /// [ORB-19177].
-    fn workspace_base_branch(&self) -> String;
-
-    /// The gates this host holds a candidate to, with where it read them
-    /// [ORB-15622]. An owner answers with its own accessors; a claimed leaf's
-    /// host answers with the owner's gates its claim captured, so a
-    /// replica's drifted configuration never decides which deferrals it
-    /// accepts or replays.
-    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates;
-
-    /// `workflow.unlocked_context_paths` and
-    /// `workflow.unlocked_path_validation_commands`: what a candidate that
-    /// changed only unlocked paths since its run's last fully validated tree
-    /// runs instead of the required list [ORB-16784].
-    fn unlocked_path_validation(&self) -> UnlockedPathValidation;
-
-    /// `workflow.generated_paths`: the conflicting paths conflict recovery
-    /// regenerates with a command instead of merging.
-    fn generated_paths(&self) -> Vec<GeneratedPath>;
-
     /// Remember `tree` as the last tree its run passed the full required
     /// list on. The record is the host's own, never task or run-state data
     /// an agent can write; a host that cannot keep one records nothing, so
@@ -87,23 +50,12 @@ pub trait HostEnvironment: Send + Sync {
     /// The tree [`Self::record_validated_tree`] last recorded for `run_id`.
     fn validated_tree(&self, run_id: &str) -> Result<Option<ValidatedTree>, OrbitError>;
 
-    /// The OS this host runs implementers on, which decides the deferral
-    /// kinds it admits [ORB-15587]: this process's OS for a local host.
-    fn host_os(&self) -> Option<orbit_types::workflow::EvidenceHostOs>;
-
     /// Returns provider-agnostic key-value configuration that is forwarded
     /// to the selected provider factory so it can decode any provider-specific
     /// settings (for example Codex reads `"sandbox"`, `"approval_policy"` and
     /// `"allow_login_shell"`).
     fn agent_provider_config(&self) -> HashMap<String, String>;
-    /// How long a provider process may produce no output and use no CPU
-    /// before its step fails as stalled. `None` disables the check and leaves
-    /// only the wall-clock deadline. Hosts answer
-    /// [`AGENT_STALL_MINUTES`](crate::AGENT_STALL_MINUTES).
-    fn agent_stall_window(&self) -> Option<std::time::Duration>;
-    /// Workspace override for this exact activity's CLI wall-clock budget.
-    /// `None` keeps the activity declaration (or the runner default).
-    fn activity_wall_clock_timeout_seconds(&self, activity_name: &str) -> Option<u64>;
+
     /// The complete environment an agent subprocess is launched with.
     ///
     /// Launchers clear the child environment and apply exactly what this
@@ -116,6 +68,7 @@ pub trait HostEnvironment: Send + Sync {
     /// PATH and the rest of the resolved validation PATH after it, the same
     /// for every agent lane. [ORB-10917] [ORB-15204] [ORB-15293]
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)>;
+
     /// [`Self::agent_subprocess_environment`] for an agent of a crew with
     /// `[crews.<name>] env` entries: each entry's name gets its source's value
     /// from the environment the host launched with (runtime defaults such as
@@ -128,15 +81,7 @@ pub trait HostEnvironment: Send + Sync {
         crew_env: &[orbit_types::identity::CrewEnvVar],
         required_env_vars: &[&str],
     ) -> Vec<(String, String)>;
-    /// Whether a Claude activity must be launched with its own credential
-    /// (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`) rather than start on
-    /// the login the Claude Desktop app shares [ORB-15154].
-    ///
-    /// The Desktop revokes that shared login when it refreshes, so an
-    /// unattended run that starts on it fails with a 401 mid-way. A host
-    /// that owns no such login answers `false`; `OrbitRuntime` answers `true`
-    /// on macOS.
-    fn requires_claude_worker_credential(&self) -> bool;
+
     /// The environment owner-side repository tooling runs in: required
     /// validation and `local_shell` steps [ORB-13987].
     ///
@@ -147,28 +92,7 @@ pub trait HostEnvironment: Send + Sync {
     /// login shell under `[workflow.validation_env]`, including workspace-selected
     /// build output bindings applied by host validation runners.
     fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment;
-    /// Workspace output bindings for cache identity. Configured hosts can use
-    /// a config-only read so observational cache queries do not probe a login
-    /// shell. The test-only host shares its environment contract.
-    fn validation_build_output_env(&self) -> Vec<String>;
 
-    /// The authoritative shared Orbit registry root to hand a spawned CLI
-    /// agent as `ORBIT_REGISTRY_ROOT`.
-    ///
-    /// This is the registry that owns the task store, not the dispatching
-    /// checkout's workspace `.orbit`. The locator selects only the global
-    /// registry. Workspace ownership for nested tool calls is the separate
-    /// logical selector from [`Self::orbit_workspace_selector`].
-    /// [ORB-10980] [ORB-11066] [ORB-11117]
-    fn orbit_registry_root(&self) -> Option<String>;
-    /// The trusted logical `ws_*` selector to hand a spawned CLI agent as
-    /// `ORBIT_WORKSPACE`.
-    ///
-    /// Nested MCP and CLI tool calls use this identity instead of inferring
-    /// durable ownership from a linked-worktree cwd. Hosts that are not bound
-    /// to a registered workspace return `None`, and the child then keeps its
-    /// ordinary fail-closed resolution. [ORB-11117]
-    fn orbit_workspace_selector(&self) -> Option<String>;
     /// Rebind durable runtime handles after an external CLI provider exits.
     ///
     /// Provider sandboxes may receive explicit access to a SQLite database and
@@ -179,44 +103,41 @@ pub trait HostEnvironment: Send + Sync {
     // ── Runtime services ───────────────────────────────────────────────
 
     fn record_event(&self, event: OrbitEvent) -> Result<(), OrbitError>;
-    fn repo_root(&self) -> Result<String, OrbitError>;
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError>;
-    /// Admitted rebuildable paths, independent of checkout-authored commands.
-    fn worktree_reclaim_patterns(&self) -> Vec<String>;
-    /// How long a task must have been parked in `someday` before the
-    /// scheduled sweep may remove its run's worktree, normally
-    /// [`WORKTREE_PARKED_RECLAIM_AFTER_HOURS`](crate::WORKTREE_PARKED_RECLAIM_AFTER_HOURS).
-    /// `None` keeps parked worktrees.
-    fn worktree_parked_reclaim_after_hours(&self) -> Option<u64>;
+
     /// A task's settlement state for worktree GC, read from the store that
     /// owns the workspace's tasks. `run_id` is the run whose worktree is
     /// being classified, so a replica can ask through that run's own claim
     /// route. An owner reads its own store; a replica host asks its owner.
     fn lookup_task_for_worktree_gc(&self, run_id: &str, task_id: &str) -> WorktreeGcTaskLookup;
+
     /// Stable scope for memoizing task lookups during one GC sweep. Replica
     /// hosts return the claim's owner selector, because one checkout may hold
     /// claims routed to different owners. `None` disables memoization.
     fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String>;
+
     /// Whether `run_id` is a claimed leaf whose claim this follower has
     /// settled with its owner. The owner then holds the leaf's delivery, so
     /// a terminal leaf's worktree is this machine's to reclaim without asking
     /// about the task. `Some` names the settlement for the GC report; a host
     /// that pulls no work holds no claims.
     fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String>;
+
     /// Whether `run_id` is a claimed leaf whose claim is not yet settled with
     /// its owner, so this follower may still owe the owner the leaf's
     /// delivery. `Some` names the claim's phase, or why it could not be read.
     fn live_claim_for_worktree_gc(&self, run_id: &str) -> Option<String>;
+
     /// Prune this checkout's `.orbit/tmp` of top-level entries untouched for
     /// `retention_hours`. `None` means the host keeps no scratch directory to
     /// sweep.
     fn gc_scratch(&self, retention_hours: u64) -> Result<Option<ScratchGcReport>, OrbitError>;
-    fn data_root(&self) -> &Path;
     fn cancel_job_run(&self, run_id: &str) -> Result<(), OrbitError>;
     fn invocation_records(
         &self,
         query: InvocationQuery,
     ) -> Result<Vec<InvocationRecord>, OrbitError>;
+
     /// [ORB-14695] Record a provider usage limit a run observed in this
     /// host's provider-limit store. The latest observation per provider,
     /// model scope and window stands; an older one never replaces it.
@@ -224,6 +145,7 @@ pub trait HostEnvironment: Send + Sync {
         &self,
         observation: &ProviderLimitObservation,
     ) -> Result<(), OrbitError>;
+
     /// [ORB-25967] Record a provider's complete usage reading, taken at one
     /// instant for one provider account. Each observation is stored as
     /// `record_provider_limit` stores it, and the account's `event`
@@ -237,6 +159,7 @@ pub trait HostEnvironment: Send + Sync {
         &self,
         input: &Value,
     ) -> Result<(Option<String>, Option<String>), OrbitError>;
+
     /// Return the exact model string persisted when the run's crew was
     /// resolved. Workflow commit attribution treats this as opaque config
     /// data and falls back when the run or model is unavailable.
@@ -247,6 +170,7 @@ pub trait HostEnvironment: Send + Sync {
         input: Value,
         tool_context: ToolContext,
     ) -> Result<Value, OrbitError>;
+
     /// Execute an engine-private VCS/PR operation for deterministic shipment.
     ///
     /// Unlike `run_tool_with_context`, this boundary never consults
@@ -257,8 +181,4 @@ pub trait HostEnvironment: Send + Sync {
     fn run_private_vcs_operation(&self, operation: &str, input: Value)
     -> Result<Value, OrbitError>;
     fn resolved_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair>;
-    /// Return the current agent model identity when this runtime is operating
-    /// as an agent, or `None` when there is no model-bearing actor.
-    fn actor_model_identity(&self) -> Option<String>;
-    fn pr_config(&self) -> PrConfig;
 }

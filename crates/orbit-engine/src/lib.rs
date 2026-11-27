@@ -59,7 +59,7 @@ mod executor;
 mod sandbox_spawn;
 mod template;
 
-pub use context::{Dispatch, HostEnvironment, Recovery, ReviewGate, RunLifecycle};
+pub use context::{Dispatch, HostEnvironment, Recovery, ReviewGate, RunLifecycle, RunSettings};
 pub use executor::automation::vcs::claim::CandidateCheckout;
 
 #[cfg(test)]

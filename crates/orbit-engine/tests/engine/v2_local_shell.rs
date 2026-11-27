@@ -59,18 +59,15 @@ impl ShellHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for ShellHost {
-    fn repo_root(&self) -> Result<String, orbit_common::OrbitError> {
-        Ok(self.root.to_string_lossy().into_owned())
-    }
-
     // A host bound to a registered workspace. A CLI agent launched from it
     // would receive both of these; a shell step must not.
-    fn orbit_registry_root(&self) -> Option<String> {
-        Some("/authoritative/registry".to_string())
-    }
-
-    fn orbit_workspace_selector(&self) -> Option<String> {
-        Some("ws_owner".to_string())
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            orbit_registry_root: Some("/authoritative/registry".to_string()),
+            orbit_workspace_selector: Some("ws_owner".to_string()),
+            repo_root: Some(self.root.to_string_lossy().into_owned()),
+            ..orbit_engine::RunSettings::default()
+        }
     }
 
     fn agent_subprocess_environment(&self, _required_env_vars: &[&str]) -> Vec<(String, String)> {
@@ -244,8 +241,8 @@ fn the_activity_fs_profile_reaches_sandbox_resolution() {
 fn a_shell_step_gets_only_the_policy_baseline_and_its_explicit_env() {
     let repo = tempfile::tempdir().expect("tempdir");
     let host = ShellHost::new(repo.path());
-    assert!(host.orbit_registry_root().is_some());
-    assert!(host.orbit_workspace_selector().is_some());
+    assert!(host.run_settings().orbit_registry_root.is_some());
+    assert!(host.run_settings().orbit_workspace_selector.is_some());
     assert!(
         std::env::var_os("CARGO_MANIFEST_DIR").is_some(),
         "the probe needs an ambient variable cargo exports to test processes"

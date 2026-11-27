@@ -213,8 +213,12 @@ impl Host {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for Host {
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Ok(self.repo.to_string_lossy().into_owned())
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            completion_hold_rules: self.hold_rules.lock().expect("hold_rules").clone(),
+            repo_root: Some(self.repo.to_string_lossy().into_owned()),
+            ..orbit_engine::RunSettings::default()
+        }
     }
 
     fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
@@ -230,10 +234,6 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
 
     fn list_run_tasks(&self, _: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
         Ok(vec![self.task.lock().expect("task").clone()])
-    }
-
-    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
-        self.hold_rules.lock().expect("hold_rules").clone()
     }
 
     fn apply_task_automation_update(

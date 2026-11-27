@@ -51,8 +51,11 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
         Ok(vec![RunLifecycle::get_task(self, TASK_ID)?])
     }
 
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Ok(path_str(&self.fx.repo).into())
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            repo_root: Some(path_str(&self.fx.repo).into()),
+            ..orbit_engine::RunSettings::default()
+        }
     }
 
     fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
