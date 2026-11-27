@@ -628,6 +628,30 @@ fn remote_access_caps_devices_and_refusal_keys_at_capacity() {
             assert_eq!(body["refusals"]["items"].as_array().unwrap().len(), 64);
             assert_eq!(body["refusals"]["total"], 64);
 
+            // A new reason arrives before an unlisted-login overflow bucket exists.
+            assert_eq!(
+                server
+                    .request("GET", "/api/tasks?workspace=ws_http_fixture")
+                    .header("host", "dash.tailnet.ts.net")
+                    .send()
+                    .unwrap()
+                    .status()
+                    .as_u16(),
+                403
+            );
+            let body = super::support::json_ok(server.get("/api/remote-access"));
+            let items = body["refusals"]["items"].as_array().unwrap();
+            assert!(items.len() <= 64);
+            assert_eq!(body["refusals"]["total"], 65);
+            assert_eq!(
+                items
+                    .iter()
+                    .filter(|item| item["reason"] == "unlisted_login")
+                    .map(|item| item["count_24h"].as_u64().unwrap())
+                    .sum::<u64>(),
+                64
+            );
+
             for i in 64..66 {
                 let login = format!("mallory-{i:02}@example.com");
                 assert_eq!(
@@ -674,7 +698,7 @@ fn remote_access_caps_devices_and_refusal_keys_at_capacity() {
                 "refusal keys must remain capped at 64, got {}: {items:?}",
                 items.len()
             );
-            assert_eq!(body["refusals"]["total"], 68);
+            assert_eq!(body["refusals"]["total"], 69);
             assert!(
                 items
                     .iter()
