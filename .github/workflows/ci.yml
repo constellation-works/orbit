@@ -739,7 +739,10 @@ jobs:
           # Pull requests run the self-tests whose inputs changed against the
           # base; a push runs every self-test.
           CI_SELF_TESTS: ${{ github.event_name == 'pull_request' && 'changed' || 'all' }}
-          CI_TEST_BASE: ${{ github.event.pull_request.base.sha }}
+          # A push checks the range it pushed, from `before` to the new tip. An
+          # all-zero `before` (a new branch) has no base, so the base stays empty
+          # and the gates fall back to agent-main as they did before.
+          CI_TEST_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before || '' }}
         run: |
           set -euo pipefail
           TIMEFORMAT='guardrails_seconds=%R'
@@ -776,7 +779,8 @@ jobs:
       - name: Run CI QA guardrails
         env:
           CI_SELF_TESTS: ${{ github.event_name == 'pull_request' && 'changed' || 'all' }}
-          CI_TEST_BASE: ${{ github.event.pull_request.base.sha }}
+          # The same push base as the core guardrails job (see above).
+          CI_TEST_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before || '' }}
         run: |
           set -euo pipefail
           TIMEFORMAT='qa_guardrails_seconds=%R'
