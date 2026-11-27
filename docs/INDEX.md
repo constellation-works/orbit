@@ -221,7 +221,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Task Publication](./design/task-publication/1_overview.md) | — | codex |
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | — | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | — | claude |
-| [User Interface](./design/user-interface/1_overview.md) | — | gemini |
+| [User Interface](./design/user-interface/1_overview.md) | Approve the compact-viewports spec, then file its three phases [ORB-29230] | gemini |
 | [Workspace Agent Corpus](./design/workspace-agent-corpus/1_scope.md) | — | Orbit |
 
 ### Parked (4)

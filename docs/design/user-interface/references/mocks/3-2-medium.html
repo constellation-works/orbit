@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Mock 3.2: Medium viewports</title>
+<!-- Mock for docs/design/user-interface/specs/compact-viewports.md. The frames are
+     1000px and 768px viewports, 640px tall. Tokens come from the dashboard's
+     base.css; the layout is mock-only CSS in compact.css. -->
+<link rel="stylesheet" href="../../../../../crates/orbit-web/assets/dashboard/css/base.css">
+<link rel="stylesheet" href="mock.css">
+<link rel="stylesheet" href="compact.css">
+</head>
+<body class="mock-page">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-search" viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.5"/><path d="M17 17l-3.6-3.6"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 20 20"><path d="M5 14V9a5 5 0 0110 0v5l1.5 2h-13zM8.5 17.5h3"/></symbol>
+  <symbol id="i-toggle" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M8 4v12"/></symbol>
+  <symbol id="i-tasks" viewBox="0 0 20 20"><path d="M3 5h14M3 10h14M3 15h9"/></symbol>
+  <symbol id="i-drain" viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 17h12"/></symbol>
+  <symbol id="i-jobs" viewBox="0 0 20 20"><path d="M6 4.5l9 5.5-9 5.5z"/></symbol>
+  <symbol id="i-health" viewBox="0 0 20 20"><path d="M2 11h4l2-5 4 9 2-4h4"/></symbol>
+  <symbol id="i-open" viewBox="0 0 20 20"><path d="M8 4H4v12h12v-4M11 3h6v6M17 3l-8 8"/></symbol>
+  <symbol id="i-dest" viewBox="0 0 20 20"><rect x="3" y="3" width="14" height="14" rx="2"/></symbol>
+</svg>
+
+<h1 class="mock-title">Mock 3.2: Medium viewports (761 to 1315px)</h1>
+<p class="mock-note">The rail shows icons only, 56px in place of 200px, and the host and workspace selects move to the header. The list and the task pane share the width while the list keeps 380px and the pane 440px; below that the list has the width to itself and a task opens over it.</p>
+
+<p class="mock-label new">1000px: list with task pane</p>
+<div class="cv-frames">
+<div class="cv-frame" style="width: 1000px; height: 640px">
+  <div class="cv-head">
+    <span class="cv-mark" role="img" aria-label="Orbit"></span><span class="cv-brand">orbit</span>
+    <span class="cv-select host"><span>dk-server-2</span></span><span class="cv-badge">Serving</span>
+    <span class="cv-select"><span>orbit</span></span>
+    <span class="cv-spacer"></span>
+    <span class="cv-search"><svg class="cv-ico"><use href="#i-search"/></svg>Search tasks or run ID</span>
+    <span class="cv-btn primary"><svg class="cv-ico"><use href="#i-plus"/></svg>New task</span>
+    <span class="cv-iconbtn" role="img" aria-label="Notify"><svg class="cv-ico"><use href="#i-bell"/></svg></span>
+  </div>
+  <div class="cv-body">
+    <div class="cv-rail">
+      <span class="cv-rail-btn" role="img" aria-label="Show navigation"><svg class="cv-ico"><use href="#i-toggle"/></svg></span>
+      <hr>
+      <span class="cv-rail-btn on" role="img" aria-label="Tasks, 31"><svg class="cv-ico"><use href="#i-tasks"/></svg></span>
+      <span class="cv-rail-btn run" role="img" aria-label="Drain, 13 of 15 running"><svg class="cv-ico"><use href="#i-drain"/></svg></span>
+      <span class="cv-rail-btn" role="img" aria-label="Jobs, 40 runs"><svg class="cv-ico"><use href="#i-jobs"/></svg></span>
+      <hr>
+      <span class="cv-rail-btn" role="img" aria-label="Fleet"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+      <span class="cv-rail-btn alert" role="img" aria-label="Health, 2 incidents"><svg class="cv-ico"><use href="#i-health"/></svg></span>
+      <span class="cv-rail-btn" role="img" aria-label="Analytics"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+      <hr>
+      <span class="cv-rail-btn" role="img" aria-label="Automation"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+      <span class="cv-rail-btn" role="img" aria-label="Knowledge"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+      <span class="cv-rail-btn" role="img" aria-label="Plugins"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+      <span class="cv-rail-btn" role="img" aria-label="Settings"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+    </div>
+    <div class="cv-split">
+      <div>
+        <div class="cv-pills" style="padding-top: 0">
+          <span class="cv-pill" title="In progress"><span class="cv-dot" style="--dot: var(--status-in-progress)"></span><b>11</b></span>
+          <span class="cv-pill" title="Review"><span class="cv-dot" style="--dot: var(--status-review)"></span><b>2</b></span>
+          <span class="cv-pill" title="Blocked"><span class="cv-dot" style="--dot: var(--status-blocked)"></span><b>0</b></span>
+          <span class="cv-pill off" title="Proposed"><span class="cv-dot" style="--dot: var(--status-proposed)"></span></span>
+          <span class="cv-pill" title="Backlog"><span class="cv-dot" style="--dot: var(--status-backlog)"></span><b>18</b></span>
+          <span class="cv-pill more">More</span>
+        </div>
+        <div class="cv-card">
+          <div class="cv-group"><span class="cv-dot" style="--dot: var(--status-review)"></span>Ready for review <b>2</b></div>
+          <div class="cv-row sel"><span class="cv-title">Include parent modules when filing Rust moves</span><span class="cv-meta">ORB-29210 · risk 11% · hydrogen@high</span><span class="cv-act">PR #11463</span></div>
+          <div class="cv-row"><span class="cv-title">Delete NullRuntimeHost and the supertrait</span><span class="cv-meta">ORB-28414 · risk 85% · sol</span><span class="cv-act">PR #11455</span></div>
+        </div>
+        <div class="cv-card">
+          <div class="cv-group"><span class="cv-dot" style="--dot: var(--status-in-progress)"></span>In progress <b>11</b></div>
+          <div class="cv-row"><span class="cv-title">Review a frozen delivery batch</span><span class="cv-meta">ORB-29224 · 2m · hydrogen@high</span><span class="cv-act">View run</span></div>
+          <div class="cv-row"><span class="cv-title">Mandate attachment in write_screened_update checks</span><span class="cv-meta">ORB-29222 · 2m · risk 11% · sonnet@high</span><span class="cv-act">View run</span></div>
+          <div class="cv-row"><span class="cv-title">Fix REQUEST_WINDOW doc comment limit (901 vs 900)</span><span class="cv-meta">ORB-29219 · 6m · risk 8% · muse-spark</span><span class="cv-act">View run</span></div>
+          <div class="cv-row"><span class="cv-title">Narrow crate-internal paths in the engine's job module</span><span class="cv-meta">ORB-29208 · 9m · risk 28% · terra</span><span class="cv-act">View run</span></div>
+        </div>
+      </div>
+      <div class="cv-task">
+        <div class="cv-task-head"><span>ORB-29210</span><span class="cv-spacer"></span><span class="cv-iconbtn" role="img" aria-label="Open full page"><svg class="cv-ico"><use href="#i-open"/></svg></span><span class="cv-esc">esc</span></div>
+        <div class="cv-task-body">
+          <h2>Include parent modules when filing Rust moves</h2>
+          <div class="cv-props">
+            <span class="cv-pill"><span class="cv-dot" style="--dot: var(--status-review)"></span>Review</span>
+            <span class="cv-pill">Medium</span>
+            <span class="cv-pill">Crew hydrogen@high</span>
+            <span class="cv-pill">Risk <b>11%</b></span>
+          </div>
+          <div class="cv-tabs"><span class="on">Overview</span><span>Context files</span><span>Runs</span><span>Activity</span></div>
+          <div class="cv-block"><div class="cv-kv">
+            <span>Scheduled</span><span>not scheduled · started 15:40 UTC</span>
+            <span>Run</span><span>jrun-20261127-1540-c3 on dk-server-2</span>
+            <span>Delivery</span><span>PR #11463</span>
+          </div></div>
+          <div class="cv-block"><h3>Acceptance criteria</h3>A move of a Rust file files its parent module in the same footprint.<br><br>A move inside one module adds no parent.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="cv-status"><span class="cv-dot" style="--dot: var(--accent)"></span>orbit.log<span>15:47:38</span><span>codex</span><span>item.completed</span><span class="cv-spacer"></span><span class="cv-act">Open log</span></div>
+</div>
+</div>
+<ul class="mock-changes" style="max-width: 86ch; margin-bottom: 36px"><li>Content is 944px wide: the list has 464px and the pane 440px. Today at 1024px they have 443px and 329px beside a 200px rail.</li><li>Rows are two-line until the list has 620px. Pills are short until their full row fits; both are measured from content, not tied to this viewport.</li><li>A dot on an icon is an attention count. The toggle opens the labelled rail over the content.</li><li>Destination icons other than Tasks, Drain, Jobs and Health are placeholders; the build uses the rail's.</li></ul>
+
+<p class="mock-label new">768px: one column</p>
+<div class="cv-frames">
+<div class="cv-frame" style="width: 768px; height: 640px">
+  <div class="cv-head">
+    <span class="cv-mark" role="img" aria-label="Orbit"></span><span class="cv-brand">orbit</span>
+    <span class="cv-select host"><span>dk-server-2</span></span><span class="cv-badge">Serving</span>
+    <span class="cv-select"><span>orbit</span></span>
+    <span class="cv-spacer"></span>
+    <span class="cv-search" style="flex-basis: 220px"><svg class="cv-ico"><use href="#i-search"/></svg>Search tasks or run ID</span>
+    <span class="cv-iconbtn primary" role="img" aria-label="New task"><svg class="cv-ico"><use href="#i-plus"/></svg></span>
+    <span class="cv-iconbtn" role="img" aria-label="Notify"><svg class="cv-ico"><use href="#i-bell"/></svg></span>
+  </div>
+  <div class="cv-body">
+    <div class="cv-rail">
+      <span class="cv-rail-btn" role="img" aria-label="Show navigation"><svg class="cv-ico"><use href="#i-toggle"/></svg></span>
+      <hr>
+      <span class="cv-rail-btn on" role="img" aria-label="Tasks, 31"><svg class="cv-ico"><use href="#i-tasks"/></svg></span>
+      <span class="cv-rail-btn run" role="img" aria-label="Drain, 13 of 15 running"><svg class="cv-ico"><use href="#i-drain"/></svg></span>
+      <span class="cv-rail-btn" role="img" aria-label="Jobs, 40 runs"><svg class="cv-ico"><use href="#i-jobs"/></svg></span>
+      <hr>
+      <span class="cv-rail-btn" role="img" aria-label="Fleet"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+      <span class="cv-rail-btn alert" role="img" aria-label="Health, 2 incidents"><svg class="cv-ico"><use href="#i-health"/></svg></span>
+      <span class="cv-rail-btn" role="img" aria-label="Analytics"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+      <hr>
+      <span class="cv-rail-btn" role="img" aria-label="Automation"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+      <span class="cv-rail-btn" role="img" aria-label="Knowledge"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+      <span class="cv-rail-btn" role="img" aria-label="Plugins"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+      <span class="cv-rail-btn" role="img" aria-label="Settings"><svg class="cv-ico"><use href="#i-dest"/></svg></span>
+    </div>
+    <div class="cv-main">
+      <div class="cv-pills" style="padding-top: 0">
+        <span class="cv-pill"><span class="cv-dot" style="--dot: var(--status-in-progress)"></span>In progress <b>11</b></span>
+        <span class="cv-pill"><span class="cv-dot" style="--dot: var(--status-review)"></span>Review <b>2</b></span>
+        <span class="cv-pill"><span class="cv-dot" style="--dot: var(--status-blocked)"></span>Blocked <b>0</b></span>
+        <span class="cv-pill off"><span class="cv-dot" style="--dot: var(--status-proposed)"></span>Proposed</span>
+        <span class="cv-pill"><span class="cv-dot" style="--dot: var(--status-backlog)"></span>Backlog <b>18</b></span>
+        <span class="cv-pill more">More</span>
+      </div>
+      <div class="cv-card">
+        <div class="cv-group"><span class="cv-dot" style="--dot: var(--status-review)"></span>Ready for review <b>2</b></div>
+        <div class="cv-row wide"><span class="cv-title">Include parent modules when filing Rust moves</span><span class="cv-meta">ORB-29210 · risk 11%</span><span class="cv-select cv-crew"><span>hydrogen@high</span></span><span class="cv-act">PR #11463</span></div>
+        <div class="cv-row wide"><span class="cv-title">Delete NullRuntimeHost and the supertrait</span><span class="cv-meta">ORB-28414 · risk 85%</span><span class="cv-select cv-crew"><span>sol</span></span><span class="cv-act">PR #11455</span></div>
+      </div>
+      <div class="cv-card">
+        <div class="cv-group"><span class="cv-dot" style="--dot: var(--status-in-progress)"></span>In progress <b>11</b></div>
+        <div class="cv-row wide"><span class="cv-title">Review a frozen delivery batch</span><span class="cv-meta">ORB-29224 · 2m</span><span class="cv-select cv-crew"><span>hydrogen@high</span></span><span class="cv-act">View run</span></div>
+        <div class="cv-row wide"><span class="cv-title">Mandate attachment in write_screened_update checks</span><span class="cv-meta">ORB-29222 · 2m · risk 11%</span><span class="cv-select cv-crew"><span>sonnet@high</span></span><span class="cv-act">View run</span></div>
+        <div class="cv-row wide"><span class="cv-title">Fix REQUEST_WINDOW doc comment limit (901 vs 900)</span><span class="cv-meta">ORB-29219 · 6m · risk 8%</span><span class="cv-select cv-crew"><span>muse-spark</span></span><span class="cv-act">View run</span></div>
+        <div class="cv-row wide"><span class="cv-title">Narrow crate-internal paths in the engine's job module</span><span class="cv-meta">ORB-29208 · 9m · risk 28%</span><span class="cv-select cv-crew"><span>terra</span></span><span class="cv-act">View run</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="cv-status"><span class="cv-dot" style="--dot: var(--accent)"></span>orbit.log<span>15:47:38</span><span>codex</span><span>item.completed</span><span class="cv-spacer"></span><span class="cv-act">Open log</span></div>
+</div>
+</div>
+<ul class="mock-changes" style="max-width: 86ch"><li>Content is 712px wide, under the 836px the list and pane need together, so the list has all of it: 672px, against 196px today with a task open.</li><li>Rows keep today's desktop layout with the crew select, and the pills keep their labels, because both fit.</li><li>A task opens over the list, inside the header and rail, with esc at its top right. The header has dropped New task to its icon.</li></ul>
+</body>
+</html>
