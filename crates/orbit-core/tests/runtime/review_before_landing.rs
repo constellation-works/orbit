@@ -137,16 +137,14 @@ fn a_before_landing_review_that_does_not_approve_keeps_the_pr_open_in_review() {
         let handoff = failure_handoff(&fixture, failed_step, message);
         assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
         assert_eq!(handoff["reason"], reason, "{handoff}");
+        assert_eq!(handoff["failed_step_id"], failed_step, "{handoff}");
         assert_eq!(handoff["pr_number"], "42");
         assert_eq!(handoff["task_status"], "review");
         assert_eq!(status(&fixture), TaskStatus::Review);
     }
-    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
-    assert!(
-        comments.iter().any(|comment| comment.message.starts_with(
-            "Before-landing review did not approve PR #42 (`review_timeout_incomplete`)"
-        )),
-        "{comments:#?}"
+    assert_eq!(
+        landing_handoff_comment_count(&fixture, "Before-landing review stopped"),
+        3
     );
 
     let run_id = fixture.input["job_run_id"].as_str().unwrap();
@@ -195,6 +193,22 @@ pub(super) fn published(fixture: &Fixture) {
 
 fn status(fixture: &Fixture) -> TaskStatus {
     fixture.runtime.get_task(&fixture.task_id).unwrap().status
+}
+
+fn landing_handoff_comment_count(fixture: &Fixture, prefix: &str) -> usize {
+    let run_id = fixture.input["job_run_id"].as_str().unwrap();
+    let run_command = format!("orbit run show {run_id} --json");
+    fixture
+        .runtime
+        .get_task_comments(&fixture.task_id)
+        .unwrap()
+        .into_iter()
+        .filter(|comment| comment.message.starts_with(prefix))
+        .inspect(|comment| {
+            assert_eq!(comment.message.lines().count(), 1, "{comment:?}");
+            assert!(comment.message.contains(&run_command), "{comment:?}");
+        })
+        .count()
 }
 
 fn failure_handoff(fixture: &Fixture, failed_step: &str, message: &str) -> Value {
@@ -560,20 +574,9 @@ fn an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_not
     assert_eq!(stranded.remote("refs/heads/main"), main_before);
     assert_eq!(handoff["task_status"], "review", "{handoff}");
     assert_eq!(status(&stranded.fixture), TaskStatus::Review);
-    let comments = stranded
-        .fixture
-        .runtime
-        .get_task_comments(&stranded.fixture.task_id)
-        .unwrap();
-    assert!(
-        comments.iter().any(|comment| {
-            comment
-                .message
-                .starts_with("Before-landing review did not approve PR #42")
-                && comment.message.contains("was pushed to the PR branch")
-                && comment.message.contains("neither approved nor revalidated")
-        }),
-        "{comments:#?}"
+    assert_eq!(
+        landing_handoff_comment_count(&stranded.fixture, "Before-landing review stopped"),
+        1
     );
 }
 
@@ -629,22 +632,12 @@ fn a_before_landing_review_of_a_pr_merged_outside_orbit_says_so_and_names_the_st
     assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
     assert_eq!(handoff["reviewer_push"], Value::Null, "{handoff}");
     assert_eq!(stranded.remote("refs/heads/candidate"), stranded.published);
-    let comments = stranded
-        .fixture
-        .runtime
-        .get_task_comments(&stranded.fixture.task_id)
-        .unwrap();
-    let handoff_note = comments
-        .iter()
-        .rfind(|comment| comment.message.starts_with("Before-landing review ended"))
-        .unwrap_or_else(|| panic!("{comments:#?}"));
-    assert!(
-        handoff_note
-            .message
-            .contains("already merged outside Orbit")
-            && !handoff_note.message.contains("stays open and unmerged"),
-        "{}",
-        handoff_note.message
+    assert_eq!(
+        landing_handoff_comment_count(
+            &stranded.fixture,
+            "Before-landing review ended because the pull request had already merged"
+        ),
+        1
     );
 }
 
@@ -757,19 +750,9 @@ fn a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved() {
     assert_eq!(stranded.remote("refs/heads/candidate"), moved);
     assert_eq!(stranded.remote(&expected_ref), reviewer_commit);
     assert_eq!(status(&stranded.fixture), TaskStatus::Review);
-    let comments = stranded
-        .fixture
-        .runtime
-        .get_task_comments(&stranded.fixture.task_id)
-        .unwrap();
-    assert!(
-        comments.iter().any(|comment| {
-            comment.message.contains("push_lease_lost")
-                && comment.message.contains("PR branch is unchanged")
-                && comment.message.contains(&reviewer_commit)
-                && comment.message.contains(&expected_ref)
-        }),
-        "{comments:#?}"
+    assert_eq!(
+        landing_handoff_comment_count(&stranded.fixture, "Before-landing review stopped"),
+        1
     );
 }
 
@@ -805,21 +788,9 @@ fn a_rejected_before_landing_review_pushes_nothing() {
     assert_eq!(stranded.remote("refs/heads/candidate"), stranded.published);
     assert_eq!(stranded.remote(&expected_ref), reviewer_commit);
     assert_eq!(status(&stranded.fixture), TaskStatus::Review);
-    let comments = stranded
-        .fixture
-        .runtime
-        .get_task_comments(&stranded.fixture.task_id)
-        .unwrap();
-    assert!(
-        comments.iter().any(|comment| {
-            comment
-                .message
-                .starts_with("Before-landing review did not approve PR #42")
-                && comment.message.contains(&reviewer_commit)
-                && comment.message.contains(&expected_ref)
-                && comment.message.contains("not pushed to the PR branch")
-        }),
-        "{comments:#?}"
+    assert_eq!(
+        landing_handoff_comment_count(&stranded.fixture, "Before-landing review stopped"),
+        1
     );
 }
 
@@ -847,7 +818,7 @@ fn setup_before_landing_remote() -> (Fixture, PathBuf, String) {
 
 /// A before-landing review that times out mid-repair commits its uncommitted
 /// repairs, preserves that commit on a durable candidate ref (never pushing to
-/// the PR branch), and names the commit and ref in the delivery comment.
+/// the PR branch), and records the commit and ref in the handoff output.
 fn a_timed_out_before_landing_review_preserves_uncommitted_repairs_on_a_durable_ref() {
     let (fixture, bare, published_head) = setup_before_landing_remote();
     std::fs::write(
@@ -893,12 +864,9 @@ fn a_timed_out_before_landing_review_preserves_uncommitted_repairs_on_a_durable_
         git(&bare, &["rev-parse", &format!("{preserved_commit}^")]),
         published_head
     );
-    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
-    assert!(
-        comments.iter().any(|comment| {
-            comment.message.contains(&preserved_commit) && comment.message.contains(&expected_ref)
-        }),
-        "{comments:#?}"
+    assert_eq!(
+        landing_handoff_comment_count(&fixture, "Before-landing review stopped"),
+        1
     );
 }
 
@@ -1006,12 +974,9 @@ fn a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_na
         "protected .env blob {env_blob} must not enter repository object store"
     );
 
-    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
-    assert!(
-        comments.iter().any(|comment| {
-            comment.message.contains(&expected_artifact) && comment.message.contains(reason)
-        }),
-        "{comments:#?}"
+    assert_eq!(
+        landing_handoff_comment_count(&fixture, "Before-landing review stopped"),
+        1
     );
 }
 

@@ -702,7 +702,7 @@ pub(super) fn repeated_observation_failure_holds_after_one_retry() {
             .get_task_comments(&f.task)
             .unwrap()
             .iter()
-            .any(|c| c.message.contains("PR completion failed after publication")),
+            .any(|c| c.message.starts_with("Pull request completion stopped")),
         "a held completion does not run the failure handoff"
     );
     let requests = std::fs::read_to_string(calls).unwrap();

@@ -46,7 +46,7 @@ use super::{
 
 /// Block on a merged pull request whose review repair was preserved.
 ///
-/// The push step's handoff comment may already carry the recipe. This does
+/// The push step may already have recorded the handoff. This does
 /// not add another, and it does not invent a blocker kind: `decision` is the
 /// existing free-form failure-handoff field.
 fn review_repair_after_merge_handoff<H: RunLifecycle + ?Sized>(
@@ -54,6 +54,7 @@ fn review_repair_after_merge_handoff<H: RunLifecycle + ?Sized>(
     task: &orbit_types::task::Task,
     failed_step_id: &str,
     error_message: &str,
+    run_id: &str,
 ) -> Result<Option<Value>, OrbitError> {
     let Some(start) = error_message.find("review_repair_after_merge:") else {
         return Ok(None);
@@ -79,7 +80,10 @@ fn review_repair_after_merge_handoff<H: RunLifecycle + ?Sized>(
             append_comments.push(TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
-                message: recipe.to_string(),
+                message: format!(
+                    "Review repair handoff failed because the pull request already merged; inspect \
+                     `orbit run show {run_id} --json` to recover the repair."
+                ),
                 operation_id: Some(operation_id),
             });
         }
@@ -164,10 +168,10 @@ pub(in crate::executor::automation) fn pr_failure_handoff<
     ensure_failure_handoff_ownership(host, input, &task, run_id)?;
 
     // A before-landing repair whose pull request merged at the leased head is
-    // already preserved. Leave the task blocked with the operator recipe,
+    // already preserved. Leave the task blocked with the recipe in the failed step,
     // instead of the completion path that keeps a task in review.
     if let Some(outcome) =
-        review_repair_after_merge_handoff(host, &task, failed_step_id, error_message)?
+        review_repair_after_merge_handoff(host, &task, failed_step_id, error_message, run_id)?
     {
         return Ok(outcome);
     }
@@ -516,7 +520,10 @@ pub(in crate::executor::automation) fn pr_failure_handoff<
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
-                message: format!("{note}\n\n{body}"),
+                message: format!(
+                    "Delivery failed because {}; inspect `orbit run show {run_id} --json` before retrying.",
+                    if conflict_blocked { "of a merge conflict" } else { "a delivery step failed" }
+                ),
                 operation_id: None,
             }],
             ..TaskAutomationUpdate::default()

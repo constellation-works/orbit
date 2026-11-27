@@ -796,13 +796,22 @@ impl TaskV2Store {
             }
 
             for comment in &fields.append_comments {
+                if comment.operation_id.as_ref().is_some_and(|operation_id| {
+                    !operation_id.trim().is_empty()
+                        && bundle
+                            .comments
+                            .iter()
+                            .any(|row| row.operation_id.as_ref() == Some(operation_id))
+                }) {
+                    continue;
+                }
                 let row = TaskCommentRowV2 {
                     schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
                     comment_id: format!("C-{next_comment:04}"),
                     at: comment.at,
                     by: comment.by.clone(),
                     body: comment.message.clone(),
-                    operation_id: None,
+                    operation_id: comment.operation_id.clone(),
                 };
                 pending_comments.push(row.clone());
                 bundle.comments.push(row);
@@ -833,7 +842,7 @@ impl TaskV2Store {
             }
 
             if !fields.append_history.is_empty()
-                || !fields.append_comments.is_empty()
+                || !pending_comments.is_empty()
                 || fields.status.is_some()
                 || fields.status_event.is_some()
                 || fields.status_note.is_some()

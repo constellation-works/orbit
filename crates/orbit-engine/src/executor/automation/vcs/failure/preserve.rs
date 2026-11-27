@@ -180,32 +180,10 @@ pub(super) fn preserve_agent_blocked_candidate<
         .as_ref()
         .map_or("unspecified", |blocker| blocker.kind.as_str())
         .to_string();
-    let diagnostic = bounded_diagnostic(error_message);
     let note = format!(
         "{} kind={kind} an agent declared a blocker: run={run_id}, \
          failed_step={failed_step_id}, candidate={head_sha}, branch={branch}; no PR was opened",
         orbit_types::workflow::TASK_BLOCKED_BY_AGENT_MARKER
-    );
-    // [ORB-29000] `orbit job resume` refuses this held run, so the comment
-    // names the worktree and the route that keeps its uncommitted candidate.
-    let task_id = task.id.as_str();
-    let worktree = workspace_path.display();
-    let body = format!(
-        "## Agent blocker\n\nThe implementer or step recovery stopped with kind `{kind}` and \
-         asked the run not to continue. No final recovery ran, no review budget was spent, \
-         nothing was committed or pushed, and no PR was opened. The candidate is uncommitted in \
-         the worktree below, and no other copy exists.\n\n- Run: `{run_id}`\n- Failed step: \
-         `{failed_step_id}`\n- Kind: `{kind}`\n- Worktree: `{worktree}`\n- Branch: `{branch}`\n\
-         - Head: `{head_sha}`\n\n`orbit job resume` refuses this held run, and a later run does not \
-         reuse uncommitted files. To keep the candidate once the blocker is resolved:\n\n\
-         1. Leave the worktree in place.\n\
-         2. Save its changes from your checkout: `git -C {worktree} add -A && git -C {worktree} \
-         diff --cached --binary HEAD > .orbit/tmp/{task_id}-salvage.patch`.\n\
-         3. Attach the patch with `orbit task artifact put {task_id} .orbit/tmp/{task_id}-salvage.patch` \
-         and name it in a task comment so the next run can read it.\n\
-         4. Once the run has stopped, return the task to backlog with `orbit task requeue {task_id} \
-         --reason '<why it can continue>'`; requeue is refused while the run still runs. The next run \
-         starts fresh.\n\n## Failure\n\n```text\n{diagnostic}\n```"
     );
     host.apply_task_automation_update(
         &task.id,
@@ -218,7 +196,10 @@ pub(super) fn preserve_agent_blocked_candidate<
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
-                message: format!("{note}\n\n{body}"),
+                message: format!(
+                    "Delivery stopped because an agent reported a blocker; inspect \
+                     `orbit run show {run_id} --json` to resolve it and preserve the candidate."
+                ),
                 operation_id: None,
             }],
             ..TaskAutomationUpdate::default()
@@ -234,6 +215,12 @@ pub(super) fn preserve_agent_blocked_candidate<
         "branch": branch,
         "head_sha": head_sha,
         "blocker_kind": kind,
+        "worktree": workspace_path,
+        "recovery": format!(
+            "Leave the worktree in place. Save its changes with `git -C {worktree} add -A && git -C {worktree} diff --cached --binary HEAD > .orbit/tmp/{task_id}-salvage.patch`. Attach the patch with `orbit task artifact put {task_id} .orbit/tmp/{task_id}-salvage.patch` and name it in a task comment. Once the blocker is resolved and the run has stopped, requeue with `orbit task requeue {task_id} --reason '<why it can continue>'`; the next run starts fresh.",
+            worktree = workspace_path.display(),
+            task_id = task.id,
+        ),
         "candidate_preserved": true,
         "pr_created": false,
         "task_status": "blocked",
@@ -345,11 +332,10 @@ pub(super) fn preserve_validation_environment_candidate<
     task: &orbit_types::task::Task,
     run_id: &str,
     failed_step_id: &str,
-    error_message: &str,
+    _error_message: &str,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
     let (branch, head_sha) = candidate_head(&host.process_env(), workspace_path)?;
-    let diagnostic = bounded_diagnostic(error_message);
     let held = carry_held_candidate(
         host,
         task,
@@ -364,18 +350,6 @@ pub(super) fn preserve_validation_environment_candidate<
          failed_step={failed_step_id}, candidate={head_sha}, branch={branch}; the candidate was \
          not judged and no PR was opened"
     );
-    let body = format!(
-        "## Validation environment\n\nA required validation command could not run because a \
-         tool it calls is missing from the validation environment. This is the host's \
-         environment, not a defect in the candidate, so no repair ran, no review or rework \
-         budget was spent, and no PR was opened.\n\n- Run: `{run_id}`\n- Failed step: \
-         `{failed_step_id}`\n- Candidate branch: `{branch}`\n- Candidate head: `{head_sha}`\n\n\
-         Make the tool available to the owner's login shell (or set \
-         `workflow.validation_env.path`), check with `orbit doctor`, then resume validation on \
-         the same candidate with `orbit job resume {run_id}`.\n\n{}\n\n## Failure\n\n\
-         ```text\n{diagnostic}\n```",
-        held_place(&held)
-    );
     host.apply_task_automation_update(
         &task.id,
         TaskAutomationUpdate {
@@ -388,7 +362,10 @@ pub(super) fn preserve_validation_environment_candidate<
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
-                message: format!("{note}\n\n{body}"),
+                message: format!(
+                    "Validation failed because a required tool is missing; inspect \
+                     `orbit run show {run_id} --json` to restore it and resume."
+                ),
                 operation_id: None,
             }],
             append_history: vec![held_history(&held)],
@@ -663,34 +640,6 @@ pub(super) fn hold_child_timeout_candidate<
     Ok(output)
 }
 
-/// The failures a hold recorded, as a Markdown section of the hold comment
-/// [ORB-15374], or nothing for a hold that records none.
-fn failing_on_base(failures: &orbit_types::workflow::BaselineRedFailures) -> String {
-    let lines = if failures.identities.is_empty() {
-        failures
-            .tail
-            .iter()
-            .map(|line| format!("    {line}"))
-            .collect::<Vec<_>>()
-    } else {
-        failures
-            .identities
-            .iter()
-            .map(|identity| format!("- `{identity}`"))
-            .chain((failures.omitted > 0).then(|| format!("- and {} more", failures.omitted)))
-            .collect()
-    };
-    if lines.is_empty() {
-        return String::new();
-    }
-    let heading = if failures.identities.is_empty() {
-        "The base run names no failing test; its output ends:"
-    } else {
-        "Failing on the base:"
-    };
-    format!("\n{heading}\n\n{}\n", lines.join("\n"))
-}
-
 /// Keep a candidate whose required command fails on its base exactly as on
 /// the candidate, and hold its task [ORB-14258].
 ///
@@ -705,7 +654,7 @@ fn failing_on_base(failures: &orbit_types::workflow::BaselineRedFailures) -> Str
 /// its durable ref on `origin` and recorded in the task's history; admission
 /// hands it to the task's next claim, and a run on this host finds it in this
 /// handoff's output. When the push is refused the hold still happens, and its
-/// output and comment say the candidate is host-local.
+/// output says the candidate is host-local.
 pub(super) fn hold_baseline_red_candidate<
     H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
 >(
@@ -713,12 +662,11 @@ pub(super) fn hold_baseline_red_candidate<
     task: &orbit_types::task::Task,
     run_id: &str,
     failed_step_id: &str,
-    error_message: &str,
+    _error_message: &str,
     hold: &orbit_types::workflow::BaselineRedHold,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
     let (branch, head_sha) = candidate_head(&host.process_env(), workspace_path)?;
-    let diagnostic = bounded_diagnostic(error_message);
     let held = carry_held_candidate(
         host,
         task,
@@ -750,20 +698,6 @@ pub(super) fn hold_baseline_red_candidate<
         hold.base_sha,
         hold.failures_clause()
     ));
-    let body = format!(
-        "## Red base\n\nRequired validation `{}` fails on base `{}` exactly as it fails on this \
-         candidate, so the candidate did not cause it. No repair ran and no rework budget was \
-         spent; {publication}.\n\n- Run: `{run_id}`\n- Failed step: \
-         `{failed_step_id}`\n- Candidate branch: `{branch}`\n- Candidate head: `{head_sha}`\n{}\n\
-         The task is back in the backlog and admission skips it while {base_ref} fails \
-         the command; fixing the base is the way forward. Once it passes on a new base tip, the \
-         next delivery can resume this candidate and validate it again.\n\n{}\n\n## Failure\n\n\
-         ```text\n{diagnostic}\n```",
-        hold.command,
-        hold.base_sha,
-        failing_on_base(&hold.failures),
-        held_place(&held)
-    );
     host.apply_task_automation_update(
         &task.id,
         TaskAutomationUpdate {
@@ -774,7 +708,10 @@ pub(super) fn hold_baseline_red_candidate<
             append_comments: vec![TaskComment {
                 at: Utc::now(),
                 by: "system".to_string(),
-                message: body,
+                message: format!(
+                    "Validation failed because the base has the same failure; inspect \
+                     `orbit run show {run_id} --json` and fix the base before retrying."
+                ),
                 operation_id: None,
             }],
             append_history: vec![held_history(&held)],

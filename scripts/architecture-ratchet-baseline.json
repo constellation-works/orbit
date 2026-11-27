@@ -3,7 +3,7 @@
   "counts": {
     "application_port_methods": 0,
     "env_global_accessor_calls": 51,
-    "env_process_env_method_calls": 509,
+    "env_process_env_method_calls": 507,
     "from_kernel_ref_uses": 0,
     "impl_orbit_runtime_files": 336,
     "orbit_runtime_ref_param_fns": 1114,

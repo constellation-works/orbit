@@ -8,11 +8,11 @@ use serde_json::Value;
 
 use crate::context::{RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate};
 
-use super::super::input::{
-    canonicalize_existing_dir, input_string_field, required_input_string, required_job_run_id,
-};
 use super::claim::{carries_implementer_output, implementer_summary};
 use super::conventions::meaningful_execution_summary;
+use crate::executor::automation::input::{
+    canonicalize_existing_dir, required_input_string, required_job_run_id,
+};
 
 pub(super) const FAILED_HANDOFF_ACTOR: &str = "system";
 
@@ -263,7 +263,7 @@ pub(super) fn completed_task_ids_from_input(input: &Value) -> Option<Vec<String>
 pub(super) fn record_failed_handoff<H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     context: &HandoffContext,
-    input: &Value,
+    _input: &Value,
     phase: FailedHandoffPhase,
     error: &OrbitError,
 ) -> Result<(), OrbitError> {
@@ -272,41 +272,34 @@ pub(super) fn record_failed_handoff<H: RunLifecycle + RuntimeHostProcessEnvironm
         context.batch_id,
         phase.label()
     );
-    let head = input_string_field(input, "head")
-        .or_else(|| current_branch(&host.process_env(), &context.workspace_path))
-        .unwrap_or_else(|| "unknown".to_string());
-    let base = input_string_field(input, "base").unwrap_or_else(|| "main".to_string());
-    let base_ref = input_string_field(input, "base_ref")
-        .map(|value| format!("Base checkpoint: {value}\n"))
-        .unwrap_or_default();
     let repair = review_repair_body(&error.to_string());
-    let timed_out = error.is_timeout();
-    let recovery = if matches!(phase, FailedHandoffPhase::Rebase)
-        && rebase_in_progress(&host.process_env(), &context.workspace_path).unwrap_or(false)
-    {
-        if timed_out {
-            "Worktree state: rebase interrupted by a Git timeout.\n\nRecovery:\n  Timeout recovery is not conflict repair. If this attempt started the rebase, Orbit aborts it and a retry can start clean. A pre-existing or foreign rebase is left intact — inspect rebase-merge/rebase-apply before retrying. Ordinary conflict recovery remains pr_conflict_recovery; failure-handoff remains pr_failure_handoff."
-        } else {
-            "Worktree state: rebase stopped with unresolved conflicts.\n\nRecovery:\n  Resolve the conflicting paths in this worktree, stage them, run `git rebase --continue`, then resume the same job step. Later handoff phases have not been replayed. This is conflict recovery, not timeout recovery."
+    let reason = if repair.is_some() {
+        "the pull request merged before the review repair was published"
+    } else if error.is_timeout() {
+        "the operation timed out"
+    } else {
+        match phase {
+            FailedHandoffPhase::Prepare => "branch preparation failed",
+            FailedHandoffPhase::Rebase => "the rebase failed",
+            FailedHandoffPhase::Push => "the push failed",
+            FailedHandoffPhase::PrLookup => "pull request lookup failed",
+            FailedHandoffPhase::PrCreate => "pull request creation failed",
+            FailedHandoffPhase::PrBody => "the pull request body could not be prepared",
+            FailedHandoffPhase::PrView => "the pull request could not be read",
+            FailedHandoffPhase::Promote => "task promotion failed",
+            FailedHandoffPhase::EmptyBranch => "the branch has no changes",
+            FailedHandoffPhase::ObsoleteBase => "the base already contains the change",
+            FailedHandoffPhase::StaleReviewGate => "the review no longer matches the candidate",
         }
-    } else if timed_out {
-        "Recovery:\n  This failure is a Git operation timeout, not a merge conflict and not a failure-handoff. Inspect the named checkout, then retry the same job step after timeout recovery has cleaned only owned incomplete state."
-    } else {
-        "Recovery:\n  Reconcile the recorded phase in this worktree, then resume the same job step. Later handoff phases have not been replayed."
     };
-    let message = if let Some(body) = repair.clone() {
-        body
-    } else {
-        format!(
-            "{header}\n\nHead branch: {head}\nWorktree: {worktree}\nBase branch: {base}\n{base_ref}Failing phase: {phase}\nError: {error}\n\n{recovery}",
-            worktree = context.workspace_path.display(),
-            phase = phase.label(),
-        )
-    };
+    let message = format!(
+        "Pull request handoff failed because {reason}; inspect `orbit run show {} --json` before retrying.",
+        context.batch_id
+    );
     // A claimed worker must not set Blocked here. That write, with or without
     // a summary, settles the claim, and the leaf's later Candidate-class Fail
     // then finds the claim already finished. The comment is enough: the owner
-    // blocks the task and copies this error, recipe included, into the summary.
+    // blocks the task; the failed step retains the error and recovery recipe.
     let block = repair.is_some() && host.worker_invocation().is_none();
 
     let (operation_id, legacy_prefix) = match repair.as_deref().and_then(review_repair_comment_key)
@@ -380,15 +373,4 @@ pub(super) fn rebase_in_progress(
         }
     }
     Ok(false)
-}
-
-fn current_branch(process_env: &orbit_common::Env, workspace_path: &Path) -> Option<String> {
-    super::git::git_output(
-        process_env,
-        workspace_path,
-        &["rev-parse", "--abbrev-ref", "HEAD"],
-    )
-    .ok()
-    .map(|value| value.trim().to_string())
-    .filter(|value| !value.is_empty())
 }

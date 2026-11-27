@@ -46,7 +46,7 @@ pub(super) fn preserve_review_gate_candidate<
         run_id,
         failed_step_id,
         error_code,
-        error_message,
+        error_message: _,
     } = failure;
     let admission = pipeline_step(input, "review_gate_admit")
         .ok()
@@ -208,36 +208,17 @@ pub(super) fn preserve_review_gate_candidate<
         &head,
         &continuation,
     );
-    let verdict = if failed_step_id == REVIEW_VALIDATION_STEP {
-        "Verdict: `reject`. The reviewer's fixes did not pass owner revalidation (required \
-         validation or path ownership) on the reviewed head, and there is no second review \
-         round.\n\n"
+    let reason = if failed_step_id == REVIEW_VALIDATION_STEP {
+        "reviewer fixes failed validation"
+    } else if evidence_hold {
+        "review evidence is missing"
+    } else if timed_out {
+        "the reviewer timed out"
+    } else if abandoned {
+        "the review ended without a verdict"
     } else {
-        ""
+        "the review gate escalated"
     };
-    let body = format!(
-        "## Review gate escalation\n\nOrbit held PR publication because the before-PR review gate \
-         did not pass. {verdict}The candidate branch was pushed so the implementation commit, \
-         any reviewer commit, and the review evidence remain inspectable; nothing was merged or \
-         published as a PR.\n\n- Task: `{}`\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n\
-         - Error code: `{error_code}`\n- Candidate branch: `{head}`\n- Candidate head: `{head_sha}`\n\
-         - Partial reviewer commit: {}\n\
-         - Uncommitted paths left in the worktree: {}\n\n\
-         The review's verdict, findings and what changed for each are recorded in the gate's \
-         settlement comment on the task. Continuation follows the timeout, evidence, or \
-         substantive decision recorded with this handoff.\n\n\
-         ## Failure\n\n```text\n{error_message}\n```",
-        task.id,
-        partial_repair
-            .as_ref()
-            .map(|commit| format!("`{}` ({})", commit.commit, commit.author))
-            .unwrap_or_else(|| "none".to_string()),
-        if leftover.is_empty() {
-            "none".to_string()
-        } else {
-            leftover.join(", ")
-        },
-    );
     let at = Utc::now();
     let append_history = if failed_step_id == REVIEW_VALIDATION_STEP {
         vec![
@@ -271,7 +252,10 @@ pub(super) fn preserve_review_gate_candidate<
             append_comments: vec![TaskComment {
                 at,
                 by: "system".to_string(),
-                message: format!("{note}\n\n{body}"),
+                message: format!(
+                    "Publication stopped because {reason}; inspect \
+                     `orbit run show {run_id} --json` for the next step."
+                ),
                 operation_id: None,
             }],
             append_history,
