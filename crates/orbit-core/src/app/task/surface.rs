@@ -17,13 +17,13 @@ use serde_json::{Value, json};
 use super::{
     Archive, Command, Outcome, Publication, Read, Rechecked, SettleMerged, Shown, Written,
 };
+use crate::app::exec::Caller;
 use crate::app::exec::Operation;
 use crate::application::contracts::ToolInvocationPort;
 use crate::application::task::{
     TaskWriteMetadata, TaskWriteResponsePolicy, task_write_response_from_tool_answer,
     task_write_response_json, with_task_write_provenance,
 };
-use crate::composition::Entry;
 use crate::{Core, OrbitRuntime};
 
 /// The operation `command` performs: the names its governance rows and its
@@ -125,7 +125,7 @@ pub(super) fn operation_fields(
     mut fields: Value,
 ) -> Result<Outcome, OrbitError> {
     let runtime = core.runtime();
-    let command_line = core.entry() == Entry::CommandLine;
+    let command_line = core.caller() == Caller::CommandLine;
     if command_line && acts_on_this_checkout(verb) {
         // The command line names no workspace: these act on its checkout.
         if let Some(object) = fields.as_object_mut() {

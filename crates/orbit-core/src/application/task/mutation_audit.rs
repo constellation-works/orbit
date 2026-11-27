@@ -205,6 +205,7 @@ pub fn audit_status_for_task_mutation_error(error: &OrbitError) -> AuditEventSta
             error,
             OrbitError::PolicyDenied(_)
                 | OrbitError::CapabilityDenied(_)
+                | OrbitError::AuthorizationDenied(_)
                 | OrbitError::CapabilityRefused(_)
         )
     {

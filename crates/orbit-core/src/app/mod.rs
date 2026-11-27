@@ -35,7 +35,7 @@ pub mod doctor;
 
 pub mod evolution;
 
-mod exec;
+pub(crate) mod exec;
 
 pub mod experiment;
 
@@ -79,5 +79,5 @@ pub mod update;
 
 pub mod workspace;
 
-pub use exec::{DashboardCaller, dashboard_authorize};
+pub use exec::{DashboardOrigin, Session, dashboard_authorize};
 pub use invocation::{AuditWriteFailure, CommandMeta, InvocationAuditScope};

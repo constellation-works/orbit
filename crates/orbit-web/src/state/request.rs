@@ -1,5 +1,6 @@
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_core::Core;
+use orbit_core::app::Session;
 use orbit_core::application::agents::AgentFacts;
 use orbit_core::application::codebase::CodebaseFacts;
 
@@ -42,9 +43,15 @@ impl Pinned {
         self.inner.resolve_runtime(&self.snapshot, id)
     }
 
+    /// The session every request to this server arrives on.
+    pub(crate) fn session(&self) -> Session {
+        Session::new(self.inner.operator.load(Ordering::Relaxed))
+    }
+
     /// The app entry for a workspace from this pinned snapshot.
     pub(crate) fn core_for(&self, id: &str) -> Result<Arc<Core>, WsRejection> {
-        self.runtime_for(id).map(|runtime| WsCore::over(&runtime).0)
+        self.runtime_for(id)
+            .map(|runtime| WsCore::over(&runtime, self.session()).0)
     }
 
     /// Stale-tolerant resolve for `GET /api/config/file` only; see
@@ -210,9 +217,14 @@ pub(crate) struct WsCore(pub(crate) Arc<Core>);
 impl WsCore {
     /// The opaque [`Core`] over an already resolved workspace runtime, for a
     /// handler that selected its workspace itself.
-    pub(crate) fn over(runtime: &Arc<OrbitRuntime>) -> Self {
-        Self(Arc::new(RegisteredRuntimeFactory::core_for_service(
+    ///
+    /// Each request derives its `Core` from the workspace's cached runtime
+    /// and the session it arrived on: one clone of the runtime handle, and
+    /// nothing opened or read.
+    pub(crate) fn over(runtime: &Arc<OrbitRuntime>, session: Session) -> Self {
+        Self(Arc::new(RegisteredRuntimeFactory::core_for_session(
             runtime.as_ref().clone(),
+            session,
         )))
     }
 }
@@ -225,7 +237,7 @@ impl FromRequestParts<DashboardState> for WsCore {
         state: &DashboardState,
     ) -> Result<Self, Self::Rejection> {
         let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
-        Ok(Self::over(&runtime))
+        Ok(Self::over(&runtime, state.session()))
     }
 }
 
@@ -259,7 +271,7 @@ impl FromRequestParts<DashboardState> for PluginPanelWs {
         state: &DashboardState,
     ) -> Result<Self, Self::Rejection> {
         let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
-        let WsCore(core) = WsCore::over(&runtime);
+        let WsCore(core) = WsCore::over(&runtime, state.session());
         Ok(Self { core, runtime })
     }
 }
@@ -300,7 +312,7 @@ impl FromRequestParts<DashboardState> for AgentsWs {
         state: &DashboardState,
     ) -> Result<Self, Self::Rejection> {
         let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
-        let WsCore(core) = WsCore::over(&runtime);
+        let WsCore(core) = WsCore::over(&runtime, state.session());
         Ok(Self { core, runtime })
     }
 }
@@ -359,7 +371,7 @@ impl FromRequestParts<DashboardState> for CodebaseWs {
         state: &DashboardState,
     ) -> Result<Self, Self::Rejection> {
         let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
-        let WsCore(core) = WsCore::over(&runtime);
+        let WsCore(core) = WsCore::over(&runtime, state.session());
         Ok(Self { core, runtime })
     }
 }
@@ -395,7 +407,7 @@ impl FromRequestParts<DashboardState> for AuditSummaryWs {
         state: &DashboardState,
     ) -> Result<Self, Self::Rejection> {
         let Ws(runtime) = Ws::from_request_parts(parts, state).await?;
-        let WsCore(core) = WsCore::over(&runtime);
+        let WsCore(core) = WsCore::over(&runtime, state.session());
         Ok(Self { core, runtime })
     }
 }
@@ -420,7 +432,7 @@ impl FromRequestParts<DashboardState> for ConfigFileWs {
         // its cached first step, and everything past it (a rebuild, the
         // stale-runtime fallback) stays on the blocking path below.
         if let Some(resolved) = state.try_resolve_cached(requested.as_deref()) {
-            return resolved.map(|runtime| ConfigFileWs(WsCore::over(&runtime).0));
+            return resolved.map(|runtime| ConfigFileWs(WsCore::over(&runtime, state.session()).0));
         }
         let state = state.clone();
         tokio::task::spawn_blocking(move || {
@@ -433,7 +445,7 @@ impl FromRequestParts<DashboardState> for ConfigFileWs {
                     .ok_or_else(WsRejection::no_default)?,
             };
             Ok(ConfigFileWs(
-                WsCore::over(&pinned.runtime_for_config_file(&id)?).0,
+                WsCore::over(&pinned.runtime_for_config_file(&id)?, pinned.session()).0,
             ))
         })
         .await

@@ -6,14 +6,14 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
-    AuthorizationDenial, DASHBOARD_AUTO_TASK_CREATE, DASHBOARD_AUTO_TASK_DELETE,
-    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
+    DASHBOARD_AUTO_TASK_CREATE, DASHBOARD_AUTO_TASK_DELETE, DASHBOARD_AUTO_TASK_MINT,
+    DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
 };
 use orbit_types::workflow::auto_task_tag;
 use serde_json::{Value, json};
 
 use super::{DashboardWrite, DashboardWritten, Listing, operation};
-use crate::app::exec::{self, DashboardCaller, DashboardRow};
+use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
 use crate::application::auto_tasks::projection::AutoTaskListingProfile;
 use crate::application::auto_tasks::{
     AutoTaskScheduleError, AutoTaskScheduleOutcome, AutoTaskScheduleProfile, AutoTaskToggleError,
@@ -81,15 +81,9 @@ pub(super) fn listing(
     })
 }
 
-/// Authorize one auto-task write, run it and record the audit row it owes:
-/// a refusal always, and otherwise only a write that was attempted.
-pub(super) fn write(
-    core: &Core,
-    caller: DashboardCaller,
-    write: DashboardWrite,
-) -> Result<Result<DashboardWritten, AuthorizationDenial>, OrbitError> {
-    let runtime = core.runtime();
-    let (governed, target, arguments) = match &write {
+/// The governed operation one write requires and the audit row it declares.
+pub(super) fn operation(origin: &DashboardOrigin, write: &DashboardWrite) -> Operation {
+    let (governed, target, arguments) = match write {
         DashboardWrite::Create { fields, enabled } => (
             &DASHBOARD_AUTO_TASK_CREATE,
             fields
@@ -135,43 +129,52 @@ pub(super) fn write(
             json!({"reason": params.reason, "force": params.force}),
         ),
     };
-    exec::run_dashboard_recorded(
-        core,
-        caller.operation(governed, &target, arguments),
-        || {
-            Ok(match write {
-                DashboardWrite::Create { fields, enabled } => DashboardWritten::Created(
-                    operation::create_from_fields(runtime, fields, enabled),
-                ),
-                DashboardWrite::Toggle {
-                    name,
-                    expected_enabled,
-                    enabled,
-                } => DashboardWritten::Toggled(runtime.auto_task_toggle_command(
-                    &name,
-                    enabled,
-                    AutoTaskToggleProfile::Observed { expected_enabled },
-                )),
-                DashboardWrite::Mint { name } => {
-                    DashboardWritten::Minted(runtime.auto_task_mint(&name).map(Box::new))
-                }
-                DashboardWrite::Schedule {
-                    name,
-                    expected_schedule,
-                    schedule,
-                } => DashboardWritten::Scheduled(runtime.auto_task_schedule_command(
-                    &name,
-                    *schedule,
-                    AutoTaskScheduleProfile::Observed { expected_schedule },
-                )),
-                DashboardWrite::UndecodedSchedule { .. } => DashboardWritten::ScheduleAdmitted,
-                DashboardWrite::Delete(params) => DashboardWritten::Deleted(
-                    runtime.auto_task_delete_command(params).map(Box::new),
-                ),
-            })
-        },
-        |result, arguments| recorded(result.as_ref().ok()?, arguments),
-    )
+    Operation::dashboard_read("auto-task", "dashboard")
+        .requires(governed)
+        .dashboard_row(governed, target, arguments, origin.clone())
+}
+
+/// Run one admitted write.
+pub(super) fn write(core: &Core, write: DashboardWrite) -> Result<DashboardWritten, OrbitError> {
+    let runtime = core.runtime();
+    Ok(match write {
+        DashboardWrite::Create { fields, enabled } => {
+            DashboardWritten::Created(operation::create_from_fields(runtime, fields, enabled))
+        }
+        DashboardWrite::Toggle {
+            name,
+            expected_enabled,
+            enabled,
+        } => DashboardWritten::Toggled(runtime.auto_task_toggle_command(
+            &name,
+            enabled,
+            AutoTaskToggleProfile::Observed { expected_enabled },
+        )),
+        DashboardWrite::Mint { name } => {
+            DashboardWritten::Minted(runtime.auto_task_mint(&name).map(Box::new))
+        }
+        DashboardWrite::Schedule {
+            name,
+            expected_schedule,
+            schedule,
+        } => DashboardWritten::Scheduled(runtime.auto_task_schedule_command(
+            &name,
+            *schedule,
+            AutoTaskScheduleProfile::Observed { expected_schedule },
+        )),
+        DashboardWrite::UndecodedSchedule { .. } => DashboardWritten::ScheduleAdmitted,
+        DashboardWrite::Delete(params) => {
+            DashboardWritten::Deleted(runtime.auto_task_delete_command(params).map(Box::new))
+        }
+    })
+}
+
+/// The audit row an admitted write owes; a write that failed outright owes none.
+pub(super) fn row(
+    result: Result<&DashboardWritten, &OrbitError>,
+    arguments: Value,
+) -> Option<DashboardRow> {
+    recorded(result.ok()?, arguments)
 }
 
 /// The audit row an admitted write owes. A toggle or schedule edit that

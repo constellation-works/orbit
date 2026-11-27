@@ -13,8 +13,8 @@ use orbit_core::application::job::{AutoDrainSubmissionProfile, ShipSubmissionPro
 use orbit_types::workflow::{JobRunTrigger, ReviewLayer};
 use serde_json::{Value, json};
 
-use super::super::routines::{OperationsQuery, authorization_denied, explicit_workspace};
-use super::super::{OptionalJson, bad_request, blocking, validate_id};
+use crate::api::routines::{OperationsQuery, explicit_workspace};
+use crate::api::{OptionalJson, bad_request, blocking, validate_id};
 
 /// Minimum window this endpoint accepts for `for_duration`, in seconds. A
 /// single pass is asked for explicitly with `one_pass`, so `0s` or a blank
@@ -358,7 +358,6 @@ pub(in crate::api) async fn auto_drain_workflow_action(
         })
         .await;
     }
-    let operator = state.operator_session();
     match helpers::blocking_join("auto-drain workflow", move || {
         let completion = if body.complete {
             orbit_core::CompletionPolicy::Done
@@ -367,31 +366,27 @@ pub(in crate::api) async fn auto_drain_workflow_action(
         };
         exec(
             &core,
-            Command::dashboard_auto(
-                orbit_core::AutoDrainRequest {
-                    for_seconds,
-                    max_active_leaf_runs: body.concurrency,
-                    completion,
-                    allowed_crews: &body.allow_crew,
-                    complexity_crews: body.complexity_crews(),
-                    actor: Some("dashboard"),
-                    claim_token: body.claim_token.as_deref(),
-                    trigger: JobRunTrigger::dashboard(),
-                    strict_containment: body.strict_worker_containment,
-                    approve_proposed: body.approve_proposed,
-                    auto_fix: body.auto_fix,
-                    auto_concurrency: body.auto_concurrency,
-                    review: body.review,
-                },
-                operator,
-            ),
+            Command::dashboard_auto(orbit_core::AutoDrainRequest {
+                for_seconds,
+                max_active_leaf_runs: body.concurrency,
+                completion,
+                allowed_crews: &body.allow_crew,
+                complexity_crews: body.complexity_crews(),
+                actor: Some("dashboard"),
+                claim_token: body.claim_token.as_deref(),
+                trigger: JobRunTrigger::dashboard(),
+                strict_containment: body.strict_worker_containment,
+                approve_proposed: body.approve_proposed,
+                auto_fix: body.auto_fix,
+                auto_concurrency: body.auto_concurrency,
+                review: body.review,
+            }),
         )
         .map(|outcome| outcome.value)
     })
     .await
     {
-        Ok(Ok(Ok(receipt))) => Json(receipt.to_json()).into_response(),
-        Ok(Ok(Err(denial))) => authorization_denied(denial),
+        Ok(Ok(receipt)) => Json(receipt.to_json()).into_response(),
         Ok(Err(error)) => map_start_refusal(error),
         Err(response) => *response,
     }
@@ -458,7 +453,6 @@ fn pull_drain_start(
 /// governed dashboard controls (`--operator` session) and refused before any
 /// runtime call.
 pub(in crate::api) async fn auto_drain_stop_action(
-    State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
     WsCore(core): WsCore,
     body: Result<OptionalJson<AutoDrainStopBody>, Response>,
@@ -466,22 +460,20 @@ pub(in crate::api) async fn auto_drain_stop_action(
     if let Err(rejection) = explicit_workspace(&query) {
         return rejection.into_response();
     }
-    let operator = state.operator_session();
     match blocking("auto-drain stop", move || {
         exec(
             &core,
             Command::dashboard_stop(
-                operator,
-                body.map(|OptionalJson(body)| (body.reason, body.claim_token)),
+                body.map(|OptionalJson(body)| (body.reason, body.claim_token))
+                    .map_err(Box::new),
             ),
         )
         .map(|outcome| outcome.value)
     })
     .await
     {
-        Ok(Err(denial)) => authorization_denied(denial),
-        Ok(Ok(Err(response))) => response,
-        Ok(Ok(Ok(result))) => {
+        Ok(Err(response)) => *response,
+        Ok(Ok(result)) => {
             let mut stopped = result.to_json();
             stopped["workflow"] = json!("auto");
             Json(stopped).into_response()
@@ -530,7 +522,6 @@ pub(in crate::api) async fn auto_drain_readiness(
         .map(orbit_common::protocol::tool_input::split_csv)
         .unwrap_or_default();
     let hosts = state.hosts().snapshot;
-    let operator = state.operator_session();
     match blocking("auto-drain readiness", move || {
         exec(
             &core,
@@ -541,7 +532,6 @@ pub(in crate::api) async fn auto_drain_readiness(
                 query.limit.unwrap_or(AUTO_DRAIN_READINESS_LIMIT),
                 &allowed_crews,
                 hosts.as_deref().map(|snapshot| &snapshot.registry),
-                operator,
             ),
         )
         .map(|outcome| outcome.value)

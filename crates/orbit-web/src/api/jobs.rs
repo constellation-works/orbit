@@ -1,11 +1,11 @@
 //! Job catalog and job-run listing handlers.
 
 use crate::state::WsCore;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
-use orbit_core::app::run::{Command, DashboardJobError, DashboardResumeError, exec};
+use orbit_core::app::run::{Command, exec};
 use orbit_core::application::job::{
     JobFailureStreak, JobRunListParams, JobRunOrder, ResumeSubmissionProfile,
     ResumeSubmissionReceipt,
@@ -15,10 +15,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{OptionalJson, bad_request, blocking, bounded_limit, map_runtime_error, validate_id};
-use crate::state::DashboardState;
 use orbit_core::application::job::job_catalog_to_json_with_last_run;
 
-use super::routines::{OperationsQuery, authorization_denied, explicit_workspace};
+use super::routines::{OperationsQuery, explicit_workspace};
 
 const JOB_RUN_DEFAULT_LIMIT: usize = 25;
 
@@ -112,7 +111,6 @@ pub(super) struct JobRunScope {
 /// Delivery pipelines need task input and are deliberately unavailable through
 /// this no-input action. The UI directs operators to Ship or Drain for those.
 pub(super) async fn run_job_action(
-    State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
     WsCore(core): WsCore,
     Path(id): Path<String>,
@@ -120,18 +118,12 @@ pub(super) async fn run_job_action(
     if let Err(rejection) = explicit_workspace(&query) {
         return rejection.into_response();
     }
-    let operator = state.operator_session();
     match blocking("run job", move || {
-        exec(
-            &core,
-            Command::submit_catalog_job(validate_id(&id), operator),
-        )
-        .map(|outcome| outcome.value)
+        exec(&core, Command::submit_catalog_job(validate_id(&id))).map(|outcome| outcome.value)
     })
     .await
     {
-        Ok(Err(DashboardJobError::Denied(denial))) => authorization_denied(denial),
-        Ok(Err(DashboardJobError::InvalidId(message))) => bad_request(message),
+        Ok(Err(message)) => bad_request(message),
         Ok(Ok(invoke)) => Json(json!({
             "job_id": invoke.job_name,
             "run_id": invoke.run_id,
@@ -329,7 +321,6 @@ fn job_run_list_params(
 /// pipeline never runs on a request thread. Callers poll `/job-runs/:id` for
 /// progress and can cancel the returned run id while it executes.
 pub(super) async fn resume_job_run_action(
-    State(state): State<DashboardState>,
     WsCore(core): WsCore,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<ResumeBody>,
@@ -340,11 +331,10 @@ pub(super) async fn resume_job_run_action(
     };
     let id = id.to_string();
     let retry_source_run_id = id.clone();
-    let operator = state.operator_session();
     match blocking("resume run", move || {
         exec(
             &core,
-            Command::resume_dashboard(&id, body.claim_token.as_deref(), operator),
+            Command::resume_dashboard(&id, body.claim_token.as_deref()),
         )
         .map(|outcome| outcome.value)
     })
@@ -359,8 +349,7 @@ pub(super) async fn resume_job_run_action(
             .to_json(),
         )
         .into_response(),
-        Ok(Err(DashboardResumeError::Denied(denial))) => authorization_denied(denial),
-        Ok(Err(DashboardResumeError::Submit(error))) => match error.job_validation_message() {
+        Ok(Err(error)) => match error.job_validation_message() {
             Some(message) => (StatusCode::CONFLICT, Json(json!({"error":message}))).into_response(),
             None => map_runtime_error(error),
         },

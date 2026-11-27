@@ -100,7 +100,7 @@ pub(in crate::state) struct StateInner {
     /// `orbit web serve --operator` (and `orbit web connect` by default):
     /// stamp operator onto the dashboard session envelope. The only operator
     /// grant: the server's TTY and `ORBIT_OPERATOR` are ignored [ORB-23047].
-    operator: AtomicBool,
+    pub(in crate::state) operator: AtomicBool,
     /// Non-loopback Hosts the Host gate admits with a listed Tailscale login
     /// (`machine.web.trusted_hosts`/`trusted_logins`) and the activity seen
     /// through them. Set once at boot; unset admits loopback Hosts only.
@@ -439,6 +439,13 @@ impl DashboardState {
     /// and env are ignored).
     pub(crate) fn operator_session(&self) -> bool {
         self.inner.operator.load(Ordering::Relaxed)
+    }
+
+    /// The session every request to this server arrives on: it holds
+    /// operator capability only when the server was started with
+    /// `--operator`.
+    pub(crate) fn session(&self) -> orbit_core::app::Session {
+        orbit_core::app::Session::new(self.operator_session())
     }
 
     /// Record the `--operator` flag after construction. Set once at boot,

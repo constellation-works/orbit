@@ -4,8 +4,8 @@
 
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
-    AuthorizationDenial, DASHBOARD_CLAIM_RECOVER, DASHBOARD_HANDOFF_APPROVE,
-    DASHBOARD_HANDOFF_RETRY, DASHBOARD_HANDOFF_REVOKE, GovernedOperation,
+    DASHBOARD_CLAIM_RECOVER, DASHBOARD_HANDOFF_APPROVE, DASHBOARD_HANDOFF_RETRY,
+    DASHBOARD_HANDOFF_REVOKE, GovernedOperation,
 };
 use orbit_types::task::{TaskWriteProvenance, TaskWriteSurface};
 use orbit_types::workflow::handoff::LandingRetryRequest;
@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::{DashboardAction, DashboardWrite, DashboardWritten};
 use crate::Core;
-use crate::app::exec::{self, DashboardCaller, DashboardRow};
+use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
 use crate::application::operator_input;
 use crate::application::task::with_task_write_provenance;
 
@@ -46,98 +46,100 @@ enum PreparedWrite {
     },
 }
 
-/// Authorize one owner handoff or claim action, run it under web task-write
-/// provenance, classify console refusals and record its one audit row.
-pub(super) fn write(
-    core: &Core,
-    caller: DashboardCaller,
-    action: DashboardAction,
-) -> Result<Result<DashboardWritten, AuthorizationDenial>, OrbitError> {
+/// The governed operation one write requires and the audit row it declares.
+pub(super) fn operation(origin: &DashboardOrigin, write: &DashboardWrite) -> Operation {
+    let (governed, target, arguments, _) = prepare(write.clone());
+    Operation::dashboard_read("review", "dashboard")
+        .requires(governed)
+        .dashboard_row(governed, target, arguments, origin.clone())
+}
+
+/// Run one admitted write.
+pub(super) fn write(core: &Core, action: DashboardAction) -> Result<DashboardWritten, OrbitError> {
     let DashboardAction {
         write_caller,
         write,
     } = action;
-    let (governed, target, arguments, prepared) = prepare(write);
+    let (_, _, _, prepared) = prepare(write);
     let runtime = core.runtime();
-    exec::run_dashboard_recorded(
-        core,
-        caller.operation(governed, &target, arguments),
-        || {
-            let outcome = with_task_write_provenance(
-                TaskWriteProvenance::new(Some(TaskWriteSurface::Web), write_caller),
-                || match prepared {
-                    PreparedWrite::Approve {
-                        handoff_id,
-                        expected,
-                        request_id,
-                    } => runtime.approve_handoff_as_operator(
-                        &handoff_id,
-                        &expected,
-                        OPERATOR_ACTOR,
-                        &format!("dashboard-approve:{handoff_id}:{request_id}"),
-                    ),
-                    PreparedWrite::Retry { request } => {
-                        let dispatch = runtime.retry_handoff_as_operator(
-                            &runtime.workspace_id()?,
-                            &request,
-                            OPERATOR_ACTOR,
-                        )?;
-                        serde_json::to_value(dispatch)
-                            .map_err(|error| OrbitError::Execution(error.to_string()))
-                    }
-                    PreparedWrite::Revoke {
-                        handoff_id,
-                        expected,
-                        reason,
-                        request_id,
-                    } => runtime.revoke_handoff_as_operator(
-                        &handoff_id,
-                        &expected,
-                        OPERATOR_ACTOR,
-                        &reason,
-                        "dashboard-revoke",
-                        &request_id,
-                    ),
-                    PreparedWrite::Recover {
-                        claim_id,
-                        expected_phase,
-                        status,
-                        reason,
-                        request_id,
-                    } => runtime.recover_claim_as_operator(
-                        &claim_id,
-                        &expected_phase,
-                        status,
-                        OPERATOR_ACTOR,
-                        &reason,
-                        ("dashboard-recover", &request_id),
-                    ),
-                },
-            );
-            Ok(match outcome {
-                Ok(value) => DashboardWritten::Applied(value),
-                Err(error) => match runtime.handoff_console_refusal(&error) {
-                    Some(refusal) => DashboardWritten::Refused {
-                        refusal,
-                        message: error.to_string(),
-                    },
-                    None => DashboardWritten::Failed(error),
-                },
-            })
+    let outcome = with_task_write_provenance(
+        TaskWriteProvenance::new(Some(TaskWriteSurface::Web), write_caller),
+        || match prepared {
+            PreparedWrite::Approve {
+                handoff_id,
+                expected,
+                request_id,
+            } => runtime.approve_handoff_as_operator(
+                &handoff_id,
+                &expected,
+                OPERATOR_ACTOR,
+                &format!("dashboard-approve:{handoff_id}:{request_id}"),
+            ),
+            PreparedWrite::Retry { request } => {
+                let dispatch = runtime.retry_handoff_as_operator(
+                    &runtime.workspace_id()?,
+                    &request,
+                    OPERATOR_ACTOR,
+                )?;
+                serde_json::to_value(dispatch)
+                    .map_err(|error| OrbitError::Execution(error.to_string()))
+            }
+            PreparedWrite::Revoke {
+                handoff_id,
+                expected,
+                reason,
+                request_id,
+            } => runtime.revoke_handoff_as_operator(
+                &handoff_id,
+                &expected,
+                OPERATOR_ACTOR,
+                &reason,
+                "dashboard-revoke",
+                &request_id,
+            ),
+            PreparedWrite::Recover {
+                claim_id,
+                expected_phase,
+                status,
+                reason,
+                request_id,
+            } => runtime.recover_claim_as_operator(
+                &claim_id,
+                &expected_phase,
+                status,
+                OPERATOR_ACTOR,
+                &reason,
+                ("dashboard-recover", &request_id),
+            ),
         },
-        |result, arguments| {
-            let failure = match result {
-                Ok(DashboardWritten::Applied(_)) => None,
-                Ok(DashboardWritten::Refused { message, .. }) => Some(message.clone()),
-                Ok(DashboardWritten::Failed(error)) | Err(error) => Some(error.to_string()),
-            };
-            Some(DashboardRow {
-                failure,
-                target: None,
-                arguments,
-            })
+    );
+    Ok(match outcome {
+        Ok(value) => DashboardWritten::Applied(value),
+        Err(error) => match runtime.handoff_console_refusal(&error) {
+            Some(refusal) => DashboardWritten::Refused {
+                refusal,
+                message: error.to_string(),
+            },
+            None => DashboardWritten::Failed(error),
         },
-    )
+    })
+}
+
+/// A refused or failed write is recorded as a failure carrying its message.
+pub(super) fn row(
+    result: Result<&DashboardWritten, &OrbitError>,
+    arguments: Value,
+) -> Option<DashboardRow> {
+    let failure = match result {
+        Ok(DashboardWritten::Applied(_)) => None,
+        Ok(DashboardWritten::Refused { message, .. }) => Some(message.clone()),
+        Ok(DashboardWritten::Failed(error)) | Err(error) => Some(error.to_string()),
+    };
+    Some(DashboardRow {
+        failure,
+        target: None,
+        arguments,
+    })
 }
 
 /// Normalize audit arguments before authorization so a denied or refused

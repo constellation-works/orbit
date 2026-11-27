@@ -10,7 +10,7 @@ use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_CREATE, DASHBOARD_AUTO_TASK_DELETE, DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
 };
-use orbit_core::app::DashboardCaller;
+use orbit_core::app::DashboardOrigin;
 use orbit_core::app::auto_task::{
     AutoTaskDeleteError, AutoTaskDeleteParams, AutoTaskDeleteProfile, AutoTaskDeleteRefusal,
     AutoTaskToggleError, AutoTaskToggleOutcome, Command, DashboardWrite, DashboardWritten, Listing,
@@ -22,9 +22,8 @@ use serde_json::{Map, Value, json};
 
 use super::map_runtime_error;
 use super::routines::{
-    OperationsQuery, action_capability, authorization_denied, authorized_caller, dashboard_caller,
-    explicit_workspace, host_cron_zone, named_entity_not_found, selection_conflict,
-    unexpected_outcome,
+    OperationsQuery, action_capability, authorized_caller, dashboard_caller, explicit_workspace,
+    host_cron_zone, named_entity_not_found, selection_conflict, unexpected_outcome,
 };
 use super::{bad_request, blocking};
 use crate::state::DashboardState;
@@ -346,7 +345,7 @@ pub(super) async fn delete_auto_task(
 pub(super) async fn auto_task_write(
     label: &'static str,
     core: Arc<Core>,
-    caller: DashboardCaller,
+    caller: DashboardOrigin,
     write: DashboardWrite,
 ) -> Result<DashboardWritten, Box<Response>> {
     match blocking(label, move || {
@@ -354,9 +353,7 @@ pub(super) async fn auto_task_write(
     })
     .await?
     {
-        Outcome::Dashboard(written) => {
-            (*written).map_err(|denial| Box::new(authorization_denied(denial)))
-        }
+        Outcome::Dashboard(written) => Ok(*written),
         Outcome::Value(_) | Outcome::Listing(_) => Err(Box::new(unexpected_outcome(label))),
     }
 }

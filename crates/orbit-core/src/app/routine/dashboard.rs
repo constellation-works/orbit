@@ -3,29 +3,22 @@
 
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
-    AuthorizationDenial, DASHBOARD_CLOCK_CADENCE, DASHBOARD_CLOCK_SERVICE,
-    DASHBOARD_ROUTINE_TOGGLE, DASHBOARD_ROUTINE_TRIGGER,
+    DASHBOARD_CLOCK_CADENCE, DASHBOARD_CLOCK_SERVICE, DASHBOARD_ROUTINE_TOGGLE,
+    DASHBOARD_ROUTINE_TRIGGER,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{ClockAction, ClockControl, ClockControlled, DashboardWrite, DashboardWritten};
 use crate::Core;
-use crate::app::exec::{self, DashboardCaller, DashboardRow};
+use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
 use crate::application::routines::{
     RoutineEditRefusal, edit_listed_routine_trigger, set_clock_cadence, set_clock_enabled,
     toggle_listed_routine,
 };
 
-/// Authorize one routine write, run it and record the audit row it owes: a
-/// refusal always, and otherwise only a write that was attempted.
-pub(super) fn write(
-    core: &Core,
-    caller: DashboardCaller,
-    write: DashboardWrite,
-) -> Result<Result<DashboardWritten, AuthorizationDenial>, OrbitError> {
-    let shared_root = core.runtime().shared_root();
-    let machine_name = caller.machine_name.clone();
-    let (governed, target, arguments) = match &write {
+/// The governed operation one write requires and the audit row it declares.
+pub(super) fn operation(origin: &DashboardOrigin, write: &DashboardWrite) -> Operation {
+    let (governed, target, arguments) = match write {
         DashboardWrite::Toggle {
             routine, enabled, ..
         } => (
@@ -52,77 +45,88 @@ pub(super) fn write(
             json!({"action": control.action, "cadence_seconds": control.cadence_seconds}),
         ),
     };
-    exec::run_dashboard_recorded(
-        core,
-        caller.operation(governed, &target, arguments),
-        || {
-            Ok(match write {
-                DashboardWrite::Toggle {
-                    routine,
-                    expected_enabled,
-                    enabled,
-                    statuses,
-                } => {
-                    let report = statuses()?;
-                    DashboardWritten::Edited(toggle_listed_routine(
-                        &report,
-                        &routine.name,
-                        Some((&routine.source, &shared_root)),
-                        &routine.target,
-                        expected_enabled,
-                        enabled,
-                    ))
-                }
-                DashboardWrite::Trigger {
-                    routine,
-                    expected,
-                    trigger,
-                    statuses,
-                } => {
-                    let report = statuses()?;
-                    DashboardWritten::Edited(edit_listed_routine_trigger(
-                        &report,
-                        &routine.name,
-                        Some((&routine.source, &shared_root)),
-                        &routine.target,
-                        &expected,
-                        *trigger,
-                    ))
-                }
-                DashboardWrite::UndecodedTrigger { .. } => DashboardWritten::TriggerAdmitted,
-                DashboardWrite::Clock(control) => {
-                    DashboardWritten::Clock(control_clock(control, &machine_name)?)
-                }
-            })
-        },
-        |result, arguments| {
-            let failure = match result.as_ref().ok()? {
-                DashboardWritten::Edited(Ok(Ok(_))) => None,
-                // An unlisted routine has nothing to audit.
-                DashboardWritten::Edited(Ok(Err(RoutineEditRefusal::NotFound { .. }))) => {
-                    return None;
-                }
-                // Every other refusal (owner authority, workspace, stale
-                // state, retargeted definition) wrote nothing; audit it.
-                DashboardWritten::Edited(Ok(Err(refusal))) => {
-                    Some(format!("{}: {}", refusal.code(), refusal.message()))
-                }
-                DashboardWritten::Edited(Err(error)) => Some(error.to_string()),
-                DashboardWritten::TriggerAdmitted
-                | DashboardWritten::Clock(
-                    ClockControlled::MachineMismatch { .. } | ClockControlled::Stale(_),
-                ) => return None,
-                DashboardWritten::Clock(ClockControlled::Applied { result, .. }) => {
-                    result.as_ref().err().map(ToString::to_string)
-                }
-            };
-            Some(DashboardRow {
-                failure,
-                target: None,
-                arguments,
-            })
-        },
-    )
+    Operation::dashboard_read("routine", "dashboard")
+        .requires(governed)
+        .dashboard_row(governed, target, arguments, origin.clone())
+}
+
+/// Run one admitted write.
+pub(super) fn write(
+    core: &Core,
+    machine_name: &str,
+    write: DashboardWrite,
+) -> Result<DashboardWritten, OrbitError> {
+    let shared_root = core.runtime().shared_root();
+    Ok(match write {
+        DashboardWrite::Toggle {
+            routine,
+            expected_enabled,
+            enabled,
+            statuses,
+        } => {
+            let report = statuses()?;
+            DashboardWritten::Edited(toggle_listed_routine(
+                &report,
+                &routine.name,
+                Some((&routine.source, &shared_root)),
+                &routine.target,
+                expected_enabled,
+                enabled,
+            ))
+        }
+        DashboardWrite::Trigger {
+            routine,
+            expected,
+            trigger,
+            statuses,
+        } => {
+            let report = statuses()?;
+            DashboardWritten::Edited(edit_listed_routine_trigger(
+                &report,
+                &routine.name,
+                Some((&routine.source, &shared_root)),
+                &routine.target,
+                &expected,
+                *trigger,
+            ))
+        }
+        DashboardWrite::UndecodedTrigger { .. } => DashboardWritten::TriggerAdmitted,
+        DashboardWrite::Clock(control) => {
+            DashboardWritten::Clock(control_clock(control, machine_name)?)
+        }
+    })
+}
+
+/// The audit row an admitted write owes: only a write that was attempted.
+pub(super) fn row(
+    result: Result<&DashboardWritten, &OrbitError>,
+    arguments: Value,
+) -> Option<DashboardRow> {
+    let failure = match result.ok()? {
+        DashboardWritten::Edited(Ok(Ok(_))) => None,
+        // An unlisted routine has nothing to audit.
+        DashboardWritten::Edited(Ok(Err(RoutineEditRefusal::NotFound { .. }))) => {
+            return None;
+        }
+        // Every other refusal (owner authority, workspace, stale
+        // state, retargeted definition) wrote nothing; audit it.
+        DashboardWritten::Edited(Ok(Err(refusal))) => {
+            Some(format!("{}: {}", refusal.code(), refusal.message()))
+        }
+        DashboardWritten::Edited(Err(error)) => Some(error.to_string()),
+        DashboardWritten::TriggerAdmitted
+        | DashboardWritten::Clock(
+            ClockControlled::MachineMismatch { .. } | ClockControlled::Stale(_),
+        ) => return None,
+        DashboardWritten::Clock(ClockControlled::Applied { result, .. }) => {
+            result.as_ref().err().map(ToString::to_string)
+        }
+    };
+    Some(DashboardRow {
+        failure,
+        target: None,
+        arguments,
+    })
 }
 
 /// Change the clock only from the machine and state the browser observed.

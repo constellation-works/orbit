@@ -124,7 +124,7 @@ pub(super) async fn answer_decision(
         json!({ "decision_id": id, "answer": answer }),
     );
     meta.role = Some(author.clone());
-    let WsCore(core) = WsCore::over(&runtime);
+    let WsCore(core) = WsCore::over(&runtime, state.session());
     match blocking("decision answer", move || {
         super::tasks::run_audited_web_task_mutation(
             &core,

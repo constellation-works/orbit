@@ -4,43 +4,24 @@
 mod flow;
 
 use orbit_common::OrbitError;
-use orbit_common::governance::authorization::{AuthorizationDenial, DASHBOARD_LEASE_WRITE};
+use orbit_common::governance::authorization::DASHBOARD_LEASE_WRITE;
 use serde_json::Value;
 
-use super::exec::{self, App, Operation};
+use super::exec::{self, App, Operation, Session};
 use crate::Core;
 pub use flow::LeaseNoticeFeed;
-
-/// A dashboard lease write verb admitted before opening the selected workspace.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LeaseWrite {
-    /// Request a path lease.
-    Request,
-    /// Renew an active path lease.
-    Renew,
-    /// Expand an active path lease with additional selectors.
-    Expand,
-    /// Release a path lease.
-    Release,
-}
-
-/// Input for a dashboard lease write whose operator session has already been
-/// admitted via [`Command::write`].
-pub struct AdmittedWrite {
-    input: Value,
-}
 
 /// What the lease app can be asked to do: one variant per lease verb, plus
 /// opening a live notice feed.
 pub enum Command {
     /// Request a path lease.
-    Request(AdmittedWrite),
+    Request(Value),
     /// Renew an active path lease.
-    Renew(AdmittedWrite),
+    Renew(Value),
     /// Expand an active path lease with additional selectors.
-    Expand(AdmittedWrite),
+    Expand(Value),
     /// Release a path lease.
-    Release(AdmittedWrite),
+    Release(Value),
     /// Show one path lease.
     Show(Value),
     /// List active path leases.
@@ -51,24 +32,6 @@ pub enum Command {
     Notices(Value),
     /// Open a live notice feed and read its first page before sending SSE headers.
     NoticeFeed(Value),
-}
-
-impl Command {
-    /// Admit a dashboard lease write before opening the selected workspace.
-    pub fn write(
-        action: LeaseWrite,
-        input: Value,
-        operator: bool,
-    ) -> Result<Self, AuthorizationDenial> {
-        exec::dashboard_authorize(&DASHBOARD_LEASE_WRITE, operator)?;
-        let write = AdmittedWrite { input };
-        Ok(match action {
-            LeaseWrite::Request => Self::Request(write),
-            LeaseWrite::Renew => Self::Renew(write),
-            LeaseWrite::Expand => Self::Expand(write),
-            LeaseWrite::Release => Self::Release(write),
-        })
-    }
 }
 
 /// What a lease command produced.
@@ -140,15 +103,25 @@ impl App for LeaseApp {
             Command::Check(_) => "check",
             Command::Notices(_) | Command::NoticeFeed(_) => "notices",
         };
-        Operation::command("lease", subcommand)
+        let operation = Operation::command("lease", subcommand);
+        match command {
+            Command::Request(_) | Command::Renew(_) | Command::Expand(_) | Command::Release(_) => {
+                operation.requires(&DASHBOARD_LEASE_WRITE)
+            }
+            Command::Show(_)
+            | Command::List
+            | Command::Check(_)
+            | Command::Notices(_)
+            | Command::NoticeFeed(_) => operation,
+        }
     }
 
     fn run(core: &Core, command: Self::Command) -> Result<Self::Outcome, Self::Error> {
         match command {
-            Command::Request(write) => flow::request(core, write.input).map(Outcome::Value),
-            Command::Renew(write) => flow::renew(core, write.input).map(Outcome::Value),
-            Command::Expand(write) => flow::expand(core, write.input).map(Outcome::Value),
-            Command::Release(write) => flow::release(core, write.input).map(Outcome::Value),
+            Command::Request(input) => flow::request(core, input).map(Outcome::Value),
+            Command::Renew(input) => flow::renew(core, input).map(Outcome::Value),
+            Command::Expand(input) => flow::expand(core, input).map(Outcome::Value),
+            Command::Release(input) => flow::release(core, input).map(Outcome::Value),
             Command::Show(input) => flow::show(core, input).map(Outcome::Value),
             Command::List => flow::list(core).map(Outcome::Value),
             Command::Check(input) => flow::check(core, input).map(Outcome::Value),
@@ -167,4 +140,11 @@ impl App for LeaseApp {
 /// Authorize, audit and run one lease command.
 pub fn exec(core: &Core, command: Command) -> Result<Outcome, crate::Error> {
     exec::run::<LeaseApp>(core, command)
+}
+
+/// Decide what `command` requires of `session` before the selected workspace
+/// is opened: a lease write is refused here without one. [`exec`] decides the
+/// same requirement again.
+pub fn admit(session: Session, command: &Command) -> Result<(), crate::Error> {
+    exec::admit::<LeaseApp>(session, command)
 }

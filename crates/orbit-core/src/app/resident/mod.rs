@@ -21,11 +21,10 @@ mod operation;
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
-use orbit_common::governance::authorization::AuthorizationDenial;
 use orbit_common::governance::resident::ResidentVerb;
 use serde_json::{Map, Value};
 
-use super::exec::{self, App, DashboardCaller, Operation};
+use super::exec::{self, App, DashboardOrigin, DashboardRow, Operation};
 use super::tool_call;
 pub use super::tool_call::Input;
 use crate::Core;
@@ -52,7 +51,7 @@ pub enum Command {
         operator: bool,
     },
     /// One write from an authenticated dashboard session.
-    Dashboard(DashboardCaller, DashboardWrite),
+    Dashboard(DashboardOrigin, DashboardWrite),
 }
 
 /// One resident write the dashboard sends.
@@ -112,7 +111,7 @@ pub enum Outcome {
     /// The list model.
     Cards(Box<Cards>),
     /// A dashboard write: what it answered, or why the session was refused.
-    Dashboard(Result<DashboardWritten, AuthorizationDenial>),
+    Dashboard(DashboardWritten),
 }
 
 impl Outcome {
@@ -156,9 +155,8 @@ impl App for ResidentApp {
                 Operation::of(*verb, &input.fields).without_tool_row()
             }
             Command::Cards { .. } => Operation::dashboard_read("resident", "cards"),
-            Command::Card { .. } | Command::Dashboard(..) => {
-                Operation::dashboard_read("resident", "card")
-            }
+            Command::Card { .. } => Operation::dashboard_read("resident", "card"),
+            Command::Dashboard(origin, write) => dashboard::operation(origin, write),
         }
     }
 
@@ -176,19 +174,25 @@ impl App for ResidentApp {
             Command::Card { task_id, operator } => {
                 Outcome::Value(dashboard::card(core, task_id, operator)?)
             }
-            Command::Dashboard(caller, write) => {
-                Outcome::Dashboard(dashboard::write(core, caller, write)?)
-            }
+            Command::Dashboard(_, write) => Outcome::Dashboard(dashboard::write(core, write)?),
         })
+    }
+
+    fn dashboard_row(
+        result: &Result<Outcome, crate::Error>,
+        _target: &str,
+        arguments: Value,
+    ) -> Option<DashboardRow> {
+        let written = match result {
+            Ok(Outcome::Dashboard(written)) => Ok(written),
+            Ok(_) => return None,
+            Err(error) => Err(error),
+        };
+        dashboard::row(written, arguments)
     }
 }
 
 /// Run one resident command: authorize it, audit it and return its outcome.
 pub fn exec(core: &Core, command: Command) -> Result<Outcome, crate::Error> {
-    match command {
-        Command::Dashboard(caller, write) => {
-            dashboard::write(core, caller, write).map(Outcome::Dashboard)
-        }
-        command => exec::run::<ResidentApp>(core, command),
-    }
+    exec::run::<ResidentApp>(core, command)
 }

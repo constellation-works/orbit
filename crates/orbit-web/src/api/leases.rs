@@ -17,13 +17,12 @@ use axum::routing::{get, post};
 use orbit_auth::scope::LeaseTokenScope;
 use orbit_common::protocol::tool_input::optional_string_alias;
 use orbit_core::Core;
-use orbit_core::app::lease::{self, Command, LeaseWrite, Outcome};
+use orbit_core::app::lease::{self, Command, Outcome};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
 use super::lease_notices;
-use super::routines::authorization_denied;
 use super::{OptionalJson, bad_request, map_runtime_error};
 use crate::state::DashboardState;
 
@@ -148,44 +147,38 @@ impl RuntimeLeaseBackend {
     }
 }
 
+impl RuntimeLeaseBackend {
+    /// Run one lease write. The session is refused before the selected
+    /// workspace is opened, so a caller without the grant learns nothing
+    /// about which workspaces exist.
+    fn write(&self, caller: &LeaseCaller, command: Command) -> LeaseBackendResult {
+        lease::admit(self.state.session(), &command)
+            .map_err(|error| Box::new(map_runtime_error(error)))?;
+        let core = self.lease_core(caller)?;
+        lease::exec(&core, command)
+            .and_then(Outcome::into_value)
+            .map_err(|error| Box::new(map_runtime_error(error)))
+    }
+}
+
 impl LeaseBackend for RuntimeLeaseBackend {
     fn request(&self, caller: &LeaseCaller, mut input: Value) -> LeaseBackendResult {
         if let Some(principal) = &caller.principal {
             input["principal"] = json!(principal);
         }
-        let command = Command::write(LeaseWrite::Request, input, self.state.operator_session())
-            .map_err(|denial| Box::new(authorization_denied(denial)))?;
-        let core = self.lease_core(caller)?;
-        lease::exec(&core, command)
-            .and_then(Outcome::into_value)
-            .map_err(|error| Box::new(map_runtime_error(error)))
+        self.write(caller, Command::Request(input))
     }
 
     fn renew(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        let command = Command::write(LeaseWrite::Renew, input, self.state.operator_session())
-            .map_err(|denial| Box::new(authorization_denied(denial)))?;
-        let core = self.lease_core(caller)?;
-        lease::exec(&core, command)
-            .and_then(Outcome::into_value)
-            .map_err(|error| Box::new(map_runtime_error(error)))
+        self.write(caller, Command::Renew(input))
     }
 
     fn expand(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        let command = Command::write(LeaseWrite::Expand, input, self.state.operator_session())
-            .map_err(|denial| Box::new(authorization_denied(denial)))?;
-        let core = self.lease_core(caller)?;
-        lease::exec(&core, command)
-            .and_then(Outcome::into_value)
-            .map_err(|error| Box::new(map_runtime_error(error)))
+        self.write(caller, Command::Expand(input))
     }
 
     fn release(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
-        let command = Command::write(LeaseWrite::Release, input, self.state.operator_session())
-            .map_err(|denial| Box::new(authorization_denied(denial)))?;
-        let core = self.lease_core(caller)?;
-        lease::exec(&core, command)
-            .and_then(Outcome::into_value)
-            .map_err(|error| Box::new(map_runtime_error(error)))
+        self.write(caller, Command::Release(input))
     }
 
     fn show(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {

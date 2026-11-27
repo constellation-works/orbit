@@ -50,7 +50,9 @@ impl OrbitError {
                 | NotFoundKind::Workspace => const { RemoteToolCode::NotFound.as_str() },
             },
             OrbitError::PolicyDenied(_) => const { RemoteToolCode::PolicyDenied.as_str() },
-            OrbitError::CapabilityDenied(_) => const { RemoteToolCode::CapabilityDenied.as_str() },
+            OrbitError::CapabilityDenied(_) | OrbitError::AuthorizationDenied(_) => {
+                const { RemoteToolCode::CapabilityDenied.as_str() }
+            }
             OrbitError::UnknownSelector(_) => "unknown_selector",
             OrbitError::AmbiguousDestination(_) => "ambiguous_destination",
             OrbitError::UnreachableDestination(_) => "unreachable_destination",

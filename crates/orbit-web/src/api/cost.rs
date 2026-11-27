@@ -51,7 +51,7 @@ async fn served_cost(
             )
         })?,
     };
-    let WsCore(core) = WsCore::over(&runtime);
+    let WsCore(core) = WsCore::over(&runtime, state.session());
     state
         .cost_memo()
         .get_or_compute(

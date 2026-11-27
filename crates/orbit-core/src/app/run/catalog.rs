@@ -8,9 +8,7 @@ use crate::application::job::{
 };
 use crate::application::job::{JobRunProjectionEvidence, JobRunProjectionProfile, project_job_run};
 use crate::{JobRun, OrbitError, OrbitRuntime, PipelineInvokeResult};
-use orbit_common::governance::authorization::{
-    AuthorizationDenial, DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN,
-};
+use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -133,10 +131,11 @@ impl<'a> Command<'a, Vec<Result<FleetCandidates, OrbitError>>> {
     }
 }
 
-impl<'a> Command<'a, Result<PipelineInvokeResult, DashboardResumeError>> {
-    /// Resume a run with its captured completion authority.
-    pub fn resume_dashboard(id: &'a str, claim: Option<&'a str>, operator: bool) -> Self {
-        let completion = super::exec::dashboard_authorize(&DASHBOARD_AUTO_DRAIN_COMPLETE, operator);
+impl<'a> Command<'a, Result<PipelineInvokeResult, OrbitError>> {
+    /// Resume a run. A source run that asked for completion needs completion
+    /// authority, which only the run's record can say, so the flow asks for
+    /// it once it has read the run. The inner result is the submission's.
+    pub fn resume_dashboard(id: &'a str, claim: Option<&'a str>) -> Self {
         Self::new(Operation::command("job", "resume-dashboard"), move |core| {
             let rt = core.runtime();
             let source = rt.show_job_run(id)?;
@@ -146,35 +145,24 @@ impl<'a> Command<'a, Result<PipelineInvokeResult, DashboardResumeError>> {
                 .and_then(|input| input.get("completion"))
                 .and_then(Value::as_str)
                 == Some("done")
-                && let Err(denial) = completion
             {
-                return Ok(Err(DashboardResumeError::Denied(denial)));
+                super::exec::require(core, &DASHBOARD_AUTO_DRAIN_COMPLETE)?;
             }
-            Ok(rt
-                .submit_resume_run(id, Some("dashboard"), claim)
-                .map_err(DashboardResumeError::Submit))
+            Ok(rt.submit_resume_run(id, Some("dashboard"), claim))
         })
     }
 }
 
-pub enum DashboardResumeError {
-    Denied(AuthorizationDenial),
-    Submit(OrbitError),
-}
-
-impl<'a> Command<'a, Result<PipelineInvokeResult, DashboardJobError>> {
-    /// Admit the dashboard session before reporting invalid input or submitting a job.
-    pub fn submit_catalog_job(id: Result<&'a str, String>, operator: bool) -> Self {
-        let admission = super::exec::dashboard_authorize(&DASHBOARD_JOB_RUN, operator);
+impl<'a> Command<'a, Result<PipelineInvokeResult, String>> {
+    /// Submit a catalog job. The session is admitted before an invalid id is
+    /// reported, which is the inner error.
+    pub fn submit_catalog_job(id: Result<&'a str, String>) -> Self {
         Self::new(
-            Operation::command("job", "submit-catalog-job"),
+            Operation::command("job", "submit-catalog-job").requires(&DASHBOARD_JOB_RUN),
             move |core| {
-                if let Err(denial) = admission {
-                    return Ok(Err(DashboardJobError::Denied(denial)));
-                }
                 let id = match id {
                     Ok(id) => id,
-                    Err(message) => return Ok(Err(DashboardJobError::InvalidId(message))),
+                    Err(message) => return Ok(Err(message)),
                 };
                 Ok(Ok(core.runtime().submit_no_input_catalog_job_run(
                     id,
@@ -184,11 +172,6 @@ impl<'a> Command<'a, Result<PipelineInvokeResult, DashboardJobError>> {
             },
         )
     }
-}
-
-pub enum DashboardJobError {
-    Denied(AuthorizationDenial),
-    InvalidId(String),
 }
 
 /// Project a run-list page: each run with its pipeline state, its tasks and

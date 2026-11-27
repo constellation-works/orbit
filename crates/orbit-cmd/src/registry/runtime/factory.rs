@@ -178,6 +178,16 @@ impl RegisteredRuntimeFactory {
         orbit_core::composition::core_for_service(runtime)
     }
 
+    /// The handle a server passes to an app's `exec` for one request: the
+    /// runtime this factory opened for the request's workspace, and the
+    /// session the request arrived on. Opens nothing.
+    pub fn core_for_session(
+        runtime: OrbitRuntime,
+        session: orbit_core::app::Session,
+    ) -> orbit_core::Core {
+        orbit_core::composition::core_for_session(runtime, session)
+    }
+
     /// Bootstrap the hidden detached worker with lock-only bounded recovery.
     pub fn initialize_pipeline_worker_with_overrides(
         root_override: Option<&Path>,

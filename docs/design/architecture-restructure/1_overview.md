@@ -2,7 +2,7 @@
 title: Architecture Restructure — Overview
 owner: claude
 created_date: 2026-11-25
-updated_date: 2026-11-26
+updated_date: 2026-11-27
 last_validated: 2026-11-25
 status: Accepted
 stage: building
@@ -87,7 +87,7 @@ The File column is where each concern lives after the restructure. The Task colu
 |---|---|---|
 | What a surface may name | `crates/orbit-core/src/lib.rs` (exports `app`, `Core`, `Error` only) | [ORB-28417] closes the exports (backlog) |
 | One unit per subject | `crates/orbit-core/src/app/<subject>/` | [ORB-28397], [ORB-28398] and [ORB-28399] built the task, run and plugin apps; [ORB-28418] to [ORB-28454] move the rest (proposed) |
-| The entry point, authorization and audit | crates/orbit-core/src/app/exec.rs | [ORB-28396] added it with `Core` and the friction app (done) |
+| The entry point, authorization and audit | crates/orbit-core/src/app/exec/ | [ORB-28396] added it with `Core` and the friction app (done) |
 | What every operation has | `crates/orbit-runtime/src/base/` | [ORB-28388] laid it out (done) |
 | The opened workspace and the store | `crates/orbit-runtime/src/stored/` | [ORB-28388] laid it out (done) |
 | This machine as a place work runs | `crates/orbit-runtime/src/host/` | [ORB-28389] laid it out (done) |

@@ -1,30 +1,17 @@
 //! [`Core`]: the opaque handle a surface holds for one opened workspace.
 
 use crate::OrbitRuntime;
+use crate::app::exec::{Caller, Session};
 
 /// One opened workspace, as a surface holds it.
 ///
 /// A surface passes it to an app's `exec` (`orbit_core::app::<subject>::exec`)
 /// and can do nothing else with it: it has no public field and no public
 /// method. It holds the runtime privately until the runtime's layers are
-/// built on demand.
+/// built on demand, and the caller the chokepoint admits and audits.
 pub struct Core {
     runtime: OrbitRuntime,
-    entry: Entry,
-}
-
-/// How commands reach the `Core`, which decides what the chokepoint owes them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Entry {
-    /// A process that runs one command and exits. The chokepoint authorizes
-    /// the command and writes its invocation audit row.
-    CommandLine,
-    /// A long-lived server answering many callers. The chokepoint authorizes
-    /// each command; no invocation audit row is written for one today.
-    Service,
-    /// A tool handler inside the generic tool entry, which authorized and
-    /// audited the call before the handler ran.
-    Tool,
+    caller: Caller,
 }
 
 impl Core {
@@ -33,7 +20,7 @@ impl Core {
     pub(crate) fn within_tool_entry(runtime: OrbitRuntime) -> Self {
         Self {
             runtime,
-            entry: Entry::Tool,
+            caller: Caller::Tool,
         }
     }
 
@@ -41,8 +28,9 @@ impl Core {
         &self.runtime
     }
 
-    pub(crate) fn entry(&self) -> Entry {
-        self.entry
+    /// Who is asking. An app's `run` reads it where a flow needs to know.
+    pub(crate) fn caller(&self) -> Caller {
+        self.caller
     }
 }
 
@@ -51,15 +39,22 @@ impl Core {
 pub fn core_for_command(runtime: OrbitRuntime) -> Core {
     Core {
         runtime,
-        entry: Entry::CommandLine,
+        caller: Caller::CommandLine,
     }
 }
 
-/// Open the `Core` of a long-lived server, over the runtime composed for one
-/// of its workspaces.
+/// Open the `Core` of a long-lived server that answers for no session, over
+/// the runtime composed for one of its workspaces. Its caller holds no grant.
 pub fn core_for_service(runtime: OrbitRuntime) -> Core {
+    core_for_session(runtime, Session::new(false))
+}
+
+/// Derive the `Core` of one request: the runtime a server composed for the
+/// request's workspace, and the session the request arrived on. It opens
+/// nothing; the runtime is the server's own handle.
+pub fn core_for_session(runtime: OrbitRuntime, session: Session) -> Core {
     Core {
         runtime,
-        entry: Entry::Service,
+        caller: Caller::Session(session),
     }
 }

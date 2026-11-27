@@ -1,8 +1,9 @@
 //! The task app: every task and decision command, whichever surface sent it.
 //!
 //! A surface builds a [`Command`], calls [`exec`] and renders the
-//! [`Outcome`]. `exec` runs through `app/exec.rs`, which authorizes and
-//! audits the command; the flows here do neither.
+//! [`Outcome`]. `exec` runs through `app/exec/`, which admits and audits the
+//! command; the flows here do neither. The app owns the writer of its
+//! `task.mutation` row (`audit.rs`), which the chokepoint calls.
 //!
 //! A command is one of three kinds:
 //!
@@ -20,6 +21,8 @@
 //! Each arm calls the runtime method the surface called before. The verbs'
 //! tool flows are the private child modules; they moved here from the tool
 //! host and still share its input and JSON helpers.
+
+mod audit;
 
 mod decision;
 mod lifecycle;
@@ -50,7 +53,7 @@ use orbit_types::workflow::JobRun;
 use orbit_types::workspace::WorkspacePublicationBinding;
 use serde_json::{Map, Value};
 
-use super::exec::{self, App, MutationAudit, Operation};
+use super::exec::{self, App, Operation, SessionAudit};
 use crate::Core;
 use crate::application::resident::ResidentActionTicket;
 use crate::application::task::InfraBlockedTask;
@@ -756,7 +759,7 @@ impl<'a> App for TaskApp<'a> {
         }
     }
 
-    fn mutation_audit(command: &Command<'a>) -> Option<MutationAudit> {
+    fn session_audit(command: &Command<'a>) -> Option<SessionAudit<Outcome>> {
         let write = match command {
             Command::Operation(_, input) | Command::Decision(_, input) => match &input.request {
                 Request::Dashboard(write) => write.as_ref(),
@@ -765,23 +768,7 @@ impl<'a> App for TaskApp<'a> {
             Command::Record(write) => write,
             _ => return None,
         };
-        Some(MutationAudit {
-            verb: write.verb,
-            target_id: write.target_id.clone(),
-            caller: write.caller.clone(),
-            role: write.role.clone(),
-            model: write.model.clone(),
-            detail: write.detail.clone(),
-        })
-    }
-
-    fn written_id(outcome: &Outcome) -> Option<String> {
-        match outcome {
-            Outcome::Screened(write) => Some(write.written.task.id.clone()),
-            Outcome::Created(id) => Some(id.clone()),
-            Outcome::DecisionRequest(request) => Some(request.task_id.clone()),
-            _ => None,
-        }
+        Some(audit::writer(write))
     }
 }
 

@@ -7,10 +7,10 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_core::application::job::JobRunCancelResultProfile;
 use serde_json::json;
 
-use super::super::routines::{OperationsQuery, authorization_denied, explicit_workspace};
-use super::super::{OptionalJson, bad_request, blocking, map_runtime_error, validate_id};
 use super::locate::{RunLookupFailure, requested_workspace, with_run};
-use orbit_core::app::run::{Command, DashboardReplay, exec};
+use crate::api::routines::{OperationsQuery, explicit_workspace};
+use crate::api::{OptionalJson, bad_request, blocking, map_runtime_error, validate_id};
+use orbit_core::app::run::{Command, admit_dashboard_replay, exec};
 
 #[derive(serde::Deserialize, Default)]
 pub(in crate::api) struct CancelRunBody {
@@ -127,10 +127,9 @@ pub(in crate::api) async fn replay_run_action(
     if let Err(response) = explicit_workspace(&query) {
         return response.into_response();
     }
-    let replay = match DashboardReplay::admit(state.operator_session()) {
-        Ok(replay) => replay,
-        Err(denial) => return authorization_denied(denial),
-    };
+    if let Err(error) = admit_dashboard_replay(state.session()) {
+        return map_runtime_error(error);
+    }
     let id = match validate_id(&id) {
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
@@ -144,19 +143,18 @@ pub(in crate::api) async fn replay_run_action(
             |core, lookup| {
                 exec(
                     core,
-                    Command::dashboard_replay(lookup, body.claim_token.as_deref(), replay),
+                    Command::dashboard_replay(lookup, body.claim_token.as_deref()),
                 )
             },
         ))
     })
     .await
     {
-        Ok(Ok(Ok(result))) => Json(json!({
+        Ok(Ok(result)) => Json(json!({
             "run_id": result.run_id,
             "state": if result.queued { "queued" } else { "submitted" },
         }))
         .into_response(),
-        Ok(Ok(Err(denial))) => authorization_denied(denial),
         Ok(Err(failure)) => failure.into_response(),
         Err(response) => *response,
     }

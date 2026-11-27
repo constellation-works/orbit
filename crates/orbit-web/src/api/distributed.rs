@@ -55,8 +55,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::routines::{
-    OperationsQuery, action_capability, authorization_denied, dashboard_caller, explicit_workspace,
-    unexpected_outcome,
+    OperationsQuery, action_capability, dashboard_caller, explicit_workspace, unexpected_outcome,
 };
 use super::{bad_request, blocking, server_error, validate_id};
 use crate::state::{DashboardState, WsCore};
@@ -353,17 +352,16 @@ async fn run_owner_action(
     })
     .await;
     match outcome {
-        Ok(review::Outcome::Dashboard(Ok(DashboardWritten::Applied(value)))) => {
+        Ok(review::Outcome::Dashboard(DashboardWritten::Applied(value))) => {
             Json(json!({ "ok": true, "result": value })).into_response()
         }
-        Ok(review::Outcome::Dashboard(Ok(DashboardWritten::Refused { refusal, message }))) => {
+        Ok(review::Outcome::Dashboard(DashboardWritten::Refused { refusal, message })) => {
             refusal_response(refusal, message)
         }
-        Ok(review::Outcome::Dashboard(Ok(DashboardWritten::Failed(error)))) => match error {
+        Ok(review::Outcome::Dashboard(DashboardWritten::Failed(error))) => match error {
             OrbitError::InvalidInput(message) => bad_request(message),
             other => server_error(OrbitError::Execution(other.to_string())),
         },
-        Ok(review::Outcome::Dashboard(Err(denial))) => authorization_denied(denial),
         Ok(_) => unexpected_outcome(label),
         Err(response) => *response,
     }

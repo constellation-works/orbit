@@ -11,13 +11,12 @@ mod dashboard;
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
-use orbit_common::governance::authorization::AuthorizationDenial;
 use orbit_types::task::TaskStatus;
 use orbit_types::tool::ApplicationConsent;
 use orbit_types::workflow::handoff::LandingAttemptState;
 use serde_json::Value;
 
-use super::exec::{self, App, DashboardCaller, Operation};
+use super::exec::{self, App, DashboardOrigin, DashboardRow, Operation};
 use crate::Core;
 pub use crate::application::operator_input::replay_key;
 pub use crate::application::review::{
@@ -61,7 +60,7 @@ pub enum Command {
     },
     /// One governed owner handoff or claim action from an authenticated
     /// dashboard session.
-    Dashboard(DashboardCaller, DashboardAction),
+    Dashboard(DashboardOrigin, DashboardAction),
 }
 
 /// One owner handoff or claim action sent from the dashboard, with its
@@ -74,6 +73,7 @@ pub struct DashboardAction {
 }
 
 /// One owner handoff or claim mutation sent from the dashboard.
+#[derive(Clone)]
 pub enum DashboardWrite {
     /// Record completion authority for one exact candidate.
     ApproveHandoff {
@@ -156,7 +156,7 @@ pub enum Outcome {
     /// Read-only owner claim console payload.
     ClaimConsole(Value),
     /// One dashboard owner action: what it did, or why the session was refused.
-    Dashboard(Result<DashboardWritten, AuthorizationDenial>),
+    Dashboard(DashboardWritten),
 }
 
 /// Why a review command failed.
@@ -195,7 +195,7 @@ impl App for ReviewApp {
                     .target(Some("application_consent"), Some(consent_id.clone()))
             }
             Command::ClaimConsole { .. } => Operation::dashboard_read("review", "claim-console"),
-            Command::Dashboard(..) => Operation::dashboard_read("review", "dashboard"),
+            Command::Dashboard(origin, action) => dashboard::operation(origin, &action.write),
         }
     }
 
@@ -232,10 +232,21 @@ impl App for ReviewApp {
                 state,
                 detail,
             )?),
-            Command::Dashboard(caller, action) => {
-                Outcome::Dashboard(dashboard::write(core, caller, action)?)
-            }
+            Command::Dashboard(_, action) => Outcome::Dashboard(dashboard::write(core, action)?),
         })
+    }
+
+    fn dashboard_row(
+        result: &Result<Outcome, crate::Error>,
+        _target: &str,
+        arguments: Value,
+    ) -> Option<DashboardRow> {
+        let written = match result {
+            Ok(Outcome::Dashboard(written)) => Ok(written),
+            Ok(_) => return None,
+            Err(error) => Err(error),
+        };
+        dashboard::row(written, arguments)
     }
 }
 

@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 
 use super::Outcome;
 use crate::Core;
-use crate::app::exec;
+use crate::app::exec::{DashboardOrigin, DashboardRow, Operation};
 use crate::application::config::{
     ConfigScope, ConfigUnsetRefusal, ConfigWriteInit, ConfigWriteOutcome, GuardedConfigUnset,
     delete_crew, set_crew, set_key, unset_key, unset_key_preserving_effective,
@@ -57,14 +57,92 @@ pub enum DashboardConfigWriteKind {
     },
 }
 
-/// One configuration write request from an authenticated dashboard session.
+impl DashboardConfigWriteKind {
+    /// The key a write targets and the arguments its audit row records.
+    fn audited(&self) -> (String, Value) {
+        match self {
+            DashboardConfigWriteKind::SetKey {
+                key, value, scope, ..
+            } => (
+                key.clone(),
+                json!({
+                    "key": key,
+                    "value": value,
+                    "scope": scope.label(),
+                }),
+            ),
+            DashboardConfigWriteKind::UnsetKey { key, scope } => (
+                key.clone(),
+                json!({
+                    "key": key,
+                    "value": Value::Null,
+                    "scope": scope.label(),
+                }),
+            ),
+            DashboardConfigWriteKind::UnsetKeyPreservingEffective { key, scope } => (
+                key.clone(),
+                json!({
+                    "key": key,
+                    "value": Value::Null,
+                    "scope": scope.label(),
+                    "preserve_effective": true,
+                }),
+            ),
+            DashboardConfigWriteKind::SetCrew {
+                name,
+                fields,
+                scope,
+                ..
+            } => {
+                let target = format!("crews.{name}");
+                (
+                    target.clone(),
+                    json!({
+                        "key": target,
+                        "value": Value::Object(fields.clone()),
+                        "scope": scope.label(),
+                    }),
+                )
+            }
+            DashboardConfigWriteKind::DeleteCrew { name, scope } => {
+                let target = format!("crews.{name}");
+                (
+                    target.clone(),
+                    json!({
+                        "key": target,
+                        "value": Value::Null,
+                        "scope": scope.label(),
+                    }),
+                )
+            }
+        }
+    }
+}
+
+/// One configuration write request from a dashboard session.
 pub struct DashboardConfigWrite {
     /// Which mutation to apply.
     pub kind: DashboardConfigWriteKind,
-    /// Whether the dashboard session holds operator capability.
-    pub operator_session: bool,
     /// Hostname recorded on the dashboard audit row.
     pub host: Option<String>,
+}
+
+impl DashboardConfigWrite {
+    /// The governed operation this write requires and its audit row names.
+    pub(super) fn operation(&self) -> Operation {
+        let (target, arguments) = self.kind.audited();
+        Operation::dashboard_read("config", "dashboard-write")
+            .requires(&DASHBOARD_CONFIG_SET)
+            .dashboard_row(
+                &DASHBOARD_CONFIG_SET,
+                target,
+                arguments,
+                DashboardOrigin {
+                    host: self.host.clone(),
+                    ..Default::default()
+                },
+            )
+    }
 }
 
 /// Outcome of an admitted dashboard configuration write.
@@ -80,142 +158,80 @@ pub enum DashboardConfigWriteResult {
     Refused(ConfigUnsetRefusal),
 }
 
-pub(super) fn exec(core: &Core, write: DashboardConfigWrite) -> Result<Outcome, OrbitError> {
-    let DashboardConfigWrite {
-        kind,
-        operator_session,
-        host,
-    } = write;
-    let (target, arguments) = match &kind {
+/// Apply one admitted configuration write.
+pub(super) fn write(
+    core: &Core,
+    write: DashboardConfigWrite,
+) -> Result<DashboardConfigWriteResult, OrbitError> {
+    let runtime = core.runtime();
+    let kind = write.kind;
+    let (result_target, _) = kind.audited();
+    let result = match kind {
         DashboardConfigWriteKind::SetKey {
-            key, value, scope, ..
-        } => (
-            key.clone(),
-            json!({
-                "key": key,
-                "value": value,
-                "scope": scope.label(),
-            }),
-        ),
-        DashboardConfigWriteKind::UnsetKey { key, scope } => (
-            key.clone(),
-            json!({
-                "key": key,
-                "value": Value::Null,
-                "scope": scope.label(),
-            }),
-        ),
-        DashboardConfigWriteKind::UnsetKeyPreservingEffective { key, scope } => (
-            key.clone(),
-            json!({
-                "key": key,
-                "value": Value::Null,
-                "scope": scope.label(),
-                "preserve_effective": true,
-            }),
-        ),
+            key,
+            value,
+            scope,
+            init,
+        } => DashboardConfigWriteResult::Applied {
+            target: result_target,
+            outcome: set_key(runtime, &key, &value, scope, init)?,
+        },
+        DashboardConfigWriteKind::UnsetKey { key, scope } => DashboardConfigWriteResult::Applied {
+            target: result_target,
+            outcome: unset_key(runtime, &key, scope)?,
+        },
+        DashboardConfigWriteKind::UnsetKeyPreservingEffective { key, scope } => {
+            match unset_key_preserving_effective(runtime, &key, scope)? {
+                GuardedConfigUnset::Unset(outcome) => DashboardConfigWriteResult::Applied {
+                    target: result_target,
+                    outcome,
+                },
+                GuardedConfigUnset::Refused(refusal) => {
+                    DashboardConfigWriteResult::Refused(refusal)
+                }
+            }
+        }
         DashboardConfigWriteKind::SetCrew {
             name,
             fields,
             scope,
-            ..
-        } => {
-            let target = format!("crews.{name}");
-            (
-                target.clone(),
-                json!({
-                    "key": target,
-                    "value": Value::Object(fields.clone()),
-                    "scope": scope.label(),
-                }),
-            )
-        }
+            init,
+        } => DashboardConfigWriteResult::Applied {
+            target: result_target,
+            outcome: set_crew(runtime, &name, &fields, scope, init)?,
+        },
         DashboardConfigWriteKind::DeleteCrew { name, scope } => {
-            let target = format!("crews.{name}");
-            (
-                target.clone(),
-                json!({
-                    "key": target,
-                    "value": Value::Null,
-                    "scope": scope.label(),
-                }),
-            )
+            DashboardConfigWriteResult::Applied {
+                target: result_target,
+                outcome: delete_crew(runtime, &name, scope)?,
+            }
         }
     };
+    Ok(result)
+}
 
-    let runtime = core.runtime();
-    let result_target = target.clone();
-    exec::run_dashboard_with_arguments(
-        core,
-        exec::DashboardOperation {
-            operation: &DASHBOARD_CONFIG_SET,
-            target: &target,
-            arguments,
-            operator_session,
-            host,
-            workspace: None,
-            machine_name: String::new(),
-            recorded_as: None,
-        },
-        move || {
-            let result = match kind {
-                DashboardConfigWriteKind::SetKey {
-                    key,
-                    value,
-                    scope,
-                    init,
-                } => DashboardConfigWriteResult::Applied {
-                    target: result_target,
-                    outcome: set_key(runtime, &key, &value, scope, init)?,
-                },
-                DashboardConfigWriteKind::UnsetKey { key, scope } => {
-                    DashboardConfigWriteResult::Applied {
-                        target: result_target,
-                        outcome: unset_key(runtime, &key, scope)?,
-                    }
-                }
-                DashboardConfigWriteKind::UnsetKeyPreservingEffective { key, scope } => {
-                    match unset_key_preserving_effective(runtime, &key, scope)? {
-                        GuardedConfigUnset::Unset(outcome) => DashboardConfigWriteResult::Applied {
-                            target: result_target,
-                            outcome,
-                        },
-                        GuardedConfigUnset::Refused(refusal) => {
-                            DashboardConfigWriteResult::Refused(refusal)
-                        }
-                    }
-                }
-                DashboardConfigWriteKind::SetCrew {
-                    name,
-                    fields,
-                    scope,
-                    init,
-                } => DashboardConfigWriteResult::Applied {
-                    target: result_target,
-                    outcome: set_crew(runtime, &name, &fields, scope, init)?,
-                },
-                DashboardConfigWriteKind::DeleteCrew { name, scope } => {
-                    DashboardConfigWriteResult::Applied {
-                        target: result_target,
-                        outcome: delete_crew(runtime, &name, scope)?,
-                    }
-                }
-            };
-            Ok(result)
-        },
-        |result| match result {
-            DashboardConfigWriteResult::Applied { .. } => None,
-            DashboardConfigWriteResult::Refused(refusal) => Some(refusal.message.clone()),
-        },
-        |result, mut arguments| {
-            if let DashboardConfigWriteResult::Applied { outcome, .. } = result
-                && let Some(object) = arguments.as_object_mut()
-            {
+/// A write's audit row: a refused unset is a failure carrying its message,
+/// and an applied write records the old and new values.
+pub(super) fn row(result: &Result<Outcome, OrbitError>, mut arguments: Value) -> DashboardRow {
+    match result {
+        Ok(Outcome::DashboardWritten(DashboardConfigWriteResult::Refused(refusal))) => {
+            DashboardRow {
+                failure: Some(refusal.message.clone()),
+                target: None,
+                arguments,
+            }
+        }
+        Ok(Outcome::DashboardWritten(DashboardConfigWriteResult::Applied { outcome, .. })) => {
+            if let Some(object) = arguments.as_object_mut() {
                 object.insert("old_value".to_string(), outcome.old_value.clone());
                 object.insert("new_value".to_string(), outcome.new_value.clone());
             }
-            arguments
-        },
-    )
-    .map(Outcome::DashboardWritten)
+            DashboardRow {
+                failure: None,
+                target: None,
+                arguments,
+            }
+        }
+        result => DashboardRow::of(result, arguments),
+    }
 }

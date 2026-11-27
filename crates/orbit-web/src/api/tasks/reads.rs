@@ -7,6 +7,7 @@ use crate::projections::{TaskListProjection, cached_riskiness_model, task_detail
 use crate::state::{DashboardState, Ws, WsCore, WsRejection};
 use axum::extract::{Path, RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
+use orbit_core::app::Session;
 use orbit_core::app::task::{
     self, Command, Outcome, PageRead, PageSelect, PageSelection, Read, RowRead, TaskPages,
 };
@@ -121,7 +122,8 @@ pub(in crate::api) async fn list_tasks(
         return bad_request(message);
     }
     let riskiness = cached_riskiness_model(&state, &ws.0).await;
-    let WsCore(core) = WsCore::over(&ws.0);
+    let session = state.session();
+    let WsCore(core) = WsCore::over(&ws.0, session);
     match blocking("task list", move || {
         let select = query.clone();
         let read = Read::Pages {
@@ -139,9 +141,9 @@ pub(in crate::api) async fn list_tasks(
             .map_err(orbit_core::OrbitError::InvalidInput)?;
         Ok(pages.and_then(|pages| {
             if query.groups_by_status() {
-                status_sections_json(&ws, &query, &scope, riskiness, pages)
+                status_sections_json((&ws, session), &query, &scope, riskiness, pages)
             } else {
-                task_list_page_json(&ws, &query, &scope, riskiness, pages)
+                task_list_page_json((&ws, session), &query, &scope, riskiness, pages)
             }
         }))
     })
@@ -192,7 +194,7 @@ fn select_pages(
 /// Build the `group=status` answer for `GET /api/tasks`: one
 /// [`task_page_json`] page per status, each bound to that status alone.
 fn status_sections_json(
-    ws: &Ws,
+    ws: (&Ws, Session),
     query: &TaskPageQuery,
     scope: &str,
     riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
@@ -222,7 +224,7 @@ fn status_sections_json(
 
 /// Build the `{ items, total, limit, truncated }` page for `GET /api/tasks`.
 fn task_list_page_json(
-    ws: &Ws,
+    ws: (&Ws, Session),
     query: &TaskPageQuery,
     scope: &str,
     riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
@@ -236,7 +238,7 @@ fn task_list_page_json(
 
 /// Project one selected page of `query` into its response envelope.
 fn task_page_json(
-    ws: &Ws,
+    (ws, session): (&Ws, Session),
     query: &TaskPageQuery,
     scope: &str,
     riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
@@ -311,7 +313,8 @@ fn task_page_json(
             ),
         }
         if query.include_detail_runs() {
-            match super::super::jobs::task_runs_page(&WsCore::over(runtime).0, detail_id, 20) {
+            match crate::api::jobs::task_runs_page(&WsCore::over(runtime, session).0, detail_id, 20)
+            {
                 Ok(runs) => result["detail_runs"] = runs,
                 Err(error) => {
                     tracing::debug!(task_id = %detail_id, %error, "task list Runs projection unavailable");
@@ -337,8 +340,12 @@ pub(in crate::api) async fn list_task_locks(WsCore(core): WsCore) -> Response {
 
 /// One task's row and the statuses of its dependencies, read through the
 /// task app.
-fn read_task_row(ws: &Ws, id: &str) -> Result<Box<RowRead>, orbit_core::OrbitError> {
-    let WsCore(core) = WsCore::over(&ws.0);
+fn read_task_row(
+    ws: &Ws,
+    session: Session,
+    id: &str,
+) -> Result<Box<RowRead>, orbit_core::OrbitError> {
+    let WsCore(core) = WsCore::over(&ws.0, session);
     task::exec(&core, Command::Read(Read::Row { id: id.to_string() })).and_then(Outcome::into_row)
 }
 
@@ -387,7 +394,8 @@ pub(in crate::api) async fn get_task(
         Err(rejection) => return rejection.into_response(),
     };
     let lookup = Ws(Arc::clone(&ws.0));
-    let read = match blocking("task detail", move || read_task_row(&lookup, &id)).await {
+    let session = state.session();
+    let read = match blocking("task detail", move || read_task_row(&lookup, session, &id)).await {
         Ok(read) => read,
         Err(response) => return *response,
     };
@@ -432,7 +440,7 @@ fn find_task_owner(state: &DashboardState, id: &str) -> Result<TaskOwner, orbit_
                 continue;
             }
         };
-        match read_task_row(&ws, id) {
+        match read_task_row(&ws, pinned.session(), id) {
             Ok(read) => {
                 return Ok(TaskOwner {
                     id: entry.id.clone(),

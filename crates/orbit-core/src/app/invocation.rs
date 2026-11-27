@@ -269,6 +269,9 @@ impl OwnRow {
             Err(OrbitError::PolicyDenied(message) | OrbitError::CapabilityDenied(message)) => {
                 (AuditEventStatus::Denied, 1, Some(message.clone()))
             }
+            Err(error @ OrbitError::AuthorizationDenied(_)) => {
+                (AuditEventStatus::Denied, 1, Some(error.to_string()))
+            }
             Err(error @ OrbitError::DecisionRefused { code, .. }) if code.is_policy_denial() => {
                 (AuditEventStatus::Denied, 1, Some(error.to_string()))
             }

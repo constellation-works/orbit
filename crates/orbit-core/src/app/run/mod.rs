@@ -53,12 +53,12 @@ use super::exec::{self, App, Operation};
 use crate::{Core, OrbitError};
 use std::marker::PhantomData;
 
-pub use catalog::{DashboardJobError, DashboardResumeError, JobCatalog, JobRunsPage};
+pub use catalog::{JobCatalog, JobRunsPage};
 pub(crate) use drain::prepare_input;
 pub use history::{FailureRow, RunHistory};
 pub use job::{JobEntry, PilotRequest, SubmittedJob, WorkflowDispatchResult, wait_timeout};
 pub use leaves::{DrainLeafSummary, WaitingBacklog, WaitingTask, waiting_backlog};
-pub use locate::{DashboardReplay, LookupError, RunLookup};
+pub use locate::{LookupError, RunLookup, admit_dashboard_replay};
 pub use logs::{LogFollower, LogSnapshot};
 pub use metrics::{
     ActivityCount, ActivityRole, BucketGranularity, BucketOutcomeRow, DoubleReadSummary,

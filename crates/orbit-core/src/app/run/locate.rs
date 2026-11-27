@@ -1,33 +1,16 @@
 //! Resolve a run against one pinned set of host workspaces before reading or changing it.
 
 use super::detail::{job_run_detail_to_json, recorded_run_detail_to_json};
+use super::exec::Session;
 use super::{Command, Operation};
 use crate::application::job::{JobRunCancelResult, JobRunHolder, RecordedJobRun};
 use crate::runtime::audit::run_events::{RunEventsPage, RunEventsPageResult};
 use crate::runtime::audit::run_logs::RunCliInvocationProfile;
 use crate::{Core, JobRun, NotFoundKind, OrbitError, OrbitRuntime, PipelineInvokeResult};
-use orbit_common::governance::authorization::{AuthorizationDenial, DASHBOARD_AUTO_DRAIN_COMPLETE};
+use orbit_common::governance::authorization::{DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_JOB_RUN};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::Value;
 use std::sync::Arc;
-
-/// Authority to submit one dashboard replay, checked before workspace discovery.
-pub struct DashboardReplay {
-    completion: Result<(), AuthorizationDenial>,
-}
-
-impl DashboardReplay {
-    pub fn admit(operator: bool) -> Result<Self, AuthorizationDenial> {
-        super::exec::dashboard_authorize(
-            &orbit_common::governance::authorization::DASHBOARD_JOB_RUN,
-            operator,
-        )?;
-        Ok(Self {
-            completion: super::exec::dashboard_authorize(&DASHBOARD_AUTO_DRAIN_COMPLETE, operator)
-                .map(|_| ()),
-        })
-    }
-}
 
 pub struct RunLookup<'a> {
     pub id: &'a str,
@@ -198,14 +181,12 @@ impl<'a> Command<'a, Result<Result<JobRunCancelResult, OrbitError>, LookupError>
     }
 }
 
-impl<'a> Command<'a, Result<Result<PipelineInvokeResult, AuthorizationDenial>, LookupError>> {
-    /// Check completion authority and submit a replay in the holding workspace.
-    pub fn dashboard_replay(
-        lookup: RunLookup<'a>,
-        claim: Option<&'a str>,
-        replay: DashboardReplay,
-    ) -> Self {
-        Self::new(Operation::command("run", "replay"), move |core| {
+impl<'a> Command<'a, Result<PipelineInvokeResult, LookupError>> {
+    /// Submit a replay in the holding workspace. A source run that asked for
+    /// completion needs completion authority, which the flow asks for once it
+    /// has read the run.
+    pub fn dashboard_replay(lookup: RunLookup<'a>, claim: Option<&'a str>) -> Self {
+        Self::new(replay_operation(), move |core| {
             Ok((|| {
                 let located = lookup.locate(core, false)?;
                 let rt = located.writable()?;
@@ -216,17 +197,28 @@ impl<'a> Command<'a, Result<Result<PipelineInvokeResult, AuthorizationDenial>, L
                     .and_then(|input| input.get("completion"))
                     .and_then(Value::as_str)
                     == Some("done")
-                    && let Err(denial) = replay.completion
                 {
-                    return Ok(Err(denial));
+                    super::exec::require(core, &DASHBOARD_AUTO_DRAIN_COMPLETE)?;
                 }
-                Ok(Ok(rt.submit_replay_run(
+                Ok(rt.submit_replay_run(
                     lookup.id,
                     Some("dashboard"),
                     claim,
                     JobRunTrigger::dashboard(),
-                )?))
+                )?)
             })())
         })
     }
+}
+
+/// A dashboard replay's operation: it requires job-run authority whatever the
+/// source run is.
+fn replay_operation() -> Operation {
+    Operation::command("run", "replay").requires(&DASHBOARD_JOB_RUN)
+}
+
+/// Decide a dashboard replay for `session` before the workspace that holds
+/// the run is discovered. `exec` decides the same requirement again.
+pub fn admit_dashboard_replay(session: Session) -> Result<(), OrbitError> {
+    super::exec::admit_operation(session, &replay_operation())
 }
