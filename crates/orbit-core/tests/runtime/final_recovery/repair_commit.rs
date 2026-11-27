@@ -199,7 +199,12 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         "id": "F1", "severity": "high", "summary": "Candidate needs repair",
                         "paths": ["candidate.txt"], "disposition": {"kind": "open"},
                     }]) } else { json!([]) },
-                    "validation": [{"id": "V1", "command": self.fixture.runtime.required_validation_commands()[0], "outcome": "passed", "role": "required"}],
+                    "validation": [{
+                        "id": "V1",
+                        "command": self.fixture.runtime.required_validation_commands()[0],
+                        "outcome": "passed",
+                        "role": "required",
+                    }],
                     "escalation": if verdict == "reject" { Some("Repair F1") } else { None },
                 }));
                 Ok(json!({"verdict": verdict}))

@@ -1614,9 +1614,11 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             ..orbit_engine::RunSettings::default()
         }
     }
+
     fn required_validation_commands(&self) -> Vec<String> {
         locked(&self.required_commands).clone()
     }
+
     fn review_baseline_commands(&self) -> Vec<String> {
         locked(&self.baseline_commands).clone()
     }
