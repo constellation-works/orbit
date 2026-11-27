@@ -2,17 +2,18 @@
 //! decides each candidate.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_types::task::{ReservationOwnerMetadata, TaskStatus};
+use orbit_types::task::{ReservationOwnerMetadata, Task, TaskStatus};
 
 use super::super::TaskCommitBoundary;
-use super::super::lifecycle::fresh_offer_history;
-use super::super::selection::{AdmissionSnapshot, DependencyReach, Screen};
 use super::{
-    ADMISSION_RESERVATION_TTL_SECONDS, AdmissionCall, CLAIM_KIND, RECEIPT_KIND, StoredReceipt,
-    admission_refusal, decode, digest, encode, receipt_key, row,
+    ADMISSION_RESERVATION_TTL_SECONDS, AdmissionCall, RECEIPT_KIND, StoredReceipt,
+    admission_refusal, digest, receipt_key,
 };
+use crate::boundary::coordination::lifecycle::{codec, fresh_offer_history};
+use crate::boundary::coordination::selection::{AdmissionSnapshot, DependencyReach, Screen};
 use crate::boundary::v2::{task_comment_from_row, task_from_bundle, task_history_from_events};
 use crate::contract::*;
 
@@ -97,6 +98,40 @@ impl TaskCommitBoundary {
             .ok_or_else(|| OrbitError::Store("a host-wide admission refused a dependency".into()))
     }
 
+    pub(in crate::boundary::coordination) fn admission_claim_id(
+        &self,
+        receipt_key: &str,
+    ) -> Result<String, OrbitError> {
+        Ok(format!(
+            "claim-{}",
+            digest(&(&self.workspace_id, receipt_key))?
+        ))
+    }
+
+    pub(in crate::boundary::coordination) fn admission_reservation_params(
+        &self,
+        orbit_dir: &Path,
+        task_id: &str,
+        footprint: &[String],
+        actor: &str,
+        claim_id: &str,
+    ) -> TaskReservationReserveParams {
+        TaskReservationReserveParams {
+            workspace_orbit_dir: orbit_dir.to_string_lossy().into_owned(),
+            workspace_id: Some(self.workspace_id.clone()),
+            task_ids: vec![task_id.to_string()],
+            requested_files: footprint.to_vec(),
+            stored_files: footprint.to_vec(),
+            actor: actor.to_string(),
+            ttl_seconds: ADMISSION_RESERVATION_TTL_SECONDS,
+            owner_run_id: None,
+            owner_metadata: Some(ReservationOwnerMetadata {
+                claim_id: Some(claim_id.to_string()),
+                ..Default::default()
+            }),
+        }
+    }
+
     fn admit_locked(
         &self,
         call: AdmissionCall<'_>,
@@ -119,7 +154,7 @@ impl TaskCommitBoundary {
         let guidance_capture = call.guidance_capture_or_default();
         let executor_host_os = &ordering.executor_host_os;
         if let Some(row) = self.receipt_row(&identity.location().machine_id, &request.request_id)? {
-            let previous = decode::<StoredReceipt>(&row.payload_json)?;
+            let previous = codec::decode::<StoredReceipt>(&row.payload_json)?;
             let same = match previous {
                 StoredReceipt::Full { receipt } => receipt.request == *request,
                 StoredReceipt::Tombstone { input_digest, .. } => input_digest == digest(request)?,
@@ -262,7 +297,7 @@ impl TaskCommitBoundary {
                 });
                 continue;
             }
-            let claim_id = format!("claim-{}", digest(&(&self.workspace_id, &key))?);
+            let claim_id = self.admission_claim_id(&key)?;
             let machine_id = &identity.location().machine_id;
             let offer = self.admission_offer(&task, &history, machine_id)?;
             let resume_candidate = offer
@@ -279,24 +314,17 @@ impl TaskCommitBoundary {
             let actor = receipt.machine_id.clone();
             let expected_status = vec![TaskStatus::Backlog];
             let status_event = Some("pulled_by".into());
-            let status_note = Some(encode(
+            let status_note = Some(codec::encode(
                 &serde_json::json!({"machine_id":receipt.machine_id,
                 "run_context":request.run_context,"claim_id":claim_id,"request_id":request.request_id}),
             )?);
-            let reservation = Some(TaskReservationReserveParams {
-                workspace_orbit_dir: orbit_dir.to_string_lossy().into_owned(),
-                workspace_id: Some(self.workspace_id.clone()),
-                task_ids: vec![task.id.clone()],
-                requested_files: footprint.clone(),
-                stored_files: footprint.clone(),
-                actor: receipt.machine_id.clone(),
-                ttl_seconds: ADMISSION_RESERVATION_TTL_SECONDS,
-                owner_run_id: None,
-                owner_metadata: Some(ReservationOwnerMetadata {
-                    claim_id: Some(claim_id.clone()),
-                    ..Default::default()
-                }),
-            });
+            let reservation = Some(self.admission_reservation_params(
+                orbit_dir,
+                &task.id,
+                &footprint,
+                &receipt.machine_id,
+                &claim_id,
+            ));
             // [ORB-14338] A kept candidate this claim cannot resume is
             // never dropped silently: the task's history says why.
             let append_history = offer
@@ -314,64 +342,31 @@ impl TaskCommitBoundary {
                 status_decision: None,
                 append_history,
                 reservation,
-                rows: vec![
-                    row(RECEIPT_KIND, &key, &())?,
-                    row(CLAIM_KIND, &claim_id, &())?,
-                ],
+                rows: admission_placeholder_rows(&key, &claim_id)?,
             };
             let effects = ClaimCommitEffects {
                 census: census.cloned(),
                 ..Default::default()
             };
+            let affinity = ordering
+                .census
+                .as_ref()
+                .map(|census| census.record(&task, executor_host_os, ordering.affinity));
+            let row_input = ClaimReceiptRowsInput {
+                identity,
+                request,
+                task: &task,
+                footprint: &footprint,
+                receipt: &receipt,
+                receipt_key: &key,
+                claim_id: &claim_id,
+                repair: None,
+                resume_candidate: resume_candidate.as_ref(),
+                affinity,
+            };
             let committed = self.commit_locked_effects(
                 &params,
-                &mut |reservation| {
-                    let reserved = reservation
-                        .ok_or_else(|| OrbitError::Store("admission reservation missing".into()))?;
-                    let claim = ExecutionClaim {
-                        claim_id: claim_id.clone(),
-                        task_id: task.id.clone(),
-                        request_id: request.request_id.clone(),
-                        executed_on: identity.location().clone(),
-                        run_context: request.run_context.clone(),
-                        footprint: footprint.clone(),
-                        reservation_id: reserved
-                            .reservation_id
-                            .clone()
-                            .ok_or_else(|| OrbitError::Store("reservation id missing".into()))?,
-                        reservation_expires_at: reserved.expires_at.clone().ok_or_else(|| {
-                            OrbitError::Store("reservation expiry missing".into())
-                        })?,
-                        phase: ExecutionClaimPhase::Claimed,
-                        repair: None,
-                    };
-                    let mut admitted = receipt.clone();
-                    admitted.claim = Some(claim.clone());
-                    admitted.task = Some(AdmissionTaskSummary {
-                        id: task.id.clone(),
-                        title: task.title.clone(),
-                        complexity: task.complexity,
-                        crew: task.crew.clone(),
-                        crew_source: task.crew_source.clone(),
-                        context_files: footprint.clone(),
-                        resume_candidate: resume_candidate.clone(),
-                    });
-                    admitted.queue_depth = admitted.queue_depth.saturating_sub(1);
-                    admitted.affinity = ordering
-                        .census
-                        .as_ref()
-                        .map(|census| census.record(&task, executor_host_os, ordering.affinity));
-                    Ok(vec![
-                        row(
-                            RECEIPT_KIND,
-                            &key,
-                            &StoredReceipt::Full {
-                                receipt: Box::new(admitted),
-                            },
-                        )?,
-                        row(CLAIM_KIND, &claim_id, &claim)?,
-                    ])
-                },
+                &mut |reservation| build_claim_receipt_rows(&row_input, reservation),
                 &effects,
                 &guidance_evidence,
                 None,
@@ -387,7 +382,7 @@ impl TaskCommitBoundary {
         }
         self.store.insert_task_coordination_row(
             &self.workspace_id,
-            &row(
+            &codec::row(
                 RECEIPT_KIND,
                 &key,
                 &StoredReceipt::Full {
@@ -399,6 +394,78 @@ impl TaskCommitBoundary {
         self.lookup_admission(identity, &request.request_id)
             .map(Some)
     }
+}
+
+pub(in crate::boundary::coordination) struct ClaimReceiptRowsInput<'a> {
+    pub(in crate::boundary::coordination) identity: &'a AdmissionIdentity,
+    pub(in crate::boundary::coordination) request: &'a AdmissionRequest,
+    pub(in crate::boundary::coordination) task: &'a Task,
+    pub(in crate::boundary::coordination) footprint: &'a [String],
+    pub(in crate::boundary::coordination) receipt: &'a AdmissionReceipt,
+    pub(in crate::boundary::coordination) receipt_key: &'a str,
+    pub(in crate::boundary::coordination) claim_id: &'a str,
+    pub(in crate::boundary::coordination) repair: Option<&'a ClaimRepair>,
+    pub(in crate::boundary::coordination) resume_candidate: Option<&'a ClaimCandidateRef>,
+    pub(in crate::boundary::coordination) affinity: Option<AdmissionAffinity>,
+}
+
+pub(in crate::boundary::coordination) fn admission_placeholder_rows(
+    receipt_key: &str,
+    claim_id: &str,
+) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
+    Ok(vec![
+        codec::row(RECEIPT_KIND, receipt_key, &())?,
+        codec::row(codec::CLAIM, claim_id, &())?,
+    ])
+}
+
+pub(in crate::boundary::coordination) fn build_claim_receipt_rows(
+    input: &ClaimReceiptRowsInput<'_>,
+    reservation: Option<&TaskReservationReserveResult>,
+) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
+    let reserved =
+        reservation.ok_or_else(|| OrbitError::Store("admission reservation missing".into()))?;
+    let claim = ExecutionClaim {
+        claim_id: input.claim_id.to_string(),
+        task_id: input.task.id.clone(),
+        request_id: input.request.request_id.clone(),
+        executed_on: input.identity.location().clone(),
+        run_context: input.request.run_context.clone(),
+        footprint: input.footprint.to_vec(),
+        reservation_id: reserved
+            .reservation_id
+            .clone()
+            .ok_or_else(|| OrbitError::Store("reservation id missing".into()))?,
+        reservation_expires_at: reserved
+            .expires_at
+            .clone()
+            .ok_or_else(|| OrbitError::Store("reservation expiry missing".into()))?,
+        phase: ExecutionClaimPhase::Claimed,
+        repair: input.repair.cloned(),
+    };
+    let mut admitted = input.receipt.clone();
+    admitted.claim = Some(claim.clone());
+    admitted.task = Some(AdmissionTaskSummary {
+        id: input.task.id.clone(),
+        title: input.task.title.clone(),
+        complexity: input.task.complexity,
+        crew: input.task.crew.clone(),
+        crew_source: input.task.crew_source.clone(),
+        context_files: input.footprint.to_vec(),
+        resume_candidate: input.resume_candidate.cloned(),
+    });
+    admitted.queue_depth = admitted.queue_depth.saturating_sub(1);
+    admitted.affinity = input.affinity.clone();
+    Ok(vec![
+        codec::row(
+            RECEIPT_KIND,
+            input.receipt_key,
+            &StoredReceipt::Full {
+                receipt: Box::new(admitted),
+            },
+        )?,
+        codec::row(codec::CLAIM, input.claim_id, &claim)?,
+    ])
 }
 
 fn validate_request(

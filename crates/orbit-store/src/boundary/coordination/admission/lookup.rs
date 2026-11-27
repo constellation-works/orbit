@@ -3,7 +3,8 @@
 use orbit_common::OrbitError;
 
 use super::super::TaskCommitBoundary;
-use super::{CLAIM_KIND, RECEIPT_KIND, StoredReceipt, decode, receipt_key};
+use super::{RECEIPT_KIND, StoredReceipt, receipt_key};
+use crate::boundary::coordination::lifecycle::codec;
 use crate::contract::*;
 
 impl TaskCommitBoundary {
@@ -18,9 +19,9 @@ impl TaskCommitBoundary {
 
     pub fn execution_claims(&self) -> Result<Vec<ExecutionClaim>, OrbitError> {
         self.enter_ordinary(|| {
-            self.coordination_rows(CLAIM_KIND)?
+            self.coordination_rows(codec::CLAIM)?
                 .iter()
-                .map(|row| decode(&row.payload_json))
+                .map(|row| codec::decode(&row.payload_json))
                 .collect()
         })
     }
@@ -72,8 +73,8 @@ impl TaskCommitBoundary {
 
     /// One claim by its indexed identity, after settling any pending commit.
     fn execution_claim(&self, claim_id: &str) -> Result<Option<ExecutionClaim>, OrbitError> {
-        self.coordination_row(CLAIM_KIND, claim_id)?
-            .map(|row| decode(&row.payload_json))
+        self.coordination_row(codec::CLAIM, claim_id)?
+            .map(|row| codec::decode(&row.payload_json))
             .transpose()
     }
 
@@ -111,7 +112,7 @@ impl TaskCommitBoundary {
             let Some(row) = self.receipt_row(&identity.location().machine_id, request_id)? else {
                 return Ok(AdmissionLookup::NotFound);
             };
-            match decode::<StoredReceipt>(&row.payload_json)? {
+            match codec::decode::<StoredReceipt>(&row.payload_json)? {
                 StoredReceipt::Tombstone { .. } => Ok(AdmissionLookup::Expired),
                 StoredReceipt::Full { receipt } => {
                     let current_claim = match &receipt.claim {
@@ -133,7 +134,7 @@ impl TaskCommitBoundary {
 pub(in super::super) fn decode_claim(payload: &str) -> Result<ExecutionClaim, OrbitError> {
     #[cfg(test)]
     CLAIM_DECODES.with(|decodes| decodes.set(decodes.get() + 1));
-    decode(payload)
+    codec::decode(payload)
 }
 
 #[cfg(test)]

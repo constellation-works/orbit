@@ -11,6 +11,9 @@ mod retention;
 
 use super::TaskCommitBoundary;
 use crate::contract::*;
+pub(super) use admit::{
+    ClaimReceiptRowsInput, admission_placeholder_rows, build_claim_receipt_rows,
+};
 pub(super) use lookup::decode_claim;
 #[cfg(test)]
 pub(super) use lookup::{claim_decodes, reset_claim_decodes};
@@ -24,8 +27,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
-
-const CLAIM_KIND: &str = "distributed-execution-claim-v1";
 
 pub const ADMISSION_RESERVATION_TTL_SECONDS: u32 = 14_400;
 /// The in-section re-check of assessment-scoped holds a caller gives
@@ -90,24 +91,13 @@ pub(super) enum StoredReceipt {
     },
 }
 
-fn encode<T: Serialize>(value: &T) -> Result<String, OrbitError> {
-    serde_json::to_string(value).map_err(|e| OrbitError::Store(e.to_string()))
-}
-fn decode<T: serde::de::DeserializeOwned>(value: &str) -> Result<T, OrbitError> {
-    serde_json::from_str(value).map_err(|e| OrbitError::Store(e.to_string()))
-}
 pub(super) fn digest<T: Serialize>(value: &T) -> Result<String, OrbitError> {
-    Ok(sha256_hex(encode(value)?.as_bytes()))
+    Ok(sha256_hex(
+        super::lifecycle::codec::encode(value)?.as_bytes(),
+    ))
 }
 fn receipt_key(machine: &str, request: &str) -> Result<String, OrbitError> {
     digest(&(machine, request))
-}
-fn row<T: Serialize>(kind: &str, id: &str, value: &T) -> Result<TaskCoordinationRow, OrbitError> {
-    Ok(TaskCoordinationRow {
-        kind: kind.into(),
-        row_id: id.into(),
-        payload_json: encode(value)?,
-    })
 }
 pub(super) fn canonical_footprint(
     files: &[String],

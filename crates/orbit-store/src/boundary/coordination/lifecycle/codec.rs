@@ -25,7 +25,8 @@ pub(super) const LATE_LEAF_CREW: &str = "distributed-late-leaf-crew-v1";
 /// model, one immutable row per claim keyed by claim id, beside the late
 /// effort row. Older readers never touch this family.
 pub(super) const LATE_LEAF_MODEL: &str = "distributed-late-leaf-model-v1";
-pub(super) const RECEIPT: &str = "distributed-claim-mutation-v1";
+
+pub(in crate::boundary::coordination) const RECEIPT: &str = "distributed-claim-mutation-v1";
 /// A friction mutation's recorded friction, keyed by its receipt id.
 pub(super) const FRICTION: &str = "distributed-claim-friction-v1";
 

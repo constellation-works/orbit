@@ -48,13 +48,15 @@ pub(crate) mod fallback_hook {
 }
 
 use super::TaskCommitBoundary;
-use super::admission::{ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, digest};
+use super::admission::{
+    ClaimReceiptRowsInput, admission_placeholder_rows, build_claim_receipt_rows,
+};
 use super::lifecycle::{CLAIM, STATE, decode_state, encode, row};
 use super::selection::{DependencyReach, Screen};
 use crate::contract::*;
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::task::{ReservationOwnerMetadata, Task, TaskStatus};
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery, LandingStopEvidence};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -182,50 +184,10 @@ impl TaskCommitBoundary {
                 receipt.invalid_candidates.push(diagnose(reason));
                 continue;
             }
-            if let Some(reason) = os_unavailable(request.os, task, screen.executor_host_os) {
-                receipt.os_unavailable.push(diagnose(reason));
+            if !screen.screen_executor_capability(task, receipt) {
                 continue;
             }
-            if let Some(reason) = labels_unavailable_with_tag_requirements(
-                request.os,
-                &request.labels,
-                task,
-                screen.tag_label_requirements,
-            ) {
-                receipt.labels_unavailable.push(diagnose(reason));
-                continue;
-            }
-            if let Some(reason) = browser_kit_unavailable(request.browser_kit, task) {
-                receipt.browser_kit_unavailable.push(diagnose(reason));
-                continue;
-            }
-            if let Some(reason) = request
-                .crews
-                .as_ref()
-                .and_then(|crews| crews.unrunnable_reason(task.crew.as_deref()))
-            {
-                receipt.crew_unavailable.push(diagnose(reason));
-                continue;
-            }
-            if let Some(reason) = request
-                .admissible
-                .as_ref()
-                .and_then(|fit| fit.unfit_reason(task))
-            {
-                receipt.capacity_unavailable.push(diagnose(reason));
-                continue;
-            }
-            if orbit_types::task::needs_perf_lane(&task.tags)
-                && let Some(holder) = screen
-                    .perf_lane_holders
-                    .iter()
-                    .find(|holder| holder.as_str() != task.id.as_str())
-            {
-                receipt.deferred_conflicts.push(AdmissionDiagnostic {
-                    task_id: task_id.clone(),
-                    reason: orbit_types::task::perf_lane_hold_reason(holder),
-                    blocked_by: vec![holder.clone()],
-                });
+            if !screen.screen_perf_lane(task, receipt) {
                 continue;
             }
             let stop_evidence = self
@@ -272,7 +234,7 @@ impl TaskCommitBoundary {
             repair,
         } = candidate;
         let superseded = &state.claim;
-        let claim_id = format!("claim-{}", digest(&(&self.workspace_id, receipt_key))?);
+        let claim_id = self.admission_claim_id(receipt_key)?;
         let footprint = superseded.footprint.clone();
         let machine_id = receipt.machine_id.clone();
         let old_claim = self
@@ -313,73 +275,31 @@ impl TaskCommitBoundary {
                 "repairs_claim_id": repair.repairs_claim_id,
                 "repairs_handoff_id": repair.handoff_id,
             }))?),
-            reservation: Some(TaskReservationReserveParams {
-                workspace_orbit_dir: orbit_dir.to_string_lossy().into_owned(),
-                workspace_id: Some(self.workspace_id.clone()),
-                task_ids: vec![task.id.clone()],
-                requested_files: footprint.clone(),
-                stored_files: footprint.clone(),
-                actor: machine_id.clone(),
-                ttl_seconds: ADMISSION_RESERVATION_TTL_SECONDS,
-                owner_run_id: None,
-                owner_metadata: Some(ReservationOwnerMetadata {
-                    claim_id: Some(claim_id.clone()),
-                    ..Default::default()
-                }),
-            }),
-            rows: vec![
-                row(RECEIPT_KIND, receipt_key, &())?,
-                row(CLAIM, &claim_id, &())?,
-            ],
+            reservation: Some(self.admission_reservation_params(
+                orbit_dir,
+                &task.id,
+                &footprint,
+                &machine_id,
+                &claim_id,
+            )),
+            rows: admission_placeholder_rows(receipt_key, &claim_id)?,
             ..Default::default()
+        };
+        let row_input = ClaimReceiptRowsInput {
+            identity,
+            request,
+            task,
+            footprint: &footprint,
+            receipt,
+            receipt_key,
+            claim_id: &claim_id,
+            repair: Some(repair),
+            resume_candidate: None,
+            affinity: None,
         };
         let outcome = self.commit_locked_effects(
             &params,
-            &mut |reservation| {
-                let reserved = reservation
-                    .ok_or_else(|| OrbitError::Store("admission reservation missing".into()))?;
-                let claim = ExecutionClaim {
-                    claim_id: claim_id.clone(),
-                    task_id: task.id.clone(),
-                    request_id: request.request_id.clone(),
-                    executed_on: identity.location().clone(),
-                    run_context: request.run_context.clone(),
-                    footprint: footprint.clone(),
-                    reservation_id: reserved
-                        .reservation_id
-                        .clone()
-                        .ok_or_else(|| OrbitError::Store("reservation id missing".into()))?,
-                    reservation_expires_at: reserved
-                        .expires_at
-                        .clone()
-                        .ok_or_else(|| OrbitError::Store("reservation expiry missing".into()))?,
-                    phase: ExecutionClaimPhase::Claimed,
-                    repair: Some(repair.clone()),
-                };
-                let mut admitted = receipt.clone();
-                admitted.claim = Some(claim.clone());
-                admitted.task = Some(AdmissionTaskSummary {
-                    id: task.id.clone(),
-                    title: task.title.clone(),
-                    complexity: task.complexity,
-                    crew: task.crew.clone(),
-                    crew_source: task.crew_source.clone(),
-                    context_files: footprint.clone(),
-                    // The repair carries its own candidate in `claim.repair`.
-                    resume_candidate: None,
-                });
-                admitted.queue_depth = admitted.queue_depth.saturating_sub(1);
-                Ok(vec![
-                    row(
-                        RECEIPT_KIND,
-                        receipt_key,
-                        &StoredReceipt::Full {
-                            receipt: Box::new(admitted),
-                        },
-                    )?,
-                    row(CLAIM, &claim_id, &claim)?,
-                ])
-            },
+            &mut |reservation| build_claim_receipt_rows(&row_input, reservation),
             &effects,
             &ClaimEvidence {
                 artifacts: guidance_artifacts.to_vec(),
