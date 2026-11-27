@@ -68,7 +68,7 @@ of [2_design.md](./2_design.md) is marked **Implemented** or **Planned**.
 
 The cost was per operation and paid up to four times. Adding `orbit.friction.foo`
 meant: a `Tool` impl in `orbit-tools` with a hand-written `ToolSchema`, a clap
-`Args` struct plus an `Execute` impl in `orbit-cli` that rebuilt the same JSON by
+`Args` struct plus an `ExecuteCore` impl in `orbit-cli` that rebuilt the same JSON by
 hand, a route and an input map in `orbit-web`, a variant in
 `OrbitBuiltinAction`, a dispatch arm in `orbit-core`, and an arm in the CLI's
 audit-metadata match. Six of those seven edits carried no information the other

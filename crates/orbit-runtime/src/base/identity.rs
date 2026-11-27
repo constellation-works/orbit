@@ -36,6 +36,11 @@ impl RuntimeKernel {
         self.base().composition_snapshot.as_deref()
     }
 
+    /// The shared snapshot [`Self::with_composition_snapshot`] stored, if any.
+    pub fn composition_snapshot_arc(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.base().composition_snapshot.clone()
+    }
+
     /// Record the registry identity of this runtime's checkout as the open
     /// resolved it, `None` being a recorded miss. Supplied by the
     /// registry-owning composition layer; Core never loads the registry to

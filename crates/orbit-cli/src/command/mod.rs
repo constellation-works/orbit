@@ -45,7 +45,7 @@ pub use operation::args as operation_args;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use orbit_core::{Core, OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError};
 
 // Re-exported so a command file imports its return type from the module that
 // defines the trait, rather than reaching into `output` for half of it.
@@ -58,10 +58,6 @@ pub use crate::output::common::payload::{Block, CommandOutput, Payload};
 /// `output::common::render` projects this into the resolved mode
 /// (`docs/design/terminal-interface/specs/output-modes.md` §3, ADR-0306).
 pub type CommandOut = Result<CommandOutput, OrbitError>;
-
-pub trait Execute {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut;
-}
 
 /// A command body that runs through an app's one `exec`
 /// (`orbit_core::app::<subject>::exec`). It is handed the opaque [`Core`]

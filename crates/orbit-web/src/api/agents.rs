@@ -324,7 +324,8 @@ async fn facts(state: &DashboardState, ws: &AgentsWs) -> Result<Served<AgentFact
             Outcome::Value(_)
             | Outcome::VisionProbe(_)
             | Outcome::TaskTypes(_)
-            | Outcome::RankSeasons(_) => Err(mismatched("scan")),
+            | Outcome::RankSeasons(_)
+            | Outcome::CrewDiscovery(_) => Err(mismatched("scan")),
         }
     })
     .await

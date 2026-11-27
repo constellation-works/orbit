@@ -11,7 +11,7 @@ use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
-use crate::OrbitRuntime;
+use crate::Core;
 use crate::app::attention;
 use crate::app::task::{ToolCall, ToolCaller};
 use crate::app::tool_call;
@@ -87,13 +87,14 @@ fn task_verb_mutation_name(verb: TaskVerb, input: &Value) -> Option<&'static str
 }
 
 pub(super) fn execute(
-    runtime: &OrbitRuntime,
+    core: &Core,
     task_scope: &OrbitTaskScope,
     brokered_resident: bool,
     caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
     input: Value,
 ) -> Result<Value, OrbitError> {
+    let runtime = core.runtime();
     let (input, mut redaction_report) =
         super::artifact_redaction::sanitize_tool_input(action, input)?;
     let ticket = match runtime.admit_resident_cycle_call(
@@ -108,7 +109,7 @@ pub(super) fn execute(
         ResidentCallAdmission::AlreadyDone(answer) => return Ok(answer),
     };
     let mut result = execute_admitted(
-        runtime,
+        core,
         task_scope,
         caller,
         action,
@@ -123,7 +124,7 @@ pub(super) fn execute(
 }
 
 fn execute_admitted(
-    runtime: &OrbitRuntime,
+    core: &Core,
     task_scope: &OrbitTaskScope,
     caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
@@ -131,6 +132,7 @@ fn execute_admitted(
     resident_call: Option<(&ResidentActionTicket, bool)>,
     redaction_report: &mut super::artifact_redaction::ArtifactRedactionReport,
 ) -> Result<Value, OrbitError> {
+    let runtime = core.runtime();
     // Only the authenticated broker can substitute the resident ledger
     // for checks on operator-only operations.
     let resident_action_key = resident_call
@@ -170,12 +172,9 @@ fn execute_admitted(
     let model_for_audit = model.clone();
     let mut persisted_task_id = None;
     let mut response = match action {
-        OrbitBuiltinAction::AutoTask(verb) => super::auto_task_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
-            verb,
-            input,
-            tool_call::Caller::default(),
-        ),
+        OrbitBuiltinAction::AutoTask(verb) => {
+            super::auto_task_tools::dispatch(core, verb, input, tool_call::Caller::default())
+        }
         OrbitBuiltinAction::DesktopAutomation => {
             super::desktop::automation::control(runtime, input, submission_trigger(session_context))
         }
@@ -229,7 +228,7 @@ fn execute_admitted(
             result
         }
         OrbitBuiltinAction::Agents(verb) => super::agents_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
+            core,
             verb,
             input,
             tool_call::Caller {
@@ -238,7 +237,7 @@ fn execute_admitted(
             },
         ),
         OrbitBuiltinAction::Attention(_) => attention::exec(
-            &crate::Core::within_tool_entry(runtime.clone()),
+            core,
             attention::Command::Query(attention::Input::from_tool_entry(
                 input,
                 tool_call::Caller {
@@ -254,18 +253,12 @@ fn execute_admitted(
                 "the attention read answered with a wait".to_string(),
             )),
         }),
-        OrbitBuiltinAction::Codebase(verb) => super::codebase_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
-            verb,
-            input,
-            tool_call::Caller::default(),
-        ),
-        OrbitBuiltinAction::Automation(verb) => super::automation_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
-            verb,
-            input,
-            tool_call::Caller::default(),
-        ),
+        OrbitBuiltinAction::Codebase(verb) => {
+            super::codebase_tools::dispatch(core, verb, input, tool_call::Caller::default())
+        }
+        OrbitBuiltinAction::Automation(verb) => {
+            super::automation_tools::dispatch(core, verb, input, tool_call::Caller::default())
+        }
         OrbitBuiltinAction::Decision(verb) => {
             let provenance = session_write_provenance(session_context);
             let surface = provenance.surface.unwrap_or(TaskWriteSurface::Mcp);
@@ -273,7 +266,7 @@ fn execute_admitted(
             let started = Instant::now();
             let result = with_task_write_provenance(provenance, || {
                 super::decision_tools::dispatch(
-                    &crate::Core::within_tool_entry(runtime.clone()),
+                    core,
                     ToolCall {
                         caller: ToolCaller {
                             session_context,
@@ -330,7 +323,7 @@ fn execute_admitted(
             result
         }
         OrbitBuiltinAction::Experiment(verb) => super::experiment_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
+            core,
             verb,
             input,
             tool_call::Caller {
@@ -339,47 +332,28 @@ fn execute_admitted(
                 ..tool_call::Caller::default()
             },
         ),
-        OrbitBuiltinAction::CommandExec => super::command_tools::exec(
-            &crate::Core::within_tool_entry(runtime.clone()),
-            input,
-            agent,
-            model,
-        ),
-        OrbitBuiltinAction::Drain(verb) => super::drain_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
-            session_context,
-            verb,
-            input,
-        ),
+        OrbitBuiltinAction::CommandExec => super::command_tools::exec(core, input, agent, model),
+        OrbitBuiltinAction::Drain(verb) => {
+            super::drain_tools::dispatch(core, session_context, verb, input)
+        }
         // ADR-0209 bearing 1 [ORB-10358]: the friction handler table is the
         // friction app, keyed by the registry's verb enum. This entry already
         // authorized and audited the call.
-        OrbitBuiltinAction::Friction(verb) => super::friction_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
-            verb,
-            input,
-            model,
-        ),
+        OrbitBuiltinAction::Friction(verb) => {
+            super::friction_tools::dispatch(core, verb, input, model)
+        }
         OrbitBuiltinAction::PipelineInvoke => super::pipeline_tools::invoke(
-            &crate::Core::within_tool_entry(runtime.clone()),
+            core,
             input,
             agent,
             model,
             reservation_owner,
             submission_trigger(session_context),
         ),
-        OrbitBuiltinAction::PipelineWait => super::pipeline_tools::wait(
-            &crate::Core::within_tool_entry(runtime.clone()),
-            input,
-            agent,
-            model,
-        ),
-        OrbitBuiltinAction::Search(verb) => super::search_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
-            verb,
-            input,
-            tool_call::Caller::default(),
-        ),
+        OrbitBuiltinAction::PipelineWait => super::pipeline_tools::wait(core, input, agent, model),
+        OrbitBuiltinAction::Search(verb) => {
+            super::search_tools::dispatch(core, verb, input, tool_call::Caller::default())
+        }
         OrbitBuiltinAction::Task(verb) => {
             let provenance = session_write_provenance(session_context);
             let surface = provenance.surface.unwrap_or(TaskWriteSurface::Cli);
@@ -411,7 +385,7 @@ fn execute_admitted(
                 .flatten();
             let result = with_task_write_provenance(provenance, || {
                 super::task::dispatch(
-                    &crate::Core::within_tool_entry(runtime.clone()),
+                    core,
                     ToolCall {
                         caller: ToolCaller {
                             session_context,
@@ -487,7 +461,7 @@ fn execute_admitted(
             Ok(response)
         }
         OrbitBuiltinAction::Workflow(verb) => super::workflow_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
+            core,
             session_context,
             verb,
             input,
@@ -496,7 +470,7 @@ fn execute_admitted(
             submission_trigger(session_context),
         ),
         OrbitBuiltinAction::Notice(verb) => super::notice_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
+            core,
             verb,
             input,
             tool_call::Caller {
@@ -508,7 +482,7 @@ fn execute_admitted(
             },
         ),
         OrbitBuiltinAction::Memory(verb) => super::memory_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
+            core,
             verb,
             input,
             tool_call::Caller {
@@ -519,14 +493,11 @@ fn execute_admitted(
                 model,
             },
         ),
-        OrbitBuiltinAction::Evolution(verb) => super::evolution_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
-            verb,
-            input,
-            tool_call::Caller::default(),
-        ),
+        OrbitBuiltinAction::Evolution(verb) => {
+            super::evolution_tools::dispatch(core, verb, input, tool_call::Caller::default())
+        }
         OrbitBuiltinAction::Resident(verb) => super::resident_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
+            core,
             verb,
             input,
             tool_call::Caller {
@@ -537,13 +508,9 @@ fn execute_admitted(
                 model,
             },
         ),
-        OrbitBuiltinAction::WorkspaceClaim(verb) => super::workspace_claim_tools::dispatch(
-            &crate::Core::within_tool_entry(runtime.clone()),
-            verb,
-            input,
-            agent,
-            model,
-        ),
+        OrbitBuiltinAction::WorkspaceClaim(verb) => {
+            super::workspace_claim_tools::dispatch(core, verb, input, agent, model)
+        }
     }?;
     super::artifact_redaction::finish_tool_response(
         runtime,

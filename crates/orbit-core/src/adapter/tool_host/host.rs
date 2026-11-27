@@ -6,7 +6,7 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::{Value, json};
 
-use crate::OrbitRuntime;
+use crate::Core;
 use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };
@@ -19,35 +19,8 @@ pub(crate) enum ToolHostRun {
     BrokeredResident(String),
 }
 
-pub(crate) fn build_orbit_tool_host(
-    runtime: &OrbitRuntime,
-    task_id: Option<String>,
-    run: ToolHostRun,
-    session_context: ToolSessionContext,
-) -> Arc<dyn OrbitToolHost> {
-    let (run_id, brokered_resident) = match run {
-        ToolHostRun::InProcess(run_id) => (
-            run_id.or_else(|| managed_run_context_run_id_from_env(runtime.env())),
-            false,
-        ),
-        #[cfg(unix)]
-        ToolHostRun::BrokeredResident(run_id) => (Some(run_id), true),
-    };
-    Arc::new(RuntimeOrbitToolHost {
-        brokered_resident,
-        runtime: runtime.clone(),
-        task_scope: OrbitTaskScope {
-            orbit_root: Some(runtime.data_root_path().to_path_buf()),
-            task_id,
-            run_id,
-        },
-        session_context,
-    })
-}
-
-#[derive(Clone)]
-struct RuntimeOrbitToolHost {
-    runtime: OrbitRuntime,
+struct CoreOrbitToolHost {
+    core: Core,
     task_scope: OrbitTaskScope,
     brokered_resident: bool,
     /// The calling session's asserted grants, carried so a handler whose
@@ -57,7 +30,7 @@ struct RuntimeOrbitToolHost {
     session_context: ToolSessionContext,
 }
 
-impl OrbitToolHost for RuntimeOrbitToolHost {
+impl OrbitToolHost for CoreOrbitToolHost {
     fn prepare_operation_input(
         &self,
         action: OrbitBuiltinAction,
@@ -83,13 +56,13 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         model: Option<String>,
         reservation_owner: Option<ReservationOwnerContext>,
     ) -> Result<Value, OrbitError> {
-        let (agent, model) = self
-            .runtime
-            .try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
+        let runtime = self.core.runtime();
+        let (agent, model) =
+            runtime.try_canonical_agent_model_identity(agent.as_deref(), model.as_deref())?;
         let mut session = self.session_context.clone();
-        self.runtime.bind_worker_session(&mut session)?;
+        runtime.bind_worker_session(&mut session)?;
         super::dispatch::execute(
-            &self.runtime,
+            &self.core,
             &self.task_scope,
             self.brokered_resident,
             crate::app::task::ToolCaller {
@@ -108,10 +81,11 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
     }
 
     fn allows_resident_drain_status(&self) -> bool {
+        let runtime = self.core.runtime();
         self.task_scope
             .run_id
             .as_deref()
-            .is_some_and(|run_id| self.runtime.is_live_resident_cycle_run(run_id))
+            .is_some_and(|run_id| runtime.is_live_resident_cycle_run(run_id))
     }
 
     /// A routed decision-channel callback runs here, outside the plugin
@@ -134,16 +108,18 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         // The route carries the operation; a family operation is dispatched
         // as its family call, the only name the dispatcher accepts for it.
         let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
-        self.runtime
-            .execute_tool_command_dispatch_with_session_context(
-                &tool,
+        crate::app::tool::exec(
+            &self.core,
+            crate::app::tool::Command::Run {
+                name: tool,
                 input,
-                None,
-                None,
-                crate::adapter::command::ToolEntryPoint::Cli,
+                agent: None,
+                model: None,
+                entry_point: crate::adapter::command::ToolEntryPoint::Cli,
                 session,
-            )
-            .map(|outcome| outcome.value)
+            },
+        )?
+        .into_value()
     }
 
     fn record_unknown_input_fields(
@@ -152,10 +128,11 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         fields: &[String],
         actor: Option<&str>,
     ) -> Result<(), OrbitError> {
-        let actor = actor.unwrap_or_else(|| self.runtime.actor_label());
+        let runtime = self.core.runtime();
+        let actor = actor.unwrap_or_else(|| runtime.actor_label());
         for field in fields {
             record_system_audit_event(
-                &self.runtime,
+                runtime,
                 SystemAuditEvent {
                     execution_id_prefix: "audit-tool-input",
                     command: "tool_input",
@@ -190,9 +167,9 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         reservation_owner: Option<ReservationOwnerContext>,
     ) -> Result<Value, OrbitError> {
         let mut session = self.session_context.clone();
-        self.runtime.bind_worker_session(&mut session)?;
+        self.core.runtime().bind_worker_session(&mut session)?;
         super::dispatch::execute(
-            &self.runtime,
+            &self.core,
             &self.task_scope,
             self.brokered_resident,
             crate::app::task::ToolCaller {
@@ -205,4 +182,31 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
             input,
         )
     }
+}
+
+pub(crate) fn build_orbit_tool_host(
+    core: Core,
+    task_id: Option<String>,
+    run: ToolHostRun,
+    session_context: ToolSessionContext,
+) -> Arc<dyn OrbitToolHost> {
+    let (run_id, brokered_resident) = match run {
+        ToolHostRun::InProcess(run_id) => (
+            run_id.or_else(|| managed_run_context_run_id_from_env(core.runtime().env())),
+            false,
+        ),
+        #[cfg(unix)]
+        ToolHostRun::BrokeredResident(run_id) => (Some(run_id), true),
+    };
+    let orbit_root = Some(core.runtime().data_root_path().to_path_buf());
+    Arc::new(CoreOrbitToolHost {
+        core,
+        task_scope: OrbitTaskScope {
+            orbit_root,
+            task_id,
+            run_id,
+        },
+        brokered_resident,
+        session_context,
+    })
 }

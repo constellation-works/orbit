@@ -1,13 +1,12 @@
 use std::path::Path;
 
 use clap::Args;
-use orbit_core::{OrbitError, OrbitRuntime};
-
+use orbit_core::app::tool::{self, Command};
+use orbit_core::application::plugin::load_sidecar_manifest;
+use orbit_core::{Core, OrbitError};
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
-
-use orbit_core::application::plugin::load_sidecar_manifest;
+use crate::command::{CommandOut, ExecuteCore, Payload};
 
 use super::manifest::{infer_tool_name, resolve_manifest_path};
 
@@ -26,14 +25,15 @@ pub struct ToolAddArgs {
     pub manifest: Option<String>,
 }
 
-impl Execute for ToolAddArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for ToolAddArgs {
+    fn execute(self, core: &Core) -> CommandOut {
         let manifest_path = resolve_manifest_path(Path::new(&self.path), self.manifest.as_deref());
         let manifest = manifest_path
             .as_deref()
             .map(load_sidecar_manifest)
             .transpose()?;
 
+        let audit_name = self.name.clone();
         let name = self
             .name
             .or_else(|| manifest.as_ref().map(|entry| entry.name.clone()))
@@ -54,7 +54,16 @@ impl Execute for ToolAddArgs {
         };
         let parameters = manifest.map(|entry| entry.parameters).unwrap_or_default();
 
-        runtime.add_tool(&name, &self.path, &description, parameters)?;
+        tool::exec(
+            core,
+            Command::Add {
+                name: name.clone(),
+                audit_name,
+                path: self.path.clone(),
+                description,
+                parameters,
+            },
+        )?;
         let mut text = format!("Added tool '{name}' from {}", self.path);
         if let Some(path) = manifest_path.as_deref() {
             text.push_str(&format!("\nLoaded plugin manifest from {}", path.display()));

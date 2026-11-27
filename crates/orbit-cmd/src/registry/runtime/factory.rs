@@ -350,6 +350,107 @@ impl RegisteredRuntimeFactory {
         )
     }
 
+    /// Open a registered checkout as a long-lived service [`orbit_core::Core`].
+    pub fn open_registered_checkout_core_for(
+        global_root: &Path,
+        workspace: &Workspace,
+        checkout: &WorkspaceCheckout,
+        host_lifetime: HostLifetime,
+    ) -> Result<orbit_core::Core, OrbitError> {
+        Self::open_registered_checkout_for(global_root, workspace, checkout, host_lifetime)
+            .map(Self::core_for_service)
+    }
+
+    /// Open an explicitly selected registered checkout for observational
+    /// service reads as an [`orbit_core::Core`].
+    pub fn open_registered_checkout_observational_core(
+        global_root: &Path,
+        workspace: &Workspace,
+        checkout: &WorkspaceCheckout,
+    ) -> Result<orbit_core::Core, OrbitError> {
+        Self::open_registered_checkout_observational(global_root, workspace, checkout)
+            .map(|runtime| Self::core_for_service(runtime.with_workspace_explicitly_selected(true)))
+    }
+
+    /// Normalize an explicit CLI owner selector without changing the opened core.
+    ///
+    /// Registered names, logical IDs and paths must resolve to the selected
+    /// checkout. The exact internal task-partition ID remains accepted too,
+    /// including when it differs from the logical registry ID, provided it
+    /// does not select another registered workspace. Core retains responsibility
+    /// for operator admission and the owner partition guard.
+    pub fn resolve_cli_owner_workspace_at(
+        global_root: &Path,
+        repo_root: &Path,
+        owner: &str,
+        selector: &str,
+    ) -> Result<String, OrbitError> {
+        let registry = Self::load_registry_for_selectors(global_root)?;
+        if selector == owner && workspace_registry::find_workspace(&registry, selector)?.is_none() {
+            return Ok(owner.to_string());
+        }
+        let selected = Self::resolve_selector_in(
+            &registry,
+            selector,
+            inspect_machine_identity(global_root)?.id(),
+        )?;
+        if !same_cli_checkout(repo_root, &selected.checkout) {
+            return Err(OrbitError::CapabilityDenied(
+                "retry owner workspace must match the selected workspace".into(),
+            ));
+        }
+        Ok(owner.to_string())
+    }
+
+    /// Bind a CLI `orbit tool run` invocation to the workspace named in `input`.
+    ///
+    /// This is the single local CLI resolver above the tools. A non-empty
+    /// `workspace` either rebinds to a new [`orbit_core::Core`] for that
+    /// registered checkout or fails closed naming the selector. MCP resolves
+    /// selectors independently on the accepting server and never falls back to
+    /// process cwd.
+    pub fn bind_cli_tool_workspace_for_core(
+        global_root: &Path,
+        repo_root: &Path,
+        composition_snapshot: Option<&(dyn std::any::Any + Send + Sync)>,
+        input: &mut Value,
+        tool: &str,
+    ) -> Result<Option<orbit_core::Core>, OrbitError> {
+        let Some(selector) = cli_workspace_selector(input)? else {
+            return Ok(None);
+        };
+        super::refuse_cli_callback_workspace(global_root, tool, &selector)?;
+        let (identity, registry) = cli_tool_bind_inputs(global_root, composition_snapshot)?;
+        match resolve_cli_workspace_target(&registry, repo_root, &selector, identity.id())? {
+            CliWorkspaceTarget::CurrentRuntime => Ok(None),
+            CliWorkspaceTarget::Checkout {
+                workspace,
+                checkout,
+                rewrite_to_repo_root,
+                ..
+            } => {
+                if workspace.status != WorkspaceStatus::Active {
+                    return Err(inactive_cli_workspace(workspace, checkout));
+                }
+                if rewrite_to_repo_root {
+                    set_input_workspace(input, &checkout.repo_root)?;
+                }
+                if same_cli_checkout(repo_root, checkout) {
+                    return Ok(None);
+                }
+                Self::open_registered_checkout_with_identity(
+                    global_root,
+                    workspace,
+                    checkout,
+                    HostLifetime::ShortLived,
+                    &identity,
+                    Some(&registry),
+                )
+                .map(|runtime| Some(Self::core_for_command(runtime)))
+            }
+        }
+    }
+
     fn initialize_with_overrides_mode(
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
@@ -797,82 +898,5 @@ impl RegisteredRuntimeFactory {
                 None,
             )
         })
-    }
-
-    /// Normalize an explicit CLI owner selector without changing the runtime.
-    ///
-    /// Registered names, logical IDs and paths must resolve to the selected
-    /// checkout. The exact internal task-partition ID remains accepted too,
-    /// including when it differs from the logical registry ID, provided it
-    /// does not select another registered workspace. Core retains responsibility
-    /// for operator admission and the owner partition guard.
-    pub fn resolve_cli_owner_workspace(
-        runtime: &OrbitRuntime,
-        selector: &str,
-    ) -> Result<String, OrbitError> {
-        let owner = runtime.workspace_id()?;
-        let global_root = runtime.global_root();
-        let registry = Self::load_registry_for_selectors(&global_root)?;
-        if selector == owner && workspace_registry::find_workspace(&registry, selector)?.is_none() {
-            return Ok(owner);
-        }
-        let selected = Self::resolve_selector_in(
-            &registry,
-            selector,
-            inspect_machine_identity(&global_root)?.id(),
-        )?;
-        if !same_cli_checkout(runtime, &selected.checkout) {
-            return Err(OrbitError::CapabilityDenied(
-                "retry owner workspace must match the selected workspace".into(),
-            ));
-        }
-        Ok(owner)
-    }
-
-    /// Bind a CLI `orbit tool run` invocation to the workspace named in `input`.
-    ///
-    /// This is the single local CLI resolver above the tools. A non-empty
-    /// `workspace` either rebinds the runtime to that registered checkout or
-    /// fails closed naming the selector. MCP resolves selectors independently
-    /// on the accepting server and never falls back to process cwd.
-    pub fn bind_cli_tool_workspace(
-        runtime: &OrbitRuntime,
-        input: &mut Value,
-        tool: &str,
-    ) -> Result<Option<OrbitRuntime>, OrbitError> {
-        let Some(selector) = cli_workspace_selector(input)? else {
-            return Ok(None);
-        };
-        let global_root = runtime.global_root();
-        super::refuse_cli_callback_workspace(&global_root, tool, &selector)?;
-        let (identity, registry) = cli_tool_bind_inputs(runtime)?;
-        match resolve_cli_workspace_target(&registry, runtime, &selector, identity.id())? {
-            CliWorkspaceTarget::CurrentRuntime => Ok(None),
-            CliWorkspaceTarget::Checkout {
-                workspace,
-                checkout,
-                rewrite_to_repo_root,
-                ..
-            } => {
-                if workspace.status != WorkspaceStatus::Active {
-                    return Err(inactive_cli_workspace(workspace, checkout));
-                }
-                if rewrite_to_repo_root {
-                    set_input_workspace(input, &checkout.repo_root)?;
-                }
-                if same_cli_checkout(runtime, checkout) {
-                    return Ok(None);
-                }
-                Self::open_registered_checkout_with_identity(
-                    &global_root,
-                    workspace,
-                    checkout,
-                    HostLifetime::ShortLived,
-                    &identity,
-                    Some(&registry),
-                )
-                .map(Some)
-            }
-        }
     }
 }

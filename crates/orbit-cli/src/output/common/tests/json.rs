@@ -157,6 +157,8 @@ fn failed_terminal_resident_ledger_append_keeps_started_action_key() {
     ]);
     // The runtime reads the managed-run marker from the Env it is built with.
     let runtime = orbit_core::test_support::with_runtime_env(runtime, orbit_common::Env::capture());
+    let core =
+        orbit_cmd::registry_runtime::RegisteredRuntimeFactory::core_for_command(runtime.clone());
 
     let input = json!({
         "id": watched,
@@ -173,7 +175,7 @@ fn failed_terminal_resident_ledger_append_keeps_started_action_key() {
     ]);
     let error = orbit_core::test_support::with_resident_action_close_failure(
         || OrbitError::Store("injected terminal ledger append failure".into()),
-        || args.execute_with_env(&runtime, &orbit_common::Env::capture()),
+        || args.execute_with_env(&core, &orbit_common::Env::capture()),
     )
     .expect_err("failed terminal ledger append must remain an error");
     let payload: Value = error_payload(&error);
@@ -210,7 +212,7 @@ fn failed_terminal_resident_ledger_append_keeps_started_action_key() {
     let refused_args =
         parse_tool_run(&["orbit", "tool", "run", "orbit.task.update", "--input", "{}"]);
     let refusal = refused_args
-        .execute_with_env(&runtime, &orbit_common::Env::capture())
+        .execute_with_env(&core, &orbit_common::Env::capture())
         .expect_err("empty update input must be refused");
     let denied = error_payload(&refusal);
     assert!(denied.get("action_key").is_none(), "{denied}");

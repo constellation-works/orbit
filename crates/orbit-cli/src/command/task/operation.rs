@@ -182,9 +182,16 @@ fn prepare(
         // routed them, which the preflight did before dispatch.
         TaskVerb::RetryHandoff => {
             if let Some(Value::String(selector)) = input.shift_remove("owner_workspace") {
-                // Owner selection has no app yet; it reads the opened runtime.
-                let workspace = RegisteredRuntimeFactory::resolve_cli_owner_workspace(
-                    context.runtime()?,
+                let binding = orbit_core::app::tool::exec(
+                    context.core()?,
+                    orbit_core::app::tool::Command::CliWorkspaceBinding,
+                )?
+                .into_cli_workspace_binding()?;
+                let owner = binding.workspace_id?;
+                let workspace = RegisteredRuntimeFactory::resolve_cli_owner_workspace_at(
+                    &binding.global_root,
+                    &binding.repo_root,
+                    &owner,
                     &selector,
                 )?;
                 input.insert("workspace".into(), json!(workspace));

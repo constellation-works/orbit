@@ -349,7 +349,7 @@ impl BrokerDispatch for RunDispatch {
                             self.runtime.clone()
                         };
                         return build_orbit_tool_host(
-                            &target,
+                            crate::Core::within_tool_entry(target),
                             run.task_id.clone(),
                             ToolHostRun::BrokeredResident(run_id.to_string()),
                             session_context,
@@ -376,7 +376,7 @@ impl BrokerDispatch for RunDispatch {
                             )));
                         }
                         let host = build_orbit_tool_host(
-                            &self.runtime,
+                            crate::Core::within_tool_entry(self.runtime.clone()),
                             run.task_id.clone(),
                             ToolHostRun::BrokeredResident(run_id.to_string()),
                             session_context.clone(),

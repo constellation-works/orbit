@@ -7,7 +7,10 @@
 //! caller's own flow, which the app runs once it has admitted the command:
 //! that flow lives above this crate.
 
+mod migrate;
+
 mod registry;
+
 mod tasks;
 
 use std::collections::BTreeMap;
@@ -26,7 +29,12 @@ use orbit_types::workspace::{
 };
 use serde_json::Value;
 
+pub use self::migrate::MigrateStatus;
+
 use super::exec::{self, App, Operation};
+use crate::application::agents::{ClaimedEffortBackfill, DispatchEffortBackfill};
+use crate::application::codebase::DiffStatsBackfill;
+use crate::application::job::TaskCrewBackfill;
 use crate::application::seeding_policy::SeedingPolicyExclusions;
 use crate::application::task::{TaskListFilter, TaskRow};
 use crate::application::workspace_preset::AppliedWorkspacePreset;
@@ -104,6 +112,16 @@ pub enum Command<'a> {
         /// The calling model.
         model: Option<String>,
     },
+    /// Report layout and schema migration status after applying migrations on open.
+    MigrateStatus,
+    /// Backfill landed diff stats for done tasks.
+    BackfillDiffStats(usize),
+    /// Backfill task crews from latest delivery selections.
+    BackfillTaskCrews,
+    /// Backfill dispatch reasoning effort from audited launches.
+    BackfillDispatchEffort,
+    /// Backfill claimed leaf effort and model reports to the owner.
+    BackfillClaimedEffort,
 }
 
 /// Inputs for one aggregate task listing across registered workspaces.
@@ -279,6 +297,16 @@ pub enum Outcome {
     AggregateTasks(AggregateTaskPages),
     /// A tool verb's answer.
     Answer(Value),
+    /// Layout and schema migration status after open.
+    MigrateStatus(Box<MigrateStatus>),
+    /// Diff stats backfill report.
+    DiffStatsBackfill(DiffStatsBackfill),
+    /// Task crew backfill report.
+    TaskCrewBackfill(TaskCrewBackfill),
+    /// Dispatch effort backfill report.
+    DispatchEffortBackfill(DispatchEffortBackfill),
+    /// Claimed leaf effort backfill report.
+    ClaimedEffortBackfill(ClaimedEffortBackfill),
 }
 
 impl Outcome {
@@ -340,6 +368,16 @@ impl<'a> App for WorkspaceApp<'a> {
             }
             Command::AggregateTasks(_) => "aggregate-tasks",
             Command::Claim { verb, input, .. } => return Operation::of(*verb, input),
+            Command::MigrateStatus
+            | Command::BackfillDiffStats(_)
+            | Command::BackfillTaskCrews
+            | Command::BackfillDispatchEffort
+            | Command::BackfillClaimedEffort => {
+                return Operation::command("migrate", "")
+                    .without_recorded_subcommand()
+                    .target(Some("workspace"), None)
+                    .without_command_row();
+            }
         };
         Operation::command("workspace", subcommand).target(Some("workspace"), None)
     }
@@ -420,6 +458,19 @@ impl<'a> App for WorkspaceApp<'a> {
                     }
                     WorkspaceClaimVerb::Show => crate::runtime::workspace::claim::show(runtime)?,
                 })
+            }
+            Command::MigrateStatus => Outcome::MigrateStatus(Box::new(migrate::status(core)?)),
+            Command::BackfillDiffStats(limit) => {
+                Outcome::DiffStatsBackfill(runtime.backfill_landed_diff_stats(limit)?)
+            }
+            Command::BackfillTaskCrews => {
+                Outcome::TaskCrewBackfill(runtime.backfill_admitted_task_crews()?)
+            }
+            Command::BackfillDispatchEffort => {
+                Outcome::DispatchEffortBackfill(runtime.backfill_dispatch_effort()?)
+            }
+            Command::BackfillClaimedEffort => {
+                Outcome::ClaimedEffortBackfill(runtime.backfill_claimed_leaf_effort()?)
             }
         })
     }

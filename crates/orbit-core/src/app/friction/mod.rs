@@ -56,6 +56,8 @@ pub enum Command {
     Resolve(Input),
     /// Move a record into the workspace that owns it.
     Rehome(Input),
+    /// Read the workspace's configured friction tag taxonomy for MCP schema decoration.
+    TagTaxonomy,
 }
 
 impl Command {
@@ -73,20 +75,21 @@ impl Command {
         }
     }
 
-    fn verb(&self) -> FrictionVerb {
+    fn verb(&self) -> Option<FrictionVerb> {
         match self {
-            Self::Add(_) => FrictionVerb::Add,
-            Self::List(_) => FrictionVerb::List,
-            Self::Show(_) => FrictionVerb::Show,
-            Self::Stats(_) => FrictionVerb::Stats,
-            Self::Tags(_) => FrictionVerb::Tags,
-            Self::Update(_) => FrictionVerb::Update,
-            Self::Resolve(_) => FrictionVerb::Resolve,
-            Self::Rehome(_) => FrictionVerb::Rehome,
+            Self::Add(_) => Some(FrictionVerb::Add),
+            Self::List(_) => Some(FrictionVerb::List),
+            Self::Show(_) => Some(FrictionVerb::Show),
+            Self::Stats(_) => Some(FrictionVerb::Stats),
+            Self::Tags(_) => Some(FrictionVerb::Tags),
+            Self::Update(_) => Some(FrictionVerb::Update),
+            Self::Resolve(_) => Some(FrictionVerb::Resolve),
+            Self::Rehome(_) => Some(FrictionVerb::Rehome),
+            Self::TagTaxonomy => None,
         }
     }
 
-    fn input(&self) -> &Input {
+    fn input(&self) -> Option<&Input> {
         match self {
             Self::Add(input)
             | Self::List(input)
@@ -95,20 +98,22 @@ impl Command {
             | Self::Tags(input)
             | Self::Update(input)
             | Self::Resolve(input)
-            | Self::Rehome(input) => input,
+            | Self::Rehome(input) => Some(input),
+            Self::TagTaxonomy => None,
         }
     }
 
-    fn into_input(self) -> Input {
+    fn into_verb_input(self) -> Option<(FrictionVerb, Input)> {
         match self {
-            Self::Add(input)
-            | Self::List(input)
-            | Self::Show(input)
-            | Self::Stats(input)
-            | Self::Tags(input)
-            | Self::Update(input)
-            | Self::Resolve(input)
-            | Self::Rehome(input) => input,
+            Self::Add(input) => Some((FrictionVerb::Add, input)),
+            Self::List(input) => Some((FrictionVerb::List, input)),
+            Self::Show(input) => Some((FrictionVerb::Show, input)),
+            Self::Stats(input) => Some((FrictionVerb::Stats, input)),
+            Self::Tags(input) => Some((FrictionVerb::Tags, input)),
+            Self::Update(input) => Some((FrictionVerb::Update, input)),
+            Self::Resolve(input) => Some((FrictionVerb::Resolve, input)),
+            Self::Rehome(input) => Some((FrictionVerb::Rehome, input)),
+            Self::TagTaxonomy => None,
         }
     }
 }
@@ -173,6 +178,8 @@ pub enum Outcome {
     Resolved(Value),
     /// The record `rehome` moved.
     Rehomed(Value),
+    /// The workspace's friction tag taxonomy.
+    TagTaxonomy(Vec<(String, String)>),
 }
 
 impl Outcome {
@@ -200,6 +207,17 @@ impl Outcome {
             | Self::Updated(value)
             | Self::Resolved(value)
             | Self::Rehomed(value) => value,
+            Self::TagTaxonomy(_) => Value::Null,
+        }
+    }
+
+    /// The friction tag taxonomy answered by [`Command::TagTaxonomy`].
+    pub fn into_tag_taxonomy(self) -> Result<Vec<(String, String)>, crate::Error> {
+        match self {
+            Self::TagTaxonomy(taxonomy) => Ok(taxonomy),
+            _ => Err(OrbitError::Execution(
+                "friction command answered an outcome other than TagTaxonomy".to_string(),
+            )),
         }
     }
 }
@@ -234,13 +252,17 @@ impl App for FrictionApp {
     type Error = Error;
 
     fn operation(command: &Command) -> Operation {
-        Operation::of(command.verb(), &command.input().fields)
+        match (command.verb(), command.input()) {
+            (Some(verb), Some(input)) => Operation::of(verb, &input.fields),
+            _ => Operation::dashboard_read("friction", "tag-taxonomy"),
+        }
     }
 
     fn run(core: &Core, command: Command) -> Result<Outcome, Error> {
-        let verb = command.verb();
-        let Input { fields, reporter } = command.into_input();
         let runtime = core.runtime();
+        let Some((verb, Input { fields, reporter })) = command.into_verb_input() else {
+            return Ok(Outcome::TagTaxonomy(runtime.friction_tag_taxonomy()?));
+        };
         let value = match core.entry() {
             // The handler table: exhaustive, so a new verb has no flow until
             // it is given one. The tool entry checked the fields against the

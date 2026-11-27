@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use orbit_cmd::task_owner::WorkspaceIdentity;
 use orbit_common::OrbitError;
-use orbit_core::OrbitRuntime;
-use orbit_core::adapter::command::ToolEntryPoint;
+use orbit_core::Core;
+use orbit_core::app::friction;
+use orbit_core::app::tool::{self, ToolEntryPoint};
 use orbit_core::application::task::{TaskListResultPolicy, TaskListResultProfile};
 use orbit_mcp::McpHost;
 use orbit_types::tool::{McpToolDefinition, McpToolScope, ToolSessionContext};
@@ -38,12 +39,14 @@ impl McpHost for ServerMcpHost {
         // (an unregistered runtime identity, a foreign path) advertises the
         // shipped defaults here and fails closed at call time, so tools/list
         // stays available for globally resolved tools such as task.show.
-        let Ok((runtime, _selected)) =
+        let Ok((core, _selected)) =
             self.resolve_workspace_runtime("orbit.friction.add", &input, context, None)
         else {
             return Ok(None);
         };
-        runtime.friction_tag_taxonomy().map(Some)
+        friction::exec(&core, friction::Command::TagTaxonomy)?
+            .into_tag_taxonomy()
+            .map(Some)
     }
 
     /// A workspace-scoped plugin tool is left out of `tools/list` where its
@@ -162,21 +165,23 @@ pub(super) fn call_workspace_selector(input: &Value) -> Result<Option<&str>, Orb
 }
 
 pub(super) fn execute_core_tool(
-    runtime: &OrbitRuntime,
+    core: &Core,
     name: &str,
     input: Value,
     context: ToolSessionContext,
     owner: Option<&WorkspaceIdentity>,
 ) -> Result<Value, OrbitError> {
-    let output = runtime
-        .execute_tool_command_dispatch_with_session_context(
-            name,
-            input.clone(),
-            None,
-            None,
-            ToolEntryPoint::Mcp,
-            context,
-        )?
-        .value;
+    let output = tool::exec(
+        core,
+        tool::Command::Run {
+            name: name.to_string(),
+            input: input.clone(),
+            agent: None,
+            model: None,
+            entry_point: ToolEntryPoint::Mcp,
+            session: context,
+        },
+    )?
+    .into_value()?;
     crate::command::task::support::attach_bound_workspace_identity(name, &input, owner, output)
 }

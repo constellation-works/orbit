@@ -57,7 +57,7 @@ pub mod workspace_rebind;
 pub mod workspace_removal;
 
 pub use doctor_host::doctor_host;
-pub use migrate::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
+pub use migrate::{MigrateStatus, migrate_dry_run_at};
 /// Materialize executor-local artifact bytes before an owner coordination call.
 pub use orbit_tools::prepare_remote_task_artifact_put;
 pub use registry::{routines as registry_routines, runtime as registry_runtime};

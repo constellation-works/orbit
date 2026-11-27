@@ -675,7 +675,7 @@ impl Commands {
                     Some(false),
                     |command, context| match command {
                         Commands::PluginGroup(invocation) => invocation
-                            .execute(|args| args.execute_with_env(context.runtime()?, context.env)),
+                            .execute(|args| args.execute_with_env(context.core()?, context.env)),
                         _ => dispatch_mismatch("PluginGroup"),
                     },
                 )

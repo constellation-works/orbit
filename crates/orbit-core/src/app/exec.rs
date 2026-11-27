@@ -102,6 +102,8 @@ pub(crate) struct Operation {
     recorded_subcommand: bool,
     /// The tool whose governance row this chokepoint decides, if any.
     tool_name: Option<&'static str>,
+    /// The tool name recorded on the command-line invocation row, if any.
+    recorded_tool_name: Option<String>,
     target_type: Option<&'static str>,
     target_id: Option<String>,
     job_run_id: Option<String>,
@@ -127,6 +129,7 @@ impl Operation {
             subcommand: spec.cli_path.join("-"),
             recorded_subcommand: true,
             tool_name: Some(spec.tool_name),
+            recorded_tool_name: None,
             target_type: Some(noun.audit_target_type),
             target_id: fields
                 .get(noun.audit_target_param)
@@ -149,6 +152,7 @@ impl Operation {
             subcommand: subcommand.into(),
             recorded_subcommand: true,
             tool_name: None,
+            recorded_tool_name: None,
             target_type: None,
             target_id: None,
             job_run_id: None,
@@ -201,6 +205,12 @@ impl Operation {
     /// the command line has always recorded it.
     pub(crate) fn without_recorded_subcommand(mut self) -> Self {
         self.recorded_subcommand = false;
+        self
+    }
+
+    /// Record `name` as the `tool_name` column on the command-line invocation row.
+    pub(crate) fn recorded_tool_name(mut self, name: Option<String>) -> Self {
+        self.recorded_tool_name = name;
         self
     }
 
@@ -419,7 +429,7 @@ impl AuditGuard {
                 .operation
                 .recorded_subcommand
                 .then(|| self.operation.subcommand.clone()),
-            tool_name: None,
+            tool_name: self.operation.recorded_tool_name.clone(),
             target_type: self.operation.target_type.map(ToOwned::to_owned),
             target_id: self.operation.target_id.clone(),
             role: self

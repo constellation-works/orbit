@@ -89,13 +89,13 @@ pub(super) fn cli_workspace_selector(input: &Value) -> Result<Option<String>, Or
 
 pub(super) fn resolve_cli_workspace_target<'a>(
     registry: &'a WorkspaceRegistry,
-    runtime: &OrbitRuntime,
+    repo_root: &Path,
     selector: &str,
     local_machine_id: Option<&str>,
 ) -> Result<CliWorkspaceTarget<'a>, OrbitError> {
     let selector = local_workspace_selector(selector, local_machine_id)?;
     if selector_looks_like_path(selector) {
-        return resolve_cli_workspace_path(registry, Some(runtime), selector);
+        return resolve_cli_workspace_path(registry, Some(repo_root), selector);
     }
     let (workspace, checkout) = resolve_named_cli_checkout(registry, selector)?;
     Ok(CliWorkspaceTarget::Checkout {
@@ -174,7 +174,7 @@ pub(super) fn resolve_named_cli_checkout<'a>(
 
 pub(super) fn resolve_cli_workspace_path<'a>(
     registry: &'a WorkspaceRegistry,
-    runtime: Option<&OrbitRuntime>,
+    repo_root: Option<&Path>,
     selector: &str,
 ) -> Result<CliWorkspaceTarget<'a>, OrbitError> {
     let raw = Path::new(selector);
@@ -201,8 +201,8 @@ pub(super) fn resolve_cli_workspace_path<'a>(
                 local_root: local_root_for_selected_path(checkout, &canonical),
             });
         }
-        if let Some(runtime) = runtime
-            && path_is_inside(&runtime.paths().repo_root, &canonical)
+        if let Some(repo_root) = repo_root
+            && path_is_inside(repo_root, &canonical)
         {
             return Ok(CliWorkspaceTarget::CurrentRuntime);
         }
@@ -352,8 +352,8 @@ pub(super) fn git_workdir_root(path: &Path) -> Option<PathBuf> {
     })
 }
 
-pub(super) fn same_cli_checkout(runtime: &OrbitRuntime, checkout: &WorkspaceCheckout) -> bool {
-    canonical_path(&runtime.paths().repo_root) == canonical_path(&checkout.repo_root)
+pub(super) fn same_cli_checkout(repo_root: &Path, checkout: &WorkspaceCheckout) -> bool {
+    canonical_path(repo_root) == canonical_path(&checkout.repo_root)
 }
 
 pub(super) fn path_is_inside(parent: &Path, child: &Path) -> bool {
@@ -474,28 +474,23 @@ pub(crate) struct OpenedSelectorInputs {
     pub(crate) registry: WorkspaceRegistry,
 }
 
-/// The selector inputs [`attach_registry_context`] stored, when this open had them.
-pub(crate) fn opened_selector_inputs(runtime: &OrbitRuntime) -> Option<&OpenedSelectorInputs> {
-    runtime
-        .composition_snapshot()
-        .and_then(|snapshot| snapshot.downcast_ref::<OpenedSelectorInputs>())
-}
-
 /// Identity and registry for a CLI tool bind.
 ///
-/// A runtime this process already opened carries both. Cloning that snapshot
-/// does not re-read `workspaces.json` or `config.toml`. A runtime opened
-/// without the snapshot still reads both files.
+/// A core this process already opened carries both in its composition snapshot.
+/// Cloning that snapshot does not re-read `workspaces.json` or `config.toml`.
+/// A core opened without the snapshot still reads both files.
 pub(super) fn cli_tool_bind_inputs(
-    runtime: &OrbitRuntime,
+    global_root: &Path,
+    composition_snapshot: Option<&(dyn std::any::Any + Send + Sync)>,
 ) -> Result<(MachineIdentityState, WorkspaceRegistry), OrbitError> {
-    if let Some(opened) = opened_selector_inputs(runtime) {
+    if let Some(opened) =
+        composition_snapshot.and_then(|snapshot| snapshot.downcast_ref::<OpenedSelectorInputs>())
+    {
         return Ok((opened.identity.clone(), opened.registry.clone()));
     }
-    let global_root = runtime.global_root();
-    let identity = inspect_machine_identity(&global_root)?;
+    let identity = inspect_machine_identity(global_root)?;
     let registry = load_registry_for_selector_resolution(
-        &workspace_registry::registry_path_for(&global_root),
+        &workspace_registry::registry_path_for(global_root),
         &identity,
     )?;
     Ok((identity, registry))

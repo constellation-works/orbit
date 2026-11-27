@@ -1,11 +1,10 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::app::tool::{self, Command};
+use orbit_core::{Core, OrbitError};
+use orbit_types::tool::{McpRole, McpToolset, McpToolsetSelection};
 use serde_json::{Value, json};
 
-use orbit_core::OrbitError;
-use orbit_types::tool::{McpRole, McpToolset, McpToolsetSelection};
-
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 use crate::output::common::color::Domain;
 
 use super::support::{format_required_tool_input_summary, tool_status};
@@ -22,13 +21,9 @@ pub struct ToolListArgs {
     pub role: Option<String>,
 }
 
-impl Execute for ToolListArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let mut tools = if self.all {
-            runtime.list_all_tools()?
-        } else {
-            runtime.list_tools()?
-        };
+impl ExecuteCore for ToolListArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let mut tools = tool::exec(core, Command::List { all: self.all })?.into_listed()?;
         let role = self
             .role
             .as_deref()
