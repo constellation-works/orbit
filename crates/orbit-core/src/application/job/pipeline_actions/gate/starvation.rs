@@ -372,6 +372,7 @@ fn record_starvation(
             role: "admin",
             status: AuditEventStatus::Success,
             arguments_json,
+            error_message: None,
             workspace_id: None,
             task_id,
             attribution: AuditRunAttribution::Run(parent_run_id),

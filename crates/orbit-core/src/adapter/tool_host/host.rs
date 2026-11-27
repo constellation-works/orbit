@@ -148,6 +148,7 @@ impl OrbitToolHost for CoreOrbitToolHost {
                         "actor": actor,
                     })
                     .to_string(),
+                    error_message: None,
                     workspace_id: None,
                     task_id: self.task_scope.task_id.as_deref(),
                     attribution: AuditRunAttribution::Environment {

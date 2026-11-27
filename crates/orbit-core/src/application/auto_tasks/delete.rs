@@ -393,6 +393,7 @@ impl OrbitRuntime {
             role: "admin",
             status: AuditEventStatus::Success,
             arguments_json: payload.to_string(),
+            error_message: None,
             workspace_id: None,
             task_id: None,
             attribution: AuditRunAttribution::Environment { run_id: None },

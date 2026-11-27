@@ -8,6 +8,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::observability::audit_id::audit_execution_id;
+use orbit_common::security::redaction::redact_sensitive_env_text;
 use orbit_types::telemetry::AuditEventStatus;
 
 use crate::RuntimeKernel;
@@ -37,6 +38,8 @@ pub struct SystemAuditEvent<'a> {
     /// `Denied` records exit code 1; every other status records 0.
     pub status: AuditEventStatus,
     pub arguments_json: String,
+    /// Optional diagnostic stored separately from the event's arguments.
+    pub error_message: Option<String>,
     pub workspace_id: Option<&'a str>,
     pub task_id: Option<&'a str>,
     pub attribution: AuditRunAttribution,
@@ -57,6 +60,7 @@ pub fn record_system_audit_event(
         role,
         status,
         arguments_json,
+        error_message,
         workspace_id,
         task_id,
         attribution,
@@ -93,7 +97,7 @@ pub fn record_system_audit_event(
             arguments_json: Some(arguments_json),
             stdout_truncated: None,
             stderr_truncated: None,
-            error_message: None,
+            error_message: error_message.map(|message| redact_sensitive_env_text(&message)),
             host: runtime
                 .env()
                 .hostname()

@@ -27,7 +27,8 @@ crate::scenario_table!(
     two_open_delivery_pull_requests_record_one_ambiguity_follow_up,
     alternating_blockers_on_one_head_record_each_code_once,
     a_retargeted_pull_request_is_not_merged_and_lands_once_restored,
-    second_read_rerun_or_changed_head_waits_while_forge_refusal_records_reason
+    second_read_rerun_or_changed_head_waits_while_forge_refusal_records_reason,
+    a_failed_merge_audit_stores_redacted_error_and_leaves_request_empty
 );
 
 /// A finished delivery run of `task` that carried `completion`.
@@ -206,6 +207,10 @@ fn a_held_inconclusive_evidence_delivery_is_not_merged_without_a_passed_check_an
         .iter()
         .filter(|row| row.command == "pr_merge")
         .map(|row| {
+            assert_eq!(
+                row.error_message, None,
+                "successful merge rows have no error"
+            );
             let payload: serde_json::Value =
                 serde_json::from_str(row.arguments_json.as_deref().unwrap()).unwrap();
             assert_eq!(
@@ -225,6 +230,55 @@ fn a_held_inconclusive_evidence_delivery_is_not_merged_without_a_passed_check_an
         ["merged".to_string(), "requested".to_string()].into(),
         "the one merge is audited before and after the forge call"
     );
+}
+
+fn a_failed_merge_audit_stores_redacted_error_and_leaves_request_empty() {
+    // The public owner landing path reaches `audited_forge_merge` and persists
+    // the outcome rows through the runtime audit store.
+    const TOKEN: &str = "fixture-merge-token-76f3d2";
+    let _token = orbit_common::test_env::scoped([("GITHUB_TOKEN", Some(TOKEN))]);
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    forge.fail_merge(Some(&format!("forge rejected merge with token {TOKEN}")));
+    delivery_run(&fx, &task, "done", JobRunState::Success, None);
+
+    tick(&fx, false, false);
+
+    assert!(
+        forge.merges().is_empty(),
+        "a failed forge merge stays unmerged"
+    );
+    fx.assert_status(&task, TaskStatus::Review, "failed merge remains in review");
+    let rows = fx
+        .runtime
+        .list_audit_events_with_kind(None, None, Some("pull_request".into()), None, None, 50)
+        .unwrap();
+    let requested = rows
+        .iter()
+        .find(|row| row.command == "pr_merge" && row.subcommand.as_deref() == Some("requested"))
+        .expect("requested merge audit row");
+    assert_eq!(
+        requested.status,
+        orbit_types::telemetry::AuditEventStatus::Success
+    );
+    assert_eq!(
+        requested.error_message, None,
+        "requested rows have no error"
+    );
+
+    let failed = rows
+        .iter()
+        .find(|row| row.command == "pr_merge" && row.subcommand.as_deref() == Some("failed"))
+        .expect("failed merge audit row");
+    assert_eq!(
+        failed.status,
+        orbit_types::telemetry::AuditEventStatus::Failure
+    );
+    let message = failed
+        .error_message
+        .as_deref()
+        .expect("failed merge row stores its error message");
+    assert!(message.contains("forge rejected merge with token [REDACTED_ENV]"));
+    assert!(!message.contains(TOKEN), "credential survived: {message}");
 }
 
 fn a_succeeded_authorised_run_with_a_passed_observation_is_merged() {

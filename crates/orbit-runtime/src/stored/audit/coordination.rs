@@ -60,6 +60,7 @@ pub(crate) fn record_coordination_audit_event(
             role: "admin",
             status,
             arguments_json,
+            error_message: None,
             workspace_id,
             task_id,
             attribution: AuditRunAttribution::Environment { run_id },
