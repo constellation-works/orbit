@@ -148,7 +148,7 @@ fn owner_landing_host_replay_preserves_refusals() {
             }
             "wrapped_broad_run" => {
                 report["validation"][0]["command"] =
-                    json!(format!("scripts/build-budget.py -- {BROAD}"));
+                    json!(format!("scripts/unknown-wrapper.py -- {BROAD}"));
             }
             "whole_crate_run" => {
                 report["validation"][0]["command"] = json!("cargo test -p orbit-exec");

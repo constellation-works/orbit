@@ -701,12 +701,18 @@ When a broader run, such as `cargo test -p <crate> --test <target> <module>`,
 defers some of its tests, name each one as a `host_sandbox_test` requirement
 whose command is `cargo test -p <crate> --test <target> <test>`. Use the same
 package and target, and the full test path the notice prints as the filter.
-A package-wide run, `cargo test -p <crate>` with no target selector, that
-defers a library unit test is named the same way with
-`cargo test -p <crate> --lib <test>`: the same package and that exact filter.
-A `--test` requirement does not cover the package-wide run, and a `--lib`
-requirement does not cover a `--test` run. A broader command that itself
-carries `--lib` or another target selector stays uncovered.
+A single-package library run (`cargo test -p <crate> --lib`) or package-wide run
+(`cargo test -p <crate>` with no target selector) that defers a library unit
+test is named the same way with `cargo test -p <crate> --lib <test>`: the same
+package and that exact filter. A leading repository-owned scheduling wrapper
+(`scripts/build-budget.py --` or `./scripts/build-budget.py --`) before
+`cargo test` is unwrapped; unknown wrappers, build-changing flags (`--release`,
+`--features`, `--profile`, `--target`), multi-package runs, and other target
+selectors (`--bins`, `--all-targets`, `--lib --test`) stay uncovered. A `--test`
+requirement does not cover a library or package-wide run, and a `--lib`
+requirement does not cover a `--test` run. When a Cargo library deferral pair
+cannot be safely reconciled, the certificate escalation names the unresolved
+record and gives a runnable native command or fresh-review route.
 Record each requirement as its own `required`, `not_run` record too. A host
 result for each requirement then establishes the broader record. A notice no
 requirement names exactly leaves the record `not_run`, and the review blocks
@@ -827,8 +833,11 @@ task is already in `review`; the fulfilment tick selects only `in-progress`
 holds. Replay still requires an otherwise complete evidence-only report:
 each requirement needs its own required unavailable record, and every
 broader record's deferral must match an exact test filter in the same package
-and integration target. A build-budget wrapper, a whole-crate run without
-`--test`, or a notice naming a different test cannot establish that match.
+and target (`--test <target>` for integration runs, or `--lib` / no target
+selector for library runs, optionally prefixed with
+`scripts/build-budget.py --`). An unknown wrapper, a build-changing flag, a
+mismatched package or target, or a notice naming a different test cannot
+establish that match.
 These shapes still block; settlement does not infer missing records or erase
 uncovered deferrals. Open findings, failed required checks and an explicit
 owner `reject` also block without running anything. A refused command, OS

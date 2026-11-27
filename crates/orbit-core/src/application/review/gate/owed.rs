@@ -197,8 +197,9 @@ impl Judgement {
     /// and target with that test as its filter (or a test path ending in
     /// it), else the record's own cargo scope —
     /// `cargo test -p <package> --test <target> <test>` for an integration
-    /// record and `cargo test -p <package> --lib <test>` for a
-    /// package-wide one. A notice no such command can name stays on its
+    /// record and `cargo test -p <package> --lib <test>` for a library or
+    /// package-wide one (including commands prefixed with
+    /// `scripts/build-budget.py --`). A notice no such command can name stays on its
     /// record and keeps blocking. Each covered notice is cleared from its
     /// record with a note naming the owed command, so the broader pass is
     /// judged with the requirements [`Self::require_owed_evidence`] adds.
@@ -261,7 +262,10 @@ impl Judgement {
                                 && filter.as_deref().is_some_and(filter_matches)
                         }
                         (
-                            Some(RecordedCargoScope::Package { package }),
+                            Some(
+                                RecordedCargoScope::Library { package }
+                                | RecordedCargoScope::Package { package },
+                            ),
                             Ok(HostSandboxCommand::CargoLibTest {
                                 package: named_package,
                                 filter,
@@ -281,7 +285,10 @@ impl Judgement {
                         Some(RecordedCargoScope::Integration { package, target }) => {
                             format!("cargo test -p {package} --test {target} {test}")
                         }
-                        Some(RecordedCargoScope::Package { package }) => {
+                        Some(
+                            RecordedCargoScope::Library { package }
+                            | RecordedCargoScope::Package { package },
+                        ) => {
                             format!("cargo test -p {package} --lib {test}")
                         }
                         None => match HostSandboxCommand::admit(&record.command, &[]) {

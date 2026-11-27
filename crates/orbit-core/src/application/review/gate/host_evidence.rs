@@ -15,8 +15,9 @@
 //!   block anyway runs nothing. A broader required run that passed only by
 //!   deferring tests counts as evidence-only when each deferred test is one
 //!   requirement's exact filter: the same package and `--test` target
-//!   [ORB-17043], or a package-wide run with no target selector and a `--lib`
-//!   filter [ORB-24325];
+//!   [ORB-17043], or a single-package library (`--lib`) or package-wide run
+//!   with a `--lib` filter [ORB-24325] (optionally prefixed with
+//!   `scripts/build-budget.py --`);
 //! - only a command [`HostSandboxCommand::admit`] admits — `cargo test -p
 //!   <crate> --test <target> [<filter>]`, `cargo test -p <crate> --lib
 //!   [<filter>]`, or an owner-required command — refused with a typed reason
