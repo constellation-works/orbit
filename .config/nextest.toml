@@ -30,7 +30,7 @@ stateful-runtime = { max-threads = 1 }
 
 # orbit-core unit tests that mutate the process environment or cwd.
 [[profile.default.overrides]]
-filter = 'package(orbit-core) & kind(lib) & test(/^(adapter::tool_host::tests::(command_tools|task_tools|workflow_tools)::|application::job::run::tests::(owner|reconcile)::|application::routines::tests::sweep::|application::search::tests::(global|types)::|bootstrap::tests::global_defaults::|runtime::task::tests::locks::|runtime::tests::(authorization|config_path|run_input)::|runtime::workspace::tests::claim::)/)'
+filter = 'package(orbit-core) & kind(lib) & test(/^(adapter::tool_host::tests::(command_tools|task_tools|workflow_tools)::|application::job::run::tests::(owner|reconcile)::|app::routine::tests::sweep::|bootstrap::tests::global_defaults::|runtime::task::tests::locks::|runtime::tests::(authorization|config_path|run_input)::|runtime::workspace::tests::claim::)/)'
 test-group = 'stateful-runtime'
 
 # A contract table performs several real CLI fixture lifecycles. Bound these
