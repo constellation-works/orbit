@@ -306,8 +306,11 @@ impl Judgement {
                                 )
                             })
                             .unwrap_or_default();
-                    library_diagnostics
-                        .extend(unreconciled_opaque_deferrals(&self.validation, owners));
+                    library_diagnostics.extend(unreconciled_opaque_deferrals(
+                        &self.validation,
+                        owners,
+                        self.required_validation_commands.as_deref(),
+                    ));
                     library_diagnostics
                         .extend(unreconciled_scenario_deferrals(&self.validation, owners));
                     self.downgrade(&defect.reason());
@@ -384,7 +387,11 @@ impl Judgement {
     fn record_unreconciled_library_deferrals(&mut self, owners: &CargoOwners) {
         let mut diagnostics =
             unreconciled_library_deferrals(&self.validation, &self.external_evidence, owners);
-        diagnostics.extend(unreconciled_opaque_deferrals(&self.validation, owners));
+        diagnostics.extend(unreconciled_opaque_deferrals(
+            &self.validation,
+            owners,
+            self.required_validation_commands.as_deref(),
+        ));
         diagnostics.extend(unreconciled_scenario_deferrals(&self.validation, owners));
         self.append_unique_escalations(diagnostics);
     }

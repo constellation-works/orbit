@@ -98,8 +98,14 @@ impl Fixture {
     /// [`Self::before_landing`] with `review` appended to its `[review]`
     /// table.
     pub(super) fn before_landing_with_config(review: &str) -> Self {
+        Self::before_landing_with_required_commands(&[], review)
+    }
+
+    /// The before-landing fixture whose admitted host contract captures
+    /// `required` as `workflow.required_validation_commands`.
+    pub(super) fn before_landing_with_required_commands(required: &[&str], review: &str) -> Self {
         Self::build(
-            &[],
+            required,
             review,
             ReviewTiming::BeforeLanding,
             10,

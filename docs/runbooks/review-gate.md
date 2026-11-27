@@ -723,9 +723,14 @@ has no supported Cargo scope. Its `unreconciled_opaque_deferral` escalation
 names the record, exact command and uncovered notices: attaching focused test
 results alone cannot establish what that command ran. Run the exact command
 natively outside the sandbox without deferrals and admit a fresh review with
-the result, or admit a fresh review with supported Cargo validation records
-and matching host evidence. The multi-package integration case described below
-is separate and remains subject to its ownership check.
+the result. When the reviewer chose that command, a fresh review with supported
+Cargo validation records and matching host evidence is the alternative. When the
+command is one the admitted host contract captured in
+`workflow.required_validation_commands`, host validation still needs that exact
+command established, which focused Cargo records cannot do, so the escalation
+and the operator stop give only the native rerun; settlement still rejects a
+missing or uncovered required command. The multi-package integration case
+described below is separate and remains subject to its ownership check.
 Record each requirement as its own `required`, `not_run` record too. A host
 result for each requirement then establishes the broader record. A notice no
 requirement names exactly leaves the record `not_run`, and the review blocks
