@@ -4,6 +4,8 @@ title: "Threat model: install-time spec.build for source-built plugins"
 summary: "Threat model and binding decisions for an opt-in spec.build that builds a git+ plugin source at install time: sandbox profile, network, environment, write scope, artifact digest, consent, pin files, doctor and abuse cases"
 owner: claude
 status: Implemented
+feature: plugins
+doc_role: spec
 tags: [plugins, security, sandbox, supply-chain, install]
 paths: ["crates/orbit-exec/src/build_sandbox/**", "crates/orbit-tools/src/plugin/build/**", "crates/orbit-core/src/app/plugin/build.rs", "crates/orbit-runtime/src/plugin/build_witness.rs", "crates/orbit-tools/src/plugin/source.rs", "crates/orbit-types/src/plugin/pin.rs", "crates/orbit-core/src/app/plugin/install/**", "crates/orbit-core/src/app/plugin/inspect/doctor.rs", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/linux_landlock/**", "crates/orbit-exec/src/macos_sandbox/**"]
 related_features: [plugins, policy-sandbox]
@@ -19,7 +21,7 @@ Status: implemented by [ORB-13887]. §6 maps each decision to the code and recor
 refines it. A change to any decision below is a security decision and needs a change to this
 document in the same PR.
 
-Builds on [1_scope.md](./1_scope.md) §3 (plugin sources, pin file, staged install) and §4.1–§4.3
+Builds on [1_scope.md](../1_scope.md) §3 (plugin sources, pin file, staged install) and §4.1–§4.3
 (grants, execution protocol, backend sandbox).
 
 ## 1. What is being added

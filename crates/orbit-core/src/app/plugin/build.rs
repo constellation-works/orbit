@@ -1,6 +1,6 @@
 //! Install-time `spec.build`: when a source builds, who may consent, and the
 //! build record an install keeps
-//! (`docs/design/plugins/3_install_time_build.md`).
+//! (`docs/design/plugins/specs/install-time-build.md`).
 //!
 //! Only `git+<url>#<full commit id>` builds (§3.1). Any other source whose
 //! manifest declares `spec.build` installs only when every declared output

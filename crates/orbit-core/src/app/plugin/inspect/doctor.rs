@@ -385,7 +385,7 @@ pub fn plugin_build_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorRes
 }
 
 /// One informational row per plugin built on this host, and the findings
-/// about those builds (`docs/design/plugins/3_install_time_build.md` §3.9).
+/// about those builds (`docs/design/plugins/specs/install-time-build.md` §3.9).
 /// Offline: nothing here runs a build, contacts a source or re-fetches.
 ///
 /// Witness findings are included here so the source-build section of

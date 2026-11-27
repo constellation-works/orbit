@@ -1,5 +1,5 @@
 //! The profile of a backend the host spawns on an agent's behalf (design
-//! `docs/design/plugins/2_agent_call_broker.md` §5).
+//! `docs/design/plugins/specs/agent-call-broker.md` §5).
 //!
 //! A backend spawned inside the agent sandbox inherits the agent's
 //! restrictions. One the host broker spawns does not, so its profile is

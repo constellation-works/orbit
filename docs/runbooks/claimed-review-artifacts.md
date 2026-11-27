@@ -85,7 +85,7 @@ The coordinator never writes a review certificate, and no other `review-*`
 path crosses it.
 
 The design is in the
-[agent-call broker design](../design/plugins/2_agent_call_broker.md) §3
+[agent-call broker design](../design/plugins/specs/agent-call-broker.md) §3
 ("Claimed-owner calls").
 
 ## 2. Refusals and recovery
@@ -369,5 +369,5 @@ a clean review with no substantive finding does not prove the repair leg.
 - [Review gate runbook](./review-gate.md) — deciding a blocked review.
 - [Distributed drain runbook](./distributed-drain.md) — claimed leaves and
   unreachable owners.
-- [Agent-call broker design](../design/plugins/2_agent_call_broker.md) — the
+- [Agent-call broker design](../design/plugins/specs/agent-call-broker.md) — the
   broker, its peer authentication and its error codes.

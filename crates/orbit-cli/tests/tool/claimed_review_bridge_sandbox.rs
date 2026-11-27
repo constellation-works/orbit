@@ -1,6 +1,6 @@
 //! A claimed before-PR reviewer's review-artifact reads and report write from
 //! inside a real agent sandbox, carried to a remote owner by its run's broker
-//! (`docs/design/plugins/2_agent_call_broker.md` §3, §4.4;
+//! (`docs/design/plugins/specs/agent-call-broker.md` §3, §4.4;
 //! `docs/runbooks/claimed-review-artifacts.md`).
 //!
 //! The owner is a separate Orbit home reached through an `ssh` stand-in that,

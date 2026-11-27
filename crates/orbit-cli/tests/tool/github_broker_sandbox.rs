@@ -1,5 +1,5 @@
 //! The read-only `github.*` tools from inside a real Bubblewrap agent sandbox
-//! (design `docs/design/plugins/2_agent_call_broker.md` §3, §4.4).
+//! (design `docs/design/plugins/specs/agent-call-broker.md` §3, §4.4).
 //!
 //! The sandbox is compiled the way a managed launch compiles it, so it masks
 //! `~/.config/gh` and the plugin trees, and the agent's environment comes from

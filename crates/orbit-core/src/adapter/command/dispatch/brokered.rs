@@ -5,7 +5,7 @@
 //! worker must not start inside the cycle's sandbox, its requeue, a resident cycle's
 //! decision raise whose lock that sandbox mounts read-only, or a resident
 //! cycle's landing or move to `done` that reads the forge — through the audited
-//! dispatch, under the run's authority (`docs/design/plugins/2_agent_call_broker.md` §3, §4.3–§4.4, §5).
+//! dispatch, under the run's authority (`docs/design/plugins/specs/agent-call-broker.md` §3, §4.3–§4.4, §5).
 //!
 //! Everything that decides authority — task, job run, activity policy, agent
 //! identity, filesystem profile and program policy — comes from the

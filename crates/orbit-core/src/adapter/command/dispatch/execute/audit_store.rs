@@ -50,7 +50,7 @@ pub(super) struct ToolDispatchAuditContext {
 }
 
 /// What a call a run's plugin broker executes is recorded under (design
-/// `docs/design/plugins/2_agent_call_broker.md` §4.4). Every field comes from
+/// `docs/design/plugins/specs/agent-call-broker.md` §4.4). Every field comes from
 /// the run's dispatch record or the authenticated connection, never from this
 /// process's environment or the tool input, which describe the host rather
 /// than the agent the call is made for.

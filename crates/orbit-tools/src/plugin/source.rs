@@ -89,7 +89,7 @@ pub struct ResolvedSource {
     pub archive_digest: Option<String>,
     /// The verified commit, when the source was `git+<url>#<full commit id>`:
     /// the only form that may build (design
-    /// `docs/design/plugins/3_install_time_build.md` §3.1).
+    /// `docs/design/plugins/specs/install-time-build.md` §3.1).
     pub commit: Option<ResolvedCommit>,
 }
 

@@ -49,7 +49,7 @@ pub struct PluginPin {
     pub digest: Option<String>,
     /// `sha256:<hex>` artifact digest the build of a `git+<url>#<commit>`
     /// source is expected to produce
-    /// (`docs/design/plugins/3_install_time_build.md` §3.7). A statement of
+    /// (`docs/design/plugins/specs/install-time-build.md` §3.7). A statement of
     /// expectation only: it can refuse an install or mark one unsatisfied,
     /// and never starts a build.
     #[serde(default, skip_serializing_if = "Option::is_none")]

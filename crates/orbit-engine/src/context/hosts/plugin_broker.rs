@@ -12,7 +12,7 @@ use orbit_types::workflow::ActivityToolDenyPolicy;
 pub use orbit_common::security::child_env::PLUGIN_BROKER_ENV;
 
 /// The dispatching run as its plugin broker authorizes and executes brokered
-/// calls (`docs/design/plugins/2_agent_call_broker.md` §4.3). Every field
+/// calls (`docs/design/plugins/specs/agent-call-broker.md` §4.3). Every field
 /// comes from the run the host dispatched; none is read from a broker request
 /// or from the agent's environment.
 #[derive(Debug, Clone)]
@@ -44,7 +44,7 @@ pub struct PluginBrokerRun {
 }
 
 /// A per-run plugin broker a host started for one sandboxed provider launch
-/// (`docs/design/plugins/2_agent_call_broker.md`).
+/// (`docs/design/plugins/specs/agent-call-broker.md`).
 ///
 /// The listener runs until the handle is dropped. Dropping it stops the
 /// listener and removes the socket and the directory holding it.

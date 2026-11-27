@@ -86,7 +86,7 @@ bullet was rechecked at `d10fae79b`).
   output is wrapped as `steps.<id>.output` (`wrap_step_output`).
 - **A sandbox that runs untrusted code with nothing granted by default.** The plugin
   build profile (`crates/orbit-exec/src/build_sandbox/**`, design in
-  [plugins §3 install-time build](../plugins/3_install_time_build.md)) runs a child
+  [plugins §3 install-time build](../plugins/specs/install-time-build.md)) runs a child
   under Bubblewrap on Linux (`linux-bwrap-build-v1`: constructed root, every namespace
   unshared, fresh `/proc`, minimal `/dev`) and a deny-default SBPL profile on macOS
   (`macos-sandbox-build-v1`, no network). Reads are denied by default, the credential

@@ -216,7 +216,7 @@ pub(super) fn apply_audit_plugin_secret_updates(conn: &Connection) -> Result<(),
 
 /// v32 `audit_brokered_call` migration: whether a run's plugin broker
 /// executed the call for a sandboxed agent, and the PID of the peer that
-/// asked (design `docs/design/plugins/2_agent_call_broker.md` §4.4).
+/// asked (design `docs/design/plugins/specs/agent-call-broker.md` §4.4).
 /// Additive: an older binary ignores both columns, and every earlier row
 /// reads NULL, which is not brokered.
 pub(super) fn apply_audit_brokered_call(conn: &Connection) -> Result<(), OrbitError> {

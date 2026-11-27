@@ -2,7 +2,7 @@
 //!
 //! The host binds the broker before the provider is spawned, anchors its peer
 //! authentication to the spawned sandbox, and tears it down when the provider
-//! exits (`docs/design/plugins/2_agent_call_broker.md` §3). A broker that
+//! exits (`docs/design/plugins/specs/agent-call-broker.md` §3). A broker that
 //! cannot be bound costs the run its brokered plugin calls, never the step.
 
 use orbit_types::workflow::ExecutorSandboxKind;

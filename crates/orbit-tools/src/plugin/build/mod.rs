@@ -2,7 +2,7 @@
 //! directory, both phases under the build profile, and the declared outputs
 //! copied into an install's staging tree.
 //!
-//! Design: `docs/design/plugins/3_install_time_build.md`. Consent, the
+//! Design: `docs/design/plugins/specs/install-time-build.md`. Consent, the
 //! refusal of unattended callers, the build record and its witness belong to
 //! `orbit-core`; this module only runs what it is handed.
 

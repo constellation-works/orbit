@@ -30,7 +30,7 @@ pub struct PluginAddOptions {
     /// Grants recorded when `enable` is set.
     pub grants: Vec<String>,
     /// The operator's `--allow-build`: consent to run this source's
-    /// `spec.build` (design `docs/design/plugins/3_install_time_build.md`
+    /// `spec.build` (design `docs/design/plugins/specs/install-time-build.md`
     /// §3.8). Never set from a pin, config or any unattended caller.
     pub allow_build: bool,
     /// Shows the build plan before a consented build runs.

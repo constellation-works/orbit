@@ -498,7 +498,7 @@ task's record and artifacts, search and task listing within the claimed workspac
 task `spawned_from` it, or a review finding that is
 also `regression_from` its culprit, and a friction) cross the run's
 plugin broker outside the sandbox ([ORB-14260]; plugins
-[2_agent_call_broker.md](../plugins/2_agent_call_broker.md) §3, "Claimed-owner calls").
+[specs/agent-call-broker.md](../plugins/specs/agent-call-broker.md) §3, "Claimed-owner calls").
 Before this, every such agent finished its change, failed to save its summary through
 `orbit.task.update`, and reported the step failed (`task_store_unreachable`), which blocked the
 task with finished work uncommitted.

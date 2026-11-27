@@ -183,7 +183,7 @@ impl PluginTool {
         callback.open_host_route(ctx.orbit_host.as_ref())?;
         // A call the broker runs for an agent is held to that agent's
         // profile as well as the plugin's (design
-        // `docs/design/plugins/2_agent_call_broker.md` §5).
+        // `docs/design/plugins/specs/agent-call-broker.md` §5).
         let profile = match &ctx.brokered_caller {
             Some(caller) => spec.brokered_sandbox_profile(&ctx.env, caller)?,
             None => spec.sandbox_profile(&ctx.env, ctx.workspace_root.as_deref())?,

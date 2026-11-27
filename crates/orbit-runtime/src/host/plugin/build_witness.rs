@@ -1,5 +1,5 @@
 //! The host-owned copy of a plugin's build record
-//! (`docs/design/plugins/3_install_time_build.md` §3.6).
+//! (`docs/design/plugins/specs/install-time-build.md` §3.6).
 //!
 //! The record lives on the `plugins` row, which a backend holding
 //! `orbit_tools` can write. The installing command also writes it to
