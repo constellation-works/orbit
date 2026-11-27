@@ -9,7 +9,7 @@ feature: auto-concurrency
 doc_role: design
 summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes and the macOS process tree, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage/sampler.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-core/src/application/admission/gap_fit.rs", "crates/orbit-core/src/application/workspace_auto/classify/**", "crates/orbit-core/src/application/workspace_auto/limiters.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-runtime/src/host_resource/**", "crates/orbit-store/src/repository/admission_load.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contract/task/coordination/admission.rs"]
+paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage/sampler.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-core/src/application/admission/gap_fit.rs", "crates/orbit-core/src/application/workspace_auto/classify/**", "crates/orbit-core/src/application/workspace_auto/limiters.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-runtime/src/host/resource/**", "crates/orbit-store/src/repository/admission_load.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contract/task/coordination/admission.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757, ORB-15774]
 ---
@@ -72,7 +72,7 @@ waiting or the host is throttled, and 60 s otherwise. A pull drain instead
 requests one claim per free slot from the owner, and the owner chooses the
 task (`pull_drain/refill/request.rs`, `pull_drain/drain/refill_pass.rs`).
 
-**The reactive guard.** The resource throttle (`runtime/host_resource/`)
+**The reactive guard.** The resource throttle (`runtime/host/resource/`)
 samples host CPU, memory, disk and, on Linux, I/O every 5 s while admission is
 being consulted, and stops 300 s after the last consult.
 
@@ -129,7 +129,7 @@ sampler is needed.
 Implemented in `application/job/pipeline/worker/usage/sampler.rs` (minute
 aggregator) and `worker/usage/tree.rs` (macOS process tree), with the work
 class in `worker/delivery_class.rs`, the host reads in
-`runtime/host_resource/usage.rs`, and the macOS walk in
+`runtime/host/resource/usage.rs`, and the macOS walk in
 `orbit-common/src/process/ancestry.rs`.
 
 - **What.** Every 5 s, a background thread in a delivery run's worker reads
@@ -289,7 +289,7 @@ class in `worker/delivery_class.rs`, the host reads in
 
 Workers also keep a host series, `host_resource_minutes`, holding host CPU
 and memory per wall-clock minute in the same units, using the shared
-`runtime/host_resource/usage.rs` reader for history and forecast baselines.
+`runtime/host/resource/usage.rs` reader for history and forecast baselines.
 Linux measures busy cores from `/proc/stat` tick deltas (excluding idle and
 iowait, without double-counting guest), and `MemTotal − MemAvailable` bytes.
 The reader resolves the proc root, opens the fixed `stat` and `meminfo` leaves
@@ -520,7 +520,7 @@ quantile of the sum (§4.1) rather than adding their percentiles.
 the minute at which `alive` falls below 0.1, the 90th-percentile duration,
 capped at 120 minutes.
 
-Implemented in `runtime/host_resource/profile/` (`build.rs`, `lookup.rs`,
+Implemented in `runtime/host/resource/profile/` (`build.rs`, `lookup.rs`,
 `cache.rs`) and read through `OrbitRuntime::resource_profiles` and
 `resource_profile_for`:
 
@@ -640,11 +640,11 @@ F(t) = B + Σ over running deliveries i of P_i(a_i + t) · alive_i(a_i + t) / al
   deliveries and reservations is a high quantile of their summed memory, not
   the sum of their 90th percentiles (§4.1).
 
-Implemented in `runtime/host_resource/forecast/` (`build.rs`, `host_load.rs`,
+Implemented in `runtime/host/resource/forecast/` (`build.rs`, `host_load.rs`,
 `memory.rs`) and built only under the host admission lock (§5.2):
 
 - **Running set.** Live (`pending`, `running`, `retrying`) runs of the
-  delivery jobs (`runtime/host_resource/delivery.rs`) in every workspace,
+  delivery jobs (`runtime/host/resource/delivery.rs`) in every workspace,
   grouped per workspace and task. A delivery's class and admission time come
   from its run input's `resource_class`, else its newest minute; a run with
   neither is assumed to be `change` work admitted when the run was created.
@@ -1008,7 +1008,7 @@ of the host's cores; the throttle's CPU mark is a Linux load average, which
 counts the run queue and can exceed 100%, so the two are not compared.
 
 Implemented for local and pull drains, with local passes in `admission/gap_fit.rs`, over
-`HostLoadForecast::gap` (`runtime/host_resource/forecast/fit.rs`):
+`HostLoadForecast::gap` (`runtime/host/resource/forecast/fit.rs`):
 
 - **Where.** `select_admissions` asks gap fit about each candidate that
   passed the ceiling, the footprint guard and the conflict checks. A
@@ -1288,7 +1288,7 @@ first.
 ### Native macOS verification
 
 Run `scripts/build-budget.py -- cargo test -p orbit-runtime --lib
-host_resource::tests::usage -- --nocapture` on macOS. The native row
+host::resource::tests::usage -- --nocapture` on macOS. The native row
 reads real host ticks beyond the cache window, asserts finite core utilization,
 a positive CPU count and coherent memory byte totals, and checks failed Mach
 calls return unknown. The same matrix covers proc fixtures and independent
@@ -1326,8 +1326,8 @@ Linux eligibility and raw history retention remain unchanged.
 ### 8.1 The accuracy report
 
 Implemented for local and pull drains, with local passes in `workspace_auto/classify/` (recording),
-`runtime/host_resource/forecast/record.rs` (the recorded points) and
-`runtime/host_resource/accuracy/report.rs` (the report), read through
+`runtime/host/resource/forecast/record.rs` (the recorded points) and
+`runtime/host/resource/accuracy/report.rs` (the report), read through
 `OrbitRuntime::forecast_accuracy` and shown by
 `orbit run profiles --accuracy`:
 
