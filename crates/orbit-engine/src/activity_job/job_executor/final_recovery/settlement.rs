@@ -43,6 +43,7 @@ pub(super) fn settle_absorbed(
         workspace_path: worktree.workspace_path.into(),
         completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
         infrastructure: None,
+        completion_observation: false,
     };
     conclude(job, ctx, step, activity, &application, None, None)
 }

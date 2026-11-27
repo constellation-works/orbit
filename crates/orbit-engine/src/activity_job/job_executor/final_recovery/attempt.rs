@@ -54,6 +54,7 @@ impl Attempt<'_, '_> {
             completion_done: self.ctx.input.get("completion").and_then(Value::as_str)
                 == Some("done"),
             infrastructure: None,
+            completion_observation: self.completion_observation_unavailable(),
         }
     }
 

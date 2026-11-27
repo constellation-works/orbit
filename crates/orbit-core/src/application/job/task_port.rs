@@ -199,6 +199,10 @@ impl TaskJobPort for OrbitRuntime {
         self.escalated_publication_local_gate(task).map(|_| ())
     }
 
+    fn held_forge_observation_resume(&self, task: &Task) -> Result<Option<String>, OrbitError> {
+        self.held_forge_observation_source(task)
+    }
+
     fn candidate_validation_gates(&self) -> HostValidationGates {
         self.host_validation_gates()
     }

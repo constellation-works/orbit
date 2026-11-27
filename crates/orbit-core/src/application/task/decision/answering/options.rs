@@ -130,6 +130,18 @@ impl OrbitRuntime {
         // specification before liveness, so a rewritten preview would refuse
         // the answer for a change it made itself.
         if blocked && !discards && option_returns_blocked_task_to_backlog(&option.action) {
+            // A run held on a read-only forge observation is not a requeue
+            // source; its resume is the route that keeps the candidate.
+            if let Some(run_id) = self.held_forge_observation_resume(&task)? {
+                return Err(refuse(&format!(
+                    "run `{run_id}` is held because completion could not read the forge \
+                     (delivery_forge_observation_unavailable), and a requeue cannot adopt a held \
+                     run's publication. Resume it with `orbit job resume {run_id}`: it reads the \
+                     pull request again at its published head and readmits the task on the same \
+                     candidate. To start over instead, discard explicitly with \
+                     `orbit task requeue {task_id} --discard-candidate`"
+                )));
+            }
             let mut preview = task.clone();
             if self.unsettled_run(&task)?.is_none() {
                 if let Some(description) = &params.description {

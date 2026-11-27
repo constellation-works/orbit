@@ -223,6 +223,7 @@ impl Fixture {
                 workspace_path: self.repo.clone(),
                 completion_done: false,
                 infrastructure: None,
+                completion_observation: false,
             },
         )
     }
@@ -530,6 +531,7 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
                     workspace_path: fixture.repo.clone(),
                     completion_done: false,
                     infrastructure: None,
+                    completion_observation: false,
                 }
             )
             .unwrap(),

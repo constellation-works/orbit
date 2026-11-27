@@ -256,7 +256,9 @@ pub struct DecisionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recommended: Option<String>,
     /// The exact action outside Orbit that unblocks the task, when no option
-    /// can: the request then carries one "Done — requeue" answer.
+    /// can: the request then carries one "Done — requeue" answer, or only a
+    /// `dismiss` answer when a requeue cannot apply (a run held on a forge
+    /// observation, which the action resumes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub human_action: Option<String>,
     /// Structured topic (or corpus rule id) an agent-raised request carries,

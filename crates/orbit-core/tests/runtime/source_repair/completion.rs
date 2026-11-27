@@ -1053,6 +1053,7 @@ pub(super) fn concurrent_and_lost_admission_keep_one_completion_budget() {
         workspace_path: f.repo.clone(),
         completion_done: true,
         infrastructure: None,
+        completion_observation: false,
     };
     for _ in 0..2 {
         assert!(matches!(
