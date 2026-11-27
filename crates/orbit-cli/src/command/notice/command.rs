@@ -1,16 +1,11 @@
-use chrono::Utc;
 use clap::Args;
 use orbit_common::governance::notice::NoticeVerb;
 use orbit_core::Core;
 use orbit_core::app::notice::{self, Command, Input};
-use serde_json::Value;
 
-use super::close;
-use super::list;
-use super::post::{self, post_cli_input};
-use super::show;
+use super::post::post_cli_input;
 use crate::command::operation_args::Invocation;
-use crate::command::{CommandOut, ExecuteCore, Payload};
+use crate::command::{CommandOut, ExecuteCore};
 
 #[derive(Args)]
 #[command(about = orbit_common::governance::notice::NOTICE.cli_about)]
@@ -27,18 +22,6 @@ impl ExecuteCore for NoticeCommand {
         }
         let value =
             notice::exec(core, Command::Operation(spec.verb, Input::new(input)))?.into_value()?;
-        Ok(render_notice(spec.verb, value).into())
+        Ok(crate::output::notice::render_notice(spec.verb, value).into())
     }
-}
-
-/// The text rendering of one notice tool answer, shared by the local
-/// command and a call host routing delivered to the workspace's owner.
-pub(crate) fn render_notice(verb: NoticeVerb, value: Value) -> Payload {
-    let blocks = match verb {
-        NoticeVerb::List => vec![list::block(&value, Utc::now())],
-        NoticeVerb::Post => vec![post::block(&value)],
-        NoticeVerb::Close => vec![close::block(&value)],
-        NoticeVerb::Show => vec![show::block(&value)],
-    };
-    Payload::blocks(value, blocks)
 }

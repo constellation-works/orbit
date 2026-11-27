@@ -9,9 +9,8 @@ use orbit_core::app::config::{
     Command, ConfigScope, ConfigWriteInit, Outcome, exec,
     refuse_indirect_uninitialized_caller_orbit,
 };
-use serde_json::json;
 
-use crate::command::{CommandOut, Payload};
+use crate::command::CommandOut;
 
 #[derive(Args)]
 pub struct ConfigSetArgs {
@@ -69,24 +68,10 @@ impl ConfigSetArgs {
             &outcome.new_value,
             env,
         );
-        let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
-        let scope = outcome.scope;
-        let path = outcome.path.to_string_lossy().into_owned();
-        let mut document = json!({ "key": self.key, "scope": scope, "path": path });
-        if let Some(warning) = &warning {
-            document["warning"] = json!(warning);
-        }
-        Ok(Payload::detail(
-            document,
-            format!(
-                "set {} ({scope} config: {path}){}",
-                self.key,
-                warning
-                    .map(|warning| format!("\nWarning: {warning}"))
-                    .unwrap_or_default()
-            ),
+        Ok(
+            crate::output::config::set_payload(&self.key, outcome.scope, &outcome.path, &warnings)
+                .into(),
         )
-        .into())
     }
 }
 

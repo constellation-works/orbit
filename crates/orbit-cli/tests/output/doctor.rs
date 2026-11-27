@@ -1300,7 +1300,14 @@ fn render_fixture_child() {
     writeln!(std::io::stdout(), "BEGIN_DOCTOR").expect("start marker");
     writeln!(std::io::stderr(), "BEGIN_DOCTOR_STDERR").expect("stderr start marker");
     crate::output::common::render::emit(
-        Payload::blocks(doc, vec![Block::table(table), Block::DoctorFindings(rows)]).into(),
+        Payload::blocks(
+            doc,
+            vec![
+                Block::table(table),
+                crate::output::doctor::findings_block(rows),
+            ],
+        )
+        .into(),
         &sink,
     )
     .expect("emit");

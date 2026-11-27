@@ -1,9 +1,8 @@
 use clap::Args;
 use orbit_core::Core;
 use orbit_core::app::config::{Command, Outcome, exec};
-use serde_json::json;
 
-use crate::command::{CommandOut, ExecuteCore, Payload};
+use crate::command::{CommandOut, ExecuteCore};
 
 #[derive(Args)]
 pub struct ConfigPathArgs {
@@ -23,7 +22,6 @@ impl ExecuteCore for ConfigPathArgs {
         else {
             unreachable!("config path returned an unrelated outcome");
         };
-        let path = path.to_string_lossy().into_owned();
-        Ok(Payload::detail(json!({ "path": path }), path.clone()).into())
+        Ok(crate::output::config::path_payload(&path).into())
     }
 }

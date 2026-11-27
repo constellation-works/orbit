@@ -5,8 +5,6 @@ mod admission_receipts;
 mod command;
 mod fs_access;
 mod providers;
-mod support;
-mod tool_telemetry;
 mod workspace_checks;
 
 pub use command::{DoctorCommand, DoctorSubcommand};

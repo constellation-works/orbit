@@ -306,7 +306,7 @@ fn attention_preflight(
         ToolSessionContext::default(),
     );
     Ok(Preflight::Remote(
-        answer.and_then(super::attention::render_attention_envelope),
+        answer.and_then(crate::output::attention::envelope_output),
     ))
 }
 
@@ -349,7 +349,9 @@ fn deliver_notice_aggregate(
     let client = super::mcp::federated_aggregate_client(global_root.to_path_buf(), authority, env)?;
     let answer = orbit_mcp::McpHost::call_tool(&client, name, input, ToolSessionContext::default());
     Ok(Preflight::Remote(answer.and_then(|value| match render {
-        AggregateRender::Notice(verb) => Ok(super::notice::render_notice(verb, value).into()),
+        AggregateRender::Notice(verb) => {
+            Ok(crate::output::notice::render_notice(verb, value).into())
+        }
         AggregateRender::ToolRun(shape) => shape.render_tool_run_output(value),
     })))
 }
@@ -830,7 +832,7 @@ fn with_host(mut value: Value, holder: &HostEntry) -> Value {
 
 fn render(render: Render, value: Value, holder: &HostEntry) -> CommandOut {
     match render {
-        Render::Notice { verb } => Ok(super::notice::render_notice(verb, value).into()),
+        Render::Notice { verb } => Ok(crate::output::notice::render_notice(verb, value).into()),
         Render::TaskShow { fields } => {
             // The CLI's single-field JSON is the bare value. A current host
             // keys a `fields` projection by field name, so unwrap that key;

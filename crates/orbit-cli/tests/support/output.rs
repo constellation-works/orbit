@@ -10,6 +10,10 @@ pub mod config;
 pub mod doctor;
 #[path = "../../src/output/common/json.rs"]
 pub mod json;
+
+#[path = "../../src/output/notice.rs"]
+pub mod notice;
+
 #[path = "../../src/output/common/payload.rs"]
 pub mod payload;
 #[path = "../../src/output/common/pipe.rs"]
@@ -23,5 +27,5 @@ pub mod table;
 
 /// Mirrors `crate::output::common` so the production paths resolve here too.
 pub mod common {
-    pub use super::{json, payload, pipe, render, sink, table};
+    pub use super::{color, json, payload, pipe, render, sink, table};
 }

@@ -13,3 +13,5 @@ pub mod attention;
 pub mod common;
 pub mod config;
 pub mod doctor;
+
+pub mod notice;
