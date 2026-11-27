@@ -89,7 +89,7 @@ Every numbered design doc starts with the YAML frontmatter carried by the [`_tem
 
 The scope template carries a shorter frontmatter (no `paths` or `related_*`); add them only when they help.
 
-The current generated design index reads `title`, `summary`, `status`, `owner`, `stage` and `next` from each entry document, and groups features by `stage` into the index's feature board. `scripts/generate-doc-indexes.sh` derives a missing title or summary from the document and defaults missing status and owner. It fails on a missing or unknown `stage`; it does not otherwise validate a design-frontmatter schema. No `orbit docs` command or tolerant inference contract is present in the current source tree. The template's other fields (`feature`, `doc_role`, `type`, `tags`, `paths`, `related_features`, and `related_artifacts`) are descriptive metadata that the generated design index does not query. When using `related_artifacts`, follow the reference forms below as a writing convention, not an enforced schema. Decisions are addressed by their titles and links, not artifact IDs, so they do not need artifact references.
+The generated feature board in [`docs/design/FEATURES.md`](./FEATURES.md) reads `title`, `owner`, `stage` and `next` from each entry document and groups features by `stage`. `scripts/generate-doc-indexes.sh` derives a missing title from the document and defaults a missing owner. It fails on a missing or unknown `stage`; it does not otherwise validate a design-frontmatter schema. Run `make docs-index` and `scripts/generate-doc-indexes.sh --check` after changing board inputs. The other fields are descriptive metadata that the board does not query. When using `related_artifacts`, follow the reference forms below as a writing convention, not an enforced schema. Decisions are addressed by their titles and links, not artifact IDs, so they do not need artifact references.
 
 ---
 
@@ -196,7 +196,7 @@ A feature that is gone for good (nothing worth keeping as reference) may still b
 2. Add a one-line pointer near the top of the entry doc: the replacement design, or the reason it is parked or retired.
 3. Move the folder into `docs/design/_archived/<feature>/` with `git mv` and fix inbound links (the move adds one `../` to every relative link out of the folder).
 
-[`_archived/README.md`](./_archived/README.md) says what belongs there. The generated index lists archived designs under their own heading, not in the main design table.
+[`_archived/README.md`](./_archived/README.md) says what belongs there. The generated board in [`docs/design/FEATURES.md`](./FEATURES.md) lists archived designs under their own heading.
 
 ---
 

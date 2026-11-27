@@ -51,7 +51,7 @@ make goldens           # CLI/MCP, environment reference, CI log, sandbox and SQL
 
 Run `make goldens` when the change touches a golden surface (CLI help, the CLI environment reference, MCP text, sandbox profiles, ledger schemas), and the tests of the behavior you changed. To regenerate, run `make goldens UPDATE=1`. For environment documentation alone, run `ORBIT_UPDATE_HELP_GOLDENS=1 cargo test -p orbit-cli --test output help_goldens::env_reference::config_environment_reference_matches_registry -- --exact` and review the generated change in [CONFIG.md](CONFIG.md#environment-variables). A red required check on the PR is repaired through the PR (auto-fix or a follow-up commit). `workflow.required_validation_commands` in the workspace config sets what the pipeline runs.
 
-When an edit changes any generated row in `docs/INDEX.md` (for example, indexed Markdown frontmatter, its first heading, or summary), run `make docs-index`, review the generated index, and run `scripts/generate-doc-indexes.sh --check`. Include any resulting `docs/INDEX.md` change with the source edits, even when `make ci-fast` is pipeline-owned final validation.
+When an edit changes any generated row in `docs/INDEX.md` or `docs/design/FEATURES.md` (for example, indexed Markdown frontmatter, its first heading, or summary), run `make docs-index`, review the generated files, and run `scripts/generate-doc-indexes.sh --check`. Include any resulting generated change with the source edits, even when `make ci-fast` is pipeline-owned final validation.
 
 When renaming or consolidating a test selected by macOS CI, update the filter
 in `.github/workflows/ci-macos.yml` and run `make check-ci-macos`. This lists
@@ -260,6 +260,7 @@ unlocked_path_validation_commands = ["make ci-fast"]
 
 [workflow.generated_paths]
 "docs/INDEX.md" = "make docs-index"
+"docs/design/FEATURES.md" = "make docs-index"
 
 [workflow.validation_env]
 build_output_env = ["CARGO_TARGET_DIR"]
