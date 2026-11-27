@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::agents_fixture::{self, AgentsFixture, SeedRun};
 use crate::bound_server::{Announcement, BoundServer};
+use crate::isolated_cli_fixture::Fixture;
 
 /// The fields that differ between two reads of the same scan: when it ran,
 /// the window start derived from it, the reported window end, and how long
@@ -1620,5 +1621,41 @@ fn migrate_backfill_records_a_launch_its_causal_links_prove() {
             .unwrap()
             .len(),
         2
+    );
+}
+
+/// An applying `orbit migrate` runs as the `migrate` admin operation, so its
+/// invocation row records the `admin` role even when a non-admin agent runs it.
+#[test]
+fn migrate_applying_invocations_audit_the_admin_role_under_an_agent_actor() {
+    let fixture = Fixture::new();
+    for args in [
+        ["migrate", "--confirm", "--json"].as_slice(),
+        ["migrate", "--backfill-dispatch-effort", "--json"].as_slice(),
+    ] {
+        fixture
+            .command(args)
+            .env("ORBIT_AGENT_NAME", "claude")
+            .env("ORBIT_AGENT_MODEL", "claude")
+            .assert()
+            .success();
+    }
+    let store = rusqlite::Connection::open_with_flags(
+        fixture.root.join("orbit.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let mut statement = store
+        .prepare("SELECT role FROM audit_events WHERE command = 'migrate' ORDER BY id")
+        .unwrap();
+    let roles: Vec<String> = statement
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        roles,
+        ["admin", "admin"],
+        "each applying migrate invocation records the admin role, not the agent actor"
     );
 }
