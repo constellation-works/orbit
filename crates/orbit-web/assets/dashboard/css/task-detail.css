@@ -432,8 +432,7 @@
   align-items: center;
   gap: var(--space-6);
 }
-/* Task controls wrap as a group when the pane is narrow; tags stay below
-   them, and compact panes shorten control chrome before the values. */
+/* Tags stay below the measured, single-line control row. */
 .task-levers-task {
   flex-direction: column;
   align-items: stretch;
@@ -441,7 +440,7 @@
 }
 .task-levers-controls {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-6);
   min-width: 0;
@@ -452,20 +451,42 @@
   flex: 0 0 auto;
   width: 100%;
 }
-@container (max-width: 360px) {
-  .task-levers-controls { gap: var(--space-2); }
-  .task-levers-controls .task-chip { gap: var(--space-4); padding-inline: var(--space-4); font-size: var(--text-xs); }
-  .task-levers-task .task-levers-controls .task-status-select,
-  .task-levers-task .task-levers-controls .task-complexity-select,
-  .task-levers-task .task-levers-controls .task-crew-select { font-size: var(--text-xs); }
-  .task-levers-controls .task-chip-crew::before,
-  .task-levers-controls .task-chip-host::before,
-  .task-levers-controls .status-cell::before,
-  .task-levers-controls .complexity-cell::before { display: none; }
-  .task-levers-task .task-levers-controls .task-status-select { padding-inline: var(--space-4); background-position: right var(--space-4) center; }
-  .task-levers-task .task-levers-controls .task-complexity-select { padding-inline: var(--space-4); background-position: right var(--space-4) center; }
-  .task-levers-task .task-levers-controls .task-crew-select { background-position: right var(--space-4) center; }
+/* Each state is selected only after the preceding natural width overflows. */
+.task-levers-help { display: none; flex: 0 0 auto; }
+.task-levers-controls:not([data-fit="full"]) .task-levers-help { display: inline-flex; }
+.task-levers-controls:not([data-fit="full"]) .task-crew-select {
+  max-width: 75px;
+  text-overflow: ellipsis;
 }
+.task-levers-controls:not([data-fit="full"]) .task-os-readout,
+.task-levers-controls:not([data-fit="full"]) .risk-label,
+.task-levers-controls:not([data-fit="full"]) .risk-value { display: none; }
+.task-levers-controls:is([data-fit="dot"], [data-fit="hide-risk"], [data-fit="hide-host"]) .task-complexity-select {
+  width: 28px;
+  padding: 0;
+  color: transparent;
+  background-image: none;
+}
+.task-levers-controls:is([data-fit="dot"], [data-fit="hide-risk"], [data-fit="hide-host"]) .task-chip-risk {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+}
+.task-levers-controls:is([data-fit="dot"], [data-fit="hide-risk"], [data-fit="hide-host"]) .task-chip-risk::before,
+.task-levers-controls:is([data-fit="dot"], [data-fit="hide-risk"], [data-fit="hide-host"]) .complexity-cell::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  mask: none;
+  -webkit-mask: none;
+}
+.task-levers-controls:is([data-fit="dot"], [data-fit="hide-risk"], [data-fit="hide-host"]) .complexity-cell::before {
+  top: 10.5px;
+  left: 10.5px;
+}
+.task-levers-controls:is([data-fit="hide-risk"], [data-fit="hide-host"]) .task-risk-hint,
+.task-levers-controls[data-fit="hide-host"] .task-chip-host { display: none; }
+
 .task-chip {
   display: inline-flex;
   align-items: center;

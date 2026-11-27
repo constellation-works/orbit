@@ -8,6 +8,7 @@ import { closeTaskPane, filterTasks, focusTaskRow, openTaskPage, revealTaskRow, 
 import { taskDetailState, taskDrainSignature, taskDrainState } from './task-data.js';
 import { buildTaskDetail, buildTaskDetailPlaceholder, detailFeedbackSignature } from './task-detail.js';
 import { buildHostPill, sizeCrewSelect } from './task-lifecycle.js';
+import { buildRiskChip, riskinessSignature } from './task-riskiness.js';
 import { buildCrewUpdateControl } from './task-status-controls.js';
 import { fixPrSignature, fixPrState, pilotSignature, recoverySignature, refreshFixPrControls, taskPullRequestNumber, triageSignature } from './task-agent-actions.js';
 import { crewOptionsSignature, feedbackSignature } from './task-crew.js';
@@ -22,6 +23,7 @@ import { decisionAnswerSignature, refreshDecisionAnswerFeedback, retainDecisionN
 function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   retireClosedDecisionCards(wrap, readinessTask);
   refreshDraftHostPill(wrap, task);
+  refreshDraftRiskPill(wrap, task);
   refreshDraftCrewControl(wrap, task, context);
   refreshDraftComplexityControl(wrap, readinessTask, context);
   refreshFixPrControls(wrap, task, context);
@@ -67,8 +69,21 @@ function refreshDraftHostPill(wrap, task) {
     current.remove();
   } else if (updated) {
     const risk = controls.querySelector(":scope > .task-risk-hint");
-    controls.insertBefore(updated, risk);
+    controls.insertBefore(updated, risk || controls.querySelector(".task-levers-help"));
   }
+}
+
+// Refresh the estimate without replacing a retained description editor.
+function refreshDraftRiskPill(wrap, task) {
+  if (task.riskiness === undefined) return;
+  const controls = wrap.querySelector(".task-meta-block .task-levers-controls");
+  if (!controls) return;
+  const current = controls.querySelector(":scope > .task-risk-hint");
+  if (current && current.dataset.riskiness === riskinessSignature(task)) return;
+  const updated = buildRiskChip(task);
+  if (current && updated) controls.replaceChild(updated, current);
+  else if (current) current.remove();
+  else if (updated) controls.insertBefore(updated, controls.querySelector(".task-levers-help"));
 }
 
 // The drain read lands after the detail is shown, so the Blocked by row is
