@@ -882,9 +882,10 @@ settlement itself routes it to the host-owed run [ORB-24656], whether or
 not the reviewer named it: it derives a Linux `host_sandbox_test`
 requirement for the test the notice names — from a reviewer-named Linux
 requirement that runs the record's own package and target with that test as
-its filter (as `covers_deferral` requires), else from the record's cargo scope
-(`cargo test -p <package> --test <target> <test>`, or `--lib <test>` for a
-package-wide record) — adds its required `not_run` record, clears the
+its filter (as `covers_deferral` requires), else from the record's Cargo
+scope: `cargo test -p <package> --test <target> <test>` for an integration
+record, or `cargo test -p <package> --lib <test>` for a single-package library
+or package-wide record — adds its required `not_run` record, clears the
 covered notice and holds as below instead of downgrading the accept to
 `validation_incomplete`. When allocating the synthesized requirement's
 artifact locator, Orbit reserves both canonical result and derived log paths
@@ -934,11 +935,13 @@ package and one target and a filter equal to the test the notice names
 notice). A requirement without a filter, a module filter, another package or
 target, or a command outside the grammar covers nothing. The broader run may
 also carry `--locked`, `--frozen`, `--offline`, `--no-fail-fast`, `-q` or
-`--quiet`, which select no target and change no build. Any other option, such
-as a target selector on that record (`--lib`, `--bins`, `--all-targets`,
+`--quiet`, which select no target and change no build. An additional target
+selector on this integration record (`--lib`, `--bins`, `--all-targets`,
 `--workspace` and the like) or a build option (`--release`, `--features`,
-`--profile`, `--target`), leaves its notices uncovered. A `--lib` requirement
-is a separate shape, below. When every notice on the record is covered, the
+`--profile`, `--target`) leaves its notices uncovered. A single-package
+`--lib` record is a separate supported shape, below; combining `--lib` with
+`--test` remains uncovered. A `--lib` requirement is also a separate shape,
+below. When every notice on the record is covered, the
 review counts as evidence-only, so it holds or
 a claimed host replays the requirements. Each passing result clears only the
 notice it covers and notes its result and log on the broader record, which
@@ -948,16 +951,26 @@ requirement. A failing replay fails its own record and the broader one. One
 uncovered notice keeps the record `not_run`, the review is not evidence-only,
 and nothing is replayed. A record that failed keeps its failure.
 
-A package-wide required run, `cargo test -p <crate>` with no target selector,
-can defer a library unit test the same way [ORB-24325]. A requirement covers
-that notice only when its command is admitted as
-`cargo test -p <crate> --lib <test>`, with that same package and a filter
-equal to the test the notice names. The run may carry one positional filter
-and the non-selecting options above. A `--test` requirement does not cover
-it, and a `--lib` requirement does not cover a `--test` record. A record that
-itself carries `--lib`, `--bins`, `--all-targets` or another target selector
-stays uncovered, as does a requirement for a different package or a filter
-that is only the test's module.
+A single-package library run, `cargo test -p <crate> --lib`, or a
+package-wide run, `cargo test -p <crate>` with no target selector, can defer
+a library unit test the same way [ORB-24325]. A requirement covers that notice
+only when its command is admitted as `cargo test -p <crate> --lib <test>`,
+with the same package and a filter equal to the test the notice names. The
+required record may carry one positional filter and the non-selecting options
+above. A leading repository-owned scheduling wrapper
+(`scripts/build-budget.py --` or `./scripts/build-budget.py --`) before
+`cargo test` is unwrapped when the required record's scope is read; unknown
+wrappers, build-changing flags (`--release`, `--features`, `--profile`,
+`--target`), multi-package library or package-wide runs, and other target
+selectors (`--bins`, `--all-targets`, `--lib --test`) stay uncovered. A
+`--test` requirement does not cover a library or package-wide record, and a
+`--lib` requirement does not cover an integration record. A requirement for
+a different package or a filter that names only the test's module also covers
+nothing. When a required library or package-wide record's deferral cannot be
+safely matched to named evidence, the `unreconciled_library_deferral`
+diagnostic identifies the record and uncovered tests and gives a runnable
+native command outside the sandbox or a fresh-review route with supported
+single-package Cargo records.
 
 The implementer lane follows the same reading [ORB-15287]. An affected-test
 gate that exits 0 with only deferral notices is handed off by naming the
