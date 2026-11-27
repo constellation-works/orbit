@@ -9,7 +9,7 @@
 //! invocation that never reached an `exec`.
 //! `agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`,
 //! `config`, `crew_memory`, `doctor`, `evolution`, `experiment`, `friction`, `gc`,
-//! `host`, `notice`, `plugin`, `remote_command`, `resident`, `review`, `routine`,
+//! `host`, `lease`, `notice`, `plugin`, `remote_command`, `resident`, `review`, `routine`,
 //! `run`, `search`, `skill`, `task`, `tool`, `update` and `workspace` are apps; `host` and `update`
 //! open no workspace, so they have no `exec` and their surfaces call them directly.
 //! The other subjects still live in `application/` and are reached through
@@ -46,6 +46,8 @@ pub mod gc;
 pub mod host;
 
 mod invocation;
+
+pub mod lease;
 
 pub mod notice;
 
