@@ -1,5 +1,5 @@
 //! The plugin build profile: the sandbox an install-time `spec.build` phase
-//! runs under (`docs/design/plugins/3_install_time_build.md` §3.2–§3.4).
+//! runs under (`docs/design/plugins/specs/install-time-build.md` §3.2–§3.4).
 //!
 //! It is neither the agent profile (host readable, writes confined) nor the
 //! backend profile (grants from the manifest). Reads are denied by default:

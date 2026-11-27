@@ -39,7 +39,7 @@ pub struct InstalledPlugin {
     pub certified_orbit_version: Option<String>,
     /// How this host built the installed outputs, when the plugin was built
     /// from a commit-pinned `git+` source under `--allow-build`
-    /// (`docs/design/plugins/3_install_time_build.md` §3.6). `None` for
+    /// (`docs/design/plugins/specs/install-time-build.md` §3.6). `None` for
     /// every install that ran no build. Mirrored into a host-owned witness
     /// the loader checks this against.
     #[serde(default)]

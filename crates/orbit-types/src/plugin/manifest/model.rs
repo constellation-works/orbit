@@ -101,7 +101,7 @@ pub struct PluginSpec {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<PluginSecretSpec>,
     /// How a `git+` source pinned to a commit builds the files its backend
-    /// needs (`docs/design/plugins/3_install_time_build.md`). Runs only with
+    /// needs (`docs/design/plugins/specs/install-time-build.md`). Runs only with
     /// the operator's per-install consent; every other source must already
     /// carry the declared outputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]

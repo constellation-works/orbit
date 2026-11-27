@@ -1,5 +1,5 @@
 //! Install-time `spec.build` at the install boundary
-//! (`docs/design/plugins/3_install_time_build.md`): consent is refused
+//! (`docs/design/plugins/specs/install-time-build.md`): consent is refused
 //! without the flag and in unattended processes, macOS refuses a `fetch`
 //! phase, a pin never builds, a non-commit source must ship its outputs, and
 //! an installed build's record is checked at load and by doctor, and sync

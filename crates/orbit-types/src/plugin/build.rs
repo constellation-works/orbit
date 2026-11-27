@@ -1,7 +1,7 @@
 //! `spec.build`: how a plugin built from source produces its backend, and the
 //! build record a host keeps for the bytes it produced.
 //!
-//! Design: `docs/design/plugins/3_install_time_build.md`. This module holds
+//! Design: `docs/design/plugins/specs/install-time-build.md`. This module holds
 //! the manifest shape, its pure validation, and the record and digest
 //! preimage; running a build belongs to `orbit-tools` and `orbit-exec`, and
 //! consent to `orbit-core`.

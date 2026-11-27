@@ -4,6 +4,8 @@ title: "Design: host-side broker for agent-initiated plugin calls"
 summary: "Design: a per-run host broker runs plugin backends for sandboxed agents, so agent sandboxes can be denied state/plugins and the plugin secret store"
 owner: claude
 status: Draft
+feature: plugins
+doc_role: spec
 tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-runtime/src/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
@@ -28,8 +30,8 @@ owner calls [ORB-14260], including a before-PR reviewer's review-artifact reads 
 claim's remote owner, so SSH runs outside the sandbox that masks `~/.ssh` (§3, "Claimed-owner
 calls").
 Every sandboxed agent run masks plugin state and secrets (§6, "As implemented").
-Builds on [1_scope.md](./1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
-sandbox described in [policy-sandbox 2_design.md §7](../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
+Builds on [1_scope.md](../1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
+sandbox described in [policy-sandbox 2_design.md §7](../../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
 
 A plugin backend holds credentials for the service it wraps, either in its own
 `{{plugin_state}}` or in the host secret store. Without this design any sandboxed agent worker
@@ -150,7 +152,7 @@ the nested `orbit`.
 **Host-credentialed reads.** One exception among built-ins is a closed list of read-only
 GitHub tools: `github.auth.status`, `github.pr.list`, `github.run.list`, `github.run.view` and
 `github.run.logs`. Each runs `gh`, which needs the host account's `~/.config/gh`, and every
-agent sandbox masks that directory (policy-sandbox [2_design.md](../policy-sandbox/2_design.md)
+agent sandbox masks that directory (policy-sandbox [2_design.md](../../policy-sandbox/2_design.md)
 §7.1). With `ORBIT_PLUGIN_BROKER` set, the nested `orbit` forwards these five like a plugin
 tool, and the broker runs them on the host with its own `gh` credentials, in the run's
 worktree. Their output is the tool's own bounded, redacted projection; no token, config or
@@ -205,7 +207,7 @@ owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.search`, `orbit.t
 `orbit.task.add`, `orbit.friction` action `add`, `orbit.task.artifact` action `get`, `orbit.task.artifact` action `put`,
 `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close`. A claimed leaf's
 task lives on its owner, another machine reached over SSH, and every agent sandbox masks
-`~/.ssh` (policy-sandbox [2_design.md](../policy-sandbox/2_design.md) §7.1), so the worker's own
+`~/.ssh` (policy-sandbox [2_design.md](../../policy-sandbox/2_design.md) §7.1), so the worker's own
 SSH route can only fail host-key verification. With `ORBIT_PLUGIN_BROKER` set, the nested
 `orbit` of a worker whose claim names a remote owner sends exactly these calls to the broker.
 The broker carries them only for the run bound to the claim, whose task is the claimed task,
@@ -244,7 +246,7 @@ local and remote owners; the worker binding alone cannot authorize a review read
 Claimed mode keeps `orbit.task.update` denied, while `orbit.task.show` remains available as a
 read scoped to the claimed workspace. The claimed task's own `regression_from` relation does not cross
 the broker either: the implementer returns the culprit in its output, and the owner records the
-relation when it accepts the handoff ([distributed-drain design](../distributed-drain/2_design.md),
+relation when it accepts the handoff ([distributed-drain design](../../distributed-drain/2_design.md),
 claimed-mode implementation).
 
 The broker holds no copy of the claimed task, so it admits a `regression_from` relation by shape
@@ -649,7 +651,7 @@ The single intended widening is `{{plugin_state}}`. The backend can read it and,
 store is not widened for anyone: secrets reach the backend only in the call envelope.
 
 On Linux the backend still runs under Landlock with no Bubblewrap wrapper
-([policy-sandbox 2_design.md §7.3](../policy-sandbox/2_design.md#the-plugin-backend-boundary)),
+([policy-sandbox 2_design.md §7.3](../../policy-sandbox/2_design.md#the-plugin-backend-boundary)),
 so the write intersection is computed when the ruleset is compiled. On macOS the intersection
 is compiled into one SBPL profile. The compiler stays `compile_macos_sandbox_profile`, fed the
 intersected roots.
@@ -711,7 +713,7 @@ granting `unsandboxed`.
 on both platforms. The same mask also hides core's decision-channel store
 `<global_root>/state/decision-channels/`, which keeps every channel's token key, the broker's
 GitHub run-log cache `<global_root>/state/github-run-logs/`, and `clock.env`
-([policy-sandbox design](../policy-sandbox/2_design.md)). Other nested-`orbit` reads under the
+([policy-sandbox design](../../policy-sandbox/2_design.md)). Other nested-`orbit` reads under the
 global root are unchanged. That includes `plugins/`, `plugins/.grants/` (the loader verifies
 witnesses when it builds the tool surface) and `state/plugin-callbacks/`.
 

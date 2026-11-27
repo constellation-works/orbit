@@ -72,7 +72,7 @@ const SCRIPT_CASES: [(&str, bool); 2] =
     [("script_worktree", true), ("script_read_only_root", false)];
 
 /// The Linux install-time plugin build profile, one case per phase
-/// (`docs/design/plugins/3_install_time_build.md` §3.2–§3.3).
+/// (`docs/design/plugins/specs/install-time-build.md` §3.2–§3.3).
 #[cfg(target_os = "linux")]
 const BUILD_CASES: [(&str, BuildPhaseNetwork); 2] = [
     ("plugin_build_fetch", BuildPhaseNetwork::Https),

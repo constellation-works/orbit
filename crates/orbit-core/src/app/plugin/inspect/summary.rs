@@ -85,7 +85,7 @@ pub struct PluginSummary {
     /// (§5), when `orbit plugin test` has recorded one.
     pub certified_orbit_version: Option<String>,
     /// What this host recorded about the install-time build that produced
-    /// the plugin's outputs (design `docs/design/plugins/3_install_time_build.md`
+    /// the plugin's outputs (design `docs/design/plugins/specs/install-time-build.md`
     /// §3.6), when it was built here.
     pub build: Option<PluginBuildRecord>,
     /// Why the plugin is not active, when it is not.

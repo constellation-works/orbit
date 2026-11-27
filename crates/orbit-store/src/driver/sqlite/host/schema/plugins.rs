@@ -66,7 +66,7 @@ pub(super) fn apply_plugin_archive_digest(conn: &Connection) -> Result<(), Orbit
 }
 
 /// v35 `plugin_build_record` migration: the JSON build record of a plugin
-/// built at install time (`docs/design/plugins/3_install_time_build.md`
+/// built at install time (`docs/design/plugins/specs/install-time-build.md`
 /// §3.6). Additive: an older binary ignores the column, and every plugin
 /// installed without a build reads NULL.
 pub(super) fn apply_plugin_build_record(conn: &Connection) -> Result<(), OrbitError> {

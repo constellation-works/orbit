@@ -1,6 +1,6 @@
 //! The agent sandbox's mask over plugin state, the plugin secret store, the
 //! decision-channel key store and the broker's GitHub run-log cache (design
-//! `docs/design/plugins/2_agent_call_broker.md` §6).
+//! `docs/design/plugins/specs/agent-call-broker.md` §6).
 //!
 //! A host that sandboxes an agent hides `<global_root>/state/plugins/`,
 //! `<global_root>/state/plugin-secrets/`,

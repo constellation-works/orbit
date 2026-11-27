@@ -1,5 +1,5 @@
 //! The per-run host broker for agent-initiated plugin calls
-//! (`docs/design/plugins/2_agent_call_broker.md`).
+//! (`docs/design/plugins/specs/agent-call-broker.md`).
 //!
 //! The `orbit job run-pipeline-worker` process that runs a sandboxed agent
 //! step starts one broker before spawning the provider and drops it when the

@@ -242,7 +242,7 @@ declares. A `git+<url>#<full commit id>` source whose manifest declares `spec.bu
 in a deny-by-default sandbox only with `--allow-build` on that `add` or `upgrade` command line;
 `sync` and a pin alone never build. The contract — build sandbox, network phases, consent,
 artifact digest, build record and doctor rows — is
-[3_install_time_build.md](./3_install_time_build.md).
+[specs/install-time-build.md](./specs/install-time-build.md).
 
 **Workspace toggles.** The host row is the ceiling; a workspace may narrow it.
 `--scope workspace` writes `[plugin_enablement] <ns> = true|false` into the selected
@@ -340,7 +340,7 @@ operator supplies values; a value never enters argv, the environment, logs, audi
   hands it over. Agent sandboxes cannot read or write it either: every sandboxed agent run
   masks `state/plugins/` and `state/plugin-secrets/`, and an agent's plugin calls reach the
   backend through the run's host-side broker, which reads the store on the host
-  ([2_agent_call_broker.md](./2_agent_call_broker.md) §6). Inside the mask the store refuses
+  ([specs/agent-call-broker.md](./specs/agent-call-broker.md) §6). Inside the mask the store refuses
   with "not visible from an agent sandbox" rather than reading as unset, and so do
   `plugin secret`, the secret rows of `plugin doctor` and `plugin remove`.
 - **Delivery.** Each backend call carries the plugin's declared secrets in the request itself:
@@ -688,7 +688,7 @@ that serves no task. Orbit takes them from the dispatch, never from tool input:
   owners and MCP audit correlation. Without the marker the call is interactive.
 - A call a run's plugin broker executes gets the run and task from the broker's own dispatch
   record, never from the request or the calling process's environment
-  ([2_agent_call_broker.md](./2_agent_call_broker.md) §4.4). Nested CLI and MCP plugin calls
+  ([specs/agent-call-broker.md](./specs/agent-call-broker.md) §4.4). Nested CLI and MCP plugin calls
   reach it when `ORBIT_PLUGIN_BROKER` is set.
 
 A `task_id` or `job_run_id` in the tool's arguments reaches the backend as input and nothing
@@ -1006,7 +1006,7 @@ still needs an `fs.write` root there and the `fs` grant (§4.1 admission is unch
 read-only sentinel directory is bound over each tree, on macOS the profile ends with a deny
 for each. A backend an agent calls
 is spawned by the run's broker on the host, outside that mask
-([2_agent_call_broker.md](./2_agent_call_broker.md) §6). `plugins/`, `plugins/.grants/` and
+([specs/agent-call-broker.md](./specs/agent-call-broker.md) §6). `plugins/`, `plugins/.grants/` and
 `state/plugin-callbacks/` are not masked. The witness under `plugins/` stays read-only
 only because both grant paths compose: the inventory omits `plugins/`, and `fs.write`
 admission refuses global-root descendants outside `{{plugin_state}}` [ORB-12778].
@@ -1384,8 +1384,8 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
 5. **Provider plugins** — deferred: open `ProviderRegistry` and collapse the four provider
    vocabularies only when a second external provider exists.
 
-The [host-side broker](./2_agent_call_broker.md#8-rollout-and-follow-up-tasks)
-and [install-time builds](./3_install_time_build.md#6-implementation) shipped
+The [host-side broker](./specs/agent-call-broker.md#8-rollout-and-follow-up-tasks)
+and [install-time builds](./specs/install-time-build.md#6-implementation) shipped
 after these four phases. Neither is pending phase-5 provider work.
 
 ## 8. Risks

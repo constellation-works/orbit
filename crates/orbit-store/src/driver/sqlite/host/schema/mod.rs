@@ -376,7 +376,7 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     },
     // Plugin standard: the build record of a plugin built from a
     // commit-pinned `git+` source under `--allow-build`
-    // (`docs/design/plugins/3_install_time_build.md` §3.6).
+    // (`docs/design/plugins/specs/install-time-build.md` §3.6).
     Migration {
         version: 35,
         name: "plugin_build_record",

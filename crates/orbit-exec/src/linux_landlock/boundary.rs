@@ -49,7 +49,7 @@ pub struct LandlockBoundary {
     /// [`Self::read`], [`Self::write`], [`Self::write_files`] or a host
     /// runtime grant the child must not read: the read exclusions of the
     /// agent run a brokered backend serves (design
-    /// `docs/design/plugins/2_agent_call_broker.md` §5). Carved out the way
+    /// `docs/design/plugins/specs/agent-call-broker.md` §5). Carved out the way
     /// the activity ruleset carves an agent's own exclusions: the directory
     /// holding an excluded path stays listable, the path itself keeps no
     /// readable ancestor, and a read root at or beneath one is not granted.
