@@ -4,18 +4,18 @@ use super::rollup::*;
 
 /// One ranked pair: its paths, the reservations holding both (the
 /// numerator), how many held either, and how many held each path.
-pub(in crate::application::codebase) struct CouplingPair<'a> {
-    pub(in crate::application::codebase) paths: (String, String),
-    pub(in crate::application::codebase) both: Vec<&'a ReservationFacts>,
-    pub(in crate::application::codebase) either: usize,
-    pub(in crate::application::codebase) counts: (usize, usize),
+pub(in crate::app::codebase) struct CouplingPair<'a> {
+    pub(in crate::app::codebase) paths: (String, String),
+    pub(in crate::app::codebase) both: Vec<&'a ReservationFacts>,
+    pub(in crate::app::codebase) either: usize,
+    pub(in crate::app::codebase) counts: (usize, usize),
 }
 
-pub(in crate::application::codebase) struct CouplingPairs<'a> {
+pub(in crate::app::codebase) struct CouplingPairs<'a> {
     /// Pairs at or above the minimum support, in ranked order.
-    pub(in crate::application::codebase) ranked: Vec<CouplingPair<'a>>,
+    pub(in crate::app::codebase) ranked: Vec<CouplingPair<'a>>,
     /// Reservations naming each path, over the counted reservations.
-    pub(in crate::application::codebase) singles: BTreeMap<String, usize>,
+    pub(in crate::app::codebase) singles: BTreeMap<String, usize>,
     below_support: usize,
     counted: usize,
     excluded_large: usize,
@@ -25,7 +25,7 @@ pub(in crate::application::codebase) struct CouplingPairs<'a> {
 /// each, `both ÷ either`. Reservations above [`LARGE_FOOTPRINT_CAP`] files
 /// are excluded; pairs reserved together fewer than `min_support` times are
 /// omitted.
-pub(in crate::application::codebase) fn coupling_pairs<'a>(
+pub(in crate::app::codebase) fn coupling_pairs<'a>(
     facts: &'a CodebaseFacts,
     params: &Params,
 ) -> CouplingPairs<'a> {
@@ -87,10 +87,7 @@ pub(in crate::application::codebase) fn coupling_pairs<'a>(
     }
 }
 
-pub(in crate::application::codebase) fn change_coupling(
-    facts: &CodebaseFacts,
-    params: &Params,
-) -> Value {
+pub(in crate::app::codebase) fn change_coupling(facts: &CodebaseFacts, params: &Params) -> Value {
     let CouplingPairs {
         ranked,
         below_support,

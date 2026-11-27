@@ -117,7 +117,7 @@ The alternative, running replay candidates in the live workspace at `low` priori
 
 ### 3.2 Base commit
 
-The base is the first parent of the commit the task landed as. Orbit already records both: `landed_diff_stats` holds `landed_commit` and `base_commit` per task (`LandedDiffStats`, `crates/orbit-store/src/contract/landed_diff_stats.rs:62-85`), and the writer defines `base_commit` as the landed commit's first parent, because pull requests land by squash or merge commit (`crates/orbit-core/src/application/codebase/diff_stats.rs:7-18`). Tasks without a row fall back to the landing receipt in task history, read by `crates/orbit-core/src/application/codebase/landed.rs`.
+The base is the first parent of the commit the task landed as. Orbit already records both: `landed_diff_stats` holds `landed_commit` and `base_commit` per task (`LandedDiffStats`, `crates/orbit-store/src/contract/landed_diff_stats.rs:62-85`), and the writer defines `base_commit` as the landed commit's first parent, because pull requests land by squash or merge commit (`crates/orbit-core/src/app/codebase/diff_stats.rs:7-18`). Tasks without a row fall back to the landing receipt in task history, read by `crates/orbit-core/src/app/codebase/landed.rs`.
 
 This agrees with the starting view. It is deliberately not the base the original run started from, which is older whenever the branch was rebased before landing: the reference diff and the held-out tests are only known to work on the merge parent.
 

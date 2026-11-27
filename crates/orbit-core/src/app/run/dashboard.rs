@@ -25,9 +25,9 @@ use orbit_types::task::{DecisionRequest, Task, TaskArtifact, TaskHistoryEntry};
 use orbit_types::workflow::JobRunTrigger;
 
 use super::{Command, Operation};
+use crate::app::codebase::{self, TaskRiskinessModel};
 use crate::app::search::GlobalSearchResponse;
 use crate::application::change_watch::RunStateStamp;
-use crate::application::codebase::TaskRiskinessModel;
 use crate::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput, ExperimentProgress,
     ExperimentReadout, ExperimentView,
@@ -100,7 +100,7 @@ dashboard_reads! {
         |rt| rt.first_implement_edits(since);
     /// The diff statistics of deliveries landed since `since`.
     landed_diff_stats(since: Option<DateTime<Utc>>) -> Vec<LandedDiffStats> = "landed-diff-stats",
-        |rt| rt.landed_diff_stats(since);
+        |rt| codebase::landed_diff_stats(rt, since);
     /// One page of version-2 audit events.
     audit_events(filter: V2AuditEventFilter) -> Vec<V2AuditEventRow> = "audit-events",
         |rt| rt.list_v2_audit_events(filter);
@@ -181,7 +181,7 @@ dashboard_reads! {
         |rt| Ok(rt.configured_crew_registry_projection());
     /// The riskiness model task rows are estimated from.
     task_riskiness_model() -> TaskRiskinessModel = "task-riskiness-model",
-        |rt| rt.task_riskiness_model();
+        |rt| codebase::task_riskiness_model(rt);
     /// Decision requests across the workspace, in the dashboard's profile.
     decision_requests(gate: Option<&'a str>, task_id: Option<&'a str>, include_closed: bool)
         -> Value = "decision-requests",

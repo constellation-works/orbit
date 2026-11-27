@@ -16,7 +16,7 @@ use crate::app::agent::role::pilots::{Graded, grade_all};
 use crate::app::agent::{
     AgentFacts, AgentQuery, AgentRole, ExecutionMode, agent_scorecard, attribution,
 };
-use crate::application::codebase::{PilotAssessment, PilotEvidence, PilotRun};
+use crate::app::codebase::{PilotAssessment, PilotEvidence, PilotRun};
 
 // (crew, tier, implemented tasks, landed tasks, reviewed tasks, first accepts).
 type Cohort<'a> = (&'a str, Option<TaskComplexity>, usize, usize, usize, usize);

@@ -1,4 +1,4 @@
-//! The codebase registry flows: each calls the runtime method its tool
+//! The codebase registry flows: each calls the codebase function its tool
 //! handler called before.
 
 use orbit_common::OrbitError;
@@ -6,8 +6,10 @@ use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::operation::OperationInput;
 use serde_json::Value;
 
+use super::{
+    CodebaseQuery, RegressionFilter, RelatedQuery, scan_analytics, scan_path_detail, scan_related,
+};
 use crate::OrbitRuntime;
-use crate::application::codebase::{CodebaseQuery, RegressionFilter, RelatedQuery};
 
 /// Run one codebase verb. The tool entry checked `input` against the verb's
 /// spec.
@@ -23,14 +25,16 @@ pub(super) fn dispatch(
                 input.optional_count("min_support")?,
                 input.optional_count("top")?,
             )?;
-            runtime.codebase_related(
+            scan_related(
+                runtime,
                 &selection.codebase_query(),
                 &input.required_string("path")?,
                 selection.top(),
             )
         }
-        CodebaseVerb::Analytics => runtime.codebase_analytics(&analytics_query(runtime, input)?),
-        CodebaseVerb::Show => runtime.codebase_path_detail(
+        CodebaseVerb::Analytics => scan_analytics(runtime, &analytics_query(runtime, input)?),
+        CodebaseVerb::Show => scan_path_detail(
+            runtime,
             &analytics_query(runtime, input)?,
             &input.required_string("path")?,
         ),

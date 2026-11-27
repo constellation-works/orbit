@@ -8,29 +8,29 @@ use super::regressions::regressions;
 use super::rejected::rejected;
 
 /// Rows returned per ranking.
-pub(in crate::application::codebase) const ROW_LIMIT: usize = 25;
+pub(in crate::app::codebase) const ROW_LIMIT: usize = 25;
 
 /// Regressed tasks, and sites, listed in one regression row's drill-down.
 pub(super) const DRILLDOWN_LIMIT: usize = 20;
 
 /// Reservations naming more files than this are left out of change coupling,
 /// so a sweeping reservation does not pair everything with everything.
-pub(in crate::application::codebase) const LARGE_FOOTPRINT_CAP: usize = 12;
+pub(in crate::app::codebase) const LARGE_FOOTPRINT_CAP: usize = 12;
 
 /// The four rankings keyed by one path, in the order the overlap lists them.
-pub(in crate::application::codebase) const PATH_RANKINGS: [&str; 4] =
+pub(in crate::app::codebase) const PATH_RANKINGS: [&str; 4] =
     ["regressions", "footprint_misses", "blocked", "rejected"];
 
 /// How footprint paths are grouped before counting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::application::codebase) enum Rollup {
+pub(in crate::app::codebase) enum Rollup {
     File,
     Dir,
     Crate,
 }
 
 impl Rollup {
-    pub(in crate::application::codebase) fn parse(raw: &str) -> Option<Self> {
+    pub(in crate::app::codebase) fn parse(raw: &str) -> Option<Self> {
         match raw {
             "file" => Some(Self::File),
             "dir" => Some(Self::Dir),
@@ -39,7 +39,7 @@ impl Rollup {
         }
     }
 
-    pub(in crate::application::codebase) fn as_str(self) -> &'static str {
+    pub(in crate::app::codebase) fn as_str(self) -> &'static str {
         match self {
             Self::File => "file",
             Self::Dir => "dir",
@@ -73,7 +73,7 @@ impl Rollup {
         }
     }
 
-    pub(in crate::application::codebase) fn keys<'a>(
+    pub(in crate::app::codebase) fn keys<'a>(
         self,
         anchors: impl IntoIterator<Item = &'a Anchor>,
     ) -> BTreeSet<String> {
@@ -81,25 +81,25 @@ impl Rollup {
     }
 }
 
-pub(in crate::application::codebase) struct Params {
-    pub(in crate::application::codebase) since: Option<DateTime<Utc>>,
-    pub(in crate::application::codebase) min_support: usize,
-    pub(in crate::application::codebase) rollup: Rollup,
+pub(in crate::app::codebase) struct Params {
+    pub(in crate::app::codebase) since: Option<DateTime<Utc>>,
+    pub(in crate::app::codebase) min_support: usize,
+    pub(in crate::app::codebase) rollup: Rollup,
     /// The regressions the Regressions ranking counts.
-    pub(in crate::application::codebase) filter: RegressionFilter,
+    pub(in crate::app::codebase) filter: RegressionFilter,
 }
 
 impl Params {
-    pub(in crate::application::codebase) fn within(&self, at: DateTime<Utc>) -> bool {
+    pub(in crate::app::codebase) fn within(&self, at: DateTime<Utc>) -> bool {
         self.since.is_none_or(|since| at >= since)
     }
 }
 
 /// A rate row before rendering: `numerator` of `denominator` distinct items.
 #[derive(Default)]
-pub(in crate::application::codebase) struct Tally {
-    pub(in crate::application::codebase) numerator: usize,
-    pub(in crate::application::codebase) denominator: usize,
+pub(in crate::app::codebase) struct Tally {
+    pub(in crate::app::codebase) numerator: usize,
+    pub(in crate::app::codebase) denominator: usize,
 }
 
 pub(super) fn rate(numerator: usize, denominator: usize) -> f64 {
@@ -114,7 +114,7 @@ pub(super) fn rate(numerator: usize, denominator: usize) -> f64 {
 /// numerator, then path; report how many fell below the support threshold.
 /// Every kept row is returned: a section shows the first [`ROW_LIMIT`], and
 /// the per-path detail reports a path's place in the whole order.
-pub(in crate::application::codebase) fn rank<T>(
+pub(in crate::app::codebase) fn rank<T>(
     rows: BTreeMap<String, T>,
     min_support: usize,
     tally: impl Fn(&T) -> (usize, usize),
@@ -155,7 +155,7 @@ pub(super) fn rank_rows<T>(
     (kept, below_support)
 }
 
-pub(in crate::application::codebase) fn rate_fields(numerator: usize, denominator: usize) -> Value {
+pub(in crate::app::codebase) fn rate_fields(numerator: usize, denominator: usize) -> Value {
     json!({
         "rate": rate(numerator, denominator),
         "numerator": numerator,
@@ -163,17 +163,14 @@ pub(in crate::application::codebase) fn rate_fields(numerator: usize, denominato
     })
 }
 
-pub(in crate::application::codebase) fn merge(mut base: Value, extra: Value) -> Value {
+pub(in crate::app::codebase) fn merge(mut base: Value, extra: Value) -> Value {
     if let (Some(base), Value::Object(extra)) = (base.as_object_mut(), extra) {
         base.extend(extra);
     }
     base
 }
 
-pub(in crate::application::codebase) fn all_sections(
-    facts: &CodebaseFacts,
-    params: &Params,
-) -> Value {
+pub(in crate::app::codebase) fn all_sections(facts: &CodebaseFacts, params: &Params) -> Value {
     let mut sections = json!({
         "regressions": regressions(facts, params),
         "lock_contention": lock_contention(facts, params),

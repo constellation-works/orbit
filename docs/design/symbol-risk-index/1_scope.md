@@ -22,7 +22,7 @@ Status: proposed. This doc and [2_design.md](./2_design.md) are the design deliv
 outputs and their ship gates; [2_design.md](./2_design.md) specifies the record, the indexer
 boundary, storage, the routine, staleness and renames.
 
-Bearing: per-task riskiness is `crates/orbit-core/src/application/codebase/riskiness.rs`,
+Bearing: per-task riskiness is `crates/orbit-core/src/app/codebase/riskiness.rs`,
 initially shipped as estimator version 1 by [ORB-18690] and consumed by the backlog forecast
 ([ORB-18691], [backlog-forecast scope](../backlog-forecast/1_scope.md#per-task-riskiness-estimator)).
 [ORB-19361] replaced its per-file maximum with a size-based fit: declared path count

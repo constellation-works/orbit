@@ -43,7 +43,7 @@ are implemented; preemption remains later work. §1 is what exists today and wha
   regenerates a conflicting file at landing ([CONFIG.md](../../CONFIG.md)). The conflict budget
   proposes `workflow.exclusive_context_paths` and per-path holder caps.
 - **Landed paths.** Codebase facts record the paths each landed task changed
-  ([scan.rs](../../../crates/orbit-core/src/application/codebase/facts/scan.rs)).
+  ([scan.rs](../../../crates/orbit-core/src/app/codebase/facts/scan.rs)).
 - **Transports.** Federated MCP reaches the owner over SSH stdio; Orbit Web is loopback-only,
   reached remotely through `orbit web connect`, and has no application authentication
   ([remote-access](../remote-access/1_overview.md#security-boundary)). Log tails already stream

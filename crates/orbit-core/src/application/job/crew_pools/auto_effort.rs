@@ -18,7 +18,7 @@ use orbit_types::identity::{AutoEffortChoice, AutoEffortSignal, Crew, auto_effor
 use orbit_types::task::Task;
 
 use crate::OrbitRuntime;
-use crate::application::codebase::Anchor;
+use crate::app::codebase::Anchor;
 use crate::application::contracts::{AutoEffortSubject, CrewCandidate};
 
 use super::draw::seeded_crew_ticket;

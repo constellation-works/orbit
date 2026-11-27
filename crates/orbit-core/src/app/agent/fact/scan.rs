@@ -16,8 +16,9 @@ use crate::OrbitRuntime;
 use crate::app::agent::attribution;
 use crate::app::agent::candidate::Candidates;
 use crate::app::agent::role::pilots::grade_all;
-use crate::application::codebase::{
-    PilotEvidence, PilotRuns, failed_claim_settlements_of, pilot_evidence,
+use crate::app::codebase::{
+    PilotEvidence, PilotRuns, codebase_scan_with_tasks, failed_claim_settlements_of,
+    landed_task_lines_changed, pilot_evidence,
 };
 
 /// Scan the workspace once. A task whose history or comments cannot be read
@@ -190,12 +191,10 @@ pub(in crate::app::agent) fn scan(runtime: &OrbitRuntime) -> Result<AgentFacts, 
     let scanned: BTreeSet<&str> = facts.iter().map(|task| task.id.as_str()).collect();
     pilots.retain(|graded| scanned.contains(graded.task_id.as_str()));
     let ids = facts.iter().map(|task| task.id.clone()).collect();
-    let landed_lines = runtime
-        .landed_task_lines_changed(&ids, horizon)
-        .unwrap_or_else(|error| {
-            tracing::warn!(%error, "agent scorecards: landed diff sizes unavailable");
-            BTreeMap::new()
-        });
+    let landed_lines = landed_task_lines_changed(runtime, &ids, horizon).unwrap_or_else(|error| {
+        tracing::warn!(%error, "agent scorecards: landed diff sizes unavailable");
+        BTreeMap::new()
+    });
     let workspace_id = runtime.stores().jobs().workspace_id().to_string();
     let snapshot = runtime.stores().host_store().read()?;
     let invocation_repo = snapshot.invocation();
@@ -254,7 +253,7 @@ pub(super) fn pilot_scan(
     tasks: Vec<orbit_types::task::Task>,
     stamps: std::collections::BTreeMap<String, String>,
 ) -> PilotEvidence {
-    match runtime.codebase_scan_with_tasks(tasks, stamps) {
+    match codebase_scan_with_tasks(runtime, tasks, stamps) {
         Ok(codebase) => pilot_evidence(runtime, &codebase, runs),
         Err(error) => {
             tracing::warn!(%error, "agent scorecards: codebase scan failed; pilots unscored");

@@ -231,6 +231,6 @@ pub(super) fn record_direct_landing(
     runtime: &OrbitRuntime,
     request: &orbit_types::workflow::automation::DirectLandingRequest,
 ) -> Result<(), OrbitError> {
-    runtime.record_direct_landing_diff_stats(request);
+    crate::app::codebase::record_direct_landing_diff_stats(runtime, request);
     Ok(())
 }

@@ -154,7 +154,11 @@ fn review_auto_effort_subject(
     base: &str,
     head: &str,
 ) -> AutoEffortSubject {
-    let size = runtime.review_candidate_size(&context.workspace_path, base, head);
+    let size = crate::app::port::ReviewCandidateSize { rt: runtime }.review_candidate_size(
+        &context.workspace_path,
+        base,
+        head,
+    );
     let complexity = context
         .tasks
         .iter()

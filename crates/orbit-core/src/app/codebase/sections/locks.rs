@@ -3,23 +3,23 @@ use super::*;
 use super::rollup::*;
 
 #[derive(Default)]
-pub(in crate::application::codebase) struct LockRow {
+pub(in crate::app::codebase) struct LockRow {
     /// The requesters refused a lock on the path: the numerator.
-    pub(in crate::application::codebase) contenders: BTreeSet<String>,
-    pub(in crate::application::codebase) requesters: BTreeSet<String>,
-    pub(in crate::application::codebase) reservations: usize,
-    pub(in crate::application::codebase) denials: usize,
+    pub(in crate::app::codebase) contenders: BTreeSet<String>,
+    pub(in crate::app::codebase) requesters: BTreeSet<String>,
+    pub(in crate::app::codebase) reservations: usize,
+    pub(in crate::app::codebase) denials: usize,
     /// The tasks' wait episodes on the path with a denial in the window.
-    pub(in crate::application::codebase) waits: Vec<WaitEpisode>,
+    pub(in crate::app::codebase) waits: Vec<WaitEpisode>,
 }
 
-pub(in crate::application::codebase) struct LockRows {
-    pub(in crate::application::codebase) rows: BTreeMap<String, LockRow>,
+pub(in crate::app::codebase) struct LockRows {
+    pub(in crate::app::codebase) rows: BTreeMap<String, LockRow>,
     reservations: usize,
     denials: usize,
 }
 
-pub(in crate::application::codebase) fn total_wait_ms(row: &LockRow) -> i64 {
+pub(in crate::app::codebase) fn total_wait_ms(row: &LockRow) -> i64 {
     row.waits.iter().map(WaitEpisode::wait_ms).sum()
 }
 
@@ -29,10 +29,7 @@ pub(in crate::application::codebase) fn total_wait_ms(row: &LockRow) -> i64 {
 /// counts are reported beside, not folded into, the contention figure, per
 /// path and as window totals. Each task's wait episodes on the path are kept
 /// beside them.
-pub(in crate::application::codebase) fn lock_rows(
-    facts: &CodebaseFacts,
-    params: &Params,
-) -> LockRows {
+pub(in crate::app::codebase) fn lock_rows(facts: &CodebaseFacts, params: &Params) -> LockRows {
     let mut rows: BTreeMap<String, LockRow> = BTreeMap::new();
     let mut reservations = 0;
     let mut denials = 0;
@@ -70,14 +67,11 @@ pub(in crate::application::codebase) fn lock_rows(
     }
 }
 
-pub(in crate::application::codebase) fn lock_tally(row: &LockRow) -> (usize, usize) {
+pub(in crate::app::codebase) fn lock_tally(row: &LockRow) -> (usize, usize) {
     (row.contenders.len(), row.requesters.len())
 }
 
-pub(in crate::application::codebase) fn lock_contention(
-    facts: &CodebaseFacts,
-    params: &Params,
-) -> Value {
+pub(in crate::app::codebase) fn lock_contention(facts: &CodebaseFacts, params: &Params) -> Value {
     let LockRows {
         rows,
         reservations,

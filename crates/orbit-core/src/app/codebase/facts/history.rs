@@ -17,31 +17,31 @@ use crate::OrbitRuntime;
 /// (status, title, footprint, tags, run) are joined at every scan, so an
 /// envelope edit never needs these recomputed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(in crate::application::codebase) struct HistoryFacts {
+pub(in crate::app::codebase) struct HistoryFacts {
     /// When the task last entered `done`, whatever its status now.
-    pub(in crate::application::codebase) entered_done: Option<DateTime<Utc>>,
+    pub(in crate::app::codebase) entered_done: Option<DateTime<Utc>>,
     /// When the task last entered `rejected`, whatever its status now.
-    pub(in crate::application::codebase) entered_rejected: Option<DateTime<Utc>>,
-    pub(in crate::application::codebase) widenings: Vec<(DateTime<Utc>, Vec<Anchor>)>,
+    pub(in crate::app::codebase) entered_rejected: Option<DateTime<Utc>>,
+    pub(in crate::app::codebase) widenings: Vec<(DateTime<Utc>, Vec<Anchor>)>,
     /// Whether a history entry only a job run writes is present.
-    pub(in crate::application::codebase) marks_run: bool,
-    pub(in crate::application::codebase) blocks: Vec<Block>,
+    pub(in crate::app::codebase) marks_run: bool,
+    pub(in crate::app::codebase) blocks: Vec<Block>,
     /// Ascending.
-    pub(in crate::application::codebase) left_backlog: Vec<DateTime<Utc>>,
+    pub(in crate::app::codebase) left_backlog: Vec<DateTime<Utc>>,
     /// The verified landing receipt: its commit and when it landed.
-    pub(in crate::application::codebase) receipt: Option<(String, DateTime<Utc>)>,
+    pub(in crate::app::codebase) receipt: Option<(String, DateTime<Utc>)>,
     /// The task-pilot receipts, read for a task with a landing receipt.
-    pub(in crate::application::codebase) pilot: Option<super::super::pilot::PilotInputs>,
+    pub(in crate::app::codebase) pilot: Option<super::super::pilot::PilotInputs>,
     /// The receipt commit's changed paths, once a diff produced them. Never
     /// stored as unavailable: missing objects may be fetched later.
-    pub(in crate::application::codebase) landed_paths: Option<BTreeSet<String>>,
+    pub(in crate::app::codebase) landed_paths: Option<BTreeSet<String>>,
 }
 
 impl HistoryFacts {
     /// Read the task's history (and, for a landed task, its comments) and
     /// derive its facts. The flag is false when a read failed: the facts
     /// then stand for an empty history and must not be stored.
-    pub(in crate::application::codebase) fn compute(
+    pub(in crate::app::codebase) fn compute(
         runtime: &OrbitRuntime,
         id: &str,
         settlements: &[SettledFailure],

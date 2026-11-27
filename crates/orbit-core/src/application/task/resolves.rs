@@ -67,7 +67,8 @@ impl OrbitRuntime {
         }
         // Every writer of a transition into done runs these effects, so the
         // landing it names records its diff stats here too [ORB-18383].
-        self.record_landed_diff_stats_on_done(previous_status, task);
+        crate::app::port::TaskCodebase { rt: self }
+            .record_landed_diff_stats_on_done(previous_status, task);
         // ...and closes the fleet notices linked to the task.
         if previous_status != TaskStatus::Done {
             crate::app::port::TaskNotice(self)

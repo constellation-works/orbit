@@ -44,7 +44,7 @@ use crate::app::agent::{
     ClaimedEffortBackfill, DispatchEffortBackfill, backfill_claimed_leaf_effort,
     backfill_dispatch_effort,
 };
-use crate::application::codebase::DiffStatsBackfill;
+use crate::app::codebase::{self, DiffStatsBackfill};
 use crate::application::job::TaskCrewBackfill;
 use crate::application::seeding_policy::SeedingPolicyExclusions;
 use crate::application::task::{TaskListFilter, TaskRow};
@@ -499,7 +499,7 @@ impl<'a> App for WorkspaceApp<'a> {
             }
             Command::MigrateStatus => Outcome::MigrateStatus(Box::new(migrate::status(core)?)),
             Command::BackfillDiffStats(limit) => {
-                Outcome::DiffStatsBackfill(runtime.backfill_landed_diff_stats(limit)?)
+                Outcome::DiffStatsBackfill(codebase::backfill_landed_diff_stats(runtime, limit)?)
             }
             Command::BackfillTaskCrews => {
                 Outcome::TaskCrewBackfill(runtime.backfill_admitted_task_crews()?)

@@ -22,6 +22,7 @@ pub(super) use super::model::{
 };
 use crate::OrbitRuntime;
 use crate::app::agent::{self as agents, ExecutionMode, task_execution_modes};
+use crate::app::codebase;
 
 /// How long after landing a `regression_from` filing counts as an escape.
 pub(super) const REGRESSION_WINDOW_DAYS: i64 = 14;
@@ -214,7 +215,7 @@ impl OrbitRuntime {
             .collect();
         let tokens = self.task_token_totals(Some(since))?;
         let spend = self.task_spend(&ids, since)?;
-        let lines = self.landed_task_lines_changed(&ids, since)?;
+        let lines = codebase::landed_task_lines_changed(self, &ids, since)?;
         let reviewable_rows = self.landed_task_reviewable_lines(&ids, since)?;
         let RunAudit {
             events: run_events,
@@ -665,7 +666,7 @@ impl OrbitRuntime {
         since: DateTime<Utc>,
     ) -> Result<BTreeMap<String, Option<u64>>, OrbitError> {
         let mut lines: BTreeMap<String, Option<u64>> = BTreeMap::new();
-        for row in self.landed_diff_stats(Some(since))? {
+        for row in codebase::landed_diff_stats(self, Some(since))? {
             if !ids.contains(&row.task_id) {
                 continue;
             }

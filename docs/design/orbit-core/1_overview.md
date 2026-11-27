@@ -416,29 +416,29 @@ lowest of the ten modules above `contracts`.
 it or call its inherent methods [ORB-24548]. Two
 edges leave or enter it from outside the order:
 
-- **Forecast → `codebase` (authorized).** `assembly.rs` calls
-  `runtime.task_riskiness_model()`, and the returned model answers
-  `forecast_regression_prior`. The guard allows exactly that line, and refuses
-  any other path or inherent call into `codebase` and any reference from
-  `codebase` back to the forecast.
+- **Forecast → `app::codebase` (authorized).** `assembly.rs` calls
+  `crate::app::codebase::task_riskiness_model(runtime)`, and the returned model
+  answers `forecast_regression_prior`. The guard allows exactly that line, and
+  refuses any other path into `app::codebase` and any reference from
+  `app::codebase` back to the forecast.
 - **`routines` → forecast (downward).** The sweep clock in
   `routines/sweep/tick.rs` calls `record_scheduled_backlog_forecast`. `routines` is
   outside the order, above `automation` and `auto_tasks` (next paragraph).
 
-Review has no edge into `codebase`. Selective-review retirement removed
+Review has no edge into `app::codebase`. Selective-review retirement removed
 admission's risk-model freeze and `TaskRiskinessModel::diff_model_identity`;
 admission captures the legacy `selective_before_landing` field as `None`.
 Codebase retains ownership of the estimator for its remaining consumers,
 including the authorized forecast call above. Review owns no risk-model
 identity port. The dependency guard rejects production review paths into
-codebase, including grouped imports and `super::` chains, and calls to
-codebase-owned inherent `OrbitRuntime` methods derived from their defining
-impls. The forecast's exact-line allowance does not apply to review.
+`app::codebase`, including grouped imports, aliases and `super::` chains. The
+forecast's exact-line allowance does not apply to review.
 
 Reviewer effort selection still needs the candidate's reviewable lines and
 changed files. It reads them through review's `ReviewCandidateSizePort`;
-`codebase/diff_stats.rs` implements the port on `OrbitRuntime` by delegating to
-the existing `candidate_review_size` calculation. This preserves path filters,
+`app/codebase/diff_stats.rs` implements the port on `ReviewPort`, a struct
+holding the runtime that `app/port.rs` binds, by delegating to the existing
+`candidate_review_size` calculation. This preserves path filters,
 counting and unreadable-repository or commit fallbacks while removing the
 remaining inherent-method back-edge. The port carries only optional counts,
 with no estimator identity or selective-review policy.
@@ -532,17 +532,18 @@ facts, while the dependency guard rejects agents paths, grouped imports,
 `super::` chains and calls to experiment-owned inherent methods. This cuts
 the direct agents/experiment cycle; the separate crew_memory cycle remains.
 
-`codebase` (the analytics behind `orbit codebase`) sits outside the order but
-above `task` [ORB-22625]. Task owns the pure block classification
+`app::codebase` (the analytics behind `orbit codebase`) sits outside the order
+but above `task` [ORB-22625]. Task owns the pure block classification
 (`task::block_cause`: `BlockCause`, `Anchor`, `classify_block`, `actor_kind`,
 `entry_marks_run`), which its blocked-recovery readout calls, and records a
-done landing's diff stats through `task::TaskCodebasePort`, which `codebase`
-implements on `OrbitRuntime` in `codebase/diff_stats.rs`. `codebase` keeps the
+done landing's diff stats through `task::TaskCodebasePort`, which
+`app::codebase` implements on `TaskPort` in `app/codebase/diff_stats.rs`, bound
+in `app/port.rs`. `codebase` keeps the
 failed-claim settlement read that needs `distributed`, so `task -> codebase ->
 distributed` no longer climbs; it also keeps the persisted representation of
 `BlockCause`, and re-exports the moved names as a compatibility shim for
-`agents` and its own modules, whose retirement is a follow-up. The guard's
-`task` upper-module list names `codebase`.
+`app::agent` and its own modules, whose retirement is a follow-up. The guard
+refuses every `task` path into `app::codebase`.
 
 `resident` (resident orchestrator mandates) sits outside the order but above
 `task` [ORB-22955]: it drives task writes and reads task history, so task

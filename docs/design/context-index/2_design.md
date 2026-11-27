@@ -66,7 +66,7 @@ A fourth seam, a predicted-files hint to the implementer, is deliberately not pr
 
 ### 1.3 What was considered and rejected: a core index
 
-Core could build a file-only index with no plugin at all. It already caches each task's landed paths (`codebase_task_facts`, [facts/history.rs](../../../crates/orbit-core/src/application/codebase/facts/history.rs)) for `orbit.codebase` action `related`, and it holds the task text. That would be the fewest moving parts for files. It is rejected because symbols could never join it, and because a tokeniser, a stopword list and a scoring formula tuned on one workspace's vocabulary are the kind of narrow behaviour core is meant to leave to a plugin. The feed in §1.2 gives a plugin the same data.
+Core could build a file-only index with no plugin at all. It already caches each task's landed paths (`codebase_task_facts`, [facts/history.rs](../../../crates/orbit-core/src/app/codebase/facts/history.rs)) for `orbit.codebase` action `related`, and it holds the task text. That would be the fewest moving parts for files. It is rejected because symbols could never join it, and because a tokeniser, a stopword list and a scoring formula tuned on one workspace's vocabulary are the kind of narrow behaviour core is meant to leave to a plugin. The feed in §1.2 gives a plugin the same data.
 
 ## 2. What is indexed
 
@@ -76,7 +76,7 @@ A task enters the window when all of these hold:
 
 - it is `done` and has a landed commit in the feed (§1.2). Tasks that ended with no diff (`no-diff-expected`, a verified no-diff or already-landed delivery) have none and are skipped entirely;
 - its landed commit is on the integration branch's first-parent chain and has a first parent;
-- after the path exclusions below, its label is not empty and holds at most `max_label_files` files (default 20, the cap `related` uses for the same reason: a 300-file sweep says nothing about any one word, [related.rs](../../../crates/orbit-core/src/application/codebase/related.rs)). *Measured*: over the last 2,000 first-parent commits the median commit changes 4 files and the 90th percentile 17, and 7.5% change more than 20, so the cap drops about one task in thirteen.
+- after the path exclusions below, its label is not empty and holds at most `max_label_files` files (default 20, the cap `related` uses for the same reason: a 300-file sweep says nothing about any one word, [related.rs](../../../crates/orbit-core/src/app/codebase/related.rs)). *Measured*: over the last 2,000 first-parent commits the median commit changes 4 files and the 90th percentile 17, and 7.5% change more than 20, so the cap drops about one task in thirteen.
 
 One landed commit that names several tasks is skipped: its diff cannot be divided between them.
 

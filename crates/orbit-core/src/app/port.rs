@@ -7,9 +7,12 @@
 pub(crate) use super::evolution::TaskPort as TaskEvolution;
 pub(crate) use super::notice::TaskPort as TaskNotice;
 pub(crate) use super::routine::ResidentRoutineStatus;
-use crate::app::agent;
+use crate::app::{agent, codebase};
 use crate::application::resident::ResidentRoutineStatusPort;
-use crate::application::task::{TaskCorpusPort, TaskEvolutionPort, TaskNoticePort};
+use crate::application::review::ReviewCandidateSizePort;
+use crate::application::task::{
+    TaskCodebasePort, TaskCorpusPort, TaskEvolutionPort, TaskNoticePort,
+};
 
 const _: () = {
     const fn binds_task_evolution<T: TaskEvolutionPort>() {}
@@ -19,8 +22,10 @@ const _: () = {
     binds_task_notice::<TaskNotice<'_>>();
 };
 
-// Compile-time proof that the bound implementor satisfies the port trait.
+// Compile-time proof that each bound implementor satisfies its port trait.
 const _: for<'a> fn(&'a TaskCorpus<'a>) -> &'a dyn TaskCorpusPort = |port| port;
+const _: for<'a> fn(&'a TaskCodebase<'a>) -> &'a dyn TaskCodebasePort = |port| port;
+const _: for<'a> fn(&'a ReviewCandidateSize<'a>) -> &'a dyn ReviewCandidateSizePort = |port| port;
 
 impl ResidentRoutineStatusPort for ResidentRoutineStatus<'_> {
     fn disabled_resident_cycle_routine_name(&self) -> Option<String> {
@@ -30,3 +35,10 @@ impl ResidentRoutineStatusPort for ResidentRoutineStatus<'_> {
 
 /// Binds `task`'s [`TaskCorpusPort`] to `app::agent`'s implementation.
 pub(crate) type TaskCorpus<'a> = agent::TaskPort<'a>;
+
+/// Binds `task`'s [`TaskCodebasePort`] to `app::codebase`'s implementation.
+pub(crate) type TaskCodebase<'a> = codebase::TaskPort<'a>;
+
+/// Binds `review`'s [`ReviewCandidateSizePort`] to `app::codebase`'s
+/// implementation.
+pub(crate) type ReviewCandidateSize<'a> = codebase::ReviewPort<'a>;

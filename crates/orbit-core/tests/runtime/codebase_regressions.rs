@@ -1,7 +1,7 @@
 //! Directory regression sites cover descendant keys introduced by other
 //! sites, including paths neither culprit declared in its footprint.
 
-use orbit_core::application::codebase::CodebaseQuery;
+use orbit_core::app::codebase::{CodebaseQuery, scan_analytics};
 use orbit_core::application::task::{TaskAddParams, TaskWriteScreen};
 use orbit_core::runtime::OrbitRuntime;
 use orbit_types::task::TaskStatus;
@@ -83,7 +83,7 @@ fn directory_sites_cover_site_only_descendants() {
             ),
         ] {
             let query = CodebaseQuery::parse(Some("all"), Some(min_support), Some(rollup)).unwrap();
-            let analytics = runtime.codebase_analytics(&query).unwrap();
+            let analytics = scan_analytics(&runtime, &query).unwrap();
             let rows = analytics["regressions"]["rows"].as_array().unwrap();
             let row = rows
                 .iter()

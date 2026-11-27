@@ -128,325 +128,31 @@ impl Attributed {
     }
 }
 
-impl OrbitRuntime {
-    /// The workspace's landed-delivery rows that landed at or after `since`
-    /// (every row when `None`), oldest first.
-    pub fn landed_diff_stats(
-        &self,
-        since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<LandedDiffStats>, OrbitError> {
-        self.sqlite_store()?
-            .read()?
-            .landed_diff()
-            .list_since(&self.workspace_id()?, since)
-    }
-
-    /// Lines added plus deleted over every landed delivery, per task.
-    pub(crate) fn landed_task_lines_changed(
-        &self,
-        ids: &BTreeSet<String>,
-        since: DateTime<Utc>,
-    ) -> Result<BTreeMap<String, u64>, OrbitError> {
-        let mut lines: BTreeMap<String, u64> = BTreeMap::new();
-        for row in self.landed_diff_stats(Some(since))? {
-            if !ids.contains(&row.task_id) {
-                continue;
-            }
-            let changed: u64 = [row.code, row.tests, row.other]
-                .iter()
-                .map(|class| class.added + class.deleted)
-                .sum();
-            *lines.entry(row.task_id).or_default() += changed;
-        }
-        Ok(lines)
-    }
-
-    /// Record the diff stats of a local fast-forward that moved its branch
-    /// from `before_commit` to `after_commit`. One task takes the whole
-    /// range; several share it by the commits whose message names exactly
-    /// one of them.
-    pub(crate) fn record_direct_landing_diff_stats(&self, request: &DirectLandingRequest) {
-        if let Err(error) = self.try_record_direct_landing(request) {
-            tracing::warn!(
-                run_id = %request.run_id,
-                %error,
-                "recording a local landing's diff stats failed"
-            );
-        }
-    }
-
-    fn try_record_direct_landing(&self, request: &DirectLandingRequest) -> Result<(), OrbitError> {
-        let task_ids: Vec<String> = if request.task_ids.is_empty() {
-            self.show_job_run(&request.run_id)?
-                .input
-                .as_ref()
-                .map(crate::runtime::run_input::recorded_task_ids)
-                .unwrap_or_default()
-                .into_iter()
-                .map(str::to_owned)
-                .collect()
-        } else {
-            request.task_ids.clone()
-        };
-        let repo = git2::Repository::open(&self.paths().repo_root)
-            .map_err(|error| OrbitError::Execution(format!("open repository: {error}")))?;
-        let classes = self.diff_classes();
-        let now = Utc::now();
-        let per_task: BTreeMap<String, Attributed> = match task_ids.as_slice() {
-            [] => return Ok(()),
-            [only] => {
-                let counts = diff_counts(
-                    &repo,
-                    Some(&request.before_commit),
-                    &request.after_commit,
-                    &classes,
-                )
-                .ok_or_else(|| {
-                    OrbitError::Execution(format!(
-                        "landed range {}..{} is not readable",
-                        request.before_commit, request.after_commit
-                    ))
-                })?
-                .1;
-                // One task owns the whole range, including a measured zero.
-                BTreeMap::from([(only.clone(), Attributed::from_range(counts))])
-            }
-            many => split_by_commit_message(
-                &repo,
-                request,
-                many,
-                &classes,
-                self.settings().machine_task_prefix(),
-            )?,
-        };
-        for (task_id, attributed) in per_task {
-            let task = self.get_task(&task_id)?;
-            self.write_row(
-                &task,
-                &Landing {
-                    task_id: &task_id,
-                    landed_commit: &request.after_commit,
-                    base_commit: Some(&request.before_commit),
-                    landed_at: now,
-                    job_run_id: Some(&request.run_id),
-                    source: LandedDiffSource::Landing,
-                },
-                &request.before_commit,
-                attributed.counts,
-                attributed.reviewable,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Fill rows for up to `limit` done tasks that landed before diff stats
-    /// were recorded, newest first. `limit` bounds the diffs; tasks without
-    /// a landing or a local commit cost one history read each and are only
-    /// counted. Only commits the local checkout already holds are diffed;
-    /// nothing is fetched. Running it again skips every task that has a row.
-    pub fn backfill_landed_diff_stats(
-        &self,
-        limit: usize,
-    ) -> Result<DiffStatsBackfill, OrbitError> {
-        if limit == 0 || limit > DIFF_STATS_BACKFILL_MAX_LIMIT {
-            return Err(OrbitError::InvalidInput(format!(
-                "backfill limit must be between 1 and {DIFF_STATS_BACKFILL_MAX_LIMIT}"
-            )));
-        }
-        let recorded: BTreeSet<String> = self
-            .sqlite_store()?
-            .read()?
-            .landed_diff()
-            .task_ids(&self.workspace_id()?)?;
-        let mut done: Vec<Task> = self
-            .list_task_metadata()?
-            .into_iter()
-            .filter(|task| task.status == TaskStatus::Done && !recorded.contains(task.id.as_str()))
-            .collect();
-        done.sort_by_key(|task| std::cmp::Reverse(task.updated_at));
-        let mut report = DiffStatsBackfill {
-            limit,
-            ..DiffStatsBackfill::default()
-        };
-        let repo = git2::Repository::open(&self.paths().repo_root)
-            .map_err(|error| OrbitError::Execution(format!("open repository: {error}")))?;
-        let mut scanner = super::landed::Scanner::new(self);
-        for (index, task) in done.iter().enumerate() {
-            if report.recorded == limit {
-                report.remaining = done.len() - index;
-                break;
-            }
-            report.examined += 1;
-            let history = match self.get_task_history(&task.id) {
-                Ok(history) => history,
-                Err(error) => {
-                    tracing::warn!(task_id = %task.id, %error, "backfill: task history unreadable");
-                    report.unresolvable += 1;
-                    continue;
-                }
-            };
-            let landed = super::landed::receipt(&history).or_else(|| {
-                scanner
-                    .observe(self, &task.id)
-                    .map(|landed| (landed.commit, landed.at))
-            });
-            let Some((commit, landed_at)) = landed else {
-                report.no_landing += 1;
-                continue;
-            };
-            let written = self.record_landing(
-                &repo,
-                task,
-                &Landing {
-                    task_id: &task.id,
-                    landed_commit: &commit,
-                    base_commit: None,
-                    landed_at,
-                    job_run_id: task.job_run_id.as_deref(),
-                    source: LandedDiffSource::Backfill,
-                },
-            )?;
-            if written {
-                report.recorded += 1;
-            } else {
-                report.unresolvable += 1;
-            }
-        }
-        Ok(report)
-    }
-
-    /// Diff `landing` and write its row. `false` when its commits are not
-    /// in the checkout.
-    fn record_landing(
-        &self,
-        repo: &git2::Repository,
-        task: &Task,
-        landing: &Landing<'_>,
-    ) -> Result<bool, OrbitError> {
-        let classes = self.diff_classes();
-        let Some((base, counts)) =
-            diff_counts(repo, landing.base_commit, landing.landed_commit, &classes)
-        else {
-            return Ok(false);
-        };
-        // Class counts stay the first-parent range. Reviewable lines are
-        // unavailable when that range cannot be isolated to this task.
-        let reviewable = attributed_reviewable(
-            repo,
-            &base,
-            landing.landed_commit,
-            landing.task_id,
-            &classes,
-            counts.reviewable_lines(),
-            self.settings().machine_task_prefix(),
-        );
-        self.write_row(task, landing, &base, counts, reviewable)?;
-        Ok(true)
-    }
-
-    fn write_row(
-        &self,
-        task: &Task,
-        landing: &Landing<'_>,
-        base_commit: &str,
-        counts: Counts,
-        reviewable: Option<ReviewableLines>,
-    ) -> Result<(), OrbitError> {
-        // The implementing crew and model as the delivery run resolved them;
-        // the task's own crew when that run is not on this host.
-        let run = landing
-            .job_run_id
-            .and_then(|run_id| self.show_job_run(run_id).ok());
-        let crew = run
-            .as_ref()
-            .and_then(|run| run.resolved_crew.clone())
-            .or_else(|| task.crew.clone());
-        let model = run.and_then(|run| run.crew_model);
-        let row = LandedDiffStats {
-            workspace_id: self.workspace_id()?,
-            task_id: landing.task_id.to_string(),
-            landed_commit: landing.landed_commit.to_string(),
-            base_commit: base_commit.to_string(),
-            job_run_id: landing.job_run_id.map(str::to_owned),
-            landed_at: landing.landed_at,
-            recorded_at: Utc::now(),
-            source: landing.source,
-            crew,
-            model,
-            complexity: task
-                .complexity
-                .map(|complexity| complexity.as_str().to_string()),
-            task_type: Some(task.task_type.to_string()),
-            code: counts.code,
-            tests: counts.tests,
-            other: counts.other,
-            reviewable,
-        };
-        self.sqlite_store()?
-            .write(|tx| tx.landed_diff().put(&row))?;
-        Ok(())
-    }
-
-    /// Lines inserted plus deleted by `base..head`, counted as a landed row
-    /// counts them. `None` when either commit is not in the checkout.
-    pub(super) fn candidate_diff_lines(
-        &self,
-        repo: &git2::Repository,
-        base: &str,
-        head: &str,
-    ) -> Option<u64> {
-        let (_, counts) = diff_counts(repo, Some(base), head, &self.diff_classes())?;
-        Some(
-            [counts.code, counts.tests, counts.other]
-                .iter()
-                .map(|class| class.added + class.deleted)
-                .sum(),
-        )
-    }
-
-    /// The reviewable lines and changed files of `base..head` in the
-    /// repository at `repo_path`, as a landed row would count them: the
-    /// size a reviewer's `<crew>@auto` resolves from. `None` when the
-    /// repository or either commit cannot be read.
-    pub(crate) fn candidate_review_size(
-        &self,
-        repo_path: &std::path::Path,
-        base: &str,
-        head: &str,
-    ) -> Option<(u64, u64)> {
-        let repo = git2::Repository::open(repo_path).ok()?;
-        let (_, counts) = diff_counts(&repo, Some(base), head, &self.diff_classes())?;
-        let lines = counts.reviewable_lines();
-        let files = [counts.code, counts.tests, counts.other]
-            .iter()
-            .map(|class| class.files)
-            .sum();
-        Some((lines.added + lines.deleted, files))
-    }
-
-    fn diff_classes(&self) -> DiffClasses<'_> {
-        DiffClasses {
-            tests: self.diff_test_paths(),
-            non_code: self.diff_non_code_paths(),
-            non_reviewable: self.diff_non_reviewable_paths(),
-        }
-    }
+/// Implements [`ReviewCandidateSizePort`] for `review` over the candidate
+/// size function.
+pub(crate) struct ReviewPort<'a> {
+    pub(crate) rt: &'a OrbitRuntime,
 }
 
 /// Candidate size for reviewer effort selection, through the review-owned port.
-impl ReviewCandidateSizePort for OrbitRuntime {
+impl ReviewCandidateSizePort for ReviewPort<'_> {
     fn review_candidate_size(
         &self,
         repo_path: &std::path::Path,
         base: &str,
         head: &str,
     ) -> Option<(u64, u64)> {
-        self.candidate_review_size(repo_path, base, head)
+        candidate_review_size(self.rt, repo_path, base, head)
     }
 }
 
+/// Implements [`TaskCodebasePort`] for `task` over the landing recorder.
+pub(crate) struct TaskPort<'a> {
+    pub(crate) rt: &'a OrbitRuntime,
+}
+
 /// The done-landing hook a task write reaches through its port [ORB-22625].
-impl TaskCodebasePort for OrbitRuntime {
+impl TaskCodebasePort for TaskPort<'_> {
     /// On a task's transition into done, record the landing its history's
     /// receipt names. The merge commit of a pull request lives on the remote,
     /// so it is fetched when the checkout lacks it.
@@ -455,19 +161,20 @@ impl TaskCodebasePort for OrbitRuntime {
             return;
         }
         let result = (|| -> Result<(), OrbitError> {
-            let history = self.get_task_history(&task.id)?;
+            let history = self.rt.get_task_history(&task.id)?;
             let Some((commit, landed_at)) = super::landed::receipt(&history) else {
                 return Ok(());
             };
-            let repo_root = &self.paths().repo_root;
+            let repo_root = &self.rt.paths().repo_root;
             if let Err(error) =
-                orbit_engine::review_gate::fetch_landed_commit(self.env(), repo_root, &commit)
+                orbit_engine::review_gate::fetch_landed_commit(self.rt.env(), repo_root, &commit)
             {
                 tracing::warn!(task_id = %task.id, %commit, %error, "landed commit could not be fetched");
             }
             let repo = git2::Repository::open(repo_root)
                 .map_err(|error| OrbitError::Execution(format!("open repository: {error}")))?;
-            let written = self.record_landing(
+            let written = record_landing(
+                self.rt,
                 &repo,
                 task,
                 &Landing {
@@ -500,6 +207,313 @@ struct DiffClasses<'a> {
     tests: &'a PathFilter,
     non_code: &'a PathFilter,
     non_reviewable: &'a PathFilter,
+}
+
+/// The workspace's landed-delivery rows that landed at or after `since`
+/// (every row when `None`), oldest first.
+pub fn landed_diff_stats(
+    rt: &OrbitRuntime,
+    since: Option<DateTime<Utc>>,
+) -> Result<Vec<LandedDiffStats>, OrbitError> {
+    rt.sqlite_store()?
+        .read()?
+        .landed_diff()
+        .list_since(&rt.workspace_id()?, since)
+}
+
+/// Lines added plus deleted over every landed delivery, per task.
+pub(crate) fn landed_task_lines_changed(
+    rt: &OrbitRuntime,
+    ids: &BTreeSet<String>,
+    since: DateTime<Utc>,
+) -> Result<BTreeMap<String, u64>, OrbitError> {
+    let mut lines: BTreeMap<String, u64> = BTreeMap::new();
+    for row in landed_diff_stats(rt, Some(since))? {
+        if !ids.contains(&row.task_id) {
+            continue;
+        }
+        let changed: u64 = [row.code, row.tests, row.other]
+            .iter()
+            .map(|class| class.added + class.deleted)
+            .sum();
+        *lines.entry(row.task_id).or_default() += changed;
+    }
+    Ok(lines)
+}
+
+/// Record the diff stats of a local fast-forward that moved its branch
+/// from `before_commit` to `after_commit`. One task takes the whole
+/// range; several share it by the commits whose message names exactly
+/// one of them.
+pub(crate) fn record_direct_landing_diff_stats(rt: &OrbitRuntime, request: &DirectLandingRequest) {
+    if let Err(error) = try_record_direct_landing(rt, request) {
+        tracing::warn!(
+            run_id = %request.run_id,
+            %error,
+            "recording a local landing's diff stats failed"
+        );
+    }
+}
+
+fn try_record_direct_landing(
+    rt: &OrbitRuntime,
+    request: &DirectLandingRequest,
+) -> Result<(), OrbitError> {
+    let task_ids: Vec<String> = if request.task_ids.is_empty() {
+        rt.show_job_run(&request.run_id)?
+            .input
+            .as_ref()
+            .map(crate::runtime::run_input::recorded_task_ids)
+            .unwrap_or_default()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    } else {
+        request.task_ids.clone()
+    };
+    let repo = git2::Repository::open(&rt.paths().repo_root)
+        .map_err(|error| OrbitError::Execution(format!("open repository: {error}")))?;
+    let classes = diff_classes(rt);
+    let now = Utc::now();
+    let per_task: BTreeMap<String, Attributed> = match task_ids.as_slice() {
+        [] => return Ok(()),
+        [only] => {
+            let counts = diff_counts(
+                &repo,
+                Some(&request.before_commit),
+                &request.after_commit,
+                &classes,
+            )
+            .ok_or_else(|| {
+                OrbitError::Execution(format!(
+                    "landed range {}..{} is not readable",
+                    request.before_commit, request.after_commit
+                ))
+            })?
+            .1;
+            // One task owns the whole range, including a measured zero.
+            BTreeMap::from([(only.clone(), Attributed::from_range(counts))])
+        }
+        many => split_by_commit_message(
+            &repo,
+            request,
+            many,
+            &classes,
+            rt.settings().machine_task_prefix(),
+        )?,
+    };
+    for (task_id, attributed) in per_task {
+        let task = rt.get_task(&task_id)?;
+        write_row(
+            rt,
+            &task,
+            &Landing {
+                task_id: &task_id,
+                landed_commit: &request.after_commit,
+                base_commit: Some(&request.before_commit),
+                landed_at: now,
+                job_run_id: Some(&request.run_id),
+                source: LandedDiffSource::Landing,
+            },
+            &request.before_commit,
+            attributed.counts,
+            attributed.reviewable,
+        )?;
+    }
+    Ok(())
+}
+
+/// Fill rows for up to `limit` done tasks that landed before diff stats
+/// were recorded, newest first. `limit` bounds the diffs; tasks without
+/// a landing or a local commit cost one history read each and are only
+/// counted. Only commits the local checkout already holds are diffed;
+/// nothing is fetched. Running it again skips every task that has a row.
+pub fn backfill_landed_diff_stats(
+    rt: &OrbitRuntime,
+    limit: usize,
+) -> Result<DiffStatsBackfill, OrbitError> {
+    if limit == 0 || limit > DIFF_STATS_BACKFILL_MAX_LIMIT {
+        return Err(OrbitError::InvalidInput(format!(
+            "backfill limit must be between 1 and {DIFF_STATS_BACKFILL_MAX_LIMIT}"
+        )));
+    }
+    let recorded: BTreeSet<String> = rt
+        .sqlite_store()?
+        .read()?
+        .landed_diff()
+        .task_ids(&rt.workspace_id()?)?;
+    let mut done: Vec<Task> = rt
+        .list_task_metadata()?
+        .into_iter()
+        .filter(|task| task.status == TaskStatus::Done && !recorded.contains(task.id.as_str()))
+        .collect();
+    done.sort_by_key(|task| std::cmp::Reverse(task.updated_at));
+    let mut report = DiffStatsBackfill {
+        limit,
+        ..DiffStatsBackfill::default()
+    };
+    let repo = git2::Repository::open(&rt.paths().repo_root)
+        .map_err(|error| OrbitError::Execution(format!("open repository: {error}")))?;
+    let mut scanner = super::landed::Scanner::new(rt);
+    for (index, task) in done.iter().enumerate() {
+        if report.recorded == limit {
+            report.remaining = done.len() - index;
+            break;
+        }
+        report.examined += 1;
+        let history = match rt.get_task_history(&task.id) {
+            Ok(history) => history,
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, %error, "backfill: task history unreadable");
+                report.unresolvable += 1;
+                continue;
+            }
+        };
+        let landed = super::landed::receipt(&history).or_else(|| {
+            scanner
+                .observe(rt, &task.id)
+                .map(|landed| (landed.commit, landed.at))
+        });
+        let Some((commit, landed_at)) = landed else {
+            report.no_landing += 1;
+            continue;
+        };
+        let written = record_landing(
+            rt,
+            &repo,
+            task,
+            &Landing {
+                task_id: &task.id,
+                landed_commit: &commit,
+                base_commit: None,
+                landed_at,
+                job_run_id: task.job_run_id.as_deref(),
+                source: LandedDiffSource::Backfill,
+            },
+        )?;
+        if written {
+            report.recorded += 1;
+        } else {
+            report.unresolvable += 1;
+        }
+    }
+    Ok(report)
+}
+
+/// Diff `landing` and write its row. `false` when its commits are not
+/// in the checkout.
+fn record_landing(
+    rt: &OrbitRuntime,
+    repo: &git2::Repository,
+    task: &Task,
+    landing: &Landing<'_>,
+) -> Result<bool, OrbitError> {
+    let classes = diff_classes(rt);
+    let Some((base, counts)) =
+        diff_counts(repo, landing.base_commit, landing.landed_commit, &classes)
+    else {
+        return Ok(false);
+    };
+    // Class counts stay the first-parent range. Reviewable lines are
+    // unavailable when that range cannot be isolated to this task.
+    let reviewable = attributed_reviewable(
+        repo,
+        &base,
+        landing.landed_commit,
+        landing.task_id,
+        &classes,
+        counts.reviewable_lines(),
+        rt.settings().machine_task_prefix(),
+    );
+    write_row(rt, task, landing, &base, counts, reviewable)?;
+    Ok(true)
+}
+
+fn write_row(
+    rt: &OrbitRuntime,
+    task: &Task,
+    landing: &Landing<'_>,
+    base_commit: &str,
+    counts: Counts,
+    reviewable: Option<ReviewableLines>,
+) -> Result<(), OrbitError> {
+    // The implementing crew and model as the delivery run resolved them;
+    // the task's own crew when that run is not on this host.
+    let run = landing
+        .job_run_id
+        .and_then(|run_id| rt.show_job_run(run_id).ok());
+    let crew = run
+        .as_ref()
+        .and_then(|run| run.resolved_crew.clone())
+        .or_else(|| task.crew.clone());
+    let model = run.and_then(|run| run.crew_model);
+    let row = LandedDiffStats {
+        workspace_id: rt.workspace_id()?,
+        task_id: landing.task_id.to_string(),
+        landed_commit: landing.landed_commit.to_string(),
+        base_commit: base_commit.to_string(),
+        job_run_id: landing.job_run_id.map(str::to_owned),
+        landed_at: landing.landed_at,
+        recorded_at: Utc::now(),
+        source: landing.source,
+        crew,
+        model,
+        complexity: task
+            .complexity
+            .map(|complexity| complexity.as_str().to_string()),
+        task_type: Some(task.task_type.to_string()),
+        code: counts.code,
+        tests: counts.tests,
+        other: counts.other,
+        reviewable,
+    };
+    rt.sqlite_store()?.write(|tx| tx.landed_diff().put(&row))?;
+    Ok(())
+}
+
+/// Lines inserted plus deleted by `base..head`, counted as a landed row
+/// counts them. `None` when either commit is not in the checkout.
+pub(super) fn candidate_diff_lines(
+    rt: &OrbitRuntime,
+    repo: &git2::Repository,
+    base: &str,
+    head: &str,
+) -> Option<u64> {
+    let (_, counts) = diff_counts(repo, Some(base), head, &diff_classes(rt))?;
+    Some(
+        [counts.code, counts.tests, counts.other]
+            .iter()
+            .map(|class| class.added + class.deleted)
+            .sum(),
+    )
+}
+
+/// The reviewable lines and changed files of `base..head` in the
+/// repository at `repo_path`, as a landed row would count them: the
+/// size a reviewer's `<crew>@auto` resolves from. `None` when the
+/// repository or either commit cannot be read.
+pub(crate) fn candidate_review_size(
+    rt: &OrbitRuntime,
+    repo_path: &std::path::Path,
+    base: &str,
+    head: &str,
+) -> Option<(u64, u64)> {
+    let repo = git2::Repository::open(repo_path).ok()?;
+    let (_, counts) = diff_counts(&repo, Some(base), head, &diff_classes(rt))?;
+    let lines = counts.reviewable_lines();
+    let files = [counts.code, counts.tests, counts.other]
+        .iter()
+        .map(|class| class.files)
+        .sum();
+    Some((lines.added + lines.deleted, files))
+}
+
+fn diff_classes(rt: &OrbitRuntime) -> DiffClasses<'_> {
+    DiffClasses {
+        tests: rt.diff_test_paths(),
+        non_code: rt.diff_non_code_paths(),
+        non_reviewable: rt.diff_non_reviewable_paths(),
+    }
 }
 
 /// Split a multi-task landing by the first-parent commits in its range whose

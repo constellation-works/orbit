@@ -17,42 +17,42 @@ use super::types::{Anchor, Block};
 use crate::OrbitRuntime;
 
 #[derive(Debug, Clone)]
-pub(in crate::application::codebase) struct TaskFacts {
-    pub(in crate::application::codebase) landed: Option<super::super::landed::Landed>,
+pub(in crate::app::codebase) struct TaskFacts {
+    pub(in crate::app::codebase) landed: Option<super::super::landed::Landed>,
     /// Landing receipt time, else done time: admits delivery fallback and
     /// places unavailable deliveries in the same window.
-    pub(in crate::application::codebase) delivery_at: Option<DateTime<Utc>>,
+    pub(in crate::app::codebase) delivery_at: Option<DateTime<Utc>>,
     /// For a landed task, what its task-pilot receipts record; attributed to
     /// a pilot run only when the pilots scorecard reads it.
-    pub(in crate::application::codebase) pilot: Option<super::super::pilot::PilotInputs>,
+    pub(in crate::app::codebase) pilot: Option<super::super::pilot::PilotInputs>,
     /// Tagged `no-diff-expected`: the task was not meant to change files.
-    pub(in crate::application::codebase) no_diff: bool,
-    pub(in crate::application::codebase) id: String,
-    pub(in crate::application::codebase) title: String,
-    pub(in crate::application::codebase) crew: Option<String>,
+    pub(in crate::app::codebase) no_diff: bool,
+    pub(in crate::app::codebase) id: String,
+    pub(in crate::app::codebase) title: String,
+    pub(in crate::app::codebase) crew: Option<String>,
     /// The assessed complexity, as its tier name.
-    pub(in crate::application::codebase) complexity: Option<String>,
-    pub(in crate::application::codebase) status: TaskStatus,
+    pub(in crate::app::codebase) complexity: Option<String>,
+    pub(in crate::app::codebase) status: TaskStatus,
     /// The declared footprint: `context_files`, widened selectors included.
-    pub(in crate::application::codebase) footprint: Vec<Anchor>,
+    pub(in crate::app::codebase) footprint: Vec<Anchor>,
     /// Last update; places the task in a window for denominators.
-    pub(in crate::application::codebase) updated_at: DateTime<Utc>,
+    pub(in crate::app::codebase) updated_at: DateTime<Utc>,
     /// When the task last became `done`, while it is done.
-    pub(in crate::application::codebase) done_at: Option<DateTime<Utc>>,
+    pub(in crate::app::codebase) done_at: Option<DateTime<Utc>>,
     /// When the task last became `rejected`, while it is rejected.
-    pub(in crate::application::codebase) rejected_at: Option<DateTime<Utc>>,
+    pub(in crate::app::codebase) rejected_at: Option<DateTime<Utc>>,
     /// Whether any job run ever picked the task up.
-    pub(in crate::application::codebase) had_run: bool,
+    pub(in crate::app::codebase) had_run: bool,
     /// Each `context_files_widened` event: when, and the paths it added.
-    pub(in crate::application::codebase) widenings: Vec<(DateTime<Utc>, Vec<Anchor>)>,
+    pub(in crate::app::codebase) widenings: Vec<(DateTime<Utc>, Vec<Anchor>)>,
     /// Each entry into `blocked`, with its classified cause.
-    pub(in crate::application::codebase) blocks: Vec<Block>,
+    pub(in crate::app::codebase) blocks: Vec<Block>,
     /// The `regression_from` links that target this task, one per
     /// regression task, by its ID.
-    pub(in crate::application::codebase) regressions: Vec<super::super::regression::RegressionLink>,
+    pub(in crate::app::codebase) regressions: Vec<super::super::regression::RegressionLink>,
     /// When the task entered a status other than `backlog`, ascending: each
     /// ends any lock wait in progress, since only a backlog task is admitted.
-    pub(in crate::application::codebase) left_backlog: Vec<DateTime<Utc>>,
+    pub(in crate::app::codebase) left_backlog: Vec<DateTime<Utc>>,
 }
 
 impl TaskFacts {
@@ -92,53 +92,53 @@ impl TaskFacts {
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::application::codebase) struct ReservationFacts {
-    pub(in crate::application::codebase) at: DateTime<Utc>,
+pub(in crate::app::codebase) struct ReservationFacts {
+    pub(in crate::app::codebase) at: DateTime<Utc>,
     /// Each requested task, or the owning run for a file-only reservation.
     /// Without either, the reservation itself identifies one request.
-    pub(in crate::application::codebase) requesters: Vec<String>,
-    pub(in crate::application::codebase) files: Vec<Anchor>,
+    pub(in crate::app::codebase) requesters: Vec<String>,
+    pub(in crate::app::codebase) files: Vec<Anchor>,
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::application::codebase) struct LockDenial {
-    pub(in crate::application::codebase) at: DateTime<Utc>,
+pub(in crate::app::codebase) struct LockDenial {
+    pub(in crate::app::codebase) at: DateTime<Utc>,
     /// Who waited: each requested task, or the run (or invocation) when the
     /// request named no task. A retry loop repeats the same contender.
-    pub(in crate::application::codebase) contenders: Vec<String>,
+    pub(in crate::app::codebase) contenders: Vec<String>,
     /// The tasks the request named; empty for a file-only request. Only a
     /// task's wait has an admission to end it.
-    pub(in crate::application::codebase) task_ids: Vec<String>,
+    pub(in crate::app::codebase) task_ids: Vec<String>,
     /// The files the request conflicted on.
-    pub(in crate::application::codebase) files: Vec<Anchor>,
+    pub(in crate::app::codebase) files: Vec<Anchor>,
     /// Each conflicting file and a holder of it: the task whose context lock
     /// held it, each task the holding reservation named, or the hard lease
     /// by its id.
-    pub(in crate::application::codebase) holders: Vec<(Anchor, String)>,
+    pub(in crate::app::codebase) holders: Vec<(Anchor, String)>,
 }
 
 /// One workspace scan: the per-task facts every ranking slices by window,
 /// minimum support and rollup.
 #[derive(Debug)]
 pub struct CodebaseFacts {
-    pub(in crate::application::codebase) repo_root: std::path::PathBuf,
-    pub(in crate::application::codebase) computed_at: DateTime<Utc>,
-    pub(in crate::application::codebase) tasks: Vec<TaskFacts>,
-    pub(in crate::application::codebase) reservations: Vec<ReservationFacts>,
-    pub(in crate::application::codebase) lock_denials: Vec<LockDenial>,
+    pub(in crate::app::codebase) repo_root: std::path::PathBuf,
+    pub(in crate::app::codebase) computed_at: DateTime<Utc>,
+    pub(in crate::app::codebase) tasks: Vec<TaskFacts>,
+    pub(in crate::app::codebase) reservations: Vec<ReservationFacts>,
+    pub(in crate::app::codebase) lock_denials: Vec<LockDenial>,
     /// When each task was granted a reservation, ascending: its admission.
-    pub(in crate::application::codebase) admissions: BTreeMap<String, Vec<DateTime<Utc>>>,
+    pub(in crate::app::codebase) admissions: BTreeMap<String, Vec<DateTime<Utc>>>,
     /// The `workflow.regression_layers` table every link's layer was
     /// resolved under: the breakdowns and cross-tabs list its layers, so a
     /// cached scan never mixes layers of two tables.
-    pub(in crate::application::codebase) regression_layers: Vec<RegressionLayerDefinition>,
+    pub(in crate::app::codebase) regression_layers: Vec<RegressionLayerDefinition>,
 }
 
 /// Scan the workspace once. A task whose history cannot be read keeps its
 /// envelope facts with an empty history rather than failing the whole view.
 /// Each task's [`super::history::HistoryFacts`] are reused from the store while its history
 /// stamp and settlements match, and computed and stored otherwise.
-pub(in crate::application::codebase) fn scan(
+pub(in crate::app::codebase) fn scan(
     runtime: &OrbitRuntime,
     delivery_window: Option<&super::super::sections::Params>,
     include_landed: bool,
@@ -343,7 +343,7 @@ pub(in crate::application::codebase) fn scan(
 /// links, with history read only for a done task that may have become done
 /// since `since`. A task updated before then became done before then too, so
 /// its update time stands in.
-pub(in crate::application::codebase) fn scan_regressions(
+pub(in crate::app::codebase) fn scan_regressions(
     runtime: &OrbitRuntime,
     since: DateTime<Utc>,
 ) -> Result<CodebaseFacts, OrbitError> {

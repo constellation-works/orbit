@@ -6,18 +6,18 @@ use super::rollup::*;
 const UNCLASSIFIED_EVENT_LIMIT: usize = 5;
 
 #[derive(Default)]
-pub(in crate::application::codebase) struct BlockedRow<'a> {
-    pub(in crate::application::codebase) tally: Tally,
+pub(in crate::app::codebase) struct BlockedRow<'a> {
+    pub(in crate::app::codebase) tally: Tally,
     /// Each task a run failure blocked, or a base conflict blocked on this
     /// path, with its latest such block in the window: the numerator.
-    pub(in crate::application::codebase) blocked: Vec<(&'a TaskFacts, DateTime<Utc>)>,
+    pub(in crate::app::codebase) blocked: Vec<(&'a TaskFacts, DateTime<Utc>)>,
     /// Each task blocked in the window with no cause found and no run
     /// failure, with its latest such block.
-    pub(in crate::application::codebase) unclassified: Vec<(&'a TaskFacts, DateTime<Utc>)>,
+    pub(in crate::app::codebase) unclassified: Vec<(&'a TaskFacts, DateTime<Utc>)>,
 }
 
-pub(in crate::application::codebase) struct BlockedRows<'a> {
-    pub(in crate::application::codebase) rows: BTreeMap<String, BlockedRow<'a>>,
+pub(in crate::app::codebase) struct BlockedRows<'a> {
+    pub(in crate::app::codebase) rows: BTreeMap<String, BlockedRow<'a>>,
     causes: BTreeMap<&'static str, usize>,
     manual: BTreeMap<&'static str, usize>,
     attributed: usize,
@@ -36,7 +36,7 @@ pub(in crate::application::codebase) struct BlockedRows<'a> {
 /// operator's cancel) is counted apart, and a block nothing classifies is
 /// reported in the `unclassified` bucket and its own per-path column. Run
 /// failures on the work count against the footprint: `blocked ÷ touched`.
-pub(in crate::application::codebase) fn blocked_rows<'a>(
+pub(in crate::app::codebase) fn blocked_rows<'a>(
     facts: &'a CodebaseFacts,
     params: &Params,
 ) -> BlockedRows<'a> {
@@ -132,7 +132,7 @@ pub(in crate::application::codebase) fn blocked_rows<'a>(
 /// [`blocked_rows`] ranked. A path with only unclassified blocks still earns
 /// a row, so that bucket stays visible per path; it ranks by its attributed
 /// rate of zero.
-pub(in crate::application::codebase) fn rank_blocked(
+pub(in crate::app::codebase) fn rank_blocked(
     rows: BTreeMap<String, BlockedRow<'_>>,
     min_support: usize,
 ) -> (Vec<(String, BlockedRow<'_>)>, usize) {
@@ -144,7 +144,7 @@ pub(in crate::application::codebase) fn rank_blocked(
     )
 }
 
-pub(in crate::application::codebase) fn blocked(facts: &CodebaseFacts, params: &Params) -> Value {
+pub(in crate::app::codebase) fn blocked(facts: &CodebaseFacts, params: &Params) -> Value {
     let BlockedRows {
         rows,
         causes,

@@ -1654,10 +1654,11 @@ fi
 # `task::base_revision`, never through it. `backlog_forecast` is above
 # `workspace_auto` and task has no port to it [ORB-22287]: only the two
 # re-export lines below name it, a compatibility shim for `lib.rs` and
-# `orbit-web`. `codebase` sits outside the order but above `task` [ORB-22625]:
-# task owns the pure block classification (`task::classify_block`) and records
-# a done landing's diff stats through `TaskCodebasePort`, which `codebase`
-# implements on `OrbitRuntime`; `codebase` reads `distributed` itself.
+# `orbit-web`. `app::codebase` sits above `task` [ORB-22625]: task owns the
+# pure block classification (`task::classify_block`) and records a done
+# landing's diff stats through `TaskCodebasePort`, which `app::codebase`
+# implements on `TaskPort` and binds in `app::port`; `app::codebase` reads
+# `distributed` itself.
 # `resident` sits outside the order but above `task` [ORB-22955]: it drives
 # task writes, so a decision answer applies a resident grant, and a task
 # comment write admits a resident record and refuses one needing redaction,
@@ -1669,7 +1670,7 @@ fi
 # `OrbitRuntime`. `app::agent` reads decision rules, task history and tasks back,
 # and reads blobs through `task::base_revision`. Task reaches it only through
 # `TaskCorpusPort`, implemented on `app::agent::TaskPort` and bound in `app::port`.
-task_upper_modules='experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|codebase|resident'
+task_upper_modules='experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|resident'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
@@ -1682,12 +1683,12 @@ if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, codebase, resident and experiment through its task ports, and must not name tag_instructions or backlog_forecast"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, resident and experiment through its task ports, and must not name tag_instructions or backlog_forecast"
   fail=1
 fi
 
-if ! super_chains_into "$app_src" task 'crate::app::agent' named-path; then
-  echo "orbit-core task must reach app::agent only through task::TaskCorpusPort bound in app::port"
+if ! super_chains_into "$app_src" task 'crate::app::agent|crate::app::codebase' named-path; then
+  echo "orbit-core task must reach app::agent and app::codebase only through task::TaskCorpusPort and task::TaskCodebasePort bound in app::port"
   fail=1
 fi
 
@@ -1924,36 +1925,43 @@ for lower_module in automation review distributed pull_drain admission workspace
 done
 
 # Selective-review retirement removed review's risk-model freeze and its
-# codebase dependency. Keep that direction closed: review has no codebase
-# exception, including calls indexed from codebase's inherent runtime methods.
-if ! super_chains_into "$app_src" review codebase ||
-  ! inherent_calls_into "$app_src" review codebase '' ''; then
-  echo "orbit-core review must not name codebase or call its inherent methods"
+# codebase dependency. Keep that direction closed: review has no
+# `app::codebase` exception, and reads candidate size only through
+# `ReviewCandidateSizePort`, which `app::codebase` implements on `ReviewPort`
+# and binds in `app::port`.
+if ! super_chains_into "$app_src" review 'crate::app::codebase' named-path; then
+  echo "orbit-core review must not name app::codebase; read candidate size through review::ReviewCandidateSizePort bound in app::port"
   fail=1
 fi
 
-# [ORB-22287] `codebase` sits outside the order. The forecast's one authorized
-# edge into it is `runtime.task_riskiness_model()` in `assembly.rs`, whose
-# returned model answers `forecast_regression_prior`. Any other path or inherent
-# call into `codebase`, or any `codebase` path or call back into the forecast,
-# is a new edge.
-forecast_codebase_allowed='^backlog_forecast/assembly\.rs:[0-9]+:\s+let risk_model = runtime\.task_riskiness_model\(\)\?;$'
-if dependency_matches -n 'crate::application::codebase\b' \
-  "$app_src/backlog_forecast" -g '*.rs' -g '!**/tests/**' ||
-  dependency_matches -n -U 'crate::application::\{[^}]*\bcodebase\b' \
-    "$app_src/backlog_forecast" -g '*.rs' -g '!**/tests/**' ||
-  ! inherent_calls_into "$app_src" backlog_forecast codebase "$forecast_codebase_allowed" '' ||
-  ! super_chains_into "$app_src" backlog_forecast codebase; then
-  echo "orbit-core backlog_forecast may reach codebase only through runtime.task_riskiness_model() in assembly.rs"
+# [ORB-22287] `app::codebase` sits outside the order. The forecast's one
+# authorized edge into it is `crate::app::codebase::task_riskiness_model(runtime)`
+# in `assembly.rs`, whose returned model answers `forecast_regression_prior`.
+# Any other path into `app::codebase` (an import, a grouped tree, an alias or a
+# `super::` chain), or any path or inherent call from `app::codebase` back into
+# the forecast, is a new edge.
+forecast_codebase_allowed='/backlog_forecast/assembly\.rs:[0-9]+:\s+let risk_model = crate::app::codebase::task_riskiness_model\(runtime\)\?;$'
+forecast_codebase_paths="$(super_chains_into "$app_src" backlog_forecast 'crate::app::codebase' named-path)" ||
+  forecast_codebase_status=$?
+forecast_codebase_unallowed="$(printf '%s\n' "$forecast_codebase_paths" | rg -v -- "$forecast_codebase_allowed" | rg -v '^$' || true)"
+# A match prints its line; a nonzero exit with nothing printed is a scan error.
+if { [[ "${forecast_codebase_status:-0}" -ne 0 ]] && [[ -z "$forecast_codebase_paths" ]]; } ||
+  [[ -n "$forecast_codebase_unallowed" ]]; then
+  [[ -n "$forecast_codebase_unallowed" ]] && printf '%s\n' "$forecast_codebase_unallowed"
+  echo "orbit-core backlog_forecast may reach app::codebase only through crate::app::codebase::task_riskiness_model(runtime) in assembly.rs"
   fail=1
 fi
+if [[ ! -d "$core_src/app/codebase" ]]; then
+  echo "dependency scan path missing: $core_src/app/codebase" >&2
+  exit 1
+fi
 if dependency_matches -n 'crate::application::backlog_forecast\b' \
-  "$app_src/codebase" -g '*.rs' -g '!**/tests/**' ||
+  "$core_src/app/codebase" -g '*.rs' -g '!**/tests/**' ||
   dependency_matches -n -U 'crate::application::\{[^}]*\bbacklog_forecast\b' \
-    "$app_src/codebase" -g '*.rs' -g '!**/tests/**' ||
-  ! inherent_calls_into "$app_src" codebase backlog_forecast '' '' ||
-  ! super_chains_into "$app_src" codebase backlog_forecast; then
-  echo "orbit-core codebase must not name backlog_forecast or call its inherent methods"
+    "$core_src/app/codebase" -g '*.rs' -g '!**/tests/**' ||
+  ! inherent_calls_into "$core_src/app" codebase backlog_forecast '' '' "$app_src" ||
+  ! super_chains_into "$core_src/app" codebase 'crate::application::backlog_forecast' named-path; then
+  echo "orbit-core app::codebase must not name backlog_forecast or call its inherent methods"
   fail=1
 fi
 

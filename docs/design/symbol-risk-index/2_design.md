@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: "Per-symbol record (body lines, LCOV coverage, regression-site history), the indexer plugin contract, core storage, the rebuild routine, staleness and rename lineage, readers and the backtest ship gates"
 tags: [symbol-risk-index, riskiness, regression-risk, test-strategy, routines]
-paths: ["crates/orbit-core/src/application/codebase/**", "crates/orbit-store/src/**", "crates/orbit-core/assets/**"]
+paths: ["crates/orbit-core/src/app/codebase/**", "crates/orbit-store/src/**", "crates/orbit-core/assets/**"]
 related_features: [backlog-forecast, routines, plugins]
 related_artifacts: [ORB-19358, ORB-19361, ORB-19276]
 ---

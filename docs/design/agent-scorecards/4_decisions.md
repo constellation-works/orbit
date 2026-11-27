@@ -10,7 +10,7 @@ doc_role: decisions
 type: design
 summary: Standing rules for agent scorecards; one owner per problem, cost shown but never scored, reviewers scored on accuracy, escaped regressions scored against expected size.
 tags: [agent-scorecards, dashboard, analytics]
-paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-core/src/application/codebase/pilot/**"]
+paths: ["crates/orbit-core/src/application/agents/**", "crates/orbit-core/src/app/codebase/pilot/**"]
 related_features: [user-interface, review-gate]
 related_artifacts: []
 ---
