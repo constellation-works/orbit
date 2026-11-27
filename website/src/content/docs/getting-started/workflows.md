@@ -109,7 +109,7 @@ owner's dashboard.
 
 The dashboard's **Jobs** view shows runs in flight under **History**, which
 opens on **Running**; switch to **All** to see every run. A failed run opens on the step it stopped at and the
-error it recorded. From a run's detail you can **cancel** a running run,
+error it recorded. From a run's detail you can **Cancel** a running run,
 **Resume** a failed one from its first unfinished step, or **Replay run** to
 start it again.
 
