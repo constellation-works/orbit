@@ -37,18 +37,15 @@
 /* The full page has no list for the task to be outside of. Its crew lives
    in the shared detail lever row, so the entire dock-only note can go. */
 main.tasks-layout.task-page-mode .pinned-external { display: none; }
-/* The filter bar (status pills) heads the list column, with the dock's tab
-   bar level with it in the column beside. Where the pills would wrap there
-   but fit in fewer rows across the list and dock columns together,
-   log-tail.js adds `filter-spans` and the bar takes both columns, the dock
-   starting below it with the list (see the layout below). The list starts
-   12px below the bar. */
+/* The filter bar heads the list column. It spans both columns when the
+   extra width makes room for full labels (log-tail.js). */
 /* --tasks-list-lead (log-tail.js) lowers the list when the dock's tab bar is
    taller than the bar's own room, so the first card and the first task block
    start level. */
 main.tasks-layout > .controls {
   grid-column: 1;
   grid-row: 1;
+  min-width: 0;
   border-bottom: 0;
   padding: 0 0 var(--space-12);
   align-items: flex-start;
@@ -71,6 +68,7 @@ main.tasks-layout > .controls {
    the closed statuses, All and Not ready behind More. Pressed chips read
    raised and bright, unpressed ones transparent and muted. */
 #task-filter {
+  position: relative;
   display: flex;
   flex: 1 1 auto;
   min-width: 0;
@@ -83,6 +81,48 @@ main.tasks-layout > .controls {
 #task-filter .workspace-filter { display: inline-flex; flex: 0 0 auto; position: relative; }
 #task-filter .workspace-filter[hidden] { display: none; }
 #task-filter .chip-group-quiet:not(.open) .chip:not(.active) { display: none; }
+.task-filter-primary {
+  display: flex;
+  gap: inherit;
+  max-width: 100%;
+}
+.task-filter-primary > .chip { flex: none; max-width: none; }
+#task-filter[data-compact] .chip[data-status] .chip-label { display: none; }
+#task-filter[data-compact] .chip[data-status] { flex: 0 1 auto; }
+#task-filter[data-compact] .chip[data-status] .chip-count {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* An unselected or still-loading status has no count from the server. */
+#task-filter[data-compact] .chip[data-status] .chip-count:empty::before { content: "–"; }
+/* Native titles handle hover. Keyboard focus and touch press also reveal
+   the full name, within the width of the filter bar. */
+#task-filter[data-compact] .chip[data-status]:is(:focus-visible, :active)::after {
+  content: attr(title);
+  position: absolute;
+  inset: 100% auto auto 0;
+  z-index: 2;
+  margin-top: var(--space-4);
+  padding: var(--space-6) var(--space-8);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--fg);
+  pointer-events: none;
+}
+
+@media (max-width: 760px) {
+  main.tasks-layout { padding: var(--space-8); }
+  #tasks-body > :is(.row, .group-header) {
+    padding-inline: var(--space-12);
+    border-inline-width: 0;
+    box-shadow: inset 1px 0 var(--border), inset -1px 0 var(--border);
+  }
+  #tasks-body > .group-end {
+    box-shadow: inset 1px 0 var(--border), inset -1px 0 var(--border), inset 0 -1px var(--border);
+  }
+}
 
 #tasks-body > .group-header { margin-top: var(--space-16); }
 #tasks-body > :first-child { margin-top: 0; }

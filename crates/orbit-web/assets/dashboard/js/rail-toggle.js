@@ -1,6 +1,6 @@
 // The navigation keeps an expand button in a narrow strip. Like the Tasks
 // dock, its contents slide before the grid column changes once; the two
-// preferences are independent. On phones the rail is a top strip instead.
+// preferences are independent. The phone bottom bar has no collapse control.
 const RAIL_COLLAPSED_PREFS_KEY = "orbit.dashboard.railCollapsed";
 const RAIL_SLIDE_FALLBACK_MS = 260;
 
@@ -44,7 +44,12 @@ export function initRailToggle() {
       content.inert = collapsed;
     }
     if (phone.matches && (document.activeElement === button || toggleHadFocus)) {
-      rail.querySelector(".tab.active")?.focus();
+      requestAnimationFrame(() => {
+        if (phone.matches) {
+          const target = document.querySelector(".phone-nav [aria-current='page']") || document.getElementById("phone-more-open");
+          target?.focus();
+        }
+      });
       toggleHadFocus = false;
     }
   }

@@ -488,6 +488,8 @@ function renderChips(context) {
       count.textContent = String(myWorkCount);
     } else {
       count.textContent = status && on && counts ? String(counts.get(status) || 0) : "";
+      const label = chip.querySelector(".chip-label").textContent;
+      chip.setAttribute("aria-label", count.textContent ? `${label}, ${count.textContent}` : label);
     }
   }
   paintWorkspaceFilter();
@@ -663,7 +665,7 @@ export function buildChips(context) {
   // disclosure. A quiet chip that is on stays in view while More is closed, so
   // the filter the list obeys is always on screen.
   const defaults = new Set(defaultActiveStatuses(context));
-  const primary = el("div", { class: "chip-group" });
+  const primary = el("div", { class: "task-filter-primary" });
   const secondary = el("div", { class: "chip-group chip-group-quiet", id: "task-filter-more" });
   for (const status of statusOrder(context)) {
     const node = chip(STATUS_LABELS[status] || status, { status }, !defaults.has(status));
@@ -718,8 +720,9 @@ export function buildChips(context) {
     more.setAttribute("aria-expanded", String(open));
     secondary.classList.toggle("open", open);
   });
+  primary.append(more);
   const workspaceFilter = buildWorkspaceFilter(context);
-  container.append(primary, more, workspaceFilter, secondary);
+  container.append(primary, workspaceFilter, secondary);
   refreshChips(context);
 }
 

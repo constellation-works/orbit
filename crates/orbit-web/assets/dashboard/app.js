@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, isOwnedWorkspace, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate, setBadgeDescription } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, isOwnedWorkspace, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate, setBadgeDescription, setRailCountText } from './js/common.js';
 import { taskPilotWarningsFilter, buildChips, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, refreshChips, refreshPinnedTask, renderTasks, syncTaskControls, wireQuickFilter, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import * as globalSearch from './js/global-search.js';
@@ -1185,8 +1185,6 @@ async function initWorkspaceSelector() {
   // response check above, so scope chips can safely offer aggregate selection.
   setMultiWorkspace(dashboardWorkspaces.length > 1);
   if (dashboardWorkspaces.length <= 1) {
-    const railWorkspace = $("rail-workspace");
-    if (railWorkspace) railWorkspace.replaceChildren();
     const hadFilter = workspaceFilterIds().length > 0;
     // setWorkspace no longer clears a leftover aggregate filter, and a host
     // with one board has nowhere to narrow.
@@ -1205,7 +1203,8 @@ async function initWorkspaceSelector() {
       setWorkspace(null);
       persistScopeToUrl();
     }
-    return true; // single mode: selected implicitly, no selector needed
+    buildWorkspaceSelector();
+    return true;
   }
 
   // A shareable URL (including explicit All workspaces) wins. Otherwise
@@ -1288,11 +1287,17 @@ async function initWorkspaceSelector() {
 }
 
 function buildWorkspaceSelector() {
+  const host = $("rail-workspace");
+  if (!host) return;
+  host.classList.toggle("single-workspace", dashboardWorkspaces.length === 1);
+  host.replaceChildren();
+  if (dashboardWorkspaces.length === 0) return;
+
   const select = el("select", { class: "workspace-select", title: "Workspace", "aria-label": "Workspace" });
   select.id = "workspace-select";
   const allOption = el("option", { text: "All workspaces" });
   allOption.value = "";
-  select.appendChild(allOption);
+  if (dashboardWorkspaces.length > 1) select.appendChild(allOption);
 
   const current = getWorkspace() || "";
   for (const ws of dashboardWorkspaces) {
@@ -1305,6 +1310,7 @@ function buildWorkspaceSelector() {
     select.appendChild(option);
   }
   if (!current) allOption.selected = true;
+  select.title = select.selectedOptions[0]?.textContent || "Workspace";
 
   select.addEventListener("change", () => {
     setWorkspace(select.value);
@@ -1321,13 +1327,7 @@ function buildWorkspaceSelector() {
   note.setAttribute("aria-hidden", "true");
   note.title = "Reliability ignores the selected workspace";
 
-  // ORB-10972: the selector moved from the header meta cluster into the rail
-  // foot, beside the connection line. Same element, same id, same listeners.
-  const host = $("rail-workspace");
-  if (!host) return;
-  host.innerHTML = "";
-  host.appendChild(select);
-  host.appendChild(note);
+  host.append(select, note);
 }
 
 // A native select keeps its own value, so a scope change made elsewhere (the
@@ -1335,7 +1335,10 @@ function buildWorkspaceSelector() {
 // module load, so rebuilding the select adds no listener.
 onWorkspaceChange(() => {
   const select = $("workspace-select");
-  if (select) select.value = getWorkspace() || "";
+  if (!select) return;
+  const value = getWorkspace() || "";
+  if (value || select.options.length > 1) select.value = value;
+  if (!select.classList.contains("scope-ignored")) select.title = select.selectedOptions[0]?.textContent || "Workspace";
 });
 
 // Whether this refresh makes the Tasks page's slow reads: always off the Tasks
@@ -1625,7 +1628,7 @@ function fetchJobsInFlight(request) {
   return request.then((payload) => {
     if (revision !== getWorkspaceRevision() || sequence !== jobsInFlightSequence) return;
     const count = Number.isFinite(payload.total) ? payload.total : listItems(payload).length;
-    setRailCount("rail-count-jobs", count, false, "Pending and running job runs, not tasks. One task is several pipeline runs. Independent of the History window and filters.", formatJobsRailCount);
+    setRailCount("rail-count-jobs", count, false, "Pending and running job runs, not tasks. One task is several pipeline runs. Independent of the History window and filters.");
   });
 }
 
@@ -1879,11 +1882,14 @@ async function fetchAndRenderFrictions() {
 // blocked colour so a failure count is legible from any tab without opening
 // the tab it belongs to. Every value here comes from a fetch the dashboard
 // already makes — this adds no endpoint.
-function setRailCount(id, value, alert = false, title = "", format = formatBigInt) {
+function setRailCount(id, value, alert = false, title = "") {
   const node = $(id);
   if (!node) return;
   const empty = value == null || value === 0;
-  node.textContent = empty ? "" : format(value);
+  node.textContent = empty ? "" : formatBigInt(value);
+  if (!empty && id === "rail-count-jobs") {
+    setRailCountText(node, `${formatBigInt(value)} ${value === 1 ? "run" : "runs"}`, formatBigInt(value));
+  }
   node.classList.toggle("alert", Boolean(alert) && !empty);
   setBadgeDescription(node, empty ? "" : title);
 }
@@ -1892,12 +1898,6 @@ function formatBigInt(n) {
   if (n == null) return "-";
   if (n >= 10000) return `${(n / 1000).toFixed(1)}k`;
   return String(n);
-}
-
-// The Jobs badge counts pipeline runs (a task has one run per leg), so the
-// unit is on the badge. Other rail counts keep their own labels.
-function formatJobsRailCount(n) {
-  return `${formatBigInt(n)} ${n === 1 ? "run" : "runs"}`;
 }
 
 // The connection line's visible success text is only the refresh time; the

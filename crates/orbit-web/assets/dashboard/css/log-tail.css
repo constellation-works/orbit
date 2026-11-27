@@ -1,11 +1,10 @@
 /* Live log tail in the Tasks dock: status bar, stream, and filters. */
 
+/* Ambient line below the shell on the rail layout. */
 @media (max-width: 760px) {
-  .log-statusbar { overflow: hidden; }
+  #log-statusbar { display: none; }
 }
 
-/* ORB-10972: always-on ambient line, present on every tab. Replaces what
-   the collapsed log panel used to do. */
 .log-statusbar {
   flex: 0 0 auto;
   height: 34px;

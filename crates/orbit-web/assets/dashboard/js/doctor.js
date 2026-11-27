@@ -30,6 +30,7 @@ import {
   renderPanelPlaceholder,
   syncNodes,
   setBadgeDescription,
+  setRailCountText,
 } from './common.js';
 import { pinnedInfoHint } from './forecast-shared.js';
 
@@ -256,7 +257,7 @@ function setHealthRailCount(body, ran) {
   const parts = [];
   if (failures) parts.push(`${failures} err`);
   if (warnings) parts.push(`${warnings} warn`);
-  node.textContent = parts.join(" · ");
+  setRailCountText(node, parts.join(" · "), String(failures + warnings));
   node.classList.toggle("alert", failures > 0);
   setBadgeDescription(node, `orbit doctor${ran ? `, run ${formatAge(ran)} ago` : ""}: ${plural(failures, "failure")}, ${plural(warnings, "warning")}. See Health › Doctor.`);
 }

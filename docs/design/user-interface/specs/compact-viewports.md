@@ -7,7 +7,7 @@ last_validated: 2026-11-27
 
 # Spec: Compact Viewports
 
-> **Approved, not built.** The operator approved this design and its mocks on 2026-11-27
+> **Approved. Phase 1 built.** The operator approved this design and its mocks on 2026-11-27
 > (STD-07 R25) [ORB-29230]. [2_design.md](../2_design.md) describes the dashboard as it is.
 > [Phasing](#phasing) names the task that builds each part.
 
@@ -235,7 +235,7 @@ Each phase ships on its own, in this order: they change the same stylesheets and
 
 | Phase | Builds | Task |
 |---|---|---|
-| 1. Small shell | The 48px header, the bottom bar and More sheet, 8px board padding, the one-row status pills | [ORB-29233] |
+| 1. Small shell (built) | The 48px header, the bottom bar and More sheet, 8px board padding, and the one-row status pills at every width | [ORB-29233] |
 | 2. Small Tasks view | Two-line rows, the full-viewport task with previous and next, the history entry | [ORB-29234] |
 | 3. Medium | The icon rail (and as the collapsed rail at wide), scope pickers in the header, the header's fit order, the side pane floors and the one-column task over the list | [ORB-29235] |
 | 4. Scope at wide | The host and workspace selects move to the header at wide too, so they are in one place at every width | Not filed; after phases 1 to 3 have been in use |

@@ -15,6 +15,9 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
   const list = document.getElementById('global-search-results');
   const status = document.getElementById('global-search-status');
   const unavailableLine = document.getElementById('global-search-unavailable');
+  const phone = window.matchMedia('(max-width: 760px)');
+  const openButton = document.getElementById('phone-search-open');
+  const closeButton = document.getElementById('phone-search-close');
   let generation = 0;
   let controller = null;
   let debounce = null;
@@ -46,6 +49,23 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
     list.replaceChildren();
     status.textContent = '';
     showUnavailable([]);
+  }
+
+  function showSearchField() {
+    if (phone.matches) {
+      wrap.classList.add('search-open');
+      openButton.setAttribute('aria-expanded', 'true');
+    }
+    input.focus();
+    input.select();
+  }
+
+  function closePhoneSearch({ restoreFocus = false } = {}) {
+    closeSearchResults();
+    if (!wrap.classList.contains('search-open')) return;
+    wrap.classList.remove('search-open');
+    openButton.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) openButton.focus();
   }
 
   // One line counts the workspaces that could not be read; its tooltip names them.
@@ -126,6 +146,7 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
       window.location.hash = hash;
     }
     input.blur();
+    closePhoneSearch();
   }
 
   function highlightSearchResult(index) {
@@ -237,6 +258,7 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
           navigateToRun(id);
         }
         input.blur();
+        closePhoneSearch();
       }
     } catch (error) {
       showSearchFailure(error, request);
@@ -253,7 +275,7 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
   });
   input.addEventListener('keydown', event => {
     if (event.isComposing) return;
-    if (event.key === 'Escape') {
+    if (event.key === 'Escape' && !phone.matches) {
       event.preventDefault();
       event.stopPropagation();
       if (!popover.hidden) closeSearchResults(); else clearGlobalSearch();
@@ -273,26 +295,34 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
       else requestSearchResults({ chooseFirst: true });
     }
   });
+  openButton.addEventListener('click', showSearchField);
+  closeButton.addEventListener('click', () => closePhoneSearch({ restoreFocus: true }));
+  wrap.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.isComposing || !phone.matches) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closePhoneSearch({ restoreFocus: true });
+  });
   document.getElementById('task-search-clear').addEventListener('click', () => {
     clearGlobalSearch();
     input.focus();
   });
   document.addEventListener('pointerdown', event => {
-    if (!wrap.contains(event.target)) closeSearchResults();
+    if (!wrap.contains(event.target)) closePhoneSearch();
   });
   document.addEventListener('focusin', event => {
-    if (!wrap.contains(event.target)) closeSearchResults();
+    if (!wrap.contains(event.target)) closePhoneSearch();
   });
   document.addEventListener('keydown', event => {
     if (event.key !== '/' || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
     const target = event.target;
     if (target?.isContentEditable || target?.closest('input, textarea, select, dialog[open]')) return;
     event.preventDefault();
-    input.focus();
-    input.select();
+    showSearchField();
   });
   onWorkspaceChange(clearGlobalSearch);
-  window.addEventListener('hashchange', closeSearchResults);
-  window.addEventListener('popstate', closeSearchResults);
+  phone.addEventListener('change', () => closePhoneSearch());
+  window.addEventListener('hashchange', () => closePhoneSearch());
+  window.addEventListener('popstate', () => closePhoneSearch());
   return id => lookupSearchId(id, 'task');
 }
