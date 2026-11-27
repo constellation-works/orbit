@@ -29,33 +29,39 @@ const TASK_PEOPLE_FIELDS = [
 // carries only the id and title, so nothing here is repeated there, and the
 // timestamps close the Overview.
 export function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
-  const levers = el("div", { class: "task-levers" });
-  levers.appendChild(buildStatusUpdateControl(task, context));
-  levers.appendChild(taskFields.buildComplexityUpdateControl(task, context));
+  const levers = el("div", { class: "task-levers task-levers-task" });
+  const controls = el("div", { class: "task-levers-controls" });
+  controls.appendChild(buildStatusUpdateControl(task, context));
+  controls.appendChild(taskFields.buildComplexityUpdateControl(task, context));
   if (canMutateTask(task)) {
     const control = buildCrewUpdateControl(task, context, { withChip: false });
     control.classList.add("task-chip-crew");
     const select = control.querySelector("select");
-    select.removeAttribute("aria-label");
+    select.setAttribute("aria-label", "Crew");
     select.id = `detail-${task.id}-crew`;
-    const label = el("label", { text: "Crew" });
-    label.htmlFor = select.id;
-    const chip = el("span", { class: "task-chip task-crew-control" }, [label, select]);
+    const chip = el("span", { class: "task-chip task-crew-control" }, [select]);
     control.prepend(chip);
-    levers.appendChild(control);
+    const resizeSelect = () => sizeCrewSelect(select);
+    resizeSelect();
+    select.addEventListener("change", resizeSelect);
+    document.fonts?.ready.then(resizeSelect);
+    controls.appendChild(control);
   } else {
     const crew = explicitCrewValue(task);
-    levers.appendChild(el("span", { class: "task-chip task-chip-crew", title: "Crew" }, [
-      el("span", { text: "Crew: " }),
+    controls.appendChild(el("span", { class: "task-chip task-chip-crew", title: "Crew" }, [
+      el("span", { class: "visually-hidden", text: "Crew: " }),
       ...(crew ? [crew] : [resolvedCrewName(task), el("span", { class: "fact-note", text: " · default" })]),
     ]));
   }
-  levers.appendChild(el("span", { class: "task-chip task-chip-host", title: "Runs on" }, [
-    el("span", { class: "visually-hidden", text: "Runs on: " }),
-    buildOsReadout(task),
-  ]));
+  if (osReadoutText(task).toLowerCase() !== "any") {
+    controls.appendChild(el("span", { class: "task-chip task-chip-host", title: "Runs on" }, [
+      el("span", { class: "visually-hidden", text: "Runs on: " }),
+      buildOsReadout(task),
+    ]));
+  }
   const risk = buildRiskChip(task);
-  if (risk) levers.appendChild(risk);
+  if (risk) controls.appendChild(risk);
+  levers.appendChild(controls);
   if (showsEditor("tags")) levers.appendChild(el("div", { class: "task-levers-tags" }, [editor("tags")]));
 
   const head = el("div", { class: "task-meta-block" }, [levers]);
@@ -64,6 +70,16 @@ export function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const delivery = buildDeliveryCard(task, drain, context, { editor, showsEditor });
   if (delivery) head.appendChild(delivery);
   return head;
+}
+
+// Native select auto-sizing follows its widest option in some browsers. Size
+// the task-detail crew pill to its selected label and keep it in sync on edits.
+function sizeCrewSelect(select) {
+  const selected = select.selectedOptions?.[0];
+  const context = document.createElement("canvas").getContext("2d");
+  if (!selected || !context) return;
+  context.font = getComputedStyle(select).font;
+  select.style.width = `${Math.ceil(context.measureText(selected.textContent || "").width + 22)}px`;
 }
 // The statuses a task passes through on its way to done. Any other status
 // (blocked, rejected, archived, someday) sits off this line and shows no strip.
