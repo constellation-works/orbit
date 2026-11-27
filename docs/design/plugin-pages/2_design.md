@@ -17,7 +17,8 @@ related_artifacts: [ORB-29504]
 # Plugin Pages — Design
 
 The operator approved this design on 2026-11-27 ([ORB-29504]). The page contract in sections 1
-and 2 was revised after it was measured in two browser engines ([ORB-29532], [ORB-29573]).
+and 2 was revised after it was measured in two browser engines ([ORB-29532]), and the operator
+approved the revision the same day ([ORB-29573]).
 Nothing in it is built, so it describes what the builds make true. The problem, the goal and the build tasks are in the
 [overview](./1_overview.md). The plugin manifest,
 grants and tool dispatch it builds on are the [plugin standard](../plugins/1_scope.md)'s.

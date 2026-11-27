@@ -8,10 +8,10 @@ status: Accepted
 feature: plugin-pages
 doc_role: decisions
 type: design
-summary: "Plugin Pages — Decisions: a page gets server-side work only through its plugin's tools, and plugin code acts only behind a confirmation drawn outside its frame"
+summary: "Plugin Pages — Decisions: a page gets server-side work only through its plugin's tools, plugin code acts only behind a confirmation drawn outside its frame, and a page is one document whose frame fetches nothing"
 tags: [plugin-pages]
 related_features: [plugins]
-related_artifacts: [ORB-29504]
+related_artifacts: [ORB-29504, ORB-29573]
 ---
 
 # Plugin Pages — Decisions
@@ -68,8 +68,39 @@ state, it is an action and takes the confirmation.
 - Cost: every action takes a second step from the operator, and a page cannot offer a
   one-click control for anything that writes.
 
+## A page is one document, and its frame fetches nothing
+
+**Recorded:** 2026-11 · [ORB-29573]
+
+### Context
+
+The design first served a page as a directory of files from an asset route, admitted by
+`script-src 'self'`. Measured in browsers ([ORB-29532]), a frame with a unique origin could not
+fetch its own files: WebKit matched `'self'` to nothing, and Chromium marked each request
+cross-site, which the router's origin guard refuses. The ways to keep files were to accept
+cross-site requests on one route, or to drop scripts and ship pages that only display.
+
+### Decision
+
+Orbit writes a page's markup, scripts and styles into one document and admits each script by
+its hash. The frame makes one request, its own navigation, and nothing after it. The origin
+guard is not widened for pages. A need that looks like a second request, such as a lazy
+chunk, a late image or a larger asset, is met inside the document or through the bridge, not
+by a route the frame can call.
+
+### Consequences
+
+- The guard, the session and the frame policy need no exception for pages, and the result is
+  the same in every engine measured.
+- Only the scripts Orbit wrote can run, which the first contract did not give.
+- Cost: a page ships bundled scripts, carries images and fonts as `data:` URLs at about a
+  third more bytes, and cannot split its code. Another host's page has to be written by the
+  local dashboard from parts, which phase 2 must build.
+
 ## Task References
 
-- [ORB-29504] — designed plugin pages; the operator approved both decisions with it.
+- [ORB-29504] — designed plugin pages; the operator approved the first two decisions with it.
+- [ORB-29532] — measured the first page contract in Chromium and WebKit.
+- [ORB-29573] — revised the page contract; the operator approved the third decision with it.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

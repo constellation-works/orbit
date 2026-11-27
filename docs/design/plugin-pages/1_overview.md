@@ -99,6 +99,12 @@ the draft and were approved with the recommendation. Both are recorded in the
    only through its plugin's tools.
 2. **Pages read first; actions come later, behind a confirmation the dashboard draws.**
 
+The page contract was then measured in browsers and did not hold ([ORB-29532]). The operator
+approved its replacement on 2026-11-27 ([ORB-29573]), recorded as a third decision:
+
+3. **A page is one document, and its frame fetches nothing.** Orbit writes it from the
+   plugin's files and admits each script by hash; the origin guard is unchanged.
+
 ## 5. Build
 
 | Phase | Task |
