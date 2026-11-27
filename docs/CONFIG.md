@@ -889,6 +889,7 @@ On a distributed claim, the owner captures its mappings in the claim's validatio
 ```toml
 [workflow.generated_paths]
 "docs/INDEX.md" = "make docs-index"
+"docs/design/FEATURES.md" = "make docs-index"
 ```
 
 When a stopped rebase conflicts on a matching path, the conflict recovery agent is told not to hand-merge it (its input lists it under `regenerated_paths`). After the agent has resolved the other files and exits, the host continuation takes the upstream side of the file, or the replayed side when upstream deleted it. It then runs each distinct command once in the checkout with the validation environment, for at most ten minutes, and stages the output with the rest of the resolution. A command that exits non-zero, times out, leaves conflict markers in the file, or changes HEAD, the branch or the index fails the repair. The stopped rebase then goes to the failure handoff as any refused continuation does. Other files the command rewrites join the continued commit. The certified continuation lists the regenerated paths. Default empty: every conflict is resolved by the agent.
