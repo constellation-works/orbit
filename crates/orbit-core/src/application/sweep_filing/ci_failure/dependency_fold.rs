@@ -14,10 +14,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_engine::ci_log_signature::{LineKind, classify_log_lines, log_payload};
 use orbit_tools::github_cli::strip_ansi_sequences;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::cluster::FailureCluster;
-use super::evidence::selected_diagnostic;
+use super::evidence::{run_id_key, selected_diagnostic};
 use super::fields::value_string;
 use super::log_signature::error_signature;
 
@@ -151,6 +151,87 @@ fn failing_step(failure: &Value) -> String {
         .and_then(|steps| steps.first())
         .map(|step| value_string(step, "name"))
         .unwrap_or_default()
+}
+
+/// Hold back dependency-only waiters whose named failed sibling is deferred.
+///
+/// A waiter's only evidence is the record naming the sibling that failed; the
+/// diagnostic lives in the sibling's log. When that sibling is in `deferred`
+/// (its log was not collected), the waiter cannot fold into a cluster that
+/// does not exist yet, and filing it alone would produce a task with no
+/// failing-test evidence. The waiter moves to the deferred set instead, to be
+/// filed or folded once a later sweep collects the sibling.
+pub(super) fn split_waiters_of_deferred_leaves(
+    complete: Vec<Value>,
+    deferred: &mut Vec<Value>,
+) -> Vec<Value> {
+    let mut remaining = Vec::new();
+    let mut held = Vec::new();
+    for failure in complete {
+        let Some(dependencies) = dependency_only_failed_jobs(&failure) else {
+            remaining.push(failure);
+            continue;
+        };
+        let run_id = run_id_key(&failure);
+        let pending = run_id.as_ref().and_then(|run_id| {
+            dependencies.iter().find(|dependency| {
+                deferred.iter().any(|entry| {
+                    run_id_key(entry).as_ref() == Some(run_id)
+                        && names_deferred_job(dependency, entry)
+                })
+            })
+        });
+        let Some(pending) = pending else {
+            remaining.push(failure);
+            continue;
+        };
+        held.push(json!({
+            "job_id": failure.get("job_id"),
+            "failed_jobs": failure.get("failed_jobs"),
+            "run_id": failure.get("run_id"),
+            "url": failure.get("url"),
+            "workflow": failure.get("workflow"),
+            "head_branch": failure.get("head_branch"),
+            "ref_kind": failure.get("ref_kind"),
+            "investigated": true,
+            "retryable": true,
+            "reasons": [{
+                "stage": "investigation",
+                "operation": "dependency_log_pending",
+                "run_id": failure.get("run_id"),
+                "job_id": failure.get("job_id"),
+                "retryable": true,
+                "message": format!(
+                    "dependency-only job waits on failed job `{}`, whose log was not collected; \
+                     the waiter is deferred until that job is investigated",
+                    pending.job_name
+                ),
+            }],
+        }));
+    }
+    deferred.extend(held);
+    remaining
+}
+
+/// Whether a deferred failure entry is the job a dependency record names: by
+/// job id when the record carries one, otherwise by name.
+fn names_deferred_job(dependency: &DependencyIdentity, entry: &Value) -> bool {
+    let entry_job = entry
+        .get("failed_jobs")
+        .and_then(Value::as_array)
+        .and_then(|jobs| jobs.first());
+    match dependency.job_id {
+        Some(job_id) => {
+            entry.get("job_id").and_then(Value::as_u64) == Some(job_id)
+                || entry_job
+                    .and_then(|job| job.get("job_id"))
+                    .and_then(Value::as_u64)
+                    == Some(job_id)
+        }
+        None => entry_job
+            .map(|job| value_string(job, "name"))
+            .is_some_and(|name| name.eq_ignore_ascii_case(&dependency.job_name)),
+    }
 }
 
 /// Dependency refs for a whole cluster, if every run in it is

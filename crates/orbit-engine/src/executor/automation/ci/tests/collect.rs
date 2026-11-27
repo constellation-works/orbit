@@ -730,3 +730,68 @@ fn over_budget_completed_failure_keeps_its_investigation_budget_error() {
     assert_eq!(uninvestigated["investigated"], json!(false));
     assert_eq!(evidence["outcome_hint"], json!("retryable_error"));
 }
+
+#[test]
+fn bounded_job_log_reads_go_to_the_leaf_job_before_its_aggregate_waiter() {
+    const RUN: u64 = 201;
+    // The waiter has the smaller job id, so id order alone would read it and
+    // defer the shard whose log holds the failing test.
+    const WAITER_JOB: u64 = 9_201;
+    const SHARD_JOB: u64 = 9_202;
+    let queries = FakeQueries::authenticated()
+        .with_head("topic", HEAD)
+        .with_runs(vec![vec![run(
+            RUN,
+            "ci",
+            HEAD,
+            "completed",
+            Some("failure"),
+            "2026-10-07T02:20:00Z",
+        )]])
+        .with_failed_jobs(
+            RUN,
+            json!([
+                {
+                    "job_id": WAITER_JOB,
+                    "name": "Check / Clippy / Test",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "failed_steps": [{
+                        "name": "Await the test build and nextest shards",
+                        "conclusion": "failure",
+                    }],
+                },
+                {
+                    "job_id": SHARD_JOB,
+                    "name": "Test partition 9",
+                    "status": "completed",
+                    "conclusion": "failure",
+                    "failed_steps": [{"name": "Run nextest", "conclusion": "failure"}],
+                },
+            ]),
+        )
+        .with_log(WAITER_JOB, &checkout_log())
+        .with_log(SHARD_JOB, &checkout_log());
+    let mut bounds = input();
+    bounds["max_job_log_reads"] = json!(1);
+
+    let evidence = collect(&queries, &bounds, &mut RetryableHistory::default()).expect("collect");
+
+    let failures = evidence["current_failures"].as_array().expect("failures");
+    let state = |job_id: u64| {
+        failures
+            .iter()
+            .find(|failure| failure["job_id"] == json!(job_id))
+            .map(|failure| failure["evidence_state"].clone())
+    };
+    assert_eq!(state(SHARD_JOB), Some(json!("complete")), "{evidence:#}");
+    assert_eq!(state(WAITER_JOB), Some(json!("deferred")), "{evidence:#}");
+    let budget: Vec<_> = evidence["retryable_errors"]
+        .as_array()
+        .expect("retryable errors")
+        .iter()
+        .filter(|error| error["operation"] == json!("job_log_budget"))
+        .collect();
+    assert_eq!(budget.len(), 1, "{evidence:#}");
+    assert_eq!(budget[0]["job_id"], json!(WAITER_JOB), "{evidence:#}");
+}
