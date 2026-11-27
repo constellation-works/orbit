@@ -1885,6 +1885,91 @@ fn a_masked_decision_channel_store_refuses_instead_of_reading_as_empty() {
     assert_eq!(fx.runtime.list_decision_channels().unwrap().len(), 1);
 }
 
+/// The store holds every channel's current and previous key, so an existing
+/// store that is linked, non-regular or open to group or world is refused
+/// before any key is parsed, and the refusal never echoes the file [ORB-29148].
+fn an_unsafe_decision_channel_store_refuses_before_parsing_keys() {
+    #[cfg(unix)]
+    unsafe_store_refusals();
+}
+
+#[cfg(unix)]
+fn unsafe_store_refusals() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    const REFUSED: &str = "refusing the decision channel store";
+    const CANARY: &str = "canary-channel-key-not-for-logs";
+
+    let fx = registered_fixture();
+    let store = fx.global.join("state/decision-channels");
+    let file = store.join("channels.json");
+    let original = std::fs::read(&file).unwrap();
+    let mode = |path: &std::path::Path, bits: u32| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(bits)).unwrap();
+    };
+    let assert_refused = |fx: &Fixture, why: &str| {
+        let error = refusal(fx.runtime.list_decision_channels(), REFUSED);
+        assert!(error.contains(why), "want {why}: {error}");
+        assert!(
+            !error.contains(CANARY),
+            "the refusal leaks contents: {error}"
+        );
+        refusal(
+            fx.runtime
+                .register_decision_channel("sms", HUMAN, PLUGIN, vec![SENDER.to_string()]),
+            REFUSED,
+        );
+    };
+
+    // A group-readable state file.
+    mode(&file, 0o640);
+    assert_refused(&fx, "mode 640");
+    mode(&file, 0o600);
+    assert_eq!(fx.runtime.list_decision_channels().unwrap().len(), 1);
+
+    // A symlinked state file, even to a private file with the canary inside.
+    let target = fx.global.join("elsewhere.json");
+    std::fs::write(&target, CANARY).unwrap();
+    mode(&target, 0o600);
+    std::fs::remove_file(&file).unwrap();
+    symlink(&target, &file).unwrap();
+    assert_refused(&fx, "is a symlink");
+    std::fs::remove_file(&file).unwrap();
+
+    // A non-regular state file.
+    std::fs::create_dir(&file).unwrap();
+    assert_refused(&fx, "is not a regular file");
+    std::fs::remove_dir(&file).unwrap();
+    std::fs::write(&file, &original).unwrap();
+    mode(&file, 0o600);
+    assert_eq!(fx.runtime.list_decision_channels().unwrap().len(), 1);
+
+    // A store directory open to group or world.
+    mode(&store, 0o750);
+    assert_refused(&fx, "mode 750");
+    mode(&store, 0o700);
+    assert_eq!(fx.runtime.list_decision_channels().unwrap().len(), 1);
+
+    // A symlinked store directory.
+    let moved = fx.global.join("moved-channels");
+    std::fs::rename(&store, &moved).unwrap();
+    symlink(&moved, &store).unwrap();
+    assert_refused(&fx, "is a symlink");
+    std::fs::remove_file(&store).unwrap();
+    std::fs::rename(&moved, &store).unwrap();
+
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        original,
+        "nothing was written"
+    );
+    assert_eq!(fx.runtime.list_decision_channels().unwrap().len(), 1);
+
+    // An absent store still reads as empty.
+    std::fs::remove_dir_all(&store).unwrap();
+    assert!(fx.runtime.list_decision_channels().unwrap().is_empty());
+}
+
 crate::scenario_table!(
     mutable_scenarios,
     a_slow_decision_task_report_does_not_hold_the_channel_store_lock,
@@ -1912,4 +1997,5 @@ crate::scenario_table!(
     core_dkim_refuses_non_wsp_bytes_added_to_a_signed_header,
     a_channel_requiring_dkim_refuses_a_submission_without_a_raw_message,
     a_masked_decision_channel_store_refuses_instead_of_reading_as_empty,
+    an_unsafe_decision_channel_store_refuses_before_parsing_keys,
 );
