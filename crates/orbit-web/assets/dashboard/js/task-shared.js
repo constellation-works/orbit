@@ -5,6 +5,24 @@
 import { bindRunLink, clockStamp, el, formatDateTime, getRegisteredHosts, getWorkspace, hostWriteRefusal, isAggregateView, isHttpUrl, runHref, withHost, withWorkspace } from './common.js';
 
 export const $ = (id) => document.getElementById(id);
+// Breakpoint where the dashboard switches to the small-viewport phone layout
+// (bottom bar, two-line task rows, full-viewport open task). Mirrors the
+// `@media (max-width: 760px)` rules in shell.css, tasks.css and task-detail.css.
+export const PHONE_SHEET_QUERY = "(max-width: 760px)";
+
+export function isSmallViewport() {
+  try {
+    return typeof window.matchMedia === "function" && window.matchMedia(PHONE_SHEET_QUERY).matches;
+  } catch (_) {
+    return false;
+  }
+}
+
+export function isTaskPaneVisible() {
+  const pane = $("task-detail-pane");
+  return Boolean(pane && !pane.hidden);
+}
+
 // Rows a Tasks section loads first and adds per "Show more" [ORB-24677].
 export const TASK_SECTION_STEP = 25;
 
@@ -32,6 +50,14 @@ export const taskState = {
   taskPageId: null,
   taskPageReturn: null,
   taskPageError: null,
+  // True when the current open task was opened while the list was covered
+  // (760px and below), so it stays shown across resizes (STD-07 R43). A task
+  // opened beside the list leaves this false, so narrowing hides the pane and
+  // keeps the row marked until widening shows it again.
+  paneOpenedCovered: false,
+  // `{ id, scrollTop }` remembered when opening a task while the list is
+  // covered, so Back or esc restores the list scroll position.
+  sheetReturn: null,
   listRestore: null,
   focusPaneTitle: false,
   // A status change folded the pane: focus goes back to the row it came from.

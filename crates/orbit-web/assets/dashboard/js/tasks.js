@@ -1,12 +1,12 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getUnownedReplicas, getWorkspace, hostWriteRefusal, workspaceColor, workspacePickerIndex, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton, setBadgeDescription } from './common.js';
+import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getUnownedReplicas, getWorkspace, hostWriteRefusal, isAggregateView, workspaceColor, workspacePickerIndex, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton, setBadgeDescription } from './common.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
-import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag, taskDispatchIdentity, isSelectedTask, TASK_SECTION_STEP } from './task-shared.js';
-import { buildMutationFeedback, crewOptionsSignature, feedbackSignature, humanCrewFor } from './task-crew.js';
+import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag, taskDispatchIdentity, isSelectedTask, isSmallViewport, isTaskPaneVisible, TASK_SECTION_STEP } from './task-shared.js';
+import { aggregateCrewPayload, aggregateCrewUnavailable, buildMutationFeedback, crewOptionsSignature, explicitCrewValue, feedbackSignature, hasStaleExplicitCrew, humanCrewFor } from './task-crew.js';
 import { invalidateDistributedConsole } from './distributed.js';
 import { clearTaskAgentActionState } from './task-agent-actions.js';
 export { normalizeCrewPayload, cacheCrewPayload, hasCrewOptions } from './task-crew.js';
@@ -34,6 +34,8 @@ onWorkspaceChange(() => {
   quickActionState.clear();
   taskState.selectedTaskId = null;
   taskState.selectedTaskWorkspace = null;
+  taskState.paneOpenedCovered = false;
+  taskState.sheetReturn = null;
   taskRunLoads.clear();
   // The initial workspace selection also lands here; a task the URL named but
   // no render has shown yet must survive it.
@@ -535,6 +537,33 @@ function buildFilteredEmpty(status, text = null) {
   note.dataset.hash = `empty-${status}`;
   return note;
 }
+
+// Read-only crew text for small-viewport rows (760px and below), where the row
+// drops the crew select and changing a crew happens in the open task's head.
+function rowCrewText(task) {
+  const aggregate = isAggregateView();
+  const payload = aggregate ? aggregateCrewPayload(task) : taskState.lastCrewPayload;
+  const registryUnavailable = aggregate && aggregateCrewUnavailable(task);
+  const crews = Array.isArray(payload.crews) ? payload.crews : [];
+  const humanCrews = Array.isArray(payload.human_crews) ? payload.human_crews : [];
+  const registryEmpty = registryUnavailable || (crews.length === 0 && humanCrews.length === 0);
+  const currentValue = explicitCrewValue(task);
+  if (registryEmpty) {
+    return currentValue || (task && task.resolved_crew ? String(task.resolved_crew) : "");
+  }
+  if (currentValue) {
+    const previous = taskState.lastCrewPayload;
+    if (aggregate) taskState.lastCrewPayload = payload;
+    let stale = false;
+    try {
+      stale = !registryUnavailable && hasStaleExplicitCrew(task);
+    } finally {
+      if (aggregate) taskState.lastCrewPayload = previous;
+    }
+    return stale ? `${currentValue} (missing)` : currentValue;
+  }
+  return payload.default_crew || (task && task.resolved_crew ? String(task.resolved_crew) : "workspace");
+}
 export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
@@ -706,24 +735,29 @@ export function renderTasks(tasks, context) {
       if (strip) groupNodes.push(strip);
       if (poolNarrows && strip) rows = poolRows;
     }
+    const small = isSmallViewport();
     for (const t of rows) {
       const rowKey = `task-${taskDispatchIdentity(t)}`;
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters (selection is painted
       // apart, by syncRowSelection)
-      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.active_triage || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${taskReadiness.readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${t.workspace_name || ""}-${aggregate ? workspaceColor(t.workspace_id) : ""}-${aggregate}-${JSON.stringify(t.human_crew || null)}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, taskDispatchIdentity(t))}-${quickActionSignature(t)}-${foldedStatusSignature(t)}-${riskinessSignature(t)}-${hostWriteRefusal()}`;
+      const rowHash = `${small}-${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.active_triage || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${taskReadiness.readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${t.workspace_name || ""}-${aggregate ? workspaceColor(t.workspace_id) : ""}-${aggregate}-${JSON.stringify(t.human_crew || null)}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, taskDispatchIdentity(t))}-${quickActionSignature(t)}-${foldedStatusSignature(t)}-${riskinessSignature(t)}-${hostWriteRefusal()}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
         // Two lines beside the crew and the action: the title with its tag
         // chips, then the ID and what the task is waiting on or where its run
-        // is. The ID line comes first in the DOM so Tab goes title → crew →
-        // action; the grid draws it under the title.
+        // is. At 760px and below the crew moves onto the metadata line as muted
+        // text and no crew select is rendered in the row. The ID line comes
+        // first in the DOM so Tab goes title → crew → action; the grid draws
+        // it under the title.
+        const crewLabel = small ? rowCrewText(t) : "";
         const meta = el("span", { class: "row-meta" }, [
           makeCopyButton(t.id, { class: "id mono", description: "Copy task ID" }),
           t.status === "backlog" ? taskReadiness.buildRowReason(t) : null,
           run ? buildRunCell(t) : null,
           buildRiskRowPart(t),
+          crewLabel ? el("span", { class: "row-crew mono", text: crewLabel }) : null,
         ]);
         const [prefixes, rest] = splitTitlePrefix(t.title);
         const tags = [
@@ -753,7 +787,7 @@ export function renderTasks(tasks, context) {
         row = el("div", { class: `row${quickError ? " has-quick-error" : ""}${statusNote ? " has-status-note" : ""}`, title: t.title }, [
           meta,
           titleLine,
-          buildCrewUpdateControl(t, context),
+          small ? null : buildCrewUpdateControl(t, context),
           buildQuickAction(t, context),
           ...(quickError ? [quickError] : []),
           statusNote,
@@ -768,7 +802,7 @@ export function renderTasks(tasks, context) {
           expanded: false,
           controls: "task-detail-pane",
           onToggle: () => {
-            if (isSelectedTask(t) && !taskState.pinnedExternalTask) closeTaskPane(context, { forget: true });
+            if (isSelectedTask(t) && !taskState.pinnedExternalTask && isTaskPaneVisible()) closeTaskPane(context, { forget: true });
             else selectTask(t.id, context, { anchor: row, workspace: row.dataset.workspace });
           },
         });
@@ -830,16 +864,20 @@ function restoreSectionFocus(body, moreFocus) {
 }
 
 // The selected row reads as selected without being rebuilt: its class and
-// its disclosure state are set on the node the list already holds.
+// its disclosure state are set on the node the list already holds. When
+// narrowing hides a pane opened beside the list (STD-07 R43), the row stays
+// marked while `aria-expanded` reflects that the pane is hidden.
 function syncRowSelection(body) {
   const selected = !taskState.pinnedExternalTask && taskState.selectedTaskId
     ? `task-${taskState.selectedTaskWorkspace || getWorkspace() || ""}:${taskState.selectedTaskId}` : null;
+  const paneShown = Boolean(taskState.taskPageId) || !isSmallViewport() || taskState.paneOpenedCovered;
   for (const row of body.querySelectorAll(".row")) {
     if (!row.dataset.key || !row.dataset.key.startsWith("task-")) continue;
     const on = row.dataset.key === selected;
     row.classList.toggle("expanded", on);
     const button = row.querySelector("[data-row-focus]");
-    if (button && button.getAttribute("aria-expanded") !== String(on)) button.setAttribute("aria-expanded", String(on));
+    const expanded = String(on && paneShown);
+    if (button && button.getAttribute("aria-expanded") !== expanded) button.setAttribute("aria-expanded", expanded);
   }
 }
 

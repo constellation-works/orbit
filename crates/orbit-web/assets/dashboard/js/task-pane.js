@@ -2,7 +2,7 @@
 // keyboard navigation around it.
 
 import { el, escCloseButton, getWorkspace, hostWriteRefusal, makeCopyButton, syncNodes } from './common.js';
-import { $, taskState } from './task-shared.js';
+import { $, isSmallViewport, PHONE_SHEET_QUERY, taskState } from './task-shared.js';
 import * as taskShared from './task-shared.js';
 import { closeTaskPane, filterTasks, focusTaskRow, openTaskPage, revealTaskRow, selectTask, stopRowInteraction } from './task-nav.js';
 import { taskDetailState, taskDrainSignature, taskDrainState } from './task-data.js';
@@ -214,7 +214,10 @@ export function renderTaskPane(filtered, context) {
   }
   syncNodes(paneBody, nodes);
   restoreDecisionNotes();
-  const open = nodes.length > 0;
+  // STD-07 R43: a task opened beside the list at a wider width hides when the
+  // window narrows to one column, leaving the list with its row marked; a task
+  // opened while the list was covered (or as a full page) stays shown.
+  const open = nodes.length > 0 && (!isSmallViewport() || Boolean(taskState.taskPageId) || taskState.paneOpenedCovered);
   pane.hidden = !open;
   const main = $("tasks-main");
   if (main) {
@@ -281,6 +284,34 @@ function buildListTaskDetail(t, drafts, existing, context) {
 }
 function buildPaneHead(task, pinned, context) {
   const page = taskState.taskPageId === task.id;
+  // Previous and next step through the list while it is covered (760px and
+  // below) and are not rendered while the list is visible beside the pane.
+  const showNav = !page && !pinned && isSmallViewport();
+  const { rows, index } = showNav ? listTaskPosition(task) : { rows: [], index: -1 };
+  const hasPrev = showNav && index > 0;
+  const hasNext = showNav && index >= 0 && index < rows.length - 1;
+  const prev = showNav ? el("button", {
+    class: "task-pane-icon task-pane-prev",
+    type: "button",
+    "aria-label": "Previous task",
+    "aria-description": "Previous task in list (K)",
+  }) : null;
+  if (prev) {
+    prev.disabled = !hasPrev;
+    prev.addEventListener("click", (event) =>
+      moveTaskSelection(-1, { focusButton: event.detail === 0 ? ".task-pane-prev" : null }));
+  }
+  const next = showNav ? el("button", {
+    class: "task-pane-icon task-pane-next",
+    type: "button",
+    "aria-label": "Next task",
+    "aria-description": "Next task in list (J)",
+  }) : null;
+  if (next) {
+    next.disabled = !hasNext;
+    next.addEventListener("click", (event) =>
+      moveTaskSelection(1, { focusButton: event.detail === 0 ? ".task-pane-next" : null }));
+  }
   const back = page ? escCloseButton("Close task page (Esc)", {
     description: "Back to the task list at this task",
     onClick: () => closeTaskPane(context, { forget: true }),
@@ -301,7 +332,7 @@ function buildPaneHead(task, pinned, context) {
   const key = `pane-head-${taskShared.taskDispatchIdentity(task)}`;
   // The head carries only the id and title; status, crew, run and dates live in
   // the detail's Details section, which edits them.
-  const baseHash = `${taskShared.taskDispatchIdentity(task)}-${task.title}-${pinned}-${page}`;
+  const baseHash = `${taskShared.taskDispatchIdentity(task)}-${task.title}-${pinned}-${page}-${showNav}-${hasPrev}-${hasNext}`;
   const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: task.title || task.id });
   title.tabIndex = -1;
   const id = makeCopyButton(task.id, { class: "id mono", description: "Copy task ID" });
@@ -309,7 +340,7 @@ function buildPaneHead(task, pinned, context) {
   const head = el("div", { class: "task-pane-head" }, [
     el("div", { class: "task-pane-bar" }, page
       ? [id, spacer, back]
-      : [id, spacer, full, close]),
+      : [id, spacer, prev, next, full, close]),
     title,
   ]);
   head.dataset.key = key;
@@ -345,7 +376,6 @@ const PANE_WIDTH_KEY = "orbit.dashboard.taskPaneWidth";
 const PANE_WIDTH_DEFAULT = 42;
 const PANE_WIDTH_MIN = 25;
 const PANE_WIDTH_MAX = 70;
-const PHONE_SHEET_QUERY = "(max-width: 760px)";
 let paneWidth = PANE_WIDTH_DEFAULT;
 let sheetOpen = false;
 let sheetInert = [];
@@ -356,6 +386,23 @@ function isEditableTarget(target) {
 
 function taskIdOfRow(row) {
   return row?.dataset.taskId || null;
+}
+
+function visibleListRows() {
+  const body = $("tasks-body");
+  if (!body) return [];
+  return Array.from(body.querySelectorAll("[data-row-focus]"))
+    .filter((button) => typeof button.getClientRects !== "function" || button.getClientRects().length > 0)
+    .map((button) => button.closest(".row"))
+    .filter(Boolean);
+}
+
+function listTaskPosition(task) {
+  const rows = visibleListRows();
+  const workspace = task.workspace_id || taskState.selectedTaskWorkspace || getWorkspace() || "";
+  const index = rows.findIndex((row) =>
+    taskIdOfRow(row) === task.id && (row.dataset.workspace || "") === workspace);
+  return { rows, index };
 }
 
 // Roving focus moved to another row: while the pane shows a list task, it
@@ -369,43 +416,42 @@ export function followRovingSelection(button) {
   }
 }
 
-// j/k from inside the pane: select the next or previous row and keep the
-// keyboard in the pane, on the new task's heading.
-function moveTaskSelection(step) {
+// j/k (and the previous/next head buttons while the list is covered): select
+// the next or previous row in the list's current order and keep focus inside
+// the pane.
+function moveTaskSelection(step, { focusButton = null } = {}) {
   const body = $("tasks-body");
   if (!body || !taskState.paneContext) return false;
-  const buttons = Array.from(body.querySelectorAll("[data-row-focus]"))
-    .filter((button) => typeof button.getClientRects !== "function" || button.getClientRects().length > 0);
-  const at = buttons.findIndex((button) => taskIdOfRow(button.closest(".row")) === taskState.selectedTaskId &&
-    button.closest(".row").dataset.workspace === (taskState.selectedTaskWorkspace || getWorkspace() || ""));
-  const next = at < 0 ? buttons[0] : buttons[at + step];
-  const taskId = next ? taskIdOfRow(next.closest(".row")) : null;
+  const rows = visibleListRows();
+  const workspace = taskState.selectedTaskWorkspace || getWorkspace() || "";
+  const at = rows.findIndex((row) =>
+    taskIdOfRow(row) === taskState.selectedTaskId && (row.dataset.workspace || "") === workspace);
+  const next = at < 0 ? rows[0] : rows[at + step];
+  const taskId = next ? taskIdOfRow(next) : null;
   if (!taskId) return false;
-  selectTask(taskId, taskState.paneContext, { workspace: next.closest(".row").dataset.workspace });
-  revealTaskRow(taskId);
-  focusPaneHeading();
+  selectTask(taskId, taskState.paneContext, { workspace: next.dataset.workspace, replaceHistory: true });
+  if (!isSmallViewport()) revealTaskRow(taskId);
+  if (focusButton) {
+    const button = $("task-detail-body")?.querySelector?.(focusButton);
+    if (button && !button.disabled) button.focus({ preventScroll: true });
+    else focusPaneHeading();
+  } else {
+    focusPaneHeading();
+  }
   return true;
 }
 
-function phoneSheet() {
-  try {
-    return typeof window.matchMedia === "function" && window.matchMedia(PHONE_SHEET_QUERY).matches;
-  } catch (_) {
-    return false;
-  }
-}
-
-// At phone width the pane covers the board inside the content area. Only
-// that covered board becomes inert; global search and navigation stay usable.
+// At phone width the open task covers the entire viewport (header, list and
+// bottom bar). Make every sibling up to document.body inert while it is open.
 function syncPaneChrome(open) {
   const pane = $("task-detail-pane");
   if (!pane) return;
-  const sheet = open && phoneSheet() && !pane.closest?.(".tab-pane:not(.active)");
+  const sheet = open && isSmallViewport() && !pane.closest?.(".tab-pane:not(.active)");
   if (sheet === sheetOpen) return;
   sheetOpen = sheet;
   if (sheet) {
-    pane.setAttribute("role", "region");
-    pane.removeAttribute("aria-modal");
+    pane.setAttribute("role", "dialog");
+    pane.setAttribute("aria-modal", "true");
     pane.setAttribute("aria-labelledby", "task-pane-title");
   } else if (typeof pane.removeAttribute === "function") {
     pane.removeAttribute("role");
@@ -419,9 +465,9 @@ function syncPaneChrome(open) {
 function setSheetInert(pane) {
   for (const node of sheetInert) node.inert = false;
   sheetInert = [];
-  for (let node = pane; node && node.parentElement && node !== $("tasks-main"); node = node.parentElement) {
+  for (let node = pane; node && node.parentElement && node !== document.body; node = node.parentElement) {
     for (const sibling of node.parentElement.children) {
-      if (sibling === node || sibling.inert || sibling.tagName === "SCRIPT") continue;
+      if (sibling === node || sibling.inert || sibling.tagName === "SCRIPT" || sibling.tagName === "DIALOG") continue;
       sibling.inert = true;
       sheetInert.push(sibling);
     }
@@ -549,13 +595,18 @@ export function wireTaskPane(context) {
     event.preventDefault();
     closeTaskPane(taskState.paneContext || context, { forget: true });
   });
-  // The sheet follows the viewport and is released whenever Tasks is not the
-  // destination on screen.
+  // Crossing 760px swaps two-line rows, prev/next buttons, and R43 pane
+  // visibility in one render pass, and releases the sheet when leaving Tasks.
   try {
-    window.matchMedia(PHONE_SHEET_QUERY).addEventListener("change", () => syncPaneChrome(!pane.hidden));
+    window.matchMedia(PHONE_SHEET_QUERY).addEventListener("change", () => {
+      if (taskState.paneContext) taskShared.rerender(taskState.paneContext);
+      else syncPaneChrome(!pane.hidden);
+    });
   } catch (_) {
     /* no media queries: the pane stays a side pane */
   }
-  // After the router has switched destinations for the same hashchange.
-  window.addEventListener("hashchange", () => setTimeout(() => syncPaneChrome(!pane.hidden), 0));
+  // After the router has switched destinations for the same navigation.
+  const syncChromeAfterNav = () => setTimeout(() => syncPaneChrome(!pane.hidden), 0);
+  window.addEventListener("hashchange", syncChromeAfterNav);
+  window.addEventListener("popstate", syncChromeAfterNav);
 }

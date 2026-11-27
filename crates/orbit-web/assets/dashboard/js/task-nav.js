@@ -1,7 +1,7 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters.
 
 import { ALL_WORKSPACES_TOKEN, captureWorkspaceVisit, getSelectedWorkspaces, getWorkspace, isWorkspaceListReady, onWorkspaceChange, onWorkspaceNamesChange, panelCanRender, persistScopeToUrl, rememberWorkspace, setSelectedWorkspaces, setWorkspace, el, fetchJson, isAggregateView, copyText, workspaceCatalogEntries, workspaceColor, workspaceDisplayName } from './common.js';
-import { $, taskState, onDecisionAnswered, rerender, taskList, activeStatusSet, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskDetailPath, taskDispatchIdentity, isSelectedTask, STATUS_LABELS } from './task-shared.js';
+import { $, taskState, onDecisionAnswered, rerender, taskList, activeStatusSet, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskDetailPath, taskDispatchIdentity, isSelectedTask, isSmallViewport, isTaskPaneVisible, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
 import { humanCrewFor, isOpenTask, isMyWorkTask, loadAggregateCrews, myWorkCrewNames } from './task-crew.js';
@@ -175,18 +175,26 @@ export function revealTaskRow(taskId, block = "nearest") {
   });
 }
 
-// Select a list row: the pane moves to it. The clicked row stays where the
-// pointer left it, even when opening the pane narrows the list and its rows
-// rewrap, so selection never costs the operator their place.
-export function selectTask(taskId, context, { anchor = null, workspace = null } = {}) {
+// Select a list row: the pane moves to it. Beside the list the clicked row
+// stays where the pointer left it; while the list is covered (760px and below)
+// opening a task adds a history entry so Back closes it at its prior scroll.
+export function selectTask(taskId, context, { anchor = null, workspace = null, replaceHistory = false } = {}) {
+  const body = $("tasks-body");
   const top = anchor && typeof anchor.getBoundingClientRect === "function" ? anchor.getBoundingClientRect().top : null;
+  const covered = isSmallViewport();
+  const wasVisible = isTaskPaneVisible();
+  const push = covered && !wasVisible && !replaceHistory;
+  if (push) {
+    taskState.sheetReturn = { id: taskId, scrollTop: body ? body.scrollTop : 0 };
+  }
+  taskState.paneOpenedCovered = covered;
   taskState.pinnedExternalTask = null;
   taskState.selectedTaskId = taskId;
   const owner = taskList(context).find(task => task.id === taskId && (!workspace || task.workspace_id === workspace));
   taskState.selectedTaskWorkspace = workspace || owner?.workspace_id || getWorkspace() || null;
-  setOpenTask(taskId);
+  setOpenTask(taskId, { push });
   rerender(context);
-  keepRowInPlace(taskId, top);
+  if (!covered) keepRowInPlace(taskId, top);
 }
 
 function keepRowInPlace(taskId, top) {
@@ -211,13 +219,28 @@ export function closeTaskPane(context, { forget = false } = {}) {
   const active = document.activeElement;
   const focusWasInPane = !active || active === document.body || Boolean(pane && pane.contains && pane.contains(active));
   const row = findTaskRow(taskId);
-  const top = row && typeof row.getBoundingClientRect === "function" ? row.getBoundingClientRect().top : null;
+  const top = !isSmallViewport() && row && typeof row.getBoundingClientRect === "function" ? row.getBoundingClientRect().top : null;
+  const popSheetHistory = Boolean(window.history.state?.orbitTaskSheet) && typeof window.history?.back === "function";
+  const savedScroll = taskState.sheetReturn?.scrollTop ?? null;
+  taskState.paneOpenedCovered = false;
+  taskState.sheetReturn = null;
   if (taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === taskId) taskState.pinnedExternalTask = null;
   if (taskState.selectedTaskId === taskId) taskState.selectedTaskId = null;
-  if (taskState.openTaskId === taskId) setOpenTask(null);
   // Reopening re-reads the detail, which is also the retry for a read that
   // failed.
   if (forget) forgetTaskDetailLoad(owner || { id: taskId, workspace_id: taskState.selectedTaskWorkspace });
+  if (popSheetHistory) {
+    openTaskGeneration += 1;
+    taskState.openTaskId = null;
+    if (taskState.commentTarget && taskState.commentTarget.taskId === taskId) taskState.commentTarget = null;
+    if (savedScroll != null) taskState.listRestore = { id: taskId, scrollTop: savedScroll };
+    rerender(context);
+    if (focusWasInPane) focusTaskRow(taskId);
+    window.history.back();
+    return;
+  }
+  if (taskState.openTaskId === taskId) setOpenTask(null, { clearSheetState: true });
+  if (savedScroll != null) taskState.listRestore = { id: taskId, scrollTop: savedScroll };
   rerender(context);
   keepRowInPlace(taskId, top);
   if (focusWasInPane) focusTaskRow(taskId);
@@ -283,6 +306,7 @@ function leaveTaskPage(context) {
   if (!taskId) return;
   const fromList = Boolean(taskState.taskPageReturn && taskState.taskPageReturn.id === taskId);
   exitTaskPageState();
+  if (!fromList && isSmallViewport()) taskState.paneOpenedCovered = false;
   if (!taskState.pinnedExternalTask && filterTasks(taskList(context), context).some((task) => task.id === taskId)) {
     taskState.selectedTaskId = taskId;
   }
@@ -298,14 +322,30 @@ function parseOpenTaskId(value) {
   return /^[\w.-]{1,64}$/.test(id) ? id : null;
 }
 
-// Mirror the open task into the current `#tasks` entry. The entry is replaced,
-// not pushed, so toggling a row never adds a Back step.
-function writeOpenTaskToUrl(taskId) {
+// Mirror the open task into the `#tasks` hash. Beside the list the entry is
+// replaced so toggling a row never adds a Back step; while the list is covered
+// (`push: true`), a new entry is pushed so browser Back closes the task and
+// returns to the list.
+function writeOpenTaskToUrl(taskId, { push = false, clearSheetState = false } = {}) {
   const hash = window.location.hash || "";
   const split = hash.indexOf("?");
   const route = split < 0 ? hash : hash.slice(0, split);
-  if (route !== "#tasks" || typeof window.history?.replaceState !== "function") return;
+  if (route !== "#tasks" && route !== "") return;
+  if (push && typeof window.history?.pushState !== "function") return;
+  if (!push && typeof window.history?.replaceState !== "function") return;
   const params = new URLSearchParams(split < 0 ? "" : hash.slice(split + 1));
+  const prevState = window.history.state && typeof window.history.state === "object" ? window.history.state : {};
+  // If a task was selected beside the list before narrowing (R43), the current
+  // entry still carries `open=`. Strip it from the base entry before pushing
+  // the covered sheet so Back always lands on the list with a distinct URL.
+  if (push && params.has("open") && typeof window.history?.replaceState === "function") {
+    const baseParams = new URLSearchParams(params);
+    baseParams.delete("open");
+    baseParams.delete("comment");
+    const baseQuery = baseParams.toString();
+    const baseHash = baseQuery ? `#tasks?${baseQuery}` : "#tasks";
+    window.history.replaceState({ ...prevState, orbitTaskSheet: false }, "", baseHash);
+  }
   if (taskId) params.set("open", taskId);
   else params.delete("open");
   const target = taskState.commentTarget;
@@ -313,15 +353,22 @@ function writeOpenTaskToUrl(taskId) {
   else params.delete("comment");
   const query = params.toString();
   const next = query ? `#tasks?${query}` : "#tasks";
-  if (next !== hash) window.history.replaceState(null, "", next);
+  if (push) {
+    window.history.pushState({ ...prevState, orbitTaskSheet: true }, "", next);
+    recordRoutedHref();
+  } else if (next !== hash || (clearSheetState && prevState.orbitTaskSheet)) {
+    const nextState = clearSheetState ? { ...prevState, orbitTaskSheet: false } : prevState;
+    window.history.replaceState(nextState, "", next);
+    recordRoutedHref();
+  }
 }
 
-export function setOpenTask(taskId) {
+export function setOpenTask(taskId, options = {}) {
   openTaskGeneration += 1;
   taskState.openTaskId = taskId;
   // A comment link names one task's thread; another task drops it.
   if (taskState.commentTarget && taskState.commentTarget.taskId !== taskId) taskState.commentTarget = null;
-  writeOpenTaskToUrl(taskId);
+  writeOpenTaskToUrl(taskId, options);
 }
 
 // Every path that closes a task detail goes through here so the URL stops
@@ -331,8 +378,10 @@ export function collapseTask(taskId, workspace = null) {
   if (taskState.taskPageId === taskId) return;
   // A same-id task selected in another workspace (aggregate view) stays open.
   if (workspace && taskState.selectedTaskWorkspace && taskState.selectedTaskWorkspace !== workspace) return;
+  taskState.paneOpenedCovered = false;
+  taskState.sheetReturn = null;
   if (taskState.selectedTaskId === taskId) taskState.selectedTaskId = null;
-  if (taskState.openTaskId === taskId) setOpenTask(null);
+  if (taskState.openTaskId === taskId) setOpenTask(null, { clearSheetState: true });
 }
 
 // Show the task a hash names, once the list that may contain it has rendered.
@@ -550,6 +599,22 @@ export function buildTasksFilterHash(context) {
   return qs ? `#tasks?${qs}` : "#tasks";
 }
 
+function sameFilterParams(query, context) {
+  const expected = filterParams(context);
+  const statusParam = query.get("status");
+  if (statusParam == null) {
+    const defaults = defaultActiveStatuses(context);
+    const active = activeStatusSet(context);
+    if (active.size !== defaults.length || !defaults.every((status) => active.has(status))) return false;
+  } else if (statusParam !== expected.get("status")) {
+    return false;
+  }
+  for (const key of ["ready", "pilot", "crew", "waiting"]) {
+    if ((query.get(key) || "") !== (expected.get(key) || "")) return false;
+  }
+  return true;
+}
+
 // `page` is the `#tasks/<id>` route segment: that task's full-page view. It
 // names only the task, so the list filter behind it is left as it was.
 export function applyTasksHashQuery(query, context, page = null) {
@@ -557,11 +622,14 @@ export function applyTasksHashQuery(query, context, page = null) {
   // A router replay of the route we just wrote is still the same lookup.
   // Retire it only when navigation actually changes the represented state.
   const current = buildTasksHash(context);
+  const previousOpen = taskState.openTaskId;
+  const wasOpen = Boolean(previousOpen || taskState.selectedTaskId || taskState.pinnedExternalTask);
   const open = pageId || parseOpenTaskId(query.get("open"));
   const commentNumber = open && /^[1-9]\d{0,5}$/.test(query.get("comment") || "") ? Number(query.get("comment")) : null;
   const replay = pageId
     ? current === `#tasks/${encodeURIComponent(pageId)}${commentNumber ? `?comment=${commentNumber}` : ""}`
     : query.toString() === (current.split("?")[1] || "");
+  const filterUnchanged = !pageId && sameFilterParams(query, context);
   if (taskState.openTaskId !== open) {
     taskState.selectedTaskWorkspace = null;
     if (taskState.selectedTaskId && taskState.selectedTaskId !== open) taskState.selectedTaskId = null;
@@ -582,7 +650,27 @@ export function applyTasksHashQuery(query, context, page = null) {
   const fromPage = Boolean(taskState.taskPageId) || returningFromPage;
   returningFromPage = false;
   exitTaskPageState();
+  if (!open) {
+    const savedScroll = taskState.sheetReturn ? taskState.sheetReturn.scrollTop : null;
+    taskState.paneOpenedCovered = false;
+    taskState.sheetReturn = null;
+    if (wasOpen && !fromPage) {
+      taskState.listRestore = { id: previousOpen, scrollTop: savedScroll };
+    }
+  } else if (isSmallViewport()) {
+    if (!taskState.paneOpenedCovered) {
+      const body = $("tasks-body");
+      taskState.sheetReturn = { id: open, scrollTop: body ? body.scrollTop : 0 };
+    }
+    taskState.paneOpenedCovered = true;
+  }
   if (fromPage && query.toString() === (buildTasksListHash(context).split("?")[1] || "")) return;
+  // Back or Forward between the list and a covered task sheet changes only
+  // `open=`: repaint immediately without resetting pagination or scroll.
+  if (!fromPage && filterUnchanged && ((wasOpen && !open) || (!wasOpen && open))) {
+    rerender(context);
+    return;
+  }
   // A link that only names a task (`#tasks?open=ID`) opens it under whatever
   // filter the operator already has; reading it as "no filter" would reset
   // the chips to their defaults.
@@ -590,7 +678,7 @@ export function applyTasksHashQuery(query, context, page = null) {
   // A replay names the list already shown. Back fires popstate and then
   // hashchange for the address the router just normalized; the second must
   // not send the list to its first page and top.
-  if (!replay && context && typeof context.resetTaskPagination === "function") {
+  if (!replay && !filterUnchanged && context && typeof context.resetTaskPagination === "function") {
     context.resetTaskPagination();
   }
   const order = statusOrder(context);

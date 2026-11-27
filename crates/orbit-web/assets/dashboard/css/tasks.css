@@ -345,6 +345,14 @@ main.tasks-layout > .controls {
    above the workspace base rate. */
 .risk-part { color: var(--fg-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .risk-part.risk-elevated { color: var(--warn-fg); }
+/* Small-viewport crew text on the metadata line (no crew select in the row). */
+.row-crew {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-mute);
+}
 .status-cell {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr);
@@ -734,6 +742,77 @@ main.tasks-layout > .controls {
   #tasks-body > .row.no-quick .task-quick-cell { display: none; }
 }
 
+/* Small viewports (760px and below): two-line rows. Line 1 is the title with
+   any qualifying badge; line 2 puts ID, wait or run, risk and crew as muted
+   metadata on the left and the row's action in one fixed-width column on the
+   right across rows and groups. No crew select is rendered in the row. Placed
+   after the tasks-panel container queries so widths 621–760px follow it too. */
+@media (max-width: 760px) {
+  #tasks-body { --task-action-width: 73px; }
+  #tasks-body > .row,
+  #tasks-body > .row.no-quick {
+    grid-template-columns: minmax(0, 1fr) var(--task-action-width);
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      "title title"
+      "meta quick";
+    row-gap: var(--space-2);
+  }
+  #tasks-body > .row.no-quick .task-quick-cell { display: flex; }
+  #tasks-body[data-quick-actions="none"] > .row,
+  #tasks-body[data-quick-actions="none"] > .row.no-quick {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "title"
+      "meta";
+  }
+  #tasks-body[data-quick-actions="none"] > .row .task-quick-cell { display: none; }
+  #tasks-body > .row > .title-line { grid-area: title; }
+  #tasks-body > .row > .row-meta { grid-area: meta; }
+  #tasks-body > .row > .crew-cell { display: none; }
+  #tasks-body > .row > .task-quick-cell { grid-area: quick; }
+  #tasks-body > .row.has-quick-error {
+    grid-template-areas:
+      "title title"
+      "meta quick"
+      "error error";
+  }
+  #tasks-body > .row.has-status-note {
+    grid-template-areas:
+      "title title"
+      "meta quick"
+      "note note";
+  }
+  #tasks-body > .row.has-quick-error.has-status-note {
+    grid-template-areas:
+      "title title"
+      "meta quick"
+      "error error"
+      "note note";
+  }
+  #tasks-body[data-quick-actions="none"] > .row.has-quick-error {
+    grid-template-areas:
+      "title"
+      "meta"
+      "error";
+  }
+  #tasks-body[data-quick-actions="none"] > .row.has-status-note {
+    grid-template-areas:
+      "title"
+      "meta"
+      "note";
+  }
+  #tasks-body[data-quick-actions="none"] > .row.has-quick-error.has-status-note {
+    grid-template-areas:
+      "title"
+      "meta"
+      "error"
+      "note";
+  }
+  #tasks-body > .row > .task-quick-error { grid-area: error; }
+  #tasks-body > .row > .task-status-note { grid-area: note; }
+}
+
 /* The filter bar, then the list below it; the Drain dock (the Auto-drain
    status card, Start a window, Log, Notices) beside both, its tab bar
    level with the bar. With `filter-spans` the bar takes both columns and the
@@ -1068,10 +1147,13 @@ main.task-pane-resizing { cursor: col-resize; user-select: none; }
   -webkit-mask: var(--icon) center / contain no-repeat;
   mask: var(--icon) center / contain no-repeat;
 }
+.task-pane-prev { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 15l6-6 6 6'/%3E%3C/svg%3E"); }
+.task-pane-next { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); }
 .task-pane-full { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 5h5v5M19 5l-8 8M18 14v5H5V6h5'/%3E%3C/svg%3E"); }
 /* Level with the 32px open-full-page icon beside it. */
 .task-pane-bar .esc-close { height: 32px; }
-.task-pane-icon:hover { color: var(--fg); background: var(--bg-well); }
+.task-pane-icon:hover:not(:disabled) { color: var(--fg); background: var(--bg-well); }
+.task-pane-icon:disabled { opacity: 0.35; cursor: default; }
 .task-pane-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* `#tasks/<id>`: the pane takes the content width and the list waits hidden
@@ -1081,19 +1163,31 @@ main.tasks-layout.task-page-mode > .controls,
 main.tasks-layout.task-page-mode > .col-tasks,
 main.tasks-layout.task-page-mode > .task-pane-resizer { display: none !important; }
 main.tasks-layout.task-page-mode > .task-detail-pane { grid-column: 1; grid-row: 1; justify-self: center; width: 100%; max-width: 1280px; }
-/* On a phone the pane fills the content area below the shared chrome, so
-   global search stays reachable while its head and footer remain in view. */
+/* At 760px and below an open task fills the entire viewport, covering the
+   header and bottom bar. Lift the Tasks tab-pane stacking context above the
+   chrome (topbar z-index 30, phone-nav z-index 25) while the pane is open. */
 @media (max-width: 760px) {
+  .main-col > .tab-pane[data-tab="tasks"].active:has(> main.tasks-layout.task-pane-open) {
+    z-index: 400;
+    animation: none;
+  }
   main.tasks-layout.task-pane-open { grid-template-columns: minmax(0, 1fr) !important; }
   main.tasks-layout.task-pane-open > .task-pane-resizer { display: none; }
   .task-detail-pane {
-    position: absolute;
+    position: fixed;
     inset: 0;
     z-index: 400;
     border: 0;
     border-radius: 0;
-    padding-bottom: env(safe-area-inset-bottom);
+    padding: 0;
   }
+  .task-detail-pane .task-pane-head {
+    padding: max(var(--space-16), env(safe-area-inset-top)) var(--space-16) var(--space-16);
+    background:
+      linear-gradient(var(--hair), var(--hair)) var(--space-16) 100% / calc(100% - 2 * var(--space-16)) 1px no-repeat,
+      var(--bg);
+  }
+  .task-detail-pane .task-pane-bar { gap: var(--space-6); }
   main.tasks-layout.task-page-mode > .task-detail-pane { max-width: none; }
 }
 
