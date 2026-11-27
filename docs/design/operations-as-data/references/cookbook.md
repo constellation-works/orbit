@@ -258,8 +258,8 @@ the authorization matrix golden in `crates/orbit-cli/tests/output/output_goldens
 
 Replace the noun's arm in `command/operation/registry.rs` with the generic
 helper `registry_operation` (runtime need from `effect`, audit metadata from the
-noun spec and `cli_path`). Keep any input-dependent override, such as `governed_when` or a
-flag that needs the full runtime, around the helper, and check the derived audit
+noun spec and `cli_path`). Keep any input-dependent override, such as a flag
+that needs the full runtime, around the helper, and check the derived audit
 labels against the old arm.
 
 **Migrating part of a noun.** When only some verbs move (task reads), keep

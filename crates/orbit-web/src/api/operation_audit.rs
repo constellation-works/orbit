@@ -2,8 +2,8 @@
 //! authorizes and records it itself.
 //!
 //! An operation that runs through an app's `exec` is recorded there. The
-//! handlers left here (script grants, routine breakers, distributed drains)
-//! move to `exec` with their subjects.
+//! handlers left here (script grants, routine breakers) move to `exec` with
+//! their subjects.
 
 use std::borrow::Cow;
 use std::ffi::OsStr;

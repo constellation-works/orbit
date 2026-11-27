@@ -8,7 +8,7 @@
 
 #![expect(
     clippy::arbitrary_source_item_ordering,
-    reason = "macro_rules! boxed_context_dispatch/core_dispatch/runtime_dispatch/runtime_env_dispatch must precede their pub(super) re-export for sibling operation::registry"
+    reason = "dispatch macros must precede their pub(super) re-export for operation::registry"
 )]
 
 use std::ffi::OsStr;
@@ -229,25 +229,6 @@ impl CommandOperation {
         self
     }
 
-    /// Mark this invocation as performing a governed operation.
-    ///
-    /// `when` is the destructiveness predicate: `gc worktrees` reports without
-    /// it and reaps with it, and only the second is governed.
-    pub(super) fn governed_when(
-        mut self,
-        when: bool,
-        command: &'static str,
-        subcommand: &'static str,
-    ) -> Self {
-        if when {
-            self.governed = Some(GovernedCommand {
-                command,
-                subcommand,
-            });
-        }
-        self
-    }
-
     /// Mark this invocation as a path a plugin backend may use.
     ///
     /// `when` is the subcommand predicate: `orbit tool run` is a callback,
@@ -267,15 +248,6 @@ impl CommandOperation {
         }
         self
     }
-}
-
-macro_rules! runtime_dispatch {
-    ($variant:ident) => {{
-        |command, context| match command {
-            Commands::$variant(command) => command.execute(context.runtime()?),
-            _ => dispatch_mismatch(stringify!($variant)),
-        }
-    }};
 }
 
 /// Dispatch a command that runs through an app's `exec`, handing it the
@@ -313,7 +285,7 @@ macro_rules! boxed_context_dispatch {
 }
 
 // Shared only with the sibling registry; dispatch helpers stay inside operation.
-pub(super) use {boxed_context_dispatch, core_dispatch, core_env_dispatch, runtime_dispatch};
+pub(super) use {boxed_context_dispatch, core_dispatch, core_env_dispatch};
 
 pub(super) fn dispatch_mismatch(variant: &str) -> CommandOut {
     Err(OrbitError::Execution(format!(

@@ -589,8 +589,8 @@ The `Commands::Friction` arm in
 calls one helper, `registry_operation`, which derives `RuntimeNeed` from
 `effect` and `admin_meta` from `cli_name`, `audit_target_type`, `cli_path` and
 the `audit_target_param` value. The `Commands::AutoTask` arm is the same one
-call. Arms that need more, such as `governed_when` for a flag-gated destructive
-command, add it around the helper.
+call. Arms that need more, such as a flag-gated `RuntimeNeed` override, add it
+around the helper.
 
 **Implemented for auto-task and the task reads: the CLI always goes through the
 tool.** Every migrated verb executes by `run_tool`, including the CLI-only ones,

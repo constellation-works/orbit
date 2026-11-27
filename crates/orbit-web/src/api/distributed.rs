@@ -5,10 +5,9 @@
 //!
 //! An HTTP projection of owner-domain lifecycle APIs that already exist. It
 //! reuses the dashboard's task and run views rather than adding a console of
-//! its own, and it holds no lifecycle state: every read is
-//! [`OrbitRuntime::distributed_claim_console`] and every write ends in the same
-//! canonical approve / revoke / recover transaction the owner landing consumer
-//! uses.
+//! its own, and it holds no lifecycle state: every read and every write runs
+//! through [`orbit_core::app::review::exec`], ending in the same canonical
+//! approve / revoke / recover transaction the owner landing consumer uses.
 //!
 //! # Where authority comes from
 //!
@@ -38,35 +37,29 @@
 //! no arbitrary pipeline inputs. Recovery is here because there is no heartbeat, so the
 //! decision that an attempt is over belongs to a human.
 
-use crate::api::helpers;
-use std::time::Instant;
+use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_CLAIM_RECOVER, DASHBOARD_HANDOFF_APPROVE, DASHBOARD_HANDOFF_RETRY,
-    DASHBOARD_HANDOFF_REVOKE, GovernedOperation,
+    DASHBOARD_HANDOFF_REVOKE,
 };
-use orbit_core::application::operator_input;
-use orbit_core::application::review::{
-    DistributedClaimState, ExpectedCandidate, HandoffConsoleRefusal,
+use orbit_core::app::review::{
+    self, DashboardAction, DashboardWrite, DashboardWritten, DistributedClaimState,
+    ExpectedCandidate, HandoffConsoleRefusal,
 };
-use orbit_core::{OrbitError, OrbitRuntime, TaskStatus};
+use orbit_core::{Core, OrbitError, TaskStatus};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::operation_audit::OperationAudit;
 use super::routines::{
-    OperationsQuery, action_capability, authorization_denied, authorized_caller, explicit_workspace,
+    OperationsQuery, action_capability, authorization_denied, dashboard_caller, explicit_workspace,
+    unexpected_outcome,
 };
 use super::{bad_request, blocking, server_error, validate_id};
-use crate::state::{DashboardState, Ws};
-
-/// Actor recorded for a dashboard-authored owner decision. The dashboard is a
-/// human surface, so approval is attributed to a human even when the server
-/// process itself runs inside a managed run whose ambient identity is a model.
-const OPERATOR_ACTOR: &str = "human";
+use crate::state::{DashboardState, WsCore};
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -129,16 +122,6 @@ pub(super) struct RetryHandoffRequest {
     request_key: String,
 }
 
-/// One owner mutation as the shared body consumes it: the governed operation
-/// that authorizes it, the audit name and target it is recorded under, and the
-/// arguments it is audited with.
-struct OwnerMutation {
-    operation: &'static GovernedOperation,
-    audit_name: &'static str,
-    target: String,
-    arguments: Value,
-}
-
 /// `GET /api/distributed/claims` — read-only owner inspection.
 ///
 /// Creates nothing: no receipt, no reservation, no claim, no task transition.
@@ -147,7 +130,7 @@ struct OwnerMutation {
 pub(super) async fn list_claims(
     State(state): State<DashboardState>,
     Query(query): Query<ClaimsQuery>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
 ) -> Response {
     if let Some(task_id) = query.task.as_deref()
         && let Err(message) = validate_id(task_id)
@@ -161,16 +144,24 @@ pub(super) async fn list_claims(
     };
     let operator_session = state.operator_session();
     match blocking("distributed claim console", move || {
-        runtime.distributed_claim_console_filtered(query.task.as_deref(), claim_state, query.detail)
+        review::exec(
+            &core,
+            review::Command::ClaimConsole {
+                task_id: query.task,
+                state: claim_state,
+                detail: query.detail,
+            },
+        )
     })
     .await
     {
-        Ok(mut console) => {
+        Ok(review::Outcome::ClaimConsole(mut console)) => {
             if let Some(object) = console.as_object_mut() {
                 object.insert("capabilities".to_string(), capabilities(operator_session));
             }
             Json(console).into_response()
         }
+        Ok(_) => unexpected_outcome("distributed claim console"),
         Err(response) => *response,
     }
 }
@@ -186,7 +177,7 @@ pub(super) async fn approve_handoff_action(
     State(state): State<DashboardState>,
     headers: axum::http::HeaderMap,
     Query(query): Query<OperationsQuery>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(handoff_id): Path<String>,
     Json(body): Json<ApproveHandoffRequest>,
 ) -> Response {
@@ -194,7 +185,7 @@ pub(super) async fn approve_handoff_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    let request_id = match operator_input::replay_key(&body.request_id) {
+    let request_id = match review::replay_key(&body.request_id) {
         Ok(request_id) => request_id,
         Err(OrbitError::InvalidInput(message)) => return bad_request(message),
         Err(error) => return server_error(error),
@@ -203,30 +194,16 @@ pub(super) async fn approve_handoff_action(
         candidate_commit: body.expected_candidate_commit,
         base_commit: body.expected_base_commit,
     };
-    let arguments = json!({
-        "handoff_id": handoff_id,
-        "candidate": expected.candidate_commit,
-        "base": expected.base_commit,
-    });
-    let audited = handoff_id.clone();
     run_owner_action(
         state,
         headers,
         query,
-        runtime,
-        OwnerMutation {
-            operation: &DASHBOARD_HANDOFF_APPROVE,
-            audit_name: "handoff.approve",
-            target: audited,
-            arguments,
-        },
-        move |runtime| {
-            runtime.approve_handoff_as_operator(
-                &handoff_id,
-                &expected,
-                OPERATOR_ACTOR,
-                &format!("dashboard-approve:{handoff_id}:{request_id}"),
-            )
+        core,
+        "handoff.approve",
+        DashboardWrite::ApproveHandoff {
+            handoff_id,
+            expected,
+            request_id,
         },
     )
     .await
@@ -237,7 +214,7 @@ pub(super) async fn retry_handoff_action(
     State(state): State<DashboardState>,
     headers: axum::http::HeaderMap,
     Query(query): Query<OperationsQuery>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(handoff_id): Path<String>,
     Json(body): Json<RetryHandoffRequest>,
 ) -> Response {
@@ -245,54 +222,23 @@ pub(super) async fn retry_handoff_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
-    // Normalize before building the audit arguments: a denied or refused
-    // request must never persist an unbounded reason or an invalid key.
-    // Invalid values are omitted from the audit projection; the raw values
-    // still reach core, which refuses them on the operator path.
-    let audit_reason = operator_input::reason(&body.reason, "retrying a handoff").ok();
-    let audit_key = operator_input::replay_key(&body.request_key).ok();
-    let request = orbit_types::workflow::handoff::LandingRetryRequest {
-        handoff_id: handoff_id.clone(),
-        expected_candidate_commit: body.expected_candidate_commit,
-        expected_base_commit: body.expected_base_commit,
-        expected_latest_attempt: body.expected_latest_attempt,
-        expected_latest_state: body.expected_latest_state,
-        reason: audit_reason.clone().unwrap_or(body.reason),
-        request_key: audit_key.clone().unwrap_or(body.request_key),
-    };
-    let mut arguments = json!(request);
-    if let Some(object) = arguments.as_object_mut() {
-        if audit_reason.is_none() {
-            object.remove("reason");
-        }
-        if audit_key.is_none() {
-            object.remove("request_key");
-        }
-    }
     run_owner_action(
         state,
         headers,
         query,
-        runtime,
-        OwnerMutation {
-            operation: &DASHBOARD_HANDOFF_RETRY,
-            audit_name: "handoff.retry",
-            target: handoff_id,
-            arguments,
+        core,
+        "handoff.retry",
+        DashboardWrite::RetryHandoff {
+            handoff_id,
+            expected_candidate_commit: body.expected_candidate_commit,
+            expected_base_commit: body.expected_base_commit,
+            expected_latest_attempt: body.expected_latest_attempt,
+            expected_latest_state: body.expected_latest_state,
+            reason: body.reason,
+            request_key: body.request_key,
         },
-        move |runtime| retry_handoff_response(runtime, &request),
     )
     .await
-}
-
-// Called by run_owner_action on its blocking worker, including workspace lookup.
-fn retry_handoff_response(
-    runtime: &OrbitRuntime,
-    request: &orbit_types::workflow::handoff::LandingRetryRequest,
-) -> Result<Value, OrbitError> {
-    let dispatch =
-        runtime.retry_handoff_as_operator(&runtime.workspace_id()?, request, OPERATOR_ACTOR)?;
-    serde_json::to_value(dispatch).map_err(|error| OrbitError::Execution(error.to_string()))
 }
 
 /// `POST /api/distributed/handoffs/:id/revoke` — withdraw completion authority.
@@ -304,7 +250,7 @@ pub(super) async fn revoke_handoff_action(
     State(state): State<DashboardState>,
     headers: axum::http::HeaderMap,
     Query(query): Query<OperationsQuery>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(handoff_id): Path<String>,
     Json(body): Json<RevokeHandoffRequest>,
 ) -> Response {
@@ -316,42 +262,17 @@ pub(super) async fn revoke_handoff_action(
         candidate_commit: body.expected_candidate_commit,
         base_commit: body.expected_base_commit,
     };
-    let audit_reason = operator_input::reason(&body.reason, "revoking completion authority").ok();
-    let audit_key = operator_input::replay_key(&body.request_id).ok();
-    let reason = audit_reason.clone().unwrap_or(body.reason);
-    let request_id = audit_key.unwrap_or(body.request_id);
-    let mut arguments = json!({
-        "handoff_id": handoff_id,
-        "candidate": expected.candidate_commit,
-        "base": expected.base_commit,
-        "reason": reason,
-    });
-    if audit_reason.is_none()
-        && let Some(object) = arguments.as_object_mut()
-    {
-        object.remove("reason");
-    }
-    let audited = handoff_id.clone();
     run_owner_action(
         state,
         headers,
         query,
-        runtime,
-        OwnerMutation {
-            operation: &DASHBOARD_HANDOFF_REVOKE,
-            audit_name: "handoff.revoke",
-            target: audited,
-            arguments,
-        },
-        move |runtime| {
-            runtime.revoke_handoff_as_operator(
-                &handoff_id,
-                &expected,
-                OPERATOR_ACTOR,
-                &reason,
-                "dashboard-revoke",
-                &request_id,
-            )
+        core,
+        "handoff.revoke",
+        DashboardWrite::RevokeHandoff {
+            handoff_id,
+            expected,
+            reason: body.reason,
+            request_id: body.request_id,
         },
     )
     .await
@@ -368,7 +289,7 @@ pub(super) async fn recover_claim_action(
     State(state): State<DashboardState>,
     headers: axum::http::HeaderMap,
     Query(query): Query<OperationsQuery>,
-    Ws(runtime): Ws,
+    WsCore(core): WsCore,
     Path(claim_id): Path<String>,
     Json(body): Json<RecoverClaimRequest>,
 ) -> Response {
@@ -382,112 +303,68 @@ pub(super) async fn recover_claim_action(
         Ok(status) => status,
         Err(message) => return bad_request(message),
     };
-    let expected_phase = body.expected_phase;
-    let audit_reason = operator_input::reason(&body.reason, "claim recovery").ok();
-    let audit_key = operator_input::replay_key(&body.request_id).ok();
-    let reason = audit_reason.clone().unwrap_or(body.reason);
-    let request_id = audit_key.unwrap_or(body.request_id);
-    let mut arguments = json!({
-        "claim_id": claim_id,
-        "expected_phase": expected_phase,
-        "status": body.status,
-        "reason": reason,
-    });
-    if audit_reason.is_none()
-        && let Some(object) = arguments.as_object_mut()
-    {
-        object.remove("reason");
-    }
-    let audited = claim_id.clone();
     run_owner_action(
         state,
         headers,
         query,
-        runtime,
-        OwnerMutation {
-            operation: &DASHBOARD_CLAIM_RECOVER,
-            audit_name: "claim.recover",
-            target: audited,
-            arguments,
-        },
-        move |runtime| {
-            runtime.recover_claim_as_operator(
-                &claim_id,
-                &expected_phase,
-                status,
-                OPERATOR_ACTOR,
-                &reason,
-                ("dashboard-recover", &request_id),
-            )
+        core,
+        "claim.recover",
+        DashboardWrite::RecoverClaim {
+            claim_id,
+            expected_phase: body.expected_phase,
+            status,
+            status_label: body.status,
+            reason: body.reason,
+            request_id: body.request_id,
         },
     )
     .await
 }
 
-/// The shared body of owner mutations: authorize, require an explicit
-/// workspace, run the domain transaction off the async pool, audit the outcome,
-/// and translate a refusal into the code the client acts on.
-async fn run_owner_action<F>(
+/// The shared body of owner mutations: require an explicit workspace, hand the
+/// action to `app::review::exec` off the async pool, and render its outcome.
+async fn run_owner_action(
     state: DashboardState,
     headers: axum::http::HeaderMap,
     query: OperationsQuery,
-    runtime: std::sync::Arc<OrbitRuntime>,
-    mutation: OwnerMutation,
-    action: F,
-) -> Response
-where
-    F: FnOnce(&OrbitRuntime) -> Result<Value, OrbitError> + Send + 'static,
-{
-    let OwnerMutation {
-        operation,
-        audit_name,
-        target,
-        arguments,
-    } = mutation;
+    core: Arc<Core>,
+    label: &'static str,
+    write: DashboardWrite,
+) -> Response {
     // Workspace selection first: an action aimed at the wrong workspace is a
     // malformed request, not a denial, and auditing it as one would be a lie.
     let workspace = match explicit_workspace(&query) {
-        Ok(workspace) => workspace.to_string(),
+        Ok(workspace) => workspace,
         Err(rejection) => return rejection.into_response(),
     };
-    let started = Instant::now();
-    let audit = OperationAudit::new(
-        &runtime,
-        state.env(),
-        &workspace,
-        audit_name,
-        target.as_str(),
-        arguments,
-    );
-    let caller = match authorized_caller(operation, state.operator_session()) {
-        Ok(caller) => caller,
-        Err(denial) => {
-            audit.denied(&denial, started).await;
-            return authorization_denied(denial);
-        }
-    };
+    let caller = dashboard_caller(&state, Some(workspace), "");
     let write_caller = super::forward::web_write_caller(&state, &headers);
-    let acting = runtime.clone();
-    let outcome = helpers::blocking_join(audit_name, move || {
-        orbit_core::application::task::with_task_write_provenance(
-            orbit_types::task::TaskWriteProvenance::new(
-                Some(orbit_types::task::TaskWriteSurface::Web),
-                write_caller,
+    let outcome = blocking(label, move || {
+        review::exec(
+            &core,
+            review::Command::Dashboard(
+                caller,
+                DashboardAction {
+                    write_caller,
+                    write,
+                },
             ),
-            || action(&acting),
         )
     })
     .await;
     match outcome {
-        Ok(Ok(value)) => {
-            audit.succeeded(&caller, started).await;
+        Ok(review::Outcome::Dashboard(Ok(DashboardWritten::Applied(value)))) => {
             Json(json!({ "ok": true, "result": value })).into_response()
         }
-        Ok(Err(error)) => {
-            let response = refusal_response(&runtime, &error);
-            audit.failed(&caller, &error.to_string(), started).await;
-            response
+        Ok(review::Outcome::Dashboard(Ok(DashboardWritten::Refused { refusal, message }))) => {
+            refusal_response(refusal, message)
         }
+        Ok(review::Outcome::Dashboard(Ok(DashboardWritten::Failed(error)))) => match error {
+            OrbitError::InvalidInput(message) => bad_request(message),
+            other => server_error(OrbitError::Execution(other.to_string())),
+        },
+        Ok(review::Outcome::Dashboard(Err(denial))) => authorization_denied(denial),
+        Ok(_) => unexpected_outcome(label),
         Err(response) => *response,
     }
 }
@@ -499,15 +376,14 @@ where
 /// differs: refresh the view, reconcile the merge, or act on the owner machine.
 /// Collapsing them into one 500 would hide exactly the state this surface
 /// exists to show.
-fn refusal_response(runtime: &OrbitRuntime, error: &OrbitError) -> Response {
-    let message = error.to_string();
-    match runtime.handoff_console_refusal(error) {
-        Some(refusal @ HandoffConsoleRefusal::ReplicaCheckout) => (
+fn refusal_response(refusal: HandoffConsoleRefusal, message: String) -> Response {
+    match refusal {
+        HandoffConsoleRefusal::ReplicaCheckout => (
             StatusCode::FORBIDDEN,
             Json(json!({"error": message, "code": refusal.code()})),
         )
             .into_response(),
-        Some(refusal @ HandoffConsoleRefusal::UncertainMerge) => (
+        HandoffConsoleRefusal::UncertainMerge => (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": message,
@@ -519,7 +395,7 @@ fn refusal_response(runtime: &OrbitRuntime, error: &OrbitError) -> Response {
             .into_response(),
         // A handoff the owner no longer holds reads as stale too: the operator's
         // remedy is the same refresh, and a 404 would invite a client retry loop.
-        Some(refusal @ HandoffConsoleRefusal::NotCurrent) => (
+        HandoffConsoleRefusal::NotCurrent => (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": message,
@@ -528,7 +404,7 @@ fn refusal_response(runtime: &OrbitRuntime, error: &OrbitError) -> Response {
             })),
         )
             .into_response(),
-        Some(refusal @ HandoffConsoleRefusal::Stale) => (
+        HandoffConsoleRefusal::Stale => (
             StatusCode::CONFLICT,
             Json(json!({
                 "error": message,
@@ -538,10 +414,6 @@ fn refusal_response(runtime: &OrbitRuntime, error: &OrbitError) -> Response {
             })),
         )
             .into_response(),
-        None => match error {
-            OrbitError::InvalidInput(message) => bad_request(message.clone()),
-            other => server_error(OrbitError::Execution(other.to_string())),
-        },
     }
 }
 
