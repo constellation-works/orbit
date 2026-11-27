@@ -208,8 +208,8 @@ pub(crate) fn build_state(
 ///
 /// The detailed form returns workspace names and the log-sink path, so it
 /// must not skip the DNS-rebinding Host gate that `/api` already has
-/// (ORB-12531). The dashboard shell and assets take the Host and supplied
-/// Origin checks in [`build_app`].
+/// (ORB-12531). The dashboard shell and assets take the Host, supplied
+/// Origin, and trusted-host Fetch Metadata checks in [`build_app`].
 pub(crate) fn health_router(state: &state::DashboardState) -> Router<state::DashboardState> {
     Router::new()
         .route("/healthz", get(health::healthz))
