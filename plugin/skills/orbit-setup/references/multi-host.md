@@ -7,6 +7,7 @@
 - [Upgrading a workspace together](#upgrading-a-workspace-together)
 - [Task-ID allocation](#task-id-allocation)
 - [Register and select a host](#register-and-select-a-host)
+- [Planned downtime](#planned-downtime)
 - [Scheduling and claims](#scheduling-and-claims)
 - [Verify another host](#verify-another-host)
 
@@ -176,6 +177,52 @@ unchanged from federated discovery. Host-local commands such as `workspace`,
 `doctor` and `run show` do not accept this routing flag; use them on the
 execution host. Registration, the doctor's `hosts` row and retired
 destinations-file recovery are in [remote-access-mcp.md](remote-access-mcp.md).
+
+## Planned downtime
+
+A host that will be unreachable on purpose, such as during maintenance, can be
+acknowledged as offline so that attention and doctor do not report it as a
+failure. Run these on each machine that reaches the host:
+
+```bash
+orbit host offline <host> --reason "<why>" [--until <RFC 3339 timestamp>]
+orbit host show <host>
+orbit host online <host>
+```
+
+`<host>` is the name or `machine_id` from `orbit host list`. This machine
+cannot be marked; only registered remote hosts can. `--reason` is required. It
+must be non-empty and contain no control characters. `--until` takes an RFC 3339
+timestamp later than the moment the mark is set, for example
+`2026-12-01T09:00:00Z`. Without it the mark lasts until `orbit host online`.
+Running `offline` again replaces the reason and deadline.
+
+The mark records the reason, the time it was set and the operator login that set
+it. It lives in this machine's host registry, not in Git or the workspace.
+Attention and doctor read the registry of the machine they run on, so set the
+mark on each machine whose view should show it.
+
+While the mark is active:
+
+- `orbit host list` and `orbit host show` report the host as
+  `acknowledged offline`, with its reason and any `until`. `show` adds
+  `(responded)` when a probe finds the host answering anyway.
+- `orbit attention` lists the host once under `acknowledged`, does not probe it,
+  and raises no `host_unhealthy` item for it.
+- `orbit doctor` reports it under the `hosts` row as acknowledged, not as a
+  warning or an error.
+- Workspace auto readiness lists it under `acknowledged`.
+
+The mark changes only those views. Nothing gates on it: pull drains, replica
+pulls and routed tool calls still try the host. To stop a drain from admitting
+new work while the host is away, run `orbit run auto --stop` on the machine that
+runs the drain. That records a pause; see
+[distributed drain setup](../../orbit/references/setup/distributed-drain-setup.md).
+
+A mark stops counting at its `until` time. Attention then probes the host again,
+and the views above stop showing it. `orbit host online` clears an expired mark
+too. On a host with no mark it reports that the acknowledgement is already clear
+and writes nothing.
 
 ## Scheduling and claims
 
