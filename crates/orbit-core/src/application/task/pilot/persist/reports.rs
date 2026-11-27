@@ -129,6 +129,7 @@ pub(in super::super) fn superseded_with_current(
         &current.id,
         &current.context_files,
         current.updated_at,
+        current.context_creation_sealed_at,
         history
             .iter()
             .map(|entry| (entry.event.as_str(), entry.note.as_deref())),

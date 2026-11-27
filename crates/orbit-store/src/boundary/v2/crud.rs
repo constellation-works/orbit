@@ -151,6 +151,7 @@ impl TaskV2Store {
         }];
         // The initial grant is part of the bundle the create publishes, so a
         // task never exists without the creation intent its writer declared.
+        let mut context_creation_sealed_at = None;
         if let Some(mut grant) = orbit_types::task::ContextCreationState::Absent.next_grant(
             &id,
             &params.context_files,
@@ -175,6 +176,7 @@ impl TaskV2Store {
                 surface: None,
                 caller: None,
             });
+            context_creation_sealed_at = Some(now);
         }
         // A creation grant is a grant change like any later one: history
         // names who set it, the tool set and that no run or claim existed.
@@ -236,6 +238,7 @@ impl TaskV2Store {
                 implemented_by: params.implemented_by,
                 created_at: now,
                 updated_at: now,
+                context_creation_sealed_at,
             },
             description: params.description,
             acceptance: render_acceptance(&params.acceptance_criteria),

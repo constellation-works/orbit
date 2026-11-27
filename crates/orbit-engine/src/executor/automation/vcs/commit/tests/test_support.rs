@@ -39,6 +39,7 @@ pub fn task_with_file(id: &str, title: &str, path: &str, implemented_by: &str) -
         rule_fingerprint: None,
         created_at: now,
         updated_at: now,
+        context_creation_sealed_at: None,
         not_before: None,
     }
 }

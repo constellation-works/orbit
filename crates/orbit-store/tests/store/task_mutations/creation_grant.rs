@@ -55,11 +55,20 @@ fn creation_state(bundle: &Snapshot) -> ContextCreationState {
         &bundle.envelope.id,
         &bundle.envelope.context_files,
         bundle.envelope.updated_at,
+        bundle.envelope.context_creation_sealed_at,
         bundle
             .events
             .iter()
             .map(|event| (event.event_type.as_str(), event.note.as_deref())),
     )
+}
+
+fn grant_event_count(id: &str) -> usize {
+    snapshot(id)
+        .events
+        .iter()
+        .filter(|event| event.event_type == CONTEXT_CREATION_AUTHORIZED_EVENT)
+        .count()
 }
 
 fn rescope(
@@ -190,11 +199,61 @@ fn revoked_or_voided_grants_never_revive() {
     old_client_rescope(&store, &id, &[EXISTING, NEW]);
     assert_eq!(state(&store, &id), ContextCreationState::Void);
 
+    // An unmaintained writer that advances only `updated_at` without updating
+    // `context_creation_sealed_at` also voids the grant fail-closed.
+    rescope(&store, &id, &[EXISTING, NEW], &[NEW]).expect("re-declare before timestamp drift");
+    old_client_rescope(&store, &id, &[EXISTING, NEW]);
+    assert_eq!(state(&store, &id), ContextCreationState::Void);
+
     // The next maintained write records an explicit revocation, so a later
     // return to the voided grant's scope finds nothing to revive.
     rescope(&store, &id, &[EXISTING, OTHER_NEW], &[]).expect("maintained write");
     rescope(&store, &id, &[EXISTING, NEW], &[]).expect("scope of the voided grant");
     assert_eq!(state(&store, &id).selectors(), [] as [String; 0]);
+
+    // Legacy bundles whose `task.yaml` lacks `context_creation_sealed_at`
+    // while `events.jsonl` holds historical `context_creation_authorized` rows
+    // continue to resolve via `grant.updated_at`, carry forward on unrelated
+    // writes without appending duplicates, and fail closed on unmaintained
+    // envelope updates.
+    rescope(&store, &id, &[EXISTING, NEW], &[NEW]).expect("grant for legacy bundle check");
+    let legacy_count = grant_event_count(&id);
+    let ContextCreationState::Current(legacy_grant) = state(&store, &id) else {
+        panic!("active grant before stripping envelope seal");
+    };
+    let mut legacy_envelope = snapshot(&id).envelope;
+    legacy_envelope.context_creation_sealed_at = None;
+    std::fs::write(
+        bundle_path(&id).join(TASK_ENVELOPE_FILE_NAME),
+        serde_yaml::to_string(&legacy_envelope).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        state(&store, &id),
+        ContextCreationState::Current(legacy_grant.clone()),
+        "legacy bundle without context_creation_sealed_at resolves losslessly"
+    );
+    store
+        .document
+        .update_task_document(
+            &id,
+            TaskDocumentUpdateParams {
+                actor: "operator".to_string(),
+                tags: Some(vec!["legacy-check".to_string()]),
+                ..Default::default()
+            },
+        )
+        .expect("unrelated write on legacy bundle");
+    assert_eq!(grant_event_count(&id), legacy_count);
+    assert_eq!(
+        state(&store, &id),
+        ContextCreationState::Current(legacy_grant)
+    );
+    let migrated_envelope = snapshot(&id).envelope;
+    assert_eq!(
+        migrated_envelope.context_creation_sealed_at,
+        Some(migrated_envelope.updated_at)
+    );
 }
 
 #[test]
@@ -207,11 +266,47 @@ fn maintained_document_edits_rebind_creation_intent_to_the_new_revision() {
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
-    let ContextCreationState::Current(before_grant) = state(&store, &id) else {
+    let initial_snapshot = snapshot(&id);
+    let ContextCreationState::Current(before_grant) = creation_state(&initial_snapshot) else {
         panic!("authorized task has a current grant");
     };
     let before = before_grant.identity();
+    assert_eq!(grant_event_count(&id), 1);
+    assert_eq!(
+        initial_snapshot.envelope.context_creation_sealed_at,
+        Some(initial_snapshot.envelope.updated_at)
+    );
 
+    // Three unrelated writes (comment, status change, tag change) with
+    // unchanged `context_files` append zero new `context_creation_authorized`
+    // rows while keeping the grant current with identical selectors/generation.
+    store
+        .history
+        .update_task_history(
+            &id,
+            TaskHistoryUpdateParams {
+                actor: "operator".to_string(),
+                append_comments: vec![orbit_types::task::TaskComment {
+                    at: Utc::now(),
+                    by: "operator".to_string(),
+                    message: "Unrelated comment.".to_string(),
+                    operation_id: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .expect("comment write");
+    store
+        .history
+        .update_task_history(
+            &id,
+            TaskHistoryUpdateParams {
+                actor: "operator".to_string(),
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+        )
+        .expect("status change");
     store
         .document
         .update_task_document(
@@ -219,19 +314,44 @@ fn maintained_document_edits_rebind_creation_intent_to_the_new_revision() {
             TaskDocumentUpdateParams {
                 actor: "operator".to_string(),
                 title: Some("renamed task".to_string()),
+                tags: Some(vec!["economy".to_string()]),
                 ..Default::default()
             },
         )
-        .expect("maintained document update");
+        .expect("tag and title update");
 
-    let after = state(&store, &id);
+    assert_eq!(
+        grant_event_count(&id),
+        1,
+        "unrelated writes must append zero duplicate context_creation_authorized rows"
+    );
+    let after_snapshot = snapshot(&id);
+    let after = creation_state(&after_snapshot);
     assert_eq!(after.selectors(), [NEW]);
     let ContextCreationState::Current(after_grant) = after else {
-        panic!("maintained edit keeps the grant current");
+        panic!("maintained edits keep the grant current");
     };
     assert_eq!(after_grant.identity(), before);
     assert_eq!(after_grant.generation, before_grant.generation);
-    assert_ne!(after_grant.updated_at, before_grant.updated_at);
+    assert_eq!(after_grant.updated_at, before_grant.updated_at);
+    assert_ne!(
+        after_snapshot.envelope.updated_at,
+        initial_snapshot.envelope.updated_at
+    );
+    assert_eq!(
+        after_snapshot.envelope.context_creation_sealed_at,
+        Some(after_snapshot.envelope.updated_at)
+    );
+
+    // Mutating `context_files` or authorizing/revoking a selector still
+    // appends exactly one `context_creation_authorized` row each time.
+    rescope(&store, &id, &[EXISTING, NEW, OTHER_NEW], &[OTHER_NEW]).expect("authorize selector");
+    assert_eq!(grant_event_count(&id), 2);
+    assert_eq!(state(&store, &id).selectors(), [NEW, OTHER_NEW]);
+
+    rescope(&store, &id, &[EXISTING, NEW], &[]).expect("revoke selector");
+    assert_eq!(grant_event_count(&id), 3);
+    assert_eq!(state(&store, &id).selectors(), [NEW]);
 }
 
 #[test]
@@ -244,9 +364,11 @@ fn desktop_comment_refreshes_the_revision_seal_without_changing_intent() {
     let temp = TempDir::new().expect("tempdir");
     let store = store(&temp);
     let id = granted_task(&store, &[EXISTING, NEW], &[NEW]);
-    let ContextCreationState::Current(before_grant) = state(&store, &id) else {
+    let before_snapshot = snapshot(&id);
+    let ContextCreationState::Current(before_grant) = creation_state(&before_snapshot) else {
         panic!("authorized task has a current grant");
     };
+    let before_grant_events = grant_event_count(&id);
     let revision = store
         .task
         .desktop_task_revision(&id)
@@ -274,12 +396,21 @@ fn desktop_comment_refreshes_the_revision_seal_without_changing_intent() {
         AtomicTaskMutationOutcome::Applied
     );
 
-    let ContextCreationState::Current(after_grant) = state(&store, &id) else {
+    assert_eq!(grant_event_count(&id), before_grant_events);
+    let after_snapshot = snapshot(&id);
+    let ContextCreationState::Current(after_grant) = creation_state(&after_snapshot) else {
         panic!("desktop comment keeps the grant current");
     };
     assert_eq!(after_grant.identity(), before_grant.identity());
     assert_eq!(after_grant.generation, before_grant.generation);
-    assert_ne!(after_grant.updated_at, before_grant.updated_at);
+    assert_ne!(
+        after_snapshot.envelope.updated_at,
+        before_snapshot.envelope.updated_at
+    );
+    assert_eq!(
+        after_snapshot.envelope.context_creation_sealed_at,
+        Some(after_snapshot.envelope.updated_at)
+    );
 }
 
 /// The pilot's write carries the grant it validated against: a different

@@ -42,6 +42,7 @@ fn task(id: &str, title: &str) -> Task {
         rule_fingerprint: None,
         created_at: at,
         updated_at: at,
+        context_creation_sealed_at: None,
         not_before: None,
     }
 }

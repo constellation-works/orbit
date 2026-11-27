@@ -554,6 +554,7 @@ impl OrbitRuntime {
             rule_fingerprint: None,
             created_at: now,
             updated_at: now,
+            context_creation_sealed_at: None,
             not_before: None,
         };
         let (crews, draw_source) = if type_source {

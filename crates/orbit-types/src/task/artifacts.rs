@@ -123,6 +123,14 @@ pub struct TaskEnvelopeV2 {
     pub implemented_by: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Envelope revision last confirmed by a writer maintaining this task's
+    /// context creation grant. Carried forward on every maintained write once
+    /// a grant record exists, so unrelated writes preserve the fail-closed
+    /// revision binding without appending duplicate
+    /// `context_creation_authorized` history rows. Absent on tasks without a
+    /// grant and on legacy bundles written before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_creation_sealed_at: Option<DateTime<Utc>>,
 }
 
 impl TaskEnvelopeV2 {

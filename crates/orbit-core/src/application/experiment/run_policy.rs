@@ -62,6 +62,7 @@ impl OrbitRuntime {
             rule_fingerprint: None,
             created_at: now,
             updated_at: now,
+            context_creation_sealed_at: None,
             not_before: None,
         };
         input["auto_crew_pools"] = serde_json::to_value(self.auto_crew_pools_for_input(input)?)

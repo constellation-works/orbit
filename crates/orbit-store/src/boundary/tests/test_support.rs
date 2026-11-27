@@ -46,6 +46,7 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
             implemented_by: None,
             created_at: now,
             updated_at: now,
+            context_creation_sealed_at: None,
             not_before: None,
         },
         description: "Description body".to_string(),

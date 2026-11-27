@@ -21,11 +21,26 @@ fn scope(selectors: &[&str]) -> Vec<String> {
 }
 
 fn resolve(context_files: &[String], notes: &[String]) -> ContextCreationState {
+    resolve_at(context_files, revision(), Some(revision()), notes)
+}
+
+fn resolve_at(
+    context_files: &[String],
+    updated_at: DateTime<Utc>,
+    sealed_at: Option<DateTime<Utc>>,
+    notes: &[String],
+) -> ContextCreationState {
     let events = notes
         .iter()
         .map(|note| (CONTEXT_CREATION_AUTHORIZED_EVENT, Some(note.as_str())))
         .collect::<Vec<_>>();
-    ContextCreationState::resolve(TASK, context_files, revision(), events.into_iter())
+    ContextCreationState::resolve(
+        TASK,
+        context_files,
+        updated_at,
+        sealed_at,
+        events.into_iter(),
+    )
 }
 
 #[test]
@@ -168,15 +183,61 @@ fn refreshing_the_revision_seal_keeps_semantic_identity_and_generation() {
     initial.generation = Some("EV-0002".to_string());
     let state = ContextCreationState::Current(initial.clone());
     let refreshed_at = revision() + chrono::Duration::seconds(1);
-    let mut refreshed = state
-        .next_grant(TASK, &files, &[], refreshed_at)
-        .unwrap()
-        .unwrap();
 
-    assert_eq!(refreshed.generation, initial.generation);
-    assert_eq!(refreshed.identity(), initial.identity());
-    assert_ne!(refreshed.updated_at, initial.updated_at);
+    // An unchanged grant emits no new history row when only `updated_at` advances.
+    assert_eq!(
+        state.next_grant(TASK, &files, &[], refreshed_at).unwrap(),
+        None
+    );
 
-    refreshed.generation = Some("EV-0003".to_string());
-    assert_ne!(refreshed.identity(), initial.identity());
+    // Carrying the envelope seal forward keeps the existing grant current with
+    // the exact same selectors, generation and identity.
+    let note = initial.to_note();
+    assert_eq!(
+        resolve_at(
+            &files,
+            refreshed_at,
+            Some(refreshed_at),
+            std::slice::from_ref(&note)
+        ),
+        ContextCreationState::Current(initial.clone())
+    );
+
+    // A stale or missing seal fails closed once `updated_at` advances.
+    assert_eq!(
+        resolve_at(
+            &files,
+            refreshed_at,
+            Some(revision()),
+            std::slice::from_ref(&note)
+        ),
+        ContextCreationState::Void
+    );
+    assert_eq!(
+        resolve_at(&files, refreshed_at, None, std::slice::from_ref(&note)),
+        ContextCreationState::Void
+    );
+
+    // Legacy bundles with no envelope seal resolve via `grant.updated_at`.
+    assert_eq!(
+        resolve_at(&files, revision(), None, std::slice::from_ref(&note)),
+        ContextCreationState::Current(initial.clone())
+    );
+
+    // A grant missing its recorded `updated_at` stays void even if sealed.
+    let mut without_updated_at = initial.clone();
+    without_updated_at.updated_at = None;
+    assert_eq!(
+        resolve_at(
+            &files,
+            refreshed_at,
+            Some(refreshed_at),
+            &[without_updated_at.to_note()],
+        ),
+        ContextCreationState::Void
+    );
+
+    let mut next_generation = initial.clone();
+    next_generation.generation = Some("EV-0003".to_string());
+    assert_ne!(next_generation.identity(), initial.identity());
 }

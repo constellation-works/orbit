@@ -14,6 +14,7 @@ pub(super) fn creation_state(bundle: &TaskBundleV2) -> ContextCreationState {
         &bundle.envelope.id,
         &bundle.envelope.context_files,
         bundle.envelope.updated_at,
+        bundle.envelope.context_creation_sealed_at,
         bundle
             .events
             .iter()
@@ -21,10 +22,15 @@ pub(super) fn creation_state(bundle: &TaskBundleV2) -> ContextCreationState {
     )
 }
 
-/// Push the grant row the next envelope revision requires, if any, into
-/// `pending_events` (and onto `bundle.events`, so later rows keep their
-/// ids and order). The caller appends the batch once, before the envelope
-/// is republished.
+/// Maintain the task's context creation grant across an envelope revision at
+/// `updated_at`, returning the `context_creation_sealed_at` value to publish
+/// on the envelope.
+///
+/// Only emits a [`CONTEXT_CREATION_AUTHORIZED_EVENT`] row into
+/// `pending_events` (and `bundle.events`) when the grant itself changes
+/// (initial authorization, scope or selector change, or revocation of a void
+/// grant). An unchanged current grant appends no history row and carries its
+/// revision binding forward via `Some(updated_at)`.
 pub(super) fn append_creation_grant(
     bundle: &mut TaskBundleV2,
     next_context_files: &[String],
@@ -32,15 +38,19 @@ pub(super) fn append_creation_grant(
     actor: &str,
     updated_at: DateTime<Utc>,
     pending_events: &mut Vec<TaskEventRowV2>,
-) -> Result<(), OrbitError> {
-    let Some(mut grant) = creation_state(bundle).next_grant(
+) -> Result<Option<DateTime<Utc>>, OrbitError> {
+    let state = creation_state(bundle);
+    let Some(mut grant) = state.next_grant(
         &bundle.envelope.id,
         next_context_files,
         authorize,
         updated_at,
     )?
     else {
-        return Ok(());
+        return Ok(match state {
+            ContextCreationState::Current(_) => Some(updated_at),
+            ContextCreationState::Absent | ContextCreationState::Void => None,
+        });
     };
     let event_id = next_event_id(&bundle.events);
     if grant.generation.is_none() {
@@ -62,7 +72,7 @@ pub(super) fn append_creation_grant(
     };
     pending_events.push(event.clone());
     bundle.events.push(event);
-    Ok(())
+    Ok(Some(updated_at))
 }
 
 /// Refuse a caller-supplied history entry that would forge a grant: only the
