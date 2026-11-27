@@ -369,9 +369,8 @@ mod filesystem {
             };
         }
         // SAFETY: fstatat succeeded and initialized metadata.
-        Ok(Some(
-            unsafe { metadata.assume_init() }.st_mode & libc::S_IFMT,
-        ))
+        let metadata = unsafe { metadata.assume_init() };
+        Ok(Some(metadata.st_mode & libc::S_IFMT))
     }
 
     /// Open one regular file of `parent` without following a link, or `None`
