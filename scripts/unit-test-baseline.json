@@ -463,6 +463,7 @@
         "activity_job/workspace/tests/fingerprint.rs::diff_chunk_starts_supported_markers_and_line_boundaries",
         "executor/automation/ci/tests/collect.rs::a_run_scoped_error_repeated_on_three_sweeps_becomes_a_persistent_note",
         "executor/automation/ci/tests/collect.rs::bounded_job_log_reads_go_to_the_leaf_job_before_its_aggregate_waiter",
+        "executor/automation/ci/tests/collect.rs::bounded_job_log_reads_prefer_leaf_jobs_over_waiters_for_every_cursor",
         "executor/automation/ci/tests/collect.rs::checkout_evidence_uses_all_scope_and_each_log_read_uses_the_requested_bound",
         "executor/automation/ci/tests/collect.rs::concurrency_cancelled_newest_runs_with_incomplete_logs_are_inconclusive_not_retryable",
         "executor/automation/ci/tests/collect.rs::over_budget_completed_failure_keeps_its_investigation_budget_error",
