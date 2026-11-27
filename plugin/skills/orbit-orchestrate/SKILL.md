@@ -102,6 +102,7 @@ is for the operator supervising work.
 | Read a typed delivery refusal and choose the next step | [`references/run-debugging-delivery-holds.md`](references/run-debugging-delivery-holds.md) |
 | Check branch, divergence and conflict evidence for a failed run | [`references/run-debugging-git-state.md`](references/run-debugging-git-state.md) |
 | Trace parent and child failures or interpret history, incidents and failure rows | [`references/run-debugging-history.md`](references/run-debugging-history.md) |
+| Hydrate a settled claim's missing leaf run evidence from its follower (operator on the owner), or verify its outcome | [`references/run-debugging-history.md#settlement-hydration`](references/run-debugging-history.md#settlement-hydration) |
 | Tell an inherited red base from candidate damage in hosted CI | [`references/run-debugging-hosted-checks.md`](references/run-debugging-hosted-checks.md) |
 | Verify a recorded PID or clean up a process group after authorized cancellation | [`references/run-debugging-live-processes.md`](references/run-debugging-live-processes.md) |
 | Inspect a base refresh or confirmed hold after an unchanged-head rerun fails | [`references/run-debugging-no-edit-rerun.md`](references/run-debugging-no-edit-rerun.md) |

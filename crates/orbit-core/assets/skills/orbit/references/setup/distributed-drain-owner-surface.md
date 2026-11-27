@@ -102,7 +102,7 @@ settlement's text. For a claim settled before a follower sent it, an operator on
 the owner reads it from the follower:
 
 ```bash
-orbit run settlements-hydrate --follower-workspace <workspace> [--claim <id>] [--task <id>] [--limit 25] [--after <claim-id>] [--recheck] [--json]
+orbit run settlements-hydrate --follower-workspace <workspace> [--claim <id>] [--task <id>] [--machine <id|name>] [--since <time|duration>] [--limit 25] [--after <claim-id>] [--recheck] [--json]
 ```
 
 Operator-only and bounded (default 25, at most 100); an agent, managed scan or
