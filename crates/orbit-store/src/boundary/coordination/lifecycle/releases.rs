@@ -222,12 +222,7 @@ impl TaskCommitBoundary {
         };
         let source_machine = claim.executed_on.machine_id;
         let candidate = preserved.candidate;
-        let fresh = if !task.spec_digest_matches(&preserved.task_spec_digest) {
-            Some((
-                CandidateFreshReason::SpecChanged,
-                "the task's description or acceptance criteria changed since it was kept".into(),
-            ))
-        } else if self
+        let fresh = if self
             .bundle_store
             .read_bundle_lightweight(&task.id)?
             .events
@@ -235,11 +230,15 @@ impl TaskCommitBoundary {
             .any(|event| {
                 event.event_type == orbit_types::task::CANDIDATE_DISCARDED_EVENT
                     && event.at >= recorded
-            })
-        {
+            }) {
             Some((
                 CandidateFreshReason::Discarded,
                 "an operator discarded it since it was kept".into(),
+            ))
+        } else if !task.spec_digest_matches(&preserved.task_spec_digest) {
+            Some((
+                CandidateFreshReason::SpecChanged,
+                "the task's description or acceptance criteria changed since it was kept".into(),
             ))
         } else if !candidate.durable() && source_machine != machine_id {
             let why = match &candidate.carry_failure {
@@ -425,17 +424,17 @@ fn held_candidate_offer(
         .machine_id
         .clone()
         .unwrap_or_else(|| "the host that held it".into());
-    let fresh = if !task.spec_digest_matches(&held.task_spec_digest) {
-        Some((
-            CandidateFreshReason::SpecChanged,
-            "the task's description or acceptance criteria changed since it was held".into(),
-        ))
-    } else if history.iter().any(|later| {
+    let fresh = if history.iter().any(|later| {
         later.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && later.at >= entry.at
     }) {
         Some((
             CandidateFreshReason::Discarded,
             "an operator discarded it since it was held".into(),
+        ))
+    } else if !task.spec_digest_matches(&held.task_spec_digest) {
+        Some((
+            CandidateFreshReason::SpecChanged,
+            "the task's description or acceptance criteria changed since it was held".into(),
         ))
     } else if held.durable_ref.is_none() && held.machine_id.as_deref() != Some(machine_id) {
         let why = match &held.carry_failure {

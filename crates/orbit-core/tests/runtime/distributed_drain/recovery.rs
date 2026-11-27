@@ -1,7 +1,7 @@
 //! Final recovery of claimed leaves.
 
 use super::*;
-use orbit_engine::{HostEnvironment, Recovery, RunLifecycle};
+use orbit_engine::{HostEnvironment, Recovery, ReviewGate, RunLifecycle};
 
 /// [ORB-13964, ORB-14635] The owner recovers the settled follower failure,
 /// even when an unrelated local run has the same machine-local ID. Explicit
@@ -978,6 +978,25 @@ fn a_claimed_requeue_resumes_only_a_kept_candidate_the_task_still_answers_to() {
         "{refused}"
     );
     assert_eq!(pair.owner_status(&task), "blocked", "nothing was changed");
+    let owner = &pair.wire.owner;
+    let freshness = || {
+        orbit_core::test_support::EngineHost::new(owner)
+            .kept_claim_candidate(&task)
+            .unwrap()
+            .expect("the claim kept a candidate")
+            .fresh
+            .map(|(reason, _)| reason)
+    };
+    assert_eq!(
+        freshness(),
+        Some(orbit_store::contract::CandidateFreshReason::SpecChanged)
+    );
+    assert!(
+        owner
+            .task_has_discardable_candidate(&owner.get_task(&task).unwrap())
+            .unwrap(),
+        "a spec-changed candidate is discardable"
+    );
 
     let discarded = pair
         .wire
@@ -986,6 +1005,24 @@ fn a_claimed_requeue_resumes_only_a_kept_candidate_the_task_still_answers_to() {
         .expect("the owner discards the candidate");
     assert!(discarded["resumes"].is_null(), "{discarded:#}");
     assert_eq!(discarded["candidate_discarded"], true, "{discarded:#}");
+    // The discard outranks the spec change, so nothing is left to discard.
+    assert_eq!(
+        freshness(),
+        Some(orbit_store::contract::CandidateFreshReason::Discarded)
+    );
+    assert!(
+        !owner
+            .task_has_discardable_candidate(&owner.get_task(&task).unwrap())
+            .unwrap(),
+        "a discarded candidate is no longer discardable"
+    );
+    let repeated = owner
+        .discard_task_candidate_as(&task, "again", "dashboard")
+        .expect_err("a repeated discard has nothing to discard");
+    assert!(
+        repeated.to_string().contains("no candidate to discard"),
+        "{repeated}"
+    );
     let drain = pair.run_drain();
     let next = pair.running_leaf(&drain, 1);
     assert_eq!(pair.claimed_task(&next), task, "the task is pulled again");
