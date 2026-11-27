@@ -84,7 +84,7 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 - `bootstrap`: Workspace initialization, managed asset seeding, and forward-only startup migrations; imports `application`, `runtime`, and lower workspace crates (never `composition`).
 - `composition`: Composition root joining resolved configuration, bootstrap, `RuntimeKernel`, and adapters; imports `application`, `bootstrap`, `runtime`, and lower workspace crates.
 - `metrics`: Source directory `metrics/` for the crate-private Rust module `metric` (declared with `#[path = "metrics/mod.rs"]`); `metric` contains reliability and run metrics computed from persisted job-run data and imports `application`, `runtime`, `orbit-common`, `orbit-runtime`, `orbit-store`, and `orbit-types`. External callers import from `app::run` ([ORB-28962]), and [ORB-28963] moves `metric`'s internals into `app::run`.
-- `runtime`: Re-export of `orbit-runtime` and the public `OrbitRuntime` wrapper over `RuntimeKernel`; imports lower workspace crates only (never `application`, `adapter`, `bootstrap`, or `composition`).
+- `runtime`: Crate-private re-export of `orbit-runtime` and the `OrbitRuntime` wrapper over `RuntimeKernel` in shipped builds (public only under `test-support`); imports lower workspace crates only (never `application`, `adapter`, `bootstrap`, or `composition`).
 
 ## Application module destinations
 
