@@ -308,3 +308,234 @@ fn audit_warning_survives_cli_field_and_artifact_put_projections() {
     let stored: Value = serde_json::from_slice(&stored_output).expect("stored artifact JSON");
     assert_eq!(stored["content"], "committed artifact", "{stored}");
 }
+
+#[test]
+fn artifact_put_accepts_non_canonical_mandate_path_and_refuses_traversal() {
+    if crate::isolated_test::run_in_child(
+        "tool_run_audit_warning::artifact_put_accepts_non_canonical_mandate_path_and_refuses_traversal",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(test_env::bulk_write_temp_dir()).expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    git_repo::init(&work);
+    fixture_orbit(&work, &home)
+        .args(["workspace", "init", "--name", "artifact-put-fixture"])
+        .assert()
+        .success();
+    let orbit_home = home.join(".orbit");
+    crate::fixture_crew::configure_sol(&orbit_home);
+    let config = orbit_home.join("config.toml");
+    let mut settings = std::fs::read_to_string(&config).expect("fixture config");
+    settings.push_str("\n[crews.mandate-fixture]\nprovider = \"codex\"\nmodel = \"gpt-6-sol\"\n");
+    std::fs::write(config, settings).expect("mandate crew config");
+    let routine_path = work.join(".orbit/routines/resident_cycle.yaml");
+    std::fs::create_dir_all(routine_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        routine_path,
+        "schemaVersion: 1\nname: artifact-cycle\nenabled: false\ntrigger:\n  cron: '0 * * * *'\ntarget: job:resident_cycle_pipeline\n",
+    )
+    .unwrap();
+    let source_path = work.join(".orbit/tmp/mandate.json");
+    std::fs::create_dir_all(source_path.parent().expect("artifact source parent"))
+        .expect("artifact source directory");
+    let mandate = json!({
+        "schema": "resident.mandate/v1",
+        "goal": "Keep direct artifact writes equivalent",
+        "exit_criteria": ["Canonical and prefixed paths behave the same"],
+        "workspaces": ["artifact-put-fixture"],
+        "crew": "mandate-fixture",
+        "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+    });
+    std::fs::write(&source_path, mandate.to_string()).expect("mandate source");
+    let source = source_path.to_str().expect("UTF-8 fixture path");
+
+    let add_resident = || {
+        let output = fixture_orbit(&work, &home)
+            .args([
+                "task",
+                "add",
+                "--title",
+                "Artifact put resident",
+                "--status",
+                "backlog",
+                "--complexity",
+                "low",
+                "--tag",
+                "resident",
+                "--crew",
+                "sol",
+                "--json",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let task: Value = serde_json::from_slice(&output).expect("resident task JSON");
+        task["id"].as_str().expect("resident task ID").to_string()
+    };
+    let tool_put = |id: &str, path: &str| {
+        let input = json!({
+            "action": "put",
+            "id": id,
+            "path": path,
+            "source_path": source,
+            "model": "codex",
+        })
+        .to_string();
+        let output = fixture_orbit(&work, &home)
+            .args([
+                "tool",
+                "run",
+                "orbit.task.artifact",
+                "--input",
+                &input,
+                "--format",
+                "json",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice::<Value>(&output).expect("artifact put JSON")
+    };
+
+    let control_id = add_resident();
+    let control = tool_put(&control_id, "resident/mandate.json");
+    let alternate_id = add_resident();
+    let alternate = tool_put(&alternate_id, "./resident/mandate.json");
+    let control_task: Value = serde_json::from_slice(
+        &fixture_orbit(&work, &home)
+            .args(["task", "show", &control_id, "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+    .expect("control task JSON");
+    let alternate_task: Value = serde_json::from_slice(
+        &fixture_orbit(&work, &home)
+            .args(["task", "show", &alternate_id, "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+    .expect("alternate task JSON");
+    let control_resident: Value = serde_json::from_slice(
+        &fixture_orbit(&work, &home)
+            .args(["resident", "show", &control_id, "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+    .expect("control resident JSON");
+    let alternate_resident: Value = serde_json::from_slice(
+        &fixture_orbit(&work, &home)
+            .args(["resident", "show", &alternate_id, "--json"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+    .expect("alternate resident JSON");
+    let metadata = |result: &Value, task: &Value, resident: &Value| {
+        json!({
+            "crew": task["crew"],
+            "task_status": task["status"],
+            "resident_status": resident["status"],
+            "cycle_routine_disabled": result["cycle_routine_disabled"],
+            "cycle_routine_name": result["cycle_routine_name"],
+            "warning": result["warning"],
+        })
+    };
+    assert_eq!(
+        metadata(&alternate, &alternate_task, &alternate_resident),
+        metadata(&control, &control_task, &control_resident)
+    );
+    for (result, task, resident) in [
+        (&control, &control_task, &control_resident),
+        (&alternate, &alternate_task, &alternate_resident),
+    ] {
+        assert_eq!(task["crew"], "mandate-fixture", "{task}");
+        assert_eq!(task["status"], "in-progress", "{task}");
+        assert_eq!(resident["status"], "in_progress", "{resident}");
+        assert_eq!(resident["cycle_routine_disabled"], true, "{resident}");
+        assert_eq!(result["cycle_routine_disabled"], true, "{result}");
+        let routine_name = resident["cycle_routine_name"].as_str().unwrap();
+        assert_eq!(result["cycle_routine_name"], routine_name, "{result}");
+        assert!(
+            result["warning"]
+                .as_str()
+                .is_some_and(|warning| warning.contains(&format!("`{routine_name}` is disabled"))),
+            "{result}"
+        );
+        assert!(
+            task["artifacts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|artifact| { artifact["path"] == "resident/mandate.json" }),
+            "{task}"
+        );
+    }
+
+    let invalid_id = add_resident();
+    let before_output = fixture_orbit(&work, &home)
+        .args(["task", "show", &invalid_id, "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let before: Value = serde_json::from_slice(&before_output).expect("before task JSON");
+    let before_state = json!({
+        "crew": before["crew"],
+        "status": before["status"],
+        "artifacts": before["artifacts"],
+    });
+    let invalid_input = json!({
+        "action": "put",
+        "id": invalid_id,
+        "path": "../resident/mandate.json",
+        "source_path": source,
+        "model": "codex",
+    })
+    .to_string();
+    fixture_orbit(&work, &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.artifact",
+            "--input",
+            &invalid_input,
+            "--format",
+            "json",
+        ])
+        .assert()
+        .failure();
+    let after_output = fixture_orbit(&work, &home)
+        .args(["task", "show", &invalid_id, "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let after: Value = serde_json::from_slice(&after_output).expect("after task JSON");
+    assert_eq!(
+        json!({
+            "crew": after["crew"],
+            "status": after["status"],
+            "artifacts": after["artifacts"],
+        }),
+        before_state,
+        "invalid artifact paths must not write or activate the resident"
+    );
+    assert_eq!(after["crew"], "sol", "{after}");
+    assert_eq!(after["status"], "backlog", "{after}");
+}
