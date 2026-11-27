@@ -711,12 +711,21 @@ test is named the same way with `cargo test -p <crate> --lib <test>`: the same
 package and that exact filter. A leading repository-owned scheduling wrapper
 (`scripts/build-budget.py --` or `./scripts/build-budget.py --`) before
 `cargo test` is unwrapped; unknown wrappers, build-changing flags (`--release`,
-`--features`, `--profile`, `--target`), multi-package runs, and other target
-selectors (`--bins`, `--all-targets`, `--lib --test`) stay uncovered. A `--test`
+`--features`, `--profile`, `--target`), multi-package library or package-wide
+runs, and other target selectors (`--bins`, `--all-targets`, `--lib --test`)
+stay uncovered. A `--test`
 requirement does not cover a library or package-wide run, and a `--lib`
 requirement does not cover a `--test` run. When a Cargo library deferral pair
 cannot be safely reconciled, the certificate escalation names the unresolved
 record and gives a runnable native command or fresh-review route.
+An opaque required command such as `CI_TEST_BASE=<sha> make ci-test-affected`
+has no supported Cargo scope. Its `unreconciled_opaque_deferral` escalation
+names the record, exact command and uncovered notices: attaching focused test
+results alone cannot establish what that command ran. Run the exact command
+natively outside the sandbox without deferrals and admit a fresh review with
+the result, or admit a fresh review with supported Cargo validation records
+and matching host evidence. The multi-package integration case described below
+is separate and remains subject to its ownership check.
 Record each requirement as its own `required`, `not_run` record too. A host
 result for each requirement then establishes the broader record. A notice no
 requirement names exactly leaves the record `not_run`, and the review blocks
