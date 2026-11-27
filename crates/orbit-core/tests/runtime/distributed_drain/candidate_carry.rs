@@ -740,6 +740,21 @@ fn owner_run_held_on_red_base(pair: &Pair, task: &str, base: &str) -> (String, S
         Some(held.text()),
         "the note is unchanged beside the decision"
     );
+    let comments = owner.get_task_comments(task).unwrap();
+    let comment = comments
+        .iter()
+        .find(|comment| {
+            comment
+                .message
+                .starts_with("Validation failed because the base")
+        })
+        .expect("the hold comment points to the run");
+    assert_eq!(comment.message.lines().count(), 1);
+    assert!(
+        comment
+            .message
+            .contains(&format!("orbit run show {run} --json"))
+    );
     (run, head, handoff)
 }
 
@@ -778,11 +793,6 @@ fn a_red_base_hold_carries_its_candidate_to_another_hosts_claim() {
         git(&bare(&pair), &["rev-parse", &reference]).trim(),
         head,
         "origin holds the held candidate at its durable ref"
-    );
-    assert!(
-        comments_of(&pair.owner_task(&task)).contains(&reference),
-        "the hold comment names the durable ref: {}",
-        pair.owner_task(&task)
     );
     hold_superseded(&pair, &task);
 
@@ -865,18 +875,6 @@ fn a_red_base_hold_whose_push_is_refused_stays_host_local() {
             .stdout
             .is_empty(),
         "nothing reached origin"
-    );
-    let comments = pair.wire.owner.get_task_comments(&task).unwrap();
-    let hold = comments
-        .iter()
-        .rev()
-        .map(|comment| comment.message.as_str())
-        .find(|message| message.starts_with("## Red base"))
-        .expect("the hold comment");
-    assert!(hold.contains("host-local"), "{hold}");
-    assert!(
-        hold.contains(failure),
-        "the comment carries the push diagnostic: {hold}"
     );
     hold_superseded(&pair, &task);
 

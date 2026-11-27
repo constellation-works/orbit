@@ -268,13 +268,23 @@ fn same_pr_publication_retains_each_refused_observation() {
     }
     f.runtime.write_run_state(id, &state).unwrap();
     let comments = f.runtime.get_task_comments(&f.task).unwrap();
+    let operation_id = format!("pr-handoff-failed:{id}:automation.vcs.pr.lookup");
+    let handoff_comments: Vec<_> = comments
+        .iter()
+        .filter(|comment| comment.message.starts_with("Pull request handoff failed"))
+        .collect();
     assert_eq!(
-        comments
-            .iter()
-            .filter(|comment| comment.message.starts_with("pr handoff failed"))
-            .count(),
+        handoff_comments.len(),
         1,
         "per-read evidence survives the existing one-comment-per-phase handoff contract"
+    );
+    let comment = handoff_comments[0];
+    assert_eq!(comment.operation_id.as_deref(), Some(operation_id.as_str()));
+    assert_eq!(comment.message.lines().count(), 1);
+    assert!(
+        comment
+            .message
+            .contains(&format!("orbit run show {id} --json"))
     );
     std::fs::write(&f.answer, answer.to_string()).unwrap();
     assert_eq!(

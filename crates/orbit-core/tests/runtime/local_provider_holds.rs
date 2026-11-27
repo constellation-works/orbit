@@ -1299,26 +1299,33 @@ fn unresolved_policy_decision_holds_the_run_and_keeps_the_candidate() {
         "partial candidate\n"
     );
 
-    // [ORB-29000] The blocker comment names the worktree and branch and gives
-    // the salvage route. It never tells the operator to resume the held run.
+    // The blocker comment points to the run. Its handoff retains the salvage route.
     let branch = handoff.output["branch"].as_str().unwrap().to_string();
     let worktree_text = worktree.display().to_string();
+    let retained_worktree = worktree.canonicalize().unwrap();
+    assert_eq!(handoff.output["worktree"], json!(retained_worktree));
+    assert_eq!(handoff.output["blocker_kind"], CODE);
+    let recovery = handoff.output["recovery"].as_str().unwrap();
+    for expected in [
+        retained_worktree.to_str().unwrap(),
+        "orbit task artifact put",
+        "orbit task requeue",
+    ] {
+        assert!(
+            recovery.contains(expected),
+            "{expected} missing: {recovery}"
+        );
+    }
     let comment = fx
         .runtime
         .get_task_comments(&task)
         .unwrap()
         .into_iter()
         .map(|comment| comment.message)
-        .find(|message| message.contains("## Agent blocker"))
+        .find(|message| message.starts_with("Delivery stopped because an agent reported a blocker"))
         .expect("the blocker comment");
-    for expected in [
-        worktree_text.as_str(),
-        branch.as_str(),
-        "orbit task artifact put",
-        "orbit task requeue",
-    ] {
-        assert!(comment.contains(expected), "{expected} missing: {comment}");
-    }
+    assert_eq!(comment.lines().count(), 1);
+    assert!(comment.contains(&format!("orbit run show {} --json", stored.run_id)));
     assert!(!comment.contains("resume the run"), "{comment}");
 
     // The operator clears the blocker by returning the task to in-progress.
