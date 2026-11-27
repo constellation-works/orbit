@@ -335,3 +335,67 @@ fn env_probe_child() {
         );
     }
 }
+
+#[test]
+fn genuine_child_skip_notice_is_relayed_and_deliberate_notice_is_filtered() {
+    const RELAY_PARENT: &str = "genuine_skip_relay_parent_child";
+    for mode in ["unfiltered", "filtered"] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", RELAY_PARENT, "--ignored", "--nocapture"])
+            .env("ORBIT_TEST_SKIP_RELAY_MODE", mode);
+        let output = run_child_test(&mut command, RELAY_PARENT, dir.path());
+        orbit_common::test_env::assert_child_test_passed_filtering(
+            RELAY_PARENT,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+            |line| !line.starts_with("SKIP:"),
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let relayed: Vec<&str> = stderr
+            .lines()
+            .filter(|line| line.starts_with("SKIP:"))
+            .collect();
+        let expected = if mode == "unfiltered" {
+            vec![
+                "SKIP: deliberate negative-control skip",
+                "SKIP: genuine host coverage gap",
+            ]
+        } else {
+            vec!["SKIP: genuine host coverage gap"]
+        };
+        assert_eq!(relayed, expected, "mode={mode}, stderr:\n{stderr}");
+    }
+}
+
+#[test]
+#[ignore = "re-executed by the child SKIP relay and filter regression"]
+fn genuine_skip_relay_parent_child() {
+    const SKIP_CHILD: &str = "genuine_skip_notice_child";
+    let mode = std::env::var("ORBIT_TEST_SKIP_RELAY_MODE").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command.args(["--exact", SKIP_CHILD, "--ignored", "--nocapture"]);
+    let output = run_child_test(&mut command, SKIP_CHILD, dir.path());
+    if mode == "unfiltered" {
+        assert_child_test_passed(SKIP_CHILD, output.status, &output.stdout, &output.stderr);
+    } else {
+        orbit_common::test_env::assert_child_test_passed_filtering(
+            SKIP_CHILD,
+            output.status,
+            &output.stdout,
+            &output.stderr,
+            |line| line != "SKIP: deliberate negative-control skip",
+        );
+    }
+}
+
+#[test]
+#[ignore = "re-executed by the child SKIP relay and filter regression"]
+fn genuine_skip_notice_child() {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "SKIP: deliberate negative-control skip");
+    let _ = writeln!(std::io::stderr(), "SKIP: genuine host coverage gap");
+}

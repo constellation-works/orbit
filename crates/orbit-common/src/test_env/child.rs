@@ -177,6 +177,19 @@ pub fn assert_child_test_passed(
     stdout: impl AsRef<[u8]>,
     stderr: impl AsRef<[u8]>,
 ) {
+    assert_child_test_passed_filtering(test_name, status, stdout, stderr, |_| true);
+}
+
+/// Like [`assert_child_test_passed`], but forwards a matched notice line only
+/// when `forward_notice` returns `true`, so negative-control tests that trigger
+/// a `SKIP:` notice on purpose do not emit it as a real host coverage gap.
+pub fn assert_child_test_passed_filtering(
+    test_name: &str,
+    status: std::process::ExitStatus,
+    stdout: impl AsRef<[u8]>,
+    stderr: impl AsRef<[u8]>,
+    mut forward_notice: impl FnMut(&str) -> bool,
+) {
     let stdout = String::from_utf8_lossy(stdout.as_ref());
     let stderr = String::from_utf8_lossy(stderr.as_ref());
     assert!(
@@ -201,8 +214,11 @@ pub fn assert_child_test_passed(
             || line.starts_with("qa-scenario-pass: ")
     });
     for line in deferrals {
-        // Bypass libtest capture, as the child's own notice did.
-        let _ = writeln!(std::io::stderr(), "{}", line.trim());
+        let trimmed = line.trim();
+        if forward_notice(trimmed) {
+            // Bypass libtest capture, as the child's own notice did.
+            let _ = writeln!(std::io::stderr(), "{trimmed}");
+        }
     }
 }
 

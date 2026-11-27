@@ -43,7 +43,8 @@ mod temp_dir;
 pub use child::{
     CHILD_TEST_CEILING, CHILD_TEST_DEADLINE, FIXTURE_CEILING, FIXTURE_STALL_DEADLINE,
     FIXTURE_STEP_DEADLINE, FixtureProgress, assert_child_test_exists, assert_child_test_passed,
-    assert_step_finished, record_scenario_pass, run_child_test, run_child_test_within,
+    assert_child_test_passed_filtering, assert_step_finished, record_scenario_pass, run_child_test,
+    run_child_test_within,
 };
 pub(crate) use env::scoped_env_active;
 pub use env::{

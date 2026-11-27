@@ -1648,11 +1648,16 @@ fn unavailable_nextest_rows_report_the_capability_and_take_no_pass_credit() {
         // Hang-guarded: a hung row is killed and fails here with the child's
         // output, instead of stalling until nextest's external termination.
         let output = orbit_common::test_env::run_child_test(&mut command, &table, logs.path());
-        orbit_common::test_env::assert_child_test_passed(
+        // The shimmed `cargo` forces a deliberate `SKIP: <row>: ... cargo-nextest ...`
+        // notice in the child; suppress only that deliberate line from outer stderr
+        // so the affected-test relay records only genuine host coverage gaps.
+        let expected_skip = format!("SKIP: {row}: ");
+        orbit_common::test_env::assert_child_test_passed_filtering(
             &table,
             output.status,
             &output.stdout,
             &output.stderr,
+            |line| !(line.starts_with(&expected_skip) && line.contains("cargo-nextest")),
         );
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
