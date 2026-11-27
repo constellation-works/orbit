@@ -67,7 +67,7 @@ pickup. Do not confuse a task description with a design document or a transcript
   - A grep criterion states the exact command, searched path scope and match
     count at filing, plus the expected count after the change. Keep the path
     scope narrow. For example, if
-    `rg -n -F 'old_setting' crates/orbit-config/src/ | wc -l` returns 4 at
+    `rg -n -F 'old_setting' src/ | wc -l` returns 4 at
     filing, require it to return 0 after the removal. Use repository-wide scope
     only when filing-time results show that every match belongs to the target.
 - **Timing and performance criteria:** a timing criterion must be stable under
