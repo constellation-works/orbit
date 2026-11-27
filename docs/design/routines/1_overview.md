@@ -150,7 +150,7 @@ fragmentation this feature exists to end.
 | `orbit clock tick` and compatibility `orbit sweep` CLI entrypoints | `crates/orbit-cli/src/command/clock/tick.rs`, `crates/orbit-cli/src/command/sweep.rs` | Done — [ORB-12237] |
 | `orbit routine` CLI (`list/show/pause/resume/init`) | `crates/orbit-cli/src/command/routine/` | Done — [ORB-10021] |
 | `orbit clock` CLI (`status/pause/enable/repair/set/tick`) | `crates/orbit-cli/src/command/clock/` | Done — [ORB-10720], [ORB-12237] |
-| launchd/systemd unit templates + installer | `crates/orbit-clock/assets/clock/` + `crates/orbit-clock/src/` (re-exported as `routines::clock`) | Done — [ORB-10021]; own crate since [ORB-22688] |
+| launchd/systemd unit templates + installer | `crates/orbit-clock/assets/clock/` + `crates/orbit-clock/src/` (operations re-exported by `app::routine`; settings by `application::contracts`) | Done — [ORB-10021]; own crate since [ORB-22688] |
 | Disabled default routine seeding + workspace ship wrapper | `crates/orbit-core/assets/{routines,jobs}/` | Done — [ORB-10207] / [Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job) |
 | Per-user definitions, seeded through init/sync | `crates/orbit-core/src/app/routine/seed.rs` | Done — [ORB-12718] replaced git-shared definitions |
 | Replica-local cron GC | `crates/orbit-core/src/app/routine/loader.rs::runs_in_replica` | Done — [ORB-14173], [ORB-16354] |
