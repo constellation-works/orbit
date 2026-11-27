@@ -254,6 +254,7 @@ if [[ "$static" == true ]]; then
 fi
 
 run_self_tests=true
+run_dashboard_fixture=false
 if [[ "$static" == true ]]; then
   run_self_tests=false
 elif [[ "$fast" == true || ("$guards" == true && "${CI_SELF_TESTS:-all}" == changed) ]]; then
@@ -279,6 +280,16 @@ elif [[ "$fast" == true || ("$guards" == true && "${CI_SELF_TESTS:-all}" == chan
     # feeds the adapter self-test. A change to either runs those self-tests.
     while IFS= read -r -d '' path; do
       case "$path" in
+        scripts/removed-dashboard-labels-allowlist.json)
+          # The core guard reads this live; its fixture cases live in this suite.
+          # Keep the QA and unsplit routes conservative.
+          if [[ "$separate_qa" == true ]]; then
+            run_dashboard_fixture=true
+            continue
+          fi
+          run_self_tests=true
+          break
+          ;;
         scripts/* | .github/* | Makefile | .cargo/* | Cargo.toml | Cargo.lock | \
           .config/nextest.toml | \
           crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml | \
@@ -298,7 +309,7 @@ fi
 
 # Selection must precede Cargo and repository guards: these mandatory fixtures
 # import yaml even though the standalone local workflow linter can warn/skip.
-if [[ "$run_self_tests" == true || "$static" == true || "$qa_only" == true ]]; then
+if [[ "$run_self_tests" == true || "$run_dashboard_fixture" == true || "$static" == true || "$qa_only" == true ]]; then
   "$repo_root/scripts/require-python.sh" --yaml
 fi
 
@@ -489,6 +500,9 @@ skipped() {
         return 0
         ;;
     esac
+  fi
+  if [[ "$name" == test-ci-fast-guards.py && "$run_dashboard_fixture" == true && "$static" == false ]]; then
+    return 1
   fi
   if [[ "$name" == test-* && "$name" != test-qa-full-sweep.py && "$run_self_tests" == false ]]; then
     if [[ "$static" == false ]]; then

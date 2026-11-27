@@ -2906,3 +2906,14 @@ benign, while a stationary source path outside those records and outside
 with real fingerprints, proving both the benign and the still-drift rows plus
 that the guard stages, commits, resets, or cleans nothing. A full pipeline
 with linked worktrees and a provider run cannot prove this guard cheaply.
+
+### Dashboard allowlist core selection (2026-11-27)
+
+A change to the removed dashboard labels allowlist previously selected every core
+fixture suite. The live label guard still runs on every core job, and the owning
+fixture cases in `test-ci-fast-guards.py` still run for that allowlist. Other
+changed self-test inputs retain the all-suite fallback, and the QA and full push
+routes are unchanged. This narrows PR fixture selection; it retires no coverage.
+After merge, the operator must run `python3 scripts/ci-p90.py --limit 20
+--budget-seconds 400` on the rolling hosted PR cohort. Local replay does not
+establish hosted budget compliance.
