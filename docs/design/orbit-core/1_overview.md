@@ -128,7 +128,7 @@ source scan, enforces the runtime direction.
 | Application operations and DTOs | `crates/orbit-core/src/application/` | [ORB-10886] |
 | Shared application constants and DTOs | `crates/orbit-core/src/application/contracts/` | [ORB-17924] |
 | Clock settings and schedule display state below `routines` | `crates/orbit-clock/src/clock_settings.rs` (re-exported from `contracts`), `crates/orbit-core/src/application/contracts/schedule_display.rs` | [ORB-22623], [ORB-22688] |
-| Host sweep clock (settings, unit install, pause, cadence, convergence, health), outside Core | `crates/orbit-clock/src/`, re-exported as `routines::clock` | [ORB-22688] |
+| Host sweep clock (settings, unit install, pause, cadence, convergence, health), outside Core | `crates/orbit-clock/src/`; operations re-exported by `app::routine`, settings by `application::contracts` | [ORB-22688] |
 | Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task/port.rs` | [ORB-17924], [ORB-17943] |
 | Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
 | Task-owned notice closure on done | `crates/orbit-core/src/application/task/notice_port.rs` (`TaskNoticePort`), implemented in `app/notice/close.rs` and bound in `app/port.rs` | [ORB-23017] |
@@ -450,8 +450,9 @@ condition hold's continuity limit are owned by the `orbit-clock` crate below
 Core [ORB-22688] and named through `contracts`, the one contract that reads and
 writes a file, under a root its caller names. The
 `ScheduleDisplayState` `auto_tasks` projects is in `contracts::schedule_display`.
-`routines::clock` and `routines::status` re-export them for outer consumers, a
-compatibility shim whose retirement is a follow-up. Resident owns
+`app::routine` re-exports the clock operations (`clock_status`, `install_clock`,
+`set_clock_enabled`, `set_clock_cadence`, convergence and inspection) for outer
+consumers, and `application::contracts` re-exports the clock settings. Resident owns
 `resident::ResidentRoutineStatusPort`, whose `disabled_resident_cycle_routine_name`
 returns only `Option<String>`; `routines/resident_port.rs` implements it on
 `OrbitRuntime` [ORB-22956]. The existing `resident_cycle_routine_disabled`
@@ -622,7 +623,7 @@ the lower modules’ direct edges into `landing`.
 - [ORB-22625] — moved the block classification into `task`, routed the done-landing diff stats through `task::TaskCodebasePort`, and added `codebase` to the guarded `task` upper modules.
 - [ORB-22956] — cut resident's cycle status back-edge through `resident::ResidentRoutineStatusPort`, implemented by `routines`, and guarded resident references and inherent calls into routines.
 - [ORB-22955] — cut task's grant-answer and resident-comment calls into `resident` through `task::TaskResidentPort`, implemented by `resident`, and added `resident` to the guarded `task` upper modules.
-- [ORB-22688] — moved the host sweep clock (`routines/clock`, its settings and unit templates) into the `orbit-clock` crate, which names only `orbit-common` and so compiles outside the serial Core library; Core re-exports it at the old paths.
+- [ORB-22688] — moved the host sweep clock (`routines/clock`, its settings and unit templates) into the `orbit-clock` crate, which names only `orbit-common` and so compiles outside the serial Core library; Core re-exported it at the old `routines/clock` paths, since replaced by the `app::routine` and `application::contracts` re-exports.
 - [ORB-22623] — cut automation's and auto_tasks' back-edges into `routines` by moving the clock settings and `ScheduleDisplayState` to `contracts`, and guarded the direction.
 - [ORB-22807] — removed visual review: `visual_delivery`, `review::ReviewVisualPort`, `distributed::DistributedVisualPort`, `task::mock_admission` and `task::visual_review_json` are gone, `landing` calls down into `task`, `job` and `distributed` only, and the guard's `visual_delivery` rule is dropped.
 - [ORB-23017] — cut task's done-transition notice closure through `task::TaskNoticePort`, implemented by `notice`, and added `notice` to the guarded `task` upper modules.
