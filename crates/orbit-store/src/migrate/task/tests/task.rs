@@ -55,6 +55,7 @@ pub(super) fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -
             implemented_by: None,
             created_at: now,
             updated_at: now,
+            context_creation_sealed_at: None,
             not_before: None,
         },
         description: format!("description for {id}"),

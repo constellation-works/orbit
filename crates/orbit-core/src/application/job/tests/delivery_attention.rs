@@ -47,6 +47,7 @@ fn task(status: TaskStatus, with_pr: bool) -> Task {
         rule_fingerprint: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
+        context_creation_sealed_at: None,
         not_before: None,
     }
 }

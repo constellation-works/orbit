@@ -856,10 +856,16 @@ fn creation_hold_scenario(failed_pilot: bool) {
         assert_status(&ws, &creating, TaskStatus::Proposed);
     }
     assert_eq!(
-        ws.last_event(&creating),
-        CONTEXT_CREATION_AUTHORIZED_EVENT,
-        "the pilot write re-seals the creation grant after its hold marker"
+        ws.history(&creating)
+            .iter()
+            .filter(|entry| entry.event == CONTEXT_CREATION_AUTHORIZED_EVENT)
+            .count(),
+        1,
+        "unchanged creation scope carries its envelope seal without appending duplicate grant rows"
     );
+    if !failed_pilot {
+        assert_eq!(ws.last_event(&creating), "task_pilot_applied");
+    }
     let assert_held_both = |selection: &Value| {
         assert_held(selection, &creating, reason);
         assert_held(selection, &ordinary, reason);
@@ -872,7 +878,21 @@ fn creation_hold_scenario(failed_pilot: bool) {
     }
     ws.comment(&creating);
     ws.comment(&ordinary);
-    assert_eq!(ws.last_event(&creating), CONTEXT_CREATION_AUTHORIZED_EVENT);
+    assert_eq!(
+        ws.history(&creating)
+            .iter()
+            .filter(|entry| entry.event == CONTEXT_CREATION_AUTHORIZED_EVENT)
+            .count(),
+        1
+    );
+    assert_eq!(
+        ws.last_event(&creating),
+        if failed_pilot {
+            "crew_assigned"
+        } else {
+            "task_pilot_applied"
+        }
+    );
     let next = ws.select(&drain);
     assert_task_ids(&next, &[]);
     assert_held_both(&next);

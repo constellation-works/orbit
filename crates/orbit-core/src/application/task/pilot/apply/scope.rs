@@ -40,6 +40,7 @@ pub(super) fn scope_with(
                 &task.id,
                 &task.context_files,
                 task.updated_at,
+                task.context_creation_sealed_at,
                 pre_history
                     .iter()
                     .map(|entry| (entry.event.as_str(), entry.note.as_deref())),

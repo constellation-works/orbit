@@ -432,6 +432,7 @@ impl TaskCommitBoundary {
             &bundle.envelope.id,
             &bundle.envelope.context_files,
             bundle.envelope.updated_at,
+            bundle.envelope.context_creation_sealed_at,
             bundle
                 .events
                 .iter()
@@ -444,6 +445,10 @@ impl TaskCommitBoundary {
             intent.envelope.updated_at,
         )?
         else {
+            intent.envelope.context_creation_sealed_at = match state {
+                ContextCreationState::Current(_) => Some(intent.envelope.updated_at),
+                ContextCreationState::Absent | ContextCreationState::Void => None,
+            };
             return Ok(());
         };
 
@@ -467,6 +472,7 @@ impl TaskCommitBoundary {
             surface: None,
             caller: None,
         });
+        intent.envelope.context_creation_sealed_at = Some(intent.envelope.updated_at);
         Ok(())
     }
 

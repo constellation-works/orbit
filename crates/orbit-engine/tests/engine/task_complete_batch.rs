@@ -135,6 +135,7 @@ fn task(id: &str, status: TaskStatus) -> Task {
         rule_fingerprint: None,
         created_at: now,
         updated_at: now,
+        context_creation_sealed_at: None,
         not_before: None,
     }
 }

@@ -103,7 +103,7 @@ impl TaskV2Store {
                 operation_id: Some(fields.operation_id.clone()),
             };
             pending_comments.push(comment);
-            append_creation_grant(
+            let creation_sealed_at = append_creation_grant(
                 &mut bundle,
                 &fields.context_files,
                 &[],
@@ -143,6 +143,7 @@ impl TaskV2Store {
             bundle.envelope.crew = fields.crew.clone();
             bundle.envelope.crew_source = fields.crew_source.clone();
             bundle.envelope.updated_at = now;
+            bundle.envelope.context_creation_sealed_at = creation_sealed_at;
             self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
             pending.finish();
             self.publish_task_index_and_lease_notices(&bundle.envelope, &fields.event_note)?;
@@ -246,6 +247,7 @@ impl TaskV2Store {
             let mut pending = PendingWriteGuard::begin(&self.bundle_store.bundle_path(id)?)?;
             let mut pending_events: Vec<TaskEventRowV2> = Vec::new();
             let updated_at = Utc::now();
+            let mut creation_sealed_at = None;
             let mut envelope_changed = false;
             let mut title_changed = false;
             let mut previous_title: Option<String> = None;
@@ -289,14 +291,14 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
             if let Some(value) = &fields.context_files {
-                append_creation_grant(
+                creation_sealed_at = Some(append_creation_grant(
                     &mut bundle,
                     value,
                     &fields.context_creation,
                     &fields.actor,
                     updated_at,
                     &mut pending_events,
-                )?;
+                )?);
                 bundle.envelope.context_files = value.clone();
                 envelope_changed = true;
             } else if !fields.context_creation.is_empty() {
@@ -574,17 +576,20 @@ impl TaskV2Store {
                 || fields.plan.is_some()
                 || fields.execution_summary.is_some()
             {
-                if fields.context_files.is_none() {
-                    let context_files = bundle.envelope.context_files.clone();
-                    append_creation_grant(
-                        &mut bundle,
-                        &context_files,
-                        &[],
-                        &fields.actor,
-                        updated_at,
-                        &mut pending_events,
-                    )?;
-                }
+                let sealed_at = match creation_sealed_at {
+                    Some(sealed_at) => sealed_at,
+                    None => {
+                        let context_files = bundle.envelope.context_files.clone();
+                        append_creation_grant(
+                            &mut bundle,
+                            &context_files,
+                            &[],
+                            &fields.actor,
+                            updated_at,
+                            &mut pending_events,
+                        )?
+                    }
+                };
                 stamp_pending_events(
                     &mut bundle.events,
                     &mut pending_events,
@@ -592,6 +597,7 @@ impl TaskV2Store {
                 );
                 self.bundle_store.append_events(id, &pending_events)?;
                 bundle.envelope.updated_at = updated_at;
+                bundle.envelope.context_creation_sealed_at = sealed_at;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
                 pending.finish();
                 self.publish_task_index_and_lease_notices(
@@ -710,6 +716,7 @@ impl TaskV2Store {
             }
             let status_transition =
                 (target_status != current_status).then_some((current_status, target_status));
+            let mut creation_sealed_at = None;
             if fields.planned_by.is_some() || fields.implemented_by.is_some() {
                 let previous = bundle.envelope.clone();
                 if let Some(value) = &fields.planned_by {
@@ -740,14 +747,14 @@ impl TaskV2Store {
                 // ahead of the status event; keep that history order.
                 if !claimed {
                     let context_files = bundle.envelope.context_files.clone();
-                    append_creation_grant(
+                    creation_sealed_at = Some(append_creation_grant(
                         &mut bundle,
                         &context_files,
                         &[],
                         &fields.actor,
                         now,
                         &mut pending_events,
-                    )?;
+                    )?);
                 }
             }
             let mut next_event = next_sequence(&bundle.events, "EV-");
@@ -834,15 +841,21 @@ impl TaskV2Store {
                 // A claimed task's creation grant is the claim's to keep: a
                 // comment admitted under it records no new grant.
                 if !claimed {
-                    let context_files = bundle.envelope.context_files.clone();
-                    append_creation_grant(
-                        &mut bundle,
-                        &context_files,
-                        &[],
-                        &fields.actor,
-                        now,
-                        &mut pending_events,
-                    )?;
+                    let sealed_at = match creation_sealed_at {
+                        Some(sealed_at) => sealed_at,
+                        None => {
+                            let context_files = bundle.envelope.context_files.clone();
+                            append_creation_grant(
+                                &mut bundle,
+                                &context_files,
+                                &[],
+                                &fields.actor,
+                                now,
+                                &mut pending_events,
+                            )?
+                        }
+                    };
+                    bundle.envelope.context_creation_sealed_at = sealed_at;
                 }
                 stamp_pending_events(
                     &mut bundle.events,

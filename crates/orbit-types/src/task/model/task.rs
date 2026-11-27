@@ -135,6 +135,10 @@ pub struct Task {
     pub rule_fingerprint: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Envelope revision last confirmed by a writer maintaining this task's
+    /// context creation grant; see [`TaskEnvelopeV2::context_creation_sealed_at`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_creation_sealed_at: Option<DateTime<Utc>>,
 }
 
 impl Display for Task {
@@ -231,6 +235,7 @@ impl Task {
             rule_fingerprint: envelope.rule_fingerprint,
             created_at: envelope.created_at,
             updated_at: envelope.updated_at,
+            context_creation_sealed_at: envelope.context_creation_sealed_at,
         }
     }
 

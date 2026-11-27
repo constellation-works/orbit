@@ -208,7 +208,7 @@ impl TaskV2Store {
             pending_events.push(event.clone());
             b.events.push(event);
             let context_files = b.envelope.context_files.clone();
-            append_creation_grant(
+            let creation_sealed_at = append_creation_grant(
                 &mut b,
                 &context_files,
                 &[],
@@ -224,6 +224,7 @@ impl TaskV2Store {
             self.bundle_store.append_events(id, &pending_events)?;
             self.bundle_store.append_comments(id, &pending_comments)?;
             b.envelope.updated_at = now;
+            b.envelope.context_creation_sealed_at = creation_sealed_at;
             self.bundle_store.rewrite_envelope(id, &b.envelope)?;
             pending.finish();
             self.publish_task_index_and_lease_notices(&b.envelope, "desktop task mutation")?;
