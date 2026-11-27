@@ -6,6 +6,7 @@ Contents:
 - [Tasks that fix frictions](#tasks-that-fix-frictions)
 - [Revise without accumulating contradictions](#revise-without-accumulating-contradictions)
 - [Repairs that narrow a shared invariant](#repairs-that-narrow-a-shared-invariant)
+- [Moves with companion fixtures and guards](#moves-with-companion-fixtures-and-guards)
 - [Description template](#description-template)
 
 Give the implementer a coherent outcome, enough evidence to start, and a way to
@@ -21,7 +22,9 @@ pickup. Do not confuse a task description with a design document or a transcript
   decisions that supersede it.
 - **Owned work:** say what this task delivers and what it deliberately leaves to
   another task. Missing ordinary methods, types, adapters and tests needed for
-  that result are implementation work, not an external dependency.
+  that result are implementation work, not an external dependency. A move's
+  companion fixture, path-filter and tracing-filter edits follow
+  [Moves with companion fixtures and guards](#moves-with-companion-fixtures-and-guards).
 - **Prerequisites:** name actual task IDs and the capability each supplies. Record
   blocking edges in `dependencies` on `orbit.task.add` (or `orbit.task.update`
   after guarded creation), not only in prose. Do not require an upstream
@@ -158,6 +161,47 @@ merged tree is green. When the change shares an invariant with other
 in-flight work, require comparing the per-commit suite on the integration
 branch against its parent commit, not just the PR's own base, before trusting
 the result.
+
+## Moves with companion fixtures and guards
+
+A behavior-preserving move can leave text that still names the old location: a
+guard test's fixture tree or path list, a path filter, or a tracing filter that
+targets the old module path. Updating that text is companion work the move needs.
+Rewriting an assertion, an expected value or an unrelated test is not. Before
+filing a move:
+
+1. Search for the old path, module path and filter target (`rg -n` over tests,
+   scripts, fixtures and filter directives), then classify each hit:
+   - **Companion:** the text must change for the guard or filter to match the
+     moved code. Name the exact file and the literal replacement, such as
+     `old/path` → `new/path`.
+   - **Unrelated:** the test only runs or passes through the moved code. Leave it
+     unchanged and do not name it.
+2. Write criteria that allow exactly the companion edits and forbid the rest. Do
+   not limit test edits to "imports or call syntax" when a guard fixture, path
+   filter or tracing filter literal must also change. Say instead: "Test edits
+   are limited to the listed literals in `<file>`; no assertion, expected value,
+   fixture body or other test changes." Workspace test rules, such as the UI test
+   prohibition in the workspace guide, still apply to every companion edit.
+3. Require an independent check that the guard still detects violations: keep or
+   add a negative case that plants a violation at the moved location and expects
+   the guard's existing failure. Do not regenerate the guard's fixture from the
+   moved source, because that removes the check. A passing run on the clean tree
+   is not evidence of this.
+4. Require a tracing filter to keep its behavior: the same events and fields
+   still appear under the new target, shown by a captured log or an assertion,
+   and the filter directive names the new target.
+5. A move that cannot pass without changing an assertion, an expected value or
+   behavior is not behavior-preserving. Name that change as its own outcome, or
+   file it as a separate task.
+
+For example, a move that renames a module watched by a dependency-direction guard
+can carry these criteria:
+
+> - `scripts/check-dependency-direction.sh` still fails on a planted import that
+>   crosses the moved module's boundary, and still passes on the clean tree.
+> - Test edits are limited to the moved module's path literals in the guard's
+>   fixture; no expected message or other test changes.
 
 ## Description template
 

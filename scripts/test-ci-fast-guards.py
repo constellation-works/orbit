@@ -2142,6 +2142,34 @@ class PullOccupancyArchitectureTests(unittest.TestCase):
                 )
 
 
+class TaskAuthoringContractTests(unittest.TestCase):
+    """Keep the move authoring check apart from unrelated test rewrites."""
+
+    def test_move_guidance_allows_companion_edits_and_forbids_unrelated_rewrites(self):
+        docs = (
+            "crates/orbit-core/assets/skills/orbit/references/task-authoring-contract.md",
+            "plugin/skills/orbit/references/task-authoring-contract.md",
+        )
+        required = (
+            "## Moves with companion fixtures and guards",
+            "[Moves with companion fixtures and guards](#moves-with-companion-fixtures-and-guards)",
+            "**Companion:** the text must change",
+            "**Unrelated:** the test only runs or passes through the moved code",
+            'Do not limit test edits to "imports or call syntax"',
+            "Test edits are limited to the listed literals",
+            "no assertion, expected value, fixture body or other test changes",
+            "keep or add a negative case that plants a violation",
+            "Do not regenerate the guard's fixture from the moved source",
+            "the same events and fields still appear under the new target",
+            "UI test prohibition",
+        )
+        for relative_path in docs:
+            with self.subTest(path=relative_path):
+                text = " ".join((SCRIPTS.parent / relative_path).read_text().split())
+                for phrase in required:
+                    self.assertIn(phrase, text)
+
+
 class DocLinkGuardrailTests(unittest.TestCase):
     """Exercise the checker through its executable boundary in real Git repos."""
 
