@@ -5,11 +5,11 @@
 //! What a command is owed depends on how it reached the [`Core`]:
 //!
 //! - From a command-line process, the chokepoint authorizes the command and
-//!   writes its invocation audit row, the row the CLI's own audit guard wrote
-//!   before the command went through an app. When the CLI entry scopes
-//!   settlement with [`InvocationAuditScope`], a successful `exec` defers that
-//!   write until output rendering finishes (or unwinds), then marks the row as
-//!   recorded so the entry's legacy guard writes no second one.
+//!   writes its invocation audit row. When the CLI entry scopes settlement
+//!   with [`InvocationAuditScope`](super::invocation::InvocationAuditScope), a
+//!   successful `exec` defers that write until output rendering finishes (or
+//!   unwinds), then marks the row as recorded so the scope writes no second
+//!   one.
 //! - From a long-lived server, the chokepoint authorizes the command. No
 //!   invocation row is written for one today; a task write records the
 //!   owner-side mutation row the dashboard wrote itself before.
@@ -17,7 +17,6 @@
 //!   call before the handler ran, so the chokepoint only runs it. This case
 //!   ends when the tool entry itself is converted to call the apps.
 
-use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::time::Instant;
 
@@ -35,18 +34,11 @@ use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::Value;
 
+use super::invocation;
 use crate::application::task::{TaskMutationAudit, audit_status_for_task_mutation_error};
 use crate::composition::Entry;
 use crate::runtime::tool_exec::CapabilityEnforcement;
 use crate::{Core, Error};
-
-thread_local! {
-    /// Active CLI invocation audit settlement scope. `Some(None)` means the
-    /// CLI entry is ready to settle one deferred `AuditGuard` after output
-    /// rendering completes; `Some(Some(_))` holds the unsettled guard.
-    static DEFERRED_INVOCATION_AUDIT: RefCell<Option<Option<Box<DeferredAudit>>>> =
-        const { RefCell::new(None) };
-}
 
 /// What an app supplies to the chokepoint: its types, the operation a command
 /// performs, and how to run it.
@@ -267,87 +259,10 @@ impl StreamAudit {
     }
 }
 
-/// Scopes command-line invocation audit settlement across command dispatch and
-/// CLI output rendering.
-///
-/// While active on the current thread, a command-line app `exec` that succeeds
-/// defers its invocation audit guard here instead of writing `success` before
-/// stdout rendering completes. [`Self::settle`] records the final render
-/// result, exit code and optional audit message and flushes the audit row
-/// before process exit; dropping the scope without settling (for example, on
-/// panic unwind when stdout fails) drops the guard unsettled so it persists
-/// `failure` with `exit_code = -1`.
-pub struct InvocationAuditScope {
-    active: bool,
-}
-
-impl InvocationAuditScope {
-    /// Begin deferring command-line invocation audit settlement on this thread
-    /// until [`Self::settle`] or drop.
-    pub fn enter() -> Self {
-        let active = DEFERRED_INVOCATION_AUDIT.with(|slot| {
-            let mut slot = slot.borrow_mut();
-            if slot.is_some() {
-                return false;
-            }
-            *slot = Some(None);
-            true
-        });
-        Self { active }
-    }
-
-    /// Settle any deferred command-line invocation audit with the complete
-    /// dispatch and rendering outcome, flushing its row before returning.
-    ///
-    /// Rendering errors take precedence over the command's or payload's
-    /// declared exit code and audit message.
-    pub fn settle(
-        mut self,
-        result: Result<(), &Error>,
-        exit_code: i32,
-        audit_message: Option<&str>,
-    ) {
-        if let Some(mut deferred) = self.take_deferred() {
-            match result {
-                Ok(()) => {
-                    let effective_exit_code = if exit_code != 0 {
-                        exit_code
-                    } else {
-                        deferred.exit_code
-                    };
-                    deferred
-                        .guard
-                        .finished_with_message(effective_exit_code, audit_message);
-                }
-                Err(error) => deferred.guard.failed(error),
-            }
-        }
-    }
-
-    fn take_deferred(&mut self) -> Option<Box<DeferredAudit>> {
-        if !self.active {
-            return None;
-        }
-        self.active = false;
-        DEFERRED_INVOCATION_AUDIT.with(|slot| slot.borrow_mut().take().flatten())
-    }
-}
-
-impl Drop for InvocationAuditScope {
-    fn drop(&mut self) {
-        let _ = self.take_deferred();
-    }
-}
-
-struct DeferredAudit {
-    guard: AuditGuard,
-    exit_code: i32,
-}
-
 /// Writes one command's invocation audit row when dropped, so an early return
 /// or a panic still leaves it. Until [`Self::finished`] is called the row says
 /// the command failed with exit code -1.
-struct AuditGuard {
+pub(super) struct AuditGuard {
     runtime: crate::OrbitRuntime,
     operation: Operation,
     execution_id: String,
@@ -368,49 +283,6 @@ impl AuditGuard {
             exit_code: -1,
             error_message: None,
         }
-    }
-
-    /// Record that the command ran and answers `exit_code`.
-    fn finished(&mut self, exit_code: i32) {
-        self.finished_with_message(exit_code, None);
-    }
-
-    /// Record that the command ran and answers `exit_code`, optionally carrying
-    /// a redacted audit message when `exit_code != 0`.
-    fn finished_with_message(&mut self, exit_code: i32, audit_message: Option<&str>) {
-        self.status = match exit_code {
-            0 => AuditEventStatus::Success,
-            _ => AuditEventStatus::Failure,
-        };
-        self.exit_code = exit_code;
-        self.error_message = (exit_code != 0)
-            .then_some(audit_message)
-            .flatten()
-            .map(redact_sensitive_env_text);
-    }
-
-    /// Record the error the command ended with.
-    fn failed(&mut self, error: &Error) {
-        let denial = match error {
-            OrbitError::PolicyDenied(message) | OrbitError::CapabilityDenied(message) => {
-                Some(message.clone())
-            }
-            OrbitError::DecisionRefused { code, .. } if code.is_policy_denial() => {
-                Some(error.to_string())
-            }
-            OrbitError::NoticeRefused { code, .. } if code.is_policy_denial() => {
-                Some(error.to_string())
-            }
-            _ => None,
-        };
-        self.status = match denial {
-            Some(_) => AuditEventStatus::Denied,
-            None => AuditEventStatus::Failure,
-        };
-        self.exit_code = 1;
-        self.error_message = Some(redact_sensitive_env_text(
-            &denial.unwrap_or_else(|| error.to_string()),
-        ));
     }
 
     fn row(&self) -> AuditEventInsertParams {
@@ -477,6 +349,49 @@ impl AuditGuard {
                 .and_then(|text| text.parse().ok()),
         }
     }
+
+    /// Record that the command ran and answers `exit_code`.
+    pub(super) fn finished(&mut self, exit_code: i32) {
+        self.finished_with_message(exit_code, None);
+    }
+
+    /// Record that the command ran and answers `exit_code`, optionally carrying
+    /// a redacted audit message when `exit_code != 0`.
+    pub(super) fn finished_with_message(&mut self, exit_code: i32, audit_message: Option<&str>) {
+        self.status = match exit_code {
+            0 => AuditEventStatus::Success,
+            _ => AuditEventStatus::Failure,
+        };
+        self.exit_code = exit_code;
+        self.error_message = (exit_code != 0)
+            .then_some(audit_message)
+            .flatten()
+            .map(redact_sensitive_env_text);
+    }
+
+    /// Record the error the command ended with.
+    pub(super) fn failed(&mut self, error: &Error) {
+        let denial = match error {
+            OrbitError::PolicyDenied(message) | OrbitError::CapabilityDenied(message) => {
+                Some(message.clone())
+            }
+            OrbitError::DecisionRefused { code, .. } if code.is_policy_denial() => {
+                Some(error.to_string())
+            }
+            OrbitError::NoticeRefused { code, .. } if code.is_policy_denial() => {
+                Some(error.to_string())
+            }
+            _ => None,
+        };
+        self.status = match denial {
+            Some(_) => AuditEventStatus::Denied,
+            None => AuditEventStatus::Failure,
+        };
+        self.exit_code = 1;
+        self.error_message = Some(redact_sensitive_env_text(
+            &denial.unwrap_or_else(|| error.to_string()),
+        ));
+    }
 }
 
 impl Drop for AuditGuard {
@@ -485,8 +400,9 @@ impl Drop for AuditGuard {
         let written = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.runtime.record_audit_event(&row)
         }));
-        // A row that was not written stays owed: the command-line entry's own
-        // guard then writes it, and reports the failure if it fails again.
+        // A row that was not written stays owed: the command line's
+        // invocation scope then writes it, and reports the failure if it
+        // fails again.
         if matches!(written, Ok(Ok(()))) {
             crate::adapter::command::mark_tool_audit_recorded();
         }
@@ -573,7 +489,7 @@ pub(crate) fn run<A: App>(core: &Core, command: A::Command) -> Result<A::Outcome
             let mut guard = AuditGuard::start(core, operation.clone());
             let result = admitted(command);
             match &result {
-                Ok(outcome) => defer_or_finish_invocation_audit(guard, A::exit_code(outcome)),
+                Ok(outcome) => invocation::defer_or_finish(guard, A::exit_code(outcome)),
                 Err(error) => guard.failed(error),
             }
             result
@@ -588,25 +504,6 @@ pub(crate) fn run<A: App>(core: &Core, command: A::Command) -> Result<A::Outcome
             record_mutation(core, audit, started, result.as_ref().map(A::written_id));
             result
         }
-    }
-}
-
-/// Hand a succeeded command-line invocation's `AuditGuard` to the active
-/// [`InvocationAuditScope`] on this thread, or settle it immediately when no
-/// CLI settlement scope is open (for example, direct in-process `exec` calls).
-fn defer_or_finish_invocation_audit(guard: AuditGuard, exit_code: i32) {
-    let deferred = DEFERRED_INVOCATION_AUDIT.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        match slot.as_mut() {
-            Some(pending) if pending.is_none() => {
-                *pending = Some(Box::new(DeferredAudit { guard, exit_code }));
-                None
-            }
-            _ => Some(guard),
-        }
-    });
-    if let Some(mut guard) = deferred {
-        guard.finished(exit_code);
     }
 }
 

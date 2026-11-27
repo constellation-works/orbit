@@ -4,6 +4,9 @@
 //! A surface builds a `Command`, passes it with its [`Core`](crate::Core) to
 //! that app's `exec`, and renders the `Outcome`. Every `exec` runs through
 //! the one chokepoint in `exec.rs`, which authorizes and audits the command.
+//! A command line also scopes each invocation with `invocation.rs`, which
+//! settles that row once output rendering finishes and writes the row of an
+//! invocation that never reached an `exec`.
 //! `agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`,
 //! `config`, `crew_memory`, `doctor`, `evolution`, `experiment`, `friction`, `gc`,
 //! `host`, `notice`, `plugin`, `resident`, `review`, `routine`, `run`, `search`,
@@ -42,6 +45,8 @@ pub mod gc;
 
 pub mod host;
 
+mod invocation;
+
 pub mod notice;
 
 pub mod plugin;
@@ -70,4 +75,5 @@ pub mod update;
 
 pub mod workspace;
 
-pub use exec::{DashboardCaller, InvocationAuditScope, dashboard_authorize};
+pub use exec::{DashboardCaller, dashboard_authorize};
+pub use invocation::{AuditWriteFailure, CommandMeta, InvocationAuditScope};

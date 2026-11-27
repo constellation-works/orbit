@@ -23,7 +23,7 @@ Four shapes in the codebase carry distinct lessons.
 
 ## Reference: `AuditGuard` — record the scope's outcome once
 
-From `crates/orbit-cli/src/audit_middleware.rs:27`:
+Adapted from the CLI guard that `crates/orbit-core/src/app/invocation.rs` (`InvocationAuditScope`, `OwnRow`) replaced (ORB-28407):
 
 ```rust
 pub struct AuditGuard<'a> {
