@@ -7,9 +7,9 @@ last_validated: 2026-11-27
 
 # Spec: Compact Viewports
 
-> **Proposed.** Nothing here is built. [2_design.md](../2_design.md) describes the dashboard
-> as it is. The operator approves this design and its mocks before any phase is filed
-> (STD-07 R25).
+> **Approved, not built.** The operator approved this design and its mocks on 2026-11-27
+> (STD-07 R25) [ORB-29230]. [2_design.md](../2_design.md) describes the dashboard as it is.
+> [Phasing](#phasing) names the task that builds each part.
 
 Below 1316px the dashboard gives each region the width it needs or takes the region off the
 screen; no region is squeezed below its measured minimum. On a phone, one header row and one
@@ -71,7 +71,7 @@ with the measured figure; the sums below follow.
 
 | Tier | Viewport | Rail | Scope pickers | Tasks regions |
 |---|---|---|---|---|
-| Wide | 1316px and up | Labelled, 200px | In the rail | List with dock or task pane (unchanged) |
+| Wide | 1316px and up | Labelled, 200px | In the rail (until phase 4) | List with dock or task pane (unchanged) |
 | Medium | 761 to 1315px | Icons, 56px | In the header | List with task pane when both fit, otherwise one column |
 | Small | 760px and below | None; bottom bar | In the header | One column |
 
@@ -97,7 +97,7 @@ provider usage, spacer, search, New task, Notify.
   directly after the brand. They are the same two native selects the rail holds today, with
   the same options (R37). Each is as wide as its longest option until the row runs out
   (R42), then ends in an ellipsis and keeps the full name in its title. At wide they stay in
-  the rail. The Serving badge shows at medium and is dropped at small, where the host
+  the rail until phase 4 moves them. The Serving badge shows at medium and is dropped at small, where the host
   select's accessible name carries it.
 - **Fit.** When the row stops fitting at full size, members shrink in this order, each at
   the width where the row measured from its content no longer fits (R39): Notify loses its
@@ -224,22 +224,21 @@ the rail's Drain icon opens it. At small the bottom bar's Drain slot opens it.
   task, after the pane and the full page. Inside a scrolling list the task's actions cannot
   stick to the bottom edge (R24), and an open task pushes every later row off the screen.
 - **A status pill row that scrolls sideways.** It keeps the labels, at the cost of hiding
-  pills past the edge. R39 rules out a row that scrolls sideways, so this needs a recorded
-  deviation. See Open Questions.
+  pills past the edge. R39 rules out a row that scrolls sideways, so it would need a
+  recorded deviation.
 - **One combined scope control** in place of two selects. It is a new control with its own
   look (R37) and adds a tap to every switch.
 
 ## Phasing
 
-Each phase ships on its own and is filed only after this design is approved.
+Each phase ships on its own, in this order: they change the same stylesheets and markup.
 
-1. **Small shell.** The 48px header, the bottom bar and More sheet, 8px board padding, the
-   one-row status pills.
-2. **Small Tasks view.** Two-line rows, the full-viewport task with previous and next, the
-   history entry.
-3. **Medium.** The icon rail (and as the collapsed rail at wide), scope pickers in the
-   header, the header's fit order, the side pane floors and the one-column task over the
-   list.
+| Phase | Builds | Task |
+|---|---|---|
+| 1. Small shell | The 48px header, the bottom bar and More sheet, 8px board padding, the one-row status pills | [ORB-29233] |
+| 2. Small Tasks view | Two-line rows, the full-viewport task with previous and next, the history entry | [ORB-29234] |
+| 3. Medium | The icon rail (and as the collapsed rail at wide), scope pickers in the header, the header's fit order, the side pane floors and the one-column task over the list | [ORB-29235] |
+| 4. Scope at wide | The host and workspace selects move to the header at wide too, so they are in one place at every width | Not filed; after phases 1 to 3 have been in use |
 
 Every implementation task carries the `user-interface` and `ui` tags and attaches
 screenshots at the view manifest's widths: 375px (small), 768px (medium, one column), 1000px
@@ -269,23 +268,23 @@ Drawn with the dashboard's tokens and a mock-only stylesheet
   and bar, and keep their own content layouts and breakpoints.
 - **The task-pane minimum is provisional** until the build measures it.
 
-## Open Questions
+## Decided at Approval
 
-Each has a recommendation; the operator decides.
+The operator settled these with the design on 2026-11-27 [ORB-29230].
 
-1. **Status pills at small: dots with counts, or a row that scrolls sideways?** Recommended:
-   dots with counts. A scrolling row needs a deviation from STD-07 R39 recorded in
-   [4_decisions.md](../4_decisions.md).
-2. **"esc" on a phone.** R44 labels every close button "esc", including on a device with no
-   Esc key. Recommended: keep the rule, since Back also closes the task. A different label
-   on touch needs an amendment to the standard, not a deviation here.
-3. **Two-line rows without the crew select at small.** Recommended: yes; it is where the
-   board's height goes.
-4. **Scope pickers in the header at wide too,** so they live in one place at every width.
-   Recommended: yes, as a fourth phase after the three above have been used.
+1. **Status pills at small are dots with counts.** A row that scrolls sideways was the
+   alternative and would have needed a deviation from STD-07 R39.
+2. **The close button stays "esc" on a phone** (R44). The browser's Back also closes the
+   task. A different label on touch would be an amendment to the standard.
+3. **Rows at small are two lines with the crew as text.** The crew is changed in the open
+   task.
+4. **Scope pickers move to the header at wide too,** as phase 4.
 
 ## Task References
 
-- [ORB-29230] recorded the phone and mid-width findings and wrote this spec.
+- [ORB-29230] recorded the phone and mid-width findings, wrote this spec and carried its approval.
+- [ORB-29233] builds phase 1, the small shell.
+- [ORB-29234] builds phase 2, the small Tasks view.
+- [ORB-29235] builds phase 3, the medium tier.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

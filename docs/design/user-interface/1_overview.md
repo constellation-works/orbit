@@ -8,7 +8,7 @@ updated_date: 2026-11-27
 last_validated: 2026-11-11
 status: Draft
 stage: shipped
-next: "Approve the compact-viewports spec, then file its three phases [ORB-29230]"
+next: "Build compact viewports phase 1, the small shell [ORB-29233]"
 feature: user-interface
 doc_role: overview
 tags: ["user-interface"]
@@ -130,7 +130,7 @@ partial coverage. No recursive federation or workspace writes are performed.
 | CLI adapter | `crates/orbit-cli/src/command/web.rs` | Delegates `serve` and `connect` to `orbit-web`. |
 | Theme rules | `./specs/theme.md` | Canon Refined tokens and visual invariants. |
 | Workspace navigation across hosts (proposed) | `./specs/workspace-navigation.md` | One entry per logical workspace, owner routing, follower capacity lanes and a multi-workspace scope. Not implemented. |
-| Compact viewports (proposed) | `./specs/compact-viewports.md` | Layout below 1316px: icon rail and measured list and pane floors at medium; one header row and a bottom bar at small. Not implemented. |
+| Compact viewports (approved, not built) | `./specs/compact-viewports.md` | Layout below 1316px: icon rail and measured list and pane floors at medium; one header row and a bottom bar at small. Not implemented. |
 | Dashboard implementation | [crates/orbit-web/src/serve.rs](../../../crates/orbit-web/src/serve.rs), [assets.rs](../../../crates/orbit-web/src/assets.rs), [state/](../../../crates/orbit-web/src/state/), [api/](../../../crates/orbit-web/src/api/) | HTTP server, embedded dashboard assets, workspace state, and API routing. |
 
 ## Task References
