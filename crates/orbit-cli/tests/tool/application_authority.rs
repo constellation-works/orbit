@@ -413,6 +413,79 @@ spec:
     );
 }
 
+/// Regression [ORB-29356]: each application consent verb writes exactly one
+/// invocation row under the `admin` role its command line declares, not the
+/// operator the runtime resolved, and keeps its target and outcome.
+#[test]
+fn application_consent_commands_audit_the_admin_role() {
+    let fixture = Fixture::new();
+    fixture.install_shapes();
+    fixture.success(["plugin", "enable", "shapes"]);
+    let show = fixture.json(["plugin", "show", "shapes"]);
+    let digest = show["manifest_digest"].as_str().unwrap();
+    let request = json!({
+        "application_id": "audit-role-app",
+        "expires_at": "2099-01-01T00:00:00Z",
+        "scopes": [{
+            "operation": {
+                "tool": "shapes.maintain",
+                "input": {},
+                "plugin": {"name": "shapes", "manifest_digest": digest}
+            },
+            "callbacks": []
+        }]
+    });
+    let (grant, _) = consent(&fixture, &request, "role-first", None);
+    let grant_id = grant["consent_id"].as_str().unwrap();
+    let (rotated, _) = consent(&fixture, &request, "role-rotated", Some(grant_id));
+    let rotated_id = rotated["consent_id"].as_str().unwrap();
+    fixture
+        .operator_command(["application", "revoke", rotated_id])
+        .assert()
+        .success();
+    // The runtime also writes consent lifecycle rows under this command, and
+    // those carry `application_json`; the invocation row never does.
+    let conn = rusqlite::Connection::open(fixture.home.join(".orbit/orbit.db")).unwrap();
+    let rows: Vec<(String, String, String, Option<String>, String, i64)> = conn
+        .prepare(
+            "SELECT subcommand, role, target_type, target_id, status, exit_code \
+             FROM audit_events WHERE command = 'application' \
+             AND application_json IS NULL ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let expected = |subcommand: &str, target_id: Option<&str>| {
+        (
+            subcommand.to_string(),
+            "admin".to_string(),
+            "application_consent".to_string(),
+            target_id.map(str::to_string),
+            "success".to_string(),
+            0,
+        )
+    };
+    assert_eq!(
+        rows,
+        vec![
+            expected("consent", None),
+            expected("rotate", Some(grant_id)),
+            expected("revoke", Some(rotated_id)),
+        ]
+    );
+}
+
 /// Exercise the inherited host route without spawning a sandboxed backend.
 /// The separate backend case above proves the real confinement integration.
 #[test]
