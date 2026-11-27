@@ -478,7 +478,11 @@ pub(super) fn approve(
 ) -> Result<Approval, OrbitError> {
     let task_id = validated.task_id.as_str();
     for attempt in 0..4 {
+        let discovered = runtime.get_task(task_id)?;
+        let named = promotion_task_ids(&validated.assessment);
+        let graph = runtime.discover_pilot_dependency_graph(&discovered, &named)?;
         let mut lock_ids = vec![task_id.to_string()];
+        lock_ids.extend(graph.task_ids().cloned());
         // A dependency owned by another registered workspace is external:
         // it takes no lock in this store, and its status comes from the
         // registered-owner lookup `resolved_dependencies` uses. A
@@ -496,7 +500,6 @@ pub(super) fn approve(
                 return Err(OrbitError::not_found(NotFoundKind::Task, id));
             }
         }
-        let named = promotion_task_ids(&validated.assessment);
         // A prerequisite that was done at the pilot write has no stored edge.
         // Lock those named local tasks too before checking completion again.
         for id in &named {
@@ -514,9 +517,16 @@ pub(super) fn approve(
         approval_hook::before_lock(runtime, task_id);
         let mut approval = None;
         let mut entered = false;
+        let mut graph_changed = false;
         let result = with_task_locks(runtime, task_id, &lock_ids, 0, &mut || {
             entered = true;
             let task = runtime.get_task(task_id)?;
+            let Some(locked_graph) =
+                runtime.reread_pilot_dependency_graph(&task, &named, &graph)?
+            else {
+                graph_changed = true;
+                return Ok(());
+            };
             let mut done = external_done.clone();
             for id in &named {
                 // A task absent during discovery is held conservatively without
@@ -535,7 +545,7 @@ pub(super) fn approve(
                 "apply_task_pilot_results",
                 task_id,
                 &validated.assessment,
-                &task.dependencies(),
+                &locked_graph.dependencies(&task),
                 &|id| done.contains(id),
             )
             .map_err(|error| OrbitError::InvalidInput(error.to_string()))?
@@ -571,6 +581,9 @@ pub(super) fn approve(
             continue;
         }
         result?;
+        if graph_changed {
+            continue;
+        }
         return approval.ok_or_else(|| {
             OrbitError::Execution("drain approval did not run under the task lock".to_string())
         });
@@ -920,7 +933,8 @@ fn promotable_reuse(
     operation_id: &str,
     policy: PromotionPolicy,
 ) -> Result<ExplicitAssessmentReuse, OrbitError> {
-    let dependencies = task.dependencies();
+    let graph = runtime.discover_pilot_dependency_graph(task, &BTreeSet::new())?;
+    let dependencies = graph.dependencies(task);
     let findings = match promotion_findings(
         "select_proposed_approvals",
         &task.id,

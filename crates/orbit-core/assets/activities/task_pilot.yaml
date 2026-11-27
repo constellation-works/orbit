@@ -894,10 +894,11 @@ spec:
       permitted edits and authority boundaries. Derive these rules from that
       workspace, never from Orbit-specific ownership assumptions. Selectors
       alone neither forbid a needed companion edit nor grant a reserved edit.
-      Read each recorded dependency and `blocked_by` relation with
-      `orbit.task.show`, including its description, criteria, plan, selectors
-      and status. A title or a generic dependency edge is not evidence that
-      its scope adds the exact missing contract. A completed dependency whose
+      Walk direct and transitive `dependencies` and `blocked_by` predecessors,
+      visiting each task once with `orbit.task.show` and inspecting its
+      description, criteria, plan, selectors, status and own predecessors.
+      A title or a generic dependency edge is not evidence that its scope adds
+      the exact missing contract. A completed dependency whose
       contract is still absent from the pinned source does not cover the gap.
       Record each contract's evidence and coverage in `assessment_rationale`:
       present in the base, explicitly supplied by a dependency (name its ID
@@ -905,7 +906,10 @@ spec:
       and scoped to add the contract, include the needed selectors; do not
       flag ordinary implementation work. When an unfinished recorded
       dependency explicitly supplies it, let that dependency gate execution;
-      do not add a holding warning just for waiting on it.
+      do not emit holding `utility_warnings`, `contract_conflicts`, or
+      `evidence_gaps` that lead to `footprint_unresolved` solely because
+      the supplied target has not yet landed at `source_revision`. Preserve
+      holds for independently unread footprint evidence.
       Otherwise, when a required contract is absent and this task cannot add
       it, emit a `utility_warnings` object with `holds_promotion: true`. Its
       text names the contract, criterion number or description requirement,
@@ -920,7 +924,11 @@ spec:
     - **Contract contradiction.** When a criterion names a command, key,
       behaviour or contract that is absent or contrary at the pinned
       revision — the criterion cannot be met as written without weakening
-      it — add `{"criterion":N,"evidence":"..."}` to `contract_conflicts`,
+      it — first check the direct and transitive `dependencies` and
+      `blocked_by` predecessors described above. If an unfinished predecessor
+      explicitly supplies the missing target, let the dependency gate execution
+      and do not report its absence as a conflict or footprint evidence gap.
+      Otherwise add `{"criterion":N,"evidence":"..."}` to `contract_conflicts`,
       citing the pinned contract (`path:line` at the revision, the checked
       schema, or the governing guide rule) and what the criterion requires
       instead. Report the contradiction only there for this signature:

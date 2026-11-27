@@ -26,7 +26,7 @@ fn admit(
     // cover a prerequisite. The done lookup reads that same locked graph.
     let task_id = assessed.task_id.as_str();
     let operation_id = assessed.operation_id.as_str();
-    let dependencies = current.dependencies();
+    let dependencies = graph.dependencies(current);
     // The graph is local by design; a prerequisite owned by another
     // registered workspace takes its status from the registry instead
     // [ORB-21172].

@@ -34,6 +34,23 @@ impl PilotDependencyGraph {
             .is_some_and(|task| task.status == TaskStatus::Done)
     }
 
+    /// Direct edges and existing reachable dependencies, excluding unrelated named findings.
+    pub(crate) fn dependencies(&self, task: &Task) -> Vec<String> {
+        let mut pending = task.dependencies();
+        let mut reached = BTreeSet::new();
+        while let Some(id) = pending.pop() {
+            if id == task.id || reached.contains(&id) {
+                continue;
+            }
+            if let Some(target) = self.tasks.get(&id) {
+                reached.insert(id);
+                pending.extend(target.dependencies());
+            }
+        }
+        reached.extend(task.dependencies());
+        reached.into_iter().collect()
+    }
+
     /// Existing dependencies remain intact; only unfinished local tasks add
     /// edges, and the resulting graph must pass the ordinary cycle check.
     /// Reads nothing beyond this snapshot.

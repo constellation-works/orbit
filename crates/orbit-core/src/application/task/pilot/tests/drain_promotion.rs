@@ -628,6 +628,50 @@ fn prerequisite_covered_by_a_dependency_promotes_and_clears_pilot_warnings() {
 }
 
 #[test]
+fn transitive_prerequisite_warning_promotes_without_redundant_edge() {
+    let workspace = workspace(None);
+    let runtime = &workspace.runtime;
+    let upstream = qualifying_task(runtime);
+    let intermediate = qualifying_task(runtime);
+    runtime
+        .update_task(
+            &intermediate.id,
+            TaskUpdateParams {
+                dependencies: Some(vec![upstream.id.clone()]),
+                ..Default::default()
+            },
+        )
+        .expect("link intermediate");
+    let task = qualifying_task(runtime);
+    runtime
+        .update_task(
+            &task.id,
+            TaskUpdateParams {
+                dependencies: Some(vec![intermediate.id.clone()]),
+                ..Default::default()
+            },
+        )
+        .expect("link task");
+    let (drain, pilot) = drain_with_pilot(runtime, &task.id);
+    let applied = pilot_with_findings(
+        &workspace,
+        &task,
+        &drain,
+        &pilot,
+        None,
+        json!({"utility_warnings": [{"text": format!("Wait for {} to supply the contract", upstream.id), "holds_promotion": true}]}),
+    );
+    assert_eq!(
+        applied["drain_approval"][0]["decision"], "promote",
+        "{applied}"
+    );
+    assert_eq!(applied["drain_approval"][0]["approved"], true, "{applied}");
+    let current = runtime.get_task(&task.id).expect("task");
+    assert_eq!(current.status, TaskStatus::Backlog);
+    assert_eq!(current.dependencies(), [intermediate.id]);
+}
+
+#[test]
 fn prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay() {
     if crate::application::tests::application::run_isolated_test(
         "application::task::pilot::tests::drain_promotion::prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay",
