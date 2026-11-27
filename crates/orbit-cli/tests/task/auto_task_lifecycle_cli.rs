@@ -967,7 +967,8 @@ pub(crate) fn baselined_delivery_consumer(
         .unwrap();
     assert!(roots.global_root.starts_with(fixture._temp.path()));
     assert!(roots.shared_root.starts_with(fixture._temp.path()));
-    let runtime = RegisteredRuntimeFactory::open_resolved_roots(roots)
+    let runtime = orbit_cmd::test_support::open_resolved_roots(roots)
+        .map(orbit_core::composition::Opening::into_runtime)
         .unwrap()
         .with_actor(ActorIdentity::human("fixture"));
     let definition = runtime

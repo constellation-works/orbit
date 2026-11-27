@@ -109,7 +109,7 @@ type CheckoutOpener = fn(
     &Path,
     &orbit_types::workspace::Workspace,
     &orbit_types::workspace::WorkspaceCheckout,
-) -> Result<orbit_core::OrbitRuntime, OrbitError>;
+) -> Result<orbit_core::composition::Opening, OrbitError>;
 
 /// Change tokens over the shared audit database's routine rows, split by how
 /// a caller should react to them.
@@ -184,7 +184,7 @@ fn discover_registered_workspaces_until(
             // A replica that cannot be opened only defers its settlement
             // delivery and local GC, so it never reads as a broken workspace.
             match open(global_root, workspace, checkout) {
-                Ok(runtime) => discovered.replicas.push((workspace.clone(), runtime)),
+                Ok(opened) => discovered.push_replica(workspace.clone(), opened),
                 Err(error) => tracing::warn!(
                     target: "orbit.cmd.sweep",
                     workspace = %workspace.name,
@@ -195,7 +195,7 @@ fn discover_registered_workspaces_until(
             continue;
         }
         match open(global_root, workspace, checkout) {
-            Ok(runtime) => discovered.entries.push((workspace.clone(), runtime)),
+            Ok(opened) => discovered.push_entry(workspace.clone(), opened),
             Err(error) => discovered.errors.push(RoutineLoadError {
                 source_workspace: workspace.name.clone(),
                 path: Some(checkout.orbit_dir.clone()),
@@ -247,11 +247,11 @@ fn discover_registered_name_collision_peers(
             continue;
         }
         match open(global_root, workspace, checkout) {
-            Ok(runtime) if checkout.role == Some(WorkspaceCheckoutRole::Replica) => {
-                peers.replicas.push((workspace.clone(), runtime));
+            Ok(opened) if checkout.role == Some(WorkspaceCheckoutRole::Replica) => {
+                peers.push_replica(workspace.clone(), opened);
             }
-            Ok(runtime) => {
-                peers.entries.push((workspace.clone(), runtime));
+            Ok(opened) => {
+                peers.push_entry(workspace.clone(), opened);
             }
             Err(error) => tracing::debug!(
                 target: "orbit.cmd.routines",

@@ -183,11 +183,12 @@ fn admitting_runtime(fixture: &Fixture) -> OrbitRuntime {
         &orbit_registry::workspace_registry::registry_path_for(&fixture.global),
     )
     .unwrap();
-    orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+    orbit_cmd::test_support::open_registered_checkout(
         &fixture.global,
         &registry.workspaces[0],
         &registry.checkouts[0],
     )
+    .map(orbit_core::composition::Opening::into_runtime)
     .unwrap()
 }
 

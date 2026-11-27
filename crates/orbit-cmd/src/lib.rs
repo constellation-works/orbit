@@ -1,10 +1,11 @@
-//! Command-layer surfaces extracted from `orbit-core` [ORB-10016].
+//! Composition: open a [`orbit_core::Core`] for a selected workspace
+//! [ORB-10016].
 //!
-//! Each module owns one CLI-facing command group whose implementation is a
-//! pure consumer of the [`orbit_core::OrbitRuntime`] public API. Runtime
-//! methods that used to be inherent `impl OrbitRuntime` blocks are exposed as
-//! per-module extension traits (`*Commands`); import the trait from the crate
-//! root to call them.
+//! Given the flags and an optional workspace selection, the registry runtime
+//! factory resolves which registered checkout to open, attaches what the
+//! registry knows about it to an [`orbit_core::composition::Opening`], and
+//! returns the `Core` a surface passes to an app's `exec`. The remaining
+//! modules are command groups and the ports the apps call back through.
 //!
 //! # Role
 //! Depends on `orbit-core` (runtime/context) and `orbit-registry`. Core reads
@@ -45,6 +46,9 @@ mod registry;
 pub mod service_environment;
 
 mod task;
+
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 pub mod update;
 

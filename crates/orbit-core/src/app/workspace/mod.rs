@@ -476,6 +476,17 @@ impl<'a> App for WorkspaceApp<'a> {
     }
 }
 
+/// Enable the plugin-seeded routines and auto-tasks `preset` names in the
+/// workspace `core` opened, for `orbit workspace init --preset`, which applies
+/// the preset to the checkout it has just registered. Returns the names whose
+/// state changed.
+pub fn enable_preset_definitions(
+    core: &Core,
+    preset: &crate::application::workspace_preset::WorkspacePreset,
+) -> Result<Vec<String>, OrbitError> {
+    core.runtime().enable_preset_definitions(preset)
+}
+
 /// Authorize, audit and run one workspace command.
 pub fn exec(core: &Core, command: Command<'_>) -> Result<Outcome, crate::Error> {
     exec::run::<WorkspaceApp<'_>>(core, command)

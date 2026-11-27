@@ -6,6 +6,7 @@ use orbit_common::Env;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_core::application::workspace_preset::WorkspacePreset;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
+use orbit_core::runtime::HostLifetime;
 use orbit_core::{OrbitError, RoutineSeedIdentity};
 use orbit_registry::workspace_registry;
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
@@ -470,9 +471,13 @@ fn apply_preset_definitions(
                     init_result.id
                 ))
             })?;
-        let runtime =
-            RegisteredRuntimeFactory::open_registered_checkout(global_root, workspace, checkout)?;
-        enabled = runtime.enable_preset_definitions(&preset)?;
+        let core = RegisteredRuntimeFactory::open_registered_checkout_core_for(
+            global_root,
+            workspace,
+            checkout,
+            HostLifetime::ShortLived,
+        )?;
+        enabled = orbit_core::app::workspace::enable_preset_definitions(&core, &preset)?;
     }
     preset.record_applied(&init_result.orbit_dir)?;
     Ok(AppliedPresetOutcome {

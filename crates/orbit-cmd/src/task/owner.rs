@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_core::OrbitRuntime;
+use orbit_core::{ActorIdentity, Core};
 use orbit_registry::workspace_registry;
 use orbit_store::maintenance::task_registry::{
     TaskRegistryStore, read_workspace_config_optional, task_registry_path,
@@ -124,7 +124,7 @@ impl RegistryFileIdentity {
     }
 }
 
-/// Bootstrap the read-only runtime `orbit task show <id>` must read.
+/// Open the read-only `Core` `orbit task show <id>` must read.
 ///
 /// With `--workspace`, the selector is a filter: this is the ordinary
 /// registered bootstrap, and a task owned elsewhere simply is not found there.
@@ -135,7 +135,8 @@ pub fn initialize_for_task_show(
     root_override: Option<&Path>,
     workspace_selector: Option<&str>,
     task_id: &str,
-) -> Result<OrbitRuntime, OrbitError> {
+    actor: ActorIdentity,
+) -> Result<Core, OrbitError> {
     let selector = workspace_selector
         .map(str::trim)
         .filter(|value| !value.is_empty());
@@ -143,6 +144,7 @@ pub fn initialize_for_task_show(
         return RegisteredRuntimeFactory::initialize_read_only_with_overrides(
             root_override,
             selector,
+            actor,
         );
     }
     let global_root = global_root_for(root_override)?;
@@ -159,6 +161,7 @@ pub fn initialize_for_task_show(
         &selected.workspace,
         &selected.checkout,
     )
+    .map(|opened| opened.with_actor(actor).into_command_core())
 }
 
 /// Resolve the registered checkout that owns `task_id`.

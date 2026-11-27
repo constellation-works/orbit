@@ -16,19 +16,7 @@ use orbit_common::Env;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use orbit_common::process::run_bounded_capped;
 use orbit_common::security::child_env::crew_env_file_problem;
-use orbit_core::OrbitRuntime;
 use orbit_types::identity::{CrewEnvSource, CrewEnvVar};
-
-/// Diagnose a successful `crews.<crew>.env` write using its newly resolved
-/// value, rather than the runtime's configuration from before the write.
-pub fn crew_env_config_write_warnings(
-    runtime: &OrbitRuntime,
-    key: &str,
-    value: &serde_json::Value,
-    env: &Env,
-) -> Vec<String> {
-    crew_env_config_write_warnings_for_root(&runtime.global_root(), key, value, env)
-}
 
 /// Diagnose a successful `crews.<crew>.env` write against the host's global
 /// Orbit root, without holding a runtime handle.

@@ -99,7 +99,7 @@ use automation::*;
 use command::*;
 pub use command::{
     DoctorCommands, DoctorProbe, OrphanTaskStoreRemoval, WorkspaceDoctorResult,
-    WorkspaceDoctorStatus,
+    WorkspaceDoctorStatus, kernel_workspace_doctor,
 };
 pub use host::{
     BrowserKit, Host, KitProblem, TaskStorePartition, TaskStorePartitions,

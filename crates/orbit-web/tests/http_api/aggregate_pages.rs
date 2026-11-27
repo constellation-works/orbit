@@ -1300,19 +1300,18 @@ fn task_detail_under_all_never_resolves_replica_checkouts() {
                     .iter()
                     .find(|checkout| checkout.workspace_id == workspace_id)
                     .expect("checkout");
-                orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
-                    &global, workspace, checkout,
-                )
-                .expect("open registered checkout")
-                .with_actor(ActorIdentity::human("human"))
-                .add_task(TaskAddParams {
-                    title: title.into(),
-                    description: "owned by one workspace".into(),
-                    status: Some(TaskStatus::Backlog),
-                    ..Default::default()
-                })
-                .expect("add task")
-                .id
+                orbit_cmd::test_support::open_registered_checkout(&global, workspace, checkout)
+                    .map(orbit_core::composition::Opening::into_runtime)
+                    .expect("open registered checkout")
+                    .with_actor(ActorIdentity::human("human"))
+                    .add_task(TaskAddParams {
+                        title: title.into(),
+                        description: "owned by one workspace".into(),
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    })
+                    .expect("add task")
+                    .id
             };
             let alpha_id = add(&registry, "alpha", "alpha backlog");
             let replica_id = add(&registry, "bravo", "replica only");

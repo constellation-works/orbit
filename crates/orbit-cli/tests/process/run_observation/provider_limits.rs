@@ -79,14 +79,14 @@ fn native_provider_usage_events_are_visible_in_readiness_and_weekly_pressure() {
     }
     let fixture = Fixture::init();
     configure_crews(&fixture);
-    let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
-        orbit_core::runtime::OrbitRuntimeRoots {
+    let runtime =
+        orbit_cmd::test_support::open_resolved_roots(orbit_core::runtime::OrbitRuntimeRoots {
             global_root: fixture.home.join(".orbit"),
             shared_root: fixture.work.join(".orbit"),
             local_root: fixture.work.join(".orbit"),
-        },
-    )
-    .unwrap();
+        })
+        .map(orbit_core::composition::Opening::into_runtime)
+        .unwrap();
     for (provider, window, scope) in [
         ("grok", "weekly", None),
         ("antigravity", "gemini-weekly", Some("flash")),
@@ -161,14 +161,14 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
         })
     })
     .unwrap();
-    let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
-        orbit_core::runtime::OrbitRuntimeRoots {
+    let runtime =
+        orbit_cmd::test_support::open_resolved_roots(orbit_core::runtime::OrbitRuntimeRoots {
             global_root: fixture.home.join(".orbit"),
             shared_root: fixture.work.join(".orbit"),
             local_root: fixture.work.join(".orbit"),
-        },
-    )
-    .unwrap();
+        })
+        .map(orbit_core::composition::Opening::into_runtime)
+        .unwrap();
     let reading_host = runtime.automation_machine_identity().unwrap();
     // Claude past the default 90% threshold, Codex well below it; Gemini
     // reports no usage at all.

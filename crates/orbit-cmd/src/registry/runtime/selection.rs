@@ -703,11 +703,11 @@ pub(super) fn registered_checkout_for_shared_root<'a>(
 /// Only a complete identity names a machine: an uninitialized root leaves
 /// automation unattributed rather than failing the open.
 pub(super) fn attach_registry_context(
-    runtime: OrbitRuntime,
+    runtime: Opening,
     global_root: &Path,
     identity: &MachineIdentityState,
     registry: Option<&WorkspaceRegistry>,
-) -> OrbitRuntime {
+) -> Opening {
     let location = identity
         .id()
         .map(|machine_id| orbit_types::task::ExecutionLocation {
@@ -718,9 +718,8 @@ pub(super) fn attach_registry_context(
     if let Some(registry) = registry {
         // Core projects the workspace identity from this same load; it must
         // not read `workspaces.json` again after the binding is settled.
-        let opened =
-            workspace_registry::find_workspace_by_path(registry, &runtime.paths().repo_root)
-                .map(|workspace| (workspace.id.clone(), workspace.name.clone()));
+        let opened = workspace_registry::find_workspace_by_path(registry, runtime.repo_root())
+            .map(|workspace| (workspace.id.clone(), workspace.name.clone()));
         runtime = runtime.with_opened_registered_workspace(opened);
         runtime = runtime.with_composition_snapshot(Arc::new(OpenedSelectorInputs {
             identity: identity.clone(),
@@ -758,7 +757,7 @@ fn restore_worker_binding<'a>(
     root: Result<&Path, OrbitError>,
     env: &Env,
 ) -> Result<Option<&'a WorkerInvocation>, OrbitError> {
-    let restored = cell.get_or_init(|| OrbitRuntime::current_worker_invocation(env, root?));
+    let restored = cell.get_or_init(|| Opening::current_worker_invocation(env, root?));
     match restored {
         Ok(binding) => Ok(binding.as_ref()),
         Err(error) => Err(replay_refusal(error)),

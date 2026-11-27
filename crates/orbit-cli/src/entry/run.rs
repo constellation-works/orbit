@@ -270,17 +270,20 @@ pub(crate) fn run(env: orbit_common::Env) {
             RuntimeNeed::Required => RegisteredRuntimeFactory::initialize_with_overrides(
                 root_override.as_deref(),
                 selection,
+                actor.clone(),
             ),
             RuntimeNeed::SelectedWorkspace { selector } => {
                 RegisteredRuntimeFactory::initialize_with_overrides(
                     root_override.as_deref(),
                     Some(selector),
+                    actor.clone(),
                 )
             }
             RuntimeNeed::PipelineWorker => {
                 RegisteredRuntimeFactory::initialize_pipeline_worker_with_overrides(
                     root_override.as_deref(),
                     selection,
+                    actor.clone(),
                 )
             }
             RuntimeNeed::ReadOnly => match task_owner_id.as_deref() {
@@ -288,43 +291,55 @@ pub(crate) fn run(env: orbit_common::Env) {
                     root_override.as_deref(),
                     selection,
                     task_id,
+                    actor.clone(),
                 ),
                 None => RegisteredRuntimeFactory::initialize_read_only_with_overrides(
                     root_override.as_deref(),
                     selection,
+                    actor.clone(),
                 ),
             },
             RuntimeNeed::Inspection => {
                 RegisteredRuntimeFactory::initialize_observational_with_overrides(
                     root_override.as_deref(),
                     selection,
+                    actor.clone(),
                 )
             }
             RuntimeNeed::PluginReadOnly => {
                 RegisteredRuntimeFactory::initialize_plugin_read_only_with_overrides(
                     root_override.as_deref(),
                     selection,
+                    actor.clone(),
                 )
             }
             RuntimeNeed::HostReadOnly => {
                 RegisteredRuntimeFactory::initialize_host_read_only_with_overrides(
                     root_override.as_deref(),
                     selection,
+                    actor.clone(),
                 )
             }
             RuntimeNeed::TaskOwner { task_id } => orbit_cmd::task_owner::initialize_for_task_show(
                 root_override.as_deref(),
                 selection,
                 task_id,
+                actor.clone(),
             ),
         }
     } else {
         // The claimed-owner route opens the worker's bound checkout.
-        RegisteredRuntimeFactory::initialize_with_overrides(root_override.as_deref(), None)
+        RegisteredRuntimeFactory::initialize_with_overrides(
+            root_override.as_deref(),
+            None,
+            actor.clone(),
+        )
     };
 
-    let runtime = match bootstrapped {
-        Ok(runtime) => runtime,
+    // The opaque handle over this command's workspace, for a command that
+    // runs through an app's `exec`.
+    let core = match bootstrapped {
+        Ok(core) => core,
         Err(err) => {
             // `orbit doctor` reports a runtime that would not open instead of
             // failing with the bare refusal when the cause is a misplaced
@@ -340,12 +355,7 @@ pub(crate) fn run(env: orbit_common::Env) {
             print_error(&err, &sink, json_error_preference);
             orbit_common::observability::logging::exit(1);
         }
-    }
-    .with_actor(actor.clone());
-
-    // The opaque handle over this command's runtime, for a command that runs
-    // through an app's `exec`.
-    let core = RegisteredRuntimeFactory::core_for_command(runtime.clone());
+    };
     let context = DispatchContext::with_core(
         &core,
         root_override.as_deref(),

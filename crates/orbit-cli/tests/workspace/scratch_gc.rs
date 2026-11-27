@@ -223,14 +223,14 @@ impl Fixture {
         if inputs.is_empty() {
             return run["pipeline"]["reap"].clone();
         }
-        let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
-            orbit_core::runtime::OrbitRuntimeRoots {
+        let runtime =
+            orbit_cmd::test_support::open_resolved_roots(orbit_core::runtime::OrbitRuntimeRoots {
                 global_root: self.home.join(".orbit"),
                 shared_root: self.work.join(".orbit"),
                 local_root: self.work.join(".orbit"),
-            },
-        )
-        .expect("registered scratch GC runtime");
+            })
+            .map(orbit_core::composition::Opening::into_runtime)
+            .expect("registered scratch GC runtime");
         let waited = runtime
             .wait_pipeline_runs(
                 &[run["run_id"]

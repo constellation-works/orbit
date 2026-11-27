@@ -34,12 +34,9 @@ fn add_workspace(fixture: &Fixture) -> OrbitRuntime {
     registry.workspaces.push(workspace.clone());
     registry.checkouts.push(checkout.clone());
     orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
-    orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
-        &fixture.global,
-        &workspace,
-        &checkout,
-    )
-    .unwrap()
+    orbit_cmd::test_support::open_registered_checkout(&fixture.global, &workspace, &checkout)
+        .map(orbit_core::composition::Opening::into_runtime)
+        .unwrap()
 }
 
 fn matching_task() -> TaskAddParams {

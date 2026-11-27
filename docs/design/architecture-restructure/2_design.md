@@ -401,7 +401,7 @@ orbit-store/src/
 
 ## 9. Composition and `orbit-cmd`
 
-**Today.** `orbit-cmd` is the composition tier. It owns `RegisteredRuntimeFactory`, which opens a runtime for a selected registered workspace, but also command groups that sequence domain and persistence calls (`doctor/`, `hosts/`, `update/`, `browser_kit/`, `workspace_removal.rs`), a deviation from STD-02 §R2 recorded in [ORB-27886].
+**Today.** `orbit-cmd` is the composition tier. It owns `RegisteredRuntimeFactory`, which opens a selected registered workspace as an `orbit_core::composition::Opening` and returns only its `Core` [ORB-28416], but also command groups that sequence domain and persistence calls (`doctor/`, `hosts/`, `update/`, `browser_kit/`, `workspace_removal.rs`), a deviation from STD-02 §R2 recorded in [ORB-27886].
 
 **Proposed.** `orbit-cmd` only constructs: given `Env`, flags and an optional workspace selection, it returns a `Core`.
 

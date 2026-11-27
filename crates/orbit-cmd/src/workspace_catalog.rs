@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_common::{Env, OrbitError};
+use orbit_core::composition::Opening;
 use orbit_core::runtime::RuntimeKernel;
-use orbit_core::{FederatedWorkspaceTarget, OrbitRuntime, WorkspaceCatalog, WorkspaceScope};
+use orbit_core::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 
@@ -152,11 +153,9 @@ impl WorkspaceCatalog for RegistryWorkspaceCatalog {
         &self,
         runtime: &orbit_core::runtime::RuntimeKernel,
     ) -> Result<Option<Vec<orbit_types::tool::AttentionHealthCheck>>, OrbitError> {
-        use orbit_core::app::doctor::{DoctorCommands, WorkspaceDoctorStatus};
-        let runtime = OrbitRuntime::from_kernel(runtime.clone());
+        use orbit_core::app::doctor::{WorkspaceDoctorStatus, kernel_workspace_doctor};
         Ok(Some(
-            runtime
-                .doctor_workspace_with_depth(&self.env, false, &crate::doctor_host::DoctorHost)?
+            kernel_workspace_doctor(runtime, &self.env, false, &crate::doctor_host::DoctorHost)?
                 .into_iter()
                 .filter_map(|row| {
                     let status = match row.status {
@@ -233,7 +232,7 @@ impl WorkspaceCatalog for RegistryWorkspaceCatalog {
             &resolved.workspace,
             &resolved.checkout,
         )
-        .map(OrbitRuntime::into_kernel)
+        .map(Opening::into_kernel)
     }
 
     fn open(&self, target: &FederatedWorkspaceTarget) -> Result<RuntimeKernel, OrbitError> {
@@ -243,7 +242,7 @@ impl WorkspaceCatalog for RegistryWorkspaceCatalog {
             &resolved.workspace,
             &resolved.checkout,
         )
-        .map(OrbitRuntime::into_kernel)
+        .map(Opening::into_kernel)
     }
 }
 
@@ -267,7 +266,7 @@ fn dedupe_by_workspace_id(selected: Vec<RegisteredCheckout>) -> Vec<RegisteredCh
 }
 
 /// Attach registry-backed federated search to a runtime this crate opened.
-pub(crate) fn attach(runtime: OrbitRuntime, global_root: &Path) -> OrbitRuntime {
+pub(crate) fn attach(runtime: Opening, global_root: &Path) -> Opening {
     runtime.with_workspace_catalog(std::sync::Arc::new(RegistryWorkspaceCatalog::new(
         global_root,
     )))
