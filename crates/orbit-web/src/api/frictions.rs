@@ -173,7 +173,10 @@ impl FrictionWs {
     /// Triaged list and the Stats read of one Frictions refresh. Keyed by the
     /// workspace runtime, so one workspace never serves another's rates, and a
     /// failed computation is not kept: the next read retries it.
-    async fn stats(&self, state: &DashboardState) -> Result<Value, Box<Response>> {
+    async fn stats(
+        &self,
+        state: &DashboardState,
+    ) -> Result<crate::runtime_memo::Served<Value>, Box<Response>> {
         let core = Arc::clone(&self.core);
         state
             .friction_stats_memo()
@@ -182,7 +185,6 @@ impl FrictionWs {
                     .map(Outcome::into_value)
             })
             .await
-            .map(|served| (*served.body).clone())
             .map_err(|error| Box::new(map_runtime_error(error)))
     }
 
@@ -260,7 +262,7 @@ pub(super) async fn list_frictions(
         Err(response) => return *response,
     };
     let stats = match stats {
-        Ok(stats) => stats,
+        Ok(served) => (*served.body).clone(),
         Err(response) => return *response,
     };
     let (items, notes) = match items_json {
@@ -363,7 +365,7 @@ pub(super) async fn friction_stats(
     ws: FrictionWs,
 ) -> Response {
     match ws.stats(&state).await {
-        Ok(stats) => Json(stats).into_response(),
+        Ok(served) => (served.age_header(), Json((*served.body).clone())).into_response(),
         Err(response) => *response,
     }
 }
