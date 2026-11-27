@@ -83,7 +83,9 @@ For a documentation or CI-only change, file the task with `skip-review`, `skip-v
 or both:
 
 - `skip-review`: no agent review before the PR, before landing or after
-  landing.
+  landing, unless the delivered candidate includes a
+  `security-state-review` task, which still requires review of its exact
+  head before landing.
 - `skip-validation`: the implementer runs no local validation, and delivery runs
   no required validation and attaches no validation logs.
 
