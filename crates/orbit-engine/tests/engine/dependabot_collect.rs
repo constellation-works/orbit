@@ -14,7 +14,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::time::Duration;
 
-use orbit_common::{OrbitError, process::run_bounded_capped, test_env};
+use orbit_common::process::run_bounded_capped;
+use orbit_common::test_env;
 use orbit_engine::execute_deterministic_action;
 use serde_json::json;
 
@@ -80,8 +81,11 @@ struct RootHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for RootHost {
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Ok(self.root.clone())
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            repo_root: Some(self.root.clone()),
+            ..orbit_engine::RunSettings::default()
+        }
     }
 }
 

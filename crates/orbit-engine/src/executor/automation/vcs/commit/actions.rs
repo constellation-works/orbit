@@ -123,7 +123,7 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
 
     let mut committed_task_ids = Vec::new();
     let mut skipped_task_ids = Vec::new();
-    let pr_config = host.pr_config();
+    let pr_config = host.run_settings().pr_config;
     let landed = resolve_regression_landed_commits(host, &workspace_path, &tasks, &pr_config);
 
     for task in tasks {
@@ -205,7 +205,7 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
 
     let files_to_commit: Vec<String> = files_to_commit.into_iter().collect();
     stage_paths(&host.process_env(), &workspace_path, &files_to_commit)?;
-    let pr_config = host.pr_config();
+    let pr_config = host.run_settings().pr_config;
     let landed =
         resolve_regression_landed_commits(host, &workspace_path, &affected_tasks, &pr_config);
     let (_, coauthors) = commit_author_for_tasks(&affected_tasks);
@@ -534,7 +534,7 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         std::slice::from_ref(&task),
         true,
     );
-    let pr_config = host.pr_config();
+    let pr_config = host.run_settings().pr_config;
     let landed = resolve_regression_landed_commits(
         host,
         &workspace_path,
@@ -599,7 +599,7 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
             std::slice::from_ref(task),
             true,
         );
-        let pr_config = host.pr_config();
+        let pr_config = host.run_settings().pr_config;
         let landed = resolve_regression_landed_commits(
             host,
             workspace_path,
@@ -655,7 +655,7 @@ fn resolve_workspace_path<H: RuntimeHost + ?Sized>(
     match input_string_field(input, "workspace_path") {
         Some(ws) => canonicalize_existing_dir(&ws, "workspace_path"),
         None => {
-            let repo_root_str = host.repo_root()?;
+            let repo_root_str = host.run_settings().repo_root()?.to_owned();
             let repo_root = Path::new(&repo_root_str);
             super::super::worktree::resolve_shared_worktree_path(
                 &host.process_env(),

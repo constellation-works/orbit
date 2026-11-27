@@ -93,8 +93,11 @@ impl LandingHost {
 }
 
 impl NullRuntimeHost for LandingHost {
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Ok(self.repo.to_string_lossy().into_owned())
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            repo_root: Some(self.repo.to_string_lossy().into_owned()),
+            ..orbit_engine::RunSettings::default()
+        }
     }
     fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
         Ok(self.context.clone())
@@ -420,10 +423,13 @@ impl FakeForge {
 }
 
 impl NullRuntimeHost for FakeForge {
-    fn pr_config(&self) -> PrConfig {
-        PrConfig {
-            ci_infrastructure_retry: self.ci_retry_policy,
-            ..Default::default()
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            pr_config: PrConfig {
+                ci_infrastructure_retry: self.ci_retry_policy,
+                ..Default::default()
+            },
+            ..orbit_engine::RunSettings::default()
         }
     }
     fn apply_task_automation_update(

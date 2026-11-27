@@ -391,7 +391,7 @@ fn resolve_workspace_root<H: RuntimeHost + ?Sized>(
 ) -> Result<PathBuf, OrbitError> {
     match input_string_field(input, "workspace_path") {
         Some(path) => canonicalize_existing_dir(&path, "workspace_path"),
-        None => canonicalize_existing_dir(&host.repo_root()?, "repo_root"),
+        None => canonicalize_existing_dir(host.run_settings().repo_root()?, "repo_root"),
     }
 }
 

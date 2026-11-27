@@ -399,7 +399,7 @@ pub(in super::super) fn dispatch_prepared_provider(
         source_cwd.as_deref(),
         tool_ctx.workspace_root.as_deref(),
         declared_worktree_pair.as_ref(),
-        &host.workspace_base_branch(),
+        &host.run_settings().workspace_base_branch,
     )?
     // A violation's full fingerprints belong in the run's blob store, not in
     // the error string every downstream reader copies [ORB-12467].
@@ -504,7 +504,7 @@ pub(in super::super) fn dispatch_prepared_provider(
             activity_name: activity_name.to_string(),
             agent_name: tool_ctx.agent_name.clone(),
             model_name: tool_ctx.model_name.clone(),
-            workspace: host.orbit_workspace_selector(),
+            workspace: host.run_settings().orbit_workspace_selector,
             allowed_tools: match tool_disallow_list {
                 Some(_) => Vec::new(),
                 None => activity_tools.effective_tools.clone(),

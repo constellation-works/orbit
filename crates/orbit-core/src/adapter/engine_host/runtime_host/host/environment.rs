@@ -2,7 +2,7 @@
 //! helper grouped by concern, or adapts a type on the way through.
 
 use orbit_common::OrbitError;
-use orbit_engine::HostEnvironment;
+use orbit_engine::{HostEnvironment, RunSettings};
 use orbit_store::contract::{InvocationQuery, InvocationRecord};
 use orbit_tools::ToolContext;
 use orbit_types::identity::AgentModelPair;
@@ -12,14 +12,63 @@ use orbit_types::workflow::JobRun;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::runtime::engine::paths::current_repo_root;
-
-use super::private_vcs;
 use crate::adapter::engine_host::runtime_host::{
     agent, crew, host_metadata, invocation, validation,
 };
 
+use super::private_vcs;
+
 impl HostEnvironment for OrbitRuntime {
+    fn run_settings(&self) -> RunSettings {
+        let settings = self.settings();
+        RunSettings {
+            validation_gates: self.host_validation_gates(),
+            completion_hold_rules: crate::runtime::RuntimeKernel::completion_hold_rules(self)
+                .to_vec(),
+            workspace_base_branch: crate::runtime::RuntimeKernel::workspace_base_branch(self)
+                .to_string(),
+            unlocked_path_validation: orbit_engine::UnlockedPathValidation {
+                paths: settings.unlocked_context_paths().patterns().to_vec(),
+                commands: settings.unlocked_path_validation_commands().to_vec(),
+            },
+            generated_paths: settings
+                .generated_paths()
+                .iter()
+                .map(|(path, command)| orbit_engine::GeneratedPath {
+                    path: path.clone(),
+                    command: command.clone(),
+                })
+                .collect(),
+            host_os: orbit_types::workflow::EvidenceHostOs::current(),
+            agent_stall_window: Some(std::time::Duration::from_secs(
+                orbit_engine::AGENT_STALL_MINUTES * 60,
+            )),
+            activity_wall_clock_timeouts: settings.activity_wall_clock_timeouts().clone(),
+            requires_claude_worker_credential: cfg!(target_os = "macos"),
+            validation_build_output_env: self.validation_env_policy().build_output_env.clone(),
+            orbit_registry_root: Some(self.paths().global_dir.to_string_lossy().into_owned()),
+            orbit_workspace_selector: self
+                .workspace_runtime_binding()
+                .map(|binding| binding.logical_workspace_id.trim())
+                .filter(|selector| !selector.is_empty())
+                .map(ToOwned::to_owned),
+            repo_root: Some(self.paths().repo_root.to_string_lossy().into_owned()),
+            worktree_reclaim_patterns: settings.worktree_reclaim().to_vec(),
+            worktree_parked_reclaim_after_hours: Some(
+                settings.worktree_parked_reclaim_after_hours(),
+            ),
+            data_root: self.data_root_path().to_path_buf(),
+            actor_model_identity: matches!(
+                self.actor().kind,
+                crate::runtime::context::ActorKind::Agent
+            )
+            .then(|| self.actor_label().trim())
+            .filter(|label| !label.is_empty())
+            .map(ToOwned::to_owned),
+            pr_config: crate::runtime::RuntimeKernel::pr_config(self).clone(),
+        }
+    }
+
     fn admit_owed_criteria(
         &self,
         task_id: &str,
@@ -37,35 +86,6 @@ impl HostEnvironment for OrbitRuntime {
         validation::outstanding_owed_criteria(self, task_id, run_id)
     }
 
-    fn required_validation_commands(&self) -> Vec<String> {
-        validation::required_validation_commands(self)
-    }
-
-    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
-        // The kernel's accessor, not this trait method of the same name.
-        crate::runtime::RuntimeKernel::completion_hold_rules(self).to_vec()
-    }
-
-    fn review_baseline_commands(&self) -> Vec<String> {
-        validation::review_baseline_commands(self)
-    }
-
-    fn workspace_base_branch(&self) -> String {
-        crate::runtime::RuntimeKernel::workspace_base_branch(self).to_string()
-    }
-
-    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
-        validation::validation_gates(self)
-    }
-
-    fn unlocked_path_validation(&self) -> orbit_engine::UnlockedPathValidation {
-        validation::unlocked_path_validation(self)
-    }
-
-    fn generated_paths(&self) -> Vec<orbit_engine::GeneratedPath> {
-        validation::generated_paths(self)
-    }
-
     fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {
         validation::record_validated_tree(self, tree)
     }
@@ -75,21 +95,6 @@ impl HostEnvironment for OrbitRuntime {
         run_id: &str,
     ) -> Result<Option<orbit_engine::ValidatedTree>, OrbitError> {
         validation::validated_tree(self, run_id)
-    }
-
-    fn host_os(&self) -> Option<orbit_types::workflow::EvidenceHostOs> {
-        orbit_types::workflow::EvidenceHostOs::current()
-    }
-
-    fn activity_wall_clock_timeout_seconds(&self, activity_name: &str) -> Option<u64> {
-        self.settings()
-            .activity_wall_clock_timeout_seconds(activity_name)
-    }
-
-    fn agent_stall_window(&self) -> Option<std::time::Duration> {
-        Some(std::time::Duration::from_secs(
-            orbit_engine::AGENT_STALL_MINUTES * 60,
-        ))
     }
 
     fn agent_provider_config(&self) -> std::collections::HashMap<String, String> {
@@ -108,24 +113,8 @@ impl HostEnvironment for OrbitRuntime {
         self.crew_agent_session_environment(crew_env, required_env_vars)
     }
 
-    fn requires_claude_worker_credential(&self) -> bool {
-        host_metadata::requires_claude_worker_credential()
-    }
-
     fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
         self.validation_environment()
-    }
-
-    fn validation_build_output_env(&self) -> Vec<String> {
-        self.validation_env_policy().build_output_env.clone()
-    }
-
-    fn orbit_registry_root(&self) -> Option<String> {
-        Some(self.paths().global_dir.to_string_lossy().into_owned())
-    }
-
-    fn orbit_workspace_selector(&self) -> Option<String> {
-        host_metadata::orbit_workspace_selector(self)
     }
 
     fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
@@ -136,20 +125,8 @@ impl HostEnvironment for OrbitRuntime {
         crate::runtime::RuntimeKernel::record_event(self, event)
     }
 
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        current_repo_root(self)
-    }
-
     fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
         self.list_job_runs_for_worktree_gc()
-    }
-
-    fn worktree_reclaim_patterns(&self) -> Vec<String> {
-        self.settings().worktree_reclaim().to_vec()
-    }
-
-    fn worktree_parked_reclaim_after_hours(&self) -> Option<u64> {
-        Some(self.settings().worktree_parked_reclaim_after_hours())
     }
 
     fn lookup_task_for_worktree_gc(
@@ -177,10 +154,6 @@ impl HostEnvironment for OrbitRuntime {
         retention_hours: u64,
     ) -> Result<Option<orbit_engine::ScratchGcReport>, OrbitError> {
         self.gc_scratch_by_age(retention_hours).map(Some)
-    }
-
-    fn data_root(&self) -> &std::path::Path {
-        self.data_root_path()
     }
 
     fn cancel_job_run(&self, run_id: &str) -> Result<(), OrbitError> {
@@ -238,13 +211,5 @@ impl HostEnvironment for OrbitRuntime {
         input: Value,
     ) -> Result<Value, OrbitError> {
         private_vcs::run_private_vcs_operation(self, operation, input)
-    }
-
-    fn actor_model_identity(&self) -> Option<String> {
-        agent::actor_model_identity(self)
-    }
-
-    fn pr_config(&self) -> orbit_engine::PrConfig {
-        crate::runtime::RuntimeKernel::pr_config(self).clone()
     }
 }

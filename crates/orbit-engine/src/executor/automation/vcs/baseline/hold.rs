@@ -124,7 +124,7 @@ fn record_inconclusive_hold<H: RuntimeHost + ?Sized>(
             tip,
             command,
             hold.selection.as_ref(),
-            &host.validation_build_output_env(),
+            &host.run_settings().validation_build_output_env,
         )?;
         let bytes = serde_json::to_vec(&InconclusiveHoldAttempt {
             recorded_at: Utc::now(),
@@ -155,7 +155,7 @@ fn recorded_moved_base_status<H: RuntimeHost + ?Sized>(
         tip,
         &hold.command,
         hold.selection.as_ref(),
-        &host.validation_build_output_env(),
+        &host.run_settings().validation_build_output_env,
     ) {
         Ok(cache) => match read_cached(&cache.result, hold.selection.as_ref()) {
             Some(result) => Ok(result),

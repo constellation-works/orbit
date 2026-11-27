@@ -1603,11 +1603,24 @@ impl DeliveryHost {
     }
 }
 impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
-    fn pr_config(&self) -> orbit_engine::PrConfig {
-        locked(&self.pr_config).clone()
-    }
-    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
-        locked(&self.completion_hold_rules).clone()
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            validation_gates: orbit_types::workflow::HostValidationGates::local(
+                orbit_types::workflow::ValidationGates {
+                    required_validation_commands: locked(&self.required_commands).clone(),
+                    baseline_commands: locked(&self.baseline_commands).clone(),
+                    light_delivery_paths: None,
+                    review_skip_tags: None,
+                },
+            ),
+            completion_hold_rules: locked(&self.completion_hold_rules).clone(),
+            host_os: *locked(&self.os),
+            validation_build_output_env: HostEnvironment::validation_subprocess_environment(self)
+                .build_output_env,
+            repo_root: Some(self.repo.to_string_lossy().into_owned()),
+            pr_config: locked(&self.pr_config).clone(),
+            ..orbit_engine::RunSettings::default()
+        }
     }
     fn get_job_run(&self, run_id: &str) -> Res<Option<JobRun>> {
         Ok(locked(&self.runs).get(run_id).cloned())
@@ -1980,18 +1993,6 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
     fn final_recovery_log_tail(&self, _run_id: &str) -> Res<Option<String>> {
         Ok(None)
     }
-    fn repo_root(&self) -> Res<String> {
-        Ok(self.repo.to_string_lossy().into_owned())
-    }
-    fn required_validation_commands(&self) -> Vec<String> {
-        locked(&self.required_commands).clone()
-    }
-    fn review_baseline_commands(&self) -> Vec<String> {
-        locked(&self.baseline_commands).clone()
-    }
-    fn host_os(&self) -> Option<EvidenceHostOs> {
-        *locked(&self.os)
-    }
     /// An implementer lane that refuses the probed sandbox, unless a test scripted another answer [ORB-15516].
     fn run_deferral_probe(
         &self,
@@ -2120,7 +2121,10 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             ship_mode: locked(&self.ship_mode).clone(),
             base_branch: BASE.to_string(),
             landing_branch: BASE.to_string(),
-            required_commands: HostEnvironment::required_validation_commands(self),
+            required_commands: HostEnvironment::run_settings(self)
+                .validation_gates
+                .gates
+                .required_validation_commands,
         })
     }
     fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Res<()> {

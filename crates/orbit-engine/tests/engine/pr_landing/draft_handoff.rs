@@ -1,7 +1,7 @@
 //! Section-gap drafts published by a follower must reach a repair, not a
 //! permanently stopped owner landing (ORB-18534).
 use super::*;
-use orbit_engine::{HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, PrConfig};
+use orbit_engine::{HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate};
 use orbit_engine::{HostEnvironment, RunLifecycle};
 use orbit_types::workflow::{DeliveryConventions, PR_SECTIONS_ARTIFACT};
 
@@ -12,8 +12,11 @@ struct DraftLanding<'a> {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for DraftLanding<'_> {
-    fn pr_config(&self) -> PrConfig {
-        HostEnvironment::pr_config(self.follower)
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            pr_config: HostEnvironment::run_settings(self.follower).pr_config,
+            ..orbit_engine::RunSettings::default()
+        }
     }
 
     fn handoff_landing_context(&self, _: &str) -> Res<HandoffLandingContext> {

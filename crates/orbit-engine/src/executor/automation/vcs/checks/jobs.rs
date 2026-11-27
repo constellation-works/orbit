@@ -228,8 +228,11 @@ pub(super) fn infrastructure_evidence<H: RuntimeHost + ?Sized>(
     log: &str,
 ) -> Option<String> {
     transient_evidence(log).or_else(|| {
-        declared_infrastructure_signature(log, &host.pr_config().ci_infrastructure_signatures)
-            .map(str::to_string)
+        declared_infrastructure_signature(
+            log,
+            &host.run_settings().pr_config.ci_infrastructure_signatures,
+        )
+        .map(str::to_string)
     })
 }
 

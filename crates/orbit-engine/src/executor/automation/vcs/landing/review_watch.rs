@@ -85,7 +85,7 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
         .ok_or_else(|| invalid("pr_number must name a pull request"))?;
     let workspace = match input_string_field(input, "workspace_path") {
         Some(path) => PathBuf::from(path),
-        None => PathBuf::from(host.repo_root()?),
+        None => PathBuf::from(host.run_settings().repo_root()?),
     };
     let max_wait_seconds = bounded_u64(
         input,

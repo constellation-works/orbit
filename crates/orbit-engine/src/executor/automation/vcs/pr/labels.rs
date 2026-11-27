@@ -14,7 +14,7 @@ pub(super) fn apply_task_labels<H: RuntimeHost + ?Sized>(
     context: &HandoffContext,
     output: &mut Value,
 ) {
-    let conventions = host.pr_config().conventions;
+    let conventions = host.run_settings().pr_config.conventions;
     let mut labels = BTreeSet::new();
     for task in &context.tasks {
         labels.extend(

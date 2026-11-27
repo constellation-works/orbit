@@ -339,7 +339,7 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
         && matches!(decision, PushDecision::RemoteAhead | PushDecision::Diverged)
         && let Some(observed) = remote_sha.as_deref()
     {
-        let repo_root = canonicalize_existing_dir(&host.repo_root()?, "repo_root")?;
+        let repo_root = canonicalize_existing_dir(host.run_settings().repo_root()?, "repo_root")?;
         super::worktree::merge_remote_head_into_base(
             &host.process_env(),
             &repo_root,
@@ -551,7 +551,7 @@ fn resolve_workspace_path<H: RuntimeHost + ?Sized>(
         Some(path) => canonicalize_existing_dir(&path, "workspace_path"),
         None => {
             let batch_id = required_job_run_id(input, "git_push")?;
-            let repo_root = host.repo_root()?;
+            let repo_root = host.run_settings().repo_root()?.to_owned();
             super::worktree::resolve_shared_worktree_path(
                 &host.process_env(),
                 Path::new(&repo_root),

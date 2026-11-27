@@ -32,7 +32,8 @@ pub(crate) fn conflicted_generated_paths(
     conflicting_paths: &[String],
 ) -> Vec<GeneratedPath> {
     let configured = host
-        .generated_paths()
+        .run_settings()
+        .generated_paths
         .into_iter()
         .filter_map(|generated| {
             RelativePathGlob::new(&generated.path)

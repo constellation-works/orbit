@@ -193,7 +193,11 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
     let mut other_failure = false;
     // [ORB-23813] Every failed job stopped in a declared dependency-handoff
     // step: the failed-step names are the classification, so no log is read.
-    let handoff_set = handoff_step_set(&host.pr_config().ci_handoff_steps, &jobs, failed);
+    let handoff_set = handoff_step_set(
+        &host.run_settings().pr_config.ci_handoff_steps,
+        &jobs,
+        failed,
+    );
     let roots_preclassified = handoff_set.is_some();
     let conclusion_roots = if roots_preclassified {
         None
@@ -466,7 +470,10 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
         CiRerunAdmission::InfrastructureExhausted { attempts } => {
             let reason = format!(
                 "ci_infrastructure_retry_exhausted: classification=transient attempts={attempts} limit={}; the candidate stays in review",
-                host.pr_config().ci_infrastructure_retry.max_attempts
+                host.run_settings()
+                    .pr_config
+                    .ci_infrastructure_retry
+                    .max_attempts
             );
             record_retry_exhausted(host, tasks, handoff, &plan, attempts, &reason)?;
             Ok(CiRerunStep::BudgetSpent(reason))

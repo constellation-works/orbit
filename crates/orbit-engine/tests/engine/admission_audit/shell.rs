@@ -15,8 +15,11 @@ struct ShellHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for ShellHost {
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Ok(self.root.to_string_lossy().into_owned())
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            repo_root: Some(self.root.to_string_lossy().into_owned()),
+            ..orbit_engine::RunSettings::default()
+        }
     }
 
     fn resolve_local_shell_executor(

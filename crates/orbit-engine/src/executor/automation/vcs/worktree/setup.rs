@@ -73,7 +73,7 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     };
 
     let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
-    let repo_root_str = host.repo_root()?;
+    let repo_root_str = host.run_settings().repo_root()?.to_owned();
     let repo_root = Path::new(&repo_root_str);
 
     // Pin the fetched commit without advancing the owner's checkout.
@@ -726,7 +726,7 @@ fn branch_name_for_tasks<H: RuntimeHost + ?Sized>(
         // checkout has been removed and only its candidate branch remains.
         let run_hash = lower_hex(Sha256::digest(run_id.as_bytes()));
         let run_hash = &run_hash[..BRANCH_HASH_LEN];
-        let template = host.pr_config().conventions.branch_name;
+        let template = host.run_settings().pr_config.conventions.branch_name;
         let task = if template.uses_external_ref() {
             // A task's external refs may change during the run, so a branch
             // this run already named is reused rather than renamed.

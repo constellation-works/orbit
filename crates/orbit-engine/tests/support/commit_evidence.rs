@@ -69,8 +69,20 @@ impl VerifierHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
-    fn pr_config(&self) -> orbit_engine::PrConfig {
-        self.pr_config.lock().unwrap().clone()
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            validation_gates: orbit_types::workflow::HostValidationGates::local(
+                orbit_types::workflow::ValidationGates {
+                    required_validation_commands: self.required_commands.lock().unwrap().clone(),
+                    baseline_commands: Vec::new(),
+                    light_delivery_paths: None,
+                    review_skip_tags: None,
+                },
+            ),
+            repo_root: Some(self.repo.to_string_lossy().into_owned()),
+            pr_config: self.pr_config.lock().unwrap().clone(),
+            ..orbit_engine::RunSettings::default()
+        }
     }
 
     fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
@@ -209,10 +221,6 @@ impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
         Ok(())
     }
 
-    fn repo_root(&self) -> Result<String, OrbitError> {
-        Ok(self.repo.to_string_lossy().into_owned())
-    }
-
     fn reject_invalid_finding(
         &self,
         report: &orbit_types::workflow::handoff::FindingInvalidReport,
@@ -220,10 +228,6 @@ impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
     ) -> Result<(), OrbitError> {
         self.rejected_findings.lock().unwrap().push(report.clone());
         Ok(())
-    }
-
-    fn required_validation_commands(&self) -> Vec<String> {
-        self.required_commands.lock().unwrap().clone()
     }
 }
 

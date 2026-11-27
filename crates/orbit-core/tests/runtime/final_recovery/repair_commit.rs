@@ -133,8 +133,8 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         self.fixture.runtime.get_job_run(run)
     }
 
-    fn required_validation_commands(&self) -> Vec<String> {
-        self.fixture.runtime.required_validation_commands()
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        HostEnvironment::run_settings(&self.fixture.runtime)
     }
 
     fn attach_task_validation_log(
@@ -188,6 +188,9 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                 } else {
                     "accept"
                 };
+                let required_command = HostEnvironment::run_settings(&self.fixture.runtime)
+                    .required_validation_commands()[0]
+                    .clone();
                 self.fixture.put_report(&json!({
                     "schema_version": 1, "attempt_id": admission["attempt_id"],
                     "verdict": verdict, "summary": "Inspected candidate behavior.",
@@ -195,7 +198,10 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         "id": "F1", "severity": "high", "summary": "Candidate needs repair",
                         "paths": ["candidate.txt"], "disposition": {"kind": "open"},
                     }]) } else { json!([]) },
-                    "validation": [{"id": "V1", "command": self.fixture.runtime.required_validation_commands()[0], "outcome": "passed", "role": "required"}],
+                    "validation": [{
+                        "id": "V1", "command": required_command,
+                        "outcome": "passed", "role": "required",
+                    }],
                     "escalation": if verdict == "reject" { Some("Repair F1") } else { None },
                 }));
                 Ok(json!({"verdict": verdict}))

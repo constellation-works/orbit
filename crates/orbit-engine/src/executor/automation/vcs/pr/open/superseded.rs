@@ -106,7 +106,7 @@ pub(in crate::executor::automation::vcs) fn close_earlier_task_pull_requests<
     kept_url: Option<&str>,
     head: &str,
 ) -> Value {
-    let config = host.pr_config();
+    let config = host.run_settings().pr_config;
     if !config.close_superseded || kept.is_empty() || tasks.is_empty() {
         return json!([]);
     }

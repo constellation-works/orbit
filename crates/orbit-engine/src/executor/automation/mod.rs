@@ -133,13 +133,14 @@ pub(crate) fn execute_engine_action<
             // [ORB-16385] Parked tasks age from their status change, by
             // the host's configured window; an unrepresentable window keeps
             // every parked worktree rather than failing the sweep.
-            let parked_older_than = host
-                .worktree_parked_reclaim_after_hours()
+            let run_settings = host.run_settings();
+            let parked_older_than = run_settings
+                .worktree_parked_reclaim_after_hours
                 .and_then(|hours| i64::try_from(hours).ok())
                 .and_then(chrono::Duration::try_hours)
                 .and_then(|age| chrono::Utc::now().checked_sub_signed(age));
             let runs = host.list_job_runs_for_gc()?;
-            let repo_root = host.repo_root()?;
+            let repo_root = run_settings.repo_root()?.to_owned();
             let result = vcs::collect_worktrees(
                 std::path::Path::new(&repo_root),
                 &runs,
@@ -157,7 +158,7 @@ pub(crate) fn execute_engine_action<
                     older_than,
                     estimate_bytes: false,
                     target_only: false,
-                    reclaim_patterns: Some(host.worktree_reclaim_patterns()),
+                    reclaim_patterns: Some(run_settings.worktree_reclaim_patterns),
                     reclaim_kept: true,
                     // [ORB-15613] A settled run's dirty worktree goes once its
                     // candidate is recoverable; it no longer leaks for good.

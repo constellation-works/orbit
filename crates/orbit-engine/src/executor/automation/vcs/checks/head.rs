@@ -209,9 +209,11 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
     // [ORB-23813] Every failed job stopped in a declared dependency-handoff
     // step: CI could not hand a job its dependency's output. That is no
     // failure a code repair clears, readable log or not.
-    if let Some((_, roots)) =
-        super::rerun::handoff_step_set(&host.pr_config().ci_handoff_steps, &jobs, failed)
-    {
+    if let Some((_, roots)) = super::rerun::handoff_step_set(
+        &host.run_settings().pr_config.ci_handoff_steps,
+        &jobs,
+        failed,
+    ) {
         let stopped = roots
             .iter()
             .map(|root| format!("'{}' ({})", root.check, root.signature))

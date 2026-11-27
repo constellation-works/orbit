@@ -32,9 +32,10 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
         input["deadline_ms"] = json!(deadline_ms);
     }
     let cache_key = JobLogKey::for_completed_job(job, run_id, job_id);
+    let data_root = host.run_settings().data_root;
     let cached = cache_key
         .as_ref()
-        .and_then(|key| log_cache::load(host.data_root(), key));
+        .and_then(|key| log_cache::load(&data_root, key));
     let reused = cached.is_some();
     let response = match cached {
         Some(answer) => answer,
@@ -75,7 +76,7 @@ pub(super) fn job_log<H: RuntimeHost + ?Sized>(
     // A completed job's readable answer never changes for its run attempt,
     // so later passes reuse it instead of reading the provider again.
     if let (false, Some(key)) = (reused, cache_key.as_ref()) {
-        log_cache::store(host.data_root(), key, &response);
+        log_cache::store(&data_root, key, &response);
     }
     Ok(log)
 }

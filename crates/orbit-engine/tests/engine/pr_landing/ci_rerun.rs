@@ -80,14 +80,13 @@ struct ClaimedRetry<'a> {
     waits: Mutex<Vec<Value>>,
 }
 impl orbit_engine::test_support::NullRuntimeHost for ClaimedRetry<'_> {
-    fn data_root(&self) -> &Path {
-        &self.data_root
-    }
-    fn pr_config(&self) -> orbit_engine::PrConfig {
-        HostEnvironment::pr_config(self.inner)
-    }
-    fn repo_root(&self) -> Res<String> {
-        Ok(self.inner.repo.to_string_lossy().into_owned())
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            repo_root: Some(self.inner.repo.to_string_lossy().into_owned()),
+            data_root: self.data_root.clone(),
+            pr_config: HostEnvironment::run_settings(self.inner).pr_config,
+            ..orbit_engine::RunSettings::default()
+        }
     }
     fn handoff_landing_context(&self, _: &str) -> Res<orbit_engine::HandoffLandingContext> {
         Ok(self.context.clone())

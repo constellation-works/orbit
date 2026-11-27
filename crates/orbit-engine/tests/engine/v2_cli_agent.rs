@@ -232,8 +232,11 @@ impl ScriptHost {
     }
 }
 impl orbit_engine::test_support::NullRuntimeHost for ScriptHost {
-    fn requires_claude_worker_credential(&self) -> bool {
-        self.requires_claude_credential
+    fn run_settings(&self) -> orbit_engine::RunSettings {
+        orbit_engine::RunSettings {
+            requires_claude_worker_credential: self.requires_claude_credential,
+            ..orbit_engine::RunSettings::default()
+        }
     }
 
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {

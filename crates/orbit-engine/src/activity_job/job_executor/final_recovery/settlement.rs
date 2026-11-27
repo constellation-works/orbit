@@ -207,7 +207,7 @@ fn completion_hold(
     {
         return None;
     }
-    let rules = ctx.host.completion_hold_rules();
+    let rules = ctx.host.run_settings().completion_hold_rules;
     if rules.is_empty() {
         return None;
     }

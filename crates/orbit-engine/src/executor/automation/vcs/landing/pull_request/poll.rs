@@ -237,7 +237,7 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
         self.completion_hold_checked = true;
         let context = self.context;
         if !context.owner_distributed_completion_done
-            || self.host.completion_hold_rules().is_empty()
+            || self.host.run_settings().completion_hold_rules.is_empty()
         {
             return Ok(());
         }

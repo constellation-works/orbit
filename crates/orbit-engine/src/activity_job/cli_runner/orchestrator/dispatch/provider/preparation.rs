@@ -133,7 +133,11 @@ pub(super) fn prepare_provider_envelope<'a>(
     // `pr.agent_sections` / `pr.required_sections`: the implementer writes
     // their content to a task artifact `pr_open` reads.
     if activity_name == AGENT_IMPLEMENT_ACTIVITY
-        && let Some(instruction) = host.pr_config().conventions.implement_instruction()
+        && let Some(instruction) = host
+            .run_settings()
+            .pr_config
+            .conventions
+            .implement_instruction()
     {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(&instruction);
