@@ -750,10 +750,13 @@ that runs it (`cargo test -p <crate> --test <target> <module>::<table>`) and
 the marker the native run must print, `qa-scenario-pass: <row>`. That run
 validates the row alone: a parent test pass without the marker, a repeated
 deferral, or a row with no single home in the candidate settles nothing. The
-home is read from the candidate's own tree and counts only when the row's
-module is declared with a plain `mod` line in a target with no `#[path]`
-module, and no other libtest runs the same row. Otherwise the escalation names
-the uncovered command and the fresh-review route.
+home is read from the candidate's own tree (ignoring comments and literals)
+and counts only when the row's module chain is declared with plain `mod` lines
+(not `#[path]`), its file is not mounted by `#[path]`, and no other libtest in
+the candidate runs the same row; `#[path]` modules in the same target do not
+suppress plain-`mod` homes, though rows inside `#[path]`-mounted files have no
+single home. Otherwise the escalation names the uncovered command and the
+fresh-review route.
 
 One exception: when the reviewer accepted with no open findings, settlement
 itself reads a `DEFERRED: bubblewrap unavailable:` notice in a required
