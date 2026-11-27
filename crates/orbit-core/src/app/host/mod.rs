@@ -48,9 +48,10 @@ use dependent::{host_dependents, replica_owners};
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
 pub use crate::bootstrap::browser_kit::{KitInspection, KitLayout, PLAYWRIGHT_VERSION};
+#[cfg(target_os = "linux")]
+pub use crate::bootstrap::linux_sandbox_host::probe_bwrap_fresh_for_user;
 pub use crate::bootstrap::linux_sandbox_host::{
     BUNDLED_BWRAP_PATH, BUNDLED_BWRAP_VERSION, BwrapProbeOutcome, BwrapSource, probe_bwrap_fresh,
-    probe_bwrap_fresh_for_user,
 };
 pub use crate::composition::{
     captured_env, compiled_compatibility, composition_env, host_resource_monitor,
