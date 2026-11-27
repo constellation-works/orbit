@@ -119,7 +119,7 @@ impl OrbitRuntime {
         Ok(tools)
     }
 
-    pub fn show_tool(&self, name: &str) -> Result<ToolInfo, OrbitError> {
+    pub(crate) fn show_tool(&self, name: &str) -> Result<ToolInfo, OrbitError> {
         self.tool_registry().refuse_family_operation_name(name)?;
         let schema = self
             .tool_registry()
@@ -295,7 +295,7 @@ impl OrbitRuntime {
         self.set_tool_enabled_state(name, false)
     }
 
-    pub fn ensure_tool_agent_facing(&self, name: &str) -> Result<(), OrbitError> {
+    pub(crate) fn ensure_tool_agent_facing(&self, name: &str) -> Result<(), OrbitError> {
         self.ensure_tool_agent_facing_with_context(name, &ToolContext::default())
     }
 
@@ -336,7 +336,10 @@ impl OrbitRuntime {
 
     /// Refuse an `orbit <ns>` verb, before dispatch, when this workspace has
     /// switched the plugin off.
-    pub fn ensure_plugin_enabled_in_workspace(&self, namespace: &str) -> Result<(), OrbitError> {
+    pub(crate) fn ensure_plugin_enabled_in_workspace(
+        &self,
+        namespace: &str,
+    ) -> Result<(), OrbitError> {
         if self.plugin_load().is_disabled_in_workspace(namespace) {
             return Err(self.plugin_disabled_in_workspace(namespace));
         }

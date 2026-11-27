@@ -8,10 +8,10 @@ mod global;
 mod runtime;
 
 pub(super) use audit_store::BrokeredAudit;
-pub use audit_store::ToolDispatchOutcome;
-pub use entry::{
-    ToolEntryPoint, mark_tool_audit_recorded, take_tool_audit_recorded, tool_suggestion_context,
-};
+#[cfg(test)]
+pub(super) use audit_store::ToolDispatchOutcome;
+pub(crate) use entry::mark_tool_audit_recorded;
+pub use entry::{ToolEntryPoint, take_tool_audit_recorded, tool_suggestion_context};
 pub(in crate::adapter::command) use global::execute_global_plugin_dispatch;
 pub use global::{
     GlobalAuditStoreCache, GlobalToolCall, execute_global_in_process_tool_dispatch,

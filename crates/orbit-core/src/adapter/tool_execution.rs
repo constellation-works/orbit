@@ -96,7 +96,7 @@ impl OrbitRuntime {
     /// capabilities and bindings, never the hosting process's terminal or
     /// environment, so a server launched from a shell does not become that
     /// shell's operator.
-    pub fn run_tool_with_session(
+    pub(crate) fn run_tool_with_session(
         &self,
         name: &str,
         input: Value,
