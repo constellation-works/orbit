@@ -22,7 +22,7 @@ VCS = "crates/orbit-engine/src/executor/automation/vcs"
 
 # Directories the architecture scan walks, even in a small manifest fixture.
 SCAN_DIRECTORIES = (
-    f"{CORE_APPLICATION}/agents",
+    "crates/orbit-core/src/app/agent",
     f"{CORE_APPLICATION}/experiment",
     f"{CORE_APPLICATION}/contracts",
     f"{CORE_APPLICATION}/task",
@@ -74,11 +74,10 @@ SCAN_DIRECTORIES = (
     "crates/orbit-engine/src/activity_job/job_executor",
 )
 
-# Single-file modules scanned directly. tag_instructions and agent_corpus are
+# Single-file modules scanned directly. tag_instructions is
 # named without the .rs suffix in the upper-module list [ORB-23019].
 SCAN_FILES = (
     f"{CORE_APPLICATION}/tag_instructions.rs",
-    f"{CORE_APPLICATION}/agent_corpus.rs",
     # The vcs conventions guard scans these engine files directly [ORB-24097].
     f"{VCS}/conventions.rs",
     f"{VCS}/handoff.rs",

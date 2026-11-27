@@ -1,0 +1,259 @@
+use std::collections::BTreeSet;
+
+use chrono::{DateTime, Utc};
+use orbit_types::task::{
+    GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskComment, TaskHistoryEntry, TaskRelationType,
+    TaskStatus, tags_at,
+};
+use orbit_types::workflow::{self, ReviewVerdict};
+
+use super::attempts::{
+    PulledClaimRunners, assigned_runner, execution_mode, final_attempt, landed_at, opened_by_claim,
+    runner,
+};
+use super::model::{Attempt, FiledFinding, Problem, Record, RunRecord, TaskFacts};
+use super::review;
+use crate::app::agent::record::{
+    Cause, blocked_pr, bounded, cites_criteria, is_operator_requeue, landed, landing_pr,
+    restart_cause, run_spans, spec_blocker_kind, spec_documents,
+};
+use crate::app::agent::role::pilot_warnings::settle;
+use crate::application::task::{is_review_finding, latest_verification};
+
+/// The facts of one task. `classify` gives the cause a block or run exit
+/// records.
+pub(in crate::app::agent) fn task_facts(
+    task: &Task,
+    history: &[TaskHistoryEntry],
+    comments: &[TaskComment],
+    runs: &[RunRecord],
+    pulled: &PulledClaimRunners<'_>,
+    classify: &dyn Fn(&TaskHistoryEntry) -> Cause,
+    now: DateTime<Utc>,
+) -> TaskFacts {
+    let spans = run_spans(history);
+    let attempts: Vec<Attempt> = spans
+        .iter()
+        .map(|span| {
+            let matched = runner(runs, span.start, span.end.or(Some(now)));
+            let local = matched.is_some();
+            let job = local || opened_by_claim(history, span.start);
+            Attempt {
+                start: span.start,
+                end: span.end,
+                runner: matched
+                    .unwrap_or_else(|| assigned_runner(task, history, pulled, span.start)),
+                job,
+                local,
+                implementer: true,
+                tags: tags_at(history, &task.tags, span.start),
+            }
+        })
+        .collect();
+    let landed = landed(task.status, history);
+    let dropped = matches!(task.status, TaskStatus::Archived | TaskStatus::Rejected) && !landed;
+    let landed_at = landed.then(|| landed_at(history)).flatten();
+    let starts: Vec<_> = attempts.iter().map(|attempt| attempt.start).collect();
+    let final_attempt = final_attempt(landed, landed_at, &starts);
+    let jobs: Vec<bool> = attempts.iter().map(|attempt| attempt.job).collect();
+    let execution = execution_mode(task.status, history, &jobs, final_attempt, !runs.is_empty());
+    let mut records = Vec::new();
+
+    // Spec defects recorded on the task's own history. An edited task counts
+    // once, however many edits it had.
+    let first_start = attempts.first().map(|attempt| attempt.start);
+    let mut edits = history.iter().filter_map(|entry| {
+        let documents = spec_documents(entry)?;
+        first_start
+            .is_some_and(|first| entry.at > first)
+            .then_some((entry, documents))
+    });
+    if let Some((entry, documents)) = edits.next() {
+        let later = edits.count();
+        records.push(Record {
+            problem: Problem::SpecEdit,
+            at: entry.at,
+            detail: if later == 0 {
+                format!("{} edited by {}", documents.join(" and "), entry.by)
+            } else {
+                format!(
+                    "{} edited by {}, then {later} more edit(s)",
+                    documents.join(" and "),
+                    entry.by
+                )
+            },
+            cause: None,
+            ended: None,
+        });
+    }
+    for entry in history {
+        if let Some(kind) = spec_blocker_kind(entry) {
+            records.push(Record {
+                problem: Problem::CriteriaBlock,
+                at: entry.at,
+                detail: format!("agent blocker kind {kind}"),
+                cause: None,
+                ended: None,
+            });
+        }
+        if cites_criteria(entry) {
+            records.push(Record {
+                problem: Problem::CriteriaEscalation,
+                at: entry.at,
+                detail: bounded(entry.note.as_deref().unwrap_or_default()),
+                cause: None,
+                ended: None,
+            });
+        }
+    }
+
+    // `[BLOCKED]` PRs, then delivery PRs that a settled task never merged.
+    let mut blocked_prs = BTreeSet::new();
+    for entry in history {
+        let Some(number) = blocked_pr(entry) else {
+            continue;
+        };
+        if blocked_prs.insert(number.to_string()) {
+            records.push(Record {
+                problem: Problem::BlockedPr,
+                at: entry.at,
+                detail: format!("[BLOCKED] PR #{number}"),
+                cause: Some(classify(entry)),
+                ended: None,
+            });
+        }
+    }
+    let landing = landed.then(|| landing_pr(history)).flatten();
+    if dropped || landing.is_some() {
+        let settled_at = history
+            .iter()
+            .rev()
+            .find(|entry| entry.to_status.is_some_and(TaskStatus::is_terminal))
+            .map_or(task.updated_at, |entry| entry.at);
+        for reference in &task.external_refs {
+            if reference.system != GITHUB_PR_EXTERNAL_REF_SYSTEM
+                || blocked_prs.contains(&reference.id)
+                || landing.as_deref() == Some(reference.id.as_str())
+            {
+                continue;
+            }
+            records.push(Record {
+                problem: Problem::UnmergedPr,
+                at: settled_at,
+                detail: format!("PR #{} closed without merging", reference.id),
+                cause: Some(Cause::Other),
+                ended: None,
+            });
+        }
+    }
+
+    // Each run after the first, attributed to what ended the one before it.
+    for (index, pair) in attempts.windows(2).enumerate() {
+        let [previous, attempt] = pair else { continue };
+        records.push(Record {
+            problem: Problem::RepeatRun,
+            at: attempt.start,
+            detail: format!("run {} of {}", index + 2, attempts.len()),
+            cause: Some(restart_cause(
+                history,
+                Some(previous.start),
+                attempt.start,
+                classify,
+            )),
+            ended: Some(index),
+        });
+    }
+
+    // Blocked tasks returned to the backlog by hand.
+    for entry in history {
+        if !is_operator_requeue(entry) {
+            continue;
+        }
+        let ended = attempts
+            .iter()
+            .rposition(|attempt| attempt.start < entry.at);
+        records.push(Record {
+            problem: Problem::OperatorRequeue,
+            at: entry.at,
+            detail: format!("{} by {}", entry.event, entry.by),
+            cause: Some(restart_cause(
+                history,
+                ended.map(|index| attempts[index].start),
+                entry.at,
+                classify,
+            )),
+            ended,
+        });
+    }
+
+    // Decode settlements and fix-validation failures once at the facts boundary.
+    let mut reviews = review::review_settlement_facts(history, comments);
+    for at in workflow::review_fix_validation_failure_times(history, comments) {
+        if let Some(review) = reviews.iter_mut().rfind(|review| review.at <= at) {
+            review.fix_failed = true;
+        }
+        records.push(Record {
+            problem: Problem::FailedFix,
+            at,
+            detail: "reviewer fixes failed owner revalidation".to_string(),
+            cause: None,
+            ended: None,
+        });
+    }
+    // An incomplete review is infrastructure's when the block that followed
+    // its settlement is.
+    for review in &mut reviews {
+        if review.verdict == ReviewVerdict::Incomplete {
+            review.infrastructure = history
+                .iter()
+                .filter(|entry| {
+                    entry.at >= review.at
+                        && entry
+                            .to_status
+                            .is_some_and(|status| status != TaskStatus::InProgress)
+                })
+                .min_by_key(|entry| entry.at)
+                .is_some_and(|entry| classify(entry) == Cause::Infrastructure);
+        }
+    }
+    let filed = is_review_finding(task).then(|| FiledFinding {
+        filer: task
+            .relations
+            .iter()
+            .find(|relation| relation.relation_type == TaskRelationType::SpawnedFrom)
+            .map(|relation| relation.target.to_string()),
+        verdict: latest_verification(history)
+            .map(|record| (record.verdict, record.verified_at, record.severity)),
+        severity: task
+            .relations
+            .iter()
+            .filter(|relation| relation.relation_type == TaskRelationType::RegressionFrom)
+            .filter_map(|relation| relation.regression.as_ref())
+            .filter(|regression| !regression.severity_unrated())
+            .map(|regression| regression.severity)
+            // The scale orders most severe first.
+            .min(),
+    });
+
+    records.sort_by_key(|record| record.at);
+    let warnings = settle(task, history, comments);
+    TaskFacts {
+        id: task.id.to_string(),
+        title: task.title.clone(),
+        status: task.status,
+        tags: task.tags.clone(),
+        context_files: task.context_files.clone(),
+        complexity: task.complexity,
+        created_at: task.created_at,
+        landed,
+        dropped,
+        attempts,
+        final_attempt,
+        execution,
+        landed_at,
+        records,
+        reviews,
+        filed,
+        warnings,
+    }
+}

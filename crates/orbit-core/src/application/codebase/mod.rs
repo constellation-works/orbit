@@ -46,12 +46,12 @@ use crate::OrbitRuntime;
 
 pub use diff_stats::{DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill};
 pub use facts::CodebaseFacts;
-pub(in crate::application) use facts::{
+pub(crate) use facts::{
     Anchor, BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements_of,
 };
 // `PilotAssessment` is named only by scorecard test fixtures.
 #[allow(unused_imports)]
-pub(in crate::application) use pilot::{
+pub(crate) use pilot::{
     Assessment as PilotAssessment, Contest, HeldWait, PilotEvidence, PilotRun, PilotRuns,
     pilot_evidence,
 };

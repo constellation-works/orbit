@@ -15,51 +15,51 @@ use crate::OrbitRuntime;
 /// One done task a pilot assessed: what its receipts and landed diff say,
 /// and the pilot run behind its newest assessment.
 #[derive(Debug, Clone)]
-pub(in crate::application) struct Assessment {
-    pub(in crate::application) task_id: String,
+pub(crate) struct Assessment {
+    pub(crate) task_id: String,
     /// When the newest assessment was written: the window it falls in.
-    pub(in crate::application) at: DateTime<Utc>,
+    pub(crate) at: DateTime<Utc>,
     /// `None` when no task-pilot run is found for the receipt.
-    pub(in crate::application) run: Option<PilotRun>,
+    pub(crate) run: Option<PilotRun>,
     /// The pilot's final selectors.
-    pub(in crate::application) after: Vec<String>,
+    pub(crate) after: Vec<String>,
     /// The filer's selectors before any pilot ran.
-    pub(in crate::application) author: Vec<String>,
+    pub(crate) author: Vec<String>,
     /// The files the landed commit changed.
-    pub(in crate::application) landed: BTreeSet<String>,
+    pub(crate) landed: BTreeSet<String>,
     /// Paths the task's own work was contested on: those a base-conflict
     /// block recorded and those a refused lock request of the task named,
     /// each with when and which.
-    pub(in crate::application) contested: Vec<Contest>,
+    pub(crate) contested: Vec<Contest>,
 }
 
 /// One path a task's work was contested on.
 #[derive(Debug, Clone)]
-pub(in crate::application) struct Contest {
-    pub(in crate::application) at: DateTime<Utc>,
-    pub(in crate::application) path: Anchor,
+pub(crate) struct Contest {
+    pub(crate) at: DateTime<Utc>,
+    pub(crate) path: Anchor,
     /// `base conflict` or `lock conflict`.
-    pub(in crate::application) kind: &'static str,
+    pub(crate) kind: &'static str,
 }
 
 /// One lock-wait episode another task spent on a path an assessed task held.
 #[derive(Debug, Clone)]
-pub(in crate::application) struct HeldWait {
+pub(crate) struct HeldWait {
     /// The assessed task holding the path.
-    pub(in crate::application) holder: String,
-    pub(in crate::application) waiter: String,
-    pub(in crate::application) path: Anchor,
-    pub(in crate::application) started_at: DateTime<Utc>,
-    pub(in crate::application) wait_ms: i64,
+    pub(crate) holder: String,
+    pub(crate) waiter: String,
+    pub(crate) path: Anchor,
+    pub(crate) started_at: DateTime<Utc>,
+    pub(crate) wait_ms: i64,
     /// How the wait ended: `admitted`, `left_backlog` or `waiting`.
-    pub(in crate::application) end: &'static str,
+    pub(crate) end: &'static str,
 }
 
 /// What the pilots scorecard reads from one codebase scan.
 #[derive(Debug, Clone, Default)]
-pub(in crate::application) struct PilotEvidence {
-    pub(in crate::application) assessments: Vec<Assessment>,
-    pub(in crate::application) waits: Vec<HeldWait>,
+pub(crate) struct PilotEvidence {
+    pub(crate) assessments: Vec<Assessment>,
+    pub(crate) waits: Vec<HeldWait>,
 }
 
 /// Every done task with a landing receipt and a pilot assessment, apart
@@ -67,7 +67,7 @@ pub(in crate::application) struct PilotEvidence {
 /// `no-diff-expected` ones, each attributed to its pilot run, and every lock
 /// wait, whenever it happened, on a path one of them held. `runs` is loaded
 /// on first use and left for the caller to attribute other receipts with.
-pub(in crate::application) fn pilot_evidence(
+pub(crate) fn pilot_evidence(
     runtime: &OrbitRuntime,
     facts: &CodebaseFacts,
     runs: &mut Option<PilotRuns>,

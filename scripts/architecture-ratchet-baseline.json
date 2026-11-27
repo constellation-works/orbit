@@ -5,8 +5,8 @@
     "env_global_accessor_calls": 51,
     "env_process_env_method_calls": 507,
     "from_kernel_ref_uses": 0,
-    "impl_orbit_runtime_files": 335,
-    "orbit_runtime_ref_param_fns": 1116,
+    "impl_orbit_runtime_files": 327,
+    "orbit_runtime_ref_param_fns": 1146,
     "runtime_top_level_modules_outside_layers": 2,
     "worker_or_owner_reads": 18
   }
