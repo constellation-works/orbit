@@ -1735,6 +1735,13 @@ input.field-editor-input {
 @container task-pane (max-width: 440px) {
   .task-action-footer { margin: auto calc(-1 * var(--space-16)) calc(-1 * var(--space-16)); padding-inline: var(--space-16); }
 }
+@media (max-width: 760px) {
+  /* Tabs without a sticky action footer still clear the bottom safe-area inset
+     when the open task covers the viewport. */
+  .task-detail-pane .task-detail-body:not(:has(.task-action-footer:not([hidden]))) {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
 
 .reject-form,
 .comment-form {
