@@ -53,7 +53,9 @@ leaf left.
 
 ## Settlement hydration
 
-Hydrate a settled claim whose leaf run evidence is missing. In `orbit run settlements --no-reconcile --json`, that is a claim whose `run_evidence.provenance` is null, or whose `build_state` or `root_cause_state` is `unrecorded`, and whose follower still holds the leaf run. Settled claims can be listed without operator capability: `orbit run settlements --since 7d --no-reconcile --json`.
+Hydrate a settled claim that holds no leaf run evidence. In `orbit run settlements --no-reconcile --json`, that is a claim whose `run_evidence.provenance` is null (no evidence row exists, so its `build_state` and `root_cause_state` are both `unrecorded` and say nothing about the run) and whose follower still holds the leaf run. Hydration selects only those claims; `--recheck` also observes claims that already hold evidence, but only to confirm an identical report (`replayed`) or report a difference (`conflict`).
+
+A claim whose `provenance` is `settlement` or `hydrated` already holds its evidence. There, a `build_state` or `root_cause_state` of `unrecorded` means the leaf's run record held no build or failing step. That state is final and is not a hydration target: hydration never fills it, and `--recheck` only confirms the held evidence or reports a conflict with it. Settled claims can be listed without operator capability: `orbit run settlements --since 7d --no-reconcile --json`.
 
 Authority: an operator on the owning host runs `orbit run settlements-hydrate`. It is operator-only and bounded; an agent session, a managed scan or a claimed worker is refused. It writes only immutable `hydrated` evidence and changes no claim, task or run.
 
