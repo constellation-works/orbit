@@ -73,7 +73,7 @@ impl PullDrains for RegisteredPullDrains {
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
     ) -> Result<orbit_core::Core, OrbitError> {
-        RegisteredRuntimeFactory::open_registered_checkout_read_only(
+        RegisteredRuntimeFactory::open_registered_checkout_observational(
             global_root,
             workspace,
             checkout,

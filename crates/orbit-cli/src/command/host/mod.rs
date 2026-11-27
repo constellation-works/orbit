@@ -1,7 +1,8 @@
 //! `orbit host` — the remote Orbit hosts this machine reaches over SSH.
 //!
 //! Each command loads `~/.orbit/hosts.toml` through `orbit_core::app::host`, which
-//! the dashboard also calls, and opens no workspace runtime. Reachability,
+//! the dashboard also calls. The command is machine-global; dependent inspection
+//! opens registered replica checkouts observationally. Reachability,
 //! version, protocol and workspaces are read from each host live and never
 //! persisted. The registry stores identity, routing and offline acknowledgements.
 //! The optional OS snapshot is read from the
