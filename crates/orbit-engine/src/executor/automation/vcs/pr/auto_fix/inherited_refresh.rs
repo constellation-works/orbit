@@ -19,7 +19,7 @@ use orbit_types::workflow::{
 };
 use serde_json::json;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RuntimeHostProcessEnvironment};
 
 use super::super::super::super::input::input_string_field;
 use super::super::super::checks::{
@@ -49,7 +49,7 @@ pub(in crate::executor::automation::vcs::pr) enum InheritedRefresh {
 /// whether the failure on `status`'s head is base-inherited and, if so,
 /// reserve and run the head's one base refresh.
 pub(in crate::executor::automation::vcs::pr) fn refresh_inherited_failure<
-    H: RuntimeHost + ?Sized,
+    H: ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
 >(
     host: &H,
     pull: AutoFixPull<'_>,

@@ -7,7 +7,7 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::super::super::input::input_string_field;
 use super::super::super::checks::{
@@ -111,7 +111,9 @@ impl RequiredFailuresStop {
 /// log) is not itself a red base. It holds only when an earlier poll already
 /// recorded this head's failure as inherited (`pr_auto_fix_base_red`): a
 /// read gap must not turn that recorded inheritance into a repair.
-pub(in crate::executor::automation::vcs::pr) fn red_base_wait<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn red_base_wait<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     pull: AutoFixPull<'_>,
     failed: &[(Option<String>, String)],
@@ -153,7 +155,7 @@ pub(in crate::executor::automation::vcs::pr) fn red_base_wait<H: RuntimeHost + ?
 /// [`red_base_wait`]'s reading: `Ok(Some)` holds, `Ok(None)` does not, and
 /// `Err` names what could not be read.
 // Same immutable observation context as red_base_wait; no new budget is inferred.
-fn evaluate_red_base<H: RuntimeHost + ?Sized>(
+fn evaluate_red_base<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     workspace_path: &str,
@@ -193,7 +195,9 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
 }
 
 /// Recover CI through the same durable retry planner as claimed landing.
-pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     pull: AutoFixPull<'_>,
     deadline_ms: u64,
@@ -329,7 +333,9 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
 /// head whose no-edit repair is not recorded, whose rerun was never reserved
 /// or has not yet produced a later authenticated failed attempt, or whose
 /// evidence cannot be read, is `None` and keeps the ordinary conflict route.
-pub(in crate::executor::automation::vcs::pr) fn failed_no_edit_rerun<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn failed_no_edit_rerun<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     auto_fix: &admission::AutoFix,
     input: &Value,
@@ -382,7 +388,7 @@ pub(in crate::executor::automation::vcs::pr) fn failed_no_edit_rerun<H: RuntimeH
 
 /// Whether a repair of `head` on a task this run watches ended with no
 /// edit and no scope record. An unreadable history is no record.
-fn no_edit_repair_recorded<H: RuntimeHost + ?Sized>(
+fn no_edit_repair_recorded<H: RunLifecycle + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     pr_number: &str,
@@ -399,7 +405,7 @@ fn no_edit_repair_recorded<H: RuntimeHost + ?Sized>(
 
 /// Whether an earlier poll recorded `head`'s failure as inherited from the
 /// base on a task this run watches. An unreadable history is no record.
-fn recorded_base_red<H: RuntimeHost + ?Sized>(
+fn recorded_base_red<H: RunLifecycle + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     head: &str,
@@ -416,7 +422,9 @@ fn recorded_base_red<H: RuntimeHost + ?Sized>(
 
 /// Read the failed checks on the pinned head and admit their repair.
 /// `deadline_ms` bounds the log reads by the completion's absolute deadline.
-pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     auto_fix: &admission::AutoFix,
     workspace_path: &str,
@@ -534,7 +542,9 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
 }
 
 /// Compare required failures with the current base tip before repair admission.
-pub(in crate::executor::automation::vcs::pr) fn base_tip_checks<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn base_tip_checks<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     workspace_path: &str,
@@ -574,7 +584,7 @@ pub(in crate::executor::automation::vcs::pr) fn base_tip_checks<H: RuntimeHost +
 /// would otherwise read as the blocker. Nothing required failing, or an
 /// answer that cannot show it, is a stop. The head-bound read is returned
 /// with the failures, for the identities of the required checks.
-pub(super) fn required_failures<H: RuntimeHost + ?Sized>(
+pub(super) fn required_failures<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,
@@ -585,7 +595,7 @@ pub(super) fn required_failures<H: RuntimeHost + ?Sized>(
         .map_err(|stop| stop.reason)
 }
 
-fn classified_required_failures<H: RuntimeHost + ?Sized>(
+fn classified_required_failures<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,

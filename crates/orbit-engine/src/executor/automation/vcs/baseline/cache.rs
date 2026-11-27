@@ -3,7 +3,7 @@ use super::super::required::command::RequiredCommandRun;
 use super::super::worktree::scratch_checkout_path;
 use super::command::run_validation_command_until;
 use super::compare::{BaseCommandResult, BaselineCheck, not_comparable};
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 use orbit_common::OrbitError;
 use orbit_common::fs::git::git_common_dir;
 use orbit_common::security::release::sha256_hex;
@@ -119,7 +119,9 @@ pub(in super::super) fn recorded_base_runs(
 
 /// The result another run already recorded for `command` on `base_sha` with
 /// `selection`, judged against it, without waiting for or starting a run.
-pub(in super::super) fn cached_base_check<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn cached_base_check<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     base_sha: &str,
@@ -163,7 +165,7 @@ pub(super) fn read_cached(path: &Path, selection: Option<&Value>) -> Option<Base
 }
 
 /// Run `command` in a fresh detached worktree of `base_sha`, then remove it.
-pub(super) fn run_on_base<H: RuntimeHost + ?Sized>(
+pub(super) fn run_on_base<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     worktree: &Path,

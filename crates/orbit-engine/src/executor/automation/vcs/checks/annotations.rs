@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use super::super::git::{git_output, git_output_paths};
 use super::super::operations;
 use super::super::pr_answers::{RequiredChecks, read_required_checks_observed};
-use crate::context::{HandoffLandingContext, RuntimeHost};
+use crate::context::{HandoffLandingContext, HostEnvironment, RuntimeHostProcessEnvironment};
 
 /// Annotations an evidence text lists before it summarizes the rest.
 const MAX_LISTED: usize = 20;
@@ -42,7 +42,7 @@ pub(super) struct SourceAnnotations {
 
 /// Read and validate the failure annotations of required check `check` on
 /// `head`. `Err` names why they do not establish a source failure.
-pub(super) fn source_annotations<H: RuntimeHost + ?Sized>(
+pub(super) fn source_annotations<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     pr: &str,
@@ -227,7 +227,7 @@ pub(super) fn source_annotations<H: RuntimeHost + ?Sized>(
 /// protection does not require keeps its previous handling and is skipped;
 /// a required one is a candidate failure only when its source annotations
 /// all name files the candidate changed from its base.
-pub(super) fn unanswered_required<H: RuntimeHost + ?Sized>(
+pub(super) fn unanswered_required<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
     pr: &str,

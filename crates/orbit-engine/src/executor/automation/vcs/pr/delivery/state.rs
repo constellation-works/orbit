@@ -2,7 +2,7 @@ use super::super::answers::{CheckState, PullRequestStatus, RequiredChecks};
 use super::super::auto_fix::UNSETTLED_BLOCKED_POLLS;
 use super::super::merge_state::{BlockedCheckRefusal, blocked_checks, has_failed_pr_check};
 use super::{PrMergeState, classify_pr_state};
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 use crate::executor::automation::vcs::operations;
 use orbit_common::{OrbitError, PrivateVcsFailureClass};
 use orbit_types::workflow::DeliveryRefusal;
@@ -267,7 +267,7 @@ pub(in crate::executor::automation::vcs) enum OwedHostedChecks {
 /// never reaches the pending dispatch that could arm auto-merge.
 /// `None` performs the bounded immediate read used by zero-wait completion;
 /// a watch always passes its original absolute deadline.
-pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn checked_pr_state<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     pr: &str,
@@ -560,7 +560,7 @@ pub(in crate::executor::automation::vcs) fn checked_pr_state<H: RuntimeHost + ?S
 /// reported at all, and those it reported still running, from the same
 /// authenticated current-gates read a base update is held to. A check the
 /// head reported, in any state, is not missing.
-fn unreported_required_checks<H: RuntimeHost + ?Sized>(
+fn unreported_required_checks<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     pr: &str,

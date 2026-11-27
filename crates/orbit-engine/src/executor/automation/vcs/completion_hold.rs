@@ -21,7 +21,7 @@ use orbit_types::workflow::{
     completion_hold_complexity_rank, current_completion_hold, normalize_instruction_tag,
 };
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{RunLifecycle, RuntimeHost, TaskAutomationUpdate};
 
 use super::git::{git_command_success, git_output_paths};
 
@@ -266,7 +266,7 @@ pub(crate) fn candidate_commit_changed_paths(
 /// `completion_held` history entry carrying the hold. A task whose current
 /// hold already records the same match for the same run is left as is, so a
 /// re-run of the completion step does not repeat it.
-pub(crate) fn record_completion_hold<H: RuntimeHost + ?Sized>(
+pub(crate) fn record_completion_hold<H: RunLifecycle + ?Sized>(
     host: &H,
     task_ids: &[String],
     hold: &CompletionHold,
@@ -305,7 +305,7 @@ pub(crate) fn record_landing_completion_hold<H: RuntimeHost + ?Sized>(
 /// The comment and `completion_held` history entry that record `hold` on
 /// `task_id`, or `None` when the task's current hold already records the same
 /// match for the same run.
-fn completion_hold_record<H: RuntimeHost + ?Sized>(
+fn completion_hold_record<H: RunLifecycle + ?Sized>(
     host: &H,
     task_id: &str,
     hold: &CompletionHold,

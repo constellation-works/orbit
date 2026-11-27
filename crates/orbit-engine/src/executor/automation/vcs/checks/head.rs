@@ -6,7 +6,7 @@ use orbit_common::{OrbitError, ProviderReadThrottle};
 use orbit_types::workflow::{CiRerunRoot, PrAutoFixFailedCheck};
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::super::ci::log_signature::error_signature;
 use super::super::operations::{CiCommitJobEvidence, CiJobConclusion};
@@ -140,7 +140,7 @@ impl DeferredLogRead {
     }
 }
 
-pub(super) fn prerequisite_log<H: RuntimeHost + ?Sized>(
+pub(super) fn prerequisite_log<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     watched_head: &str,
@@ -182,7 +182,9 @@ pub(super) fn prerequisite_log<H: RuntimeHost + ?Sized>(
 /// admission; its caller separately preserves the known-red-base hold. A log read the
 /// provider throttled is [`HeadCheckEvidence::ReadDeferred`]; `deadline_ms`,
 /// when set, bounds the log read by the completion's absolute deadline.
-pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn head_check_evidence<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     read: HeadCheckRead<'_>,
 ) -> HeadCheckEvidence {
@@ -391,7 +393,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
 /// Authenticate a waiter's record using the same complete-set proof as reruns.
 /// This is a read-only proof: no rerun is reserved or dispatched. Report
 /// bounded reasons and use only provider job identities in those reasons.
-fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
+fn dependency_repair_excerpt<H: HostEnvironment + ?Sized>(
     host: &H,
     scope: DependencyProofScope<'_>,
     jobs: &[CiCommitJobEvidence],
@@ -513,7 +515,7 @@ fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
 ///
 /// Landing and auto-fix both call this. The signature comparison is
 /// [`inherited`]; nothing here re-implements it.
-pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
+pub(super) fn classify_logged_job<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     comparison: &mut BaseComparison<'_, H>,
     job: &CiCommitJobEvidence,
     log: &str,
@@ -609,7 +611,9 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
 /// this one. `Err` is evidence this read could not establish: a head job
 /// whose identity or log could not be read, or a classification left
 /// inconclusive, such as an unreadable base job or log.
-pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn unmoved_red_base<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     mut comparison: BaseComparison<'_, H>,
     failed: &[(Option<String>, String)],
 ) -> Result<Option<String>, CheckReadGap> {
@@ -742,7 +746,7 @@ fn job_concluded(job: &CiCommitJobEvidence) -> bool {
 /// the same signature fails on the base commit, or the base branch moved and
 /// the same job passes there. `Ok(None)` is an answer read in full; `Err`
 /// names the evidence that could not be read.
-fn inherited<H: RuntimeHost + ?Sized>(
+fn inherited<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     comparison: &mut BaseComparison<'_, H>,
     job: &CiCommitJobEvidence,
     log: &str,
@@ -879,7 +883,7 @@ pub(super) fn onto_passing_tip(jobs: &[FailedJob]) -> bool {
 
 /// Whether `tip` reports `job` succeeded. A failed read is not a pass, and
 /// it is cached so a later job sees the same answer.
-fn same_job_passes<H: RuntimeHost + ?Sized>(
+fn same_job_passes<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     job: &CiCommitJobEvidence,

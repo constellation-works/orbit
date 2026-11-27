@@ -32,7 +32,7 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RunLifecycle, RuntimeHost};
 
 /// The checkout directory a handed-off gate summary must be in: the
 /// implementer's scratch.
@@ -202,7 +202,7 @@ fn keep<H: RuntimeHost + ?Sized>(
 }
 
 /// The task's kept record artifact, if it has one.
-fn kept<H: RuntimeHost + ?Sized>(
+fn kept<H: RunLifecycle + ?Sized>(
     host: &H,
     task_id: &str,
 ) -> Result<Option<DeferredSandboxArtifact>, OrbitError> {
@@ -223,7 +223,7 @@ fn kept<H: RuntimeHost + ?Sized>(
 
 /// The commands an owner's validation replays for `task_ids`: each task's
 /// kept deferral.
-pub(super) fn deferred_replays<H: RuntimeHost + ?Sized>(
+pub(super) fn deferred_replays<H: RunLifecycle + HostEnvironment + ?Sized>(
     host: &H,
     task_ids: &[String],
 ) -> Result<Vec<String>, OrbitError> {

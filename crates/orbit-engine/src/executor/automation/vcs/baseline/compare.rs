@@ -6,7 +6,7 @@ use super::super::required::command::{
 use super::cache::{
     CACHE_SCHEMA_VERSION, cache_paths, cached_base_check, read_cached, run_on_base,
 };
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHost, RuntimeHostProcessEnvironment};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::fs::file_lock::{FileLockOptions, acquire_exclusive_file_lock};
@@ -306,7 +306,9 @@ pub(super) fn not_comparable(
 /// Prefer a conclusive comparable full cache, otherwise replay only fully
 /// identified test failures. The original candidate command stays complete;
 /// unknown, compiler, timeout and host-refused outcomes retain full comparison.
-pub(in super::super) fn compare_candidate_with_base<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn compare_candidate_with_base<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     base_sha: &str,
@@ -397,7 +399,9 @@ pub(in super::super) fn hold_failures(
 ///
 /// Never fails the step: anything that keeps the base from being judged is an
 /// inconclusive check, which leaves the candidate's failure standing.
-pub(in super::super) fn compare_with_base<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn compare_with_base<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     base_sha: &str,
@@ -409,7 +413,9 @@ pub(in super::super) fn compare_with_base<H: RuntimeHost + ?Sized>(
 
 /// [`compare_with_base`], ending by `deadline` when one is set: the wait for
 /// another candidate's run and the base run itself both stop there.
-pub(in super::super) fn compare_with_base_until<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn compare_with_base_until<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     base_sha: &str,
@@ -447,7 +453,7 @@ pub(in super::super) fn compare_claimed_with_base_until<H: RuntimeHost + ?Sized>
     )
 }
 
-fn compare_base<H: RuntimeHost + ?Sized>(
+fn compare_base<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     base_sha: &str,

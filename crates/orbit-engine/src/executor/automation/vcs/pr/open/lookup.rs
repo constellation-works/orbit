@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 
 use super::super::super::operations;
 use super::super::answers::{PullRequestStatus, PullRequestSummary};
@@ -19,7 +19,7 @@ pub(super) struct PrOutput<'a> {
     pub(super) freshness: &'a super::super::super::freshness::BranchFreshness,
 }
 
-pub(super) fn view_pr<H: RuntimeHost + ?Sized>(
+pub(super) fn view_pr<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &std::path::Path,
     selector: &str,
@@ -37,7 +37,7 @@ pub(super) fn view_pr<H: RuntimeHost + ?Sized>(
     Ok((pr_number, pull_request.url.clone(), pull_request))
 }
 
-pub(super) fn find_pr_by_head<H: RuntimeHost + ?Sized>(
+pub(super) fn find_pr_by_head<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &std::path::Path,
     head: &str,

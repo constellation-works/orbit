@@ -10,7 +10,9 @@ use super::super::git::{
 use super::super::handoff::{HandoffContext, rebase_in_progress};
 use super::checkpoint::{RecoveryCheckpointLookup, recovery_checkpoint_lookup, recovery_run_id};
 use super::divergence::original_base_sha;
-use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost};
+use crate::context::{
+    RebaseRecoveryAttemptScope, Recovery, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 use orbit_common::{OrbitError, RecoverableVcsConflict};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -28,7 +30,7 @@ pub(super) enum RecoveredRewrite {
 /// the same content evidence and host authority as conflict recovery. Other
 /// steps and candidates without a covering commit retain the empty-branch
 /// refusal. Consumers re-observe this certificate before settlement.
-pub(super) fn certify_empty_rebase<H: RuntimeHost + ?Sized>(
+pub(super) fn certify_empty_rebase<H: Recovery + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
@@ -359,7 +361,9 @@ fn read_rebase_state(
 ///   or refusing it [ORB-14393].
 /// - `Err`: a certified checkpoint was found whose recorded provenance does
 ///   not match this attempt. A hard refusal with no redo.
-pub(super) fn recovered_rewrite<H: RuntimeHost + ?Sized>(
+pub(super) fn recovered_rewrite<
+    H: RunLifecycle + Recovery + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     context: &HandoffContext,

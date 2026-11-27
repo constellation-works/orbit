@@ -8,7 +8,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{ReviewGate, RunLifecycle, TaskAutomationUpdate};
 
 use super::super::super::push::record_published_pr_head;
 use super::super::super::retry_lineage::{LineageStep, LineageStop, RetryLineage};
@@ -18,7 +18,7 @@ use super::{admission, verdict};
 /// retain the source head. Only the host's durable, same-job retry ancestry
 /// transfers repair authority; input/checkpoint claims do not supply it.
 /// Direct activity calls without a stored run retain current-run authority.
-pub(super) fn repair_ledger_runs<H: RuntimeHost + ?Sized>(
+pub(super) fn repair_ledger_runs<H: RunLifecycle + ?Sized>(
     host: &H,
     run_id: &str,
 ) -> Result<BTreeSet<String>, OrbitError> {
@@ -54,7 +54,9 @@ pub(super) fn repair_ledger_runs<H: RuntimeHost + ?Sized>(
 }
 
 /// Retain the failed and passing exact-head evidence before refreshing.
-pub(in crate::executor::automation::vcs::pr) fn record_landed_repair<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn record_landed_repair<
+    H: RunLifecycle + ReviewGate + ?Sized,
+>(
     host: &H,
     auto_fix: &admission::AutoFix,
     pr_number: &str,
@@ -80,7 +82,7 @@ pub(in crate::executor::automation::vcs::pr) fn record_landed_repair<H: RuntimeH
 
 /// Reserve a base refresh separately from agent repair attempts. A previous
 /// reservation never authorizes another rewrite, including after interruption.
-pub(in crate::executor::automation::vcs::pr) fn reserve_base_refresh<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn reserve_base_refresh<H: ReviewGate + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     candidate: &orbit_types::workflow::handoff::HandoffCandidate,
@@ -122,7 +124,7 @@ pub(in crate::executor::automation::vcs::pr) fn reserve_base_refresh<H: RuntimeH
 
 /// Record a base decision once per exact evidence on every owning task;
 /// repeated known-red polls do not flood history.
-pub(in crate::executor::automation::vcs::pr) fn record_base_path<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn record_base_path<H: RunLifecycle + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     event: &str,
@@ -138,7 +140,7 @@ pub(in crate::executor::automation::vcs::pr) fn record_base_path<H: RuntimeHost 
 /// Persist the inherited-failure hold: a one-line note and the full record as
 /// the decision. A hold already recorded for the same failed head, landed
 /// base and failing checks, in any storage shape, is not recorded again.
-pub(in crate::executor::automation::vcs::pr) fn record_base_red<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn record_base_red<H: RunLifecycle + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     record: &PrAutoFixBaseRed,
@@ -155,7 +157,7 @@ pub(in crate::executor::automation::vcs::pr) fn record_base_red<H: RuntimeHost +
 
 /// Persist the failure an admitted check repair was handed: a one-line note
 /// and the full record as the decision, once per identical record.
-pub(in crate::executor::automation::vcs::pr) fn record_head_failure<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn record_head_failure<H: RunLifecycle + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     record: &PrAutoFixHeadFailure,
@@ -173,7 +175,7 @@ pub(in crate::executor::automation::vcs::pr) fn record_head_failure<H: RuntimeHo
 /// Record one throttled-read wait: a one-line note and the record as the
 /// decision. An identical record is not written again, so a resume does not
 /// rewrite a decision-less history entry.
-pub(in crate::executor::automation::vcs::pr) fn record_read_deferral<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn record_read_deferral<H: RunLifecycle + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     deferral: &PrAutoFixReadDeferral,
@@ -188,7 +190,7 @@ pub(in crate::executor::automation::vcs::pr) fn record_read_deferral<H: RuntimeH
     )
 }
 
-fn append_history_note<H: RuntimeHost + ?Sized>(
+fn append_history_note<H: RunLifecycle + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     event: &str,
@@ -221,7 +223,7 @@ fn append_history_note<H: RuntimeHost + ?Sized>(
 
 /// Retain the authenticated check annotations a repair of `head` relies on,
 /// before it is admitted. A repeated read of the same head replaces them.
-pub(super) fn record_check_annotations<H: RuntimeHost + ?Sized>(
+pub(super) fn record_check_annotations<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     pr_number: &str,
@@ -239,7 +241,9 @@ pub(super) fn record_check_annotations<H: RuntimeHost + ?Sized>(
 
 /// Attach `evidence`, redacted, to the owning run of the primary task at
 /// `path`. A task with no owning run stops with `missing_owner_reason`.
-pub(in crate::executor::automation::vcs::pr) fn attach_evidence<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn attach_evidence<
+    H: RunLifecycle + ReviewGate + ?Sized,
+>(
     host: &H,
     auto_fix: &admission::AutoFix,
     pr_number: &str,
@@ -261,7 +265,7 @@ pub(in crate::executor::automation::vcs::pr) fn attach_evidence<H: RuntimeHost +
     )
 }
 
-fn retain<H: RuntimeHost + ?Sized>(
+fn retain<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     pr_number: &str,
@@ -279,7 +283,9 @@ fn retain<H: RuntimeHost + ?Sized>(
 }
 
 /// Record a head this run published on the pull request.
-pub(in crate::executor::automation::vcs::pr) fn record_published_repair<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn record_published_repair<
+    H: RunLifecycle + ?Sized,
+>(
     host: &H,
     auto_fix: &admission::AutoFix,
     pr_number: &str,

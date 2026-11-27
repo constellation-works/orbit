@@ -21,7 +21,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::{CiRerunPlan, CiRerunRoot};
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 
 use super::super::operations;
 
@@ -94,7 +94,7 @@ pub(super) fn is_no_authenticated_plan_error(error: &OrbitError) -> bool {
     matches!(error, OrbitError::Execution(message) if message == NO_AUTHENTICATED_PLAN)
 }
 
-pub(super) fn authenticated_plan<H: RuntimeHost + ?Sized>(
+pub(super) fn authenticated_plan<H: HostEnvironment + ?Sized>(
     host: &H,
     request: &RerunPlanRequest<'_>,
 ) -> Result<Result<CiRerunPlan, PlanMismatch>, OrbitError> {

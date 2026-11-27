@@ -17,7 +17,7 @@ use orbit_types::workflow::handoff::{
 use orbit_types::workflow::{DeliveryRefusal, ValidationOutcome, ValidationRole};
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::super::delivery_marker::delivery_markers;
 use super::super::super::git::{git_output, git_output_paths, git_success};
@@ -47,7 +47,7 @@ impl Verifier for AlreadyLanded {
         evidence_changed: "accepted landing evidence changed; rerun the commit verification step",
     };
 
-    fn check_artifacts<H: RuntimeHost + ?Sized>(host: &H, task: &Task) -> Result<(), OrbitError> {
+    fn check_artifacts<H: RunLifecycle + ?Sized>(host: &H, task: &Task) -> Result<(), OrbitError> {
         if host.get_task_artifact(&task.id, ARTIFACT)?.is_none()
             && host
                 .get_task_artifact(&task.id, no_diff::ARTIFACT)?
@@ -61,7 +61,9 @@ impl Verifier for AlreadyLanded {
         Ok(())
     }
 
-    fn verify_at_revision<H: RuntimeHost + ?Sized>(
+    fn verify_at_revision<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         task: &Task,
         workspace: &Path,
@@ -78,7 +80,9 @@ impl Verifier for AlreadyLanded {
         )
     }
 
-    fn verify_at_revision_with_supplied_regression_from<H: RuntimeHost + ?Sized>(
+    fn verify_at_revision_with_supplied_regression_from<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         task: &Task,
         workspace: &Path,
@@ -101,7 +105,9 @@ impl Verifier for AlreadyLanded {
     /// changed after the evidence was captured is a deliberate, typed
     /// [`DeliveryRefusal::EvidenceStale`], so the owner's landing holds the
     /// candidate in review; every other refusal keeps its plain failure.
-    fn verify_handoff_at_revision_with_supplied_regression_from<H: RuntimeHost + ?Sized>(
+    fn verify_handoff_at_revision_with_supplied_regression_from<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         task: &Task,
         workspace: &Path,
@@ -135,7 +141,9 @@ enum ScopeChange {
 }
 
 impl AlreadyLanded {
-    fn verify_evidence<H: RuntimeHost + ?Sized>(
+    fn verify_evidence<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         task: &Task,
         workspace: &Path,
@@ -362,7 +370,7 @@ fn verify_covering_scope(
 
 /// Whether `evidence_run` is the current run or a run in its recorded retry
 /// lineage. Shared with the no-diff verifier.
-pub(in crate::executor::automation::vcs::commit) fn run_in_lineage<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::commit) fn run_in_lineage<H: RunLifecycle + ?Sized>(
     host: &H,
     run_id: &str,
     evidence_run: &str,
@@ -391,12 +399,12 @@ pub(in crate::executor::automation::vcs::commit) fn run_in_lineage<H: RuntimeHos
 /// Check captured validation against the workspace's required commands.
 ///
 /// `evidence.required_commands` is not the requirement. The requirement is
-/// `RuntimeHost::required_validation_commands`: the list final validation
+/// `HostEnvironment::required_validation_commands`: the list final validation
 /// runs (`workflow.required_validation_commands`, or the owner's captured
 /// gates on a claimed leaf). An empty report list is accepted only when that
 /// set is empty. Passing, exit-0 evidence covers a command whichever accepted
 /// role labelled it. A missing command is refused by name.
-fn verify_checks<H: RuntimeHost + ?Sized>(
+fn verify_checks<H: RunLifecycle + HostEnvironment + ?Sized>(
     host: &H,
     evidence: &Evidence,
     task: &Task,
@@ -493,7 +501,7 @@ fn verify_checks<H: RuntimeHost + ?Sized>(
 }
 
 /// `host.required_validation_commands`, trimmed, with blanks and repeats dropped.
-fn workspace_required_commands<H: RuntimeHost + ?Sized>(host: &H) -> Vec<String> {
+fn workspace_required_commands<H: HostEnvironment + ?Sized>(host: &H) -> Vec<String> {
     let mut commands = Vec::new();
     for command in host.required_validation_commands() {
         let command = command.trim();

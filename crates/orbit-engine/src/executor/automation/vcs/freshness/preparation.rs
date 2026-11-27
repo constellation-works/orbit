@@ -13,7 +13,10 @@ use super::checkpoint::{recorded_workspace_matches, recovery_run_id};
 use super::divergence::{commit_sha, remote_branch_sha};
 use super::rebase::prepare_pr_handoff_inner;
 use super::rebase_recovery::{RecoveredRewrite, ensure_clean_for_rewrite, recovered_rewrite};
-use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost};
+use crate::context::{
+    RebaseRecoveryAttemptScope, Recovery, ReviewGate, RunLifecycle, RuntimeHost,
+    RuntimeHostProcessEnvironment,
+};
 use orbit_common::OrbitError;
 use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
@@ -97,7 +100,7 @@ pub(crate) fn refreshed_input<H: RuntimeHost + ?Sized>(
     effective_input(host, input, &context).map(|(effective, _)| effective)
 }
 
-fn effective_input<H: RuntimeHost + ?Sized>(
+fn effective_input<H: RunLifecycle + ReviewGate + Recovery + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
@@ -160,7 +163,9 @@ fn effective_input<H: RuntimeHost + ?Sized>(
     Ok((effective, latest))
 }
 
-pub(super) fn synchronize<H: RuntimeHost + ?Sized>(
+pub(super) fn synchronize<
+    H: RunLifecycle + ReviewGate + Recovery + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
@@ -271,7 +276,7 @@ pub(super) fn synchronize<H: RuntimeHost + ?Sized>(
     }
 }
 
-fn refresh<H: RuntimeHost + ?Sized>(
+fn refresh<H: RunLifecycle + ReviewGate + Recovery + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
@@ -392,7 +397,7 @@ fn refresh<H: RuntimeHost + ?Sized>(
     persist(host, context, REFRESH, next)
 }
 
-pub(super) fn validate_owner<H: RuntimeHost + ?Sized>(
+pub(super) fn validate_owner<H: ReviewGate + ?Sized>(
     host: &H,
     run_id: &str,
     context: &HandoffContext,
@@ -409,7 +414,7 @@ pub(super) fn validate_owner<H: RuntimeHost + ?Sized>(
     )
 }
 
-fn persist<H: RuntimeHost + ?Sized>(
+fn persist<H: RunLifecycle + ReviewGate + Recovery + ?Sized>(
     host: &H,
     context: &HandoffContext,
     step: &str,

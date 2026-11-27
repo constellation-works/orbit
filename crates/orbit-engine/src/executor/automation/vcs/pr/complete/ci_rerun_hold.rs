@@ -11,7 +11,7 @@
 use orbit_common::OrbitError;
 use serde_json::json;
 
-use crate::context::RuntimeHost;
+use crate::context::RunLifecycle;
 
 use super::super::auto_fix::{AutoFix, record_base_path};
 
@@ -79,7 +79,7 @@ impl CiRerunHold {
 
     /// The single hold transition point, keyed by planner and read outcome:
     /// clear on a defined set of outcomes, keep across deferred reads.
-    pub(super) fn apply_recovery<H: RuntimeHost + ?Sized>(
+    pub(super) fn apply_recovery<H: RunLifecycle + ?Sized>(
         &mut self,
         host: &H,
         auto_fix: &AutoFix,
@@ -129,7 +129,7 @@ impl CiRerunHold {
     /// `false` means it expired and the failed checks go to the repair path.
     /// A hold is recorded when it begins on a head and when it expires, so a
     /// reason that changes between polls cannot flood task history.
-    pub(super) fn still_holds<H: RuntimeHost + ?Sized>(
+    pub(super) fn still_holds<H: RunLifecycle + ?Sized>(
         &mut self,
         host: &H,
         auto_fix: &AutoFix,

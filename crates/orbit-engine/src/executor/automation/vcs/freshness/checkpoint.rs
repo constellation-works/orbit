@@ -1,7 +1,7 @@
 //! Host-certified rebase recovery checkpoint lookup.
 use super::super::super::input::required_input_string;
 use super::super::handoff::HandoffContext;
-use crate::context::RuntimeHost;
+use crate::context::{Recovery, RunLifecycle, RuntimeHostProcessEnvironment};
 use orbit_common::OrbitError;
 use serde_json::Value;
 use std::path::Path;
@@ -55,7 +55,9 @@ pub(in crate::executor::automation::vcs) fn recorded_workspace_matches(
     )
 }
 
-pub(super) fn recovery_checkpoint_lookup<H: RuntimeHost + ?Sized>(
+pub(super) fn recovery_checkpoint_lookup<
+    H: RunLifecycle + Recovery + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     run_id: &str,
     workspace: &Path,
@@ -142,7 +144,9 @@ pub(super) fn recovery_checkpoint_lookup<H: RuntimeHost + ?Sized>(
 /// has no redo fallback of its own (see `resume.rs`'s identity checks); only
 /// [`super::rebase_recovery::recovered_rewrite`] needs the finer distinction, via
 /// [`recovery_checkpoint_lookup`] directly.
-pub(in crate::executor::automation::vcs) fn recovered_head_checkpoint<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn recovered_head_checkpoint<
+    H: RunLifecycle + Recovery + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     run_id: &str,
     workspace: &Path,

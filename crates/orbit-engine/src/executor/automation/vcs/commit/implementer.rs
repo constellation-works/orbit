@@ -6,7 +6,7 @@ use orbit_types::task::{NO_DIFF_EXPECTED_TAG, refuses_implementer_writes};
 use orbit_types::workflow::handoff::{ALREADY_RESOLVED_FIELD, AlreadyResolved};
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::git::git_output;
 use super::scope::{NewPathPolicy, task_candidate_paths};
@@ -20,7 +20,9 @@ use super::scope::{NewPathPolicy, task_candidate_paths};
 /// [ORB-15747] An already-resolved outcome is a claimed leaf's, whose claim
 /// host replays its tests; its selectors are admitted here, before commit,
 /// and again where they run.
-pub(crate) fn require_implementer_no_diff_artifacts<H: RuntimeHost + ?Sized>(
+pub(crate) fn require_implementer_no_diff_artifacts<
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     output: &Value,

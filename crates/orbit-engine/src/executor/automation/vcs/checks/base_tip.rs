@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::super::super::ci::log_signature::error_signature;
 use super::super::git::git_output;
@@ -26,14 +26,14 @@ use super::jobs::{
 const BASE_WALK_LIMIT: usize = 8;
 
 /// The base branch's latest push jobs, read once per commit in one call.
-struct BaseHistory<'a, H: RuntimeHost + ?Sized> {
+struct BaseHistory<'a, H: ?Sized> {
     host: &'a H,
     workspace: &'a Path,
     base_branch: &'a str,
     jobs: HashMap<String, Option<Vec<CiCommitJobEvidence>>>,
 }
 
-impl<H: RuntimeHost + ?Sized> BaseHistory<'_, H> {
+impl<H: HostEnvironment + ?Sized> BaseHistory<'_, H> {
     /// The newest commit, from `start` back along first-parent history and
     /// at most [`BASE_WALK_LIMIT`] commits, whose `job` ran to success or
     /// failure, with that job. `None` when a same job has not concluded,
@@ -117,7 +117,9 @@ impl<H: RuntimeHost + ?Sized> BaseHistory<'_, H> {
 /// [`unmoved_red_base`](super::unmoved_red_base) then holds instead of
 /// admitting a repair. Log-read failures instead return a typed gap: throttles
 /// retain the exact prerequisite identity and all reads share deadline_ms.
-pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace: &Path,
     head: &str,
@@ -228,7 +230,7 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
 
 /// The jobs of the latest push run of each workflow on `commit` of
 /// `base_branch`; `None` when they could not be read.
-fn latest_push_jobs<H: RuntimeHost + ?Sized>(
+fn latest_push_jobs<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     commit: &str,

@@ -24,7 +24,7 @@ use orbit_common::security::redaction::redact_all;
 use orbit_common::text::floor_char_boundary;
 use orbit_types::workflow::{DeliveryRefusal, PrAutoFixReadDeferral, PrAutoFixReadReset};
 
-use crate::context::RuntimeHost;
+use crate::context::RunLifecycle;
 use crate::executor::automation::read_throttle::read_not_before;
 
 use super::super::super::checks::DeferredLogRead;
@@ -39,7 +39,7 @@ const MAX_DIAGNOSTIC_BYTES: usize = 2_048;
 /// the held stop when no wait fits: a completion mutation already ran, the
 /// read stayed throttled through every wait, or the not-before is past the
 /// original `deadline_ms` (`None` when completion has no wait budget).
-pub(in crate::executor::automation::vcs::pr) fn defer_throttled_read<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn defer_throttled_read<H: RunLifecycle + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     pr_number: &str,
@@ -121,7 +121,7 @@ pub(in crate::executor::automation::vcs::pr) fn defer_throttled_read<H: RuntimeH
 /// The wait, in milliseconds, still owed to a wait this run lineage recorded
 /// for `head` before a poll reads its logs again, or `None` when none is
 /// owed. A recorded not-before at or past `deadline_ms` holds instead.
-pub(in crate::executor::automation::vcs::pr) fn owed_read_wait<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn owed_read_wait<H: RunLifecycle + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     pr_number: &str,
@@ -155,7 +155,7 @@ pub(in crate::executor::automation::vcs::pr) fn owed_read_wait<H: RuntimeHost + 
 }
 
 /// This run lineage's recorded waits for `head` on the pull request.
-fn recorded<H: RuntimeHost + ?Sized>(
+fn recorded<H: RunLifecycle + ?Sized>(
     host: &H,
     auto_fix: &admission::AutoFix,
     pr_number: &str,

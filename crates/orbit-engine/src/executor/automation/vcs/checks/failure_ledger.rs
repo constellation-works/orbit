@@ -30,7 +30,7 @@ use orbit_types::workflow::{
     CiRerunPlan, ci_failure_ledger,
 };
 
-use crate::context::{HandoffLandingContext, RuntimeHost};
+use crate::context::{HandoffLandingContext, ReviewGate, RunLifecycle};
 
 use super::super::operations::CiCommitJobEvidence;
 use super::super::pr_answers::{CheckState, PullRequestStatus};
@@ -44,24 +44,9 @@ pub(in crate::executor::automation::vcs) struct FailureLedger {
 }
 
 impl FailureLedger {
-    fn entries<H: RuntimeHost + ?Sized>(
-        &mut self,
-        host: &H,
-        task: &str,
-    ) -> &mut Vec<CiFailureLedgerEntry> {
-        self.entries
-            .get_or_insert_with(|| match host.get_task_history(task) {
-                Ok(history) => ci_failure_ledger(&history),
-                Err(error) => {
-                    tracing::warn!(task, %error, "CI failure ledger: task history unreadable");
-                    Vec::new()
-                }
-            })
-    }
-
     /// Record each failed job on `head` the ledger does not hold yet, and
     /// upgrade an `unknown` one the evidence now classes.
-    pub(super) fn record<H: RuntimeHost + ?Sized>(
+    pub(super) fn record<H: RunLifecycle + ReviewGate + ?Sized>(
         &mut self,
         host: &H,
         context: &HandoffLandingContext,
@@ -109,7 +94,9 @@ impl FailureLedger {
 
     /// A check recorded `unknown` on this head that now passes on the same
     /// head is flaky: it passed on a rerun with no new commit.
-    pub(in crate::executor::automation::vcs) fn observe_passes<H: RuntimeHost + ?Sized>(
+    pub(in crate::executor::automation::vcs) fn observe_passes<
+        H: RunLifecycle + ReviewGate + ?Sized,
+    >(
         &mut self,
         host: &H,
         context: &HandoffLandingContext,
@@ -155,6 +142,21 @@ impl FailureLedger {
                 );
             }
         }
+    }
+
+    fn entries<H: RunLifecycle + ?Sized>(
+        &mut self,
+        host: &H,
+        task: &str,
+    ) -> &mut Vec<CiFailureLedgerEntry> {
+        self.entries
+            .get_or_insert_with(|| match host.get_task_history(task) {
+                Ok(history) => ci_failure_ledger(&history),
+                Err(error) => {
+                    tracing::warn!(task, %error, "CI failure ledger: task history unreadable");
+                    Vec::new()
+                }
+            })
     }
 }
 
@@ -236,7 +238,7 @@ pub(super) fn head_was_rerun(history: &[orbit_types::task::TaskHistoryEntry], he
 }
 
 /// Append the audited class change and apply it to the cached entry.
-fn reclassify<H: RuntimeHost + ?Sized>(
+fn reclassify<H: ReviewGate + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
     entries: &mut [CiFailureLedgerEntry],
@@ -266,7 +268,7 @@ fn reclassify<H: RuntimeHost + ?Sized>(
 
 /// Append one ledger event to the landing's task; a refusal is logged and
 /// leaves the landing's route unchanged.
-fn write<H: RuntimeHost + ?Sized, T: serde::Serialize>(
+fn write<H: ReviewGate + ?Sized, T: serde::Serialize>(
     host: &H,
     context: &HandoffLandingContext,
     event: &str,

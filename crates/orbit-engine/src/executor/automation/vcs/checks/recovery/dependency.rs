@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-use crate::context::{HandoffLandingContext, RuntimeHost};
+use crate::context::{HandoffLandingContext, HostEnvironment};
 
 use super::super::super::operations;
 
@@ -14,7 +14,7 @@ use super::{CheckFailureClass, FailedJob};
 /// What authenticating a waiter's dependency record reads through the
 /// provider adapter: the landing's host, checkout, candidate, PR, head and
 /// accepted base, bounded by one deadline.
-pub(super) struct DependencyAuthScope<'a, H: RuntimeHost + ?Sized> {
+pub(super) struct DependencyAuthScope<'a, H: ?Sized> {
     pub(super) host: &'a H,
     pub(super) workspace: &'a std::path::Path,
     pub(super) context: &'a HandoffLandingContext,
@@ -51,7 +51,7 @@ fn dependency_ids_in_log(log: &str) -> Vec<u64> {
 /// whose only diagnostic is an authenticated dependency record takes no
 /// class of its own, so the aggregate class comes from its dependencies.
 /// An unauthenticated or malformed record keeps its classified class.
-pub(super) fn fold_dependency_waiters<H: RuntimeHost + ?Sized>(
+pub(super) fn fold_dependency_waiters<H: HostEnvironment + ?Sized>(
     scope: &DependencyAuthScope<'_, H>,
     waiter_logs: &[(u64, String)],
     jobs: &mut [FailedJob],
@@ -147,7 +147,7 @@ pub(super) fn fold_dependency_waiters<H: RuntimeHost + ?Sized>(
 /// Authenticate one waiter's dependency record through the same adapter the
 /// rerun planner uses, returning the dependency job ids it names. Any
 /// failure — malformed, forged or unproven closure — returns `None`.
-fn authenticated_dependency_ids<H: RuntimeHost + ?Sized>(
+fn authenticated_dependency_ids<H: HostEnvironment + ?Sized>(
     scope: &DependencyAuthScope<'_, H>,
     run_id: u64,
     waiter_id: u64,

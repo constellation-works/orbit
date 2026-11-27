@@ -10,7 +10,7 @@ use super::send::send_reserved_rerun;
 use super::{
     CiRerunStep, PlanMismatch, RerunPlanRequest, authenticated_plan, is_no_authenticated_plan_error,
 };
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{CiRerunAdmission, CiRerunPlan, CiRerunRefusal, CiRerunRoot};
 use std::{collections::BTreeSet, path::Path};
@@ -35,7 +35,7 @@ pub(in crate::executor::automation::vcs) struct RerunLanding<'a> {
 /// before the send. `Ok(None)` when the set is not eligible or the budget
 /// is already spent; the caller then keeps its own route.
 pub(in crate::executor::automation::vcs::checks) fn request_classification_rerun<
-    H: RuntimeHost + ?Sized,
+    H: RunLifecycle + ReviewGate + HostEnvironment + ?Sized,
 >(
     host: &H,
     target: RerunLanding<'_>,
@@ -115,7 +115,7 @@ pub(in crate::executor::automation::vcs::checks) fn request_classification_rerun
 /// and never reserves or sends one: a head without that reserved rerun, or
 /// whose rerun has not produced a later failed attempt, is `NotEligible`.
 pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
-    H: RuntimeHost + ?Sized,
+    H: RunLifecycle + ReviewGate + HostEnvironment + ?Sized,
 >(
     host: &H,
     target: RerunLanding<'_>,
@@ -314,7 +314,7 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
 /// The attempts of `plan`'s workflow run whose no-edit repair rerun on the
 /// plan's head is already reserved on a watched task. An unreadable history
 /// reserves nothing.
-fn reserved_no_edit_rerun_attempts<'a, H: RuntimeHost + ?Sized>(
+fn reserved_no_edit_rerun_attempts<'a, H: RunLifecycle + ?Sized>(
     host: &'a H,
     tasks: &'a [String],
     plan: &'a CiRerunPlan,
@@ -336,7 +336,7 @@ fn reserved_no_edit_rerun_attempts<'a, H: RuntimeHost + ?Sized>(
         .map(|previous| previous.run_attempt)
 }
 
-fn no_edit_rerun_failed_reason<H: RuntimeHost + ?Sized>(
+fn no_edit_rerun_failed_reason<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     head_sha: &str,

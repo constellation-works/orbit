@@ -3,7 +3,10 @@
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use crate::context::{ReviewLandingRequest, RuntimeHost};
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, ReviewLandingRequest, RunLifecycle,
+    RuntimeHostProcessEnvironment as ProcessEnvironment,
+};
 
 use super::super::super::super::input::input_string_field;
 use super::super::super::super::task_update::{authorization_note, complete_tasks};
@@ -17,10 +20,13 @@ use super::drive::{Delivery, drive_pr_to_merged};
 use super::mutation::{ensure_all_tasks_no_diff_expected, resolve_pr_number};
 use super::reviewed::reviewed_head_sha;
 
-pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn pr_complete<H>(
     host: &H,
     input: &Value,
-) -> Result<Value, OrbitError> {
+) -> Result<Value, OrbitError>
+where
+    H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
+{
     let pinned = landing_review_pins(input);
     let input = pinned.as_ref().unwrap_or(input);
     // Resolve the bundle exactly as `pr_promote` does: the shared handoff
@@ -235,7 +241,7 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
 /// tasks stay in review, exactly as a run without completion authority leaves
 /// them. An auto-fix run still watches and repairs the PR, as it does without
 /// `--complete`.
-fn held_without_merge<H: RuntimeHost + ?Sized>(
+fn held_without_merge<H>(
     host: &H,
     input: &Value,
     batch_id: &str,
@@ -243,7 +249,10 @@ fn held_without_merge<H: RuntimeHost + ?Sized>(
     workspace_path: &str,
     pr_number: &str,
     hold: &orbit_types::workflow::CompletionHold,
-) -> Result<Value, OrbitError> {
+) -> Result<Value, OrbitError>
+where
+    H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
+{
     let unmerged = json!({
         "merged": false,
         "reason": "completion_held",

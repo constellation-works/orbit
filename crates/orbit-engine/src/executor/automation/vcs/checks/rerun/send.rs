@@ -1,7 +1,7 @@
 //! Sending a reserved failed-jobs retry, and the retry history it records.
 
 use super::super::super::operations;
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     CI_CHECK_RERUN_EVENT, CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT, CiCheckRerunEvent,
@@ -13,7 +13,7 @@ use std::path::Path;
 
 /// Send a just-reserved failed-jobs retry once and record it. `false` when
 /// the reservation or the owner's authority changed before the send.
-pub(super) fn send_reserved_rerun<H: RuntimeHost + ?Sized>(
+pub(super) fn send_reserved_rerun<H: RunLifecycle + ReviewGate + HostEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     tasks: &[String],
@@ -86,7 +86,7 @@ pub(super) fn send_reserved_rerun<H: RuntimeHost + ?Sized>(
     Ok(true)
 }
 
-pub(super) fn record_cancellation_exhausted<H: RuntimeHost + ?Sized>(
+pub(super) fn record_cancellation_exhausted<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     tasks: &[String],
     handoff: Option<&str>,
@@ -118,7 +118,7 @@ pub(super) fn record_cancellation_exhausted<H: RuntimeHost + ?Sized>(
 /// Read only the durable ledger while backing off; do not re-fetch completed
 /// jobs, logs or provider authentication on every completion poll.
 pub(in crate::executor::automation::vcs::checks) fn infrastructure_backoff<
-    H: RuntimeHost + ?Sized,
+    H: RunLifecycle + ?Sized,
 >(
     host: &H,
     tasks: &[String],
@@ -152,7 +152,7 @@ pub(in crate::executor::automation::vcs::checks) fn infrastructure_backoff<
     Ok(None)
 }
 
-pub(super) fn record_retry_exhausted<H: RuntimeHost + ?Sized>(
+pub(super) fn record_retry_exhausted<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     tasks: &[String],
     handoff: Option<&str>,
@@ -167,7 +167,7 @@ pub(super) fn record_retry_exhausted<H: RuntimeHost + ?Sized>(
     record_retry_history(host, tasks, handoff, event, &note)
 }
 
-pub(super) fn record_retry_history<H: RuntimeHost + ?Sized>(
+pub(super) fn record_retry_history<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     tasks: &[String],
     handoff: Option<&str>,

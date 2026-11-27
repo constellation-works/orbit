@@ -3,7 +3,7 @@ use orbit_types::identity::normalize_optional_attribution_label;
 use orbit_types::task::Task;
 use serde_json::json;
 
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 
 pub(in crate::executor::automation) fn ship_done_attribution(task: &Task) -> Option<String> {
     normalize_optional_attribution_label(
@@ -14,7 +14,7 @@ pub(in crate::executor::automation) fn ship_done_attribution(task: &Task) -> Opt
     )
 }
 
-pub(super) fn pr_review_attribution<H: RuntimeHost + ?Sized>(
+pub(super) fn pr_review_attribution<H: HostEnvironment + ?Sized>(
     host: &H,
     task: &Task,
     batch_id: &str,

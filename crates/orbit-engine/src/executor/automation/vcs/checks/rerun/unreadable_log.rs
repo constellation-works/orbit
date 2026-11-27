@@ -8,7 +8,7 @@ use orbit_types::{
     workflow::{CI_UNREADABLE_LOG_CLASSIFICATION, CiRerunAdmission, CiRerunPlan, CiRerunRoot},
 };
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle};
 
 use super::super::super::operations::CiCommitJobEvidence;
 use super::super::{
@@ -59,7 +59,7 @@ pub(super) fn unreadable_log_rerun_pending(
         })
 }
 
-pub(super) fn retry_unreadable_log<H: RuntimeHost + ?Sized>(
+pub(super) fn retry_unreadable_log<H: RunLifecycle + ReviewGate + HostEnvironment + ?Sized>(
     host: &H,
     retry: UnreadableLogRetry<'_>,
     jobs: &[CiCommitJobEvidence],

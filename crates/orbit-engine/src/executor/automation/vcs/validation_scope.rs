@@ -20,7 +20,7 @@ use std::path::Path;
 use orbit_common::fs::path_glob::RelativePathGlob;
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, ValidatedTree};
+use crate::context::{HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment, ValidatedTree};
 
 use super::git::git_output_raw;
 
@@ -42,7 +42,9 @@ pub(super) struct ValidationScope {
 /// command list (deferred-sandbox replays included). A host error reading
 /// the record, or a tree diff Git cannot produce, falls back to the full
 /// list: narrowing is an optimization and never a reason to fail.
-pub(super) fn validation_scope<H: RuntimeHost + ?Sized>(
+pub(super) fn validation_scope<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     run_id: &str,

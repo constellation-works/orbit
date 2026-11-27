@@ -8,7 +8,7 @@ use super::super::{
     log::job_log,
     recovery::CheckFailureClass,
 };
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 use orbit_common::OrbitError;
 use orbit_types::workflow::CiRerunRoot;
 use std::{collections::BTreeSet, path::Path};
@@ -16,7 +16,7 @@ use std::{collections::BTreeSet, path::Path};
 /// Jobs in `runs` whose conclusions alone are a transient stop, including a
 /// failure job that only reports awaiting that stop. `None` keeps today's
 /// log classification. A failure-job log that cannot be read is still an error.
-pub(super) fn try_conclusion_transient<H: RuntimeHost + ?Sized>(
+pub(super) fn try_conclusion_transient<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     jobs: &[CiCommitJobEvidence],

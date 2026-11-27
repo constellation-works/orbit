@@ -4,7 +4,10 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::{PrAutoFixBlocker, pr_auto_fix_attempts};
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle,
+    RuntimeHostProcessEnvironment as ProcessEnvironment,
+};
 
 use super::super::super::super::input::input_string_field;
 use super::super::super::candidate_validate::candidate_validate;
@@ -37,7 +40,7 @@ pub(in crate::executor::automation::vcs::pr) enum LocalRepair {
 /// what it does not pin. The repair passes the workspace's required
 /// validation before it moves anything, and the push is a fast-forward of
 /// the exact published head.
-pub(in crate::executor::automation::vcs::pr) fn publish_local_repair<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn publish_local_repair<H>(
     host: &H,
     input: &Value,
     auto_fix: &admission::AutoFix,
@@ -45,7 +48,10 @@ pub(in crate::executor::automation::vcs::pr) fn publish_local_repair<H: RuntimeH
     pr_number: &str,
     pin: &DeliveryPin,
     reviewed: bool,
-) -> Result<LocalRepair, OrbitError> {
+) -> Result<LocalRepair, OrbitError>
+where
+    H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
+{
     let (Some(authorized), Some(head)) = (pin.candidate_sha(), input_string_field(input, "head"))
     else {
         return Ok(LocalRepair::None);

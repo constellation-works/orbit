@@ -9,7 +9,7 @@ use orbit_types::workflow::is_reserved_review_artifact;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::ReviewGate;
 
 use super::input::refused;
 
@@ -77,7 +77,7 @@ fn prepare(
 /// may name the review gate's `review-` namespace, which the owner refuses
 /// only after earlier entries are already stored.
 pub(in crate::executor::automation::vcs) fn import_implementation_evidence<
-    H: RuntimeHost + ?Sized,
+    H: ReviewGate + ?Sized,
 >(
     host: &H,
     task_id: &str,

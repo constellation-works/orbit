@@ -6,7 +6,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::super::input::input_string_field;
 use super::super::git::git_output;
@@ -37,7 +37,7 @@ pub(super) enum PinnedHead {
 /// The `regression_from` culprits this run's implementer supplied, which the
 /// owner records as relations on acceptance [ORB-24696]. Read through the
 /// same implementation-output channel the commit step uses for its summary.
-fn supplied_regression_from_input<H: RuntimeHost + ?Sized>(
+fn supplied_regression_from_input<H: RunLifecycle + ?Sized>(
     host: &H,
     run_id: &str,
     input: &Value,
@@ -60,7 +60,9 @@ fn supplied_regression_from_input<H: RuntimeHost + ?Sized>(
 /// are reported. Without either report, admitted implementation selectors may
 /// settle a claimed task as already resolved at this pinned base; its host
 /// replays the selectors before handoff. Owner runs require a report.
-pub(super) fn verify_clean_tree<H: RuntimeHost + ?Sized>(
+pub(super) fn verify_clean_tree<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: &orbit_types::task::Task,
     workspace_path: &Path,
@@ -147,7 +149,9 @@ pub(in crate::executor::automation::vcs) fn verified_clean_tree_checkpoint(
 }
 
 /// Recheck a [`verified_clean_tree_checkpoint`] against live task and Git state.
-pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     tasks: &[orbit_types::task::Task],
     workspace_path: &Path,
@@ -202,7 +206,7 @@ pub(in crate::executor::automation::vcs) fn claimed_clean_base_checkpoint(
 /// Owner revalidation on an independently observed base, without modifying
 /// the owner's checkout or requiring the executor's branch to exist there.
 pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff_at_revision<
-    H: RuntimeHost + ?Sized,
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
 >(
     host: &H,
     task: &orbit_types::task::Task,
@@ -310,7 +314,9 @@ pub(super) fn head_descends_from_pin(
 /// state. That receipt counts only when the executing run is a bounded
 /// same-job retry descendant of the checkpoint owner, the receipt was recorded
 /// on that chain, and the task is still bound to the checkpoint owner.
-pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
+pub(super) fn head_matches_final_recovery<
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     checkpoint_owner: &str,
@@ -387,7 +393,9 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
 /// whose stored author is `SYSTEM_STAMPED_AUTHOR`. The public task update
 /// accepts the same display prose from an implementer; that prose is not
 /// provenance (STD-05 §R1).
-pub(super) fn head_matches_settled_review<H: RuntimeHost + ?Sized>(
+pub(super) fn head_matches_settled_review<
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task_id: &str,
     workspace_path: &Path,

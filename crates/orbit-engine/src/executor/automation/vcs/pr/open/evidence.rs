@@ -5,7 +5,7 @@ use orbit_types::task::TaskHistoryEntry;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::super::super::input::input_string_field;
 use super::super::super::git::git_output;
@@ -23,7 +23,10 @@ pub(super) struct ValidationRecord<'a> {
 /// Keep the latest matching record per command, from delivered tasks' history
 /// followed by a claimed leaf's handed validation output. Claimed leaves cannot
 /// write the owner's task history.
-pub(super) fn collect_validation_records<H: RuntimeHost + ?Sized, T: DeserializeOwned>(
+pub(super) fn collect_validation_records<
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+    T: DeserializeOwned,
+>(
     host: &H,
     context: &HandoffContext,
     base_sha: &str,

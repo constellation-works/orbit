@@ -19,7 +19,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskActivityUpdate};
+use crate::context::{HostEnvironment, RunLifecycle, RuntimeHost, TaskActivityUpdate};
 
 use super::super::input::{input_string_field, required_job_run_id};
 use super::super::vcs::completion_hold::{
@@ -46,7 +46,9 @@ pub(in crate::executor::automation) fn task_complete<H: RuntimeHost + ?Sized>(
 /// PR-mode completion resolves and validates its bundle through the shared
 /// handoff context first, so it calls this directly rather than re-deriving the
 /// selection from raw input.
-pub(in crate::executor::automation) fn complete_tasks<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn complete_tasks<
+    H: RunLifecycle + HostEnvironment + ?Sized,
+>(
     host: &H,
     run_id: &str,
     task_ids: &[String],

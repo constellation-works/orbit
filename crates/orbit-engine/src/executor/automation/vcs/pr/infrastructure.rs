@@ -4,7 +4,7 @@ use super::{
     answers::{PullRequestStatus, RequiredChecks},
     auto_fix::{hold_auto_fix_stop, stopped, stopped_by},
 };
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     DeliveryRefusal, PrInfrastructureAdmission, PrInfrastructureEvidence,
@@ -35,7 +35,7 @@ impl InfrastructureOwner<'_> {
     }
 }
 
-fn record<H: RuntimeHost + ?Sized>(
+fn record<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     owner: &InfrastructureOwner<'_>,
     evidence: &PrInfrastructureEvidence,
@@ -136,7 +136,9 @@ fn unreadable_prerequisite_evidence_stop(pr: &str, error: &OrbitError) -> OrbitE
 /// failed prerequisite or zero-job workflow, obtain complete typed evidence
 /// before admission.
 /// A lost mutation reply spends the reservation; only observation follows.
-pub(super) fn recover<H: RuntimeHost + ?Sized>(
+pub(super) fn recover<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     owner: &InfrastructureOwner<'_>,
     workspace: &str,

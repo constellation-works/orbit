@@ -12,6 +12,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::context::{RunLifecycle, RuntimeHostProcessEnvironment};
 use orbit_common::fs::selector::claim_new_path_is_safe;
 use orbit_common::security::redaction::{redact_all, redact_all_bytes};
 
@@ -833,7 +834,9 @@ fn stageable_safe_paths(
 
 /// Capture any uncommitted diff in `workspace_path` and persist it as a redacted
 /// task artifact (falling back to `.orbit/tmp/` if the task record rejects writes).
-pub(crate) fn persist_uncommitted_diff_artifact<H: crate::RuntimeHost + ?Sized>(
+pub(crate) fn persist_uncommitted_diff_artifact<
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task_id: &str,
     workspace_path: &Path,

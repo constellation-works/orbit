@@ -28,7 +28,7 @@ use orbit_types::workflow::DeliveryRefusal;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{HostEnvironment, RunLifecycle, TaskAutomationUpdate};
 
 use super::super::super::operations;
 use super::super::answers::PullRequestStatus;
@@ -88,7 +88,7 @@ impl AbsentCheckRuns {
     /// Re-trigger once, or hold, when the published head has had no workflow
     /// run and no run of any required check for long enough. A present
     /// workflow run keeps the ordinary wait. `Ok` keeps that wait too.
-    pub(super) fn observe<H: RuntimeHost + ?Sized>(
+    pub(super) fn observe<H: RunLifecycle + HostEnvironment + ?Sized>(
         &mut self,
         host: &H,
         poll: &AbsentCheckRunPoll<'_>,
@@ -180,7 +180,7 @@ impl AbsentCheckRuns {
 
 /// The re-trigger already recorded for `head` of pull request `pr` on any
 /// of `task_ids`.
-fn recorded_retrigger<H: RuntimeHost + ?Sized>(
+fn recorded_retrigger<H: RunLifecycle + ?Sized>(
     host: &H,
     task_ids: &[String],
     pr: &str,
@@ -204,7 +204,7 @@ fn recorded_retrigger<H: RuntimeHost + ?Sized>(
 
 /// Record the re-trigger on every owning task before the forge is asked, so
 /// an interrupted request is never repeated for the same head.
-fn record_retrigger<H: RuntimeHost + ?Sized>(
+fn record_retrigger<H: RunLifecycle + ?Sized>(
     host: &H,
     task_ids: &[String],
     record: &RetriggerRecord,

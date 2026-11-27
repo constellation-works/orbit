@@ -5,7 +5,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use serde_json::json;
 
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 
 use super::super::super::ci::log_signature::{
     LineKind, classify_log_lines, declared_infrastructure_signature, diagnostic_excerpt,
@@ -54,7 +54,7 @@ pub(super) fn failed_step(job: &CiCommitJobEvidence) -> &str {
 
 /// Every job on `commit`. An answer without a job list is a failed read,
 /// never an empty one.
-pub(super) fn commit_jobs<H: RuntimeHost + ?Sized>(
+pub(super) fn commit_jobs<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     commit: &str,
@@ -223,7 +223,7 @@ pub(super) fn transient_evidence(log: &str) -> Option<String> {
 /// [`transient_evidence`], or the infrastructure signature this workspace
 /// declares that a failed job's log carries. Declared signatures live in
 /// configuration, so core knows no repository's scripts.
-pub(super) fn infrastructure_evidence<H: RuntimeHost + ?Sized>(
+pub(super) fn infrastructure_evidence<H: HostEnvironment + ?Sized>(
     host: &H,
     log: &str,
 ) -> Option<String> {

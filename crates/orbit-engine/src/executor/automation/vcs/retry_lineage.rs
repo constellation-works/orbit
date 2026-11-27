@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use orbit_types::workflow::JobRun;
 
-use crate::context::RuntimeHost;
+use crate::context::RunLifecycle;
 
 /// The most retry ancestors one lineage walk loads.
 pub(super) const RETRY_LINEAGE_MAX_HOPS: usize = 64;
@@ -66,15 +66,8 @@ impl RetryLineage {
         }
     }
 
-    /// Also stop when a stored ancestor records a different run id than the
-    /// one its descendant names.
-    pub(super) fn checking_identity(mut self) -> Self {
-        self.check_identity = true;
-        self
-    }
-
     /// Load the next ancestor, or report why the walk ended.
-    pub(super) fn step<H: RuntimeHost + ?Sized>(
+    pub(super) fn step<H: RunLifecycle + ?Sized>(
         &mut self,
         host: &H,
     ) -> Result<LineageStep, OrbitError> {
@@ -105,5 +98,12 @@ impl RetryLineage {
         }
         self.next.clone_from(&run.retry_source_run_id);
         Ok(LineageStep::Ancestor(run_id, Box::new(run)))
+    }
+
+    /// Also stop when a stored ancestor records a different run id than the
+    /// one its descendant names.
+    pub(super) fn checking_identity(mut self) -> Self {
+        self.check_identity = true;
+        self
     }
 }

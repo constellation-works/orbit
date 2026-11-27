@@ -5,7 +5,9 @@ use super::answers::PullRequestStatus;
 use super::auto_fix::{
     AutoFix, AutoFixPull, CiRerunRecovery, defer_throttled_read, owed_read_wait, recover_ci_rerun,
 };
-use crate::context::RuntimeHost;
+use crate::context::{
+    HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment as ProcessEnvironment,
+};
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -18,7 +20,7 @@ pub(in crate::executor::automation::vcs) enum ReviewCiRetryStep {
 
 /// Retry CI only. This does not call repair admission, merge or change status.
 pub(in crate::executor::automation::vcs) fn recover_review_ci(
-    host: &(impl RuntimeHost + ?Sized),
+    host: &(impl RunLifecycle + ReviewGate + HostEnvironment + ProcessEnvironment + ?Sized),
     input: &Value,
     task: &str,
     pr: &str,

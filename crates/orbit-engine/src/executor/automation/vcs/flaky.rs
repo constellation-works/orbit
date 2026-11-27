@@ -5,7 +5,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_types::workflow::{FlakyValidation, MAX_FLAKY_TESTS};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::base::claim::failing_tests_selection;
 use super::baseline::BaselineCheck;
@@ -17,7 +17,7 @@ pub(super) struct CandidateRerun {
     pub(super) flaky: Option<FlakyValidation>,
 }
 
-pub(super) fn rerun_failed_tests<H: RuntimeHost + ?Sized>(
+pub(super) fn rerun_failed_tests<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     candidate: &str,

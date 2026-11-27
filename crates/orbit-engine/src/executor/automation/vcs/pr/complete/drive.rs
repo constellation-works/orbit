@@ -3,7 +3,10 @@
 use orbit_common::OrbitError;
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle,
+    RuntimeHostProcessEnvironment as ProcessEnvironment,
+};
 
 use orbit_types::workflow::CompletionHold;
 
@@ -67,7 +70,7 @@ struct CompletionDrive<'a> {
 
 /// Poll GitHub until the PR is verifiably merged, requesting the merge (or
 /// auto-merge) as its reported state allows.
-pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
+pub(super) fn drive_pr_to_merged<H>(
     host: &H,
     input: &Value,
     workspace_path: &str,
@@ -75,7 +78,10 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     task_ids: &[String],
     auto_fix: Option<&AutoFix>,
     hold_check: Option<&CompletionHoldCheck>,
-) -> Result<Delivery, OrbitError> {
+) -> Result<Delivery, OrbitError>
+where
+    H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
+{
     let mut diagnostic = None;
     let result = drive_pr_to_merged_observed(
         host,
@@ -106,11 +112,14 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
     result
 }
 
-fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
+fn drive_pr_to_merged_observed<H>(
     host: &H,
     drive: CompletionDrive<'_>,
     diagnostic: &mut Option<super::super::super::checks::rerun_diagnostic::CiRerunDiagnostic>,
-) -> Result<Delivery, OrbitError> {
+) -> Result<Delivery, OrbitError>
+where
+    H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
+{
     let CompletionDrive {
         input,
         workspace_path,
