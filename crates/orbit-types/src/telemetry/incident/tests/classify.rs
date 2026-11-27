@@ -7,6 +7,34 @@ use crate::telemetry::AuditEventStatus;
 use crate::telemetry::incident::types::{DOCTOR_FINDINGS_MESSAGE_PREFIX, RUN_DEFERRED_SURFACE};
 
 #[test]
+fn auto_fix_stops_are_expected_but_genuine_pr_complete_failures_stay_unexpected() {
+    let held_stop = "execution failed: deterministic action pr_complete refused: \
+                     auto_fix_stopped: pull request #42 cannot be repaired automatically \
+                     (required checks have not all concluded)";
+    assert_eq!(
+        classify_failure(
+            "job run-pipeline-worker",
+            AuditEventStatus::Failure,
+            Some(held_stop),
+        ),
+        FailureClass::Expected,
+        "an auto-fix stop is a documented hold even when its audit row has failure status"
+    );
+
+    let genuine_failure = "execution failed: deterministic action pr_complete failed: \
+                          database unavailable";
+    assert_eq!(
+        classify_failure(
+            "job run-pipeline-worker",
+            AuditEventStatus::Failure,
+            Some(genuine_failure),
+        ),
+        FailureClass::Unexpected,
+        "a pr_complete failure without the hold marker must remain unexpected"
+    );
+}
+
+#[test]
 fn doctor_findings_are_expected_but_a_doctor_crash_stays_unexpected() {
     let findings = format!("{DOCTOR_FINDINGS_MESSAGE_PREFIX}1 failure (review), 3 warnings");
     assert_eq!(
