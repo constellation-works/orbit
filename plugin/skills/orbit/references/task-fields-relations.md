@@ -21,6 +21,12 @@ Contents:
 - `dependencies: ["<task-id>", ...]` — prerequisites must reach a satisfying
   status first. `orbit.task.add` takes it too (guarded creation with
   `request_id` does not), with the same validation as `orbit.task.update`.
+  - A `dependencies` entry is stored as a `blocked_by` relation: the two
+    inputs represent the same prerequisite edge. Supply each prerequisite
+    once — either in `dependencies` or as a single `blocked_by` entry in
+    `relations`, not both. Supplying the same prerequisite in both fields is
+    refused as a duplicate `BlockedBy` relation; remove it from one field
+    and retry.
   - Unlike `resolves`, task IDs are global: a prerequisite owned by
     another workspace registered on this machine is read from its owner, and
     completing it there satisfies the dependency here. A prerequisite this
@@ -42,7 +48,9 @@ Contents:
     `spawned_from`, `regression_from`, `supersedes`, `related_to`) are tracked
     but inert. Only `produces`/`resolves` accept non-task artifact IDs; `covered_by`
     also accepts GitHub PR external keys as described in [`task-fields-placement.md`](task-fields-placement.md). The remaining
-    relation types require a task ID. A dangling target (unknown in every
+    relation types require a task ID. A `blocked_by` entry is the same
+    prerequisite edge a `dependencies` entry writes; send each prerequisite
+    once (see above). A dangling target (unknown in every
     workspace this host can see) succeeds but emits a `TaskRelationDangling` audit event.
 - A `regression_from` relation may carry
   `"regression": {"nature": "<nature>", "escape": "<escape>", "severity": "<severity>", "sites": [...]}`

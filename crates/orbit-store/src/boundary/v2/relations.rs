@@ -3,6 +3,18 @@ use super::*;
 pub(super) fn relations_from_create_params(
     params: &TaskCreateParams,
 ) -> Result<Vec<TaskRelation>, OrbitError> {
+    // A `dependencies` entry is stored as a `BlockedBy` edge, exactly like a
+    // `blocked_by` entry in `relations`. Name both inputs in the refusal so a
+    // caller supplying the same prerequisite twice knows to keep only one.
+    for dependency in &params.dependencies {
+        if params.relations.iter().any(|relation| {
+            relation.relation_type == TaskRelationType::BlockedBy && relation.target == *dependency
+        }) {
+            return Err(OrbitError::InvalidInput(format!(
+                "duplicate task relation BlockedBy -> '{dependency}': 'dependencies' and a 'blocked_by' entry in 'relations' represent the same prerequisite edge; supply '{dependency}' once (remove it from one of the two fields)"
+            )));
+        }
+    }
     let mut relations = Vec::new();
     if let Some(parent_id) = &params.parent_id {
         relations.push(TaskRelation {
