@@ -219,6 +219,67 @@ fn symlinked_bundle_files_and_directory_are_refused_without_touching_targets() {
 
 #[cfg(unix)]
 #[test]
+fn symlinked_bundle_dir_append_leaves_outside_directory_untouched() {
+    if !support::isolated("jsonl::symlinked_bundle_dir_append_leaves_outside_directory_untouched") {
+        return;
+    }
+    let temp = tempdir().expect("temporary directory");
+    let store = store(&temp);
+    let id = store
+        .task
+        .create_task(create_params("Symlinked dir append", TaskStatus::Backlog))
+        .unwrap()
+        .id;
+    let bundle = bundle_path(&id);
+    let outside_dir = temp.path().join("outside-append-dir");
+    fs::create_dir_all(&outside_dir).unwrap();
+    for entry in fs::read_dir(&bundle).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            fs::copy(entry.path(), outside_dir.join(entry.file_name())).unwrap();
+        }
+    }
+    fs::remove_dir_all(&bundle).unwrap();
+    std::os::unix::fs::symlink(&outside_dir, &bundle).unwrap();
+    let listing = |dir: &std::path::Path| -> std::collections::BTreeMap<String, Vec<u8>> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                let name = entry.file_name().to_string_lossy().into_owned();
+                (name, fs::read(entry.path()).unwrap_or_default())
+            })
+            .collect()
+    };
+    let before = listing(&outside_dir);
+    assert!(
+        store
+            .history
+            .update_task_history(
+                &id,
+                TaskHistoryUpdateParams {
+                    actor: "test".into(),
+                    append_comments: vec![TaskComment {
+                        at: Utc::now(),
+                        by: "test".into(),
+                        message: "should fail".into(),
+                        operation_id: None,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .is_err(),
+        "append under a symlinked bundle directory must be refused"
+    );
+    assert_eq!(
+        listing(&outside_dir),
+        before,
+        "refused append must not create or change files beside the symlink target"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn symlinked_store_ancestor_keeps_bundle_reads_and_writes_working() {
     if !support::isolated("jsonl::symlinked_store_ancestor_keeps_bundle_reads_and_writes_working") {
         return;

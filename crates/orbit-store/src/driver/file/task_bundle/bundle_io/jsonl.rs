@@ -69,6 +69,15 @@ where
         );
         encoded.push('\n');
     }
+    // Refuse a symlinked bundle directory or leaf before the lock runs: its
+    // sibling `.<name>.lock` is created beside the canonical parent, which
+    // would otherwise write into a symlink target. A missing parent is left to
+    // the lock, which creates it.
+    match super::validated_bundle_file_path(path) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(OrbitError::from_write_io(path, err)),
+    }
     with_exclusive_file_lock(path, "task jsonl", || {
         let validated_path = super::validated_bundle_file_path(path)
             .map_err(|err| OrbitError::from_write_io(path, err))?;
