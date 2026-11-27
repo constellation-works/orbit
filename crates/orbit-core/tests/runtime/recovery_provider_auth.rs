@@ -2,7 +2,8 @@
 #![cfg(unix)]
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_engine::{RuntimeHost, V2AuditWriter};
+use orbit_engine::V2AuditWriter;
+use orbit_engine::{Recovery, RunLifecycle};
 use orbit_store::contract::JobRunStepParams;
 use orbit_types::resource::ExecutorResource;
 use orbit_types::task::ExecutionLocation;

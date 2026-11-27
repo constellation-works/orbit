@@ -1,6 +1,6 @@
 //! Admissions that land between task-pilot selection and hydration.
 
-use orbit_engine::RuntimeHost;
+use orbit_engine::{Dispatch, RunLifecycle};
 use orbit_tools::ToolContext;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};

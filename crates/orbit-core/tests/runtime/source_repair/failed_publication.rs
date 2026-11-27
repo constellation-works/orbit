@@ -3,6 +3,7 @@ use super::*;
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest,
 };
+use orbit_engine::{Recovery, RunLifecycle};
 use std::path::Path;
 
 pub(super) fn escalate(f: &Fixture, id: &str) {
@@ -34,7 +35,7 @@ fn infra_escalate(
         FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
         FinalRecoveryApplied,
     };
-    let admission = RuntimeHost::admit_final_recovery(
+    let admission = Recovery::admit_final_recovery(
         &f.runtime,
         run_id,
         &FinalRecoveryAdmissionRequest {
@@ -45,7 +46,7 @@ fn infra_escalate(
     )
     .unwrap();
     assert_eq!(admission, FinalRecoveryAdmission::Admitted);
-    let applied = RuntimeHost::apply_final_recovery(
+    let applied = Recovery::apply_final_recovery(
         &f.runtime,
         run_id,
         &FinalRecoveryApplication {

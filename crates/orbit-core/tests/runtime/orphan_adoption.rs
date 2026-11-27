@@ -33,7 +33,8 @@ use orbit_core::runtime::task_pr_forge::{
     ForgePullRequest, GhTaskPrForge, PullRequestBlockers, TaskPrForge,
 };
 use orbit_core::{OrbitRuntime, TaskStatus};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::TaskAutomationUpdate;
+use orbit_engine::{Dispatch, RunLifecycle};
 use orbit_store::contract::{ExecutionClaimPhase, JobRunStepParams, LocalPullPhase};
 use orbit_tools::ToolContext;
 use orbit_types::task::ExternalRef;

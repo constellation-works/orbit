@@ -1,5 +1,6 @@
 use orbit_common::OrbitError;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::TaskAutomationUpdate;
+use orbit_engine::{HostEnvironment, RunLifecycle};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus, push_external_ref_if_missing,
@@ -103,7 +104,7 @@ fn apply_task_automation_update_under_lock(
         update.agent.as_deref(),
         update.model.as_deref(),
     );
-    let runtime_model_identity = <OrbitRuntime as RuntimeHost>::actor_model_identity(runtime);
+    let runtime_model_identity = <OrbitRuntime as HostEnvironment>::actor_model_identity(runtime);
     let attribution = assemble_task_attribution(
         &existing_task,
         TaskAttributionInput {
@@ -256,7 +257,8 @@ pub(super) fn reject_invalid_finding(
             "a claimed run cannot reject the owner's review finding".to_string(),
         ));
     }
-    let crew = RuntimeHost::get_job_run(runtime, &report.run_id)?.and_then(|run| run.resolved_crew);
+    let crew =
+        RunLifecycle::get_job_run(runtime, &report.run_id)?.and_then(|run| run.resolved_crew);
     let finding = InvalidFinding {
         source: VerdictSource::Implementer,
         analyzed: AnalyzedFinding {

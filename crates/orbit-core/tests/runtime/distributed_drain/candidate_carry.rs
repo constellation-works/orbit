@@ -27,6 +27,7 @@
 //! tip to the durable ref, and the next claim on another host resumes it.
 
 use orbit_core::runtime::JobRuns;
+use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{CANDIDATE_RESUME_EVENT, TaskDecision, TaskStatus};
 use orbit_types::workflow::{BaselineRedHold, CANDIDATE_HELD_EVENT};

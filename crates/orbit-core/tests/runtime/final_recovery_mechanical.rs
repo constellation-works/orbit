@@ -7,7 +7,8 @@
 use std::process::Command;
 
 use chrono::Utc;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::JobRunState;
 use serde_json::json;
@@ -201,7 +202,7 @@ fn resume_run_resumes_the_failed_run_once_within_the_shared_bound() {
         .unwrap();
     jobs.finalize_job_run(&run.run_id, JobRunState::Failed, Utc::now(), Some(1))
         .unwrap();
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &fx.runtime,
         &task,
         TaskAutomationUpdate {

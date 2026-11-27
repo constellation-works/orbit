@@ -9,6 +9,7 @@
 //! review evidence against its own copies.
 
 use super::*;
+use orbit_engine::Dispatch;
 
 use orbit_store::contract::{HandoffReviewObservation, ReviewInvocationRecord};
 use orbit_types::task::TaskStatus;

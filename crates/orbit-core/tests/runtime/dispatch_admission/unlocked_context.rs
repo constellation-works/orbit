@@ -7,7 +7,7 @@
 //! definitions keep locking, and `[]` restores the lock on every entry.
 
 use orbit_core::{OrbitRuntime, TaskStatus};
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -110,7 +110,7 @@ fn shared_markdown_beside_distinct_code_admits_both_and_stays_in_context() {
         "the first reservation holds no Markdown: {grant}"
     );
 
-    let envelope = RuntimeHost::task_context_for_agent_input(
+    let envelope = Dispatch::task_context_for_agent_input(
         &runtime,
         "jrun-envelope",
         "implement",

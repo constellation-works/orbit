@@ -9,9 +9,8 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_core::TaskStatus;
-use orbit_engine::{
-    DispatchError, RuntimeHost, TaskAutomationUpdate, V2AuditWriter, execute_job_with_resume,
-};
+use orbit_engine::{Dispatch, RunLifecycle};
+use orbit_engine::{DispatchError, TaskAutomationUpdate, V2AuditWriter, execute_job_with_resume};
 use orbit_types::resource::ExecutorResource;
 use orbit_types::workflow::activity_job::{JobV2, Provider, V2AuditEvent, V2AuditEventKind};
 use orbit_types::workflow::{
@@ -183,7 +182,7 @@ fn busy_deferred_footprint_holds_the_run_and_requeues_the_task() {
             None,
         )
         .unwrap();
-    RuntimeHost::acquire_deferred_footprint(&fx.runtime, &next.run_id, "agent_review_repair")
+    Dispatch::acquire_deferred_footprint(&fx.runtime, &next.run_id, "agent_review_repair")
         .expect("the footprint is taken once the holder releases it");
 }
 
@@ -226,7 +225,7 @@ fn stopped_run_waiting_for_its_footprint_is_not_held() {
         )
         .unwrap();
     let error =
-        RuntimeHost::acquire_deferred_footprint(&fx.runtime, &run.run_id, "agent_review_repair")
+        Dispatch::acquire_deferred_footprint(&fx.runtime, &run.run_id, "agent_review_repair")
             .unwrap_err();
     assert!(
         matches!(error, DispatchError::CliInvocationPermanent(_)),
@@ -287,9 +286,8 @@ fn an_exhausted_footprint_wait_keeps_a_stopped_run_permanent() {
     };
 
     let stopped = insert();
-    let error =
-        RuntimeHost::acquire_deferred_footprint(&fx.runtime, &stopped, "agent_review_repair")
-            .unwrap_err();
+    let error = Dispatch::acquire_deferred_footprint(&fx.runtime, &stopped, "agent_review_repair")
+        .unwrap_err();
     assert!(
         matches!(error, DispatchError::CliInvocationPermanent(_)),
         "a stopped run with a spent budget keeps the permanent failure, got: {error}"
@@ -308,9 +306,8 @@ fn an_exhausted_footprint_wait_keeps_a_stopped_run_permanent() {
     fx.runtime
         .mark_job_run_running(&running, Utc::now(), std::process::id())
         .unwrap();
-    let error =
-        RuntimeHost::acquire_deferred_footprint(&fx.runtime, &running, "agent_review_repair")
-            .unwrap_err();
+    let error = Dispatch::acquire_deferred_footprint(&fx.runtime, &running, "agent_review_repair")
+        .unwrap_err();
     assert!(
         matches!(error, DispatchError::FootprintUnavailable(_)),
         "a running run with a spent budget is held, got: {error}"
@@ -333,7 +330,7 @@ fn an_exhausted_footprint_wait_keeps_a_stopped_run_permanent() {
             },
         )
         .unwrap();
-    RuntimeHost::acquire_deferred_footprint(&fx.runtime, &running, "agent_review_repair")
+    Dispatch::acquire_deferred_footprint(&fx.runtime, &running, "agent_review_repair")
         .expect("the running run takes the footprint once the holder releases it");
 }
 

@@ -5,7 +5,7 @@
 
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -77,7 +77,7 @@ fn human_comments_outrank_superseded_pilot_assessments_in_the_comment_budget() {
     comment_as(&runtime, &task, "HUMAN-NEWEST: steering.", "human:operator");
     pilot_comment(&runtime, &task, "latest pass");
 
-    let context = RuntimeHost::task_context_for_agent_input(
+    let context = Dispatch::task_context_for_agent_input(
         &runtime,
         "run",
         "step",
@@ -151,7 +151,7 @@ fn pilot_summary_replacement_marks_comments_truncated_without_omitting_a_comment
     );
     comment_as(&runtime, &task, &oversized_pilot, "task-pilot");
 
-    let context = RuntimeHost::task_context_for_agent_input(
+    let context = Dispatch::task_context_for_agent_input(
         &runtime,
         "run",
         "step",

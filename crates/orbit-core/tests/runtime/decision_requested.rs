@@ -12,7 +12,8 @@ use orbit_core::application::automation::{consumer_key, evaluate_routine};
 use orbit_core::application::task::{FinalRecoveryCompletion, FinalRecoveryRequest};
 use orbit_core::runtime::JobRuns;
 use orbit_core::{ActorIdentity, OrbitRuntime};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::automation::members::MemberState;
 use orbit_types::workflow::{JobRunState, RoutineDefinition};
@@ -424,7 +425,7 @@ fn an_active_member_settles_when_its_request_is_answered() {
     let now = Utc::now();
     fire(&fx, &task, now);
 
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &fx.runtime,
         &task,
         TaskAutomationUpdate {

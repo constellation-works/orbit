@@ -1,5 +1,6 @@
 //! Review-to-backlog updates authenticate a publication before admitting it.
 use super::*;
+use orbit_engine::RunLifecycle;
 use orbit_types::task::TaskHistoryEntry;
 
 fn put_in_review(f: &Fixture) {

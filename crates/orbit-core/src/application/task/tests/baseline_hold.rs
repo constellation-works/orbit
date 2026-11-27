@@ -2,7 +2,8 @@
 
 use std::time::{Duration, Instant};
 
-use orbit_engine::{RuntimeHost, baseline_red_hold_update};
+use orbit_engine::RunLifecycle;
+use orbit_engine::baseline_red_hold_update;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_VERDICT_EVENT, BaselineRedFailures, BaselineRedHold,
@@ -42,7 +43,7 @@ fn one_unreadable_history_does_not_abort_the_baseline_hold_tick() {
                 ..Default::default()
             })
             .expect("add task");
-        RuntimeHost::apply_task_automation_update(
+        RunLifecycle::apply_task_automation_update(
             &runtime,
             &task.id,
             baseline_red_hold_update("task_pr_pipeline", &hold(&format!("jrun-hold-{index}"))),

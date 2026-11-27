@@ -4,6 +4,7 @@
 //! its run. The test claims each pilot itself, so a pilot stays running until
 //! the test ends it. Only the pilot's agent output is fixture data.
 
+use orbit_engine::RunLifecycle;
 use std::time::{Duration, Instant};
 
 use orbit_core::DrainAdmissionsStopRequest;

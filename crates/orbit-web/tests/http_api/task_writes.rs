@@ -582,7 +582,8 @@ fn dashboard_answers_a_decision_request_as_human() {
     isolated(
         "task_writes::dashboard_answers_a_decision_request_as_human",
         || {
-            use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+            use orbit_engine::RunLifecycle;
+            use orbit_engine::TaskAutomationUpdate;
             use orbit_types::task::{
                 DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest,
             };

@@ -107,7 +107,8 @@ fn admitted_type_edits_keep_crew_until_fresh_admission_and_explicit_correction()
     ) {
         return;
     }
-    use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+    use orbit_engine::RunLifecycle;
+    use orbit_engine::TaskAutomationUpdate;
     use orbit_types::workflow::JobRunState;
     for status in [
         TaskStatus::Backlog,

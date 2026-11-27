@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskStatus};
+use orbit_engine::RunLifecycle;
 use orbit_engine::review_gate::{ReplayBudget, verify_base_failure};
-use orbit_engine::{BaselineHoldStatus, RuntimeHost, baseline_red_hold_update};
+use orbit_engine::{BaselineHoldStatus, baseline_red_hold_update};
 use orbit_types::task::{
     ExternalRef, Task, TaskDecision, TaskHistoryEntry, TaskPriority, TaskRelationType,
 };
@@ -61,7 +62,7 @@ fn held_task_with(
             ..Default::default()
         })
         .unwrap();
-    RuntimeHost::apply_task_automation_update(&fixture.runtime, &task.id, update).unwrap();
+    RunLifecycle::apply_task_automation_update(&fixture.runtime, &task.id, update).unwrap();
     assert_eq!(
         fixture.runtime.get_task(&task.id).unwrap().status,
         TaskStatus::Backlog,
@@ -590,7 +591,7 @@ fn holds_and_verdicts_written_as_notes_alone_still_hold_and_lift() {
     let note_held = held_task_with(&fixture, "Note-only hold", note_only("jrun-note"));
     assert_eq!(hold_entry(&note_held).decision, None);
     let note_lifted = held_task_with(&fixture, "Note-only lifted hold", note_only("jrun-lifted"));
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &fixture.runtime,
         &note_lifted,
         orbit_engine::TaskAutomationUpdate {

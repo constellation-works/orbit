@@ -2,13 +2,14 @@
 //! check was denied on its host is admitted to settlement only when its report
 //! is a valid incomplete verdict for the open attempt whose sole gap is the
 //! external check it names. The host answers through
-//! `RuntimeHost::review_report_evidence_hold`; settlement then holds the
+//! `ReviewGate::review_report_evidence_hold`; settlement then holds the
 //! review, with the reviewer's repair, for that named evidence. A missing or
 //! mismatched report, a reject, an open finding, an incomplete report that
 //! names no evidence and one with a gap beyond it are refused, so the
 //! reviewer step keeps its failure.
 
-use orbit_engine::{DispatchError, ReviewReportCorrectionRequest, RuntimeHost};
+use orbit_engine::ReviewGate;
+use orbit_engine::{DispatchError, ReviewReportCorrectionRequest};
 use orbit_types::workflow::{REVIEW_CONTRACT_VERSION, REVIEW_EVIDENCE_HOLD_ARTIFACT};
 use serde_json::{Value, json};
 
@@ -26,7 +27,7 @@ fn admitted(required: &[&str]) -> Fixture {
 }
 
 fn ask(fixture: &Fixture) -> Option<String> {
-    RuntimeHost::review_report_evidence_hold(
+    ReviewGate::review_report_evidence_hold(
         &fixture.runtime,
         &ReviewReportCorrectionRequest {
             run_id: fixture.input["job_run_id"].as_str().unwrap().into(),

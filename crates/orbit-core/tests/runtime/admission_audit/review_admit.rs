@@ -5,7 +5,8 @@ use std::fs;
 
 use chrono::{Duration, Utc};
 use orbit_automation::review::{combined_task_meaning_digest, task_meaning_digest};
-use orbit_engine::{DispatchError, RuntimeHost};
+use orbit_engine::DispatchError;
+use orbit_engine::RunLifecycle;
 use orbit_store::contract::{ReviewInvocationRecord, ReviewReserveRequest};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
@@ -129,7 +130,7 @@ fn a_run_that_dies_mid_review_releases_its_attempt_when_it_terminates() {
             )
         })
         .expect("record the reviewer start");
-    RuntimeHost::finalize_job_run(
+    RunLifecycle::finalize_job_run(
         runtime,
         &gated.run_id,
         JobRunState::Interrupted,

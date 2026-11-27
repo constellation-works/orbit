@@ -1,6 +1,7 @@
 //! Admission receipt maintenance through the owner's public runtime API.
 
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
+use orbit_engine::ReviewGate;
 use orbit_store::contract::{ClaimEvidence, ClaimInvocation, ClaimMutation};
 
 use super::*;
@@ -262,11 +263,11 @@ fn landed_no_diff_completion_replays_after_admission_receipt_compaction() {
         observed: Some(handoff.candidate.clone()),
         evidence: landed["evidence"].to_string(),
     };
-    RuntimeHost::record_handoff_landing(owner, &update)
+    ReviewGate::record_handoff_landing(owner, &update)
         .expect("recorded Complete replays without the compacted admission receipt");
     let mut changed = update;
     changed.evidence = json!({"delivery": "changed"}).to_string();
-    let error = RuntimeHost::record_handoff_landing(owner, &changed)
+    let error = ReviewGate::record_handoff_landing(owner, &changed)
         .expect_err("changed completion input must not reuse the receipt");
     assert!(error.to_string().contains("mutation_mismatch"), "{error}");
     fixture.assert_status("done");

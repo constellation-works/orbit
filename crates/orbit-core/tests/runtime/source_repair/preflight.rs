@@ -1,6 +1,7 @@
 //! Lifecycle refusal must precede durable source-repair admission.
 use super::*;
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_engine::RunLifecycle;
 
 const PLACEHOLDER: &str = "To be authored by executing agent at start time.";
 

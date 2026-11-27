@@ -13,6 +13,7 @@ use super::*;
 use orbit_core::runtime::task_pr_forge::{
     ForgePullRequest, GhTaskPrForge, PullRequestBlockers, TaskPrForge,
 };
+use orbit_engine::RunLifecycle;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 

@@ -4,7 +4,8 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_core::{ActorIdentity, OrbitRuntime, TaskStatus};
-use orbit_engine::{RuntimeHost, TaskActivityUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskActivityUpdate;
 use orbit_types::workflow::JobRunState;
 use serde_json::json;
 
@@ -26,7 +27,7 @@ fn archive_of_a_run_owned_task_requires_explicit_force() {
     .unwrap();
     let tasks = fixture.json(&["task", "list", "--json"]);
     let id = tasks[0]["id"].as_str().unwrap();
-    let run = RuntimeHost::insert_job_run(
+    let run = RunLifecycle::insert_job_run(
         &runtime,
         "archive-fixture",
         1,
@@ -97,7 +98,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
         .to_string();
     // The tool's proposal-approval route is a status write too, and a
     // submitted run owns its selection before it starts executing.
-    let pending = RuntimeHost::insert_job_run(
+    let pending = RunLifecycle::insert_job_run(
         &runtime,
         "local-run-fixture",
         1,
@@ -120,7 +121,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
         String::from_utf8_lossy(&refused.stderr)
     );
     assert_eq!(fixture.json(&["task", "show", &id, "--json"]), before);
-    RuntimeHost::finalize_job_run(
+    RunLifecycle::finalize_job_run(
         &runtime,
         &pending.run_id,
         JobRunState::Cancelled,
@@ -131,7 +132,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
     // An unowned task still follows ordinary lifecycle transitions.
     fixture.json(&["task", "update", &id, "--status", "backlog", "--json"]);
     fixture.json(&["task", "update", &id, "--status", "in-progress", "--json"]);
-    let run = RuntimeHost::insert_job_run(
+    let run = RunLifecycle::insert_job_run(
         &runtime,
         "local-run-fixture",
         1,
@@ -140,11 +141,11 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
         None,
     )
     .unwrap();
-    RuntimeHost::mark_job_run_running(&runtime, &run.run_id, Utc::now(), std::process::id())
+    RunLifecycle::mark_job_run_running(&runtime, &run.run_id, Utc::now(), std::process::id())
         .unwrap();
     // A newer run naming only a singular task_id must neither confer
     // ownership nor hide the older run whose task_ids names the task.
-    RuntimeHost::insert_job_run(
+    RunLifecycle::insert_job_run(
         &runtime,
         "local-run-fixture",
         1,
@@ -241,7 +242,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
         "the tool start path must preserve local run ownership: {}",
         String::from_utf8_lossy(&refused.stderr)
     );
-    RuntimeHost::finalize_job_run(
+    RunLifecycle::finalize_job_run(
         &runtime,
         &run.run_id,
         JobRunState::Success,
@@ -318,7 +319,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
             .iter()
             .all(|inspection| inspection.claim.task_id != trusted_id)
     );
-    let trusted_run = RuntimeHost::insert_job_run(
+    let trusted_run = RunLifecycle::insert_job_run(
         &runtime,
         "local-run-fixture",
         1,
@@ -335,7 +336,7 @@ fn status_changes_respect_local_run_ownership_and_explicit_force() {
         TaskStatus::Backlog
     );
     assert_eq!(
-        RuntimeHost::get_job_run(&runtime, &trusted_run.run_id)
+        RunLifecycle::get_job_run(&runtime, &trusted_run.run_id)
             .unwrap()
             .unwrap()
             .state,

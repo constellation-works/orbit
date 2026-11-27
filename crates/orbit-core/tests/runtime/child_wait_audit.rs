@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use orbit_core::runtime::JobRuns;
 use orbit_core::{FailureClass, OrbitRuntime};
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use orbit_types::telemetry::incident::classify;
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};

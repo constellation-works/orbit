@@ -138,7 +138,7 @@ pub use worktree::{
 };
 
 /// [ORB-26389] The engine-private operation that merges a pull request. A
-/// host answering [`crate::RuntimeHost::run_private_vcs_operation`] audits
+/// host answering [`crate::HostEnvironment::run_private_vcs_operation`] audits
 /// every request of it, so no Orbit-initiated merge leaves the trail.
 pub const PRIVATE_VCS_PR_MERGE: &str = operations::PR_MERGE;
 
@@ -150,7 +150,7 @@ pub const PR_MERGE_ATTRIBUTION_FIELD: &str = "attribution";
 
 /// Run one engine-private VCS/PR operation against the real `git` and `gh`,
 /// outside the public tool registry. A host answers
-/// [`crate::RuntimeHost::run_private_vcs_operation`] with it.
+/// [`crate::HostEnvironment::run_private_vcs_operation`] with it.
 pub fn run_private_operation(
     process_env: &orbit_common::Env,
     operation: &str,

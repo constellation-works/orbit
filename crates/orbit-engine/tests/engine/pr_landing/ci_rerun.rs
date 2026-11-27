@@ -10,6 +10,7 @@ mod rate_limit;
 mod unreadable_log;
 
 use super::*;
+use orbit_engine::{HostEnvironment, ReviewGate};
 use orbit_types::workflow::{CI_RERUN_RESERVED_EVENT, CiRerunPlan, CiRerunRoot};
 
 // Each case is refused under both the step-grouped and the raw
@@ -83,7 +84,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRetry<'_> {
         &self.data_root
     }
     fn pr_config(&self) -> orbit_engine::PrConfig {
-        RuntimeHost::pr_config(self.inner)
+        HostEnvironment::pr_config(self.inner)
     }
     fn repo_root(&self) -> Res<String> {
         Ok(self.inner.repo.to_string_lossy().into_owned())
@@ -127,7 +128,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRetry<'_> {
         plan: &CiRerunPlan,
         now_ms: u64,
     ) -> Res<orbit_types::workflow::CiRerunAdmission> {
-        RuntimeHost::admit_ci_rerun(self.inner, tasks, handoff, plan, now_ms)
+        ReviewGate::admit_ci_rerun(self.inner, tasks, handoff, plan, now_ms)
     }
     fn run_private_vcs_operation(&self, operation: &str, input: Value) -> Res<Value> {
         if operation == "pr.merge" {
@@ -142,7 +143,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRetry<'_> {
             .unwrap();
             return Ok(json!({"landed_commit":self.context.candidate.candidate.commit}));
         }
-        RuntimeHost::run_private_vcs_operation(self.inner, operation, input)
+        HostEnvironment::run_private_vcs_operation(self.inner, operation, input)
     }
 }
 

@@ -5,6 +5,7 @@
 //! derives one from evidence the automation would accept for the frozen
 //! batch, and from nothing else.
 
+use orbit_engine::RunLifecycle;
 use std::path::PathBuf;
 
 use orbit_core::application::task::TaskAddParams;
@@ -120,7 +121,7 @@ fn review_coverage_bound_to_the_batch_is_the_no_diff_evidence() {
             ..Default::default()
         })
         .unwrap();
-    let plain_run = RuntimeHost::insert_job_run(
+    let plain_run = RunLifecycle::insert_job_run(
         &runtime,
         "task-pr-pipeline",
         1,
@@ -129,7 +130,7 @@ fn review_coverage_bound_to_the_batch_is_the_no_diff_evidence() {
         None,
     )
     .unwrap();
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &runtime,
         &plain.id,
         TaskAutomationUpdate {

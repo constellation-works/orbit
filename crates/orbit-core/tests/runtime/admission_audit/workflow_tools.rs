@@ -1,7 +1,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::process::identity::{STABLE_TOKEN_PREFIX, current_pid_namespace};
-use orbit_engine::RuntimeHost;
+use orbit_engine::HostEnvironment;
 use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 

@@ -5,7 +5,8 @@
 //! that admits a cycle's ship also decides these actions and the separate
 //! `recover` right's `resume_delivery` action.
 
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 
 use super::*;
 

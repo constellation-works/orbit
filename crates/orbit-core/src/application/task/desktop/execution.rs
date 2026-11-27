@@ -8,7 +8,8 @@
 //! the same id in this machine's own store is a different run and proves
 //! nothing about it.
 use orbit_common::OrbitError;
-use orbit_engine::{PullRequestStatus, RuntimeHost};
+use orbit_engine::HostEnvironment;
+use orbit_engine::PullRequestStatus;
 use orbit_store::contract::{ClaimInspection, ClaimRun, ClaimSettlementKind, ExecutionClaimPhase};
 use orbit_types::{
     task::Task,

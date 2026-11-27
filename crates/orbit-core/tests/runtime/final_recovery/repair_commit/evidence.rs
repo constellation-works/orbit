@@ -1,6 +1,7 @@
 //! Evidence fixtures exercise the public host handoff while task tools stay closed.
 
 use super::*;
+use orbit_engine::{HostEnvironment, Recovery};
 
 pub(super) fn repair_evidence_output(fixture: &Fixture, step_id: &str) -> Value {
     let asset = load_activity_asset(
@@ -29,7 +30,7 @@ pub(super) fn repair_evidence_output(fixture: &Fixture, step_id: &str) -> Value 
         .to_string();
     for task in [&fixture.task_id, &other] {
         for tool in ["orbit.task.update", "orbit.task.artifact.put"] {
-            let error = RuntimeHost::run_tool_with_context(
+            let error = HostEnvironment::run_tool_with_context(
                 &fixture.runtime,
                 tool,
                 json!({"id": task, "model": "codex"}),
@@ -51,13 +52,7 @@ pub(super) fn repair_evidence_output(fixture: &Fixture, step_id: &str) -> Value 
     });
     let run = fixture.input["job_run_id"].as_str().unwrap();
     let persist = |task: &str, value: &Value| {
-        RuntimeHost::persist_final_recovery_evidence(
-            &fixture.runtime,
-            run,
-            task,
-            &fixture.repo,
-            value,
-        )
+        Recovery::persist_final_recovery_evidence(&fixture.runtime, run, task, &fixture.repo, value)
     };
     let error = persist(&other, &evidence).unwrap_err();
     assert!(

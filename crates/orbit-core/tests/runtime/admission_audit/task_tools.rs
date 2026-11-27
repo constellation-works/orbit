@@ -112,7 +112,8 @@ mod artifact_get {
     }
 }
 
-use orbit_engine::RuntimeHost;
+use orbit_engine::HostEnvironment;
+use orbit_engine::RunLifecycle;
 use orbit_types::task::TaskStatus;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::json;
@@ -505,7 +506,7 @@ fn delivery_coverage_write_refuses_outside_own_orbit_run_and_accepts_own_run() {
     );
     let attempt = seed_open_delivery_batch_attempt(&runtime, machine_id, &task.id);
 
-    let own_run = RuntimeHost::insert_job_run(
+    let own_run = RunLifecycle::insert_job_run(
         &runtime,
         "task_local_pipeline",
         1,
@@ -514,7 +515,7 @@ fn delivery_coverage_write_refuses_outside_own_orbit_run_and_accepts_own_run() {
         None,
     )
     .expect("insert own run");
-    let other_run = RuntimeHost::insert_job_run(
+    let other_run = RunLifecycle::insert_job_run(
         &runtime,
         "task_local_pipeline",
         1,
@@ -523,7 +524,7 @@ fn delivery_coverage_write_refuses_outside_own_orbit_run_and_accepts_own_run() {
         None,
     )
     .expect("insert other run");
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &runtime,
         &task.id,
         TaskAutomationUpdate {

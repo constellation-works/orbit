@@ -8,7 +8,7 @@ use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_core::application::job::{DrainWindowExtensionOutcome, DrainWorkerLimitOutcome};
 use orbit_core::runtime::JobRuns;
 use orbit_core::{DrainWindowExtensionRequest, DrainWorkerLimitRequest, OrbitError, OrbitRuntime};
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_store::contract::AuditEventFilter;
 use orbit_tools::ToolContext;
 use orbit_types::telemetry::AuditEventStatus;

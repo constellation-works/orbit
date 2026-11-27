@@ -59,8 +59,8 @@ use orbit_engine::activity_job::{
     AssetLoadError, CatalogError, V2ActivityCatalog, load_activity_asset, load_job_asset,
 };
 use orbit_engine::{
-    DispatchError, ResolvedCliExecutor, RuntimeHost, V2AuditWriter, V2DispatchInput,
-    dispatch_v2_activity, execute_job_with_resume, resolve_job_catalog_refs_for_execution,
+    DispatchError, ResolvedCliExecutor, V2AuditWriter, V2DispatchInput, dispatch_v2_activity,
+    execute_job_with_resume, resolve_job_catalog_refs_for_execution,
 };
 use orbit_store::{Store, V2AuditEventFilter};
 use orbit_types::workflow::activity_job::{

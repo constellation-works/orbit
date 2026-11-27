@@ -14,6 +14,7 @@
 
 use super::claimed_review::{REVIEW_CREW, ReviewedLeaf};
 use super::*;
+use orbit_engine::Dispatch;
 
 use orbit_types::task::HostOs;
 use orbit_types::workflow::{

@@ -3,6 +3,7 @@
 //! the attempt; `done` keeps the ordinary completion gates.
 
 use super::*;
+use orbit_engine::HostEnvironment;
 use orbit_types::task::TaskStatus;
 
 fn claim_id(pair: &Pair, leaf: &str) -> String {

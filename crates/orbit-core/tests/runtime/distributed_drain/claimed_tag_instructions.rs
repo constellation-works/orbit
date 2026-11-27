@@ -3,6 +3,7 @@
 //! `.orbit/` configuration is untracked and drifts, so the replica's mapping
 //! could otherwise add or drop instructions the owner's runs would not.
 
+use orbit_engine::Dispatch;
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::{ShipMode, TagInstructionRole, TagInstructionSource};
 
@@ -14,7 +15,7 @@ const OWNER: &str = "[workflow.tag_instructions.no-diff-expected]\nimplement = f
 const REPLICA: &str = "[workflow.tag_instructions.no-diff-expected]\nimplement = \"missing.md\"\n";
 
 fn implement_tags(host: &OrbitRuntime, task: &str) -> Vec<String> {
-    RuntimeHost::tag_instructions_for_activity(
+    Dispatch::tag_instructions_for_activity(
         host,
         "jrun-tag-instructions",
         "agent_implement",
@@ -203,7 +204,7 @@ fn a_pull_captures_the_shipping_modes_authoritative_tag_instructions() {
                 Arc::new(CaptureOwner(pair.wire.owner.clone())),
             )
             .unwrap();
-        let received = RuntimeHost::tag_instructions_for_activity(
+        let received = Dispatch::tag_instructions_for_activity(
             &bound,
             &leaf,
             "agent_implement",

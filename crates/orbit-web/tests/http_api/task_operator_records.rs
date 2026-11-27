@@ -1,6 +1,6 @@
 use orbit_core::TaskStatus;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_engine::RuntimeHost;
+use orbit_engine::HostEnvironment;
 use orbit_types::workflow::OwedCriterion;
 use serde_json::json;
 
@@ -92,7 +92,7 @@ fn owed_task(fixture: &Fixture) -> String {
             },
         }),
     );
-    RuntimeHost::admit_owed_criteria(
+    HostEnvironment::admit_owed_criteria(
         &fixture.runtime,
         &id,
         "run-fixture",

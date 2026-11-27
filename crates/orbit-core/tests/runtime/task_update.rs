@@ -41,7 +41,7 @@ fn activity_updates_refuse_replica_writes_and_preserve_owner_updates() {
     };
     for result in [
         replica.update_task_from_activity(&task.id, update.clone()),
-        orbit_engine::RuntimeHost::update_task_from_activity(&replica, &task.id, update.clone()),
+        orbit_engine::RunLifecycle::update_task_from_activity(&replica, &task.id, update.clone()),
     ] {
         let error = result.expect_err("activity updates must refuse the replica");
         let OrbitError::CapabilityRefused(reason) = &error else {
@@ -58,7 +58,7 @@ fn activity_updates_refuse_replica_writes_and_preserve_owner_updates() {
     assert_eq!(persisted.get_task_history(&task.id).unwrap(), history);
     assert_eq!(persisted.get_task_comments(&task.id).unwrap(), comments);
 
-    orbit_engine::RuntimeHost::update_task_from_activity(&owner, &task.id, update)
+    orbit_engine::RunLifecycle::update_task_from_activity(&owner, &task.id, update)
         .expect("the owner host can apply the same activity update");
     let persisted = OrbitRuntime::from_roots(&global, &workspace).unwrap();
     let updated = persisted.get_task(&task.id).unwrap();
@@ -266,7 +266,7 @@ fn automation_persists_returned_summary_crew_and_run_history_without_status_chan
             ..Default::default()
         })
         .unwrap();
-    orbit_engine::RuntimeHost::apply_task_automation_update(
+    orbit_engine::RunLifecycle::apply_task_automation_update(
         &runtime,
         &task.id,
         orbit_engine::TaskAutomationUpdate {

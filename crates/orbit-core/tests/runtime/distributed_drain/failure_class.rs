@@ -3,6 +3,8 @@
 //! release evidence; transient failures still release within a per-task budget.
 
 use orbit_core::application::job::JobRunCancelOutcome;
+use orbit_engine::Dispatch;
+use orbit_engine::HostEnvironment;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use orbit_core::application::distributed::{
@@ -2069,7 +2071,7 @@ fn a_lost_owner_route_during_envelope_loading_fails_as_owner_route() {
     let (pair, drain, leaf, task) = claimed_sol();
     let bound = bound_to(&pair.follower, &pair, &leaf, Arc::new(Unreachable));
 
-    let error = RuntimeHost::task_context_for_agent_input(
+    let error = Dispatch::task_context_for_agent_input(
         &bound,
         &leaf,
         "implement_one",
@@ -2103,7 +2105,7 @@ fn a_lost_owner_route_during_envelope_loading_fails_as_owner_route() {
     );
 
     let broken = bound_to(&pair.follower, &pair, &leaf, Arc::new(Broken));
-    let untyped = RuntimeHost::task_context_for_agent_input(
+    let untyped = Dispatch::task_context_for_agent_input(
         &broken,
         &leaf,
         "implement_one",

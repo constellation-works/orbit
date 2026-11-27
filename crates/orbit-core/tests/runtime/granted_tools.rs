@@ -2,7 +2,7 @@
 
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_engine::RuntimeHost;
+use orbit_engine::Recovery;
 use orbit_types::tool::StoredTool;
 
 fn granted_tool_writes_reject_unusable_tools_atomically() {

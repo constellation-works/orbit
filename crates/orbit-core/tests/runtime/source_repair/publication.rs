@@ -1,7 +1,8 @@
 //! Publication through the real private provider adapter and public runtime.
 use super::fixture::{Fixture, git};
 use orbit_common::security::release::sha256_hex;
-use orbit_engine::{RuntimeHost, execute_deterministic_action};
+use orbit_engine::execute_deterministic_action;
+use orbit_engine::{HostEnvironment, ReviewGate, RunLifecycle};
 use orbit_types::{
     task::{
         PublicationProofValue, PublicationSettlingDecision, PublicationSettlingObservation,
@@ -1126,7 +1127,7 @@ fn publication_history_refuses_unreadable_reservations_without_note_fallback() {
 fn repair_run_footprint_edits_refuse_and_host_widening_publishes() {
     let p = Publication::with_worker(|f, run, checkout| {
         let as_run = |input: Value| {
-            RuntimeHost::run_tool_with_context(
+            HostEnvironment::run_tool_with_context(
                 &f.runtime,
                 "orbit.task.update",
                 input,

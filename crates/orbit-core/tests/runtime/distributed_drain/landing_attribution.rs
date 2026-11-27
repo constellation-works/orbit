@@ -2,6 +2,7 @@
 //! delivered [ORB-13894].
 
 use super::*;
+use orbit_engine::{ReviewGate, RunLifecycle};
 
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
@@ -70,7 +71,7 @@ fn complete_landing(pair: &Pair) -> String {
             },
         )
         .unwrap();
-    RuntimeHost::record_handoff_landing(owner, &HandoffLandingUpdate {
+    ReviewGate::record_handoff_landing(owner, &HandoffLandingUpdate {
             handoff_id,
             step: HandoffLandingStep::Complete,
             observed: Some(delivered.candidate),

@@ -1,6 +1,7 @@
 use super::support::{Fixture, error_code, isolated};
 use orbit_core::application::task::TaskAddParams;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{
     DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, TaskStatus,
 };

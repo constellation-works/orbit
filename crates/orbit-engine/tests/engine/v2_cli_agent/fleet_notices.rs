@@ -3,6 +3,7 @@
 //! guidance whenever the dispatch may post — including on an empty board
 //! or with brief delivery off, where the host answers no brief.
 
+use orbit_engine::{Dispatch, HostEnvironment, Recovery};
 use orbit_types::workflow::FleetNoticeBrief;
 use orbit_types::workflow::activity_job::V2AuditEventKind;
 use serde_json::json;
@@ -19,7 +20,7 @@ struct NoticeHost {
 
 impl orbit_engine::test_support::NullRuntimeHost for NoticeHost {
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        RuntimeHost::agent_subprocess_environment(&self.cli, required_env_vars)
+        HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
     }
 
     fn run_deterministic(
@@ -29,11 +30,11 @@ impl orbit_engine::test_support::NullRuntimeHost for NoticeHost {
         input: &Value,
         tool_context: orbit_tools::ToolContext,
     ) -> Result<Value, DispatchError> {
-        RuntimeHost::run_deterministic(&self.cli, action, config, input, tool_context)
+        Dispatch::run_deterministic(&self.cli, action, config, input, tool_context)
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        RuntimeHost::resolve_cli_executor(&self.cli, provider)
+        Dispatch::resolve_cli_executor(&self.cli, provider)
     }
 
     fn tool_context_for_activity(
@@ -43,7 +44,7 @@ impl orbit_engine::test_support::NullRuntimeHost for NoticeHost {
         fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
         proc_allowed_programs: Option<&[String]>,
     ) -> orbit_tools::ToolContext {
-        RuntimeHost::tool_context_for_activity(
+        Recovery::tool_context_for_activity(
             &self.cli,
             run_id,
             fs_profile,

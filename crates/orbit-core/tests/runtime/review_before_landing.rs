@@ -9,7 +9,8 @@ use chrono::Utc;
 use orbit_core::OrbitError;
 use orbit_core::TaskStatus;
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
+use orbit_engine::{Dispatch, Recovery, RunLifecycle};
+use orbit_engine::{TaskAutomationUpdate, execute_deterministic_action};
 use orbit_types::task::{ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM};
 use orbit_types::workflow::{JobRunState, REVIEW_CONTRACT_VERSION};
 use serde_json::{Value, json};
@@ -148,9 +149,9 @@ fn a_before_landing_review_that_does_not_approve_keeps_the_pr_open_in_review() {
     );
 
     let run_id = fixture.input["job_run_id"].as_str().unwrap();
-    RuntimeHost::mark_job_run_running(&fixture.runtime, run_id, Utc::now(), std::process::id())
+    RunLifecycle::mark_job_run_running(&fixture.runtime, run_id, Utc::now(), std::process::id())
         .unwrap();
-    RuntimeHost::finalize_job_run(
+    RunLifecycle::finalize_job_run(
         &fixture.runtime,
         run_id,
         JobRunState::Failed,

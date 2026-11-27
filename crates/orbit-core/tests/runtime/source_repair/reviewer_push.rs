@@ -12,6 +12,7 @@ use super::handoff_requeue::{
 };
 use super::published_owner::save_run;
 use super::*;
+use orbit_engine::RunLifecycle;
 use std::path::Path;
 
 const SETTLE: &str = "landing_review_gate_settle";

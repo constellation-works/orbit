@@ -12,7 +12,8 @@ use chrono::Utc;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
-use orbit_engine::{DispatchError, RuntimeHost};
+use orbit_engine::Dispatch;
+use orbit_engine::DispatchError;
 use orbit_store::contract::V2AuditEventInsertParams;
 use orbit_types::workflow::{
     MAX_TAG_INSTRUCTION_FILE_BYTES, PipelineState, TagInstruction, TagInstructionSource,
@@ -107,7 +108,7 @@ impl Fixture {
         activity: &str,
         task: &str,
     ) -> Result<Vec<TagInstruction>, DispatchError> {
-        RuntimeHost::tag_instructions_for_activity(
+        Dispatch::tag_instructions_for_activity(
             &self.runtime,
             run,
             activity,

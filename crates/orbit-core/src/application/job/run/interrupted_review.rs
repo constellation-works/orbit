@@ -16,10 +16,11 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_engine::review_gate::{
     INTERRUPTED_REVIEW_KEY, carry_interrupted_review, preserve_interrupted_review, review_in_flight,
 };
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::TaskComment;
 use orbit_types::workflow::{self, JobRun};
 use serde_json::{Value, json};
@@ -128,7 +129,7 @@ impl OrbitRuntime {
             } else {
                 "in this repository only"
             };
-            RuntimeHost::apply_task_automation_update(
+            RunLifecycle::apply_task_automation_update(
                 self,
                 task_id,
                 TaskAutomationUpdate {

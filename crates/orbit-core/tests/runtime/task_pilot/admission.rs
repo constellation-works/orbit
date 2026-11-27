@@ -5,7 +5,7 @@ use orbit_core::application::task::{
     DecisionSubmitCaller, DecisionSubmitParams, TaskAddParams, TaskUpdateParams,
 };
 use orbit_core::{Task, TaskComplexity, TaskPriority, TaskStatus};
-use orbit_engine::RuntimeHost;
+use orbit_engine::RunLifecycle;
 use orbit_store::contract::TaskHistoryUpdateParams;
 use orbit_types::task::{
     DecisionGate, DecisionRequest, DecisionRequestState, PilotAdmissionVerdict, TaskArtifact,
@@ -134,14 +134,14 @@ fn verdicts(workspace: &Workspace, task: &Task) -> Vec<PilotAdmissionVerdict> {
 }
 fn assert_workflow_admitted(workspace: &Workspace, task: &Task) {
     assert_eq!(
-        RuntimeHost::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
+        RunLifecycle::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
             .unwrap()
             .status,
         TaskStatus::InProgress
     );
 }
 fn workflow_refusal(workspace: &Workspace, task: &Task) -> String {
-    RuntimeHost::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
+    RunLifecycle::admit_task_for_workflow(&workspace.runtime, &task.id, "worktree_setup")
         .unwrap_err()
         .to_string()
 }

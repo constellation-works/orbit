@@ -8,6 +8,7 @@
 //! is recorded with its reason.
 
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_engine::Dispatch;
 
 use super::*;
 

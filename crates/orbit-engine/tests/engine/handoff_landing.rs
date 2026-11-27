@@ -27,6 +27,7 @@ use orbit_engine::{
     HandoffLandingUpdate, PrConfig, RuntimeHost, TaskAutomationUpdate, dispatch_error_to_orbit,
     execute_deterministic_action, execute_job_with_resume, observe_candidate,
 };
+use orbit_engine::{ReviewGate, RunLifecycle};
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::automation::DirectLandingRequest;
 use orbit_types::workflow::handoff::{
@@ -453,7 +454,7 @@ impl NullRuntimeHost for FakeForge {
         _: &str,
         req: &PrBaseUpdateReservation,
     ) -> Result<PrBaseUpdateAdmission, OrbitError> {
-        RuntimeHost::admit_pr_base_update(self, &[TASK_ID.into()], req)
+        ReviewGate::admit_pr_base_update(self, &[TASK_ID.into()], req)
     }
     fn get_task_history(&self, _: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
         Ok(self.history.lock().unwrap().clone())
@@ -1161,7 +1162,7 @@ fn a_mismatched_merged_pr_resolves_the_intent_before_stopping_later_attempts() {
         for u in &updates {
             assert!(!u.evidence.contains("futureField") && !u.evidence.contains(&secret));
         }
-        let ctx_now = RuntimeHost::handoff_landing_context(&host, "handoff-1").unwrap();
+        let ctx_now = ReviewGate::handoff_landing_context(&host, "handoff-1").unwrap();
         assert!(ctx_now.unresolved_merge_intent.is_none());
 
         let retry = land(&host).expect_err("a later attempt sees the settled Stop");
@@ -1729,7 +1730,7 @@ fn passed(run_id: u64, job_id: u64) -> FakeJob {
 fn handoff_fake_refuses_unscoped_automation_updates() {
     let (_sb, forge, _, _) = forge_fixture(true, false);
     let u = TaskAutomationUpdate::default();
-    let err = RuntimeHost::apply_task_automation_update(&forge, TASK_ID, u).expect_err("fenced");
+    let err = RunLifecycle::apply_task_automation_update(&forge, TASK_ID, u).expect_err("fenced");
     assert_contains(
         &err.to_string(),
         &["active execution claim requires a claim-scoped mutation"],

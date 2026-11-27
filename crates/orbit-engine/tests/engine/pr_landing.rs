@@ -36,11 +36,12 @@ use orbit_engine::{
     BaseSyncMode, BaselineHoldStatus, ClaimExecutionContext, ClaimedKnownRed, DispatchError,
     FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied, KnownRedUnconfirmed, PrAutoFixAdmission, PrAutoFixRequest,
-    RebaseRecoveryAttemptScope, ReviewLandingRequest, ReviewReleaseRequest, RuntimeHost,
-    TaskActivityUpdate, TaskAutomationUpdate, baseline_hold_status, execute_deterministic_action,
+    RebaseRecoveryAttemptScope, ReviewLandingRequest, ReviewReleaseRequest, TaskActivityUpdate,
+    TaskAutomationUpdate, baseline_hold_status, execute_deterministic_action,
     execute_job_with_resume, resolve_job_catalog_refs_for_execution, review_gate,
     run_private_vcs_operation, verify_claimed_known_red,
 };
+use orbit_engine::{HostEnvironment, Recovery, ReviewGate, RunLifecycle};
 use orbit_exec::{LoginShell, ValidationEnvPolicy, ValidationEnvironment};
 use orbit_types::task::{
     ContextWideningStep, ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskArtifact,
@@ -1621,7 +1622,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             .count() as u32;
         let ended = |attempt: &PrAutoFixAttempt| {
             matches!(
-                RuntimeHost::get_job_run(self, &attempt.run_id),
+                RunLifecycle::get_job_run(self, &attempt.run_id),
                 Ok(Some(run)) if run.state.is_terminal()
             )
         };
@@ -2119,7 +2120,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             ship_mode: locked(&self.ship_mode).clone(),
             base_branch: BASE.to_string(),
             landing_branch: BASE.to_string(),
-            required_commands: RuntimeHost::required_validation_commands(self),
+            required_commands: HostEnvironment::required_validation_commands(self),
         })
     }
     fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Res<()> {
@@ -2133,7 +2134,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         Ok(())
     }
     fn record_flaky_validation(&self, task_id: &str, record: &FlakyValidation) -> Res<()> {
-        RuntimeHost::apply_task_automation_update(
+        RunLifecycle::apply_task_automation_update(
             self,
             task_id,
             TaskAutomationUpdate {
@@ -2159,7 +2160,10 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
     }
     fn validation_subprocess_environment(&self) -> ValidationEnvironment {
         locked(&self.validation_env).clone().unwrap_or_else(|| {
-            ValidationEnvironment::launcher(RuntimeHost::agent_subprocess_environment(self, &[]))
+            ValidationEnvironment::launcher(HostEnvironment::agent_subprocess_environment(
+                self,
+                &[],
+            ))
         })
     }
     /// Like the task store, accept evidence only from the run owning the task.
@@ -2170,7 +2174,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         path: &str,
         content: Vec<u8>,
     ) -> Res<()> {
-        if RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
+        if RunLifecycle::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
             return Err(OrbitError::PolicyDenied(format!(
                 "run {run_id} does not own {task_id}"
             )));
@@ -4978,7 +4982,7 @@ fn claim_replay_pinned(host: &DeliveryHost, input: &mut Value, gate: &Gate, case
     pending
 }
 fn attach_deferred(host: &DeliveryHost, record: &Value) {
-    RuntimeHost::attach_task_validation_log(
+    ReviewGate::attach_task_validation_log(
         host,
         TASK_ID,
         RUN_ID,

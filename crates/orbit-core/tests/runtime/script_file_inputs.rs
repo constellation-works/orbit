@@ -8,7 +8,8 @@
 use std::path::{Path, PathBuf};
 
 use orbit_core::OrbitRuntime;
-use orbit_engine::{RuntimeHost, ScriptStepEnd, ScriptStepRequest, ScriptStepRun};
+use orbit_engine::Dispatch;
+use orbit_engine::{ScriptStepEnd, ScriptStepRequest, ScriptStepRun};
 use orbit_types::workflow::activity_job::{
     ScriptExecutionRecord, script_refusal, script_sha256_hex,
 };
@@ -158,7 +159,7 @@ fn declared_inputs_are_read_only_at_in_and_recorded_with_their_digests() {
         "brief": "docs/brief.txt",
         "library": fixture.library.display().to_string(),
     });
-    let run = RuntimeHost::run_script_step(&fixture.runtime, &request(input.clone()));
+    let run = Dispatch::run_script_step(&fixture.runtime, &request(input.clone()));
     let ran = match run {
         ScriptStepRun::Refused {
             code,
@@ -211,7 +212,7 @@ fn declared_inputs_are_read_only_at_in_and_recorded_with_their_digests() {
     // A nested change moves the directory input's recorded digest.
     let first = ran.record.input_files[1].sha256.clone();
     std::fs::write(fixture.repo.join("site/dist/sub/a.txt"), "b\n").unwrap();
-    let ScriptStepRun::Ran(again) = RuntimeHost::run_script_step(&fixture.runtime, &request(input))
+    let ScriptStepRun::Ran(again) = Dispatch::run_script_step(&fixture.runtime, &request(input))
     else {
         panic!("second attempt refused");
     };
@@ -239,7 +240,7 @@ fn a_missing_or_out_of_bounds_input_refuses_before_spawn_naming_it() {
         (".orbit/secret", "overlaps protected state"),
         (".", "overlaps protected state"),
     ] {
-        let run = RuntimeHost::run_script_step(
+        let run = Dispatch::run_script_step(
             &fixture.runtime,
             &request(json!({"brief": brief, "library": library})),
         );
@@ -277,7 +278,7 @@ fn an_input_from_an_ungranted_root_refuses_naming_it() {
     }
     let fixture = fixture("      - {from: \"{{ input.path }}\", as: elsewhere}\n");
     let elsewhere = fixture._root.path().join("home");
-    let run = RuntimeHost::run_script_step(
+    let run = Dispatch::run_script_step(
         &fixture.runtime,
         &request(json!({"path": elsewhere.display().to_string()})),
     );

@@ -1,6 +1,7 @@
 //! Owner-side placement against the executor census, and frozen-batch
 //! ordering, through the pull tool.
 
+use orbit_engine::Dispatch;
 use orbit_types::task::HostOs;
 
 use super::*;

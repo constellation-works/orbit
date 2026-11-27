@@ -10,7 +10,7 @@
 use super::run_support::{insert_pending_run, test_runtime};
 use chrono::{DateTime, Utc};
 use orbit_core::OrbitRuntime;
-use orbit_engine::RuntimeHost;
+use orbit_engine::RunLifecycle;
 use orbit_types::workflow::{JobRun, JobRunState};
 
 use chrono::Duration;

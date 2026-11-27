@@ -1,5 +1,6 @@
 //! A shared boundary holder deterministically outlasts pilot admission.
 
+use orbit_engine::Dispatch;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::mpsc;
 use std::time::Duration;

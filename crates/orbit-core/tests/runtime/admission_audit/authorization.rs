@@ -8,7 +8,7 @@
 //! process-signal precedence rules themselves are exercised as pure data in
 //! `orbit_common::governance::authorization`.
 
-use orbit_engine::RuntimeHost;
+use orbit_engine::HostEnvironment;
 
 use std::collections::BTreeSet;
 

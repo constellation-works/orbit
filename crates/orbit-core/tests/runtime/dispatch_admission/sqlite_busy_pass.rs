@@ -9,7 +9,8 @@
 
 use std::time::Duration;
 
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
+use orbit_engine::HostEnvironment;
 use orbit_tools::ToolContext;
 use serde_json::json;
 

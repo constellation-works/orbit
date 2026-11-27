@@ -11,7 +11,8 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{
     LIGHT_DELIVERY_TAGS, LightDeliveryDecision, LightDeliveryReplayKey,
     RecordedLightDeliveryDecision, Task, TaskHistoryEntry,

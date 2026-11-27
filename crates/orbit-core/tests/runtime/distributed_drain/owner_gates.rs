@@ -10,6 +10,7 @@
 //! the pipeline's final validation runs, so a managed implementer leaves only
 //! those to it [ORB-15963].
 
+use orbit_engine::{Dispatch, HostEnvironment};
 use orbit_types::workflow::{
     BUBBLEWRAP_NAMESPACE_PROBE, BUBBLEWRAP_NAMESPACE_REFUSAL, DeferredSandboxValidation,
     HostValidationGates, NamespaceProbe, ValidationGateSource, ValidationGates, deferral_handoff,
@@ -53,7 +54,7 @@ fn replica_gates() -> ValidationGates {
 /// validation, with or without the pipeline's `final_validation` input.
 fn final_validation_commands(host: &OrbitRuntime, task: &str, final_validation: bool) -> Value {
     let input = json!({"task_id": task, "final_validation": final_validation});
-    RuntimeHost::task_context_for_agent_input(host, "jrun-envelope", "implement", &input)
+    Dispatch::task_context_for_agent_input(host, "jrun-envelope", "implement", &input)
         .expect("the envelope builds")
         .expect("a task envelope")["final_validation_commands"]
         .clone()
@@ -104,15 +105,15 @@ fn a_claimed_leaf_applies_the_owners_captured_gates_over_its_own() {
     assert!(receipt.request.ship.review.is_none(), "review is off");
     assert_eq!(receipt.gates, Some(owner_gates()));
 
-    let gates = RuntimeHost::validation_gates(&leaf.bound);
+    let gates = HostEnvironment::validation_gates(&leaf.bound);
     assert_eq!(gates.source, ValidationGateSource::OwnerContract);
     assert_eq!(gates.gates, owner_gates());
     assert_eq!(
-        RuntimeHost::required_validation_commands(&leaf.bound),
+        HostEnvironment::required_validation_commands(&leaf.bound),
         vec!["make owner-check".to_string()]
     );
     assert_eq!(
-        RuntimeHost::review_baseline_commands(&leaf.bound),
+        HostEnvironment::review_baseline_commands(&leaf.bound),
         vec!["make owner-affected".to_string()]
     );
     let base = leaf.base.commit.as_str();
@@ -121,7 +122,7 @@ fn a_claimed_leaf_applies_the_owners_captured_gates_over_its_own() {
     assert_eq!(record.command, "make owner-affected");
     // The owner itself still validates its own runs against its own config.
     assert_eq!(
-        RuntimeHost::validation_gates(&leaf.pair.wire.owner).source,
+        HostEnvironment::validation_gates(&leaf.pair.wire.owner).source,
         ValidationGateSource::LocalConfig
     );
 
@@ -166,7 +167,7 @@ fn a_claim_without_captured_gates_falls_back_to_the_replica_config() {
     });
     assert_eq!(leaf.pair.admission(&leaf.leaf).receipt.unwrap().gates, None);
 
-    let gates = RuntimeHost::validation_gates(&leaf.bound);
+    let gates = HostEnvironment::validation_gates(&leaf.bound);
     assert_eq!(gates.source, ValidationGateSource::ReplicaConfig);
     assert_eq!(gates.gates, replica_gates());
     assert!(

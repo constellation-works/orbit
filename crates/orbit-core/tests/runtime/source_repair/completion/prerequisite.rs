@@ -1,5 +1,6 @@
 //! A later authenticated prerequisite read fails after a successful PR-status read.
 use super::*;
+use orbit_engine::RunLifecycle;
 
 /// A BLOCKED pull request whose only failure is an optional check sends
 /// enabled auto-fix completion to the infrastructure prerequisite reads. The

@@ -2,6 +2,7 @@
 
 use super::*;
 use orbit_core::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
+use orbit_engine::ReviewGate;
 use orbit_store::contract::FrictionListFilter;
 use orbit_types::task::TaskDecision;
 use orbit_types::workflow::{FLAKY_VALIDATION_EVENT, FlakyValidation};
@@ -92,7 +93,7 @@ fn claimed_flaky_evidence_records_history_and_reuses_local_signature() {
     // The local validator records this signature first. Accepted remote evidence
     // must reuse it, including a retried acceptance after a lost reply.
     let local_task = backlog_task(owner, &pair.owner_repo, "src/local.rs", None);
-    RuntimeHost::record_flaky_validation(owner, &local_task, &flaky).unwrap();
+    ReviewGate::record_flaky_validation(owner, &local_task, &flaky).unwrap();
     for _ in 0..2 {
         owner
             .accept_task_handoff(

@@ -9,6 +9,7 @@ pub(super) mod prerequisite;
 use super::*;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{FinalRecoveryAdmissionRequest, V2AuditWriter, execute_job_with_resume};
+use orbit_engine::{Recovery, ReviewGate, RunLifecycle};
 
 fn fixture() -> (Fixture, PathBuf) {
     fixture_with_auto_fix(true)
@@ -1060,7 +1061,7 @@ pub(super) fn concurrent_and_lost_admission_keep_one_completion_budget() {
     };
     for _ in 0..2 {
         assert!(matches!(
-            RuntimeHost::apply_final_recovery(&f.runtime, &f.source.run_id, &application).unwrap(),
+            Recovery::apply_final_recovery(&f.runtime, &f.source.run_id, &application).unwrap(),
             orbit_engine::FinalRecoveryApplied::Resume
         ));
     }

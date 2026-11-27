@@ -614,7 +614,8 @@ fn a_purpose_assignment_redraws_within_its_pool_when_its_provider_is_limited() {
 
 /// A single live runtime and drain observe workspace and global policy edits.
 fn live_provider_policy_reloads_and_keeps_the_last_good_config() {
-    use orbit_engine::RuntimeHost;
+    use orbit_engine::Dispatch;
+
     use orbit_tools::ToolContext;
     use orbit_types::workflow::PipelineState;
 

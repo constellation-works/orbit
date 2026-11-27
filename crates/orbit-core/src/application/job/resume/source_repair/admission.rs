@@ -4,7 +4,8 @@ use chrono::Utc;
 use orbit_common::protocol::tool_input::required_string;
 use orbit_common::security::release::sha256_hex;
 use orbit_common::{OrbitError, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::TaskAutomationUpdate;
+use orbit_engine::{HostEnvironment, RunLifecycle};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{

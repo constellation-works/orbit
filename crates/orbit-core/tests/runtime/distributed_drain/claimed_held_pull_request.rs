@@ -15,6 +15,7 @@ use super::claimed_owed_evidence::{
 };
 use super::claimed_review::{REVIEW_CREW, ReviewedLeaf};
 use super::*;
+use orbit_engine::ReviewGate;
 
 use orbit_types::task::HostOs;
 use orbit_types::workflow::{

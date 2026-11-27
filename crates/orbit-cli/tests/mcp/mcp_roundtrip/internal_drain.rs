@@ -565,7 +565,8 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
     // Bind this isolated test process as the agent provider. Its descendants
     // retain the immutable binding even when their activity env is removed,
     // so the agent cannot launch the host channel itself.
-    use orbit_engine::RuntimeHost;
+    use orbit_engine::RunLifecycle;
+
     let runtime = orbit_core::OrbitRuntime::from_roots(
         &owner.home.join(".orbit"),
         &owner.work.join(".orbit"),
@@ -582,7 +583,7 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
         Arc::new(follower),
     )
     .unwrap();
-    RuntimeHost::register_worker_process(&runtime, std::process::id()).unwrap();
+    RunLifecycle::register_worker_process(&runtime, std::process::id()).unwrap();
     let denied = McpWorkspace::orbit_command(&owner.work, &owner.home)
         .args([
             "mcp",

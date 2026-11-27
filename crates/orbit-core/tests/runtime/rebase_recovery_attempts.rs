@@ -10,7 +10,8 @@ use std::sync::Arc;
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::JobRuns;
-use orbit_engine::{RebaseRecoveryAttemptScope, RuntimeHost};
+use orbit_engine::RebaseRecoveryAttemptScope;
+use orbit_engine::Recovery;
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -188,9 +189,8 @@ fn a_resumed_run_certifies_its_second_recovery_of_one_step_scenario() {
             .unwrap()
     );
     // A recovery admitted before the restart cannot certify after a newer one.
-    let error =
-        RuntimeHost::checkpoint_rebase_recovery(&restarted, &fixture.run, STEP, &recovery_a)
-            .expect_err("a superseded attempt never certifies");
+    let error = Recovery::checkpoint_rebase_recovery(&restarted, &fixture.run, STEP, &recovery_a)
+        .expect_err("a superseded attempt never certifies");
     assert!(error.to_string().contains("superseded"), "{error}");
     assert_eq!(fixture.stored(), Some(recovery_b));
 }

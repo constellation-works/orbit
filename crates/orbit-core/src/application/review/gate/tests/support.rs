@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use orbit_engine::RuntimeHost;
+use orbit_engine::RunLifecycle;
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
@@ -61,7 +61,7 @@ impl Gated {
 
     /// Record `run_id` as running since `started_at`.
     pub(super) fn start(&self, run_id: &str, started_at: chrono::DateTime<Utc>) {
-        RuntimeHost::mark_job_run_running(
+        RunLifecycle::mark_job_run_running(
             &self.fixture.runtime,
             run_id,
             started_at,
@@ -163,7 +163,7 @@ fn admitted_run(runtime: &OrbitRuntime, job: &str, task_ids: &[String]) -> JobRu
     runtime
         .install_review_admission(job, &mut input, None, false)
         .expect("capture admission");
-    let run = RuntimeHost::insert_job_run(runtime, job, 1, Utc::now(), Some(input), None)
+    let run = RunLifecycle::insert_job_run(runtime, job, 1, Utc::now(), Some(input), None)
         .expect("insert run");
     bind_tasks(runtime, task_ids, &run.run_id);
     run

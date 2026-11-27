@@ -4,7 +4,7 @@
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use orbit_core::OrbitRuntime;
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 
 /// Git's interrupted writes leave a temporary name beside the final one in

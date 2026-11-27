@@ -69,7 +69,8 @@ use orbit_core::{
     CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, Task, TaskComplexity, TaskPriority,
     TaskStatus, TaskType,
 };
-use orbit_engine::RuntimeHost;
+use orbit_engine::HostEnvironment;
+use orbit_engine::{Dispatch, RunLifecycle};
 use orbit_tools::ToolContext;
 use orbit_types::task::{CONTEXT_FILES_WIDENED_EVENT, ContextWideningStep, TaskDecision};
 use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};

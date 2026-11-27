@@ -1,6 +1,7 @@
 //! Owner clean-base delivery must use verified artifacts, never claim-only selectors.
 
 use super::*;
+use orbit_engine::RunLifecycle;
 
 /// ORB-23194: drive the real implement boundary and commit together. Selectors
 /// cannot bypass owner validation, and artifact-backed no-op delivery still ends

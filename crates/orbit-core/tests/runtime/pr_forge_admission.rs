@@ -11,7 +11,7 @@ use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{
     CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, TaskComplexity, TaskStatus,
 };
-use orbit_engine::RuntimeHost;
+use orbit_engine::{Dispatch, RunLifecycle};
 use orbit_tools::ToolContext;
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};

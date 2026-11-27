@@ -19,6 +19,7 @@ mod support;
 
 use super::*;
 use orbit_core::application::job::TaskAutoFixError;
+use orbit_engine::Dispatch;
 use orbit_types::workflow::{DeliveryRefusal, PR_AUTO_FIX_ADMITTED_EVENT};
 use support::*;
 

@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 //! [ORB-10002] Checkpoint/resume behavior of the v2 DAG executor:
-//! per-step checkpoints flow through `RuntimeHost::checkpoint_step`, and
+//! per-step checkpoints flow through `Recovery::checkpoint_step`, and
 //! `execute_job_with_resume` skips checkpointed steps while feeding their
 //! recorded outputs into the pipeline for later steps.
 
@@ -15,9 +15,10 @@ use orbit_types::workflow::{
 };
 
 use super::job_support::*;
+use orbit_engine::Dispatch;
 use orbit_engine::{
     AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness, AutoTaskStepRequest, DispatchError,
-    JobOutcome, RuntimeHost, execute_job_with_resume,
+    JobOutcome, execute_job_with_resume,
 };
 use orbit_types::workflow::activity_job::{
     FanInSpec, FanOutBlock, JobV2, JobV2Step, JobV2StepBody, JoinMode, LoopBlock, ParallelBlock,
@@ -73,7 +74,7 @@ impl orbit_engine::test_support::NullRuntimeHost for CheckpointHost {
             .lock()
             .expect("inputs")
             .push((action.to_string(), input.clone()));
-        RuntimeHost::run_deterministic(&self.inner, action, config, input, tool_context)
+        Dispatch::run_deterministic(&self.inner, action, config, input, tool_context)
     }
 
     fn checkpoint_step(
@@ -183,7 +184,7 @@ impl orbit_engine::test_support::NullRuntimeHost for CompoundReplayHost {
             .lock()
             .expect("inputs")
             .push((action.to_string(), input.clone()));
-        RuntimeHost::run_deterministic(&self.inner, action, config, input, tool_context)
+        Dispatch::run_deterministic(&self.inner, action, config, input, tool_context)
     }
 
     fn observe_auto_task_step(
@@ -352,7 +353,7 @@ impl orbit_engine::test_support::NullRuntimeHost for StateHost {
             .lock()
             .expect("inputs")
             .push((action.to_string(), input.clone()));
-        RuntimeHost::run_deterministic(&self.inner, action, config, input, tool_context)
+        Dispatch::run_deterministic(&self.inner, action, config, input, tool_context)
     }
 
     fn checkpoint_step(

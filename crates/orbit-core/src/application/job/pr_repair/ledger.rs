@@ -1,6 +1,7 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
     PR_AUTO_FIX_BUDGET, PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision,

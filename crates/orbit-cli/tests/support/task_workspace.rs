@@ -11,7 +11,8 @@ use std::process::Output;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use orbit_core::application::task::TaskAddParams;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{TaskComplexity, TaskHistoryEntry, TaskStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -362,7 +363,7 @@ fn seed_if_requested() -> bool {
                 })
                 .expect("seed task through runtime");
             if !history.is_empty() {
-                RuntimeHost::apply_task_automation_update(
+                RunLifecycle::apply_task_automation_update(
                     &runtime,
                     &created.id,
                     TaskAutomationUpdate {

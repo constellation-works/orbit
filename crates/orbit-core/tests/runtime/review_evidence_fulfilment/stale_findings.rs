@@ -21,7 +21,7 @@ use orbit_types::workflow::{
 use super::{CODEQL, Fixture, Stub, artifact, held, latest_decision, seed_runtime_hold};
 use chrono::Utc;
 use orbit_core::TaskStatus;
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use serde_json::{Value, json};
 
 #[test]

@@ -13,7 +13,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::host_resource::forecast::{ForecastDecision, HostLoadForecast};
 use orbit_core::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_store::contract::{
     AdmissionForecastPoint, AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase,
     ExecutionLocation, FrictionListFilter, RunResourceMinute,

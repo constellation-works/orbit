@@ -2,6 +2,7 @@
 //! permanently stopped owner landing (ORB-18534).
 use super::*;
 use orbit_engine::{HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, PrConfig};
+use orbit_engine::{HostEnvironment, RunLifecycle};
 use orbit_types::workflow::{DeliveryConventions, PR_SECTIONS_ARTIFACT};
 
 struct DraftLanding<'a> {
@@ -12,7 +13,7 @@ struct DraftLanding<'a> {
 
 impl orbit_engine::test_support::NullRuntimeHost for DraftLanding<'_> {
     fn pr_config(&self) -> PrConfig {
-        RuntimeHost::pr_config(self.follower)
+        HostEnvironment::pr_config(self.follower)
     }
 
     fn handoff_landing_context(&self, _: &str) -> Res<HandoffLandingContext> {
@@ -20,7 +21,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DraftLanding<'_> {
     }
 
     fn get_task_history(&self, id: &str) -> Res<Vec<TaskHistoryEntry>> {
-        RuntimeHost::get_task_history(self.follower, id)
+        RunLifecycle::get_task_history(self.follower, id)
     }
 
     fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Res<()> {

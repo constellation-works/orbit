@@ -2,6 +2,7 @@
 
 use super::*;
 use orbit_core::application::job::JobRunCancelOutcome;
+use orbit_engine::HostEnvironment;
 
 /// The session machine fences bind/settle even when the caller knows the
 /// claim and bound run. A refused attempt must leave the owner unchanged.

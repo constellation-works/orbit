@@ -1,4 +1,4 @@
-use orbit_engine::RuntimeHost;
+use orbit_engine::{Dispatch, HostEnvironment};
 #[cfg(target_os = "linux")]
 use orbit_exec::{
     compile_linux_bwrap_argv, linux_bwrap_write_grant_diagnostic, prepare_linux_bwrap_write_grants,
@@ -474,7 +474,7 @@ fn undeclared_sandbox_still_resolves_to_none_on_every_os() {
 /// The side roots must be in play, or the reachability assertions are vacuous.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_codex_side_roots_configured(runtime: &crate::OrbitRuntime) {
-    let config = RuntimeHost::agent_provider_config(runtime);
+    let config = HostEnvironment::agent_provider_config(runtime);
     let dirs: Vec<String> = serde_json::from_str(
         config
             .get("writable_dirs_json")

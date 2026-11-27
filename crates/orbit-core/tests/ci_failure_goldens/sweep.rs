@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use orbit_core::OrbitRuntime;
-use orbit_engine::RuntimeHost;
+use orbit_engine::{Dispatch, RunLifecycle};
 use orbit_tools::ToolContext;
 use serde_json::{Value, json};
 use tempfile::TempDir;

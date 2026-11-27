@@ -8,6 +8,7 @@
 //! pipeline-action answers; its dispatch input feeds the next level, and the
 //! leaf runs the shipped `worktree` step against the real Git fixture.
 use super::*;
+use orbit_engine::RunLifecycle;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
 use orbit_engine::{execute_job_with_resume, resolve_job_catalog_refs_for_execution};
 use orbit_types::task::{TaskRelation, TaskRelationType};

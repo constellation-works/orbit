@@ -2,7 +2,7 @@
 use super::engine_support::{runtime_with_workspace_config, seed_executor};
 #[cfg(target_os = "macos")]
 use super::sandbox_resolve::last_compiled_file_write_allows_under;
-use orbit_engine::RuntimeHost;
+use orbit_engine::{Dispatch, HostEnvironment};
 #[cfg(target_os = "linux")]
 use orbit_exec::{compile_linux_bwrap_argv, prepare_linux_bwrap_write_grants};
 const CODEX_WORKSPACE_WRITE: &str = "[execution.codex]\nsandbox = \"workspace-write\"\n";
@@ -81,7 +81,7 @@ impl CodexSideRootFixture {
 /// The side roots must be in play, or the reachability assertions are vacuous.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_codex_side_roots_configured(runtime: &orbit_core::OrbitRuntime) {
-    let config = RuntimeHost::agent_provider_config(runtime);
+    let config = HostEnvironment::agent_provider_config(runtime);
     let dirs: Vec<String> = serde_json::from_str(
         config
             .get("writable_dirs_json")

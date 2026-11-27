@@ -18,7 +18,8 @@ use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_store::contract::JobRunStepParams;
 use orbit_types::workflow::activity_job::{V2AuditEvent, V2AuditEventKind};
 use orbit_types::workflow::{

@@ -10,7 +10,7 @@ use orbit_core::runtime::JobRuns;
 use orbit_core::{
     AutoTaskAddParams, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType,
 };
-use orbit_engine::RuntimeHost;
+use orbit_engine::Recovery;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{
     ActivityCrewDraw, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, FINAL_RECOVERY_CREWS_KEY,

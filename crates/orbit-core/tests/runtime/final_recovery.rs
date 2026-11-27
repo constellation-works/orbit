@@ -19,9 +19,10 @@ use std::sync::Arc;
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::JobRuns;
+use orbit_engine::{Dispatch, Recovery, RunLifecycle};
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
-    FinalRecoveryApplied, RuntimeHost,
+    FinalRecoveryApplied,
 };
 use orbit_types::workflow::{
     FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, PipelineState,
@@ -205,7 +206,7 @@ impl Fixture {
     ) -> Result<FinalRecoveryApplied, orbit_core::OrbitError> {
         // Named through the trait: `OrbitRuntime` also has the applier's own
         // `apply_final_recovery`, which the host method calls after recording.
-        RuntimeHost::apply_final_recovery(
+        Recovery::apply_final_recovery(
             &self.runtime,
             run,
             &FinalRecoveryApplication {
@@ -323,7 +324,7 @@ impl Fixture {
                     .put(&self.runtime.workspace_id().unwrap(), &run, None)
             })
             .unwrap();
-        RuntimeHost::apply_task_automation_update(
+        RunLifecycle::apply_task_automation_update(
             &self.runtime,
             &task,
             orbit_engine::blocked_workflow_failure_update(
@@ -372,7 +373,7 @@ impl Fixture {
     /// `apply_blocked_task_recovery` deterministic action.
     fn apply_backstop(&self, recovery: &str, episode: &Value, result: Value) -> Value {
         use orbit_tools::{ReservationOwnerContext, ToolContext};
-        RuntimeHost::run_deterministic(
+        Dispatch::run_deterministic(
             &self.runtime,
             "apply_blocked_task_recovery",
             &json!({}),
@@ -512,7 +513,7 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
             refused_output: json!({"deferred_sandbox_validation": {"probe": {}}}),
         };
         assert_eq!(
-            RuntimeHost::apply_final_recovery(
+            Recovery::apply_final_recovery(
                 &fixture.runtime,
                 &run,
                 &FinalRecoveryApplication {
@@ -846,7 +847,7 @@ fn final_recovery_log_tail_reads_only_the_requested_runs_bounded_log() {
     )
     .unwrap();
     std::fs::write(logs.join("jrun-other.worker.log"), "foreign-log").unwrap();
-    let tail = RuntimeHost::final_recovery_log_tail(&fixture.runtime, "jrun-own")
+    let tail = Recovery::final_recovery_log_tail(&fixture.runtime, "jrun-own")
         .unwrap()
         .unwrap();
     assert!(
@@ -857,11 +858,11 @@ fn final_recovery_log_tail_reads_only_the_requested_runs_bounded_log() {
     assert!(!tail.contains("discarded-prefix"));
     assert!(!tail.contains("foreign-log"));
     assert_eq!(
-        RuntimeHost::final_recovery_log_tail(&fixture.runtime, "jrun-missing").unwrap(),
+        Recovery::final_recovery_log_tail(&fixture.runtime, "jrun-missing").unwrap(),
         None
     );
     assert!(
-        RuntimeHost::final_recovery_log_tail(&fixture.runtime, "../jrun-other").is_err(),
+        Recovery::final_recovery_log_tail(&fixture.runtime, "../jrun-other").is_err(),
         "run identity cannot escape the log directory"
     );
 }

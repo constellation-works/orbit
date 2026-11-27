@@ -6,7 +6,8 @@
 use std::path::Path;
 
 use orbit_core::{ActorIdentity, OrbitRuntime};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 

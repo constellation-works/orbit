@@ -1,4 +1,5 @@
 use super::*;
+use orbit_engine::HostEnvironment;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 
 const SOURCE: &str = "FIXTURE_CREW_READINESS_UNSET_SOURCE";

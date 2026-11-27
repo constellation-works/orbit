@@ -57,6 +57,7 @@ use orbit_engine::{
     StepRecoveryAdmission, TaskAutomationUpdate, V2AuditWriter, V2DispatchInput,
     WorktreeGcTaskLookup, dispatch_v2_activity, execute_deterministic_action,
 };
+use orbit_engine::{HostEnvironment, Recovery, ReviewGate, RunLifecycle};
 use orbit_store::contract::{ClaimCandidateRef, KeptClaimCandidate};
 use orbit_types::task::{
     CANDIDATE_DISCARDED_EVENT, ContextWideningStep, ExternalRef, Task, TaskArtifact,
@@ -951,7 +952,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
 
     fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
         let mut environment = orbit_exec::ValidationEnvironment::launcher(
-            RuntimeHost::agent_subprocess_environment(self, &[]),
+            HostEnvironment::agent_subprocess_environment(self, &[]),
         );
         environment.build_output_env = vec!["BUILD_OUTPUT_DIR".into()];
         environment
@@ -989,7 +990,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
     fn admit_task_for_workflow(&self, task_id: &str, _workflow: &str) -> Result<Task, OrbitError> {
         self.admitted.lock().unwrap().push(task_id.to_string());
         self.set_status(task_id, TaskStatus::InProgress);
-        RuntimeHost::get_task(self, task_id)
+        RunLifecycle::get_task(self, task_id)
     }
 
     fn apply_task_automation_update(
@@ -1150,7 +1151,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         // As the runtime's host does: validate the path, refuse a run that
         // does not own the task with a typed error, and store the bytes raw.
         orbit_types::task::validate_relative_artifact_path(path)?;
-        if RuntimeHost::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
+        if RunLifecycle::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
             return Err(OrbitError::PolicyDenied(format!(
                 "run '{run_id}' does not own task '{task_id}'; it cannot attach validation evidence"
             )));
@@ -1172,7 +1173,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
             .worker
             .as_ref()
             .expect("claim routes evidence to its owner");
-        RuntimeHost::attach_task_validation_log(
+        ReviewGate::attach_task_validation_log(
             self,
             &worker.task_id,
             &worker.bound_run_id,
@@ -1213,7 +1214,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         if let Some(answer) = self.owner_answers.lock().unwrap().get(task_id) {
             return answer.clone();
         }
-        match RuntimeHost::get_task(self, task_id) {
+        match RunLifecycle::get_task(self, task_id) {
             Ok(task) => WorktreeGcTaskLookup::Found {
                 status: task.status,
                 pr_status: task.pr_status,

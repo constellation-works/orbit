@@ -382,7 +382,7 @@ fn review_report_request(
 /// "failed"`, exit 0) because a required check could not run on its host
 /// still leaves its report behind. When the host finds that report a valid
 /// incomplete verdict whose only gap is the external checks it names
-/// ([`RuntimeHost::review_report_evidence_hold`]), the step succeeds so the
+/// ([`crate::ReviewGate::review_report_evidence_hold`]), the step succeeds so the
 /// gate's settlement runs: it authenticates the report, commits the
 /// reviewer's repairs and decides the evidence hold as for any report.
 /// Anything else — a timeout, a reserved or typed code, no or a mismatched

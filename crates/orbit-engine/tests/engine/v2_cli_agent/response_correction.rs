@@ -10,6 +10,7 @@
 //! The provider is a scripted `claude` that numbers its invocations and saves
 //! each prompt and argv.
 
+use orbit_engine::{Dispatch, HostEnvironment, Recovery};
 use std::{cell::Cell, sync::Mutex};
 
 use orbit_types::workflow::activity_job::ResponseCorrectionPolicy;
@@ -57,11 +58,11 @@ impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
     }
 
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        RuntimeHost::agent_subprocess_environment(&self.cli, required_env_vars)
+        HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        RuntimeHost::resolve_cli_executor(&self.cli, provider)
+        Dispatch::resolve_cli_executor(&self.cli, provider)
     }
 
     fn tool_context_for_activity(
@@ -71,7 +72,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
         fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
         proc_allowed_programs: Option<&[String]>,
     ) -> orbit_tools::ToolContext {
-        RuntimeHost::tool_context_for_activity(
+        Recovery::tool_context_for_activity(
             &self.cli,
             run_id,
             fs_profile,

@@ -11,7 +11,9 @@
 //! # Key exports
 //! - v2 dispatcher, job executor, and audit writer types re-exported at the
 //!   crate root
-//! - [`RuntimeHost`] — the single capability boundary used by job execution
+//! - [`RuntimeHost`] — the single capability boundary used by job execution,
+//!   the supertrait of [`RunLifecycle`], [`ReviewGate`], [`HostEnvironment`],
+//!   [`Dispatch`] and [`Recovery`]
 //! - [`RuntimeHostProcessEnvironment`] — the required process environment
 //!   capability inherited by [`RuntimeHost`]
 //! - [`execute_deterministic_action`] — the built-in automation actions
@@ -57,6 +59,7 @@ mod executor;
 mod sandbox_spawn;
 mod template;
 
+pub use context::{Dispatch, HostEnvironment, Recovery, ReviewGate, RunLifecycle};
 pub use executor::automation::vcs::claim::CandidateCheckout;
 
 #[cfg(test)]

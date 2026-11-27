@@ -5,7 +5,8 @@
 //! on a red base holds its task in the backlog instead.
 
 use chrono::Utc;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT};
+use orbit_engine::{Dispatch, RunLifecycle};
+use orbit_engine::{TaskAutomationUpdate, WORKFLOW_RUN_FAILED_EVENT};
 use orbit_store::{JobRunStepParams, TaskCreateParams};
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::{JobRun, JobRunState, JobTargetType};

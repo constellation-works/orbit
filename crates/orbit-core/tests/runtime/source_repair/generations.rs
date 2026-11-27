@@ -1,5 +1,6 @@
 //! A fully published repair becomes the next cancelled recovery source.
 use super::*;
+use orbit_engine::RunLifecycle;
 use orbit_store::contract::JobRunStepParams;
 use orbit_types::workflow::JobTargetType;
 

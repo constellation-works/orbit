@@ -2,6 +2,7 @@
 
 use super::*;
 use orbit_core::application::job::JobRunCancelOutcome;
+use orbit_engine::HostEnvironment;
 
 /// A dead owner cannot authorize releasing a live provider's ownership.
 /// Corrupting one audit row deterministically fails the actual store read while

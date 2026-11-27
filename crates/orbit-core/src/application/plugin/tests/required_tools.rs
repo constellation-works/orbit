@@ -4,7 +4,7 @@ use crate::application::plugin::{
     PluginAddOptions, PluginEnableOptions, enable_plugin, install_plugin,
 };
 use crate::application::task::TaskAddParams;
-use orbit_engine::RuntimeHost;
+use orbit_engine::Recovery;
 
 #[test]
 fn filing_requires_plugin_tools_an_agent_can_call() {

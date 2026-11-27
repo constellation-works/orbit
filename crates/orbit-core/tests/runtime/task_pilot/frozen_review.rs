@@ -7,6 +7,7 @@
 //! its own recovery, so settlement leaves its admitted attempt in place.
 
 use super::*;
+use orbit_engine::RunLifecycle;
 
 use orbit_automation::delivery::input_digest;
 use orbit_core::application::automation::evaluate_auto_task;

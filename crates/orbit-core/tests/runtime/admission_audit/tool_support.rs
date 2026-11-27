@@ -1,4 +1,4 @@
-use orbit_engine::RuntimeHost;
+use orbit_engine::HostEnvironment;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 

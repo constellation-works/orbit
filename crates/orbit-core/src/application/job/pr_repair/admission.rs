@@ -11,7 +11,8 @@
 //! lock; it draws no crew and never dispatches an agent.
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_engine::{PrAutoFixAdmission, PrAutoFixRequest, RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::{PrAutoFixAdmission, PrAutoFixRequest, TaskAutomationUpdate};
 use orbit_types::task::{TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
     CrewPurpose, PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_CREWS_KEY,
@@ -245,7 +246,7 @@ impl OrbitRuntime {
             ));
         }
         if request.head_sha != accepted.handoff.candidate.candidate.commit {
-            let response = orbit_engine::RuntimeHost::run_private_vcs_operation(
+            let response = orbit_engine::HostEnvironment::run_private_vcs_operation(
                 self,
                 "pr.status",
                 serde_json::json!({
@@ -390,7 +391,7 @@ impl OrbitRuntime {
                 ));
             }
             if plan.head_sha != candidate.candidate.commit {
-                let response = orbit_engine::RuntimeHost::run_private_vcs_operation(
+                let response = orbit_engine::HostEnvironment::run_private_vcs_operation(
                     self,
                     "pr.status",
                     serde_json::json!({"workspace_path":self.paths().repo_root,"pr":plan.pr_number}),

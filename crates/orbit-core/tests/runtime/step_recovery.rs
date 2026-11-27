@@ -25,11 +25,12 @@ use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
 use orbit_engine::{
-    DispatchError, ResolvedActivityTools, ResolvedCliExecutor, RuntimeHost,
-    StepRecoveryDecisionRead, StepRecoveryDecisionRequest, StepRecoveryDecisionSlot,
-    StepRecoveryVerdict, TaskActivityUpdate, TaskAutomationUpdate, V2AuditWriter,
-    execute_job_with_resume, resolve_job_catalog_refs_for_execution,
+    DispatchError, ResolvedActivityTools, ResolvedCliExecutor, StepRecoveryDecisionRead,
+    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, StepRecoveryVerdict, TaskActivityUpdate,
+    TaskAutomationUpdate, V2AuditWriter, execute_job_with_resume,
+    resolve_job_catalog_refs_for_execution,
 };
+use orbit_engine::{Recovery, ReviewGate};
 use orbit_types::task::{ContextWideningStep, ExecutionLocation};
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::activity_job::{
@@ -232,7 +233,7 @@ impl RecoveryHost<'_> {
 
 impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        RuntimeHost::final_recovery_log_tail(self.runtime, run_id)
+        Recovery::final_recovery_log_tail(self.runtime, run_id)
     }
 
     fn run_deterministic(

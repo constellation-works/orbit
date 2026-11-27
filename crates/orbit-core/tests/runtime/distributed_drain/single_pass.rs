@@ -5,6 +5,7 @@
 //! expired, a stop or a cancel never gains it.
 
 use orbit_core::DrainAdmissionsStopRequest;
+use orbit_engine::Dispatch;
 
 use super::*;
 

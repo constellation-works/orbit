@@ -1,7 +1,7 @@
 //! Goldens of the resolved Linux sandbox for representative activity policies.
 //!
 //! Each case resolves an executor's sandbox through the runtime's public
-//! `RuntimeHost::resolve_executor_sandbox` against the default policy, then
+//! `Dispatch::resolve_executor_sandbox` against the default policy, then
 //! compiles the Bubblewrap plan through `orbit-exec` as the spawn path does:
 //! write anchors prepared for a managed worktree, runtime grants passed as
 //! descriptor authority, the agent mask (plugin trees and `clock.env`) mounted
@@ -36,7 +36,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use orbit_core::OrbitRuntime;
-use orbit_engine::{ResolvedSandbox, RuntimeHost};
+use orbit_engine::Dispatch;
+use orbit_engine::ResolvedSandbox;
 use orbit_exec::{
     LinuxBwrapCommand, LinuxBwrapMask, LinuxBwrapMountAuthority,
     compile_linux_bwrap_argv_with_authority, prepare_linux_bwrap_write_grants,

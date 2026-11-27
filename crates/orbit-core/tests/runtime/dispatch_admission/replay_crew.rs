@@ -5,7 +5,8 @@
 use chrono::{Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::workflow::{
     JobRunState, JobRunTrigger, PROVIDER_FAILURE_HOLD_EVENT, ProviderFailureClass,
     ProviderFailureHold,

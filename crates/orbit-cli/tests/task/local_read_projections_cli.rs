@@ -10,7 +10,8 @@ use orbit_core::application::task::{
 };
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{ActorIdentity, OrbitRuntime};
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
+use orbit_engine::RunLifecycle;
+use orbit_engine::{TaskAutomationUpdate, blocked_workflow_failure_update};
 use orbit_types::task::{
     ExecutionLocation, ExternalRef, TaskComplexity, TaskHistoryEntry, TaskStatus,
 };

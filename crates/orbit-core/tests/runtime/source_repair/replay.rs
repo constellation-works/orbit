@@ -1,7 +1,7 @@
 //! Lost-reply reconciliation through the public operator request.
 use super::fixture::Fixture;
 use chrono::Utc;
-use orbit_engine::RuntimeHost;
+use orbit_engine::RunLifecycle;
 use orbit_types::workflow::JobRunState;
 use serde_json::json;
 

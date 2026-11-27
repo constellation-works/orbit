@@ -1,5 +1,6 @@
 mod owner;
 
+use orbit_engine::{Dispatch, RunLifecycle};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use orbit_common::OrbitError;
@@ -18,7 +19,7 @@ struct NoDiffHost {
 
 impl orbit_engine::test_support::NullRuntimeHost for NoDiffHost {
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        RuntimeHost::resolve_cli_executor(&self.cli, provider)
+        Dispatch::resolve_cli_executor(&self.cli, provider)
     }
 
     fn get_task(&self, _: &str) -> Result<Task, OrbitError> {
@@ -91,7 +92,7 @@ impl orbit_engine::test_support::NullRuntimeHost for SummaryDeliveryHost {
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        RuntimeHost::resolve_cli_executor(&self.cli, provider)
+        Dispatch::resolve_cli_executor(&self.cli, provider)
     }
 
     fn get_task(&self, _: &str) -> Result<Task, OrbitError> {

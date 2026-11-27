@@ -3,7 +3,8 @@
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskAddParams;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, TaskStatus};
 use serde_json::json;
 
@@ -35,7 +36,7 @@ fn no_diff_promotion_records_attribution_and_review_in_one_commit() {
             ..Default::default()
         })
         .expect("task");
-    let run = RuntimeHost::insert_job_run(
+    let run = RunLifecycle::insert_job_run(
         &runtime,
         "task_pr_pipeline",
         1,
@@ -44,7 +45,7 @@ fn no_diff_promotion_records_attribution_and_review_in_one_commit() {
         None,
     )
     .expect("run");
-    RuntimeHost::apply_task_automation_update(
+    RunLifecycle::apply_task_automation_update(
         &runtime,
         &task.id,
         TaskAutomationUpdate {

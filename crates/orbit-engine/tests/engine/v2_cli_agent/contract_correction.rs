@@ -8,6 +8,7 @@
 //! line to a side-effect file only when it is not asked for a correction (as
 //! an agent filing tasks would), and prints the scripted envelope.
 
+use orbit_engine::Dispatch;
 use std::sync::Mutex;
 
 use orbit_types::workflow::activity_job::V2AuditEventKind;
@@ -43,7 +44,7 @@ impl orbit_engine::test_support::NullRuntimeHost for CorrectionHost {
     }
 
     fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        RuntimeHost::resolve_cli_executor(&self.cli, provider)
+        Dispatch::resolve_cli_executor(&self.cli, provider)
     }
 
     fn run_deterministic(

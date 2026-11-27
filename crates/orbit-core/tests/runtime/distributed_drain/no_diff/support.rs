@@ -5,6 +5,7 @@
 //! `task_artifacts`.
 use super::super::claimed_review::ToOwner;
 use super::super::*;
+use orbit_engine::{Dispatch, ReviewGate, RunLifecycle};
 use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::handoff::already_landed_scope;
 
@@ -699,8 +700,8 @@ impl CleanLeaf {
             }),
         );
         let report = if already_landed {
-            let task = RuntimeHost::get_task(&fixture.bound, &fixture.task).unwrap();
-            let comments = RuntimeHost::get_task_comments(&fixture.bound, &fixture.task).unwrap();
+            let task = RunLifecycle::get_task(&fixture.bound, &fixture.task).unwrap();
+            let comments = RunLifecycle::get_task_comments(&fixture.bound, &fixture.task).unwrap();
             json!({
                 "schema_version": 1, "task_id": fixture.task, "run_id": fixture.leaf,
                 "tested_head": fixture.base, "covering_commit": fixture.base,
@@ -755,7 +756,7 @@ impl CleanLeaf {
     }
 
     pub(crate) fn assert_bulk_evidence_exceeds_ceiling(&self) {
-        let error = RuntimeHost::get_task_artifacts(&self.bound, &self.task).expect_err(
+        let error = RunLifecycle::get_task_artifacts(&self.bound, &self.task).expect_err(
             "ORB-16120: former bulk evidence read must overflow the unchanged MCP ceiling",
         );
         assert!(error.to_string().contains("67108864"), "{error}");
@@ -1182,7 +1183,8 @@ impl CleanLeaf {
 
     /// The commands the owner holds a passing log for.
     pub(crate) fn owner_validated_commands(&self, handoff: &TaskHandoff) -> Vec<String> {
-        let artifacts = RuntimeHost::get_task_artifacts(&self.pair.wire.owner, &self.task).unwrap();
+        let artifacts =
+            RunLifecycle::get_task_artifacts(&self.pair.wire.owner, &self.task).unwrap();
         handoff
             .validation
             .iter()
@@ -1205,7 +1207,8 @@ impl CleanLeaf {
             self.pair.admission(&self.leaf).settlement.is_none(),
             "a refused leaf records no handoff"
         );
-        let artifacts = RuntimeHost::get_task_artifacts(&self.pair.wire.owner, &self.task).unwrap();
+        let artifacts =
+            RunLifecycle::get_task_artifacts(&self.pair.wire.owner, &self.task).unwrap();
         let logs = artifacts
             .iter()
             .filter(|artifact| artifact.path.starts_with("validation/"))
@@ -1411,6 +1414,6 @@ impl CleanLeaf {
 
     /// Every artifact the owner holds for this leaf's task.
     pub(crate) fn owner_artifacts(&self) -> Vec<TaskArtifact> {
-        RuntimeHost::get_task_artifacts(&self.pair.wire.owner, &self.task).unwrap()
+        RunLifecycle::get_task_artifacts(&self.pair.wire.owner, &self.task).unwrap()
     }
 }

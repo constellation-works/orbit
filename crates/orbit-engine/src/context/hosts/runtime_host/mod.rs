@@ -1,4 +1,9 @@
 //! The unified capability boundary between the engine and its runtime.
+//!
+//! The boundary is five traits, one per capability group: [`RunLifecycle`],
+//! [`ReviewGate`], [`HostEnvironment`], [`Dispatch`] and [`Recovery`].
+//! [`RuntimeHost`] is their supertrait, implemented for every type that
+//! implements all five.
 
 mod dispatch;
 mod environment;
@@ -6,60 +11,44 @@ mod lifecycle;
 mod recovery;
 mod review;
 
-use orbit_common::OrbitError;
-use orbit_store::contract::JobRunStepParams;
-use orbit_store::contract::{InvocationQuery, InvocationRecord, KeptClaimCandidate};
-use orbit_tools::{FsAuditLogger, ToolContext};
-use orbit_types::identity::AgentModelPair;
-use orbit_types::record::OrbitEvent;
-use orbit_types::task::{
-    ContextWideningStep, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
-    TaskPriority, TaskStatus,
-};
-use orbit_types::telemetry::ProviderLimitObservation;
-use orbit_types::workflow::{AutoTaskStepRecord, ParkedWait};
-use orbit_types::workflow::{
-    DeferralProbe, ExperimentActivityOverlay, JobRun, JobRunStartOutcome, JobRunState,
-    NamespaceProbe, PipelineState, TagInstruction,
-};
-use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
-use std::sync::Arc;
-
-use crate::context::dispatch_contract::{
-    DispatchError, DispatchInvocationTrace, ResolvedCliExecutor, ResolvedSandbox,
-    ResolvedShellExecutor,
-};
-
-use super::{AutoTaskAdmission, AutoTaskObservation, AutoTaskStepRequest};
-use super::{
-    ClaimExecutionContext, CompletionObservationAdmission, CrewConfig, FinalRecoveryAdmission,
-    FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
-    HandoffLandingContext, HandoffLandingUpdate, PluginBrokerHandle, PluginBrokerRun,
-    PrAutoFixAdmission, PrAutoFixRequest, PrConfig, RebaseRecoveryAttemptScope,
-    ResolvedActivityTools, ReviewLandingRequest, ReviewReleaseRequest,
-    ReviewReportCorrectionRequest, ReviewerInvocationRequest, ScratchGcReport, SteeringGateReading,
-    SteeringRoundAdmission, StepRecoveryAdmission, StepRecoveryDecisionRead,
-    StepRecoveryDecisionRequest, StepRecoveryDecisionSlot, TaskActivityUpdate,
-    TaskAutomationUpdate, WorktreeGcTaskLookup,
-};
+pub use dispatch::Dispatch;
+pub use environment::HostEnvironment;
+pub use lifecycle::RunLifecycle;
+pub use recovery::Recovery;
+pub use review::ReviewGate;
 
 /// The single capability boundary between the job executor and its runtime.
 ///
 /// Deterministic actions, task/run persistence, environment resolution, agent
 /// dispatch, and audit/checkpoint hooks all cross this boundary exactly once.
+/// It declares no method of its own: each capability belongs to one of its
+/// five supertraits, and the blanket implementation below makes any type that
+/// implements all five a `RuntimeHost`.
 ///
 /// Every method is required, so a new capability fails to compile until the
 /// production host answers it. Test doubles implement
 /// `test_support::NullRuntimeHost` instead, which answers each capability the
 /// way a host without it does.
-pub trait RuntimeHost: RuntimeHostProcessEnvironment + Send + Sync {
-    lifecycle::lifecycle_methods!();
-    review::review_methods!();
-    environment::environment_methods!();
-    dispatch::dispatch_methods!();
-    recovery::recovery_methods!();
+pub trait RuntimeHost:
+    RunLifecycle
+    + ReviewGate
+    + HostEnvironment
+    + Dispatch
+    + Recovery
+    + RuntimeHostProcessEnvironment
+    + Send
+    + Sync
+{
+}
+
+impl<T> RuntimeHost for T where
+    T: RunLifecycle
+        + ReviewGate
+        + HostEnvironment
+        + Dispatch
+        + Recovery
+        + RuntimeHostProcessEnvironment
+{
 }
 
 /// Required process environment capability for a [`RuntimeHost`].

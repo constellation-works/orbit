@@ -2,6 +2,8 @@
 
 use super::*;
 use orbit_common::env_vars::{HOME, ORBIT_MANAGED_RUN_CONTEXT, ORBIT_RUN_ID};
+use orbit_engine::HostEnvironment;
+use orbit_engine::ReviewGate;
 
 /// Reproduces the missing public same-handoff retry seam. The old stopped
 /// attempt survives, the normal landing action completes, and replay keeps
@@ -189,7 +191,7 @@ fn dispatched_retry_requires_exact_terminal_owner_evidence() {
                 // Attach a real terminal owner job with matching-looking input
                 // but without this attempt's dispatch key. Worker/foreign labels
                 // and a terminal status cannot substitute for the exact binding.
-                RuntimeHost::record_handoff_landing(
+                ReviewGate::record_handoff_landing(
                     runtime,
                     &orbit_engine::HandoffLandingUpdate {
                         handoff_id: request.handoff_id.clone(),
@@ -268,7 +270,7 @@ fn dispatched_retry_requires_exact_terminal_owner_evidence() {
 
 fn publish_retry_intent(owner: &OwnerLocal, prior: &LandingAttempt) {
     let accepted = owner.accepted(&prior.claim_id);
-    RuntimeHost::record_handoff_landing(
+    ReviewGate::record_handoff_landing(
         &owner.pair.wire.owner,
         &orbit_engine::HandoffLandingUpdate {
             handoff_id: prior.handoff_id.clone(),
@@ -550,7 +552,7 @@ fn retry_fixture_with_evidence(
     let task = owner.pair.claimed_task(&leaf);
     let accepted = owner.accepted(&owner.claim_of(&leaf));
     if stop {
-        RuntimeHost::record_handoff_landing(
+        ReviewGate::record_handoff_landing(
             runtime,
             &orbit_engine::HandoffLandingUpdate {
                 handoff_id: accepted.handoff_id.clone(),
@@ -746,7 +748,7 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
                 .follower_jobs
                 .mark_job_run_running(&run_id, Utc::now(), std::process::id())
                 .unwrap();
-            RuntimeHost::record_handoff_landing(
+            ReviewGate::record_handoff_landing(
                 runtime,
                 &orbit_engine::HandoffLandingUpdate {
                     handoff_id: request.handoff_id.clone(),

@@ -5,6 +5,7 @@ use super::freshness;
 use super::source_moves::{apply_claim, prepare_claim};
 use super::*;
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_engine::RunLifecycle;
 
 fn bundled_routine() -> RoutineDefinition {
     let template = std::fs::read_to_string(
@@ -268,7 +269,7 @@ fn manual_backlog_starts_after_edits_without_a_routine_pilot() {
                 .unwrap();
             assert_eq!(run.input.unwrap()["task_ids"], json!([task.id]));
 
-            let delivery = RuntimeHost::insert_job_run(
+            let delivery = RunLifecycle::insert_job_run(
                 &workspace.runtime,
                 "task_pr_pipeline",
                 1,
@@ -287,7 +288,7 @@ fn manual_backlog_starts_after_edits_without_a_routine_pilot() {
                 orbit_common::ForceOverridableKind::RunStillOwnsTask
             );
             assert_eq!(owner.run_id.as_deref(), Some(delivery.run_id.as_str()));
-            RuntimeHost::finalize_job_run(
+            RunLifecycle::finalize_job_run(
                 &workspace.runtime,
                 &delivery.run_id,
                 JobRunState::Cancelled,

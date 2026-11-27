@@ -9,7 +9,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{
     AuditEventInsertParams, AuditEventStatus, JobRun, JobRunState, OrbitError, TaskStatus,
 };
-use orbit_engine::RuntimeHost;
+use orbit_engine::Dispatch;
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, DefectSeverity,
     RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,

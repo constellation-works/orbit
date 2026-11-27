@@ -7,6 +7,7 @@ mod task_artifacts;
 
 use super::claimed_review::ToOwner;
 use super::*;
+use orbit_engine::{HostEnvironment, ReviewGate, RunLifecycle};
 
 pub(crate) use support::*;
 
@@ -229,7 +230,7 @@ fn claimed_coverage_is_authenticated_by_the_owners_claim_journal_after_landing()
         .unwrap();
     assert!(pruned > 0, "the claim's mutation receipts existed");
     assert!(owner.show_job_run(&fixture.leaf).is_err());
-    let accepted_coverage = || RuntimeHost::accepted_automation_coverage(owner, &fixture.task);
+    let accepted_coverage = || RunLifecycle::accepted_automation_coverage(owner, &fixture.task);
     assert_eq!(accepted_coverage().unwrap(), Some(coverage.clone()));
 
     let witness_path = find_file(&owner.paths().global_dir, EVIDENCE_AUTHORITY_ARTIFACT)
@@ -1252,10 +1253,10 @@ fn a_replica_lacking_the_owners_baseline_gate_accepts_and_replays_its_deferral()
         let mut fixture = CleanLeaf::gated_on("done", GateOn::OwnerOnly);
         let gate = fixture.gate.as_ref().unwrap().command();
         assert!(
-            RuntimeHost::review_baseline_commands(&fixture.pair.follower).is_empty(),
+            HostEnvironment::review_baseline_commands(&fixture.pair.follower).is_empty(),
             "{job}: the replica's own configuration names no baseline gate"
         );
-        let gates = RuntimeHost::validation_gates(&fixture.bound);
+        let gates = HostEnvironment::validation_gates(&fixture.bound);
         assert_eq!(
             gates.source,
             orbit_types::workflow::ValidationGateSource::OwnerContract,
@@ -1294,7 +1295,7 @@ fn a_deferral_of_a_replica_only_gate_is_refused_naming_the_owners_gates() {
         let mut fixture = CleanLeaf::gated_on("done", GateOn::FollowerOnly);
         let refusal = check_deferral(
             &fixture.deferral(false),
-            &RuntimeHost::validation_gates(&fixture.bound),
+            &HostEnvironment::validation_gates(&fixture.bound),
             &fixture.base,
         )
         .unwrap_err();
@@ -1343,7 +1344,7 @@ fn a_claimed_known_red_log_is_accepted_only_on_the_owners_own_base_run() {
         fixture.attach_coverage();
         let handoff = fixture.run_clean_pipeline("task_claimed_pr_pipeline");
         let owner = &fixture.pair.wire.owner;
-        let artifacts = RuntimeHost::get_task_artifacts(owner, &fixture.task).unwrap();
+        let artifacts = RunLifecycle::get_task_artifacts(owner, &fixture.task).unwrap();
         let logs = handoff
             .validation
             .iter()

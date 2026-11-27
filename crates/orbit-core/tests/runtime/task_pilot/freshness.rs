@@ -2,6 +2,7 @@
 //! active work and changes to the consumer's material contract remain guarded.
 
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_engine::RunLifecycle;
 use orbit_types::workflow::automation::members::SourceSensitivity;
 
 use super::races::apply_input;
@@ -565,7 +566,7 @@ fn decision_rewrite_repilots_before_dispatch() {
     apply_explicit_pilot_assessment(&workspace, &task, false);
     let runtime = &workspace.runtime;
     runtime.approve_task(&task.id, None, None).unwrap();
-    RuntimeHost::admit_task_for_workflow(runtime, &task.id, "worktree_setup").unwrap();
+    RunLifecycle::admit_task_for_workflow(runtime, &task.id, "worktree_setup").unwrap();
     let running = runtime.get_task(&task.id).unwrap();
     let observed = runtime.final_recovery_revision(&running).unwrap();
     let criteria = ["Verify the retry also covers the failure path."];
@@ -617,7 +618,7 @@ fn decision_rewrite_repilots_before_dispatch() {
     assert_eq!(ready_for_pilot.description, blocked.description);
     assert_eq!(ready_for_pilot.tags, blocked.tags);
 
-    let held = RuntimeHost::admit_task_for_workflow(runtime, &task.id, "worktree_setup")
+    let held = RunLifecycle::admit_task_for_workflow(runtime, &task.id, "worktree_setup")
         .unwrap_err()
         .to_string();
     assert!(held.contains("changed after its latest pilot"), "{held}");
@@ -635,7 +636,7 @@ fn decision_rewrite_repilots_before_dispatch() {
     workspace.record_steps(&run.run_id, &[("prepare", &prepared), ("apply", &applied)]);
     runtime.cancel_job_run(&run.run_id).unwrap();
     assert_eq!(
-        RuntimeHost::admit_task_for_workflow(runtime, &task.id, "worktree_setup")
+        RunLifecycle::admit_task_for_workflow(runtime, &task.id, "worktree_setup")
             .unwrap()
             .status,
         TaskStatus::InProgress

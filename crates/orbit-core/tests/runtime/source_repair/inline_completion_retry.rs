@@ -2,6 +2,7 @@
 use super::inline_publication::{refused_without_effects, rework, supported_incident};
 use super::published_owner::save_run;
 use super::*;
+use orbit_engine::RunLifecycle;
 use orbit_types::workflow::JobRun;
 
 pub(super) fn audit_started(f: &Fixture, run: &JobRun, step: &str) {
