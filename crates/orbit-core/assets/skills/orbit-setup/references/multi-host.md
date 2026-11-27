@@ -192,21 +192,32 @@ orbit host online <host>
 
 `<host>` is the name or `machine_id` from `orbit host list`. This machine
 cannot be marked; only registered remote hosts can. `--reason` is required. It
-must be non-empty and contain no control characters. `--until` takes an RFC 3339
-timestamp later than the moment the mark is set, for example
-`2026-12-01T09:00:00Z`. Without it the mark lasts until `orbit host online`.
-Running `offline` again replaces the reason and deadline.
+is trimmed of surrounding whitespace, then must be non-empty and contain no
+control characters. `--until` takes an RFC 3339 timestamp later than the moment
+the mark is set, for example `2026-12-01T09:00:00Z`. Without it the mark lasts
+until `orbit host online`. Running `offline` again replaces the whole mark: its
+reason, deadline, set time and operator.
 
-The mark records the reason, the time it was set and the operator login that set
-it. It lives in this machine's host registry, not in Git or the workspace.
-Attention and doctor read the registry of the machine they run on, so set the
-mark on each machine whose view should show it.
+The mark records the reason, the time it was set and the operator who set it.
+The operator is the login of the user who ran `orbit host offline`; if that
+login cannot be read, this machine's name is recorded instead. The mark lives in
+this machine's host registry, not in Git or the workspace. Attention and doctor
+read the registry of the machine they run on, so set the mark on each machine
+whose view should show it.
 
 While the mark is active:
 
 - `orbit host list` and `orbit host show` report the host as
-  `acknowledged offline`, with its reason and any `until`. `show` adds
-  `(responded)` when a probe finds the host answering anyway.
+  `acknowledged offline`, with its reason. `orbit host show` also prints the
+  `since` time with its operator, and `until` when one is set. Plain
+  `orbit host list` has no deadline column; `orbit host list --json` and
+  `orbit host show --json` carry `offline.until`, absent when there is none.
+- `(responded)` joins that state in the plain REACHABLE column of `host list`
+  and the `reachable:` line of `host show` when a probe reached the host and
+  recorded no error for it. `host show` always probes; `host list` probes unless
+  run with `--no-probe`, which never shows `(responded)`. A host whose probe
+  recorded an error, such as one that answers with a different identity, keeps
+  the plain label.
 - `orbit attention` lists the host once under `acknowledged`, does not probe it,
   and raises no `host_unhealthy` item for it.
 - `orbit doctor` reports it under the `hosts` row as acknowledged, not as a
@@ -215,8 +226,17 @@ While the mark is active:
 
 The mark changes only those views. Nothing gates on it: pull drains, replica
 pulls and routed tool calls still try the host. To stop a drain from admitting
-new work while the host is away, run `orbit run auto --stop` on the machine that
-runs the drain. That records a pause; see
+new work while the host is away, run `orbit run auto --stop` in the checkout
+where that drain runs:
+
+- A pull drain runs on the follower machine, in the replica checkout of the
+  workspace that pulls from the host. Run the stop there; stopping the owner's
+  checkout does not stop it.
+- A local drain runs in its own workspace checkout. Run the stop in that
+  workspace.
+
+Each stop records a pause for the one checkout it runs in and leaves live leaves
+running. See
 [distributed drain setup](../../orbit/references/setup/distributed-drain-setup.md).
 
 A mark stops counting at its `until` time. Attention then probes the host again,
