@@ -68,7 +68,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
             intentional: true,
         }]
     } else {
-        super::super::secret::unset_secret_rows(runtime, &summaries)?
+        crate::app::plugin::secret::unset_secret_rows(runtime, &summaries)?
     };
     // A skill link whose target is gone is invisible to the skill catalog's
     // own doctor — it only walks seeded trees — and to the plugin record,
@@ -79,7 +79,7 @@ pub fn plugin_doctor(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorResult>, 
         if summary.install_path.is_empty() {
             continue;
         }
-        for (link, target) in super::super::skill::dangling_plugin_skill_links(
+        for (link, target) in crate::app::plugin::skill::dangling_plugin_skill_links(
             &runtime.global_root(),
             &plugin_namespace_dir(&runtime.global_root(), &summary.name),
         ) {

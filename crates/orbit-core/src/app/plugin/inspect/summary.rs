@@ -13,8 +13,8 @@ use orbit_types::plugin::{
 };
 use serde_json::{Value, json};
 
-use super::super::panel::{PluginLinkSummary, PluginPanelSummary, web_summaries};
 use super::profile::permission_rows;
+use crate::app::plugin::panel::{PluginLinkSummary, PluginPanelSummary, web_summaries};
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin::cache::load_installed_plugin;

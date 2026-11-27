@@ -14,9 +14,9 @@ use crate::runtime::plugin::paths::{plugin_namespace_dir, plugin_state_dir};
 use crate::runtime::plugin::sandbox_mask::{not_visible, plugin_trees_masked};
 
 use super::super::install::lock_plugin_namespace;
-use super::super::secret::delete_plugin_secrets;
 use super::disable::unlink_namespace_skills;
 use super::record::{installed_plugin, set_enabled, verified_install_path};
+use crate::app::plugin::secret::delete_plugin_secrets;
 
 /// What `orbit plugin remove` was asked to delete.
 #[derive(Debug, Clone, Default)]

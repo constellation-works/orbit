@@ -20,7 +20,7 @@ use crate::runtime::plugin::paths::plugin_install_path;
 
 use super::super::inspect::{PluginSummary, summary_for_installed};
 use super::super::lifecycle::{resolve_consented_programs, unrequested_grant_warnings};
-use super::super::secret::{prune_undeclared_secrets, unset_secret_warnings};
+use crate::app::plugin::secret::{prune_undeclared_secrets, unset_secret_warnings};
 
 use super::permissions::{
     fs_compare_layout, fs_request_references_config, permission_diff, permission_widening_message,

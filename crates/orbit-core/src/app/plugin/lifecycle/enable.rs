@@ -15,10 +15,10 @@ use crate::OrbitRuntime;
 use crate::runtime::plugin::grants::{recorded_program_paths, witnessed_program_paths};
 
 use super::super::inspect::PluginSummary;
-use super::super::secret::unset_secret_warnings;
 use super::super::seed::{PluginSeedOutcome, seed_plugin_definitions};
-use super::super::skill::{PluginSkillLink, link_plugin_skills};
 use super::record::{installed_plugin, set_enabled, verified_install_path};
+use crate::app::plugin::secret::unset_secret_warnings;
+use crate::app::plugin::skill::{PluginSkillLink, link_plugin_skills};
 use crate::runtime::plugin::definitions::load_plugin_definitions;
 
 /// What `orbit plugin enable` was asked to do beyond recording grants.

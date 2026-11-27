@@ -16,22 +16,32 @@
 //! plugin is not a state an operator can reason about.
 
 mod build;
-mod conformance;
-mod dashboard;
-mod inspect;
-mod install;
-mod lifecycle;
-mod mcp_surface;
-mod panel;
-mod runtime;
-mod scaffold;
-mod secret;
-mod seed;
-mod skill;
-mod visibility;
 
-#[cfg(test)]
-mod tests;
+mod conformance;
+
+mod dashboard;
+
+mod inspect;
+
+mod install;
+
+mod lifecycle;
+
+mod mcp_surface;
+
+mod panel;
+
+mod runtime;
+
+mod scaffold;
+
+mod secret;
+
+mod seed;
+
+mod skill;
+
+mod visibility;
 
 use std::path::PathBuf;
 
@@ -395,7 +405,12 @@ impl<'a> App for PluginApp<'a> {
                 first_party,
                 render,
             } => Outcome::Validated(if render {
-                validate_plugin_dir_for_workspace(runtime, &dir, first_party, Some(&runtime.paths().repo_root))
+                validate_plugin_dir_for_workspace(
+                    runtime,
+                    &dir,
+                    first_party,
+                    Some(&runtime.paths().repo_root),
+                )
                         .map_err(|error| {
                             if runtime.shared_root() == runtime.global_root() {
                                 OrbitError::InvalidInput(format!(
@@ -473,3 +488,6 @@ impl<'a> App for PluginApp<'a> {
 pub fn exec(core: &Core, command: Command<'_>) -> Result<Outcome, crate::Error> {
     exec::run::<PluginApp<'_>>(core, command)
 }
+
+#[cfg(test)]
+mod tests;
