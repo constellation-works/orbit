@@ -55,7 +55,8 @@ pub enum FinalRecoveryDecision {
     Requeue { reason: String },
     /// Only a human action outside Orbit unblocks the task. The applier
     /// blocks it and opens a decision request carrying `summary`, the exact
-    /// `human_action` and one "Done — requeue" answer.
+    /// `human_action` and one "Done — requeue" answer (only a `dismiss`
+    /// answer when the run ends held on a completion observation).
     Escalate {
         diagnosis: String,
         human_action: String,

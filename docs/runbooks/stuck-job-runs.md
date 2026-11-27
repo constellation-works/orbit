@@ -830,6 +830,27 @@ non-transient error and every other escalation keep their ordinary failures. Aut
 process to own the live run, with no retry parent. No successful receipt is
 rewritten and no replacement PR is created by the continuation.
 
+### Answer the block decision of a held forge observation
+
+A requeue refuses a run held as `delivery_forge_observation_unavailable`,
+because the run did not stop as a failed delivery. So when final recovery parks
+such a run and blocks its task, the block-triage decision offers no
+**Done — requeue** answer. It offers a single **Keep blocked — resume the held
+run** answer (`dismiss`), which applies nothing. The decision's human action
+names the next step: once the forge answers, run `orbit job resume <run>`. That
+command reads the pull request again at its published head and readmits the task
+on the same candidate. The task readout's `resume_command` names the same
+command. It appears only while that run is the task's newest delivery, is
+stopped `held` on the forge observation, is an exact owner-local single-task
+execution of the task and has no discard recorded since it started.
+
+A block decision raised before this change can still show a requeue. Answering
+it with a requeue, or with a rewrite that keeps the candidate, is refused
+without writing anything. The refusal names `orbit job resume <run>` and the
+explicit `orbit task requeue <task> --discard-candidate`. Discarding stays an
+explicit operator choice. Escalations of other failures keep their
+**Done — requeue** answer and its guarded requeue.
+
 ## Requeue a failure-handoff task onto its published candidate
 
 When the work is finished, open the task's block decision in the dashboard or list

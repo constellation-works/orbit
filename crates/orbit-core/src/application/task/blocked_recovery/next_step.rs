@@ -50,12 +50,21 @@ impl OrbitRuntime {
         let live_cancel = requeue_override
             .as_deref()
             .is_some_and(|cmd| cmd.starts_with("orbit run cancel "));
+        // A delivery held on a read-only forge observation resumes the run
+        // that held, which may be a resume of the blocking run.
+        let held_resume = if live_cancel {
+            None
+        } else {
+            self.held_forge_observation_resume(task).ok().flatten()
+        };
         let resumable = !live_cancel
             && self.task_run_is_local(task)
             && self
                 .observed_job_run(&run_id)
                 .is_ok_and(|run| is_resumable(&run));
-        let resume_command = resumable.then(|| format!("orbit job resume {run_id}"));
+        let resume_command = held_resume
+            .map(|held| format!("orbit job resume {held}"))
+            .or_else(|| resumable.then(|| format!("orbit job resume {run_id}")));
         Some(BlockedNextStep {
             run_id,
             resume_command,

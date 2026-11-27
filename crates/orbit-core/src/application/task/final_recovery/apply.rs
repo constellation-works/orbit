@@ -3,7 +3,7 @@
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_types::task::{
-    DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption, DecisionRequest,
+    DecisionAction, DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption, DecisionRequest,
     FINAL_RECOVERY_DECIDED_EVENT, Task, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
     decision_option_answers,
 };
@@ -29,6 +29,10 @@ pub(in super::super) const FINAL_RECOVERY_COMPLETED_EVENT: &str = "final_recover
 const REJECTED_EVENT: &str = "final_recovery_rejected";
 const ARCHIVED_EVENT: &str = "final_recovery_archived";
 const ESCALATED_EVENT: &str = "final_recovery_escalated";
+
+/// The one answer a held completion observation's request offers: it keeps
+/// the task blocked for this episode and applies nothing.
+const HELD_OBSERVATION_ANSWER_ID: &str = "dismiss";
 
 #[cfg(test)]
 thread_local! {
@@ -159,7 +163,7 @@ impl Plan {
                     option: Some(DecisionOption {
                         summary: "Done — requeue".to_string(),
                         rewrite: None,
-                        action: Some(orbit_types::task::DecisionAction::Requeue),
+                        action: Some(DecisionAction::Requeue),
                     }),
                 }],
                 recommended: Some("done".to_string()),
@@ -167,6 +171,60 @@ impl Plan {
                 comment_head: String::new(),
             },
         )
+    }
+
+    /// Re-ask a requeue-only question for a run the engine will end `held`
+    /// on a read-only completion observation.
+    ///
+    /// A park applied for such a run leaves it `held` as
+    /// `delivery_forge_observation_unavailable`. A requeue of a held source
+    /// is refused (it is not a conclusively stopped failed delivery), so a
+    /// "Done — requeue" answer could never apply. The request instead keeps
+    /// the task blocked and names the candidate-preserving route: resuming
+    /// the held run re-reads the pull request at its published head and
+    /// readmits the task. Requests with options of their own are left as
+    /// they are.
+    pub(super) fn held_on_completion_observation(&mut self, request: &FinalRecoveryRequest) {
+        let Some(raise) = self.raise.as_mut() else {
+            return;
+        };
+        let requeue_only = !raise.answers.is_empty()
+            && raise.answers.iter().all(|answer| {
+                answer
+                    .option
+                    .as_ref()
+                    .is_some_and(|option| option.action == Some(DecisionAction::Requeue))
+            });
+        if !requeue_only {
+            return;
+        }
+        let run_id = &request.run_id;
+        raise.answers = vec![DecisionAnswer {
+            risk_tier: Default::default(),
+            id: HELD_OBSERVATION_ANSWER_ID.to_string(),
+            label: "Keep blocked — resume the held run".to_string(),
+            consequence: format!(
+                "The task stays blocked and its pull request is kept; nothing is requeued. \
+                 Resume run {run_id} with `orbit job resume {run_id}` once the forge answers."
+            ),
+            option: None,
+        }];
+        raise.recommended = Some(HELD_OBSERVATION_ANSWER_ID.to_string());
+        let earlier = raise
+            .human_action
+            .take()
+            .filter(|action| !action.trim().is_empty());
+        let mut action = format!(
+            "Run {run_id} ends held on a read-only forge observation \
+             (delivery_forge_observation_unavailable); its pull request and published head are \
+             kept, and a requeue is refused while it is held. Once the forge answers, run \
+             `orbit job resume {run_id}`: it reads the pull request again at its published head \
+             and readmits the task on the same candidate."
+        );
+        if let Some(earlier) = earlier {
+            action.push_str(&format!(" If the candidate itself must change: {earlier}"));
+        }
+        raise.human_action = Some(action);
     }
 }
 
@@ -204,18 +262,22 @@ impl OrbitRuntime {
         request: &FinalRecoveryRequest,
         output: Option<&Value>,
     ) -> Result<FinalRecoveryOutcome, OrbitError> {
-        self.apply_classified_final_recovery(request, output, None)
+        self.apply_classified_final_recovery(request, output, None, false)
     }
 
     /// [`Self::apply_final_recovery`] for a decision the engine made itself
     /// after classifying the failure as transient infrastructure. `infra`
     /// is set only by that engine path, never from an agent's output; an
     /// `escalate` it accompanies is recorded as an infra block.
+    /// `completion_observation` is the engine's report that the failed step
+    /// was a read-only completion observation, whose park ends the run
+    /// `held` ([`Plan::held_on_completion_observation`]).
     pub(crate) fn apply_classified_final_recovery(
         &self,
         request: &FinalRecoveryRequest,
         output: Option<&Value>,
         infra: Option<TransientInfraBlock>,
+        completion_observation: bool,
     ) -> Result<FinalRecoveryOutcome, OrbitError> {
         let decision = FinalRecoveryDecision::from_output(output);
         // Recorded beside the decision; a decision without one, such as an
@@ -249,10 +311,13 @@ impl OrbitRuntime {
                 }
                 let task = self.get_task(&request.task_id)?;
                 let current = self.final_recovery_revision_after(&request.observed, &task)?;
-                let plan = match refusal(&task, &current, request) {
+                let mut plan = match refusal(&task, &current, request) {
                     Some(reason) => Plan::refused(&task, request, &decision, reason),
                     None => self.plan(&task, request, &decision, infra.as_ref())?,
                 };
+                if completion_observation {
+                    plan.held_on_completion_observation(request);
+                }
                 // Completion checks guard a transition into done. `Plan::refused`
                 // copies the current status, so an already-done task is not a
                 // completion: the refusal comment and decision must still be

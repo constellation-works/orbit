@@ -65,6 +65,7 @@ fn infra_escalate(
             workspace_path: checkout.to_path_buf(),
             completion_done: false,
             infrastructure: Some(class),
+            completion_observation: false,
         },
     )
     .unwrap();

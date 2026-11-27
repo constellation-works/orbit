@@ -87,7 +87,7 @@ pub(super) fn raise_block_triage(f: &Fixture) -> DecisionRequest {
     request
 }
 
-fn answer(
+pub(super) fn answer(
     f: &Fixture,
     request: &DecisionRequest,
     option: &str,
@@ -210,7 +210,7 @@ fn a_remaining_refusal_names_a_route_the_answering_surface_has() {
     assert_eq!(f.runtime.get_task_history(&f.task).unwrap().len(), history);
 }
 
-fn recorded_by_anyone(f: &Fixture, event: &str) -> usize {
+pub(super) fn recorded_by_anyone(f: &Fixture, event: &str) -> usize {
     f.runtime
         .get_task_history(&f.task)
         .unwrap()
@@ -223,7 +223,7 @@ const FOLLOW_UP_TITLE: &str = "Migrate the stored totals";
 
 /// Leave the fixture's publishing run in `state`. `decision_hold` records the
 /// before-landing review step that ends a delivery `held` instead of `failed`.
-fn park_source(f: &mut Fixture, state: JobRunState, decision_hold: bool) {
+pub(super) fn park_source(f: &mut Fixture, state: JobRunState, decision_hold: bool) {
     let mut run = f.runtime.show_job_run_observed(&f.source.run_id).unwrap();
     run.state = state;
     if state.is_terminal() {

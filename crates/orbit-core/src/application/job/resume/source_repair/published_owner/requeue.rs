@@ -3,8 +3,8 @@
 
 use super::super::*;
 use super::source_checks::{
-    OWN_PUBLICATION_KEYS, adoptable_published_source, footprint_held, parse_preserved,
-    preserved_entry, require_stopped_failed_requeue_source,
+    OWN_PUBLICATION_KEYS, adoptable_published_source, footprint_held, held_on_forge_observation,
+    parse_preserved, preserved_entry, require_stopped_failed_requeue_source,
 };
 use super::{PRESERVED, PreservedPublication, PublishedResume};
 use crate::application::contracts::OwnerSourceIdentityRefusal;
@@ -56,6 +56,48 @@ impl OrbitRuntime {
             None => None,
         };
         Ok(adopted.unwrap_or_else(|| run_id.to_string()))
+    }
+
+    /// The held run whose resume is `task`'s candidate-preserving next step:
+    /// the task's newest delivery, stopped `held` on a read-only forge
+    /// observation, an exact owner-local single-task execution of `task`
+    /// bound to it, with no discard since it started. A requeue refuses
+    /// such a source; `orbit job resume` re-reads the pull request at its
+    /// published head and readmits the task. Reads local records
+    /// only. `None` when any prerequisite is unproven.
+    pub(crate) fn held_forge_observation_source(
+        &self,
+        task: &Task,
+    ) -> Result<Option<String>, OrbitError> {
+        if !self.task_run_is_local(task) {
+            return Ok(None);
+        }
+        let Some(bound) = task.job_run_id.as_deref() else {
+            return Ok(None);
+        };
+        let newest = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            job_id: Some(workflow::TASK_PR_PIPELINE_JOB.into()),
+            task_id: Some(task.id.clone()),
+            limit: Some(1),
+            include_steps: false,
+            ..Default::default()
+        })?;
+        let Some(newest) = newest.first() else {
+            return Ok(None);
+        };
+        let Some(source) = self.get_job_run_backend(&newest.run_id)? else {
+            return Ok(None);
+        };
+        if !held_on_forge_observation(&source)
+            || (source.run_id != bound && source.retry_source_run_id.as_deref() != Some(bound))
+            || self.owner_source_identity_refusal(&source, task)?.is_some()
+            || self.get_task_history(&task.id)?.iter().any(|e| {
+                e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && e.at >= source.created_at
+            })
+        {
+            return Ok(None);
+        }
+        Ok(Some(source.run_id))
     }
 
     /// `run_id`, when a requeue of `task` would preserve its publication: a

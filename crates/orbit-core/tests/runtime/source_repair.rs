@@ -28,6 +28,9 @@ mod generations;
 mod handoff_landing;
 #[path = "source_repair/handoff_requeue.rs"]
 mod handoff_requeue;
+
+#[path = "source_repair/held_observation.rs"]
+mod held_observation;
 #[path = "source_repair/held_publication.rs"]
 mod held_publication;
 #[path = "source_repair/inline_completion_retry.rs"]

@@ -183,6 +183,13 @@ pub(in crate::application) trait TaskJobPort {
     /// the forge; `Err` carries the refusal a requeue reports.
     fn check_escalated_publication_requeue(&self, task: &Task) -> Result<(), OrbitError>;
 
+    /// The run `task`'s candidate-preserving next step resumes: its newest
+    /// delivery, stopped `held` on a read-only forge observation, an exact
+    /// owner-local single-task execution of `task` with no discard since it
+    /// started. Reads local records only; `None` when any prerequisite is
+    /// unproven.
+    fn held_forge_observation_resume(&self, task: &Task) -> Result<Option<String>, OrbitError>;
+
     /// The validation gates this process holds a candidate to: a claimed
     /// leaf's captured owner gates, else this host's configuration.
     fn candidate_validation_gates(&self) -> HostValidationGates;

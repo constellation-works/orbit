@@ -252,7 +252,12 @@ fn apply(
                 failed_step_id: application.failed_step_id.clone(),
                 class,
             });
-    let outcome = match runtime.apply_classified_final_recovery(&request, Some(&output), infra) {
+    let outcome = match runtime.apply_classified_final_recovery(
+        &request,
+        Some(&output),
+        infra,
+        application.completion_observation,
+    ) {
         Ok(outcome) => outcome,
         Err(error) => {
             let Some(outcome) = recorded() else {

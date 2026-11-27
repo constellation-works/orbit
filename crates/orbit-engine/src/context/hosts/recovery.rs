@@ -203,6 +203,11 @@ pub struct FinalRecoveryApplication {
     /// transient infrastructure. The decision is then an `escalate` the host
     /// records as an infra block that a passing probe requeues.
     pub infrastructure: Option<orbit_types::workflow::TransientInfrastructure>,
+    /// Set when the failed step was a read-only completion observation of a
+    /// published candidate. A park the host applies for it ends the run
+    /// `held` as `delivery_forge_observation_unavailable`, not `failed`, so
+    /// the host must not offer a requeue that refuses a held source.
+    pub completion_observation: bool,
 }
 
 /// [ORB-13907] What applying a final-recovery decision did.

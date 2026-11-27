@@ -76,6 +76,17 @@ pub(in crate::application::job::resume::source_repair) fn footprint_held(run: &J
         })
 }
 
+/// `run` is a stopped task delivery held because completion could not read
+/// the forge ([`workflow::DeliveryRefusal::ForgeObservationUnavailable`]):
+/// nothing changed on the forge, and `orbit job resume` reads it again.
+pub(super) fn held_on_forge_observation(run: &JobRun) -> bool {
+    run.job_id == workflow::TASK_PR_PIPELINE_JOB
+        && run.state == JobRunState::Held
+        && source_owner_is_gone(run)
+        && run.steps.last().and_then(|step| step.error_code.as_deref())
+            == Some(workflow::DeliveryRefusal::ForgeObservationUnavailable.error_code())
+}
+
 /// A publication the next run may adopt: a stopped failed, cancelled, or
 /// succeeded delivery, or a stopped review-decision hold.
 pub(super) fn adoptable_published_source(source: &JobRun) -> bool {

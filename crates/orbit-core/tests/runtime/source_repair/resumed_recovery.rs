@@ -176,6 +176,7 @@ fn resumed_fixture() -> Resumed {
         workspace_path: checkout.clone(),
         completion_done: false,
         infrastructure: None,
+        completion_observation: false,
     };
     assert_eq!(
         Recovery::apply_final_recovery(
