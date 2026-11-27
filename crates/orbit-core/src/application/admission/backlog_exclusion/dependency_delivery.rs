@@ -14,7 +14,6 @@ use orbit_types::task::Task;
 use orbit_types::workflow::ShipMode;
 
 use super::{BacklogTaskExclusion, BacklogTaskExclusionReason};
-use crate::OrbitRuntime;
 use crate::application::contracts::EngineHostPort;
 
 pub(super) struct DependencyDeliveryContext<'a> {
