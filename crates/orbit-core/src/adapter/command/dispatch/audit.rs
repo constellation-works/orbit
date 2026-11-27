@@ -195,6 +195,23 @@ pub fn audit_role_label(
     audit_role_label_with_env(env, input, agent_override, model_override)
 }
 
+fn trimmed_non_blank(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn finalize_audit_role_label(agent: Option<String>, model: Option<String>) -> String {
+    let agent = normalize_agent_family_for_model(agent.as_deref(), model.as_deref())
+        .ok()
+        .flatten()
+        .or(agent);
+
+    normalize_optional_attribution_label(model.as_deref().or(agent.as_deref()), model.as_deref())
+        .unwrap_or_else(|| "agent".to_string())
+}
+
 fn audit_role_label_with_env(
     env: &Env,
     input: &Value,
@@ -205,8 +222,9 @@ fn audit_role_label_with_env(
     let env_agent = env_non_blank(env.orbit_agent_name());
     let env_model = env_non_blank(env.orbit_agent_model());
     let has_input_identity = input_agent.is_some() || input_model.is_some();
-    let has_flag_identity = agent_override.is_some_and(|value| !value.trim().is_empty())
-        || model_override.is_some_and(|value| !value.trim().is_empty());
+    let flag_agent = trimmed_non_blank(agent_override);
+    let flag_model = trimmed_non_blank(model_override);
+    let has_flag_identity = flag_agent.is_some() || flag_model.is_some();
     let has_env_identity = env_agent.is_some() || env_model.is_some();
     let (agent, model) = if has_env_identity && !has_flag_identity {
         let agent = normalize_agent_family_for_model(env_agent.as_deref(), env_model.as_deref())
@@ -215,28 +233,40 @@ fn audit_role_label_with_env(
             .or(env_agent);
         (agent.clone(), agent)
     } else if has_flag_identity && (has_env_identity || !has_input_identity) {
-        (
-            agent_override
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned),
-            model_override
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned),
-        )
+        (flag_agent, flag_model)
     } else if has_input_identity {
         (input_agent, input_model)
     } else {
         (env_agent, env_model)
     };
-    let agent = normalize_agent_family_for_model(agent.as_deref(), model.as_deref())
-        .ok()
-        .flatten()
-        .or(agent);
+    finalize_audit_role_label(agent, model)
+}
 
-    normalize_optional_attribution_label(model.as_deref().or(agent.as_deref()), model.as_deref())
-        .unwrap_or_else(|| "agent".to_string())
+/// Resolve the audit `role` label for `orbit tool run --dry-run`.
+///
+/// Matches `tool_run_actor_role` precedence: tool-input `model` identity,
+/// then explicit `--agent`/`--model` flags, then `ORBIT_AGENT_*` env,
+/// falling back to `"agent"`.
+pub(crate) fn dry_run_audit_role_label(
+    env: &Env,
+    input: &Value,
+    agent_override: Option<&str>,
+    model_override: Option<&str>,
+) -> String {
+    let (input_agent, input_model) = read_input_identity(input);
+    let flag_agent = trimmed_non_blank(agent_override);
+    let flag_model = trimmed_non_blank(model_override);
+    let (agent, model) = if input_agent.is_some() || input_model.is_some() {
+        (input_agent, input_model)
+    } else if flag_agent.is_some() || flag_model.is_some() {
+        (flag_agent, flag_model)
+    } else {
+        (
+            env_non_blank(env.orbit_agent_name()),
+            env_non_blank(env.orbit_agent_model()),
+        )
+    };
+    finalize_audit_role_label(agent, model)
 }
 
 /// Resolve the audit role with the MCP trust boundary applied. Standalone MCP

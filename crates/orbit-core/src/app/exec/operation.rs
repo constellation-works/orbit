@@ -37,6 +37,20 @@ pub(super) struct DashboardRowSpec {
     pub(super) recorded_as: Option<&'static str>,
 }
 
+/// How an operation's command-line invocation audit `role` is resolved.
+#[derive(Clone)]
+pub(super) enum AuditRole {
+    /// A fixed static role label (such as `"admin"`).
+    Fixed(&'static str),
+    /// Resolved with `tool_run_actor_role` precedence: input identity,
+    /// `--agent`/`--model` flags, then `ORBIT_AGENT_*` env.
+    ToolRun {
+        input: Value,
+        agent: Option<String>,
+        model: Option<String>,
+    },
+}
+
 /// One command's identity in the operation registry: the names its governance
 /// rows and its audit row are keyed on.
 #[derive(Clone)]
@@ -53,7 +67,7 @@ pub(crate) struct Operation {
     pub(super) target_type: Option<&'static str>,
     pub(super) target_id: Option<String>,
     pub(super) job_run_id: Option<String>,
-    pub(super) audit_role: Option<&'static str>,
+    pub(super) audit_role: Option<AuditRole>,
     /// The arguments a command-line invocation row records, as JSON text.
     pub(super) arguments_json: Option<String>,
     /// Whether a command-line caller is held to the command's governance row.
@@ -219,7 +233,23 @@ impl Operation {
 
     /// Preserve the command's explicit audit attribution.
     pub(crate) fn audit_role(mut self, role: &'static str) -> Self {
-        self.audit_role = Some(role);
+        self.audit_role = Some(AuditRole::Fixed(role));
+        self
+    }
+
+    /// Resolve the command's invocation audit `role` with `tool_run_actor_role`
+    /// precedence (input identity, `--agent`/`--model` flags, then `ORBIT_AGENT_*` env).
+    pub(crate) fn tool_run_audit_role(
+        mut self,
+        input: Value,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Self {
+        self.audit_role = Some(AuditRole::ToolRun {
+            input,
+            agent,
+            model,
+        });
         self
     }
 

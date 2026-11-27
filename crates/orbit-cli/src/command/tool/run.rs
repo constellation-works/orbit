@@ -284,6 +284,8 @@ impl ToolRunArgs {
                 Command::DryRun {
                     name: self.name,
                     input,
+                    agent: self.agent,
+                    model: self.model,
                     session: session_context,
                 },
             )?
