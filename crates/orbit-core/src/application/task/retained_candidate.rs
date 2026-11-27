@@ -25,6 +25,9 @@ const MAX_CANDIDATE_PATHS: usize = 20;
 const CANDIDATE_STATUS_TIMEOUT: StdDuration = StdDuration::from_secs(30);
 const CANDIDATE_STATUS_LIMIT: usize = 256 * 1024;
 
+/// Largest retained final-recovery patch an operator can adopt.
+const RETAINED_PATCH_LIMIT: usize = 8 * 1024 * 1024;
+
 // A test cap smaller than a fixture's porcelain, so truncation does not
 // need a worktree large enough to fill 256 KiB.
 #[cfg(test)]
@@ -194,6 +197,92 @@ impl OrbitRuntime {
     }
 }
 
+/// The exact uncommitted tracked edits of a stopped run's retained checkout,
+/// read without writing to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RetainedPatch {
+    /// The checkout's `HEAD`, which the patch applies to.
+    pub(crate) head: String,
+    /// `git diff --binary --full-index HEAD` output.
+    pub(crate) bytes: Vec<u8>,
+    /// Changed tracked paths, in `git status` order.
+    pub(crate) paths: Vec<String>,
+}
+
+impl OrbitRuntime {
+    /// Read the retained checkout's uncommitted tracked edits for explicit
+    /// adoption. `Ok(None)` is a clean checkout. Refuses (`Err`) a missing
+    /// checkout, untracked or unmerged paths, an incomplete listing and a
+    /// patch beyond the adoption limit: none of those is an exact patch.
+    pub(crate) fn retained_patch(&self, run: &JobRun) -> Result<Option<RetainedPatch>, String> {
+        let paths = run_worktree_paths(self.env(), &self.paths().repo_root, run)
+            .map_err(|error| format!("run {} names no worktree: {error}", run.run_id))?;
+        let Some(worktree) = paths.into_iter().find(|path| path.is_dir()) else {
+            return Err(format!("run {}'s worktree no longer exists", run.run_id));
+        };
+        let (status, truncated) = read_only_git(
+            &worktree,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            candidate_status_limit(),
+        )?;
+        if truncated {
+            return Err("the retained checkout's status listing is truncated".into());
+        }
+        let status = String::from_utf8(status)
+            .map_err(|_| "the retained checkout's status names a non-UTF-8 path".to_string())?;
+        let mut records = status.split('\0').filter(|record| !record.is_empty());
+        let mut changed = Vec::new();
+        while let Some(record) = records.next() {
+            let (Some(code), Some(path)) = (record.get(..2), record.get(3..)) else {
+                return Err("the retained checkout's status is unreadable".into());
+            };
+            if code == "??" {
+                return Err(format!("the retained checkout has untracked path {path}"));
+            }
+            if code.contains('U') || code == "AA" || code == "DD" {
+                return Err(format!("the retained checkout has unmerged path {path}"));
+            }
+            if code.contains(['R', 'C']) {
+                records.next();
+            }
+            changed.push(path.to_string());
+        }
+        if changed.is_empty() {
+            return Ok(None);
+        }
+        let (head, _) = read_only_git(&worktree, &["rev-parse", "--verify", "HEAD"], 256)?;
+        let head = String::from_utf8_lossy(&head).trim().to_string();
+        let (bytes, truncated) = read_only_git(
+            &worktree,
+            &[
+                "diff",
+                "--binary",
+                "--full-index",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--no-renames",
+                "HEAD",
+                "--",
+            ],
+            RETAINED_PATCH_LIMIT,
+        )?;
+        if truncated {
+            return Err(format!(
+                "the retained edits exceed the {RETAINED_PATCH_LIMIT}-byte adoption limit"
+            ));
+        }
+        if bytes.is_empty() {
+            return Err("the retained checkout's status and diff disagree".into());
+        }
+        Ok(Some(RetainedPatch {
+            head,
+            bytes,
+            paths: changed,
+        }))
+    }
+}
+
 /// Paths `git status` kept, and whether the capture stopped early.
 struct CandidatePathListing {
     paths: Vec<String>,
@@ -208,12 +297,12 @@ fn candidate_status_limit() -> usize {
     CANDIDATE_STATUS_LIMIT
 }
 
-/// Paths `git status` reports in a worktree — staged, unstaged or untracked —
-/// without writing to it: optional locks are off, so Git neither takes the
-/// index lock nor refreshes the index, and no fsmonitor program runs. Status
-/// never recurses into a gitlink's checkout, whose own config could run a
-/// filter command on the host.
-fn changed_paths(worktree: &Path) -> Result<CandidatePathListing, String> {
+/// Run Git in `worktree` without writing to it: optional locks are off, so
+/// Git neither takes the index lock nor refreshes the index, and no fsmonitor
+/// program runs. Nothing recurses into a gitlink's checkout, whose own config
+/// could run a filter command on the host. Returns stdout without the
+/// truncation marker, and whether the capture stopped at `limit`.
+fn read_only_git(worktree: &Path, args: &[&str], limit: usize) -> Result<(Vec<u8>, bool), String> {
     let mut command = Command::new("git");
     command
         .current_dir(worktree)
@@ -223,31 +312,41 @@ fn changed_paths(worktree: &Path) -> Result<CandidatePathListing, String> {
             "-c",
             "diff.ignoreSubmodules=all",
             "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "-z",
         ])
+        .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0");
-    let output = run_bounded_capped(
-        &mut command,
-        CANDIDATE_STATUS_TIMEOUT,
-        candidate_status_limit(),
-    )
-    .map_err(|error| error.to_string())?;
+    let mut output = run_bounded_capped(&mut command, CANDIDATE_STATUS_TIMEOUT, limit)
+        .map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err(format!(
-            "git status exited with {}: {}",
+            "git {} exited with {}: {}",
+            args.first().copied().unwrap_or_default(),
             output.status,
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
     let truncated = output.stdout.ends_with(OUTPUT_TRUNCATED_MARKER);
-    let retained = if truncated {
-        &output.stdout[..output.stdout.len() - OUTPUT_TRUNCATED_MARKER.len()]
-    } else {
-        &output.stdout
-    };
+    if truncated {
+        output
+            .stdout
+            .truncate(output.stdout.len() - OUTPUT_TRUNCATED_MARKER.len());
+    }
+    Ok((output.stdout, truncated))
+}
+
+/// Paths `git status` reports in a worktree — staged, unstaged or untracked —
+/// without writing to it: optional locks are off, so Git neither takes the
+/// index lock nor refreshes the index, and no fsmonitor program runs. Status
+/// never recurses into a gitlink's checkout, whose own config could run a
+/// filter command on the host.
+fn changed_paths(worktree: &Path) -> Result<CandidatePathListing, String> {
+    let (stdout, truncated) = read_only_git(
+        worktree,
+        &["status", "--porcelain=v1", "-z"],
+        candidate_status_limit(),
+    )?;
+    let retained = stdout.as_slice();
     // A cut that lands inside a record leaves a prefix that is not a path.
     let partial_tail = truncated && !retained.is_empty() && !retained.ends_with(b"\0");
     let stdout = String::from_utf8_lossy(retained);

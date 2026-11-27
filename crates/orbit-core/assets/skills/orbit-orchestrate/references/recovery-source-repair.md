@@ -84,6 +84,13 @@ after final recovery escalated:
     effects. Dirty worktrees, active or ambiguous lineage and changed heads or
     specifications refuse. Green requeue remains the route for carrying the
     unchanged candidate without authorizing implementation.
+  - When final recovery left its own fix uncommitted in the publisher's
+    checkout, inspect with `"adopt_retained_edits": true`. The binding gains a
+    `retained_patch` (digest, size, base and paths) and the reply carries the
+    exact patch to review. Submit that binding unchanged; the successor
+    applies those bytes over the same candidate, then commits, validates and
+    reviews them on the same PR. Changed, untracked, unmerged or unreadable
+    edits refuse before any reservation; the original checkout stays as it was.
 - **Final recovery resumed the publishing run in place and it failed again.**
   Select that same run. Its checkpoints must hold the host's applied `resume`
   receipt for this task and run, with no host repair commit, beside the

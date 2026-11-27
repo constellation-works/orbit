@@ -325,6 +325,7 @@ impl OrbitRuntime {
                 &source,
                 &task,
                 Some(admitted_run_id),
+                binding.retained_patch.is_some(),
             )? == *expected);
         }
         Ok(self.observe_source_successor(&source, &task)? == *expected)

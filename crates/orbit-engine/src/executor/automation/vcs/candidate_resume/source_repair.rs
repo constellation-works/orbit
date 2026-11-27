@@ -3,13 +3,25 @@ use super::super::git::git_output;
 use super::super::pr_answers::read_pr_status;
 use super::adopt::{Adoption, adopt_published_branch};
 use super::apply::{Applied, apply, output, record};
+use super::retained_patch::{RetainedApplied, apply_retained_patch};
 use super::{Candidate, Outcome};
 use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 use orbit_common::OrbitError;
 use orbit_types::task::Task;
-use orbit_types::workflow::{JobRun, SourceRepairAdmission, source_repair_authorizations};
+use orbit_types::workflow::{
+    JobRun, SOURCE_REPAIR_RETAINED_PATCH_APPLIED, SourceRepairAdmission,
+    source_repair_authorizations,
+};
 use serde_json::{Value, json};
 use std::path::Path;
+
+/// The admitted repair run and the retained edits its admission binds.
+struct RetainedTarget<'a> {
+    run: &'a JobRun,
+    task: &'a Task,
+    admission: &'a SourceRepairAdmission,
+    bound: &'a orbit_types::workflow::SourceRepairRetainedPatch,
+}
 
 pub(super) fn continue_source<
     H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
@@ -112,8 +124,9 @@ pub(super) fn continue_source<
     if admission.resident_repair_deadline().is_some() {
         repair["failed_step_id"] = json!("resident_source_repair");
     }
+    let process_env = host.process_env();
     match apply(
-        &host.process_env(),
+        &process_env,
         &candidate,
         &candidate.head_sha,
         workspace,
@@ -127,6 +140,15 @@ pub(super) fn continue_source<
         }
         Applied::Clean | Applied::AlreadyPresent => {}
     }
+    if let Some(bound) = &binding.retained_patch {
+        let target = RetainedTarget {
+            run,
+            task,
+            admission: &admission,
+            bound,
+        };
+        apply_bound_retained_patch(host, &process_env, &target, workspace, &mut repair)?;
+    }
     let outcome = Outcome::Repair(repair);
     record(host, task, &run.run_id, &candidate, &outcome)?;
     let mut result = output(&outcome, Some(&candidate), base);
@@ -135,6 +157,71 @@ pub(super) fn continue_source<
     result["reused_branch"] = json!(binding.branch);
     result["reused_head_sha"] = json!(binding.head_sha);
     Ok(result)
+}
+
+/// Carry the operator-adopted final-recovery edits onto the adopted candidate
+/// and tell the implementer they are there. A conflicting candidate cannot
+/// take them: the exact bytes would land over conflict markers.
+fn apply_bound_retained_patch<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
+    host: &H,
+    process_env: &orbit_common::Env,
+    target: &RetainedTarget<'_>,
+    workspace: &Path,
+    repair: &mut Value,
+) -> Result<(), OrbitError> {
+    let RetainedTarget {
+        run,
+        task,
+        admission,
+        bound,
+    } = target;
+    let refused = |reason: &str| OrbitError::Execution(format!("source repair refused: {reason}"));
+    if repair["trigger"] != "continuation" {
+        return Err(refused(
+            "the candidate conflicts with the base, so the retained final-recovery edits cannot be applied over it; inspect again on a clean candidate",
+        ));
+    }
+    let bytes = host
+        .source_repair_retained_patch(&run.run_id)?
+        .ok_or_else(|| refused("bound retained final-recovery edits are unavailable"))?;
+    let note = format!(
+        "Retained final-recovery edits from run {} (sha256 {}) are applied as uncommitted changes: {}.",
+        admission.binding.source_run_id,
+        bound.sha256,
+        bound.paths.join(", ")
+    );
+    match apply_retained_patch(process_env, workspace, bound, &bytes)? {
+        RetainedApplied::Refused(reason) => return Err(refused(&reason)),
+        RetainedApplied::Clean => {
+            repair["output"] = json!(format!("{}\n\n{note}", admission.diagnosis));
+        }
+        RetainedApplied::Conflict { paths, output } => {
+            repair["trigger"] = json!("conflict");
+            repair["conflicting_paths"] = json!(paths);
+            repair["output"] = json!(format!("{}\n\n{note}\n\n{output}", admission.diagnosis));
+        }
+    }
+    repair["retained_patch"] = json!({
+        "source_run_id": admission.binding.source_run_id,
+        "sha256": bound.sha256,
+        "paths": bound.paths,
+    });
+    host.apply_task_automation_update(
+        &task.id,
+        crate::context::TaskAutomationUpdate {
+            status_event: Some(SOURCE_REPAIR_RETAINED_PATCH_APPLIED.into()),
+            status_note: Some(
+                json!({"request_key":admission.request_key,
+                    "source_run_id":admission.binding.source_run_id,
+                    "sha256":bound.sha256,"run_id":run.run_id})
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+    )?;
+    Ok(())
 }
 
 /// A host-authenticated completed owner candidate skips implementation after a

@@ -165,6 +165,7 @@ impl OrbitRuntime {
                 .map(|tip| tip.head.clone())
                 .or_else(|| preserved_review.map(|tip| tip.head.clone())),
             candidate_ref: preserved_review.map(|tip| tip.durable_ref.clone()),
+            retained_patch: None,
         };
         Ok((source, task, binding))
     }

@@ -87,6 +87,15 @@ macro_rules! __orbit_test_host_review {
                 ))
             }
 
+            fn source_repair_retained_patch(
+                &self,
+                _run_id: &str,
+            ) -> Result<Option<Vec<u8>>, fixture::OrbitError> {
+                Err(fixture::OrbitError::CapabilityDenied(
+                    "operator source repair is unavailable on this host".into(),
+                ))
+            }
+
             fn admit_pr_auto_fix(
                 &self,
                 _request: &$crate::PrAutoFixRequest,
