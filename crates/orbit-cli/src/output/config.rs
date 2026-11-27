@@ -197,8 +197,25 @@ impl CrewRow {
     }
 }
 
+/// How much of the config `orbit config show` lists.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfigShowDetail {
+    /// Hide default-valued advanced keys, all-unset sections and the Paths,
+    /// Crew purposes and Review summaries.
+    Summary,
+    /// List every key and every summary section.
+    Full,
+}
+
+impl ConfigShowDetail {
+    fn is_full(self) -> bool {
+        self == Self::Full
+    }
+}
+
 /// Build the payload for `orbit config show`.
-pub(crate) fn show_payload(shown: ConfigShowData, all: bool) -> Payload {
+pub(crate) fn show_payload(shown: ConfigShowData, detail: ConfigShowDetail) -> Payload {
+    let all = detail.is_full();
     match shown {
         ConfigShowData::Effective {
             values,

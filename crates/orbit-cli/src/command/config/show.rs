@@ -4,6 +4,7 @@ use orbit_core::app::config::{Command, Outcome, exec};
 
 use super::support::ConfigScopeArg;
 use crate::command::{CommandOut, ExecuteCore};
+use crate::output::config::ConfigShowDetail;
 
 #[derive(Args)]
 pub struct ConfigShowArgs {
@@ -29,6 +30,11 @@ impl ExecuteCore for ConfigShowArgs {
         else {
             unreachable!("config show returned an unrelated outcome");
         };
-        Ok(crate::output::config::show_payload(*shown, self.all).into())
+        let detail = if self.all {
+            ConfigShowDetail::Full
+        } else {
+            ConfigShowDetail::Summary
+        };
+        Ok(crate::output::config::show_payload(*shown, detail).into())
     }
 }
