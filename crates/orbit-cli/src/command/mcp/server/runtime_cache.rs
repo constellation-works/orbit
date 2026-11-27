@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use orbit_cmd::registry_runtime::{RegisteredRuntimeStamp, ResolvedWorkspaceSelection};
 use orbit_common::OrbitError;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 use orbit_types::plugin::InstalledPlugin;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 
@@ -39,12 +39,12 @@ pub(super) struct WorkspaceRuntimeCache {
     observation: Mutex<HashMap<String, CachedRuntime>>,
 }
 
-/// One built runtime together with the facts it was composed from.
+/// One built workspace core together with the facts it was composed from.
 struct CachedRuntime {
     workspace: Workspace,
     checkout: WorkspaceCheckout,
     stamp: RegisteredRuntimeStamp,
-    value: Arc<OrbitRuntime>,
+    value: Arc<Core>,
 }
 
 impl CachedRuntime {
@@ -83,20 +83,20 @@ impl WorkspaceRuntimeCache {
         global_root: &Path,
         selected: &ResolvedWorkspaceSelection,
         host_plugins: Vec<InstalledPlugin>,
-        build: impl FnOnce() -> Result<OrbitRuntime, OrbitError>,
-    ) -> Result<Arc<OrbitRuntime>, OrbitError> {
+        build: impl FnOnce() -> Result<Core, OrbitError>,
+    ) -> Result<Arc<Core>, OrbitError> {
         resolve_kind(&self.writable, global_root, selected, host_plugins, build)
     }
 
-    /// Reuse the observation runtime already built for `selected`, or build
+    /// Reuse the observation core already built for `selected`, or build
     /// one and keep it. Never consults or publishes the writable map.
     pub(super) fn resolve_observation(
         &self,
         global_root: &Path,
         selected: &ResolvedWorkspaceSelection,
         host_plugins: Vec<InstalledPlugin>,
-        build: impl FnOnce() -> Result<OrbitRuntime, OrbitError>,
-    ) -> Result<Arc<OrbitRuntime>, OrbitError> {
+        build: impl FnOnce() -> Result<Core, OrbitError>,
+    ) -> Result<Arc<Core>, OrbitError> {
         resolve_kind(
             &self.observation,
             global_root,
@@ -112,8 +112,8 @@ fn resolve_kind(
     global_root: &Path,
     selected: &ResolvedWorkspaceSelection,
     host_plugins: Vec<InstalledPlugin>,
-    build: impl FnOnce() -> Result<OrbitRuntime, OrbitError>,
-) -> Result<Arc<OrbitRuntime>, OrbitError> {
+    build: impl FnOnce() -> Result<Core, OrbitError>,
+) -> Result<Arc<Core>, OrbitError> {
     let stamp = RegisteredRuntimeStamp::read_with_host_plugins(
         global_root,
         &selected.checkout,
@@ -152,7 +152,7 @@ fn reusable(
     entries: &Mutex<HashMap<String, CachedRuntime>>,
     selected: &ResolvedWorkspaceSelection,
     stamp: &RegisteredRuntimeStamp,
-) -> Option<Arc<OrbitRuntime>> {
+) -> Option<Arc<Core>> {
     lock(entries)
         .get(&selected.workspace.id)
         .filter(|cached| cached.matches(selected, stamp))

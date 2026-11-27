@@ -1,8 +1,8 @@
 use clap::{Args, Subcommand};
 use orbit_common::Env;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 
-use crate::command::{CommandOut, Execute};
+use crate::command::{CommandOut, ExecuteCore};
 
 use super::add::ToolAddArgs;
 use super::disable::ToolDisableArgs;
@@ -31,8 +31,8 @@ pub struct ToolCommand {
 }
 
 impl ToolCommand {
-    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
-        self.command.execute_with_env(runtime, env)
+    pub(crate) fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
+        self.command.execute_with_env(core, env)
     }
 }
 
@@ -57,18 +57,16 @@ pub enum ToolSubcommand {
 }
 
 impl ToolSubcommand {
-    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+    fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
         match self {
-            ToolSubcommand::List(args) => args.execute(runtime),
-            ToolSubcommand::Show(args) => args.execute(runtime),
-            ToolSubcommand::Run(args) => args.execute_with_env(runtime, env),
-            ToolSubcommand::Add(args) => args.execute(runtime),
-            ToolSubcommand::Remove(args) => args.execute(runtime),
-            ToolSubcommand::Enable(args) => args.execute(runtime),
-            ToolSubcommand::Disable(args) => args.execute(runtime),
-            ToolSubcommand::Doctor(args) => {
-                doctor::execute_tool_doctor(runtime, args.name.as_deref())
-            }
+            ToolSubcommand::List(args) => args.execute(core),
+            ToolSubcommand::Show(args) => args.execute(core),
+            ToolSubcommand::Run(args) => args.execute_with_env(core, env),
+            ToolSubcommand::Add(args) => args.execute(core),
+            ToolSubcommand::Remove(args) => args.execute(core),
+            ToolSubcommand::Enable(args) => args.execute(core),
+            ToolSubcommand::Disable(args) => args.execute(core),
+            ToolSubcommand::Doctor(args) => doctor::execute_tool_doctor(core, args.name.as_deref()),
         }
     }
 }

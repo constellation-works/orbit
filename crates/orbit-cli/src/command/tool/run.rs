@@ -2,21 +2,26 @@ use std::sync::OnceLock;
 
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
-use orbit_cmd::task_owner::bound_workspace_identity;
+use orbit_cmd::task_owner::WorkspaceIdentity;
 use orbit_common::Env;
 use orbit_common::governance::task::select_fields;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
+use orbit_core::app::tool::{self, CliWorkspaceBinding, Command, ToolEntryPoint};
 use orbit_core::application::task::{
     TaskListResultPolicy, TaskListResultProfile, artifact_put_result,
 };
 use orbit_core::runtime::authorization::route_resident_delivery_recovery_to_broker;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError};
 use orbit_types::task::is_task_show_projection_field;
 use orbit_types::tool::{McpTransport, ToolSessionContext, tool_family, tool_operation_name};
 use serde_json::{Map, Value};
 
 use crate::command::{CommandOut, Payload};
+
+const TASK_WRITE_TOOLS: &[&str] = &["orbit.task.add", "orbit.task.update", "orbit.task.reject"];
+
+const WRITE_SIDECAR_FIELDS: &[&str] = &["comments", "history"];
 
 /// Runtime route for one `orbit tool run` invocation, chosen before bootstrap.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,11 +233,13 @@ fn trimmed_string_field(value: &Value, key: &str) -> Option<String> {
 }
 
 impl ToolRunArgs {
-    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+    pub(crate) fn execute_with_env(self, core: &Core, env: &Env) -> CommandOut {
         // A tool invocation owns only the ledger key produced by this call.
         orbit_core::application::resident::take_failed_resident_action_key();
         let mut input = self.prepare_tool_run_input()?;
 
+        let initial_binding =
+            tool::exec(core, Command::CliWorkspaceBinding)?.into_cli_workspace_binding()?;
         // Resolve `workspace` once above local CLI tools, then bind or fail
         // closed. MCP uses its own server-side selector resolution.
         // `orbit.task.show` is bootstrapped via RuntimeNeed::TaskOwner so an
@@ -244,10 +251,7 @@ impl ToolRunArgs {
         // bridge or replace the worker runtime with owner state.
         let claimed_owner_call =
             orbit_types::tool::is_claimed_owner_tool(tool_operation_name(&self.name, &input))
-                && runtime
-                    .run()
-                    .claim_owner()
-                    .is_some_and(|owner| owner.is_remote());
+                && initial_binding.is_remote_claimed_owner;
         // The resident broker must verify coverage before the caller opens
         // another workspace. Keep the named selector in the call's input.
         let bound = if claimed_owner_call
@@ -258,19 +262,42 @@ impl ToolRunArgs {
             ) {
             None
         } else {
-            RegisteredRuntimeFactory::bind_cli_tool_workspace(runtime, &mut input, &self.name)?
+            RegisteredRuntimeFactory::bind_cli_tool_workspace_for_core(
+                &initial_binding.global_root,
+                &initial_binding.repo_root,
+                initial_binding.composition_snapshot.as_deref(),
+                &mut input,
+                &self.name,
+            )?
         };
-        let runtime = bound.as_ref().unwrap_or(runtime);
+        let (core, binding) = match bound.as_ref() {
+            Some(bound_core) => (
+                bound_core,
+                tool::exec(bound_core, Command::CliWorkspaceBinding)?
+                    .into_cli_workspace_binding()?,
+            ),
+            None => (core, initial_binding),
+        };
 
-        let owner = bound_workspace_identity(runtime);
-        let session_context = local_tool_session_context(runtime, owner.as_ref())?;
+        let owner = binding
+            .registered_workspace
+            .as_ref()
+            .map(|(id, name)| WorkspaceIdentity {
+                id: id.clone(),
+                name: name.clone(),
+            });
+        let session_context = local_tool_session_context(&binding, owner.as_ref());
 
         if self.dry_run {
-            let result = runtime.run_tool_dry_run_with_session_context(
-                &self.name,
-                &input,
-                session_context,
-            )?;
+            let result = tool::exec(
+                core,
+                Command::DryRun {
+                    name: self.name,
+                    input,
+                    session: session_context,
+                },
+            )?
+            .into_dry_run()?;
             let policy = if result.policy_allowed {
                 "allowed"
             } else {
@@ -299,13 +326,18 @@ impl ToolRunArgs {
 
         let mut execution_input = input.clone();
         let shape = self.prepare_tool_run_shape(&mut execution_input)?;
-        let output = runtime.execute_tool_command_with_session_context(
-            &self.name,
-            execution_input,
-            self.agent,
-            self.model,
-            session_context,
-        )?;
+        let output = tool::exec(
+            core,
+            Command::Run {
+                name: self.name.clone(),
+                input: execution_input,
+                agent: self.agent,
+                model: self.model,
+                entry_point: ToolEntryPoint::Cli,
+                session: session_context,
+            },
+        )?
+        .into_value()?;
         orbit_core::application::resident::take_failed_resident_action_key();
         let output = crate::command::task::support::attach_bound_workspace_identity(
             &self.name,
@@ -317,41 +349,24 @@ impl ToolRunArgs {
     }
 }
 
-const LOCAL_MACHINE_ID_FALLBACK: &str = "host/local";
-
 fn local_tool_session_context(
-    runtime: &OrbitRuntime,
-    owner: Option<&orbit_cmd::task_owner::WorkspaceIdentity>,
-) -> Result<ToolSessionContext, OrbitError> {
-    let (machine_id, machine_name) = local_machine_identity(runtime);
-    Ok(ToolSessionContext {
-        workspace: Some(runtime.paths().repo_root.to_string_lossy().into_owned()),
+    binding: &CliWorkspaceBinding,
+    owner: Option<&WorkspaceIdentity>,
+) -> ToolSessionContext {
+    ToolSessionContext {
+        workspace: Some(binding.repo_root.to_string_lossy().into_owned()),
         workspace_id: owner
             .map(|owner| owner.id.clone())
-            .or_else(|| runtime.workspace_id().ok()),
-        caller_machine_id: Some(machine_id.clone()),
-        caller_machine_name: machine_name.clone(),
-        process_machine_id: Some(machine_id),
-        process_machine_name: machine_name,
+            .or_else(|| binding.workspace_id.as_ref().ok().cloned()),
+        caller_machine_id: Some(binding.machine_id.clone()),
+        caller_machine_name: binding.machine_name.clone(),
+        process_machine_id: Some(binding.machine_id.clone()),
+        process_machine_name: binding.machine_name.clone(),
         transport: Some(McpTransport::Local),
         trace_id: Some(audit_execution_id("trace")),
         ..ToolSessionContext::default()
-    })
-}
-
-fn local_machine_identity(runtime: &OrbitRuntime) -> (String, Option<String>) {
-    // Open already attached this from the narrow machine-identity read.
-    // A runtime with no location (in-memory, or opened outside the factory)
-    // keeps the historical unattributed fallback and does not read config.
-    match runtime.automation_execution_location() {
-        Some(location) => (location.machine_id.clone(), location.machine_name.clone()),
-        None => (LOCAL_MACHINE_ID_FALLBACK.to_string(), None),
     }
 }
-
-const TASK_WRITE_TOOLS: &[&str] = &["orbit.task.add", "orbit.task.update", "orbit.task.reject"];
-
-const WRITE_SIDECAR_FIELDS: &[&str] = &["comments", "history"];
 
 fn is_task_write_tool(tool_name: &str) -> bool {
     TASK_WRITE_TOOLS.contains(&tool_name)

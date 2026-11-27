@@ -18,6 +18,7 @@ mod operation;
 use orbit_common::OrbitError;
 use orbit_common::governance::agents::AgentsVerb;
 use orbit_config::TaskTypeDefinition;
+use orbit_types::record::CrewDiscoveryV1;
 use serde_json::Value;
 
 use super::exec::{self, App, Operation};
@@ -50,6 +51,13 @@ pub enum Command {
     RankSeasons,
     /// The dashboard's read of the recorded required-check failures.
     CiFailures(CiFailureQuery),
+    /// Discover effective crews for a workspace, for MCP workspace discovery.
+    CrewDiscovery {
+        /// Registered logical workspace id.
+        workspace_id: String,
+        /// Registered owner machine id, if any.
+        owner_machine_id: Option<String>,
+    },
 }
 
 /// What a command produced.
@@ -65,6 +73,8 @@ pub enum Outcome {
     TaskTypes(Vec<TaskTypeDefinition>),
     /// The ranking seasons on file.
     RankSeasons(RankSeasons),
+    /// Effective crew discovery for one workspace.
+    CrewDiscovery(CrewDiscoveryV1),
 }
 
 impl Outcome {
@@ -74,6 +84,9 @@ impl Outcome {
             Self::Value(value) => Ok(value),
             Self::VisionProbe(report) => serde_json::to_value(&report)
                 .map_err(|error| OrbitError::Execution(error.to_string())),
+            Self::CrewDiscovery(discovery) => serde_json::to_value(discovery).map_err(|error| {
+                OrbitError::Execution(format!("serialize crew discovery: {error}"))
+            }),
             Self::Scan(_) | Self::TaskTypes(_) | Self::RankSeasons(_) => Err(
                 OrbitError::Execution("agent read model has no JSON document".to_string()),
             ),
@@ -127,6 +140,7 @@ impl App for AgentApp {
             Command::TaskTypes => Operation::dashboard_read("agents", "task-types"),
             Command::RankSeasons => Operation::dashboard_read("agents", "rank-seasons"),
             Command::CiFailures(_) => Operation::dashboard_read("agents", "ci-failures"),
+            Command::CrewDiscovery { .. } => Operation::dashboard_read("agents", "crew-discovery"),
         }
     }
 
@@ -149,6 +163,10 @@ impl App for AgentApp {
             Command::TaskTypes => Outcome::TaskTypes(runtime.task_types().to_vec()),
             Command::RankSeasons => Outcome::RankSeasons(runtime.agent_rank_seasons()?),
             Command::CiFailures(query) => Outcome::Value(runtime.ci_failure_records(&query)?),
+            Command::CrewDiscovery {
+                workspace_id,
+                owner_machine_id,
+            } => Outcome::CrewDiscovery(runtime.crew_discovery(&workspace_id, owner_machine_id)?),
         })
     }
 }

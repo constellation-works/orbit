@@ -2,15 +2,16 @@ use clap::Args;
 use orbit_cmd::registry_runtime::{
     RegisteredRuntimeFactory, global_root_for, workspace_runtime_binding,
 };
-use orbit_cmd::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
+use orbit_cmd::{MigrateStatus, migrate_dry_run_at};
+use orbit_core::app::workspace::{self, Command, Outcome};
 use orbit_core::application::agents::{ClaimedEffortBackfill, DispatchEffortBackfill};
 use orbit_core::application::codebase::{DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill};
 use orbit_core::application::job::TaskCrewBackfill;
 use orbit_core::composition::WorkspaceAuthorityAdoption;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::{Core, OrbitError};
 use serde_json::json;
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 
 // ORB-10012: source provenance for the versioned migration surface.
 /// Inspect or apply pending `.orbit/` workspace upgrades.
@@ -144,23 +145,55 @@ impl MigrateCommand {
     }
 }
 
-impl Execute for MigrateCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ExecuteCore for MigrateCommand {
+    fn execute(self, core: &Core) -> CommandOut {
         if self.backfill_diff_stats {
-            return backfill_payload(&runtime.backfill_landed_diff_stats(self.limit)?);
+            let Outcome::DiffStatsBackfill(report) =
+                workspace::exec(core, Command::BackfillDiffStats(self.limit))?
+            else {
+                return Err(OrbitError::Execution(
+                    "migrate backfill answered an unexpected outcome".to_string(),
+                ));
+            };
+            return backfill_payload(&report);
         }
         if self.backfill_task_crews {
-            return task_crew_backfill_payload(&runtime.backfill_admitted_task_crews()?);
+            let Outcome::TaskCrewBackfill(report) =
+                workspace::exec(core, Command::BackfillTaskCrews)?
+            else {
+                return Err(OrbitError::Execution(
+                    "migrate backfill answered an unexpected outcome".to_string(),
+                ));
+            };
+            return task_crew_backfill_payload(&report);
         }
         if self.backfill_dispatch_effort {
-            return dispatch_effort_backfill_payload(&runtime.backfill_dispatch_effort()?);
+            let Outcome::DispatchEffortBackfill(report) =
+                workspace::exec(core, Command::BackfillDispatchEffort)?
+            else {
+                return Err(OrbitError::Execution(
+                    "migrate backfill answered an unexpected outcome".to_string(),
+                ));
+            };
+            return dispatch_effort_backfill_payload(&report);
         }
         if self.backfill_claimed_effort {
-            return claimed_effort_backfill_payload(&runtime.backfill_claimed_leaf_effort()?);
+            let Outcome::ClaimedEffortBackfill(report) =
+                workspace::exec(core, Command::BackfillClaimedEffort)?
+            else {
+                return Err(OrbitError::Execution(
+                    "migrate backfill answered an unexpected outcome".to_string(),
+                ));
+            };
+            return claimed_effort_backfill_payload(&report);
         }
-        // Apply path: opening the runtime (before this command ran) already
+        // Apply path: opening the workspace (before this command ran) already
         // applied everything pending; report the outcome.
-        let status = runtime.migrate_status()?;
+        let Outcome::MigrateStatus(status) = workspace::exec(core, Command::MigrateStatus)? else {
+            return Err(OrbitError::Execution(
+                "migrate status answered an unexpected outcome".to_string(),
+            ));
+        };
         status_payload(&status, false)
     }
 }

@@ -29,5 +29,4 @@ pub use factory::{
     ConfigLayerStamp, RegisteredRuntimeFactory, RegisteredRuntimeStamp, ResolvedWorkspaceBinding,
     ResolvedWorkspaceSelection, workspace_runtime_binding,
 };
-pub(crate) use selection::opened_selector_inputs;
 pub use selection::{global_root_for, selector_looks_like_path};

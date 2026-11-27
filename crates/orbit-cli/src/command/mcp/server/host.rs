@@ -9,11 +9,12 @@ use orbit_cmd::task_owner::{TaskOwnerLookup, WorkspaceIdentity};
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::{BoundWorkspaceRemedy, Env, NotFoundKind, OrbitError};
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
 use orbit_core::adapter::command::{
     GlobalAuditStoreCache, HostPluginMcpCache, HostPluginMcpSurface, ToolEntryPoint,
     execute_global_in_process_tool_dispatch_with_audit_writer, execute_global_plugin_tool,
 };
+use orbit_core::app::{agent, plugin, tool};
 use orbit_core::runtime::HostLifetime;
 use orbit_core::runtime::authorization::route_resident_delivery_recovery_to_broker;
 use orbit_mcp::federated;
@@ -169,14 +170,22 @@ impl ServerMcpHost {
                     .iter()
                     .find(|definition| &definition.schema.name == probe)
             });
-            let Ok((runtime, _)) =
+            let Ok((core, _)) =
                 self.resolve_workspace_runtime(probe, &input, context, probe_definition)
             else {
                 return BTreeSet::new();
             };
             owners
                 .values()
-                .filter(|plugin| runtime.ensure_plugin_enabled_in_workspace(plugin).is_err())
+                .filter(|plugin_name| {
+                    !matches!(
+                        plugin::exec(
+                            &core,
+                            plugin::Command::WorkspaceEnabled((*plugin_name).clone())
+                        ),
+                        Ok(plugin::Outcome::WorkspaceEnabled(true))
+                    )
+                })
                 .cloned()
                 .collect()
         } else {
@@ -354,13 +363,15 @@ impl ServerMcpHost {
     fn workspace_crews(&self, workspace_id: &str) -> Result<Value, OrbitError> {
         let selected =
             RegisteredRuntimeFactory::resolve_workspace_selector(&self.global_root, workspace_id)?;
-        let runtime = self.open_selected_runtime(&selected)?;
-        let discovery = runtime.crew_discovery(
-            &selected.workspace.id,
-            selected.workspace.owner_machine_id.clone(),
-        )?;
-        serde_json::to_value(discovery)
-            .map_err(|error| OrbitError::Execution(format!("serialize crew discovery: {error}")))
+        let core = self.open_selected_runtime(&selected)?;
+        agent::exec(
+            &core,
+            agent::Command::CrewDiscovery {
+                workspace_id: selected.workspace.id,
+                owner_machine_id: selected.workspace.owner_machine_id,
+            },
+        )?
+        .into_value()
     }
 
     pub(super) fn call_global_tool(
@@ -421,28 +432,28 @@ impl ServerMcpHost {
         input: &Value,
         context: &ToolSessionContext,
         definition: Option<&McpToolDefinition>,
-    ) -> Result<(Arc<OrbitRuntime>, ResolvedWorkspaceSelection), OrbitError> {
+    ) -> Result<(Arc<Core>, ResolvedWorkspaceSelection), OrbitError> {
         let selected = self.workspace_selection(name, input, context, definition)?;
         // Canonical dotted name: the MCP adapter maps the advertised
         // underscore form before this host sees the call. Federated workspace
         // discovery without crews does not open a runtime. Crew attachment
         // keeps the writable open below.
-        let runtime = if tool_operation_name(name, input) == WorkflowVerb::RunObserve.tool_name() {
+        let core = if tool_operation_name(name, input) == WorkflowVerb::RunObserve.tool_name() {
             self.open_observation_runtime(&selected)?
         } else {
             self.open_selected_runtime(&selected)?
         };
-        Ok((runtime, selected))
+        Ok((core, selected))
     }
 
     /// Stored-record observation. The workspace open that precedes the handler
-    /// must not reconcile stale runs or repair tasks, and this runtime must
+    /// must not reconcile stale runs or repair tasks, and this core must
     /// not occupy the writable cache: a later ordinary tool, including
     /// `orbit.workflow.run.show`, still reconciles on its own open.
     fn open_observation_runtime(
         &self,
         selected: &ResolvedWorkspaceSelection,
-    ) -> Result<Arc<OrbitRuntime>, OrbitError> {
+    ) -> Result<Arc<Core>, OrbitError> {
         let host_plugins = self
             .plugin_surface
             .host_installed_plugin_rows(&self.global_root)
@@ -452,37 +463,36 @@ impl ServerMcpHost {
             selected,
             host_plugins,
             || {
-                let runtime = RegisteredRuntimeFactory::open_registered_checkout_observational(
+                let core = RegisteredRuntimeFactory::open_registered_checkout_observational_core(
                     &self.global_root,
                     &selected.workspace,
                     &selected.checkout,
-                )?
-                .with_workspace_explicitly_selected(true);
+                )?;
                 tracing::debug!(
                     target: RUNTIME_OPEN_LOG_TARGET,
                     workspace_id = %selected.workspace.id,
                     "{OPENED_WORKSPACE_RUNTIME_LOG}"
                 );
-                Ok(runtime)
+                Ok(core)
             },
         )
     }
 
-    /// The shared long-lived runtime for one resolved checkout.
+    /// The shared long-lived core for one resolved checkout.
     ///
     /// Ordinary workspace tools and crew attachment use this open, which
     /// reconciles stale runs. Observation does not.
     fn open_selected_runtime(
         &self,
         selected: &ResolvedWorkspaceSelection,
-    ) -> Result<Arc<OrbitRuntime>, OrbitError> {
+    ) -> Result<Arc<Core>, OrbitError> {
         let host_plugins = self
             .plugin_surface
             .host_installed_plugin_rows(&self.global_root)
             .unwrap_or_default();
         self.workspace_runtimes
             .resolve(&self.global_root, selected, host_plugins, || {
-                let runtime = RegisteredRuntimeFactory::open_registered_checkout_for(
+                let core = RegisteredRuntimeFactory::open_registered_checkout_core_for(
                     &self.global_root,
                     &selected.workspace,
                     &selected.checkout,
@@ -493,7 +503,7 @@ impl ServerMcpHost {
                     workspace_id = %selected.workspace.id,
                     "{OPENED_WORKSPACE_RUNTIME_LOG}"
                 );
-                Ok(runtime)
+                Ok(core)
             })
     }
 
@@ -737,7 +747,7 @@ impl ServerMcpHost {
                     && route_resident_delivery_recovery_to_broker(&self.env, &operation)
             })
             .map(|home| serde_json::json!({"workspace": home}));
-        let (runtime, selected) = match self.resolve_workspace_runtime(
+        let (core, selected) = match self.resolve_workspace_runtime(
             name,
             broker_home.as_ref().unwrap_or(&input),
             &context,
@@ -768,22 +778,24 @@ impl ServerMcpHost {
             &operation,
             federated::CapabilityClasses::for_checkout(&selected.workspace, &selected.checkout),
         ) {
-            return runtime
-                .execute_in_process_tool_dispatch(
-                    name,
+            return tool::exec(
+                &core,
+                tool::Command::AuditRefusal {
+                    name: name.to_string(),
                     input,
-                    ToolEntryPoint::Mcp,
-                    context,
-                    move |_| Err(error),
-                )
-                .map(|outcome| outcome.value);
+                    entry_point: ToolEntryPoint::Mcp,
+                    session: context,
+                    error,
+                },
+            )?
+            .into_value();
         }
 
         let owner = WorkspaceIdentity {
             id: selected.workspace.id.clone(),
             name: selected.workspace.name.clone(),
         };
-        execute_core_tool(&runtime, name, input, context, Some(&owner))
+        execute_core_tool(&core, name, input, context, Some(&owner))
     }
 }
 
@@ -835,9 +847,9 @@ impl ServerMcpHost {
                 )?
             }
         };
-        let runtime = self.open_observation_runtime(&selected)?;
+        let core = self.open_observation_runtime(&selected)?;
         context.process_machine_id = Some(self.process_machine_id.clone());
         context.process_machine_name = Some(self.process_machine_name.clone());
-        execute_core_tool(&runtime, "orbit.attention", input, context, None)
+        execute_core_tool(&core, "orbit.attention", input, context, None)
     }
 }

@@ -1,9 +1,10 @@
 use clap::Args;
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::app::tool::{self, Command, DoctorStatus};
+use orbit_core::{Core, OrbitError};
+use serde_json::json;
 
 use crate::command::{Block, CommandOut, Payload};
 use crate::output::common::color::{Domain, Role};
-use serde_json::json;
 
 #[derive(Args)]
 pub struct ToolDoctorArgs {
@@ -11,10 +12,14 @@ pub struct ToolDoctorArgs {
     pub name: Option<String>,
 }
 
-pub(super) fn execute_tool_doctor(runtime: &OrbitRuntime, name: Option<&str>) -> CommandOut {
-    use orbit_core::adapter::command::DoctorStatus;
-
-    let results = runtime.doctor()?;
+pub(super) fn execute_tool_doctor(core: &Core, name: Option<&str>) -> CommandOut {
+    let results = tool::exec(
+        core,
+        Command::Doctor {
+            name: name.map(ToOwned::to_owned),
+        },
+    )?
+    .into_diagnosed()?;
     if let Some(name) = name {
         let row = results
             .iter()

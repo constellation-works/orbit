@@ -394,7 +394,7 @@ pub(super) fn tool_context_for_activity(
             task_id: None,
         }),
         orbit_host: Some(build_orbit_tool_host(
-            runtime,
+            crate::Core::within_tool_entry(runtime.clone()),
             None,
             ToolHostRun::InProcess(run_id.map(ToOwned::to_owned)),
             ToolSessionContext::default(),
@@ -421,7 +421,7 @@ pub(in crate::adapter::engine_host) fn rebind_activity_tool_context_to_worktree(
         task_id: Some(task_id.to_string()),
     });
     tool_context.orbit_host = Some(build_orbit_tool_host(
-        runtime,
+        crate::Core::within_tool_entry(runtime.clone()),
         Some(task_id.to_string()),
         ToolHostRun::InProcess(Some(run_id.to_string())),
         tool_context.session_context.clone(),

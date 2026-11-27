@@ -352,8 +352,7 @@ pub(crate) fn run(env: orbit_common::Env) {
     // The opaque handle over this command's runtime, for a command that runs
     // through an app's `exec`.
     let core = RegisteredRuntimeFactory::core_for_command(runtime.clone());
-    let context = DispatchContext::with_runtime(
-        &runtime,
+    let context = DispatchContext::with_core(
         &core,
         root_override.as_deref(),
         workspace_selector.as_deref(),

@@ -90,7 +90,7 @@ For a noun with verbs `v₁…vₙ`, find:
 | Handlers, and the input names and aliases they read | `crates/orbit-core/src/adapter/tool_host/<noun>_tools.rs` |
 | Redaction policy | `crates/orbit-core/src/adapter/tool_host/artifact_redaction/policy.rs` |
 | Claimed-worker routing | `crates/orbit-core/src/adapter/tool_host/worker_tools.rs` |
-| CLI args + `Execute` impls | `crates/orbit-cli/src/command/<noun>/` |
+| CLI args + `ExecuteCore` impls | `crates/orbit-cli/src/command/<noun>/` |
 | CLI audit metadata and runtime need | `crates/orbit-cli/src/command/operation/registry.rs` |
 | Governed operations | `crates/orbit-common/src/governance/authorization/catalog/operation.rs` |
 | Web handlers | `crates/orbit-web/src/api/<noun>s.rs` |
@@ -241,7 +241,7 @@ parameter order, types, requiredness and exact description strings — through
 
 ### Step 6. Derive the CLI
 
-Delete the per-verb `Args` structs and `Execute` impls. The generic
+Delete the per-verb `Args` structs and `ExecuteCore` impls. The generic
 `Invocation<V>` supplies the clap impls; the parent command's subcommand field
 has type `Invocation<<Noun>Verb>`, and its `#[command(about)]` reads the noun
 spec's `cli_about`. Keep only the noun's exhaustive CLI surface tables:

@@ -1,8 +1,9 @@
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_core::Core;
+use orbit_core::app::tool::{self, Command};
 use serde_json::{Value, json};
 
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, ExecuteCore, Payload};
 
 use super::support::tool_status;
 
@@ -15,9 +16,9 @@ pub struct ToolShowArgs {
     pub parameter: Option<String>,
 }
 
-impl Execute for ToolShowArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        let tool = runtime.show_tool(&self.name)?;
+impl ExecuteCore for ToolShowArgs {
+    fn execute(self, core: &Core) -> CommandOut {
+        let tool = tool::exec(core, Command::Show(self.name))?.into_shown()?;
 
         use crate::output::common::color::{self, Domain};
         let constraints = tool.input_schema.as_ref().map(tool_input_constraints);

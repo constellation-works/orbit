@@ -17,15 +17,15 @@ use std::path::Path;
 use orbit_common::Env;
 use orbit_common::governance::operation::{Effect, OperationVerb};
 use orbit_common::governance::task::TaskVerb;
-use orbit_core::{ActorIdentity, Core, OrbitError, OrbitRuntime};
+use orbit_core::{ActorIdentity, Core, OrbitError};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
 };
 use serde_json::Value;
 
+use crate::command::{CommandOut, CommandOutput, Commands, ExecuteCore};
 use crate::entry::resolved::Resolved;
 
-use super::super::{CommandOut, CommandOutput, Commands, Execute, ExecuteCore};
 use super::args::Invocation;
 
 /// Dispatch a command that runs through an app's `exec` and reads the
@@ -94,13 +94,12 @@ pub enum RuntimeNeed {
 }
 
 pub struct DispatchContext<'a> {
-    runtime: Option<&'a OrbitRuntime>,
-    /// The opaque handle over the same runtime, for a command that runs
+    /// The opaque handle over the opened workspace, for commands that run
     /// through an app's `exec`.
     core: Option<&'a Core>,
     root_override: Option<&'a Path>,
     /// The global `--workspace` selector, for the runtime-forbidden commands
-    /// that resolve their own workspaces instead of being handed one runtime.
+    /// that resolve their own workspaces instead of being handed one core.
     workspace_selector: Option<&'a str>,
     pub(super) env: &'a Env,
     /// The roots, worker invocation, actor and managed workspace the entry
@@ -109,8 +108,7 @@ pub struct DispatchContext<'a> {
 }
 
 impl<'a> DispatchContext<'a> {
-    pub fn with_runtime(
-        runtime: &'a OrbitRuntime,
+    pub fn with_core(
         core: &'a Core,
         root_override: Option<&'a Path>,
         workspace_selector: Option<&'a str>,
@@ -118,7 +116,6 @@ impl<'a> DispatchContext<'a> {
         resolved: &'a Resolved,
     ) -> Self {
         Self {
-            runtime: Some(runtime),
             core: Some(core),
             root_override,
             workspace_selector,
@@ -134,21 +131,12 @@ impl<'a> DispatchContext<'a> {
         resolved: &'a Resolved,
     ) -> Self {
         Self {
-            runtime: None,
             core: None,
             root_override,
             workspace_selector,
             env,
             resolved,
         }
-    }
-
-    pub(crate) fn runtime(&self) -> Result<&'a OrbitRuntime, OrbitError> {
-        self.runtime.ok_or_else(|| {
-            OrbitError::Execution(
-                "command operation required a runtime but dispatch did not provide one".to_string(),
-            )
-        })
     }
 
     pub(crate) fn core(&self) -> Result<&'a Core, OrbitError> {
@@ -261,20 +249,7 @@ macro_rules! core_dispatch {
     }};
 }
 
-macro_rules! runtime_env_dispatch {
-    ($variant:ident) => {{
-        |command, context| match command {
-            Commands::$variant(command) => {
-                command.execute_with_env(context.runtime()?, context.env)
-            }
-            _ => dispatch_mismatch(stringify!($variant)),
-        }
-    }};
-}
-
-/// Dispatch a part-migrated command: its subcommands run through an app's
-/// `exec`, and the one that has no app yet takes the runtime from the
-/// dispatch context.
+/// Dispatch a command whose subcommands read the dispatch context (core and env).
 macro_rules! boxed_context_dispatch {
     ($variant:ident) => {{
         |command, context| match command {
@@ -488,7 +463,7 @@ pub(super) fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) 
         Commands::Migrate(command) if !command.applies() => {
             command.execute_without_runtime(context.root_override, context.workspace_selector)
         }
-        Commands::Migrate(command) => command.execute(context.runtime()?),
+        Commands::Migrate(command) => ExecuteCore::execute(command, context.core()?),
         _ => dispatch_mismatch("Migrate"),
     }
 }
@@ -697,7 +672,7 @@ pub(super) fn tool_operation(
             job_run_id: None,
         }),
         json_output,
-        runtime_env_dispatch!(Tool),
+        core_env_dispatch!(Tool),
     )
     .plugin_callback_entry_point(matches!(&command.command, ToolSubcommand::Run(_)))
 }

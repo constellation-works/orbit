@@ -91,6 +91,8 @@ pub enum Command<'a> {
     },
     /// A manifest-defined tool reached through the existing tool entry.
     InvokeTool(Box<ToolCall<'a>>),
+    /// Check whether a plugin namespace is enabled in the bound workspace.
+    WorkspaceEnabled(String),
 }
 
 /// Tool arguments and a context assembled by the audited tool entry.
@@ -137,6 +139,7 @@ pub enum Outcome {
     DashboardToggled(Result<Option<PluginSummary>, AuthorizationDenial>),
     Panel(Box<PanelRead>),
     ToolOutput(Value),
+    WorkspaceEnabled(bool),
 }
 
 /// Why a plugin command failed.
@@ -189,6 +192,9 @@ impl<'a> App for PluginApp<'a> {
             Command::Migrate(request) => ("migrate", Some(request.backend_command.clone())),
             Command::ReadPanel { namespace, .. } => ("panel", Some(namespace.clone())),
             Command::InvokeTool(call) => ("tool", Some(call.name.to_string())),
+            Command::WorkspaceEnabled(_) => {
+                return Operation::dashboard_read("plugin", "workspace-enabled");
+            }
             Command::DashboardToggle(_) => {
                 unreachable!("dashboard toggles use dashboard admission")
             }
@@ -335,6 +341,11 @@ impl<'a> App for PluginApp<'a> {
                     call.enforcement,
                 )?)
             }
+            Command::WorkspaceEnabled(namespace) => Outcome::WorkspaceEnabled(
+                runtime
+                    .ensure_plugin_enabled_in_workspace(&namespace)
+                    .is_ok(),
+            ),
             Command::DashboardToggle(_) => {
                 unreachable!("dashboard toggles use dashboard admission")
             }
