@@ -125,12 +125,12 @@ impl OrbitRuntime {
             && super::inline_publication::kept_inline_publication(&state);
         let adopt_retained_edits = if inline {
             if self
-                .observe_inline_repair_lineage(&source, task, None, false)
+                .observe_source_repair(source_id, &task.id, false, false)
                 .is_ok()
             {
                 false
             } else if self
-                .observe_inline_repair_lineage(&source, task, None, true)
+                .observe_source_repair(source_id, &task.id, false, true)
                 .is_ok()
             {
                 true

@@ -1260,6 +1260,76 @@ fn conflicting_publications_guide_to_admissible_source_repair_or_discard() {
             TaskStatus::InProgress
         );
     }
+
+    // 6. A conflicting kept-inline Failed publication with tracked retained
+    // edits guides to the same adopting inspection that binds those edits.
+    {
+        let (mut fixture, checkout, _) = escalated_completion_fixture();
+        let path = checkout.join("source.txt");
+        let mut retained = std::fs::read_to_string(&path).unwrap();
+        retained.push_str("retained tracked repair\n");
+        std::fs::write(&path, retained).unwrap();
+        let forge = green_forge(&mut fixture);
+        forge.set_conflicting(true);
+
+        let error = refused(&fixture, false, "Failed/Blocked retained tracked edit");
+        assert!(
+            error.contains("adopt_retained_edits: true"),
+            "adoptable retained edits must guide to adopting inspect: {error}"
+        );
+
+        let mut request = fixture.request("inspect");
+        request["source_repair"]["adopt_retained_edits"] = json!(true);
+        let inspected = fixture
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", request)
+            .unwrap();
+        assert_eq!(inspected["binding"]["head_sha"], fixture.head);
+        assert_eq!(
+            inspected["binding"]["retained_patch"]["base_sha"],
+            fixture.head
+        );
+        assert!(
+            inspected["retained_patch"]
+                .as_str()
+                .unwrap()
+                .contains("retained tracked repair"),
+            "inspection must return the retained tracked edit"
+        );
+    }
+
+    // 7. An untracked retained path cannot be adopted, so conflict guidance
+    // offers the available discard route instead of a failing inspect.
+    {
+        let (mut fixture, checkout, _) = escalated_completion_fixture();
+        std::fs::write(checkout.join("untracked.txt"), "unadoptable\n").unwrap();
+        let forge = green_forge(&mut fixture);
+        forge.set_conflicting(true);
+
+        let error = refused(&fixture, false, "Failed/Blocked untracked retained path");
+        assert!(
+            error.contains("conflicts with its base")
+                && error.contains("is unavailable")
+                && error.contains("--discard-candidate"),
+            "unadoptable retained edits must report source repair unavailable: {error}"
+        );
+        assert!(
+            !error.contains("action `inspect`"),
+            "unadoptable retained edits must not recommend inspect: {error}"
+        );
+
+        let mut request = fixture.request("inspect");
+        request["source_repair"]["adopt_retained_edits"] = json!(true);
+        let inspect_error = fixture
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", request)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            inspect_error.contains("untracked path untracked.txt"),
+            "the advised adopting inspection would fail on the untracked path: {inspect_error}"
+        );
+    }
 }
 
 crate::scenario_table!(
