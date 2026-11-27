@@ -726,14 +726,14 @@ fn run_delivery_from_observation(
     let branch = match provenance.activity.as_str() {
         "pr_complete" => {
             if let Some(evidence_commit) = output
-                .pointer("/delivery_evidence/merge_commit")
+                .pointer("/merge/delivery_evidence/merge_commit")
                 .and_then(Value::as_str)
                 && evidence_commit != landed_sha
             {
                 return Ok(None);
             }
             output
-                .pointer("/delivery_evidence/base_ref")
+                .pointer("/merge/delivery_evidence/base_ref")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|branch| !branch.is_empty())
