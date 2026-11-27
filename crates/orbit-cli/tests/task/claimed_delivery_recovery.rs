@@ -567,9 +567,12 @@ fn version_one_receipts_still_read_as_accepted_coverage(
 ) {
     assert_eq!(receipts.len(), 1);
     let evidence =
-        orbit_core::test_support::fixture_engine::RunLifecycle::accepted_automation_coverage(runtime, &receipts[0].action_id)
-            .unwrap()
-            .expect("version 1 coverage reads");
+        orbit_core::test_support::fixture_engine::RunLifecycle::accepted_automation_coverage(
+            runtime,
+            &receipts[0].action_id,
+        )
+        .unwrap()
+        .expect("version 1 coverage reads");
     assert_eq!(evidence.schema_version, 1);
     assert!(evidence.delivery_examinations.is_empty());
     assert!(evidence.examination_complete);
