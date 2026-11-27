@@ -17,6 +17,283 @@ use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 use tokio::net::TcpStream;
 
+struct EchoHost {
+    contexts: Mutex<Vec<ToolSessionContext>>,
+    list_calls: Mutex<usize>,
+}
+
+impl McpHost for EchoHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        *self.list_calls.lock().expect("list calls") += 1;
+        Ok(vec![
+            definition("demo.echo"),
+            definition("demo.inspect"),
+            definition("demo.unbound_workspace"),
+            definition("demo.missing_workspace"),
+        ])
+    }
+
+    fn call_tool(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        if name == "demo.unbound_workspace" {
+            return Err(OrbitError::not_found(
+                orbit_common::NotFoundKind::Workspace,
+                "ws_unbound-data-dir",
+            ));
+        }
+        if name == "demo.missing_workspace" {
+            return Err(OrbitError::not_found(
+                orbit_common::NotFoundKind::Workspace,
+                "ws_missing-project",
+            ));
+        }
+        if name != "demo.echo" && name != "demo.inspect" {
+            return Err(OrbitError::not_found(
+                orbit_common::NotFoundKind::Tool,
+                name.to_string(),
+            ));
+        }
+        self.contexts
+            .lock()
+            .expect("contexts")
+            .push(context.clone());
+        Ok(json!({
+            "tool": name,
+            "echo": input.get("value"),
+            "workspace": context.workspace,
+        }))
+    }
+}
+
+struct TaskPanelHost {
+    calls: Mutex<Vec<(String, Value, ToolSessionContext)>>,
+    hidden: std::sync::atomic::AtomicBool,
+}
+
+impl McpHost for TaskPanelHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        let mut task = definition("orbit.task.show");
+        task.annotations = Some(McpToolAnnotations::READ_ONLY);
+        Ok(vec![task])
+    }
+
+    fn hidden_tool_names(&self, _: &ToolSessionContext) -> std::collections::BTreeSet<String> {
+        if self.hidden.load(std::sync::atomic::Ordering::Relaxed) {
+            std::collections::BTreeSet::from(["orbit.task.show".to_owned()])
+        } else {
+            std::collections::BTreeSet::new()
+        }
+    }
+
+    fn call_tool(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        self.calls
+            .lock()
+            .expect("calls")
+            .push((name.to_owned(), input.clone(), context));
+        if input["workspace"] != "selected" {
+            return Err(OrbitError::UnknownSelector(input["workspace"].to_string()));
+        }
+        Ok(
+            json!({"id": "TST-1", "title": "<script>untrusted</script>", "updated_at": "2026-10-03T00:00:00Z"}),
+        )
+    }
+}
+
+struct PresentationCollisionHost {
+    name: &'static str,
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl McpHost for PresentationCollisionHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        Ok(vec![definition(self.name)])
+    }
+
+    fn call_tool(&self, _: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(json!({}))
+    }
+}
+
+/// Simulates selector translation by the real workspace/federation host.
+struct DesktopWireHost {
+    calls: Mutex<Vec<(String, Value, ToolSessionContext)>>,
+}
+
+impl McpHost for DesktopWireHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        let mut task_show = definition("orbit.task.show");
+        task_show.annotations = Some(McpToolAnnotations::READ_ONLY);
+        let mut definitions = vec![
+            task_show,
+            definition("orbit.task.list"),
+            definition("orbit.task.update"),
+            definition("orbit.run"),
+        ];
+        for definition in &mut definitions {
+            definition.schema.builtin = true;
+            if definition.schema.name == "orbit.run" {
+                definition
+                    .schema
+                    .parameters
+                    .push(orbit_types::tool::ToolParam {
+                        name: "view".into(),
+                        param_type: "string".into(),
+                        required: false,
+                        description: "Bounded observation".into(),
+                        enum_values: Vec::new(),
+                    });
+            }
+        }
+        Ok(definitions)
+    }
+
+    fn call_tool(
+        &self,
+        name: &str,
+        input: Value,
+        context: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((name.into(), input.clone(), context));
+        if input["workspace"] != "host-qualified:opaque-workspace" {
+            return Err(OrbitError::UnknownSelector(
+                "unknown desktop destination".into(),
+            ));
+        }
+        Ok(
+            json!({"workspace":"/owner/local/checkout","schema_version":1,"run":{"run_id":"jrun-proof"},"snapshot":{"revision":"revision-1","task":{"id":"TST-1"}}}),
+        )
+    }
+}
+
+struct CanonicalContractHost;
+
+impl McpHost for CanonicalContractHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        orbit_mcp::canonical_mcp_tool_definitions()
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+    }
+
+    fn call_tool(
+        &self,
+        name: &str,
+        input: Value,
+        _: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        Ok(json!({"name":name,"input":input}))
+    }
+}
+
+struct FrictionTaxonomyHost;
+
+impl McpHost for FrictionTaxonomyHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        orbit_mcp::canonical_mcp_tool_definitions()
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))
+    }
+
+    fn friction_tag_taxonomy(
+        &self,
+        _: &ToolSessionContext,
+    ) -> Result<Option<Vec<(String, String)>>, OrbitError> {
+        Ok(Some(vec![(
+            "workspace-only".into(),
+            "A tag defined by this workspace.".into(),
+        )]))
+    }
+
+    fn call_tool(
+        &self,
+        name: &str,
+        input: Value,
+        _: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        Ok(json!({"name":name,"input":input}))
+    }
+}
+
+/// An owner whose task read timed out waiting on a store lock.
+struct LockBusyHost;
+
+impl McpHost for LockBusyHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        Ok(vec![definition("demo.echo")])
+    }
+
+    fn call_tool(&self, _: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
+        Err(OrbitError::FileLockTimeout(Box::new(
+            orbit_common::fs::io::FileLockTimeout {
+                lock_path: "/state/tasks/workspaces/ws/.task-commit.lock".into(),
+                label: "task commit boundary: recovery at src/task.rs:1".into(),
+                timeout_ms: 30_000,
+                holder: None,
+                shared_holders: Vec::new(),
+            },
+        )))
+    }
+}
+
+/// A host declares transport behavior on a name the adapter has never seen.
+struct MetadataHost {
+    calls: Mutex<Vec<String>>,
+}
+
+impl McpHost for MetadataHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        use orbit_types::tool::{
+            McpInputCondition, McpPresentationRead, McpToolRules, McpWorkspaceEcho,
+        };
+        let mut reader = definition("custom.record");
+        reader.scope = McpToolScope::Global;
+        reader.annotations = Some(McpToolAnnotations::READ_ONLY);
+        reader.rules = McpToolRules {
+            workspace_echo: McpWorkspaceEcho::WhenAny(vec![
+                McpInputCondition::Present("view".into()),
+                McpInputCondition::True("flag".into()),
+            ]),
+            presentation_read: Some(McpPresentationRead::Task),
+            ..Default::default()
+        };
+        Ok(vec![reader])
+    }
+
+    fn call_tool(&self, name: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
+        self.calls.lock().unwrap().push(name.into());
+        Ok(json!({
+            "id": "TST-1", "title": "Metadata reader", "updated_at": "2026-10-11T00:00:00Z",
+            "workspace": "/host/checkout", "catalog": {}, "runs": {}
+        }))
+    }
+}
+
+struct DeliveryRefusalHost;
+
+impl McpHost for DeliveryRefusalHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        Ok(vec![definition("demo.echo")])
+    }
+
+    fn call_tool(&self, _: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
+        Err(OrbitError::DeliveryRefused {
+            refusal: orbit_types::workflow::DeliveryRefusal::HeadChanged,
+            message: "published head differs from pull request head".into(),
+        })
+    }
+}
+
 /// A worker binding must agree with the SSH session machine, and a refused
 /// replacement must preserve the original binding and authority reduction.
 #[tokio::test]
@@ -164,58 +441,6 @@ async fn ssh_worker_initialize_fences_the_execution_machine_and_keeps_its_bindin
             .await
             .unwrap()
             .unwrap();
-    }
-}
-
-struct EchoHost {
-    contexts: Mutex<Vec<ToolSessionContext>>,
-    list_calls: Mutex<usize>,
-}
-
-impl McpHost for EchoHost {
-    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        *self.list_calls.lock().expect("list calls") += 1;
-        Ok(vec![
-            definition("demo.echo"),
-            definition("demo.inspect"),
-            definition("demo.unbound_workspace"),
-            definition("demo.missing_workspace"),
-        ])
-    }
-
-    fn call_tool(
-        &self,
-        name: &str,
-        input: Value,
-        context: ToolSessionContext,
-    ) -> Result<Value, OrbitError> {
-        if name == "demo.unbound_workspace" {
-            return Err(OrbitError::not_found(
-                orbit_common::NotFoundKind::Workspace,
-                "ws_unbound-data-dir",
-            ));
-        }
-        if name == "demo.missing_workspace" {
-            return Err(OrbitError::not_found(
-                orbit_common::NotFoundKind::Workspace,
-                "ws_missing-project",
-            ));
-        }
-        if name != "demo.echo" && name != "demo.inspect" {
-            return Err(OrbitError::not_found(
-                orbit_common::NotFoundKind::Tool,
-                name.to_string(),
-            ));
-        }
-        self.contexts
-            .lock()
-            .expect("contexts")
-            .push(context.clone());
-        Ok(json!({
-            "tool": name,
-            "echo": input.get("value"),
-            "workspace": context.workspace,
-        }))
     }
 }
 
@@ -625,43 +850,6 @@ fn call(name: &str, args: Value) -> CallToolRequestParams {
     CallToolRequestParams::new(name.to_string()).with_arguments(arguments)
 }
 
-struct TaskPanelHost {
-    calls: Mutex<Vec<(String, Value, ToolSessionContext)>>,
-    hidden: std::sync::atomic::AtomicBool,
-}
-
-impl McpHost for TaskPanelHost {
-    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        let mut task = definition("orbit.task.show");
-        task.annotations = Some(McpToolAnnotations::READ_ONLY);
-        Ok(vec![task])
-    }
-    fn hidden_tool_names(&self, _: &ToolSessionContext) -> std::collections::BTreeSet<String> {
-        if self.hidden.load(std::sync::atomic::Ordering::Relaxed) {
-            std::collections::BTreeSet::from(["orbit.task.show".to_owned()])
-        } else {
-            std::collections::BTreeSet::new()
-        }
-    }
-    fn call_tool(
-        &self,
-        name: &str,
-        input: Value,
-        context: ToolSessionContext,
-    ) -> Result<Value, OrbitError> {
-        self.calls
-            .lock()
-            .expect("calls")
-            .push((name.to_owned(), input.clone(), context));
-        if input["workspace"] != "selected" {
-            return Err(OrbitError::UnknownSelector(input["workspace"].to_string()));
-        }
-        Ok(
-            json!({"id": "TST-1", "title": "<script>untrusted</script>", "updated_at": "2026-10-03T00:00:00Z"}),
-        )
-    }
-}
-
 #[tokio::test]
 async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mismatched_reads() {
     let host = Arc::new(TaskPanelHost {
@@ -793,22 +981,6 @@ async fn presentation_wire_preserves_dispatch_context_and_refuses_hidden_or_mism
     server_task.abort();
 }
 
-struct PresentationCollisionHost {
-    name: &'static str,
-    calls: std::sync::atomic::AtomicUsize,
-}
-
-impl McpHost for PresentationCollisionHost {
-    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        Ok(vec![definition(self.name)])
-    }
-    fn call_tool(&self, _: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
-        self.calls
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(json!({}))
-    }
-}
-
 #[tokio::test]
 async fn mixed_dot_underscore_names_cannot_shadow_presentation_entrypoints() {
     for name in ["orbit.ui", "orbit_ui"] {
@@ -852,58 +1024,6 @@ async fn mixed_dot_underscore_names_cannot_shadow_presentation_entrypoints() {
             "collision refusal happens before host dispatch"
         );
         server_task.abort();
-    }
-}
-
-/// Simulates selector translation by the real workspace/federation host.
-struct DesktopWireHost {
-    calls: Mutex<Vec<(String, Value, ToolSessionContext)>>,
-}
-impl McpHost for DesktopWireHost {
-    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        let mut task_show = definition("orbit.task.show");
-        task_show.annotations = Some(McpToolAnnotations::READ_ONLY);
-        let mut definitions = vec![
-            task_show,
-            definition("orbit.task.list"),
-            definition("orbit.task.update"),
-            definition("orbit.run"),
-        ];
-        for definition in &mut definitions {
-            definition.schema.builtin = true;
-            if definition.schema.name == "orbit.run" {
-                definition
-                    .schema
-                    .parameters
-                    .push(orbit_types::tool::ToolParam {
-                        name: "view".into(),
-                        param_type: "string".into(),
-                        required: false,
-                        description: "Bounded observation".into(),
-                        enum_values: Vec::new(),
-                    });
-            }
-        }
-        Ok(definitions)
-    }
-    fn call_tool(
-        &self,
-        name: &str,
-        input: Value,
-        context: ToolSessionContext,
-    ) -> Result<Value, OrbitError> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((name.into(), input.clone(), context));
-        if input["workspace"] != "host-qualified:opaque-workspace" {
-            return Err(OrbitError::UnknownSelector(
-                "unknown desktop destination".into(),
-            ));
-        }
-        Ok(
-            json!({"workspace":"/owner/local/checkout","schema_version":1,"run":{"run_id":"jrun-proof"},"snapshot":{"revision":"revision-1","task":{"id":"TST-1"}}}),
-        )
     }
 }
 
@@ -1029,49 +1149,6 @@ async fn desktop_wire_preserves_explicit_destination_and_run_inspector_authority
         .unwrap();
 }
 
-struct CanonicalContractHost;
-impl McpHost for CanonicalContractHost {
-    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        orbit_mcp::canonical_mcp_tool_definitions()
-            .map_err(|error| OrbitError::InvalidInput(error.to_string()))
-    }
-    fn call_tool(
-        &self,
-        name: &str,
-        input: Value,
-        _: ToolSessionContext,
-    ) -> Result<Value, OrbitError> {
-        Ok(json!({"name":name,"input":input}))
-    }
-}
-
-struct FrictionTaxonomyHost;
-impl McpHost for FrictionTaxonomyHost {
-    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        orbit_mcp::canonical_mcp_tool_definitions()
-            .map_err(|error| OrbitError::InvalidInput(error.to_string()))
-    }
-
-    fn friction_tag_taxonomy(
-        &self,
-        _: &ToolSessionContext,
-    ) -> Result<Option<Vec<(String, String)>>, OrbitError> {
-        Ok(Some(vec![(
-            "workspace-only".into(),
-            "A tag defined by this workspace.".into(),
-        )]))
-    }
-
-    fn call_tool(
-        &self,
-        name: &str,
-        input: Value,
-        _: ToolSessionContext,
-    ) -> Result<Value, OrbitError> {
-        Ok(json!({"name":name,"input":input}))
-    }
-}
-
 #[tokio::test]
 async fn tools_list_advertises_the_bound_workspace_friction_taxonomy() {
     let server = OrbitToolServer::new(Arc::new(FrictionTaxonomyHost));
@@ -1156,25 +1233,6 @@ async fn client_handshake_does_not_advertise_retired_desktop_tools() {
     }
 }
 
-/// An owner whose task read timed out waiting on a store lock.
-struct LockBusyHost;
-impl McpHost for LockBusyHost {
-    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        Ok(vec![definition("demo.echo")])
-    }
-    fn call_tool(&self, _: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
-        Err(OrbitError::FileLockTimeout(Box::new(
-            orbit_common::fs::io::FileLockTimeout {
-                lock_path: "/state/tasks/workspaces/ws/.task-commit.lock".into(),
-                label: "task commit boundary: recovery at src/task.rs:1".into(),
-                timeout_ms: 30_000,
-                holder: None,
-                shared_holders: Vec::new(),
-            },
-        )))
-    }
-}
-
 /// [ORB-15088] A call that lost only to a lock-wait deadline reaches its
 /// caller as the retryable `lock_busy`, not `internal_error`: a pull follower
 /// reads that code off the wire to retry its owner read and to keep the
@@ -1220,39 +1278,6 @@ async fn a_lock_wait_timeout_is_a_retryable_lock_busy_on_the_wire() {
 
     client.cancel().await.expect("cancel");
     server_task.await.expect("server");
-}
-
-/// A host declares transport behavior on a name the adapter has never seen.
-struct MetadataHost {
-    calls: Mutex<Vec<String>>,
-}
-
-impl McpHost for MetadataHost {
-    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        use orbit_types::tool::{
-            McpInputCondition, McpPresentationRead, McpToolRules, McpWorkspaceEcho,
-        };
-        let mut reader = definition("custom.record");
-        reader.scope = McpToolScope::Global;
-        reader.annotations = Some(McpToolAnnotations::READ_ONLY);
-        reader.rules = McpToolRules {
-            workspace_echo: McpWorkspaceEcho::WhenAny(vec![
-                McpInputCondition::Present("view".into()),
-                McpInputCondition::True("flag".into()),
-            ]),
-            presentation_read: Some(McpPresentationRead::Task),
-            ..Default::default()
-        };
-        Ok(vec![reader])
-    }
-
-    fn call_tool(&self, name: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
-        self.calls.lock().unwrap().push(name.into());
-        Ok(json!({
-            "id": "TST-1", "title": "Metadata reader", "updated_at": "2026-10-11T00:00:00Z",
-            "workspace": "/host/checkout", "catalog": {}, "runs": {}
-        }))
-    }
 }
 
 #[tokio::test]
@@ -1351,19 +1376,6 @@ async fn host_metadata_drives_selector_echo_and_presentation_without_builtin_nam
         .await
         .unwrap()
         .unwrap();
-}
-
-struct DeliveryRefusalHost;
-impl McpHost for DeliveryRefusalHost {
-    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        Ok(vec![definition("demo.echo")])
-    }
-    fn call_tool(&self, _: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
-        Err(OrbitError::DeliveryRefused {
-            refusal: orbit_types::workflow::DeliveryRefusal::HeadChanged,
-            message: "published head differs from pull request head".into(),
-        })
-    }
 }
 
 #[tokio::test]

@@ -58,6 +58,36 @@ for line in sys.stdin:
     print(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}), flush=True)
 "#;
 
+const LEGACY_CHILD: &str = "ORBIT_LEGACY_RPC_REFUSAL_FIXTURE";
+
+/// An owner whose internal drain registry predates late effort reports.
+///
+/// The reply is the old server's invalid-params JSON-RPC error, spoken on the
+/// exported SSH route rather than a private session.
+const LEGACY_PEER: &str = r#"#!/usr/bin/env python3
+import json, os, sys
+fixture = os.environ['ORBIT_FIXTURE_DIR']
+with open(os.path.join(fixture, 'argv'), 'w') as file:
+    file.write('\n'.join(sys.argv))
+with open(os.path.join(fixture, 'peer.pid'), 'w') as file:
+    file.write(str(os.getpid()))
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request:
+        continue
+    with open(os.path.join(fixture, 'journal'), 'a') as file:
+        file.write(request['method'] + '\n')
+    if request['method'] == 'initialize':
+        result = {'protocolVersion': request['params']['protocolVersion']}
+        response = {'result': result}
+    elif request['method'] == 'orbit/internal/drain/call':
+        response = {'error': {'code': -32602, 'message': 'unknown internal drain operation'}}
+    else:
+        raise SystemExit('unexpected request: ' + request['method'])
+    response.update(jsonrpc='2.0', id=request['id'])
+    print(json.dumps(response), flush=True)
+"#;
+
 #[test]
 fn oversized_lines_retain_safe_uncorrelated_context_without_replay() {
     if let Ok(case) = std::env::var(CHILD) {
@@ -306,36 +336,6 @@ fn exercise(case: &str) {
         }
     );
 }
-
-const LEGACY_CHILD: &str = "ORBIT_LEGACY_RPC_REFUSAL_FIXTURE";
-
-/// An owner whose internal drain registry predates late effort reports.
-///
-/// The reply is the old server's invalid-params JSON-RPC error, spoken on the
-/// exported SSH route rather than a private session.
-const LEGACY_PEER: &str = r#"#!/usr/bin/env python3
-import json, os, sys
-fixture = os.environ['ORBIT_FIXTURE_DIR']
-with open(os.path.join(fixture, 'argv'), 'w') as file:
-    file.write('\n'.join(sys.argv))
-with open(os.path.join(fixture, 'peer.pid'), 'w') as file:
-    file.write(str(os.getpid()))
-for line in sys.stdin:
-    request = json.loads(line)
-    if 'id' not in request:
-        continue
-    with open(os.path.join(fixture, 'journal'), 'a') as file:
-        file.write(request['method'] + '\n')
-    if request['method'] == 'initialize':
-        result = {'protocolVersion': request['params']['protocolVersion']}
-        response = {'result': result}
-    elif request['method'] == 'orbit/internal/drain/call':
-        response = {'error': {'code': -32602, 'message': 'unknown internal drain operation'}}
-    else:
-        raise SystemExit('unexpected request: ' + request['method'])
-    response.update(jsonrpc='2.0', id=request['id'])
-    print(json.dumps(response), flush=True)
-"#;
 
 #[test]
 fn unknown_internal_drain_operation_preserves_the_legacy_rpc_refusal() {

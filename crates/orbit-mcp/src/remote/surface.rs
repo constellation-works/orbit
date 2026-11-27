@@ -4,9 +4,9 @@ use std::sync::{Arc, OnceLock};
 
 use orbit_types::tool::{McpToolDefinition, McpToolDefinitionError};
 
-type CanonicalDefinitions = Result<Arc<Vec<McpToolDefinition>>, McpToolDefinitionError>;
-
 static CANONICAL_DEFINITIONS: OnceLock<Arc<CanonicalDefinitions>> = OnceLock::new();
+
+type CanonicalDefinitions = Result<Arc<Vec<McpToolDefinition>>, McpToolDefinitionError>;
 
 pub fn canonical_mcp_tool_definitions() -> Result<Vec<McpToolDefinition>, McpToolDefinitionError> {
     cached_canonical_mcp_tool_definitions().map(|definitions| definitions.as_ref().clone())

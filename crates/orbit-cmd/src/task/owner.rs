@@ -51,6 +51,79 @@ impl WorkspaceIdentity {
     }
 }
 
+/// Owner lookups for a long-lived host: one lazily opened registry handle,
+/// reused across calls and reopened when the database file is replaced.
+///
+/// The handle is read-only. Each lookup is one indexed read, and SQLite shows
+/// every commit another process makes to the registry on the next statement, so
+/// a task bound after the handle opened is still found. A registry that cannot
+/// be opened read-only (missing, or needing a writable migration) falls back to
+/// [`resolve_task_owner`] for that call and is retried on the next one.
+#[derive(Default)]
+pub struct TaskOwnerLookup {
+    cached: Mutex<Option<CachedRegistry>>,
+}
+
+impl TaskOwnerLookup {
+    /// Resolve the checkout that owns `task_id` with the same results and
+    /// errors as [`resolve_task_owner`].
+    pub fn resolve(
+        &self,
+        global_root: &Path,
+        task_id: &str,
+    ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
+        let path = task_registry_path(global_root);
+        let store = {
+            let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
+            let identity = RegistryFileIdentity::read(&path);
+            if cached
+                .as_ref()
+                .is_some_and(|held| Some(&held.identity) != identity.as_ref())
+            {
+                *cached = None;
+            }
+            if cached.is_none()
+                && let Some(identity) = identity
+                && let Ok(store) = TaskRegistryStore::open_read_only(&path)
+            {
+                *cached = Some(CachedRegistry { identity, store });
+            }
+            cached.as_ref().map(|held| held.store.clone())
+        };
+        match store {
+            Some(store) => resolve_task_owner_in(global_root, &store, task_id),
+            None => resolve_task_owner(global_root, task_id),
+        }
+    }
+}
+
+struct CachedRegistry {
+    identity: RegistryFileIdentity,
+    store: TaskRegistryStore,
+}
+
+/// Detects registry replacement without reacting to ordinary writes.
+#[derive(Debug, PartialEq, Eq)]
+struct RegistryFileIdentity {
+    created: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    device_inode: (u64, u64),
+}
+
+impl RegistryFileIdentity {
+    fn read(path: &Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        Some(Self {
+            created: metadata.created().ok(),
+            #[cfg(unix)]
+            device_inode: {
+                use std::os::unix::fs::MetadataExt;
+                (metadata.dev(), metadata.ino())
+            },
+        })
+    }
+}
+
 /// Bootstrap the read-only runtime `orbit task show <id>` must read.
 ///
 /// With `--workspace`, the selector is a filter: this is the ordinary
@@ -150,79 +223,6 @@ pub fn resolve_task_owner_in(
         checkout: checkout.clone(),
         local_root: checkout.orbit_dir.clone(),
     })
-}
-
-/// Owner lookups for a long-lived host: one lazily opened registry handle,
-/// reused across calls and reopened when the database file is replaced.
-///
-/// The handle is read-only. Each lookup is one indexed read, and SQLite shows
-/// every commit another process makes to the registry on the next statement, so
-/// a task bound after the handle opened is still found. A registry that cannot
-/// be opened read-only (missing, or needing a writable migration) falls back to
-/// [`resolve_task_owner`] for that call and is retried on the next one.
-#[derive(Default)]
-pub struct TaskOwnerLookup {
-    cached: Mutex<Option<CachedRegistry>>,
-}
-
-struct CachedRegistry {
-    identity: RegistryFileIdentity,
-    store: TaskRegistryStore,
-}
-
-/// Detects registry replacement without reacting to ordinary writes.
-#[derive(Debug, PartialEq, Eq)]
-struct RegistryFileIdentity {
-    created: Option<std::time::SystemTime>,
-    #[cfg(unix)]
-    device_inode: (u64, u64),
-}
-
-impl RegistryFileIdentity {
-    fn read(path: &Path) -> Option<Self> {
-        let metadata = std::fs::metadata(path).ok()?;
-        Some(Self {
-            created: metadata.created().ok(),
-            #[cfg(unix)]
-            device_inode: {
-                use std::os::unix::fs::MetadataExt;
-                (metadata.dev(), metadata.ino())
-            },
-        })
-    }
-}
-
-impl TaskOwnerLookup {
-    /// Resolve the checkout that owns `task_id` with the same results and
-    /// errors as [`resolve_task_owner`].
-    pub fn resolve(
-        &self,
-        global_root: &Path,
-        task_id: &str,
-    ) -> Result<ResolvedWorkspaceSelection, OrbitError> {
-        let path = task_registry_path(global_root);
-        let store = {
-            let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
-            let identity = RegistryFileIdentity::read(&path);
-            if cached
-                .as_ref()
-                .is_some_and(|held| Some(&held.identity) != identity.as_ref())
-            {
-                *cached = None;
-            }
-            if cached.is_none()
-                && let Some(identity) = identity
-                && let Ok(store) = TaskRegistryStore::open_read_only(&path)
-            {
-                *cached = Some(CachedRegistry { identity, store });
-            }
-            cached.as_ref().map(|held| held.store.clone())
-        };
-        match store {
-            Some(store) => resolve_task_owner_in(global_root, &store, task_id),
-            None => resolve_task_owner(global_root, task_id),
-        }
-    }
 }
 
 /// Task-store partition id recorded in `<orbit_dir>/config.yaml`, which is the

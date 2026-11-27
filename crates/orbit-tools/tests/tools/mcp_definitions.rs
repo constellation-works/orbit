@@ -51,6 +51,61 @@ impl Tool for PluginImpersonator {
     }
 }
 
+/// A builtin fixture that addresses one id with an optional workspace but
+/// declares no id route at its definition site.
+struct UnclassifiedIdTool;
+
+impl Tool for UnclassifiedIdTool {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "orbit.experiment.unclassified_fixture".to_string(),
+            description: "unclassified id-addressing fixture".to_string(),
+            parameters: vec![
+                ToolParam {
+                    name: "id".to_string(),
+                    description: "one id".to_string(),
+                    param_type: "string".to_string(),
+                    required: true,
+                    enum_values: Vec::new(),
+                },
+                ToolParam {
+                    name: "workspace".to_string(),
+                    description: "optional workspace".to_string(),
+                    param_type: "string".to_string(),
+                    required: false,
+                    enum_values: Vec::new(),
+                },
+            ],
+            builtin: true,
+        }
+    }
+
+    fn execute(&self, _ctx: &ToolContext, _input: Value) -> Result<Value, OrbitError> {
+        Ok(Value::Null)
+    }
+}
+
+struct ReadOnlyPlugin;
+
+impl Tool for ReadOnlyPlugin {
+    fn schema(&self) -> ToolSchema {
+        ToolSchema {
+            name: "demo.inspect".to_string(),
+            description: "read-only plugin tool".to_string(),
+            parameters: Vec::new(),
+            builtin: false,
+        }
+    }
+
+    fn execution_kind(&self) -> ToolExecutionKind {
+        ToolExecutionKind::ReadOnly
+    }
+
+    fn execute(&self, _ctx: &ToolContext, _input: Value) -> Result<Value, OrbitError> {
+        Ok(Value::Null)
+    }
+}
+
 #[test]
 fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
     let definitions =
@@ -383,40 +438,6 @@ fn every_declared_registry_enum_parameter_is_advertised_in_mcp_schema() {
     );
 }
 
-/// A builtin fixture that addresses one id with an optional workspace but
-/// declares no id route at its definition site.
-struct UnclassifiedIdTool;
-
-impl Tool for UnclassifiedIdTool {
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "orbit.experiment.unclassified_fixture".to_string(),
-            description: "unclassified id-addressing fixture".to_string(),
-            parameters: vec![
-                ToolParam {
-                    name: "id".to_string(),
-                    description: "one id".to_string(),
-                    param_type: "string".to_string(),
-                    required: true,
-                    enum_values: Vec::new(),
-                },
-                ToolParam {
-                    name: "workspace".to_string(),
-                    description: "optional workspace".to_string(),
-                    param_type: "string".to_string(),
-                    required: false,
-                    enum_values: Vec::new(),
-                },
-            ],
-            builtin: true,
-        }
-    }
-
-    fn execute(&self, _ctx: &ToolContext, _input: Value) -> Result<Value, OrbitError> {
-        Ok(Value::Null)
-    }
-}
-
 #[test]
 fn unclassified_id_addressing_builtin_fails_closed_in_this_target() {
     let mut registry = ToolRegistry::new();
@@ -606,27 +627,6 @@ fn register_plugin_tool_refuses_to_overwrite_a_builtin_name() {
             && registry.plugin_binding("orbit.command.exec").is_none(),
         "the built-in still holds orbit.command.exec"
     );
-}
-
-struct ReadOnlyPlugin;
-
-impl Tool for ReadOnlyPlugin {
-    fn schema(&self) -> ToolSchema {
-        ToolSchema {
-            name: "demo.inspect".to_string(),
-            description: "read-only plugin tool".to_string(),
-            parameters: Vec::new(),
-            builtin: false,
-        }
-    }
-
-    fn execution_kind(&self) -> ToolExecutionKind {
-        ToolExecutionKind::ReadOnly
-    }
-
-    fn execute(&self, _ctx: &ToolContext, _input: Value) -> Result<Value, OrbitError> {
-        Ok(Value::Null)
-    }
 }
 
 #[test]

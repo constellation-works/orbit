@@ -11,6 +11,32 @@ const PR_LIST_FIELDS: &str =
 const DEFAULT_LIMIT: u64 = 30;
 const MAX_LIMIT: u64 = 100;
 
+super::gh_tool! {
+    pub struct GithubPrListTool;
+    name: "github.pr.list";
+    description: "List pull requests with their current head SHAs. Defaults to open pull requests.";
+    parameters: [
+        super::tool_param("state", "Pull-request state filter: open (default), closed, merged, or all", "string", false),
+        super::tool_param("base", "Restrict to pull requests targeting one base branch", "string", false),
+        super::tool_param("limit", "Maximum pull requests to return (default 30, capped at 100)", "integer", false),
+        super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
+    ];
+    request: |ctx, input| {
+        build_exec_request(input).map(|request| super::in_tool_workspace(request, ctx))
+    }
+    response: |_ctx, _input, result| {
+        check_exec_result(result, "gh pr list")?;
+
+        let entries = super::parse_gh_json(&result.stdout, "gh pr list")?;
+        let pull_requests: Vec<Value> = entries
+            .as_array()
+            .map(|entries| entries.iter().map(project_pull_request).collect())
+            .unwrap_or_default();
+
+        Ok(json!({ "count": pull_requests.len(), "pull_requests": pull_requests }))
+    }
+}
+
 pub fn build_exec_request(input: &Value) -> Result<ExecRequest, OrbitError> {
     let mut args = vec!["pr".to_string(), "list".to_string()];
     super::push_optional_flag(&mut args, input, "state", "--state")?;
@@ -70,30 +96,4 @@ pub fn project_pull_request(pr: &Value) -> Value {
         "url": pr["url"],
         "updated_at": pr["updatedAt"],
     })
-}
-
-super::gh_tool! {
-    pub struct GithubPrListTool;
-    name: "github.pr.list";
-    description: "List pull requests with their current head SHAs. Defaults to open pull requests.";
-    parameters: [
-        super::tool_param("state", "Pull-request state filter: open (default), closed, merged, or all", "string", false),
-        super::tool_param("base", "Restrict to pull requests targeting one base branch", "string", false),
-        super::tool_param("limit", "Maximum pull requests to return (default 30, capped at 100)", "integer", false),
-        super::tool_param("repo", "Repository in owner/name format (uses current directory if omitted)", "string", false),
-    ];
-    request: |ctx, input| {
-        build_exec_request(input).map(|request| super::in_tool_workspace(request, ctx))
-    }
-    response: |_ctx, _input, result| {
-        check_exec_result(result, "gh pr list")?;
-
-        let entries = super::parse_gh_json(&result.stdout, "gh pr list")?;
-        let pull_requests: Vec<Value> = entries
-            .as_array()
-            .map(|entries| entries.iter().map(project_pull_request).collect())
-            .unwrap_or_default();
-
-        Ok(json!({ "count": pull_requests.len(), "pull_requests": pull_requests }))
-    }
 }

@@ -20,6 +20,80 @@ use orbit_tools::plugin::{
 };
 use orbit_tools::plugin::{PluginBackend, PluginTool, PluginToolBinding};
 
+/// An in-memory secret store with the host store's compare-and-swap: a check
+/// and write under one lock, and a fresh version on every applied write.
+#[derive(Default)]
+pub(super) struct CasSource {
+    pub(super) values: Mutex<BTreeMap<String, DeliveredPluginSecret>>,
+    writes: AtomicUsize,
+}
+
+impl CasSource {
+    pub(super) fn holding(values: &[(&str, &str, &str)]) -> Arc<Self> {
+        let source = Self::default();
+        {
+            let mut stored = source.values.lock().expect("values");
+            for (name, value, version) in values {
+                stored.insert(
+                    (*name).to_string(),
+                    DeliveredPluginSecret {
+                        value: (*value).to_string(),
+                        version: (*version).to_string(),
+                    },
+                );
+            }
+        }
+        Arc::new(source)
+    }
+
+    pub(super) fn stored(&self, name: &str) -> Option<(String, String)> {
+        self.values
+            .lock()
+            .expect("values")
+            .get(name)
+            .map(|secret| (secret.value.clone(), secret.version.clone()))
+    }
+}
+
+impl PluginSecretSource for CasSource {
+    fn read(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError> {
+        let values = self.values.lock().expect("values");
+        Ok(names
+            .iter()
+            .filter_map(|name| {
+                values
+                    .get(name)
+                    .map(|secret| (name.clone(), secret.clone()))
+            })
+            .collect())
+    }
+
+    fn compare_and_swap(
+        &self,
+        name: &str,
+        value: &str,
+        expected_version: Option<&str>,
+    ) -> Result<PluginSecretRotation, OrbitError> {
+        let mut values = self.values.lock().expect("values");
+        if values.get(name).map(|secret| secret.version.as_str()) != expected_version {
+            return Ok(PluginSecretRotation::Stale);
+        }
+        let write = self.writes.fetch_add(1, Ordering::SeqCst);
+        let version = format!("rotated-{write}");
+        values.insert(
+            name.to_string(),
+            DeliveredPluginSecret {
+                value: value.to_string(),
+                version: version.clone(),
+            },
+        );
+        Ok(PluginSecretRotation::Applied { version })
+    }
+}
+
 pub(super) fn stub_backend(dir: &Path, script: &str) -> PathBuf {
     let path = dir.join("backend.sh");
     std::fs::write(&path, script).expect("write backend");
@@ -102,79 +176,5 @@ pub(super) fn context(cwd: &Path) -> ToolContext {
         env: orbit_common::Env::capture(),
         cwd: Some(cwd.to_string_lossy().into_owned()),
         ..ToolContext::default()
-    }
-}
-
-/// An in-memory secret store with the host store's compare-and-swap: a check
-/// and write under one lock, and a fresh version on every applied write.
-#[derive(Default)]
-pub(super) struct CasSource {
-    pub(super) values: Mutex<BTreeMap<String, DeliveredPluginSecret>>,
-    writes: AtomicUsize,
-}
-
-impl CasSource {
-    pub(super) fn holding(values: &[(&str, &str, &str)]) -> Arc<Self> {
-        let source = Self::default();
-        {
-            let mut stored = source.values.lock().expect("values");
-            for (name, value, version) in values {
-                stored.insert(
-                    (*name).to_string(),
-                    DeliveredPluginSecret {
-                        value: (*value).to_string(),
-                        version: (*version).to_string(),
-                    },
-                );
-            }
-        }
-        Arc::new(source)
-    }
-
-    pub(super) fn stored(&self, name: &str) -> Option<(String, String)> {
-        self.values
-            .lock()
-            .expect("values")
-            .get(name)
-            .map(|secret| (secret.value.clone(), secret.version.clone()))
-    }
-}
-
-impl PluginSecretSource for CasSource {
-    fn read(
-        &self,
-        names: &[String],
-    ) -> Result<BTreeMap<String, DeliveredPluginSecret>, OrbitError> {
-        let values = self.values.lock().expect("values");
-        Ok(names
-            .iter()
-            .filter_map(|name| {
-                values
-                    .get(name)
-                    .map(|secret| (name.clone(), secret.clone()))
-            })
-            .collect())
-    }
-
-    fn compare_and_swap(
-        &self,
-        name: &str,
-        value: &str,
-        expected_version: Option<&str>,
-    ) -> Result<PluginSecretRotation, OrbitError> {
-        let mut values = self.values.lock().expect("values");
-        if values.get(name).map(|secret| secret.version.as_str()) != expected_version {
-            return Ok(PluginSecretRotation::Stale);
-        }
-        let write = self.writes.fetch_add(1, Ordering::SeqCst);
-        let version = format!("rotated-{write}");
-        values.insert(
-            name.to_string(),
-            DeliveredPluginSecret {
-                value: value.to_string(),
-                version: version.clone(),
-            },
-        );
-        Ok(PluginSecretRotation::Applied { version })
     }
 }

@@ -50,11 +50,6 @@ impl From<PluginLoadError> for OrbitError {
     }
 }
 
-/// A manifest rejection is invalid input at every surface that surfaces it.
-pub fn manifest_refusal(error: PluginManifestError) -> OrbitError {
-    OrbitError::InvalidInput(error.to_string())
-}
-
 /// One `spec.tools[]` entry with its schemas resolved and flattened.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedPluginTool {
@@ -135,6 +130,11 @@ impl LoadedPlugin {
     pub fn tool_name(&self, verb: &str, first_party: bool) -> String {
         plugin_tool_name(self.namespace(), verb, first_party)
     }
+}
+
+/// A manifest rejection is invalid input at every surface that surfaces it.
+pub fn manifest_refusal(error: PluginManifestError) -> OrbitError {
+    OrbitError::InvalidInput(error.to_string())
 }
 
 /// SHA-256 of the manifest bytes, hex encoded.

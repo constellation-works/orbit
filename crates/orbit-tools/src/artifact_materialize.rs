@@ -22,6 +22,9 @@ use orbit_common::governance::task::TaskVerb;
 
 use crate::ToolContext;
 
+/// How to supply an artifact's bytes, for a put that omits `source_path`.
+pub(crate) const SOURCE_PATH_REMEDY: &str = "`path` is the artifact name, and `source_path` is the local file to attach under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)";
+
 /// Keep the shipped source-file remedy on incomplete calls. Unknown fields
 /// are refused by the operation spec before a source is materialized.
 pub(crate) fn source_presence_error(input: &Value) -> Option<OrbitError> {
@@ -53,9 +56,6 @@ pub(crate) fn source_presence_error(input: &Value) -> Option<OrbitError> {
     result.err()
 }
 
-/// How to supply an artifact's bytes, for a put that omits `source_path`.
-pub(crate) const SOURCE_PATH_REMEDY: &str = "`path` is the artifact name, and `source_path` is the local file to attach under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)";
-
 /// Materialize a task artifact before a spoke sends the coordination request
 /// to its hub. The returned value contains artifact bytes but no source path.
 ///
@@ -72,11 +72,11 @@ pub fn prepare_remote_task_artifact_put(
 ) -> Result<Value, OrbitError> {
     let ctx = ToolContext {
         cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
-        workspace_root: workspace_root.map(PathBuf::from),
         session_context: orbit_types::tool::ToolSessionContext {
             transport,
             ..Default::default()
         },
+        workspace_root: workspace_root.map(PathBuf::from),
         ..ToolContext::default()
     };
     prepare_remote_payload(input, &ctx)

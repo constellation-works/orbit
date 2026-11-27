@@ -36,14 +36,6 @@ pub const PLUGIN_BUILD_DENIED_ENV: &[&str] = &[
 /// Prefixes of names never passed to a build.
 pub const PLUGIN_BUILD_DENIED_ENV_PREFIXES: &[&str] = &["AWS_", "CARGO_REGISTRIES_"];
 
-/// Whether `name` is on the build environment's fixed denylist.
-pub fn is_denied_build_env(name: &str) -> bool {
-    PLUGIN_BUILD_DENIED_ENV.contains(&name)
-        || PLUGIN_BUILD_DENIED_ENV_PREFIXES
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
-}
-
 /// System trees whose programs need no toolchain root: the build profile
 /// already reads them.
 const SYSTEM_PREFIXES: &[&str] = &["/usr", "/bin", "/sbin", "/lib", "/lib64", "/System"];
@@ -87,17 +79,6 @@ impl PluginBuildHostEnv {
     }
 }
 
-/// Where a bare name is found on `PATH`, before canonicalization.
-pub(super) fn invoked_path(name: &str, search_path: Option<&OsStr>) -> Option<PathBuf> {
-    if name.contains('/') {
-        return Some(PathBuf::from(name));
-    }
-    std::env::split_paths(search_path?)
-        .filter(|dir| dir.is_absolute())
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
-}
-
 pub(super) enum Toolchain {
     System,
     Prefix(PathBuf),
@@ -107,6 +88,25 @@ pub(super) enum Toolchain {
         settings: Option<PathBuf>,
         default_bin: Option<PathBuf>,
     },
+}
+
+/// Whether `name` is on the build environment's fixed denylist.
+pub fn is_denied_build_env(name: &str) -> bool {
+    PLUGIN_BUILD_DENIED_ENV.contains(&name)
+        || PLUGIN_BUILD_DENIED_ENV_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+}
+
+/// Where a bare name is found on `PATH`, before canonicalization.
+pub(super) fn invoked_path(name: &str, search_path: Option<&OsStr>) -> Option<PathBuf> {
+    if name.contains('/') {
+        return Some(PathBuf::from(name));
+    }
+    std::env::split_paths(search_path?)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 /// The installation a program runs from (§3.2).

@@ -18,6 +18,73 @@ use tempfile::tempdir;
 /// The `denyRead` set shipped in `crates/orbit-core/assets/policies/default.yaml`.
 const DEFAULT_DENY_READ: &[&str] = &["**/.env", "**/.env.*", "**/*.env", "**/*.env.*"];
 
+/// A fake rustup that writes `macro.env.html` when a real default-profile
+/// install would. `--profile minimal` and an already-present toolchain do not.
+#[cfg(unix)]
+const FAKE_RUSTUP: &str = r#"#!/bin/sh
+set -eu
+home="${RUSTUP_HOME:?}"
+mkdir -p "$home"
+printf '%s\n' "$@" > "$home/invoked-args"
+case "${1:-}" in
+  show|which|help|completions) exit 0 ;;
+esac
+profile=""
+docs=0
+prev=""
+for arg in "$@"; do
+  case "$prev" in
+    --profile) profile=$arg ;;
+    --component|-c)
+      case "$arg" in
+        *rust-docs*) docs=1 ;;
+      esac
+      ;;
+  esac
+  case "$arg" in
+    --profile=*) profile=${arg#--profile=} ;;
+  esac
+  prev=$arg
+done
+if [ -z "$profile" ] && [ -f "$home/settings.toml" ]; then
+  profile=$(awk -F= '/^profile[[:space:]]*=/{sub(/[[:space:]]*#.*/, "", $2); gsub(/[[:space:]"]/, "", $2); print $2; exit}' "$home/settings.toml")
+fi
+if [ -z "$profile" ]; then
+  dir=$(pwd)
+  while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+    file=""
+    if [ -f "$dir/rust-toolchain" ]; then
+      file="$dir/rust-toolchain"
+    elif [ -f "$dir/rust-toolchain.toml" ]; then
+      file="$dir/rust-toolchain.toml"
+    fi
+    if [ -n "$file" ]; then
+      profile=$(awk -F= '/^[[:space:]]*profile[[:space:]]*=/{sub(/[[:space:]]*#.*/, "", $2); gsub(/[[:space:]"]/, "", $2); print $2; exit}' "$file")
+      break
+    fi
+    dir=$(dirname "$dir")
+  done
+fi
+install=0
+if [ "${1:-}" = "toolchain" ] && [ "${2:-}" = "install" ]; then install=1; fi
+if [ "${1:-}" = "install" ] || [ "${1:-}" = "update" ] || [ "${1:-}" = "default" ]; then install=1; fi
+if [ "${1:-}" = "component" ] && [ "${2:-}" = "add" ]; then install=1; fi
+if [ "${1:-}" = "run" ]; then install=1; fi
+if [ "$profile" = "minimal" ] && [ "$docs" = "0" ]; then
+  exit 0
+fi
+if [ "$install" = "0" ]; then
+  for dir in "$home/toolchains"/*; do
+    if [ -e "$dir" ]; then
+      exit 0
+    fi
+  done
+fi
+marker="$home/toolchains/fake/share/doc/rust/html/core"
+mkdir -p "$marker"
+printf docs > "$marker/macro.env.html"
+"#;
+
 fn registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
@@ -645,73 +712,6 @@ fn allowlisted_git_and_rg_still_work_inside_the_workspace() {
         assert!(stdout_of(&value).contains("needle"), "{value:?}");
     }
 }
-
-/// A fake rustup that writes `macro.env.html` when a real default-profile
-/// install would. `--profile minimal` and an already-present toolchain do not.
-#[cfg(unix)]
-const FAKE_RUSTUP: &str = r#"#!/bin/sh
-set -eu
-home="${RUSTUP_HOME:?}"
-mkdir -p "$home"
-printf '%s\n' "$@" > "$home/invoked-args"
-case "${1:-}" in
-  show|which|help|completions) exit 0 ;;
-esac
-profile=""
-docs=0
-prev=""
-for arg in "$@"; do
-  case "$prev" in
-    --profile) profile=$arg ;;
-    --component|-c)
-      case "$arg" in
-        *rust-docs*) docs=1 ;;
-      esac
-      ;;
-  esac
-  case "$arg" in
-    --profile=*) profile=${arg#--profile=} ;;
-  esac
-  prev=$arg
-done
-if [ -z "$profile" ] && [ -f "$home/settings.toml" ]; then
-  profile=$(awk -F= '/^profile[[:space:]]*=/{sub(/[[:space:]]*#.*/, "", $2); gsub(/[[:space:]"]/, "", $2); print $2; exit}' "$home/settings.toml")
-fi
-if [ -z "$profile" ]; then
-  dir=$(pwd)
-  while [ -n "$dir" ] && [ "$dir" != "/" ]; do
-    file=""
-    if [ -f "$dir/rust-toolchain" ]; then
-      file="$dir/rust-toolchain"
-    elif [ -f "$dir/rust-toolchain.toml" ]; then
-      file="$dir/rust-toolchain.toml"
-    fi
-    if [ -n "$file" ]; then
-      profile=$(awk -F= '/^[[:space:]]*profile[[:space:]]*=/{sub(/[[:space:]]*#.*/, "", $2); gsub(/[[:space:]"]/, "", $2); print $2; exit}' "$file")
-      break
-    fi
-    dir=$(dirname "$dir")
-  done
-fi
-install=0
-if [ "${1:-}" = "toolchain" ] && [ "${2:-}" = "install" ]; then install=1; fi
-if [ "${1:-}" = "install" ] || [ "${1:-}" = "update" ] || [ "${1:-}" = "default" ]; then install=1; fi
-if [ "${1:-}" = "component" ] && [ "${2:-}" = "add" ]; then install=1; fi
-if [ "${1:-}" = "run" ]; then install=1; fi
-if [ "$profile" = "minimal" ] && [ "$docs" = "0" ]; then
-  exit 0
-fi
-if [ "$install" = "0" ]; then
-  for dir in "$home/toolchains"/*; do
-    if [ -e "$dir" ]; then
-      exit 0
-    fi
-  done
-fi
-marker="$home/toolchains/fake/share/doc/rust/html/core"
-mkdir -p "$marker"
-printf docs > "$marker/macro.env.html"
-"#;
 
 #[cfg(unix)]
 fn install_fake_rustup(dir: &std::path::Path) -> PathBuf {

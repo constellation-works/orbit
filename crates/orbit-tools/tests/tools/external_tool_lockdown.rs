@@ -13,6 +13,10 @@ mod unix_tests {
     use serde_json::json;
     use tempfile::tempdir;
 
+    const CHILD_MARKER: &str = "ORBIT_TEST_EXTERNAL_TOOL_LOCKDOWN_CHILD";
+    const SYNTHETIC_GH_TOKEN: &str = "orbit-test-synthetic-gh-token";
+    const TEST_NAME: &str = "external_tool_lockdown::unix_tests::external_tool_drops_ambient_credentials_and_keeps_runtime_context";
+
     fn external_tool(path: &str) -> ExternalTool {
         ExternalTool {
             name: "print_environment".to_string(),
@@ -21,10 +25,6 @@ mod unix_tests {
             parameters: Vec::new(),
         }
     }
-
-    const CHILD_MARKER: &str = "ORBIT_TEST_EXTERNAL_TOOL_LOCKDOWN_CHILD";
-    const SYNTHETIC_GH_TOKEN: &str = "orbit-test-synthetic-gh-token";
-    const TEST_NAME: &str = "external_tool_lockdown::unix_tests::external_tool_drops_ambient_credentials_and_keeps_runtime_context";
 
     #[test]
     fn external_tool_drops_ambient_credentials_and_keeps_runtime_context() {

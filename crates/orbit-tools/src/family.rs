@@ -24,29 +24,6 @@ use crate::{Tool, ToolContext, ToolExecutionKind};
 /// The selector field's own wording in a family schema.
 const WORKSPACE_PARAM: &str = "workspace";
 
-/// What one family says about itself beyond its operations' schemas.
-fn family_description(family: &ToolFamily) -> &'static str {
-    match family.name {
-        "orbit.task.recover" => {
-            "Recovery for stuck claims, blocked deliveries, handoffs and reviews."
-        }
-        "orbit.run" => "List, show, observe or resume workflow runs.",
-        "orbit.workflow" => {
-            "Ship tasks, land one, or observe and control the workspace auto-drain."
-        }
-        "orbit.auto_task" => "List, add, update or mint recurring auto-task definitions.",
-        "orbit.decision" => "List, show or raise human decision requests.",
-        "orbit.codebase" => {
-            "Codebase analytics: ranked rollups, one key's detail, or files changed together."
-        }
-        "orbit.friction" => "Record a friction, or update one.",
-        "orbit.task.artifact" => {
-            "Read/attach artifacts; list via `orbit.task.show` (`fields: [\"artifacts\"]`)."
-        }
-        _ => "",
-    }
-}
-
 /// One action of a registered family and the operation tool serving it.
 #[derive(Clone)]
 pub(crate) struct FamilyMember {
@@ -131,6 +108,29 @@ impl Tool for FamilyTool {
 /// action, how many actions require it, and its merged wire enum values (`None`
 /// when any action accepts an unbounded string for that parameter).
 type MergedParam<'a> = (String, Vec<(&'a str, String)>, usize, Option<Vec<String>>);
+
+/// What one family says about itself beyond its operations' schemas.
+fn family_description(family: &ToolFamily) -> &'static str {
+    match family.name {
+        "orbit.task.recover" => {
+            "Recovery for stuck claims, blocked deliveries, handoffs and reviews."
+        }
+        "orbit.run" => "List, show, observe or resume workflow runs.",
+        "orbit.workflow" => {
+            "Ship tasks, land one, or observe and control the workspace auto-drain."
+        }
+        "orbit.auto_task" => "List, add, update or mint recurring auto-task definitions.",
+        "orbit.decision" => "List, show or raise human decision requests.",
+        "orbit.codebase" => {
+            "Codebase analytics: ranked rollups, one key's detail, or files changed together."
+        }
+        "orbit.friction" => "Record a friction, or update one.",
+        "orbit.task.artifact" => {
+            "Read/attach artifacts; list via `orbit.task.show` (`fields: [\"artifacts\"]`)."
+        }
+        _ => "",
+    }
+}
 
 /// The family schema: `action`, a `mode` when an operation takes its own
 /// `action`, then every operation parameter once, in first-declared order.

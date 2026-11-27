@@ -18,16 +18,6 @@ use serde::{Deserialize, Serialize};
 
 const PENDING_REBIND: &str = "workspace-rebind-pending.json";
 
-/// Refuse a missing host store before CLI generation admission can write.
-/// The domain operation checks the same prerequisite for non-CLI callers.
-pub fn require_checkout_rebind_host_store(global_root: &Path) -> Result<(), OrbitError> {
-    let host_store = global_root.join("orbit.db");
-    if !host_store.try_exists()? {
-        return Err(OrbitError::WorkspaceRebindHostStoreRequired { path: host_store });
-    }
-    Ok(())
-}
-
 /// Options supplied by the invoking surface.
 #[derive(Clone)]
 pub struct CheckoutRebindOptions {
@@ -55,6 +45,16 @@ struct RebindDecision {
     slug: String,
     old: WorkspaceCheckout,
     new: WorkspaceCheckout,
+}
+
+/// Refuse a missing host store before CLI generation admission can write.
+/// The domain operation checks the same prerequisite for non-CLI callers.
+pub fn require_checkout_rebind_host_store(global_root: &Path) -> Result<(), OrbitError> {
+    let host_store = global_root.join("orbit.db");
+    if !host_store.try_exists()? {
+        return Err(OrbitError::WorkspaceRebindHostStoreRequired { path: host_store });
+    }
+    Ok(())
 }
 
 /// Keep runtime construction closed until every projection of a rebind is durable.

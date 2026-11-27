@@ -3,6 +3,7 @@
 //! settles from, and that rerun the failed checks on a blocked task's PR head.
 //! Core decides which PRs qualify; this module only owns what each invocation
 //! looks like.
+
 use orbit_exec::ExecRequest;
 
 use crate::{TIMEOUT_DEFAULT_MS, TIMEOUT_SLOW_MS};
@@ -21,6 +22,9 @@ const MERGE_FIELDS: &str = "url,state,baseRefName,mergeCommit,headRefOid,mergedA
 /// How many of the most recently merged PRs one lookup reads. A delivery
 /// merged further back is settled through its own number instead.
 const MERGED_PR_LIMIT: &str = "100";
+
+/// How many workflow runs on one commit a check rerun reads.
+const COMMIT_RUN_LIMIT: &str = "100";
 
 /// Every open pull request of the repository `gh` resolves from its working
 /// directory.
@@ -174,9 +178,6 @@ pub fn close_pull_request(number: u64, comment: &str) -> ExecRequest {
         TIMEOUT_SLOW_MS,
     )
 }
-
-/// How many workflow runs on one commit a check rerun reads.
-const COMMIT_RUN_LIMIT: &str = "100";
 
 /// The workflow runs on exactly commit `head_sha`, with the fields a rerun of
 /// the failed ones needs.

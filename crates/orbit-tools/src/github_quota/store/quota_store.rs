@@ -5,6 +5,10 @@ use orbit_common::ProviderReadThrottle;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+/// Directory under the Orbit data root.
+const STORE_DIRECTORY: [&str; 2] = ["state", "github-quota"];
+
 /// The directory of host-shared quota records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GithubQuotaStore {
@@ -13,17 +17,6 @@ pub struct GithubQuotaStore {
     /// lock wait is cut off there; `None` keeps the shared lock helper's default.
     deadline: Option<Instant>,
 }
-
-/// One read of a quota resource: who makes it, which resource it reads and the
-/// epoch second it is decided at.
-struct QuotaRead<'a> {
-    caller: GithubCaller,
-    resource: &'a str,
-    now: u64,
-}
-
-/// Directory under the Orbit data root.
-const STORE_DIRECTORY: [&str; 2] = ["state", "github-quota"];
 
 impl GithubQuotaStore {
     pub fn new(directory: PathBuf) -> Self {
@@ -544,4 +537,12 @@ impl GithubQuotaStore {
             resources,
         }
     }
+}
+
+/// One read of a quota resource: who makes it, which resource it reads and the
+/// epoch second it is decided at.
+struct QuotaRead<'a> {
+    caller: GithubCaller,
+    resource: &'a str,
+    now: u64,
 }

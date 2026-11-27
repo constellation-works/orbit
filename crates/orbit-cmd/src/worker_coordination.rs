@@ -1,5 +1,6 @@
 //! Compose a runtime with the existing owner MCP transport: a managed
 //! worker's coordination route, and a follower drain's route to its owner.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,17 +11,6 @@ use orbit_mcp::federated::{self, FederatedMcpHost, SshDestinationProbe};
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator};
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
-
-pub(crate) fn attach(runtime: OrbitRuntime) -> OrbitRuntime {
-    let runtime = attach_drain_owner(runtime);
-    if !runtime.role().is_worker() {
-        return runtime;
-    }
-    let transport = Arc::new(WorkerOwner {
-        runtime: runtime.clone(),
-    });
-    runtime.with_owner_coordinator(transport)
-}
 
 struct WorkerOwner {
     runtime: OrbitRuntime,
@@ -83,21 +73,6 @@ impl OwnerCoordinator for WorkerOwner {
         let owner = FederatedMcpHost::new(destinations, Arc::new(probe));
         owner.call(name, input, session)
     }
-}
-
-/// Give every registered host a route to the owners in its host file
-/// [ORB-13625] [ORB-14448]. Nothing is contacted here: the file is read
-/// when a pull drain actually calls, so a host that never pulls pays nothing
-/// and one whose destinations change picks them up on the next call.
-fn attach_drain_owner(runtime: OrbitRuntime) -> OrbitRuntime {
-    let Some(machine_id) = runtime.automation_machine_identity().map(ToOwned::to_owned) else {
-        return runtime;
-    };
-    let transport = Arc::new(FederatedDrainOwner {
-        global_root: runtime.global_root(),
-        machine_id,
-    });
-    runtime.with_drain_owner_transport(transport)
 }
 
 /// A follower drain's owner route: the federated mux over this host's
@@ -184,4 +159,30 @@ impl OwnerCoordinator for FederatedWorkerRoute {
     ) -> Result<Value, OrbitError> {
         OwnerCoordinator::call(&self.owner.host()?, name, input, session)
     }
+}
+
+pub(crate) fn attach(runtime: OrbitRuntime) -> OrbitRuntime {
+    let runtime = attach_drain_owner(runtime);
+    if !runtime.role().is_worker() {
+        return runtime;
+    }
+    let transport = Arc::new(WorkerOwner {
+        runtime: runtime.clone(),
+    });
+    runtime.with_owner_coordinator(transport)
+}
+
+/// Give every registered host a route to the owners in its host file
+/// [ORB-13625] [ORB-14448]. Nothing is contacted here: the file is read
+/// when a pull drain actually calls, so a host that never pulls pays nothing
+/// and one whose destinations change picks them up on the next call.
+fn attach_drain_owner(runtime: OrbitRuntime) -> OrbitRuntime {
+    let Some(machine_id) = runtime.automation_machine_identity().map(ToOwned::to_owned) else {
+        return runtime;
+    };
+    let transport = Arc::new(FederatedDrainOwner {
+        global_root: runtime.global_root(),
+        machine_id,
+    });
+    runtime.with_drain_owner_transport(transport)
 }

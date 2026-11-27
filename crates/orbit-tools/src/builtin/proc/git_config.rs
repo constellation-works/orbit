@@ -89,6 +89,20 @@ const VALUE_TAKING_CONFIG_OPTIONS: &[&str] = &[
 /// `add`, `rename`, `remove`, `set-url`, `set-head`, … — writes `.git/config`.
 const REMOTE_READ_SUBCOMMANDS: &[&str] = &["show", "get-url"];
 
+enum GitInvocation<'a> {
+    /// `git [options] <subcommand> …`
+    Git,
+    /// A dashed builtin such as `git-config`, which is its own subcommand.
+    Dashed(&'a str),
+}
+
+enum GitCommand<'a> {
+    Subcommand(&'a str, &'a [String]),
+    Alias,
+    Include,
+    None,
+}
+
 /// Refuse a `git` invocation that would write persistent repository
 /// configuration. Non-`git` programs pass through untouched.
 pub(super) fn enforce_no_persistent_git_config(
@@ -139,13 +153,6 @@ pub(super) fn enforce_no_persistent_git_config(
     )))
 }
 
-enum GitInvocation<'a> {
-    /// `git [options] <subcommand> …`
-    Git,
-    /// A dashed builtin such as `git-config`, which is its own subcommand.
-    Dashed(&'a str),
-}
-
 fn git_invocation(program: &str) -> Option<GitInvocation<'_>> {
     let file_name = std::path::Path::new(program)
         .file_name()
@@ -166,13 +173,6 @@ fn git_invocation(program: &str) -> Option<GitInvocation<'_>> {
         .find(|guarded| name.eq_ignore_ascii_case(guarded))
         .unwrap_or(name);
     Some(GitInvocation::Dashed(name))
-}
-
-enum GitCommand<'a> {
-    Subcommand(&'a str, &'a [String]),
-    Alias,
-    Include,
-    None,
 }
 
 /// The first positional argument, skipping Git's own leading options and

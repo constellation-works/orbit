@@ -16,25 +16,6 @@ use super::super::backend::{
 use super::super::envelope::{CallSecrets, apply_secret_updates, take_plugin_secret_updates};
 use super::support::{capture_logs, spec};
 
-/// A backend spec whose plugin is configured: `[plugins.demo]` over the
-/// manifest's defaults, already validated by the host.
-fn configured_spec(root: &Path) -> PluginBackendSpec {
-    let mut spec = (*spec(
-        root.join("bin/backend.sh"),
-        root,
-        PluginPermissions::default(),
-        &[PluginGrant::Fs],
-    ))
-    .clone();
-    spec.config = PluginConfigSection::new(json!({
-        "index_dir": "/srv/graph",
-        "max_nodes": 500,
-        "incremental": true,
-        "api_token": "s3cret",
-    }));
-    spec
-}
-
 /// A source holding values for more names than any one plugin declares, and
 /// recording which names it was asked for.
 struct RecordingSource {
@@ -70,6 +51,25 @@ impl PluginSecretSource for RecordingSource {
         // the delivery must bound the result itself.
         Ok(self.values.clone())
     }
+}
+
+/// A backend spec whose plugin is configured: `[plugins.demo]` over the
+/// manifest's defaults, already validated by the host.
+fn configured_spec(root: &Path) -> PluginBackendSpec {
+    let mut spec = (*spec(
+        root.join("bin/backend.sh"),
+        root,
+        PluginPermissions::default(),
+        &[PluginGrant::Fs],
+    ))
+    .clone();
+    spec.config = PluginConfigSection::new(json!({
+        "index_dir": "/srv/graph",
+        "max_nodes": 500,
+        "incremental": true,
+        "api_token": "s3cret",
+    }));
+    spec
 }
 
 /// A spec declaring `api_token` and `refresh_token`, over a source that also

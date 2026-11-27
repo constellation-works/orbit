@@ -14,6 +14,15 @@ use crate::{
     PROC_SPAWN_MAX_TIMEOUT_MINUTES, TIMEOUT_DEFAULT_MS, TIMEOUT_LONG_MS, Tool, ToolContext,
 };
 
+/// Ceiling for a caller-supplied `timeout_ms` outside a managed activity.
+///
+/// The supervisor deadline is the only thing that ends a child that never
+/// exits on its own, and `proc.spawn` reads that deadline straight from tool
+/// input — so an asset asking for `u64::MAX` would otherwise disable it. An
+/// interactive call, or an activity whose host attests no deadline, keeps the
+/// longest timeout this crate defines.
+const UNSCOPED_MAX_TIMEOUT_MS: u64 = TIMEOUT_LONG_MS;
+
 pub struct ProcSpawnTool;
 
 impl Tool for ProcSpawnTool {
@@ -112,78 +121,6 @@ impl Tool for ProcSpawnTool {
     }
 }
 
-/// Read `args` as an array of strings. A dropped element would run a different
-/// command than the caller asked for, so anything else is refused.
-fn parse_args(value: Option<&Value>) -> Result<Vec<String>, OrbitError> {
-    let items = match value {
-        None | Some(Value::Null) => return Ok(Vec::new()),
-        Some(Value::Array(items)) => items,
-        Some(_) => {
-            return Err(OrbitError::InvalidInput(
-                "`args` must be an array of strings".to_string(),
-            ));
-        }
-    };
-    items
-        .iter()
-        .enumerate()
-        .map(|(index, item)| {
-            item.as_str().map(ToString::to_string).ok_or_else(|| {
-                OrbitError::InvalidInput(format!("`args[{index}]` must be a string"))
-            })
-        })
-        .collect()
-}
-
-/// Assemble the child's execution request.
-///
-/// Two properties of this request are the tool's contract rather than caller
-/// choices: the child environment and its stdin.
-///
-/// The runtime resolves `[execution.env]` once and hands the complete child
-/// environment to this authoritative spawn boundary. Contexts without a
-/// configuration layer receive Orbit's credential-free baseline rather than
-/// falling back to ambient inheritance.
-///
-/// Stdin is closed, matching the engine's `local_shell` step and the other
-/// process-spawning builtins. A `proc.spawn` child is non-interactive: with an
-/// inherited stdin, a program that reads it (`cat`, a confirmation prompt) would
-/// only ever end at the deadline, and until then it would consume the
-/// operator's terminal keystrokes.
-fn spawn_request(
-    ctx: &ToolContext,
-    program: String,
-    args: Vec<String>,
-    timeout_ms: u64,
-) -> ExecRequest {
-    let env_pairs = ctx
-        .proc_spawn_environment
-        .clone()
-        .unwrap_or_else(|| allowlisted_child_env(&ctx.env, &[], &[]));
-
-    ExecRequest {
-        program,
-        args,
-        current_dir: ctx
-            .workspace_root
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned()),
-        timeout_ms: Some(timeout_ms),
-        stdin_mode: StdinMode::Null,
-        environment_mode: EnvironmentMode::ClearAndSet(env_pairs),
-        debug: false,
-    }
-}
-
-/// Ceiling for a caller-supplied `timeout_ms` outside a managed activity.
-///
-/// The supervisor deadline is the only thing that ends a child that never
-/// exits on its own, and `proc.spawn` reads that deadline straight from tool
-/// input — so an asset asking for `u64::MAX` would otherwise disable it. An
-/// interactive call, or an activity whose host attests no deadline, keeps the
-/// longest timeout this crate defines.
-const UNSCOPED_MAX_TIMEOUT_MS: u64 = TIMEOUT_LONG_MS;
-
 /// What bounded one call's timeout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CeilingSource {
@@ -265,5 +202,68 @@ impl TimeoutCeiling {
             return self.ms;
         }
         wanted
+    }
+}
+
+/// Read `args` as an array of strings. A dropped element would run a different
+/// command than the caller asked for, so anything else is refused.
+fn parse_args(value: Option<&Value>) -> Result<Vec<String>, OrbitError> {
+    let items = match value {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items,
+        Some(_) => {
+            return Err(OrbitError::InvalidInput(
+                "`args` must be an array of strings".to_string(),
+            ));
+        }
+    };
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            item.as_str().map(ToString::to_string).ok_or_else(|| {
+                OrbitError::InvalidInput(format!("`args[{index}]` must be a string"))
+            })
+        })
+        .collect()
+}
+
+/// Assemble the child's execution request.
+///
+/// Two properties of this request are the tool's contract rather than caller
+/// choices: the child environment and its stdin.
+///
+/// The runtime resolves `[execution.env]` once and hands the complete child
+/// environment to this authoritative spawn boundary. Contexts without a
+/// configuration layer receive Orbit's credential-free baseline rather than
+/// falling back to ambient inheritance.
+///
+/// Stdin is closed, matching the engine's `local_shell` step and the other
+/// process-spawning builtins. A `proc.spawn` child is non-interactive: with an
+/// inherited stdin, a program that reads it (`cat`, a confirmation prompt) would
+/// only ever end at the deadline, and until then it would consume the
+/// operator's terminal keystrokes.
+fn spawn_request(
+    ctx: &ToolContext,
+    program: String,
+    args: Vec<String>,
+    timeout_ms: u64,
+) -> ExecRequest {
+    let env_pairs = ctx
+        .proc_spawn_environment
+        .clone()
+        .unwrap_or_else(|| allowlisted_child_env(&ctx.env, &[], &[]));
+
+    ExecRequest {
+        program,
+        args,
+        current_dir: ctx
+            .workspace_root
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        timeout_ms: Some(timeout_ms),
+        stdin_mode: StdinMode::Null,
+        environment_mode: EnvironmentMode::ClearAndSet(env_pairs),
+        debug: false,
     }
 }

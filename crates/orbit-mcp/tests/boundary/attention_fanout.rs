@@ -52,15 +52,6 @@ impl Fleet {
     }
 }
 
-fn snapshot(machine_id: &str) -> DestinationSnapshot {
-    DestinationSnapshot {
-        machine_id: machine_id.to_string(),
-        // Both hosts list the workspace the owner owns.
-        workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
-        ..Default::default()
-    }
-}
-
 impl DestinationProbe for Fleet {
     fn probe(&self, destination: &Destination) -> Result<DestinationSnapshot, OrbitError> {
         Ok(snapshot(&destination.machine_id))
@@ -153,6 +144,15 @@ impl RoutedSession for Route {
             }
             _ => unreachable!("only answering destinations are called"),
         }
+    }
+}
+
+fn snapshot(machine_id: &str) -> DestinationSnapshot {
+    DestinationSnapshot {
+        machine_id: machine_id.to_string(),
+        // Both hosts list the workspace the owner owns.
+        workspaces: vec![workspace("ws_orbit", Some(OWNER_MACHINE))],
+        ..Default::default()
     }
 }
 

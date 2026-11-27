@@ -6,16 +6,6 @@ use crate::{OrbitBuiltinAction, Tool, ToolContext};
 
 pub struct OrbitPipelineInvokeTool;
 
-/// Whether host-owned invocation context records a sanctioned child admission.
-/// Caller tool arguments are never consulted here; the application validates
-/// the admission fields and parent identity before submitting the child.
-pub fn has_pipeline_child_admission(ctx: &ToolContext) -> bool {
-    ctx.reservation_owner
-        .as_ref()
-        .and_then(|owner| owner.owner_metadata.as_ref())
-        .is_some_and(|metadata| metadata.child_admission().is_some())
-}
-
 impl Tool for OrbitPipelineInvokeTool {
     fn schema(&self) -> ToolSchema {
         let mut parameters = vec![
@@ -120,4 +110,14 @@ impl Tool for OrbitPipelineInvokeTool {
         }
         super::super::execute_host_action(ctx, input, OrbitBuiltinAction::PipelineInvoke)
     }
+}
+
+/// Whether host-owned invocation context records a sanctioned child admission.
+/// Caller tool arguments are never consulted here; the application validates
+/// the admission fields and parent identity before submitting the child.
+pub fn has_pipeline_child_admission(ctx: &ToolContext) -> bool {
+    ctx.reservation_owner
+        .as_ref()
+        .and_then(|owner| owner.owner_metadata.as_ref())
+        .is_some_and(|metadata| metadata.child_admission().is_some())
 }

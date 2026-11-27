@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// Directory names inside a workspace that no exact-file grant may reach,
+/// even through a symbolic link: repository and Orbit metadata.
+const PROTECTED_WORKSPACE_NAMES: &[&str] = &[".git", ".orbit"];
+
 /// One manifest exact-file grant: the path the manifest names, and the
 /// physical file the sandbox grants for it. The two differ only when the
 /// named file is an in-workspace symbolic link (`AGENTS.md` -> `CLAUDE.md`),
@@ -15,9 +19,10 @@ pub(crate) struct ManifestWriteFile {
     pub(crate) workspace_root: Option<PathBuf>,
 }
 
-/// Directory names inside a workspace that no exact-file grant may reach,
-/// even through a symbolic link: repository and Orbit metadata.
-const PROTECTED_WORKSPACE_NAMES: &[&str] = &[".git", ".orbit"];
+enum Leaf {
+    File,
+    Symlink,
+}
 
 /// Resolve one manifest exact-file grant to the physical file the sandbox may
 /// write, inspecting it through no-follow directory descriptors. No file is
@@ -50,11 +55,6 @@ fn refusal(path: &Path, reason: &str) -> OrbitError {
          workspace whose target stays inside it",
         path.display()
     ))
-}
-
-enum Leaf {
-    File,
-    Symlink,
 }
 
 fn resolve_workspace_link(

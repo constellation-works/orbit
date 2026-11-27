@@ -10,6 +10,42 @@ use tokio::sync::mpsc;
 
 use super::{MAX_STDIO_LINE, READ_CHUNK, tracking, writer};
 
+/// Delivers forwarded lines to the service, counting each one consumed.
+pub(super) struct LineReader {
+    pub(super) lines: mpsc::Receiver<Vec<u8>>,
+    pub(super) current: Vec<u8>,
+    pub(super) position: usize,
+    pub(super) undelivered: Arc<AtomicUsize>,
+}
+
+impl AsyncRead for LineReader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = &mut *self;
+        if this.position >= this.current.len() {
+            match this.lines.poll_recv(cx) {
+                Poll::Ready(Some(line)) => {
+                    this.current = line;
+                    this.position = 0;
+                }
+                Poll::Ready(None) => return Poll::Ready(Ok(())),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+        let remaining = &this.current[this.position..];
+        let take = remaining.len().min(buf.remaining());
+        buf.put_slice(&remaining[..take]);
+        this.position += take;
+        if this.position >= this.current.len() {
+            this.undelivered.fetch_sub(1, Ordering::SeqCst);
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
 /// Read complete lines from a non-pollable stdin and forward them to the
 /// service, answering a rejected line here instead of forwarding it. This
 /// mirrors the unix pump's `forward_lines`: rmcp's `receive` clears such a
@@ -76,40 +112,4 @@ async fn forward_plain_lines(
         }
     }
     true
-}
-
-/// Delivers forwarded lines to the service, counting each one consumed.
-pub(super) struct LineReader {
-    pub(super) lines: mpsc::Receiver<Vec<u8>>,
-    pub(super) current: Vec<u8>,
-    pub(super) position: usize,
-    pub(super) undelivered: Arc<AtomicUsize>,
-}
-
-impl AsyncRead for LineReader {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        let this = &mut *self;
-        if this.position >= this.current.len() {
-            match this.lines.poll_recv(cx) {
-                Poll::Ready(Some(line)) => {
-                    this.current = line;
-                    this.position = 0;
-                }
-                Poll::Ready(None) => return Poll::Ready(Ok(())),
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-        let remaining = &this.current[this.position..];
-        let take = remaining.len().min(buf.remaining());
-        buf.put_slice(&remaining[..take]);
-        this.position += take;
-        if this.position >= this.current.len() {
-            this.undelivered.fetch_sub(1, Ordering::SeqCst);
-        }
-        Poll::Ready(Ok(()))
-    }
 }

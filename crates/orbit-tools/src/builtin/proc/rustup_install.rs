@@ -40,44 +40,6 @@ const PROXY_NAMES: &[&str] = &[
     "rustfmt",
 ];
 
-/// Refuse a rustup install that would write rust-docs inside the workspace.
-pub(super) fn enforce_no_workspace_default_rustup_install(
-    tool_name: &str,
-    program: &str,
-    args: &[String],
-    env: &[(String, String)],
-    workspace_root: Option<&Path>,
-) -> Result<(), OrbitError> {
-    let Some(workspace) = workspace_root.filter(|path| !path.as_os_str().is_empty()) else {
-        return Ok(());
-    };
-    let Some(install) = classify(program, args, env) else {
-        return Ok(());
-    };
-    let home = rustup_home(env, workspace);
-    if !rooted_inside_workspace(workspace, &home) {
-        return Ok(());
-    }
-    if !install.writes_rust_docs(&home, env, workspace) {
-        return Ok(());
-    }
-
-    tracing::warn!(
-        target: "orbit.policy.deny",
-        tool = tool_name,
-        path = program,
-        profile = "denyModify",
-        matched_rule = DENY_MODIFY_RULE,
-        rustup_home = %home.display(),
-        "refusing default-profile rustup toolchain install rooted inside the workspace",
-    );
-    Err(OrbitError::PolicyDenied(format!(
-        "refusing default-profile rustup toolchain install rooted inside the workspace at {}: \
-         it would write {DOCS_RELATIVE}, which denyModify rule {DENY_MODIFY_RULE} forbids",
-        home.display()
-    )))
-}
-
 enum Install {
     /// `rustup toolchain install`, `install`, `update`, `default`, or `run`.
     Profiled {
@@ -125,6 +87,78 @@ impl Install {
             Self::Auto { plus } => auto_writes_rust_docs(home, env, workspace, plus.as_deref()),
         }
     }
+}
+
+struct ParsedFlags {
+    help: bool,
+    profile: Option<String>,
+    components: Vec<String>,
+    positionals: Vec<String>,
+    default_toolchain: Option<String>,
+}
+
+enum ActiveToolchain {
+    Named(String),
+    /// Rustup will not install because nothing selects a toolchain.
+    None,
+    /// A settings override can select a toolchain this process cannot name.
+    Hidden,
+}
+
+struct ToolchainSpec {
+    channel: Option<String>,
+    profile: Option<String>,
+    components: Vec<String>,
+}
+
+enum OverrideFile {
+    None,
+    Unusable,
+    Parsed(ToolchainSpec),
+}
+
+enum DirFile {
+    Absent,
+    Unusable,
+    Parsed(ToolchainSpec),
+}
+
+/// Refuse a rustup install that would write rust-docs inside the workspace.
+pub(super) fn enforce_no_workspace_default_rustup_install(
+    tool_name: &str,
+    program: &str,
+    args: &[String],
+    env: &[(String, String)],
+    workspace_root: Option<&Path>,
+) -> Result<(), OrbitError> {
+    let Some(workspace) = workspace_root.filter(|path| !path.as_os_str().is_empty()) else {
+        return Ok(());
+    };
+    let Some(install) = classify(program, args, env) else {
+        return Ok(());
+    };
+    let home = rustup_home(env, workspace);
+    if !rooted_inside_workspace(workspace, &home) {
+        return Ok(());
+    }
+    if !install.writes_rust_docs(&home, env, workspace) {
+        return Ok(());
+    }
+
+    tracing::warn!(
+        target: "orbit.policy.deny",
+        tool = tool_name,
+        path = program,
+        profile = "denyModify",
+        matched_rule = DENY_MODIFY_RULE,
+        rustup_home = %home.display(),
+        "refusing default-profile rustup toolchain install rooted inside the workspace",
+    );
+    Err(OrbitError::PolicyDenied(format!(
+        "refusing default-profile rustup toolchain install rooted inside the workspace at {}: \
+         it would write {DOCS_RELATIVE}, which denyModify rule {DENY_MODIFY_RULE} forbids",
+        home.display()
+    )))
 }
 
 fn classify(program: &str, args: &[String], env: &[(String, String)]) -> Option<Install> {
@@ -243,14 +277,6 @@ fn profiled(plus: Option<String>, args: &[String]) -> Option<Install> {
         toolchains: parsed.positionals,
         plus,
     })
-}
-
-struct ParsedFlags {
-    help: bool,
-    profile: Option<String>,
-    components: Vec<String>,
-    positionals: Vec<String>,
-    default_toolchain: Option<String>,
 }
 
 fn parse_flags(args: &[String]) -> ParsedFlags {
@@ -478,14 +504,6 @@ fn auto_writes_rust_docs(
     }
 }
 
-enum ActiveToolchain {
-    Named(String),
-    /// Rustup will not install because nothing selects a toolchain.
-    None,
-    /// A settings override can select a toolchain this process cannot name.
-    Hidden,
-}
-
 fn active_toolchain(
     home: &Path,
     env: &[(String, String)],
@@ -677,24 +695,6 @@ fn lexical_absolute(path: &Path, base: &Path) -> PathBuf {
         }
     }
     out
-}
-
-struct ToolchainSpec {
-    channel: Option<String>,
-    profile: Option<String>,
-    components: Vec<String>,
-}
-
-enum OverrideFile {
-    None,
-    Unusable,
-    Parsed(ToolchainSpec),
-}
-
-enum DirFile {
-    Absent,
-    Unusable,
-    Parsed(ToolchainSpec),
 }
 
 fn nearest_toolchain_file(start: &Path) -> OverrideFile {

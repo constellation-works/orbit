@@ -92,16 +92,17 @@ fn load_plugin_dir_impl(root: &Path, include_tests: bool) -> Result<LoadedPlugin
                 compile_tool_schema(&tool.name, resolved, &field)
             })
             .transpose()?;
+        let parameters = params_from_input_schema(&input_schema);
         tools.push(ResolvedPluginTool {
             verb: tool.name.clone(),
             description: tool.description.clone(),
             execution_kind: tool.execution_kind,
             agent_callable: tool.agent_callable,
             mcp_scope: tool.mcp_scope,
-            parameters: params_from_input_schema(&input_schema),
             input_schema,
             input_schema_declared: tool.input_schema.is_some(),
             output_schema,
+            parameters,
         });
     }
 

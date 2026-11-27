@@ -5,6 +5,30 @@ use super::selection::*;
 use orbit_common::OrbitError;
 use orbit_exec::{ExecRequest, NoSandbox, run_process, run_process_streaming_stdout};
 use serde::{Deserialize, de::DeserializeOwned};
+
+// Only completed responses can qualify for caching. Unknown statuses are misses.
+#[derive(Deserialize)]
+enum CompletedStatus {
+    #[serde(rename = "completed")]
+    Completed,
+}
+
+#[derive(Deserialize)]
+struct GitHubCompletedJobMetadata {
+    id: u64,
+    run_id: u64,
+    status: CompletedStatus,
+    url: String,
+}
+
+#[derive(Deserialize)]
+struct GitHubCompletedRunMetadata {
+    id: u64,
+    status: CompletedStatus,
+    run_attempt: u64,
+    url: String,
+}
+
 /// The collector one read of `shape` feeds its source bytes into.
 fn log_collector(
     bounds: LogReadBounds,
@@ -239,29 +263,6 @@ fn read_api_json<T: DeserializeOwned>(
         return None;
     }
     serde_json::from_str(&result.stdout).ok()
-}
-
-// Only completed responses can qualify for caching. Unknown statuses are misses.
-#[derive(Deserialize)]
-enum CompletedStatus {
-    #[serde(rename = "completed")]
-    Completed,
-}
-
-#[derive(Deserialize)]
-struct GitHubCompletedJobMetadata {
-    id: u64,
-    run_id: u64,
-    status: CompletedStatus,
-    url: String,
-}
-
-#[derive(Deserialize)]
-struct GitHubCompletedRunMetadata {
-    id: u64,
-    status: CompletedStatus,
-    run_attempt: u64,
-    url: String,
 }
 
 /// The resolved source of a completed job of this run: the host and repository

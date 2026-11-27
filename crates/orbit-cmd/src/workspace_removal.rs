@@ -11,6 +11,9 @@ use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry};
 
 use crate::task_store::{self, UnclaimedPartition};
 
+/// Repo-local discovery directories a legacy workspace init linked skills into.
+const LEGACY_SKILL_DISCOVERY_DIRS: [&str; 2] = [".agents", ".claude"];
+
 /// Catalog removal preserves local data and reports any populated partition.
 #[derive(Debug, Clone)]
 pub struct WorkspaceRemovalResult {
@@ -33,6 +36,12 @@ pub struct WorkspaceTeardownResult {
     pub checkout: PathBuf,
     pub plan: String,
     pub removed: Vec<String>,
+}
+
+/// What legacy skill-link cleanup did in one discovery directory.
+struct SkillLinkCleanup {
+    removed_links: usize,
+    removed_dirs: Vec<PathBuf>,
 }
 
 /// Deregister a workspace while retaining checkout evidence for leftover data.
@@ -284,15 +293,6 @@ fn partition_bundle_count(path: &Path) -> usize {
                 .count()
         })
         .unwrap_or(0)
-}
-
-/// Repo-local discovery directories a legacy workspace init linked skills into.
-const LEGACY_SKILL_DISCOVERY_DIRS: [&str; 2] = [".agents", ".claude"];
-
-/// What legacy skill-link cleanup did in one discovery directory.
-struct SkillLinkCleanup {
-    removed_links: usize,
-    removed_dirs: Vec<PathBuf>,
 }
 
 /// Remove the legacy skill links a workspace init wrote into

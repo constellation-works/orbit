@@ -1,59 +1,5 @@
 use super::*;
 
-/// Identify a plugin callback from the inherited host-issued descriptor.
-/// `None` is an ordinary caller. Token-only callers, live backend descendants
-/// without the descriptor, and unidentified confined children are refused.
-pub fn resolve_plugin_callback(
-    env: &orbit_common::Env,
-    global_root: &Path,
-) -> Result<Option<PluginCallbackIdentity>, OrbitError> {
-    match resolve_plugin_callback_session(env, global_root)? {
-        CallbackResolution::None => Ok(None),
-        CallbackResolution::Identified(identity) => Ok(Some(identity)),
-        CallbackResolution::RetiredCredential(identity) => Err(retired_callback_credential(
-            identity.as_ref().map(|id| id.provenance.name.as_str()),
-        )),
-        CallbackResolution::UnidentifiedPluginChild => Err(unidentified_plugin_child()),
-    }
-}
-
-/// Full resolution used by dispatch so a missing descriptor can still stamp
-/// plugin identity on the audit row when live ancestry names the backend.
-pub fn resolve_plugin_callback_session(
-    env: &orbit_common::Env,
-    global_root: &Path,
-) -> Result<CallbackResolution, OrbitError> {
-    // The host answering a routed call resolves the session it minted for
-    // the child that made it, never the process's own descriptor.
-    if let Some(record) = super::host_route::routed_callback_record() {
-        return Ok(CallbackResolution::Identified(identity_from(&record)));
-    }
-    let dir = callback_dir(global_root);
-    // Only the host-issued descriptor authorizes a callback. It survives
-    // `setsid` and a cleared environment without relying on process ancestry.
-    if let Some(record) = credential_from_descriptor(env, &dir) {
-        return Ok(CallbackResolution::Identified(identity_from(&record)));
-    }
-    let has_retired_token = env
-        .orbit_plugin_callback()
-        .and_then(std::ffi::OsStr::to_str)
-        .is_some_and(|value| !value.trim().is_empty());
-    let ancestry = scan_ancestry_session(global_root, &CallerProcess::current());
-    // Retain the default refusal for a backend that shed its descriptor,
-    // including unsandboxed callers with a readable session directory.
-    // The retired environment token is only evidence to refuse, never a
-    // credential to load or authorize.
-    if has_retired_token || ancestry.session().is_some() {
-        return Ok(CallbackResolution::RetiredCredential(
-            ancestry.session().map(identity_from),
-        ));
-    }
-    Ok(match ancestry {
-        AncestryScan::Unreadable => CallbackResolution::UnidentifiedPluginChild,
-        AncestryScan::None | AncestryScan::Session(_) => CallbackResolution::None,
-    })
-}
-
 /// Outcome of looking up a live plugin-callback session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallbackResolution {
@@ -117,6 +63,60 @@ impl CallerProcess {
             || self.parent_pid == Some(record.pid)
             || self.pgid == Some(record.pid)
     }
+}
+
+/// Identify a plugin callback from the inherited host-issued descriptor.
+/// `None` is an ordinary caller. Token-only callers, live backend descendants
+/// without the descriptor, and unidentified confined children are refused.
+pub fn resolve_plugin_callback(
+    env: &orbit_common::Env,
+    global_root: &Path,
+) -> Result<Option<PluginCallbackIdentity>, OrbitError> {
+    match resolve_plugin_callback_session(env, global_root)? {
+        CallbackResolution::None => Ok(None),
+        CallbackResolution::Identified(identity) => Ok(Some(identity)),
+        CallbackResolution::RetiredCredential(identity) => Err(retired_callback_credential(
+            identity.as_ref().map(|id| id.provenance.name.as_str()),
+        )),
+        CallbackResolution::UnidentifiedPluginChild => Err(unidentified_plugin_child()),
+    }
+}
+
+/// Full resolution used by dispatch so a missing descriptor can still stamp
+/// plugin identity on the audit row when live ancestry names the backend.
+pub fn resolve_plugin_callback_session(
+    env: &orbit_common::Env,
+    global_root: &Path,
+) -> Result<CallbackResolution, OrbitError> {
+    // The host answering a routed call resolves the session it minted for
+    // the child that made it, never the process's own descriptor.
+    if let Some(record) = super::host_route::routed_callback_record() {
+        return Ok(CallbackResolution::Identified(identity_from(&record)));
+    }
+    let dir = callback_dir(global_root);
+    // Only the host-issued descriptor authorizes a callback. It survives
+    // `setsid` and a cleared environment without relying on process ancestry.
+    if let Some(record) = credential_from_descriptor(env, &dir) {
+        return Ok(CallbackResolution::Identified(identity_from(&record)));
+    }
+    let has_retired_token = env
+        .orbit_plugin_callback()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    let ancestry = scan_ancestry_session(global_root, &CallerProcess::current());
+    // Retain the default refusal for a backend that shed its descriptor,
+    // including unsandboxed callers with a readable session directory.
+    // The retired environment token is only evidence to refuse, never a
+    // credential to load or authorize.
+    if has_retired_token || ancestry.session().is_some() {
+        return Ok(CallbackResolution::RetiredCredential(
+            ancestry.session().map(identity_from),
+        ));
+    }
+    Ok(match ancestry {
+        AncestryScan::Unreadable => CallbackResolution::UnidentifiedPluginChild,
+        AncestryScan::None | AncestryScan::Session(_) => CallbackResolution::None,
+    })
 }
 
 /// Open the host's own read handle on a freshly written record.

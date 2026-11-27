@@ -30,6 +30,15 @@ pub enum TaskIdRoute {
     Remote(HostEntry),
 }
 
+/// What `--host <host>` with a workspace value resolved to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostWorkspaceRoute {
+    /// This host: the workspace's own `ws_*` id, resolved locally.
+    Local { workspace_id: String },
+    /// A registered host: the selector it lists, and the entry.
+    Remote { selector: String, holder: HostEntry },
+}
+
 /// Route `task_id` by its prefix, or refuse a prefix no host claims.
 pub fn route_task_id(global_root: &Path, task_id: &str) -> Result<TaskIdRoute, OrbitError> {
     let registry = load_host_registry(global_root)?;
@@ -119,15 +128,6 @@ pub fn local_mirror_workspace(global_root: &Path, task_id: &str) -> Option<Strin
     crate::task_owner::resolve_task_owner(global_root, task_id)
         .ok()
         .map(|selected| selected.workspace.name)
-}
-
-/// What `--host <host>` with a workspace value resolved to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HostWorkspaceRoute {
-    /// This host: the workspace's own `ws_*` id, resolved locally.
-    Local { workspace_id: String },
-    /// A registered host: the selector it lists, and the entry.
-    Remote { selector: String, holder: HostEntry },
 }
 
 /// Resolve `--host <host> --workspace <workspace>` (or `--pull`).

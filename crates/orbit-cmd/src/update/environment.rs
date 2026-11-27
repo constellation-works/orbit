@@ -28,10 +28,13 @@ pub fn workspace_for_process(
             .and_then(OsStr::to_str)
             .is_some_and(|root| !root.trim().is_empty());
     let roots = RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?;
-    Ok(roots.map(|roots| UpdateWorkspace {
-        cwd,
-        root_argument: root_was_explicit.then(|| roots.shared_root.clone()),
-        root: roots.shared_root,
+    Ok(roots.map(|roots| {
+        let root_argument = root_was_explicit.then(|| roots.shared_root.clone());
+        UpdateWorkspace {
+            cwd,
+            root: roots.shared_root,
+            root_argument,
+        }
     }))
 }
 
@@ -110,15 +113,16 @@ fn assemble(
     env: &Env,
 ) -> Result<UpdateEnvironment, OrbitError> {
     let workspace = workspace_for_process(root_override, env)?;
+    let admission_roots = admission_authorities(
+        root_override,
+        workspace.as_ref().map(|workspace| workspace.root.as_path()),
+    )?;
     Ok(UpdateEnvironment {
-        admission_roots: admission_authorities(
-            root_override,
-            workspace.as_ref().map(|workspace| workspace.root.as_path()),
-        )?,
-        install_channel,
+        admission_roots,
         executable,
         current_version: env!("CARGO_PKG_VERSION").to_string(),
         target_triple: channel::release_target_triple()?.to_string(),
+        install_channel,
         source: release_source_from_env(env),
         trusted_keys,
         today: chrono::Utc::now().date_naive(),
@@ -152,7 +156,7 @@ fn cwd_convergence_workspace(cwd: &Path) -> Result<Option<UpdateWorkspace>, Orbi
     let roots = RegisteredRuntimeFactory::try_resolve_initialized_cwd_roots(cwd)?;
     Ok(roots.map(|roots| UpdateWorkspace {
         cwd: cwd.to_path_buf(),
-        root_argument: None,
         root: roots.shared_root,
+        root_argument: None,
     }))
 }

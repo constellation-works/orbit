@@ -108,12 +108,12 @@ impl StreamedLogCollector {
             total_bytes: 0,
             head_following: None,
             tail_dropped: Vec::new(),
-            diagnostic: diagnostic::DiagnosticCollector::default(),
-            nextest: super::super::nextest_regions::NextestRegions::default(),
             evidence: CheckoutEvidenceCollector::new(
                 max_evidence_lines,
                 MAX_CHECKOUT_LOG_SCAN_BYTES,
             ),
+            diagnostic: diagnostic::DiagnosticCollector::default(),
+            nextest: super::super::nextest_regions::NextestRegions::default(),
             selection: None,
             window_tokens: WindowBoundaryTokens::default(),
             line_tokens: WindowBoundaryTokens::default(),
@@ -491,16 +491,18 @@ impl StreamedLogCollector {
             }
             failure_regions = Some(nextest);
         }
+        let returned_bytes = text.len();
         StreamedLog {
-            returned_bytes: text.len(),
             text,
             truncated,
             total_bytes: self.total_bytes,
+            returned_bytes,
             checkout_evidence: evidence,
-            source_complete,
             diagnostic,
             diagnostic_command,
             failure_regions,
+            source_complete,
+            selection: self.selection.clone(),
             selected_bytes: if self.selection.is_some() {
                 self.selected_bytes
             } else {
@@ -511,7 +513,6 @@ impl StreamedLogCollector {
             selection_unsupported: self.selection.as_ref().is_some_and(|s| s.step.is_some())
                 && !self.selection_found
                 && self.plain_log_seen,
-            selection: self.selection.clone(),
         }
     }
 }

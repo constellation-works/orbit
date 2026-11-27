@@ -270,6 +270,53 @@ impl McpListener {
     }
 }
 
+/// Fails a read once a message (the bytes since the last newline) outgrows
+/// `limit`, which ends the rmcp session before the message is buffered whole.
+struct MessageLimited<R> {
+    inner: R,
+    limit: usize,
+    line_bytes: usize,
+}
+
+impl<R> MessageLimited<R> {
+    fn new(inner: R, limit: usize) -> Self {
+        Self {
+            inner,
+            limit,
+            line_bytes: 0,
+        }
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for MessageLimited<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = &mut *self;
+        let before = buf.filled().len();
+        match Pin::new(&mut this.inner).poll_read(cx, buf) {
+            Poll::Ready(Ok(())) => {}
+            other => return other,
+        }
+        for byte in &buf.filled()[before..] {
+            if *byte == b'\n' {
+                this.line_bytes = 0;
+            } else {
+                this.line_bytes += 1;
+                if this.line_bytes > this.limit {
+                    return Poll::Ready(Err(std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("mcp message exceeds {} bytes", this.limit),
+                    )));
+                }
+            }
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
 fn ensure_bind_allowed(addr: SocketAddr, exposure: ListenerExposure) -> Result<(), OrbitError> {
     if exposure == ListenerExposure::AnyInterface || addr.ip().is_loopback() {
         return Ok(());
@@ -333,53 +380,6 @@ async fn serve_connection(
         };
     if let Err(error) = running.waiting().await {
         tracing::warn!(peer = %peer, error = %error, "mcp listener session ended with an error");
-    }
-}
-
-/// Fails a read once a message (the bytes since the last newline) outgrows
-/// `limit`, which ends the rmcp session before the message is buffered whole.
-struct MessageLimited<R> {
-    inner: R,
-    limit: usize,
-    line_bytes: usize,
-}
-
-impl<R> MessageLimited<R> {
-    fn new(inner: R, limit: usize) -> Self {
-        Self {
-            inner,
-            limit,
-            line_bytes: 0,
-        }
-    }
-}
-
-impl<R: AsyncRead + Unpin> AsyncRead for MessageLimited<R> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        let this = &mut *self;
-        let before = buf.filled().len();
-        match Pin::new(&mut this.inner).poll_read(cx, buf) {
-            Poll::Ready(Ok(())) => {}
-            other => return other,
-        }
-        for byte in &buf.filled()[before..] {
-            if *byte == b'\n' {
-                this.line_bytes = 0;
-            } else {
-                this.line_bytes += 1;
-                if this.line_bytes > this.limit {
-                    return Poll::Ready(Err(std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("mcp message exceeds {} bytes", this.limit),
-                    )));
-                }
-            }
-        }
-        Poll::Ready(Ok(()))
     }
 }
 

@@ -54,6 +54,24 @@ impl NonBlockingStdin {
     }
 }
 
+pub(super) enum PumpOutcome {
+    /// Stopped on request, holding the partial line read so far and the
+    /// sender that keeps the service's input open.
+    Stopped {
+        carryover: Vec<u8>,
+        input: mpsc::Sender<Vec<u8>>,
+    },
+    /// The client closed stdin.
+    Closed,
+}
+
+pub(super) enum PumpStop {
+    /// Stop regardless of the partial line, for closure or yielding.
+    Always,
+    /// Stop only if the partial line fits in the resumed session state.
+    HandOver(oneshot::Sender<bool>),
+}
+
 /// Whether [`NonBlockingStdin::new`] would succeed, asked before any
 /// runtime exists: register stdin with a throwaway reactor the same way.
 pub(super) fn stdin_is_pollable() -> bool {
@@ -91,24 +109,6 @@ fn set_nonblocking(enabled: bool) -> Option<()> {
 /// Hand stdin to the next image the way this one received it.
 pub(super) fn restore_blocking_stdin() {
     let _ = set_nonblocking(false);
-}
-
-pub(super) enum PumpOutcome {
-    /// Stopped on request, holding the partial line read so far and the
-    /// sender that keeps the service's input open.
-    Stopped {
-        carryover: Vec<u8>,
-        input: mpsc::Sender<Vec<u8>>,
-    },
-    /// The client closed stdin.
-    Closed,
-}
-
-pub(super) enum PumpStop {
-    /// Stop regardless of the partial line, for closure or yielding.
-    Always,
-    /// Stop only if the partial line fits in the resumed session state.
-    HandOver(oneshot::Sender<bool>),
 }
 
 /// Forward complete lines from stdin until stopped or closed.

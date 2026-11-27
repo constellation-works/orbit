@@ -42,11 +42,6 @@ impl InProcessDestinationProbe {
     }
 }
 
-/// Private discovery arguments that ask a destination for crews.
-pub(super) fn crews_arguments() -> Value {
-    json!({ "include": [crate::WORKSPACE_LIST_INCLUDE_CREWS] })
-}
-
 impl DestinationProbe for InProcessDestinationProbe {
     fn open_internal_drain_route(
         &self,
@@ -259,4 +254,9 @@ impl DestinationProbe for CompositeDestinationProbe {
     fn open_route(&self, destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError> {
         self.probe_for(destination).open_route(destination)
     }
+}
+
+/// Private discovery arguments that ask a destination for crews.
+pub(super) fn crews_arguments() -> Value {
+    json!({ "include": [crate::WORKSPACE_LIST_INCLUDE_CREWS] })
 }

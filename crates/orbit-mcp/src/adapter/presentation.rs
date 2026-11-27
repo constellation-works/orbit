@@ -25,6 +25,13 @@ pub(super) const TASK_FIELDS: [&str; 6] = [
     "acceptance_criteria",
 ];
 
+/// A destination and optional entity, validated independently of client state.
+pub(super) struct Selection {
+    pub workspace: String,
+    pub id: Option<String>,
+    pub kind: String,
+}
+
 pub(super) fn is_presentation(name: &str) -> bool {
     is_presentation_tool(name)
 }
@@ -165,13 +172,6 @@ pub(super) fn resource_content(
             .cloned()
             .unwrap_or_default(),
         ))
-}
-
-/// A destination and optional entity, validated independently of client state.
-pub(super) struct Selection {
-    pub workspace: String,
-    pub id: Option<String>,
-    pub kind: String,
 }
 
 /// Core still validates selector ownership, task identity and authority.

@@ -489,6 +489,13 @@ impl TcpUidRows {
     }
 }
 
+enum ClientUid {
+    Uid(u32),
+    Missing,
+    Ambiguous,
+    Unreadable,
+}
+
 /// `Some` when the peer must be closed before any byte is read.
 pub(crate) fn peer_refusal(
     local: SocketAddr,
@@ -519,13 +526,6 @@ pub(crate) fn current_euid() -> u32 {
 pub(crate) fn current_euid() -> u32 {
     // No peer credential is available, so the listener admits nobody.
     u32::MAX
-}
-
-enum ClientUid {
-    Uid(u32),
-    Missing,
-    Ambiguous,
-    Unreadable,
 }
 
 fn client_uid(local: SocketAddr, peer: SocketAddr, rows: Option<TcpUidRows>) -> ClientUid {

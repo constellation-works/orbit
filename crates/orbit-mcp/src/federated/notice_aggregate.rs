@@ -23,16 +23,23 @@ use serde_json::{Value, json};
 use super::descriptor::WorkspaceDescriptor;
 use super::host::{FederatedMcpHost, workspace_selector};
 
-/// Whether `name` is the notice list tool, either spelling.
-fn is_notice_list(name: &str) -> bool {
-    mcp_advertised_tool_name(name) == "orbit_notice_list"
-}
-
 /// One owner's place in the fan-out, in configured destination order.
 struct OwnerRead {
     label: String,
     selector: Option<String>,
     workspaces: Vec<String>,
+}
+
+impl OwnerRead {
+    /// The `degraded` entry for an owner that contributed nothing: the
+    /// host, plus the workspaces it listed when it listed any.
+    fn degraded_label(&self) -> String {
+        if self.workspaces.is_empty() {
+            self.label.clone()
+        } else {
+            format!("{}: {}", self.label, self.workspaces.join(", "))
+        }
+    }
 }
 
 impl FederatedMcpHost {
@@ -224,16 +231,9 @@ impl FederatedMcpHost {
     }
 }
 
-impl OwnerRead {
-    /// The `degraded` entry for an owner that contributed nothing: the
-    /// host, plus the workspaces it listed when it listed any.
-    fn degraded_label(&self) -> String {
-        if self.workspaces.is_empty() {
-            self.label.clone()
-        } else {
-            format!("{}: {}", self.label, self.workspaces.join(", "))
-        }
-    }
+/// Whether `name` is the notice list tool, either spelling.
+fn is_notice_list(name: &str) -> bool {
+    mcp_advertised_tool_name(name) == "orbit_notice_list"
 }
 
 /// Order merged notices in the shared notice list order. Every owner

@@ -16,6 +16,23 @@ use orbit_types::plugin::{
     MANIFEST_FILE_NAME, PLUGIN_DIR_NAME, PluginBackendType, PluginMcpScope, SemverRange,
 };
 
+const VALID_GOLDEN: &str = "\
+schemaVersion: 1
+kind: PluginTest
+tests:
+  - name: status_ok
+    tool: status
+    input: {}
+    expect:
+      output: {}
+";
+
+/// One zip member: a regular file, or a symbolic link to `target`.
+enum ZipMember<'a> {
+    File(&'a str),
+    Symlink(&'a str, &'a str),
+}
+
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -94,17 +111,6 @@ fn write_golden(root: &Path, body: &str) {
     std::fs::create_dir_all(&dir).expect("golden dir");
     std::fs::write(dir.join("golden.yaml"), body).expect("write golden");
 }
-
-const VALID_GOLDEN: &str = "\
-schemaVersion: 1
-kind: PluginTest
-tests:
-  - name: status_ok
-    tool: status
-    input: {}
-    expect:
-      output: {}
-";
 
 #[test]
 fn full_loader_reads_goldens_and_host_loader_skips_them() {
@@ -461,12 +467,6 @@ fn migrate_folds_the_orbit_graph_sidecars_into_one_v2_manifest() {
         assert_eq!(migrated.required, param.required, "{}", param.name);
         assert_eq!(migrated.description, param.description, "{}", param.name);
     }
-}
-
-/// One zip member: a regular file, or a symbolic link to `target`.
-enum ZipMember<'a> {
-    File(&'a str),
-    Symlink(&'a str, &'a str),
 }
 
 /// Write a `.zip` plugin source whose first member is a manifest, followed by

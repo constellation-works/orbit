@@ -9,6 +9,176 @@ use serde_json::{Value, json};
 #[cfg(unix)]
 use tempfile::TempDir;
 
+/// What the registered log tool did over one scripted job or whole run, as the
+/// fake `gh` saw it. Every read goes through `ToolRegistry`, so the cache is
+/// enabled and located by the shipped wiring, not by the test.
+#[cfg(unix)]
+struct CachedLogRead {
+    root: TempDir,
+    registry: ToolRegistry,
+    job: Option<&'static str>,
+}
+
+#[cfg(unix)]
+impl CachedLogRead {
+    /// A completed job or run whose log is numbered lines tagged `tag`, in a
+    /// fresh fixture directory and an empty cache.
+    fn new(tag: &str, job: Option<&'static str>) -> (Self, orbit_common::test_env::ScopedEnv) {
+        let _ = std::fs::remove_dir_all(Self::cache_dir());
+        let root = TempDir::new().unwrap();
+        let env = orbit_common::test_env::scoped([(
+            "GH_GOLDEN_CASE",
+            Some(root.path().to_str().unwrap()),
+        )]);
+        let mut registry = ToolRegistry::new();
+        registry.register_builtins();
+        let read = Self {
+            root,
+            registry,
+            job,
+        };
+        read.set_log(tag);
+        read.set_status("completed", "acme/orbit", 1);
+        (read, env)
+    }
+
+    fn cache_dir() -> PathBuf {
+        PathBuf::from(std::env::var_os("ORBIT_ROOT").unwrap())
+            .join(orbit_tools::GITHUB_RUN_LOG_CACHE_DIR)
+    }
+
+    fn set_log(&self, tag: &str) {
+        let log: String = (1..=40)
+            .map(|line| format!("build\tTest\t2026-11-20T02:00:00.0000000Z {tag} line {line}\n"))
+            .collect();
+        std::fs::write(self.root.path().join("job_9"), &log).unwrap();
+        std::fs::write(self.root.path().join("run_log"), log).unwrap();
+    }
+
+    fn set_status(&self, status: &str, repository: &str, run_attempt: u64) {
+        self.set_job(status, repository);
+
+        let run_url = format!("https://api.github.com/repos/{repository}/actions/runs/123");
+        let run_body = json!({
+            "id": 123,
+            "status": status,
+            "run_attempt": run_attempt,
+            "url": run_url,
+            "extra": true,
+        });
+        std::fs::write(self.root.path().join("run_metadata"), run_body.to_string()).unwrap();
+    }
+
+    /// The job's metadata alone, so a case can change the job without touching
+    /// the run that owns it.
+    fn set_job(&self, status: &str, repository: &str) {
+        let job_url = format!("https://api.github.com/repos/{repository}/actions/jobs/9");
+        let job_body =
+            json!({"id": 9, "run_id": 123, "status": status, "url": job_url, "extra": true});
+        std::fs::write(self.root.path().join("job_metadata"), job_body.to_string()).unwrap();
+    }
+
+    fn deny(&self) {
+        std::fs::write(self.root.path().join("denied"), "").unwrap();
+    }
+
+    fn read(&self, window: Value) -> Result<Value, orbit_common::OrbitError> {
+        let mut input = json!({"run": "123", "scope": "all"});
+        if let Some(job) = self.job {
+            input["job"] = json!(job);
+        }
+        for (key, value) in window.as_object().unwrap() {
+            input[key] = value.clone();
+        }
+        self.registry.execute(
+            "github.run.logs",
+            &ToolContext {
+                env: orbit_common::Env::capture(),
+                ..ToolContext::default()
+            },
+            input,
+        )
+    }
+
+    fn calls(&self) -> Vec<String> {
+        std::fs::read_to_string(self.root.path().join("calls"))
+            .unwrap_or_default()
+            .lines()
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    /// Whole-log downloads, as opposed to status requests.
+    fn downloads(&self) -> usize {
+        self.calls()
+            .iter()
+            .filter(|call| call.starts_with("run view") && call.contains("--log"))
+            .count()
+    }
+
+    fn cache_entries(&self) -> Vec<PathBuf> {
+        std::fs::read_dir(Self::cache_dir())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect()
+    }
+
+    /// A run whose run-scoped read prints nothing (the primary blind spot).
+    /// Its one job, 9, is a completed failure whose log API serves the log, so
+    /// the run-scoped read recovers the excerpt from that job.
+    fn fallback(tag: &str) -> (Self, orbit_common::test_env::ScopedEnv) {
+        let (read, env) = Self::new(tag, None);
+        std::fs::write(read.root.path().join("run_log"), "").unwrap();
+        let view = json!({
+            "databaseId": 123,
+            "url": "https://github.com/acme/orbit/actions/runs/123",
+            "jobs": [{
+                "databaseId": 9,
+                "name": "build",
+                "status": "completed",
+                "conclusion": "failure",
+            }],
+        });
+        std::fs::write(read.root.path().join("view.json"), view.to_string()).unwrap();
+        let run = json!({
+            "id": 123,
+            "status": "completed",
+            "run_attempt": 1,
+            "url": "https://api.github.com/repos/acme/orbit/actions/runs/123",
+        });
+        std::fs::write(read.root.path().join("run_metadata"), run.to_string()).unwrap();
+        (read, env)
+    }
+
+    /// A run-scoped read with the default scope, which is the request that
+    /// reaches the fallback.
+    fn run_read(&self, window: Value) -> Result<Value, orbit_common::OrbitError> {
+        let mut input = json!({"run": "123"});
+        for (key, value) in window.as_object().unwrap() {
+            input[key] = value.clone();
+        }
+        self.registry.execute(
+            "github.run.logs",
+            &ToolContext {
+                env: orbit_common::Env::capture(),
+                ..ToolContext::default()
+            },
+            input,
+        )
+    }
+
+    /// Whole-log downloads of the fallback job's own log API, as opposed to
+    /// the run-scoped primary reads and status requests.
+    fn fallback_downloads(&self) -> usize {
+        self.calls()
+            .iter()
+            .filter(|call| call.contains("actions/jobs/9/logs"))
+            .count()
+    }
+}
+
 fn directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/github_log_goldens")
 }
@@ -668,176 +838,6 @@ fn fallback_fixture_goldens() {
             Err(error) => json!({"error": error.to_string(), "calls": calls, "cwds": cwds}),
         }
     });
-}
-
-/// What the registered log tool did over one scripted job or whole run, as the
-/// fake `gh` saw it. Every read goes through `ToolRegistry`, so the cache is
-/// enabled and located by the shipped wiring, not by the test.
-#[cfg(unix)]
-struct CachedLogRead {
-    root: TempDir,
-    registry: ToolRegistry,
-    job: Option<&'static str>,
-}
-
-#[cfg(unix)]
-impl CachedLogRead {
-    /// A completed job or run whose log is numbered lines tagged `tag`, in a
-    /// fresh fixture directory and an empty cache.
-    fn new(tag: &str, job: Option<&'static str>) -> (Self, orbit_common::test_env::ScopedEnv) {
-        let _ = std::fs::remove_dir_all(Self::cache_dir());
-        let root = TempDir::new().unwrap();
-        let env = orbit_common::test_env::scoped([(
-            "GH_GOLDEN_CASE",
-            Some(root.path().to_str().unwrap()),
-        )]);
-        let mut registry = ToolRegistry::new();
-        registry.register_builtins();
-        let read = Self {
-            root,
-            registry,
-            job,
-        };
-        read.set_log(tag);
-        read.set_status("completed", "acme/orbit", 1);
-        (read, env)
-    }
-
-    fn cache_dir() -> PathBuf {
-        PathBuf::from(std::env::var_os("ORBIT_ROOT").unwrap())
-            .join(orbit_tools::GITHUB_RUN_LOG_CACHE_DIR)
-    }
-
-    fn set_log(&self, tag: &str) {
-        let log: String = (1..=40)
-            .map(|line| format!("build\tTest\t2026-11-20T02:00:00.0000000Z {tag} line {line}\n"))
-            .collect();
-        std::fs::write(self.root.path().join("job_9"), &log).unwrap();
-        std::fs::write(self.root.path().join("run_log"), log).unwrap();
-    }
-
-    fn set_status(&self, status: &str, repository: &str, run_attempt: u64) {
-        self.set_job(status, repository);
-
-        let run_url = format!("https://api.github.com/repos/{repository}/actions/runs/123");
-        let run_body = json!({
-            "id": 123,
-            "status": status,
-            "run_attempt": run_attempt,
-            "url": run_url,
-            "extra": true,
-        });
-        std::fs::write(self.root.path().join("run_metadata"), run_body.to_string()).unwrap();
-    }
-
-    /// The job's metadata alone, so a case can change the job without touching
-    /// the run that owns it.
-    fn set_job(&self, status: &str, repository: &str) {
-        let job_url = format!("https://api.github.com/repos/{repository}/actions/jobs/9");
-        let job_body =
-            json!({"id": 9, "run_id": 123, "status": status, "url": job_url, "extra": true});
-        std::fs::write(self.root.path().join("job_metadata"), job_body.to_string()).unwrap();
-    }
-
-    fn deny(&self) {
-        std::fs::write(self.root.path().join("denied"), "").unwrap();
-    }
-
-    fn read(&self, window: Value) -> Result<Value, orbit_common::OrbitError> {
-        let mut input = json!({"run": "123", "scope": "all"});
-        if let Some(job) = self.job {
-            input["job"] = json!(job);
-        }
-        for (key, value) in window.as_object().unwrap() {
-            input[key] = value.clone();
-        }
-        self.registry.execute(
-            "github.run.logs",
-            &ToolContext {
-                env: orbit_common::Env::capture(),
-                ..ToolContext::default()
-            },
-            input,
-        )
-    }
-
-    fn calls(&self) -> Vec<String> {
-        std::fs::read_to_string(self.root.path().join("calls"))
-            .unwrap_or_default()
-            .lines()
-            .map(ToString::to_string)
-            .collect()
-    }
-
-    /// Whole-log downloads, as opposed to status requests.
-    fn downloads(&self) -> usize {
-        self.calls()
-            .iter()
-            .filter(|call| call.starts_with("run view") && call.contains("--log"))
-            .count()
-    }
-
-    fn cache_entries(&self) -> Vec<PathBuf> {
-        std::fs::read_dir(Self::cache_dir())
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|entry| entry.path())
-            .collect()
-    }
-
-    /// A run whose run-scoped read prints nothing (the primary blind spot).
-    /// Its one job, 9, is a completed failure whose log API serves the log, so
-    /// the run-scoped read recovers the excerpt from that job.
-    fn fallback(tag: &str) -> (Self, orbit_common::test_env::ScopedEnv) {
-        let (read, env) = Self::new(tag, None);
-        std::fs::write(read.root.path().join("run_log"), "").unwrap();
-        let view = json!({
-            "databaseId": 123,
-            "url": "https://github.com/acme/orbit/actions/runs/123",
-            "jobs": [{
-                "databaseId": 9,
-                "name": "build",
-                "status": "completed",
-                "conclusion": "failure",
-            }],
-        });
-        std::fs::write(read.root.path().join("view.json"), view.to_string()).unwrap();
-        let run = json!({
-            "id": 123,
-            "status": "completed",
-            "run_attempt": 1,
-            "url": "https://api.github.com/repos/acme/orbit/actions/runs/123",
-        });
-        std::fs::write(read.root.path().join("run_metadata"), run.to_string()).unwrap();
-        (read, env)
-    }
-
-    /// A run-scoped read with the default scope, which is the request that
-    /// reaches the fallback.
-    fn run_read(&self, window: Value) -> Result<Value, orbit_common::OrbitError> {
-        let mut input = json!({"run": "123"});
-        for (key, value) in window.as_object().unwrap() {
-            input[key] = value.clone();
-        }
-        self.registry.execute(
-            "github.run.logs",
-            &ToolContext {
-                env: orbit_common::Env::capture(),
-                ..ToolContext::default()
-            },
-            input,
-        )
-    }
-
-    /// Whole-log downloads of the fallback job's own log API, as opposed to
-    /// the run-scoped primary reads and status requests.
-    fn fallback_downloads(&self) -> usize {
-        self.calls()
-            .iter()
-            .filter(|call| call.contains("actions/jobs/9/logs"))
-            .count()
-    }
 }
 
 #[cfg(unix)]

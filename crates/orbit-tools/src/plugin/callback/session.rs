@@ -352,6 +352,24 @@ impl PluginCallbackSession {
     }
 }
 
+impl Drop for PluginCallbackSession {
+    fn drop(&mut self) {
+        // Stop answering routed calls before the record they run under goes.
+        #[cfg(unix)]
+        self.host_route.take();
+        match fs::remove_file(&self.path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(
+                    path = %self.path.display(),
+                    "could not remove plugin callback session: {error}"
+                );
+            }
+        }
+    }
+}
+
 /// Create the session directory owner-only and make an existing one so.
 ///
 /// The records under it are the credential a backend's descriptor must name
@@ -371,22 +389,4 @@ fn ensure_private_session_dir(dir: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
-}
-
-impl Drop for PluginCallbackSession {
-    fn drop(&mut self) {
-        // Stop answering routed calls before the record they run under goes.
-        #[cfg(unix)]
-        self.host_route.take();
-        match fs::remove_file(&self.path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                tracing::warn!(
-                    path = %self.path.display(),
-                    "could not remove plugin callback session: {error}"
-                );
-            }
-        }
-    }
 }

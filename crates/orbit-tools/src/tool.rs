@@ -7,18 +7,6 @@ use orbit_types::tool::{McpIdRouteDeclaration, ToolParam, ToolSchema};
 
 use super::context::ToolContext;
 
-/// Set `key` to `value` in a child's cleared-and-set environment pair list,
-/// replacing an existing entry rather than appending a second one. Shared by
-/// every surface that stamps `ORBIT_*` variables into a spawned child:
-/// external tools, plugin backends, and the plugin callback session.
-pub(crate) fn upsert_env(env_pairs: &mut Vec<(String, String)>, key: &str, value: String) {
-    if let Some(existing) = env_pairs.iter_mut().find(|(name, _)| name == key) {
-        existing.1 = value;
-    } else {
-        env_pairs.push((key.to_string(), value));
-    }
-}
-
 pub trait Tool: Send + Sync {
     fn schema(&self) -> ToolSchema;
     /// The tool's own JSON Schema for its input, when it declares one richer
@@ -63,6 +51,24 @@ pub trait Tool: Send + Sync {
     fn execute(&self, ctx: &ToolContext, input: Value) -> Result<Value, OrbitError>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolExecutionKind {
+    ReadOnly,
+    Mutating,
+}
+
+/// Set `key` to `value` in a child's cleared-and-set environment pair list,
+/// replacing an existing entry rather than appending a second one. Shared by
+/// every surface that stamps `ORBIT_*` variables into a spawned child:
+/// external tools, plugin backends, and the plugin callback session.
+pub(crate) fn upsert_env(env_pairs: &mut Vec<(String, String)>, key: &str, value: String) {
+    if let Some(existing) = env_pairs.iter_mut().find(|(name, _)| name == key) {
+        existing.1 = value;
+    } else {
+        env_pairs.push((key.to_string(), value));
+    }
+}
+
 pub(crate) fn tool_param(
     name: &str,
     description: &str,
@@ -76,12 +82,6 @@ pub(crate) fn tool_param(
         required,
         enum_values: Vec::new(),
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolExecutionKind {
-    ReadOnly,
-    Mutating,
 }
 
 /// Extract a non-empty string field from a tool input value.

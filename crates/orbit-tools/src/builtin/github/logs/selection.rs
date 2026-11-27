@@ -4,6 +4,7 @@ use crate::TIMEOUT_LONG_MS;
 use orbit_common::OrbitError;
 use orbit_exec::ExecRequest;
 use serde_json::Value;
+
 /// Cap on returned checkout-evidence lines. Evidence is a handful of lines per
 /// job; a much larger match set means the pattern caught noise, not evidence.
 pub const MAX_EVIDENCE_LINES: usize = 40;
@@ -112,6 +113,76 @@ pub struct RunLogRequests {
     pub(super) cache: Option<LogCache>,
 }
 
+impl RunLogRequests {
+    pub fn from_input(input: &Value) -> Result<Self, OrbitError> {
+        let job = match input.get("job") {
+            Some(_) => Some(super::super::require_numeric_id(input, "job")?),
+            None => None,
+        };
+        Ok(Self {
+            run_log: run_log_request(input)?,
+            run_view: super::super::run::view::build_exec_request(input)?,
+            run_id: super::super::require_numeric_id(input, "run")?,
+            job,
+            scope: LogScope::from_input(input)?,
+            repository: super::super::repository_path(input)?,
+            selection: log_selection_from_input(input)?,
+            cache: None,
+        })
+    }
+
+    /// Serve repeat reads of a completed job or run from `cache`.
+    pub(crate) fn with_log_cache(mut self, cache: Option<LogCache>) -> Self {
+        self.cache = cache;
+        self
+    }
+
+    /// Serve repeat reads of a completed job or run from a test cache under `dir`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_test_log_cache(self, dir: &std::path::Path) -> Self {
+        self.with_log_cache(Some(LogCache::in_root(dir)))
+    }
+
+    /// Run every request from `dir`, the checkout the query is about.
+    pub fn in_directory(mut self, dir: &str) -> Self {
+        self.run_log.current_dir = Some(dir.to_string());
+        self.run_view.current_dir = Some(dir.to_string());
+        self
+    }
+
+    /// One job's own log, as the log API serves it.
+    ///
+    /// Derived from the run-log request so the fallback keeps the same CLI,
+    /// checkout, timeout, and environment as the read it stands in for; only
+    /// the argv differs. `job_id` is a `u64` by construction, so nothing a
+    /// caller supplied is interpolated into the endpoint path.
+    pub(super) fn job_log_request(&self, job_id: u64) -> ExecRequest {
+        ExecRequest {
+            args: vec![
+                "api".to_string(),
+                "--method".to_string(),
+                "GET".to_string(),
+                format!("repos/{}/actions/jobs/{job_id}/logs", self.repository),
+            ],
+            ..self.run_log.clone()
+        }
+    }
+
+    /// One `gh api` metadata read, shaped like [`Self::job_log_request`]: it
+    /// keeps the run-log request's CLI, checkout, timeout and environment.
+    pub(super) fn api_request(&self, endpoint: String) -> ExecRequest {
+        ExecRequest {
+            args: vec![
+                "api".to_string(),
+                "--method".to_string(),
+                "GET".to_string(),
+                endpoint,
+            ],
+            ..self.run_log.clone()
+        }
+    }
+}
+
 fn optional_usize(input: &Value, key: &str) -> Result<Option<usize>, OrbitError> {
     let Some(value) = input.get(key) else {
         return Ok(None);
@@ -202,76 +273,6 @@ pub fn log_selection_from_input(input: &Value) -> Result<Option<LogSelection>, O
         byte_window,
         line_window,
     }))
-}
-
-impl RunLogRequests {
-    pub fn from_input(input: &Value) -> Result<Self, OrbitError> {
-        let job = match input.get("job") {
-            Some(_) => Some(super::super::require_numeric_id(input, "job")?),
-            None => None,
-        };
-        Ok(Self {
-            run_log: run_log_request(input)?,
-            run_view: super::super::run::view::build_exec_request(input)?,
-            run_id: super::super::require_numeric_id(input, "run")?,
-            job,
-            scope: LogScope::from_input(input)?,
-            repository: super::super::repository_path(input)?,
-            selection: log_selection_from_input(input)?,
-            cache: None,
-        })
-    }
-
-    /// Serve repeat reads of a completed job or run from `cache`.
-    pub(crate) fn with_log_cache(mut self, cache: Option<LogCache>) -> Self {
-        self.cache = cache;
-        self
-    }
-
-    /// Serve repeat reads of a completed job or run from a test cache under `dir`.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_test_log_cache(self, dir: &std::path::Path) -> Self {
-        self.with_log_cache(Some(LogCache::in_root(dir)))
-    }
-
-    /// Run every request from `dir`, the checkout the query is about.
-    pub fn in_directory(mut self, dir: &str) -> Self {
-        self.run_log.current_dir = Some(dir.to_string());
-        self.run_view.current_dir = Some(dir.to_string());
-        self
-    }
-
-    /// One job's own log, as the log API serves it.
-    ///
-    /// Derived from the run-log request so the fallback keeps the same CLI,
-    /// checkout, timeout, and environment as the read it stands in for; only
-    /// the argv differs. `job_id` is a `u64` by construction, so nothing a
-    /// caller supplied is interpolated into the endpoint path.
-    pub(super) fn job_log_request(&self, job_id: u64) -> ExecRequest {
-        ExecRequest {
-            args: vec![
-                "api".to_string(),
-                "--method".to_string(),
-                "GET".to_string(),
-                format!("repos/{}/actions/jobs/{job_id}/logs", self.repository),
-            ],
-            ..self.run_log.clone()
-        }
-    }
-
-    /// One `gh api` metadata read, shaped like [`Self::job_log_request`]: it
-    /// keeps the run-log request's CLI, checkout, timeout and environment.
-    pub(super) fn api_request(&self, endpoint: String) -> ExecRequest {
-        ExecRequest {
-            args: vec![
-                "api".to_string(),
-                "--method".to_string(),
-                "GET".to_string(),
-                endpoint,
-            ],
-            ..self.run_log.clone()
-        }
-    }
 }
 
 /// Build the run-scoped `gh run view --log*` request.

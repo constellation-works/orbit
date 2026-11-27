@@ -69,16 +69,6 @@ R7dTEa7m1rPGwS7jBMC+avb7EOPmVyZuIRqHwzDITTeCpT+R1YWu0DyFJdZyvPvB
 6QIDAQAB
 -----END PUBLIC KEY-----";
 
-/// Test trust set carrying the throwaway key above.
-fn test_trusted_keys() -> &'static [TrustedReleaseKey] {
-    &[TrustedReleaseKey {
-        id: "orbit-test-key-1",
-        not_after: "2099-12-31",
-        revoked_at: None,
-        public_key_pem: TEST_PUBLIC_KEY_PEM,
-    }]
-}
-
 /// The release target the fixture publishes for.
 const TEST_TARGET: &str = "x86_64-unknown-linux-gnu";
 
@@ -148,21 +138,22 @@ impl Fixture {
     /// Build the update environment for this fixture.
     pub fn environment(&self) -> UpdateEnvironment {
         let cwd = self.workspace.clone();
+        let workspace_root = cwd.join(".orbit");
         UpdateEnvironment {
             admission_roots: vec![self._root.path().join("global")],
-            install_channel: InstallChannel::Managed {
-                install_dir: self.executable.parent().expect("bin dir").to_path_buf(),
-            },
             executable: self.executable.clone(),
             current_version: self.installed_version.clone(),
             target_triple: TEST_TARGET.to_string(),
+            install_channel: InstallChannel::Managed {
+                install_dir: self.executable.parent().expect("bin dir").to_path_buf(),
+            },
             source: Box::new(DirectoryReleaseSource::new(self.mirror.clone())),
             trusted_keys: test_trusted_keys(),
             today: NaiveDate::from_ymd_opt(2026, 9, 5).expect("valid date"),
             workspace: Some(UpdateWorkspace {
-                root_argument: Some(cwd.join(".orbit")),
-                root: cwd.join(".orbit"),
                 cwd,
+                root: workspace_root.clone(),
+                root_argument: Some(workspace_root),
             }),
             bundled_bwrap_installed: false,
             probe_timeout: crate::update::converge::DEFAULT_PROBE_TIMEOUT,
@@ -205,6 +196,16 @@ impl Fixture {
 /// A default request: latest version, apply, no downgrade.
 pub fn request() -> UpdateRequest {
     UpdateRequest::default()
+}
+
+/// Test trust set carrying the throwaway key above.
+fn test_trusted_keys() -> &'static [TrustedReleaseKey] {
+    &[TrustedReleaseKey {
+        id: "orbit-test-key-1",
+        not_after: "2099-12-31",
+        revoked_at: None,
+        public_key_pem: TEST_PUBLIC_KEY_PEM,
+    }]
 }
 
 fn sign(message: &[u8]) -> Vec<u8> {

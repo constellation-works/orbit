@@ -60,6 +60,45 @@ const BOUNDED_LIST_KEYS: &[&str] = &[
     "model",
 ];
 
+/// Top-level fields of a `snapshot: true` response, plus the routing
+/// `workspace` echo. Mirrors the serialized desktop task snapshot.
+const SNAPSHOT_RESPONSE_FIELDS: &[&str] = &[
+    "schema_version",
+    "observed_at",
+    "revision",
+    "task",
+    "actions",
+    "comments",
+    "history",
+    "artifacts",
+    "comments_total",
+    "history_total",
+    "artifacts_total",
+    "reviewed_head",
+    "reviewed_head_reason",
+    "truncated_fields",
+    "content_truncated",
+    "review",
+    "review_reason",
+    "workspace",
+];
+
+/// Every top-level field a guarded review can answer with across all its
+/// outcomes (applied or replayed, revision conflict, refusal, accepted with a
+/// refresh error). A field absent from one outcome is still a valid selector,
+/// so validity never depends on what the write does.
+pub(super) const GUARDED_REVIEW_RESPONSE_FIELDS: &[&str] = &[
+    "snapshot",
+    "replayed",
+    "conflict",
+    "mutation_applied",
+    "refusal",
+    "accepted",
+    "task_id",
+    "refresh_error",
+    "workspace",
+];
+
 impl GuardedModes for TaskVerb {
     fn preempt(self, ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>> {
         // Task calls have always required an object; the shared spec also
@@ -399,45 +438,6 @@ fn snapshot(ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
     }
     Ok(result)
 }
-
-/// Top-level fields of a `snapshot: true` response, plus the routing
-/// `workspace` echo. Mirrors the serialized desktop task snapshot.
-const SNAPSHOT_RESPONSE_FIELDS: &[&str] = &[
-    "schema_version",
-    "observed_at",
-    "revision",
-    "task",
-    "actions",
-    "comments",
-    "history",
-    "artifacts",
-    "comments_total",
-    "history_total",
-    "artifacts_total",
-    "reviewed_head",
-    "reviewed_head_reason",
-    "truncated_fields",
-    "content_truncated",
-    "review",
-    "review_reason",
-    "workspace",
-];
-
-/// Every top-level field a guarded review can answer with across all its
-/// outcomes (applied or replayed, revision conflict, refusal, accepted with a
-/// refresh error). A field absent from one outcome is still a valid selector,
-/// so validity never depends on what the write does.
-pub(super) const GUARDED_REVIEW_RESPONSE_FIELDS: &[&str] = &[
-    "snapshot",
-    "replayed",
-    "conflict",
-    "mutation_applied",
-    "refusal",
-    "accepted",
-    "task_id",
-    "refresh_error",
-    "workspace",
-];
 
 /// Parses the response projection and refuses names outside `allowed` before
 /// any host action, so a refused request has no effect.

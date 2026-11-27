@@ -40,6 +40,14 @@ pub struct InjectAgentRulesResult {
     pub outcomes: Vec<InjectionOutcome>,
 }
 
+/// A target's outcome, with the content it should hold once written.
+struct PlannedWrite {
+    path: PathBuf,
+    action: InjectionAction,
+    /// `None` when the file already holds the block and needs no write.
+    next: Option<String>,
+}
+
 /// Inject (or refresh) the Orbit rules block into `CLAUDE.md` and `AGENTS.md`
 /// at the workspace root. Always uses the embedded `AGENT_RULES_TEMPLATE`.
 ///
@@ -92,14 +100,6 @@ pub fn inject_agent_rules(workspace_root: &Path) -> Result<InjectAgentRulesResul
         });
     }
     Ok(InjectAgentRulesResult { outcomes })
-}
-
-/// A target's outcome, with the content it should hold once written.
-struct PlannedWrite {
-    path: PathBuf,
-    action: InjectionAction,
-    /// `None` when the file already holds the block and needs no write.
-    next: Option<String>,
 }
 
 /// Normalize the template to a single trailing newline so the file produced
