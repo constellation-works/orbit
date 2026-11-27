@@ -4,9 +4,9 @@ owner: claude
 created_date: 2026-11-27
 updated_date: 2026-11-27
 last_validated: 2026-11-27
-status: Draft
+status: Accepted
 stage: designing
-next: "Operator review of this scope; build tasks are filed after approval [ORB-29306]"
+next: "Phase 1: create docs/principles/ and move the three pages [ORB-29310]"
 feature: doc-layout
 doc_role: scope
 type: design
@@ -16,7 +16,8 @@ tags: [doc-layout, docs, principles, index]
 
 # Scope: docs layout and principle pages
 
-Status: design only. Nothing is moved or written until the operator approves this scope.
+Status: the operator approved this scope on 2026-11-27, with the three recommendations under
+Settled questions. Nothing is built yet; the phases below are filed as tasks.
 Bearing: the feature board is leaving the generated index ([ORB-29261]), `docs/dev/` is being
 folded into `docs/agents/records/` and `docs/development/examples/` ([ORB-29290]), and the two
 large references are being split into `docs/development/` ([ORB-29291]) and `docs/config/`
@@ -140,8 +141,9 @@ A page is admitted when all four hold:
    different product, and the page says what the rule gives up.
 3. **Observable.** Someone using Orbit can see it: a refusal, a hold, a status, a default. A
    rule only a compiler or a reviewer sees is a standard or a design pattern.
-4. **One statement.** Once the page exists, designs, runbooks and skills keep their mechanism
-   and link to the page for the argument.
+4. **One statement.** Once the page exists, designs, runbooks and agent rule files keep their
+   mechanism and link to the page for the argument. Bundled skills and website pages are left
+   as they are: they must stand alone and cannot link to repository docs.
 
 Rule 2 is the test the design conventions already apply to a decision entry. It is repeated
 here because the retired decision store grew to 210 records, 24% of them cited from nowhere,
@@ -228,8 +230,8 @@ change faster than Orbit does.
 ## Concerns and honest limitations
 
 - **Old links break.** A link from outside the repository to `docs/POSITIONING.md` or
-  `docs/OPTIMISTIC_MERGING.md` stops resolving, because a renamed file is not redirected. Open
-  question 2 covers leaving maps at the old paths.
+  `docs/OPTIMISTIC_MERGING.md` stops resolving, because a renamed file is not redirected. Settled
+  question 2 accepts this.
 - **The standards cite two of the pages by path.** The vendored STD-05 exemplars name
   `docs/POSITIONING.md` and `docs/DATA_HANDLING.md` for §R15 and §R20. The vendored copy cannot
   be edited here, so it names the old paths until the shared canon is corrected and synced.
@@ -242,29 +244,34 @@ change faster than Orbit does.
 
 ## Phasing
 
-1. **Folder, moves and index.** Create `docs/principles/` with `CONVENTIONS.md`, move the three
+1. **Folder, moves and index** ([ORB-29310]). Create `docs/principles/` with `CONVENTIONS.md`, move the three
    pages, update inbound links, add the Principles table and the root rule to the generator.
    Runs after [ORB-29290], the last chained task that edits the generator.
-2. **Four principle pages.** One task per page, each reading the sources named above, replacing
-   restated arguments in those sources with links where the page now carries them. The task for
+2. **Four principle pages.** One task per page ([ORB-29312], [ORB-29313], [ORB-29314],
+   [ORB-29315]), each reading the sources named above and replacing restated arguments in designs,
+   runbooks and rule files with links where the page now carries them. The task for
    `operator-admission.md` also trims the positioning page. Runs after phase 1.
-3. **Operating-model page.** Add `operating-model.md` to `docs/development/`, and the README line. Runs
+3. **Operating-model page** ([ORB-29316]). Add `operating-model.md` to `docs/development/`, and the README line. Runs
    after [ORB-29291], which creates the folder's README.
-4. **Standards citation.** Correct the STD-05 exemplar paths in the shared canon and sync the
+4. **Standards citation.** Tracked in the workspace that owns the canon. Correct the STD-05 exemplar paths in the shared canon and sync the
    vendored copy. The operator approves that change to the canon. Runs after phase 1.
 
 ## Open questions
 
-1. **Does the companion-tools paragraph belong in this public repository?** Recommended: yes,
-   as one paragraph of roles with links to the two public repositories. A reader of this
-   repository meets task ids, an integration branch and vendored standards with nothing that
-   says how the project is run. The alternative is a single line saying the project is developed
-   with companion tools, with no description.
-2. **Should maps stay at the three old paths?** Recommended: no. Inside the repository only six
-   files link to them and all are updated in phase 1. Maps would keep outside links alive, and
-   would leave five files at the root instead of three.
-3. **Does `data-handling.md` move, or stay at the root as a user reference?** Recommended: move.
-   Only the index links it today, and the website has its own privacy page for users.
+None open.
+
+### Settled questions
+
+The operator settled these on 2026-11-27, each as recommended:
+
+1. **The companion-tools paragraph belongs in this public repository,** as one paragraph of
+   roles with links to the two public repositories. A reader of this repository meets task ids,
+   an integration branch and vendored standards with nothing that says how the project is run.
+2. **No maps stay at the three old paths.** Inside the repository six files link to them and
+   all are updated in phase 1. Maps would keep outside links alive, and would leave five files
+   at the root instead of three.
+3. **`data-handling.md` moves.** Only the index links it today, and the website has its own
+   privacy page for users.
 
 ## Acceptance (feature level)
 
@@ -287,5 +294,11 @@ change faster than Orbit does.
 - [ORB-29290] — moves `docs/dev/` records and examples.
 - [ORB-29291] — splits `docs/DEVELOPMENT.md` into `docs/development/`.
 - [ORB-29292] — splits `docs/CONFIG.md` into `docs/config/`.
+- [ORB-29310] — creates `docs/principles/`, moves the three pages, adds the Principles index and the root rule.
+- [ORB-29312] — writes the declared-footprints page.
+- [ORB-29313] — writes the operator-admission page and trims the positioning page.
+- [ORB-29314] — writes the pilot-before-promote page.
+- [ORB-29315] — writes the refuse-not-degrade page.
+- [ORB-29316] — adds the operating-model page.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
