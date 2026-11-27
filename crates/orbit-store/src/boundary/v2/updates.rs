@@ -327,6 +327,14 @@ impl TaskV2Store {
         })
     }
 
+    /// One history write: its events, its comments and any envelope change.
+    ///
+    /// A comment with a nonblank `operation_id` replays as a no-op when this
+    /// task's own comment log already holds that ID, including an earlier
+    /// comment of the same call. The check runs under the task's bundle write
+    /// lock, so racing writers with one ID append it once, and the row keeps
+    /// the ID for later replays. A comment without an ID, or with a blank one,
+    /// always appends. Another task's comment with the same ID never matches.
     pub(crate) fn update_task_history(
         &self,
         id: &str,
@@ -659,7 +667,8 @@ fn append_history_entries<'a>(
     }
 }
 
-/// Append each comment whose operation id the log has not already seen.
+/// Append each comment except a replay of a nonblank operation id this task's
+/// comment log already holds; see [`TaskV2Store::update_task_history`].
 fn append_comment_rows(
     bundle: &mut TaskBundleV2,
     comments: &[TaskComment],

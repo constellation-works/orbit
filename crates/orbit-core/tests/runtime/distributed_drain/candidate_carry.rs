@@ -14,8 +14,8 @@
 //!
 //! [ORB-14905] An owner-local run whose candidate a red base held carries it
 //! to the same durable ref, and the task's next claim on another host resumes
-//! it; when that push is refused the task is still held, and says the
-//! candidate is host-local.
+//! it; when that push is refused the task is still held, and its typed record
+//! says the candidate is host-local.
 //!
 //! [ORB-15308] A claim that pushed its candidate and opened a pull request,
 //! then failed in its before-landing review, is blocked; returned to the
@@ -841,9 +841,10 @@ fn a_red_base_hold_carries_its_candidate_to_another_hosts_claim() {
 }
 
 /// [ORB-14905] When `origin` refuses the held candidate's push, the task is
-/// still held, the hold's output and comment say the candidate is host-local
-/// with the push diagnostic, and a claim on another host implements fresh
-/// for that typed reason.
+/// still held. The hold's output has `carry: failed`, the push diagnostic as
+/// `carry_failure` and no `durable_ref`, and the hold's comment is the one line
+/// naming the run. Another host's claim implements fresh, and the owner's
+/// history records that with a `not_durable` reason.
 fn a_red_base_hold_whose_push_is_refused_stays_host_local() {
     let pair = Pair::new(1);
     let task = pair.tasks[0].clone();

@@ -1832,6 +1832,14 @@ its candidate is kept. `orbit run readiness --json` reports the task with
 the tests failing there (or, for a command that names no test, the end of its
 output).
 
+The hold also carries the candidate to `refs/orbit/candidates/<task>/<run>` on
+`origin`, so a claim on any host can resume it. The hold comment is one line
+that names the run; it does not say where the candidate is. Read that from the
+task's `candidate_held` history entry (`orbit task show <task>`): `durable_ref`
+names the ref when the push succeeded, and `carry_failure` holds the push error
+when it was refused. A refused push leaves the candidate on the host that ran
+it, and a claim elsewhere implements fresh.
+
 Fix the base instead: land a repair of the failing command on the integration
 branch. The owner's clock tick has already filed one `baseline-red-repair`
 task for it, naming the failing tests, the first red base and every task the
