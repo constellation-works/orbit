@@ -11,7 +11,7 @@
 //!    command selectors carry no path and are counted as unsupported. Once
 //!    the task is in review or done and its diff resolves, the size is the
 //!    lines changed (insertions plus deletions) of that diff: a done task's
-//!    landed-delivery row ([`super::diff_stats`], written once per landing),
+//!    landed-delivery row ([`super::diff_stat`], written once per landing),
 //!    or a review task's candidate commit against the base its delivery run
 //!    started from, diffed once per commit pair per process. A review or
 //!    done task without a resolvable diff falls back to declared files and
@@ -46,9 +46,10 @@ use orbit_types::task::{Task, TaskStatus};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::facts::{Anchor, CodebaseFacts};
+use super::diff_stat::{candidate_diff_lines, landed_diff_stats};
+use super::fact::{Anchor, CodebaseFacts};
 use super::regression::RegressionFilter;
-use super::sections::{Params, Rollup};
+use super::section::{Params, Rollup};
 use crate::OrbitRuntime;
 use crate::application::job::CodebaseDeliveryScan;
 
@@ -442,84 +443,80 @@ impl TaskRiskinessModel {
     }
 }
 
-impl OrbitRuntime {
-    /// Read the windowed regression facts and the recorded diff sizes once
-    /// and build the model that estimates every task's riskiness from them,
-    /// over a fixed 30-day window with a minimum support of 5.
-    pub fn task_riskiness_model(&self) -> Result<TaskRiskinessModel, OrbitError> {
-        let since = Utc::now() - Duration::days(i64::from(RISKINESS_WINDOW_DAYS));
-        let facts = super::facts::scan_regressions(self, since)?;
-        let mut diff_lines: HashMap<String, u64> = self
-            .landed_diff_stats(None)
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "riskiness: landed diff stats unreadable");
-                Vec::new()
-            })
-            .iter()
-            // Oldest first: a task's latest landing wins.
-            .map(|row| (row.task_id.clone(), landed_lines(row)))
-            .collect();
-        self.add_review_candidate_lines(&facts, &mut diff_lines);
-        Ok(TaskRiskinessModel::build(
-            &facts,
-            since,
-            RISKINESS_WINDOW_DAYS,
-            RISKINESS_MIN_SUPPORT,
-            diff_lines,
-        ))
-    }
-
-    /// The lines changed by each review task's candidate, from the commit
-    /// its delivery run made against the base it started from.
-    fn add_review_candidate_lines(
-        &self,
-        facts: &CodebaseFacts,
-        diff_lines: &mut HashMap<String, u64>,
-    ) {
-        let scan = CodebaseDeliveryScan::default();
-        let mut repo: Option<Option<git2::Repository>> = None;
-        for task in &facts.tasks {
-            if task.status != TaskStatus::Review || diff_lines.contains_key(&task.id) {
-                continue;
-            }
-            let Ok(delivery) = self.observe_codebase_task_delivery(&task.id, &scan) else {
-                continue;
-            };
-            let (Some(base), Some(head)) = (delivery.commit.base_sha, delivery.commit.head_sha)
-            else {
-                continue;
-            };
-            let key = (base, head);
-            let cache = candidate_lines_cache();
-            if let Some(lines) = cache.lock().ok().and_then(|seen| seen.get(&key).copied()) {
-                diff_lines.insert(task.id.clone(), lines);
-                continue;
-            }
-            let repo = repo
-                .get_or_insert_with(|| git2::Repository::open(&self.paths().repo_root).ok())
-                .as_ref();
-            // A missing commit is not remembered: a later fetch can supply it.
-            let Some(lines) = repo.and_then(|repo| self.candidate_diff_lines(repo, &key.0, &key.1))
-            else {
-                continue;
-            };
-            if let Ok(mut seen) = cache.lock() {
-                if seen.len() >= CANDIDATE_CACHE_LIMIT {
-                    seen.clear();
-                }
-                seen.insert(key, lines);
-            }
-            diff_lines.insert(task.id.clone(), lines);
-        }
-    }
-}
-
 /// The log-likelihood, score and Fisher information of one observation set
 /// at `(a, b)` under the complementary log-log link.
 struct FitStep {
     log_likelihood: f64,
     score: [f64; 2],
     information: [f64; 3],
+}
+
+/// Read the windowed regression facts and the recorded diff sizes once
+/// and build the model that estimates every task's riskiness from them,
+/// over a fixed 30-day window with a minimum support of 5.
+pub fn task_riskiness_model(rt: &OrbitRuntime) -> Result<TaskRiskinessModel, OrbitError> {
+    let since = Utc::now() - Duration::days(i64::from(RISKINESS_WINDOW_DAYS));
+    let facts = super::fact::scan_regressions(rt, since)?;
+    let mut diff_lines: HashMap<String, u64> = landed_diff_stats(rt, None)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "riskiness: landed diff stats unreadable");
+            Vec::new()
+        })
+        .iter()
+        // Oldest first: a task's latest landing wins.
+        .map(|row| (row.task_id.clone(), landed_lines(row)))
+        .collect();
+    add_review_candidate_lines(rt, &facts, &mut diff_lines);
+    Ok(TaskRiskinessModel::build(
+        &facts,
+        since,
+        RISKINESS_WINDOW_DAYS,
+        RISKINESS_MIN_SUPPORT,
+        diff_lines,
+    ))
+}
+
+/// The lines changed by each review task's candidate, from the commit
+/// its delivery run made against the base it started from.
+fn add_review_candidate_lines(
+    rt: &OrbitRuntime,
+    facts: &CodebaseFacts,
+    diff_lines: &mut HashMap<String, u64>,
+) {
+    let scan = CodebaseDeliveryScan::default();
+    let mut repo: Option<Option<git2::Repository>> = None;
+    for task in &facts.tasks {
+        if task.status != TaskStatus::Review || diff_lines.contains_key(&task.id) {
+            continue;
+        }
+        let Ok(delivery) = rt.observe_codebase_task_delivery(&task.id, &scan) else {
+            continue;
+        };
+        let (Some(base), Some(head)) = (delivery.commit.base_sha, delivery.commit.head_sha) else {
+            continue;
+        };
+        let key = (base, head);
+        let cache = candidate_lines_cache();
+        if let Some(lines) = cache.lock().ok().and_then(|seen| seen.get(&key).copied()) {
+            diff_lines.insert(task.id.clone(), lines);
+            continue;
+        }
+        let repo = repo
+            .get_or_insert_with(|| git2::Repository::open(&rt.paths().repo_root).ok())
+            .as_ref();
+        // A missing commit is not remembered: a later fetch can supply it.
+        let Some(lines) = repo.and_then(|repo| candidate_diff_lines(rt, repo, &key.0, &key.1))
+        else {
+            continue;
+        };
+        if let Ok(mut seen) = cache.lock() {
+            if seen.len() >= CANDIDATE_CACHE_LIMIT {
+                seen.clear();
+            }
+            seen.insert(key, lines);
+        }
+        diff_lines.insert(task.id.clone(), lines);
+    }
 }
 
 /// Lines changed per candidate `(base, head)`. A commit pair's diff never

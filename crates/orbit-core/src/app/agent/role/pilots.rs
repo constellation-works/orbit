@@ -4,7 +4,7 @@
 //!
 //! The unit is an assessed task: a done task whose newest pilot receipt was
 //! written in the window, bulk and `no-diff-expected` tasks left out (see
-//! [`crate::application::codebase::pilot_evidence`]). Recall, precision and
+//! [`crate::app::codebase::pilot_evidence`]). Recall, precision and
 //! F1 grade the pilot's final selectors, and the filer's selectors from
 //! before any pilot ran are the baseline the F1 lift is measured from. The
 //! observed tier ranks the window's assessed tasks by total implementation
@@ -36,7 +36,7 @@ use crate::app::agent::score::{
     Denominator, Occurrence, RowInput, Stat, Tally, Term, number, sample_units,
 };
 use crate::app::agent::{AgentFacts, ExecutionScope, WindowBounds};
-use crate::application::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
+use crate::app::codebase::{Anchor, Contest, HeldWait, PilotEvidence, PilotRun};
 use crate::application::statistics;
 
 pub(super) const ROLE: RoleSpec = RoleSpec {

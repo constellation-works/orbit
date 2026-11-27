@@ -3,18 +3,18 @@ use super::*;
 use super::rollup::*;
 
 #[derive(Default)]
-pub(in crate::application::codebase) struct FootprintRow<'a> {
-    pub(in crate::application::codebase) tally: Tally,
-    pub(in crate::application::codebase) widenings: usize,
+pub(in crate::app::codebase) struct FootprintRow<'a> {
+    pub(in crate::app::codebase) tally: Tally,
+    pub(in crate::app::codebase) widenings: usize,
     /// Each task that widened onto the path, with its latest such widening
     /// in the window: the numerator.
-    pub(in crate::application::codebase) missed: Vec<(&'a TaskFacts, DateTime<Utc>)>,
+    pub(in crate::app::codebase) missed: Vec<(&'a TaskFacts, DateTime<Utc>)>,
 }
 
 /// Distinct tasks that had the path added mid-run by `context_files_widened`
 /// ÷ tasks whose footprint touched it, for tasks active in the window.
 /// Also returns the number of tasks active in the window.
-pub(in crate::application::codebase) fn footprint_rows<'a>(
+pub(in crate::app::codebase) fn footprint_rows<'a>(
     facts: &'a CodebaseFacts,
     params: &Params,
 ) -> (BTreeMap<String, FootprintRow<'a>>, usize) {
@@ -53,10 +53,7 @@ pub(in crate::application::codebase) fn footprint_rows<'a>(
     (rows, population)
 }
 
-pub(in crate::application::codebase) fn footprint_misses(
-    facts: &CodebaseFacts,
-    params: &Params,
-) -> Value {
+pub(in crate::app::codebase) fn footprint_misses(facts: &CodebaseFacts, params: &Params) -> Value {
     let (rows, population) = footprint_rows(facts, params);
     let (ranked, below_support) = rank(rows, params.min_support, |row| {
         (row.tally.numerator, row.tally.denominator)

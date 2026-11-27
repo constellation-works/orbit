@@ -23,24 +23,22 @@ mod regressions;
 mod rejected;
 mod rollup;
 
-use super::facts::{
+use super::fact::{
     ACTOR_KINDS, Anchor, Block, BlockCause, CodebaseFacts, INFRA_CAUSES, ReservationFacts,
     TaskFacts,
 };
-use super::lock_waits::{WaitEpisode, wait_episodes, wait_summary};
+use super::lock_wait::{WaitEpisode, wait_episodes, wait_summary};
 use super::regression::{RegressionFilter, RegressionLink};
-pub(in crate::application::codebase) use blocked::{blocked_rows, rank_blocked};
+pub(in crate::app::codebase) use blocked::{blocked_rows, rank_blocked};
 use chrono::{DateTime, Utc};
-pub(in crate::application::codebase) use coupling::coupling_pairs;
-pub(in crate::application::codebase) use footprint::footprint_rows;
-pub(in crate::application::codebase) use locks::{lock_rows, lock_tally};
+pub(in crate::app::codebase) use coupling::coupling_pairs;
+pub(in crate::app::codebase) use footprint::footprint_rows;
+pub(in crate::app::codebase) use locks::{lock_rows, lock_tally};
 use orbit_common::fs::selector::Selector;
 use orbit_types::task::TaskStatus;
-pub(in crate::application::codebase) use regressions::{
-    regressed_fields, regression_rows, site_entries,
-};
-pub(in crate::application::codebase) use rejected::rejected_rows;
-pub(in crate::application::codebase) use rollup::{
+pub(in crate::app::codebase) use regressions::{regressed_fields, regression_rows, site_entries};
+pub(in crate::app::codebase) use rejected::rejected_rows;
+pub(in crate::app::codebase) use rollup::{
     LARGE_FOOTPRINT_CAP, Params, ROW_LIMIT, Rollup, Tally, all_sections, merge, rank, rate_fields,
 };
 use serde_json::{Value, json};

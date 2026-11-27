@@ -14,7 +14,7 @@ use crate::OrbitRuntime;
 /// attributed to a run: kept with the task's stored facts, since only its
 /// comments change it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(in crate::application::codebase) struct PilotInputs {
+pub(in crate::app::codebase) struct PilotInputs {
     /// The newest assessment's final selectors.
     pub(super) after: Vec<String>,
     /// The filer's selectors before any pilot ran.
@@ -80,7 +80,7 @@ fn strings(value: &Value) -> Option<Vec<String>> {
 
 /// Read a task's task-pilot receipts: `None` when no receipt carries the
 /// pilot's final selectors, an error when the comments cannot be read.
-pub(in crate::application::codebase) fn inputs(
+pub(in crate::app::codebase) fn inputs(
     runtime: &OrbitRuntime,
     id: &str,
 ) -> Result<Option<PilotInputs>, OrbitError> {

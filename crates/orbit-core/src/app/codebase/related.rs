@@ -5,12 +5,12 @@ use orbit_common::OrbitError;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::facts::{CodebaseFacts, TaskFacts};
-use super::sections::{Params, rate_fields};
+use super::fact::{CodebaseFacts, TaskFacts};
+use super::section::{Params, rate_fields};
 
 /// Landed diffs and reservations above this many paths are bulk in the
 /// one-file view and excluded from it. Higher than the coupling ranking's
-/// [`super::sections::LARGE_FOOTPRINT_CAP`] so a release cut, which bumps a
+/// [`super::section::LARGE_FOOTPRINT_CAP`] so a release cut, which bumps a
 /// dozen manifests together, still counts.
 pub(super) const RELATED_FOOTPRINT_CAP: usize = 20;
 

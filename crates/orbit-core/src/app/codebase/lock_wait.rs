@@ -14,8 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
-use super::facts::CodebaseFacts;
-use super::sections::Params;
+use super::fact::CodebaseFacts;
+use super::section::Params;
 
 /// How a wait episode ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

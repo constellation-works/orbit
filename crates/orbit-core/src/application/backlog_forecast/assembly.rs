@@ -207,7 +207,7 @@ pub(super) fn assemble_forecast_simulation(
         .map(|item| model::resolve_forecast_item(item, history, episodes, waits))
         .collect();
 
-    let risk_model = runtime.task_riskiness_model()?;
+    let risk_model = crate::app::codebase::task_riskiness_model(runtime)?;
     let mut rework = rework::RegressionRework {
         donors: rework::collect_forecast_donors(
             tasks,

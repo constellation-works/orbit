@@ -114,7 +114,7 @@ fn two_task_landing_counts_only_that_tasks_reviewable_lines() {
     )
     .unwrap();
 
-    let rows = runtime.landed_diff_stats(None).unwrap();
+    let rows = orbit_core::app::codebase::landed_diff_stats(&runtime, None).unwrap();
     let reviewable = |id: &str| {
         rows.iter()
             .find(|row| row.task_id == id)
@@ -201,7 +201,7 @@ fn single_commit_landing_reviewable(message: fn(&str, &str) -> String) -> Option
         })
         .unwrap();
 
-    let rows = runtime.landed_diff_stats(None).unwrap();
+    let rows = orbit_core::app::codebase::landed_diff_stats(&runtime, None).unwrap();
     rows.iter()
         .find(|row| row.task_id == owner)
         .unwrap_or_else(|| panic!("no landed row for {owner}; rows={rows:?}"))

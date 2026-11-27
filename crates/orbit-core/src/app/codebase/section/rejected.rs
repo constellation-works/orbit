@@ -3,22 +3,22 @@ use super::*;
 use super::rollup::*;
 
 #[derive(Default)]
-pub(in crate::application::codebase) struct RejectedRow<'a> {
-    pub(in crate::application::codebase) tally: Tally,
+pub(in crate::app::codebase) struct RejectedRow<'a> {
+    pub(in crate::app::codebase) tally: Tally,
     /// Each task rejected after a run in the window, with when: the
     /// numerator.
-    pub(in crate::application::codebase) rejected: Vec<(&'a TaskFacts, DateTime<Utc>)>,
+    pub(in crate::app::codebase) rejected: Vec<(&'a TaskFacts, DateTime<Utc>)>,
 }
 
-pub(in crate::application::codebase) struct RejectedRows<'a> {
-    pub(in crate::application::codebase) rows: BTreeMap<String, RejectedRow<'a>>,
+pub(in crate::app::codebase) struct RejectedRows<'a> {
+    pub(in crate::app::codebase) rows: BTreeMap<String, RejectedRow<'a>>,
     counted: usize,
     excluded_without_run: usize,
 }
 
 /// Rejected tasks that had a job run ÷ tasks with a run whose footprint
 /// touched the path. Proposal-stage rejections (no run) are excluded.
-pub(in crate::application::codebase) fn rejected_rows<'a>(
+pub(in crate::app::codebase) fn rejected_rows<'a>(
     facts: &'a CodebaseFacts,
     params: &Params,
 ) -> RejectedRows<'a> {
@@ -53,7 +53,7 @@ pub(in crate::application::codebase) fn rejected_rows<'a>(
     }
 }
 
-pub(in crate::application::codebase) fn rejected(facts: &CodebaseFacts, params: &Params) -> Value {
+pub(in crate::app::codebase) fn rejected(facts: &CodebaseFacts, params: &Params) -> Value {
     let RejectedRows {
         rows,
         counted,

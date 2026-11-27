@@ -3,18 +3,18 @@ use super::*;
 use super::rollup::*;
 
 #[derive(Default)]
-pub(in crate::application::codebase) struct RegressionRow<'a> {
-    pub(in crate::application::codebase) tally: Tally,
+pub(in crate::app::codebase) struct RegressionRow<'a> {
+    pub(in crate::app::codebase) tally: Tally,
     /// The regressed tasks: the numerator.
-    pub(in crate::application::codebase) regressed: Vec<&'a TaskFacts>,
+    pub(in crate::app::codebase) regressed: Vec<&'a TaskFacts>,
     /// Every task the row counts: the denominator.
-    pub(in crate::application::codebase) touching: Vec<&'a TaskFacts>,
+    pub(in crate::app::codebase) touching: Vec<&'a TaskFacts>,
     by_crew: BTreeMap<String, Tally>,
     /// Each regressed task's recorded sites under the path, by task ID.
-    pub(in crate::application::codebase) sites: BTreeMap<&'a str, BTreeSet<&'a str>>,
+    pub(in crate::app::codebase) sites: BTreeMap<&'a str, BTreeSet<&'a str>>,
     /// Regressed tasks that declared the path but whose kept links record no
     /// site, so they count against no path.
-    pub(in crate::application::codebase) unsited: Vec<&'a TaskFacts>,
+    pub(in crate::app::codebase) unsited: Vec<&'a TaskFacts>,
 }
 
 impl<'a> RegressionRow<'a> {
@@ -36,14 +36,14 @@ impl<'a> RegressionRow<'a> {
 
 /// The Regressions ranking's rows, the done tasks of the window, and the
 /// regressed tasks and links the filter keeps that record no site.
-pub(in crate::application::codebase) struct RegressionRows<'a> {
-    pub(in crate::application::codebase) rows: BTreeMap<String, RegressionRow<'a>>,
+pub(in crate::app::codebase) struct RegressionRows<'a> {
+    pub(in crate::app::codebase) rows: BTreeMap<String, RegressionRow<'a>>,
     population: usize,
     unsited_tasks: usize,
     unsited_links: usize,
 }
 
-pub(in crate::application::codebase) fn crew_of(task: &TaskFacts) -> String {
+pub(in crate::app::codebase) fn crew_of(task: &TaskFacts) -> String {
     task.crew
         .clone()
         .unwrap_or_else(|| "unassigned".to_string())
@@ -73,7 +73,7 @@ fn link_sites(link: &RegressionLink) -> impl Iterator<Item = (&str, Anchor)> {
 /// joins the denominator of a key it did not declare, so the rate stays at
 /// most 1. Links without a site are attributed to no path: they are counted,
 /// with their regressed tasks, as unsited.
-pub(in crate::application::codebase) fn regression_rows<'a>(
+pub(in crate::app::codebase) fn regression_rows<'a>(
     facts: &'a CodebaseFacts,
     params: &Params,
 ) -> RegressionRows<'a> {
@@ -156,10 +156,7 @@ pub(in crate::application::codebase) fn regression_rows<'a>(
     }
 }
 
-pub(in crate::application::codebase) fn regressions(
-    facts: &CodebaseFacts,
-    params: &Params,
-) -> Value {
+pub(in crate::app::codebase) fn regressions(facts: &CodebaseFacts, params: &Params) -> Value {
     let RegressionRows {
         rows,
         population,
@@ -228,7 +225,7 @@ pub(in crate::application::codebase) fn regressions(
 /// What a regressed task's entry adds: its crew and complexity, the links
 /// the filter keeps, as IDs and with their four dimensions, and the sites
 /// that attribute it to `row`'s path.
-pub(in crate::application::codebase) fn regressed_fields(
+pub(in crate::app::codebase) fn regressed_fields(
     task: &TaskFacts,
     row: &RegressionRow,
     filter: &RegressionFilter,
@@ -255,7 +252,7 @@ pub(in crate::application::codebase) fn regressed_fields(
 /// its scope (`symbol`, `file` or `dir`) with the symbol's name and kind, the
 /// regressed tasks it attributes, and the kept links naming it with their
 /// regression tasks.
-pub(in crate::application::codebase) fn site_entries(
+pub(in crate::app::codebase) fn site_entries(
     row: &RegressionRow,
     filter: &RegressionFilter,
 ) -> Vec<Value> {

@@ -34,7 +34,7 @@ line count suggests. Luna and Astra may have different responses; neither equal
 capability nor accelerating error growth follows from that example alone.
 
 At base `fe97e5d54dd3cda67f426d106e95b121b77a493f`,
-[`riskiness.rs`](../../../crates/orbit-core/src/application/codebase/riskiness.rs)
+[`riskiness.rs`](../../../crates/orbit-core/src/app/codebase/risk.rs)
 is estimator v3: `p = 1 - exp(-exp(a + b * ln(1 + size)))`, separately fitted to
 declared paths and available review/landed diff lines. Its outcome is a done task
 named by any recorded `regression_from` link. It does not measure unsuccessful

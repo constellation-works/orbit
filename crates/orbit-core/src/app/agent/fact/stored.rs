@@ -40,7 +40,7 @@ use super::model::{RunRecord, Runner, TaskFacts};
 use super::task::task_facts;
 use crate::OrbitRuntime;
 use crate::app::agent::record::block_cause;
-use crate::application::codebase::SettledFailure;
+use crate::app::codebase::SettledFailure;
 
 /// Bump when [`TaskFacts`] or anything it serializes changes shape or
 /// meaning: every stored row is then recomputed and replaced. Version 1

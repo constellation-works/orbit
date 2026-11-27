@@ -10,7 +10,7 @@
 //!   `sweep_filing`, `seeding_policy`.
 //! - Agents and runs: `executor`, `experiment`, `resident`, `vision_probe`, `statistics`.
 //! - Tool names: `tool_name_migration`.
-//! - Workspace and host: `codebase`, `distributed`, `pull_drain`,
+//! - Workspace and host: `distributed`, `pull_drain`,
 //!   `host_labels`, `gc`, `change_watch`, `managed_assets`.
 //! - Policy: `application_authority`, `contracts`, `admission`,
 //!   `backlog_forecast`, `tag_instructions`.
@@ -22,7 +22,6 @@ pub mod auto_tasks;
 pub mod automation;
 pub(crate) mod backlog_forecast;
 pub mod change_watch;
-pub mod codebase;
 pub mod contracts;
 pub mod distributed;
 pub(crate) mod executor;

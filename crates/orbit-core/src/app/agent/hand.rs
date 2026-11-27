@@ -38,7 +38,7 @@ use super::record::is_operator_requeue;
 use super::role::pilot_warnings;
 use crate::OrbitRuntime;
 use crate::Task;
-use crate::application::codebase::{PilotRuns, actor_kind};
+use crate::app::codebase::{PilotRuns, actor_kind};
 use crate::application::task::BLOCKED_TASK_TRIAGED_EVENT;
 use crate::application::task::blocked_recovery::{
     self, LegacyBlockedTriageOutcome, LegacyBlockedTriageRecord,

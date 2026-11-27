@@ -8,7 +8,7 @@
 //! separately measures verified landed diffs, including unreserved Markdown.
 //! The same scan supplies the evidence the Agents › Pilots scorecard grades
 //! pilots by (`pilot_evidence`).
-//! [`OrbitRuntime::codebase_scan`] lists every task's envelope from the task
+//! [`codebase_scan`] lists every task's envelope from the task
 //! index and takes what its history, comments and failed claim settlements
 //! say from the store's derived per-task facts (`stored`), reading a task's
 //! event log (outside the task commit lock when nothing is left to recover)
@@ -18,23 +18,11 @@
 //! [`codebase_path_detail`] only slice the facts by window, minimum support
 //! and rollup. Analytics and path detail use verified landing receipts in
 //! task history, without observing delivery runs. Related queries use
-//! [`OrbitRuntime::codebase_related_scan`] for window-scoped delivery
+//! [`codebase_related_scan`] for window-scoped delivery
 //! fallback, which lists the workspace's runs and parses the job catalog once
 //! per scan; what delivery observation finds is never stored with a task. A
 //! caller that keeps the history-only facts (the dashboard) answers another
 //! selection without rescanning.
-
-mod detail;
-mod diff_stats;
-mod facts;
-mod landed;
-mod lock_waits;
-mod pilot;
-mod regression;
-mod related;
-mod riskiness;
-mod sections;
-mod stored;
 
 use std::time::Duration;
 
@@ -42,25 +30,11 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
+use super::fact::CodebaseFacts;
+use super::regression::RegressionFilter;
+use super::section::{Params, ROW_LIMIT, Rollup};
+use super::{detail, fact, related, section};
 use crate::OrbitRuntime;
-
-pub use diff_stats::{DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill};
-pub use facts::CodebaseFacts;
-pub(crate) use facts::{
-    Anchor, BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements_of,
-};
-// `PilotAssessment` is named only by scorecard test fixtures.
-#[allow(unused_imports)]
-pub(crate) use pilot::{
-    Assessment as PilotAssessment, Contest, HeldWait, PilotEvidence, PilotRun, PilotRuns,
-    pilot_evidence,
-};
-pub use regression::RegressionFilter;
-pub use riskiness::{
-    BasisFallback, RiskinessBase, RiskinessBasis, RiskinessFit, RiskinessSizeBand, RiskinessState,
-    SupportState, TASK_RISKINESS_ESTIMATOR_VERSION, TaskRiskiness, TaskRiskinessModel,
-};
-use sections::{Params, ROW_LIMIT, Rollup};
 
 const DEFAULT_WINDOW: &str = "90d";
 const DEFAULT_MIN_SUPPORT: usize = 15;
@@ -206,59 +180,6 @@ impl RelatedQuery {
     }
 }
 
-impl OrbitRuntime {
-    /// Scan the workspace's tasks, reservations and lock denials once, reusing
-    /// the stored facts of every task unchanged since they were computed. A
-    /// task whose history cannot be read keeps its envelope facts. Landed paths
-    /// and pilot receipts use task-history receipts only, without delivery
-    /// observation.
-    pub fn codebase_scan(&self) -> Result<CodebaseFacts, OrbitError> {
-        facts::scan(self, None, true, None)
-    }
-
-    /// [`Self::codebase_scan`] over a task list and history stamps a
-    /// preceding scan of the same workspace already took (the agent
-    /// scorecards list and stamp every task for their own facts first),
-    /// so the combined scan lists and stamps once, not twice.
-    pub(crate) fn codebase_scan_with_tasks(
-        &self,
-        tasks: Vec<orbit_types::task::Task>,
-        stamps: std::collections::BTreeMap<String, String>,
-    ) -> Result<CodebaseFacts, OrbitError> {
-        facts::scan(self, None, true, Some((tasks, stamps)))
-    }
-
-    /// Scan facts for related-file queries in this window. Delivery fallback
-    /// is restricted to done tasks in the window; cache separately from the
-    /// history-only analytics scan and from other windows.
-    pub fn codebase_related_scan(
-        &self,
-        query: &CodebaseQuery,
-    ) -> Result<CodebaseFacts, OrbitError> {
-        facts::scan(self, Some(&query.params()), true, None)
-    }
-
-    /// Scan, then rank for `query`. For callers that keep no scan, so the
-    /// response reports a cache period of zero.
-    pub fn codebase_analytics(&self, query: &CodebaseQuery) -> Result<Value, OrbitError> {
-        Ok(codebase_analytics(
-            &self.codebase_scan()?,
-            query,
-            Duration::ZERO,
-        ))
-    }
-
-    /// Scan history-only facts, including landed receipts, then report one
-    /// path's standing in every ranking without observing delivery runs.
-    pub fn codebase_path_detail(
-        &self,
-        query: &CodebaseQuery,
-        path: &str,
-    ) -> Result<Value, OrbitError> {
-        codebase_path_detail(&self.codebase_scan()?, query, path)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CheckoutPresence {
     File,
@@ -266,16 +187,65 @@ enum CheckoutPresence {
     Indeterminate,
 }
 
-impl OrbitRuntime {
-    /// Scan and rank files that changed alongside one repository file.
-    pub fn codebase_related(
-        &self,
-        query: &CodebaseQuery,
-        path: &str,
-        top: usize,
-    ) -> Result<Value, OrbitError> {
-        codebase_related(&self.codebase_related_scan(query)?, query, path, top)
-    }
+/// Scan the workspace's tasks, reservations and lock denials once, reusing
+/// the stored facts of every task unchanged since they were computed. A
+/// task whose history cannot be read keeps its envelope facts. Landed paths
+/// and pilot receipts use task-history receipts only, without delivery
+/// observation.
+pub fn codebase_scan(rt: &OrbitRuntime) -> Result<CodebaseFacts, OrbitError> {
+    fact::scan(rt, None, true, None)
+}
+
+/// [`codebase_scan`] over a task list and history stamps a
+/// preceding scan of the same workspace already took (the agent
+/// scorecards list and stamp every task for their own facts first),
+/// so the combined scan lists and stamps once, not twice.
+pub(crate) fn codebase_scan_with_tasks(
+    rt: &OrbitRuntime,
+    tasks: Vec<orbit_types::task::Task>,
+    stamps: std::collections::BTreeMap<String, String>,
+) -> Result<CodebaseFacts, OrbitError> {
+    fact::scan(rt, None, true, Some((tasks, stamps)))
+}
+
+/// Scan facts for related-file queries in this window. Delivery fallback
+/// is restricted to done tasks in the window; cache separately from the
+/// history-only analytics scan and from other windows.
+pub fn codebase_related_scan(
+    rt: &OrbitRuntime,
+    query: &CodebaseQuery,
+) -> Result<CodebaseFacts, OrbitError> {
+    fact::scan(rt, Some(&query.params()), true, None)
+}
+
+/// Scan, then rank for `query`. For callers that keep no scan, so the
+/// response reports a cache period of zero.
+pub fn scan_analytics(rt: &OrbitRuntime, query: &CodebaseQuery) -> Result<Value, OrbitError> {
+    Ok(codebase_analytics(
+        &codebase_scan(rt)?,
+        query,
+        Duration::ZERO,
+    ))
+}
+
+/// Scan history-only facts, including landed receipts, then report one
+/// path's standing in every ranking without observing delivery runs.
+pub fn scan_path_detail(
+    rt: &OrbitRuntime,
+    query: &CodebaseQuery,
+    path: &str,
+) -> Result<Value, OrbitError> {
+    codebase_path_detail(&codebase_scan(rt)?, query, path)
+}
+
+/// Scan and rank files that changed alongside one repository file.
+pub fn scan_related(
+    rt: &OrbitRuntime,
+    query: &CodebaseQuery,
+    path: &str,
+    top: usize,
+) -> Result<Value, OrbitError> {
+    codebase_related(&codebase_related_scan(rt, query)?, query, path, top)
 }
 
 /// The six path rankings and the paths several of them share (`overlap`),
@@ -287,11 +257,11 @@ pub fn codebase_analytics(
     cache_ttl: Duration,
 ) -> Value {
     let params = query.params();
-    let mut payload = sections::all_sections(facts, &params);
+    let mut payload = section::all_sections(facts, &params);
     if params.rollup == Rollup::File {
         mark_absent_rows(&mut payload, &facts.repo_root);
     }
-    payload = sections::merge(payload, query.header(facts, params.since));
+    payload = section::merge(payload, query.header(facts, params.since));
     payload["regression_filter"] = query.filter.json();
     payload["known_paths"] = json!(related::known_paths(facts));
     payload["cache_ttl_seconds"] = json!(cache_ttl.as_secs());
@@ -323,7 +293,7 @@ pub fn codebase_path_detail(
         }
     }
     detail["regression_filter"] = query.filter.json();
-    Ok(sections::merge(detail, query.header(facts, params.since)))
+    Ok(section::merge(detail, query.header(facts, params.since)))
 }
 
 // Check each distinct listed path at query time, including cached scan consumers.
@@ -445,8 +415,8 @@ pub(super) fn test_mark_absent_row_with_lookup(
 
 /// Rank files that changed alongside `path` in landed tasks. Related queries
 /// always use file paths, independently of the analytics rollup. Use facts
-/// from `OrbitRuntime::codebase_related_scan` for the same window to include
-/// delivery-run evidence; `OrbitRuntime::codebase_scan` contains receipts only.
+/// from `codebase_related_scan` for the same window to include
+/// delivery-run evidence; `codebase_scan` contains receipts only.
 pub fn codebase_related(
     facts: &CodebaseFacts,
     query: &CodebaseQuery,
@@ -455,8 +425,5 @@ pub fn codebase_related(
 ) -> Result<Value, OrbitError> {
     let params = query.params();
     let payload = related::related(facts, &params, path, top)?;
-    Ok(sections::merge(query.header(facts, params.since), payload))
+    Ok(section::merge(query.header(facts, params.since), payload))
 }
-
-#[cfg(test)]
-mod tests;

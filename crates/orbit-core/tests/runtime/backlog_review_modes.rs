@@ -348,7 +348,9 @@ fn forecast_riskiness_preserves_observation_timestamps() {
     // The task API reads the same estimator shape: identical fields and a
     // window from the same scan, within clock skew between the two scans.
     let task = runtime.get_task(&pending_id).unwrap();
-    let estimated = runtime.task_riskiness_model().unwrap().estimate(&task);
+    let estimated = orbit_core::app::codebase::task_riskiness_model(&runtime)
+        .unwrap()
+        .estimate(&task);
     assert_eq!(
         estimated.window_days as u64,
         riskiness["window_days"].as_u64().unwrap(),

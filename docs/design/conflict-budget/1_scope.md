@@ -67,7 +67,7 @@ Orbit has no way to express that trade today:
 
   | Outcome | Where the conflicting paths are recorded | Read by codebase facts |
   |---|---|---|
-  | Conflict recovery failed, local run (`pr_conflict_blocked`, or `pr_failure_handoff` with `failed_step=sync_base`) | Task history note text (`conflicts=a, b`) | Yes, `BlockCause::BaseConflict(paths)` in [`block_cause.rs`](../../../crates/orbit-core/src/application/codebase/facts/block_cause.rs) |
+  | Conflict recovery failed, local run (`pr_conflict_blocked`, or `pr_failure_handoff` with `failed_step=sync_base`) | Task history note text (`conflicts=a, b`) | Yes, `BlockCause::BaseConflict(paths)` in [`block_cause.rs`](../../../crates/orbit-core/src/app/codebase/fact/block_cause.rs) |
   | Conflict recovery failed, claimed leaf (`ClaimFailureClass::BaseConflict`) | Nowhere on the owner: the settlement carries the class only | As a conflict with no paths |
   | Conflict recovered by `pr_conflict_recovery` | The run's `PipelineState::rebase_recovery_checkpoints` (`RebaseRecoveryCheckpoint::conflicting_paths`), on the host that ran it | No |
   | Overlapping work that rebased cleanly | Nowhere directly; derivable from landed paths and in-flight intervals | No |
@@ -120,7 +120,7 @@ risk(path) = p(path) · c(path)                             # expected repair co
 `workflow.generated_paths`; the repair is the regenerate command), `docs`, `config`, `code`.
 The priors (`p₀`, `c₀`) are configuration, so a fresh workspace starts from them, and history
 replaces them as support grows, following the window and minimum-support pattern of
-[task riskiness](../../../crates/orbit-core/src/application/codebase/riskiness.rs).
+[task riskiness](../../../crates/orbit-core/src/app/codebase/risk.rs).
 
 A conflict rate measures textual conflicts only. Whether a clean merge of two edits still breaks
 behaviour depends on the code, which is where an optional **complexity weight** helps: a periodic

@@ -22,14 +22,14 @@ Status: proposed. This doc and [2_design.md](./2_design.md) are the design deliv
 outputs and their ship gates; [2_design.md](./2_design.md) specifies the record, the indexer
 boundary, storage, the routine, staleness and renames.
 
-Bearing: per-task riskiness is `crates/orbit-core/src/application/codebase/riskiness.rs`,
+Bearing: per-task riskiness is `crates/orbit-core/src/app/codebase/risk.rs`,
 initially shipped as estimator version 1 by [ORB-18690] and consumed by the backlog forecast
 ([ORB-18691], [backlog-forecast scope](../backlog-forecast/1_scope.md#per-task-riskiness-estimator)).
 [ORB-19361] replaced its per-file maximum with a size-based fit: declared path count
 before a diff exists, lines changed once one does. [ORB-19376] subsequently stabilized finite
 fits and advanced the estimator to version 3 without changing those bases. Lines changed per
 landed delivery are
-already recorded by `codebase/diff_stats.rs` ([ORB-18383]). A `regression_from` link can carry
+already recorded by `codebase/diff_stat.rs` ([ORB-18383]). A `regression_from` link can carry
 `regression.sites`, the `symbol:`/`file:` selectors of the code that was wrong (`dir:` when no
 narrower site can be named)
 (`crates/orbit-types/src/task/regression.rs`), and [ORB-19276] made Orbit always record

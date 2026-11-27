@@ -541,35 +541,32 @@ class RelativeImportTests(unittest.TestCase):
     def test_task_reaches_codebase_only_through_its_port(self):
         # [ORB-22625] Task imported codebase's block classifier and called its
         # done-landing hook directly, climbing task -> codebase -> distributed.
-        # One detector per call: the guard's chains stop at the first hit.
+        # `app::codebase` is reached only through `TaskCodebasePort` bound in
+        # `app::port`. One detector per call: the guard's chains stop at the
+        # first hit.
+        core_src = self.root / "crates/orbit-core/src"
         for rows in (
             [("task/blocked_recovery/readout.rs",
-              "use crate::application::codebase::{BlockCause, classify_block};\n")],
-            [("task/probe.rs", "use crate::application::{\n    codebase::Probe,\n};\n")],
-            [("task/mod.rs", "use super::codebase::Probe;\n"),
+              "use crate::app::codebase::{BlockCause, classify_block};\n")],
+            [("task/probe.rs", "use crate::app::{\n    codebase::Probe,\n};\n")],
+            [("task/mod.rs", "use super::super::app::codebase::Probe;\n"),
              ("task/blocked_recovery/probe.rs",
-              "use super::super::super::{codebase::Probe};\n")],
+              "use super::super::super::super::app::{codebase::Probe};\n")],
         ):
             self.check_rows(rows, rejected=True)
-        self.check_rows([
-            ("task/resolves.rs",
-             "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
-             "        self.fresh_codebase_method();\n    }\n}\n"),
-        ], rejected=True, shared={
-            "codebase/diff_stats.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn fresh_codebase_method(&self) {}\n}\n"})
         self.check_files({
-            "task/mod.rs": "pub(in crate::application) trait TaskCodebasePort {\n"
-                           "    fn record_landed_probe(&self);\n}\n",
-            "task/resolves.rs":
+            "application/task/mod.rs": "pub(crate) trait TaskCodebasePort {\n"
+                                       "    fn record_landed_probe(&self);\n}\n",
+            "application/task/resolves.rs":
                 "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
-                "        self.record_landed_probe();\n    }\n}\n",
-            "codebase/diff_stats.rs":
-                "impl TaskCodebasePort for OrbitRuntime {\n    fn record_landed_probe(&self) {}\n}\n",
-            "codebase/facts/block_cause.rs":
+                "        crate::app::port::TaskCodebase { rt: self }.record_landed_probe();\n"
+                "    }\n}\n",
+            "app/codebase/diff_stat.rs":
+                "impl TaskCodebasePort for TaskPort<'_> {\n    fn record_landed_probe(&self) {}\n}\n",
+            "app/codebase/fact/block_cause.rs":
                 "use crate::application::distributed::LeafSettlement;\n"
-                "pub(in crate::application) use crate::application::task::classify_block;\n",
-        }, rejected=False)
+                "pub(crate) use crate::application::task::classify_block;\n",
+        }, rejected=False, base=core_src)
 
     def test_task_reaches_resident_only_through_its_port(self):
         # [ORB-22955] Task imported resident's comment redaction check and
@@ -706,63 +703,62 @@ class RelativeImportTests(unittest.TestCase):
         ], rejected=True)
 
     def test_forecast_codebase_edge_is_exactly_the_authorized_call(self):
-        codebase = "impl OrbitRuntime {\n    pub fn task_riskiness_model(&self) {}\n    pub fn other_codebase_method(&self) {}\n}\n"
+        core_src = self.root / "crates/orbit-core/src"
+        codebase = "pub(crate) fn task_riskiness_model(rt: &OrbitRuntime) {}\n"
+        allowed = ("fn assemble(runtime: &OrbitRuntime) {\n"
+                   "    let risk_model = crate::app::codebase::task_riskiness_model(runtime)?;\n}\n")
         self.check_files({
-            "codebase/riskiness.rs": codebase,
-            "backlog_forecast/assembly.rs":
-                "fn assemble(runtime: &OrbitRuntime) {\n"
-                "    let risk_model = runtime.task_riskiness_model()?;\n}\n",
-        }, rejected=False)
+            "app/codebase/risk.rs": codebase,
+            "application/backlog_forecast/assembly.rs": allowed,
+        }, rejected=False, base=core_src)
         for relative, source in (
-            ("backlog_forecast/assembly.rs",
-             "fn assemble(runtime: &OrbitRuntime) {\n    runtime.other_codebase_method();\n}\n"),
-            ("backlog_forecast/projection.rs",
+            ("application/backlog_forecast/assembly.rs",
              "fn assemble(runtime: &OrbitRuntime) {\n"
-             "    let risk_model = runtime.task_riskiness_model()?;\n}\n"),
-            ("backlog_forecast/assembly.rs", "use crate::application::codebase::Probe;\n"),
-            ("codebase/probe.rs", "use crate::application::backlog_forecast::Probe;\n"),
+             "    crate::app::codebase::other_codebase_function(runtime);\n}\n"),
+            ("application/backlog_forecast/projection.rs", allowed),
+            ("application/backlog_forecast/assembly.rs", "use crate::app::codebase::Probe;\n"),
+            ("application/backlog_forecast/assembly.rs",
+             "use crate::app::{codebase as risk};\n"),
+            ("application/backlog_forecast/assembly.rs",
+             "use super::super::super::app::codebase::Probe;\n"),
+            ("app/codebase/probe.rs", "use crate::application::backlog_forecast::Probe;\n"),
+            ("app/codebase/probe.rs",
+             "use super::super::super::application::{backlog_forecast::Probe};\n"),
         ):
             with self.subTest(relative=relative, source=source):
-                self.check_files({"codebase/riskiness.rs": codebase, relative: source}, rejected=True)
+                self.check_files({"app/codebase/risk.rs": codebase, relative: source},
+                                 rejected=True, base=core_src)
 
     def test_review_cannot_name_codebase(self):
         # Selective-review retirement removed this edge, but the guard still
         # accepted its reintroduction. Exercise each detector independently.
         for rows in (
-            [("review/admission.rs", "use crate::application::codebase::Probe;\n"),
+            [("review/admission.rs", "use crate::app::codebase::Probe;\n"),
              ("review/gate/context.rs",
-              "fn probe() { crate::application::codebase::probe(); }\n")],
-            [("review/admission.rs", "use crate::application::{codebase::Probe};\n"),
+              "fn probe() { crate::app::codebase::probe(); }\n")],
+            [("review/admission.rs", "use crate::app::{codebase::Probe};\n"),
              ("review/gate/context.rs",
-              "use crate::application::{task::{Other}, codebase::{Probe}};\n")],
-            [("review/mod.rs", "use super::{codebase::Probe};\n"),
-             ("review/admission.rs", "use super::super::codebase::Probe;\n"),
+              "use crate::app::{port::{Other}, codebase::{Probe}};\n")],
+            [("review/mod.rs", "use super::super::{app::codebase::Probe};\n"),
+             ("review/admission.rs", "use super::super::super::app::codebase::Probe;\n"),
              ("review/gate/context.rs",
-              "use super::{super::{super::{codebase::Probe}}};\n"),
+              "use super::{super::{super::{super::{app::codebase::Probe}}}};\n"),
              ("review/gate/admit/context.rs",
-              "use super::super::super::super::super::{application::codebase::Probe};\n")],
+              "use super::super::super::super::super::{app::codebase::Probe};\n")],
         ):
             with self.subTest(rows=rows):
                 self.check_rows(rows, rejected=True)
-
-    def test_review_cannot_call_indexed_codebase_methods(self):
-        # Derive ownership from the defining impl, including future methods;
-        # the forecast's exact-line allowance must never apply to review.
+        # The forecast's exact-line allowance never applies to review.
         self.check_rows([
-            ("review/admission.rs", f"fn probe(runtime: &OrbitRuntime) {{ {call}; }}\n")
-            for call in (
-                "runtime.fresh_codebase_method()",
-                "OrbitRuntime::fresh_codebase_method(runtime)",
-                "Self::fresh_codebase_method(runtime)",
-                "<crate::OrbitRuntime>::fresh_codebase_method(runtime)",
-                "runtime.task_riskiness_model()",
-            )
-        ], rejected=True, shared={
-            "codebase/riskiness.rs":
-                "impl OrbitRuntime {\n"
-                "    pub(crate) fn fresh_codebase_method(&self) {}\n"
-                "    pub(crate) fn task_riskiness_model(&self) {}\n}\n",
-        })
+            ("review/admission.rs",
+             "fn probe(runtime: &OrbitRuntime) {\n"
+             "    let risk_model = crate::app::codebase::task_riskiness_model(runtime)?;\n}\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("review/gate/admit/reviewer.rs",
+             "fn probe(runtime: &OrbitRuntime) {\n"
+             "    crate::app::port::ReviewCandidateSize { rt: runtime }.review_candidate_size();\n}\n"),
+        ], rejected=False)
 
     def test_distributed_reaches_experiment_only_through_its_port(self):
         # [ORB-22416] Admission's capture call into experiment was a hidden
@@ -1270,10 +1266,11 @@ class RelativeImportTests(unittest.TestCase):
         }, rejected=True, base=core_src)
         self.check_files({
             "application/experiment/readout.rs": "use crate::app::agent::Probe;\n",
-            "application/codebase/diff_stats.rs":
-                "impl OrbitRuntime {\n    pub(crate) fn landed_task_lines_changed(&self) {}\n}\n",
+            "app/codebase/diff_stat.rs":
+                "pub(crate) fn landed_task_lines_changed(rt: &OrbitRuntime) {}\n",
             "app/agent/facts/scan.rs":
-                "fn scan(runtime: &OrbitRuntime) { runtime.landed_task_lines_changed(); }\n",
+                "fn scan(runtime: &OrbitRuntime) {\n"
+                "    crate::app::codebase::landed_task_lines_changed(runtime);\n}\n",
         }, rejected=False, base=core_src)
 
     def test_forecast_cannot_reach_sweep_filing(self):
@@ -1405,7 +1402,7 @@ class RelativeImportTests(unittest.TestCase):
              "use crate::application::{\n    contracts::{DrainClaimedLeaf},\n    job::Other,\n};\n"),
         ], rejected=True)
         self.check_rows([
-            ("review/probe.rs", "use crate::{OrbitRuntime, application::codebase::Probe};\n"),
+            ("review/probe.rs", "use crate::{OrbitRuntime, app::codebase::Probe};\n"),
         ], rejected=True)
         self.check_rows([
             ("task/probe.rs", "use crate::{OrbitRuntime, application::contracts::Probe};\n"),
@@ -1492,10 +1489,10 @@ class RelativeImportTests(unittest.TestCase):
         ("application/distributed/probe.rs", 2, "pull_drain"),
         ("app/agent/probe.rs", 3, "application::experiment"),
         ("application/task/probe.rs", 3, "app::agent"),
-        ("application/review/probe.rs", 2, "codebase"),
+        ("application/review/probe.rs", 3, "app::codebase"),
         ("application/review/probe.rs", 2, "landing"),
-        ("application/backlog_forecast/probe.rs", 2, "codebase"),
-        ("application/codebase/probe.rs", 2, "backlog_forecast"),
+        ("application/backlog_forecast/probe.rs", 3, "app::codebase"),
+        ("app/codebase/probe.rs", 3, "application::backlog_forecast"),
         # orbit-core bootstrap, composition and runtime layering.
         ("application/workspace/sync.rs", 3, "bootstrap"),
         ("adapter/tool_host/operation.rs", 3, "composition"),

@@ -240,9 +240,9 @@ pub(crate) use update::admit_agent_artifact;
 /// What a task write needs from `codebase` [ORB-22625]: the transition into
 /// done records the landed delivery's diff stats. `codebase` owns the landed
 /// rows and sits above `task`, so a direct call from here would climb into
-/// it; `codebase` implements this port on [`OrbitRuntime`](crate::OrbitRuntime),
-/// so composing the runtime binds it.
-pub(in crate::application) trait TaskCodebasePort {
+/// it; `app::codebase` implements this port on a struct holding the runtime,
+/// bound in `app::port`.
+pub(crate) trait TaskCodebasePort {
     /// On `task`'s transition into done from `previous_status`, record the
     /// diff stats of the landing its history's receipt names. Never fails
     /// the write: a missing commit or a store error is logged.

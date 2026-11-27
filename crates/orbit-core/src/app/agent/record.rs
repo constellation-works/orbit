@@ -15,7 +15,7 @@ use orbit_types::workflow::{RecoveryFault, TASK_BLOCKED_BY_AGENT_EVENT};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::application::codebase::{BlockCause, SettledFailure, actor_kind, classify_block};
+use crate::app::codebase::{BlockCause, SettledFailure, actor_kind, classify_block};
 
 /// Status events that start an implementation run: worktree setup, a claim's
 /// pull, or a resumed run's readmission.
