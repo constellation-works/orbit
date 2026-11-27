@@ -212,17 +212,22 @@ whose manifest has pages lists them in the consent prompt.
 
 ## 10. Concerns & Honest Limitations
 
-- **Measured in two engines, not three.** On 2026-11-27 the first contract, a directory of
-  files served under `script-src 'self'`, failed in both engines tried ([ORB-29532], Playwright
-  1.58.2 on macOS 27.2.1). WebKit 26.0 matched `'self'` to nothing in a frame with a unique
-  origin and loaded no file. Chromium 145 loaded classic scripts, but marked each request
-  `Sec-Fetch-Site: cross-site`, which the origin guard refuses, and module scripts and fonts
-  failed their cross-origin check. The contract above was then measured in the same two
-  engines with the same result in each: the listed inline scripts ran, classic and module; the
-  bridge round trip worked; `data:` images and fonts loaded; the frame made one request; and
-  every escape in [Serving](#2-serving) was refused. Firefox is not measured: Playwright's
-  Firefox does not launch on that macOS version. It is to be measured on Linux before phase 1
-  closes. Playwright's WebKit is the engine and not Safari itself.
+- **Browser measurements.** On 2026-11-27 the first contract, a directory of files served
+  under `script-src 'self'`, failed in both engines tried ([ORB-29532]). WebKit blocked the
+  separate bundle assets before requesting them. Chromium ran classic scripts in the fixture,
+  but its subresource requests carried `Sec-Fetch-Site: cross-site`, which the Orbit router
+  refuses. Module scripts and bundled fonts also failed their cross-origin checks.
+- **The one-document probe passed in three engines.** Chromium 145.0.7632.6 and WebKit 26.0
+  ran on macOS 27.2.1 arm64 with Playwright 1.58.2. Firefox 157.0 ran on Ubuntu 26.04.1 x64
+  with Playwright 1.64.0 after pinned Firefox failed to launch on that Mac. The probe used
+  the final [Serving](#2-serving) policy and the matching iframe sandbox in a loopback
+  fixture. All three ran hash-admitted classic and module scripts, rendered inline styles,
+  data images and a data font, and returned a bridge message whose origin was `null`. Each
+  frame load reached the fixture as one same-origin navigation carrying its session cookie.
+  A deliberate reload produced one further navigation. The frame sent no subresource or
+  canary request. All three refused the attempted unlisted or later-added scripts, imports,
+  `eval`, external assets, storage access, parent DOM access, fetch, form submission,
+  popup and top navigation. Evidence and the probe are attached to [ORB-29532].
 - **No file is fetched at run time.** A page that splits its code into chunks or loads an
   image by URL has to bundle them into its listed scripts and styles. `data:` URLs cost about
   a third more bytes than the files they carry, and the size bound counts the document as
