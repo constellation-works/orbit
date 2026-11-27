@@ -183,7 +183,7 @@ The engine takes a `LedgeredDatabase` naming the state component (`task
 registry`), and writes the same `schema_meta` ledger rows and
 `migration.compat` record into that file. Its entries follow the rules of §1
 and §6: append-only, frozen bodies, and a per-prefix schema golden
-(`task_registry/tests/registry_schema.golden`). [ORB-15822] implemented this
+(`task_index/schema/tests/registry_schema.golden`). [ORB-15822] implemented this
 ledger and adoption path. Two engine options exist for
 this database:
 
