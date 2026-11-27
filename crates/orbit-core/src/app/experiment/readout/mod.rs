@@ -5,11 +5,19 @@
 //! counted.
 
 mod admission;
+
 mod build;
+
 mod metrics;
+
 mod model;
-mod outcomes;
+
+mod outcome;
+
 mod stats;
+
 mod verdict;
+
+pub use build::experiment_readout;
 
 pub use model::ExperimentReadout;

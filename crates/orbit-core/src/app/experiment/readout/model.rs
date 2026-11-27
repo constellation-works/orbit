@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::application::experiment::readout::stats::Interval;
+use crate::app::experiment::readout::stats::Interval;
 use orbit_types::workflow::TagInstructionRole;
 
 /// The readout shape's version; bump it on any breaking change.

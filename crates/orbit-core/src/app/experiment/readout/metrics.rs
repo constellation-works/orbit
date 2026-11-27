@@ -2,17 +2,17 @@ use std::collections::BTreeSet;
 
 use orbit_store::contract::ExperimentRecord;
 
-use crate::application::experiment::definition::{Better, Kind, MetricSpec, metric_spec};
-use crate::application::experiment::readout::model::{
+use crate::app::experiment::definition::{Better, Kind, MetricSpec, metric_spec};
+use crate::app::experiment::readout::model::{
     CostSource, Outcome, ReviewableDenominator, TaskOutcome,
 };
-use crate::application::experiment::readout::stats::Cell;
+use crate::app::experiment::readout::stats::Cell;
 
 use super::model::{
     ArmEstimate, ComplexityDifference, CostCoverage, Difference, DifferenceEstimate, Estimate,
     ReadoutMetric, SegmentEstimate,
 };
-use super::outcomes::REGRESSION_WINDOW_DAYS;
+use super::outcome::REGRESSION_WINDOW_DAYS;
 use super::stats;
 use crate::application::statistics;
 use chrono::{DateTime, Duration, Utc};

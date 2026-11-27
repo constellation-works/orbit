@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: "Accepted, now parked design for experimental per-model memory: owner-store spaces delivered through a memory experiment overlay and rewritten by score-blind dreaming runs only during an active memory experiment; external user surfaces and the default routine were retired after a no-difference readout."
 tags: [crew-memory, experiments, agent-scorecards, auto-tasks]
-paths: ["crates/orbit-core/src/application/crew_memory/**", "crates/orbit-core/src/application/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
+paths: ["crates/orbit-core/src/application/crew_memory/**", "crates/orbit-core/src/app/experiment/**", "crates/orbit-engine/src/activity_job/cli_runner/**"]
 related_features: [experiments, agent-scorecards, auto-tasks, routines, task-artifacts]
 related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23115, ORB-23116, ORB-23066, ORB-10736, ORB-23644]
 ---
@@ -72,7 +72,7 @@ The lint is lexical and imperfect (§11). The structural defences are that a mod
 
 ### 5.1 The surface
 
-A new `ExperimentOverlay` surface sits alongside `instructions`, `skills`, `tools`, `crew` and `config` (`crates/orbit-core/src/application/experiment/definition.rs`):
+A new `ExperimentOverlay` surface sits alongside `instructions`, `skills`, `tools`, `crew` and `config` (`crates/orbit-core/src/app/experiment/definition.rs`):
 
 ```toml
 [arms.memory.overlay.memory]

@@ -151,7 +151,7 @@ impl OrbitRuntime {
             .as_ref()
             .and_then(|receipt| receipt.claim.clone())
             .ok_or_else(|| refused("claimed leaf has no admitted claim"))?;
-        self.validate_job_experiment_capture(
+        crate::app::port::JobExperiment(self).validate_job_experiment_capture(
             admission
                 .receipt
                 .as_ref()

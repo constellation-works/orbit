@@ -6,15 +6,17 @@ use orbit_store::contract::ExperimentAssignment;
 use crate::OrbitRuntime;
 use crate::application::task::TaskExperimentPort;
 
-impl TaskExperimentPort for OrbitRuntime {
+pub(crate) struct TaskPort<'a>(pub(crate) &'a OrbitRuntime);
+
+impl TaskExperimentPort for TaskPort<'_> {
     fn task_experiment_assignment_readout(
         &self,
         task_id: &str,
     ) -> Result<Vec<ExperimentAssignment>, OrbitError> {
-        self.task_experiments(task_id)
+        super::assignment::task_experiments(self.0, task_id)
     }
 
     fn task_has_experiment_crew_pool(&self, task_id: &str) -> Result<bool, OrbitError> {
-        Ok(self.experiment_crew_pool(task_id)?.is_some())
+        Ok(super::run_policy::experiment_crew_pool(self.0, task_id)?.is_some())
     }
 }

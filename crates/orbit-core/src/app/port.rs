@@ -5,13 +5,20 @@
 //! under its port name and asserts at compile time that it satisfies the trait.
 
 pub(crate) use super::evolution::TaskPort as TaskEvolution;
+pub(crate) use super::experiment::{
+    DistributedPort as DistributedExperiment, JobPort as JobExperiment,
+    TagInstructionPort as TagInstructionExperiment, TaskPort as TaskExperiment,
+};
 pub(crate) use super::notice::TaskPort as TaskNotice;
 pub(crate) use super::routine::ResidentRoutineStatus;
 use crate::app::{agent, codebase};
+use crate::application::distributed::DistributedExperimentPort;
+use crate::application::job::JobExperimentPort;
 use crate::application::resident::ResidentRoutineStatusPort;
 use crate::application::review::ReviewCandidateSizePort;
+use crate::application::tag_instructions::TagInstructionExperimentPort;
 use crate::application::task::{
-    TaskCodebasePort, TaskCorpusPort, TaskEvolutionPort, TaskNoticePort,
+    TaskCodebasePort, TaskCorpusPort, TaskEvolutionPort, TaskExperimentPort, TaskNoticePort,
 };
 
 const _: () = {
@@ -20,6 +27,18 @@ const _: () = {
 
     binds_task_evolution::<TaskEvolution<'_>>();
     binds_task_notice::<TaskNotice<'_>>();
+};
+
+const _: () = {
+    const fn binds_distributed_experiment<T: DistributedExperimentPort>() {}
+    const fn binds_job_experiment<T: JobExperimentPort>() {}
+    const fn binds_tag_instruction_experiment<T: TagInstructionExperimentPort>() {}
+    const fn binds_task_experiment<T: TaskExperimentPort>() {}
+
+    binds_distributed_experiment::<DistributedExperiment<'_>>();
+    binds_job_experiment::<JobExperiment<'_>>();
+    binds_tag_instruction_experiment::<TagInstructionExperiment<'_>>();
+    binds_task_experiment::<TaskExperiment<'_>>();
 };
 
 // Compile-time proof that each bound implementor satisfies its port trait.

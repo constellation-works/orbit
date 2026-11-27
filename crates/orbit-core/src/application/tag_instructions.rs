@@ -47,9 +47,8 @@ pub(crate) enum TagInstructionFailure {
 /// This port is the way in: experiment implements it on
 /// [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds it.
 /// Selection, default suppression, role filtering and the combined prompt
-/// budget stay here. The query name stays distinct from the inherent method
-/// it forwards to, so the dependency guard can index that method.
-pub(in crate::application) trait TagInstructionExperimentPort {
+/// budget stay here. The adapter is bound in `app::port`.
+pub(crate) trait TagInstructionExperimentPort {
     /// Live overlays for `activity_name` of `run_id` and the task `input`
     /// names, in assignment order. Implemented by experiment.
     fn tag_instruction_experiment_overlays(
@@ -91,7 +90,8 @@ impl OrbitRuntime {
             }
         }
         .map_err(TagInstructionFailure::Refused)?;
-        let overlays = self.tag_instruction_experiment_overlays(run_id, activity_name, input)?;
+        let overlays = crate::app::port::TagInstructionExperiment(self)
+            .tag_instruction_experiment_overlays(run_id, activity_name, input)?;
         with_experiment_instructions(selected, &overlays, role)
     }
 

@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, Utc};
 use orbit_store::contract::ExperimentRecord;
 
-use crate::application::experiment::definition::{Kind, MetricSpec, metric_spec};
+use crate::app::experiment::definition::{Kind, MetricSpec, metric_spec};
 
 use super::model::{GuardrailArm, GuardrailReadout, ReadoutArm, ReadoutMetric, Verdict};
 

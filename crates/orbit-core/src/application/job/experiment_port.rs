@@ -8,8 +8,8 @@
 //! and claimed-leaf authorization validates the owner's capture. `experiment`
 //! owns all of that, and it reads tasks and the claimed leaf back and draws
 //! through the crew pools, so a direct call from here would close a cycle.
-//! This port is the way in: `experiment` implements it on
-//! [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds it.
+//! This port is the way in: `app::experiment` implements it and
+//! `app::port` binds the adapter.
 //! The pool value both sides name is
 //! [`ExperimentCrewPool`](crate::application::contracts::ExperimentCrewPool).
 
@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::application::contracts::ExperimentCrewPool;
 
 /// The experiment operations job code calls, implemented by `experiment`.
-pub(in crate::application) trait JobExperimentPort {
+pub(crate) trait JobExperimentPort {
     /// The crew pool of the task's existing live, crew-bearing assignment.
     /// Existing assignments only: eligibility must never enroll a task.
     /// Implemented by experiment.

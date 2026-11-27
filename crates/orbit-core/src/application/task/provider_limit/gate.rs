@@ -252,7 +252,7 @@ impl OrbitRuntime {
     /// legacy pin — rather than a purpose pool's, a complexity pool's, or the
     /// default's.
     pub(crate) fn explicit_task_crew(&self, task: &Task) -> Result<bool, OrbitError> {
-        if self.task_has_experiment_crew_pool(&task.id)? {
+        if crate::app::port::TaskExperiment(self).task_has_experiment_crew_pool(&task.id)? {
             return Ok(false);
         }
         let source = self.recorded_crew_source(task)?;

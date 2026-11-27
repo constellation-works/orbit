@@ -1,4 +1,5 @@
 use super::*;
+use orbit_core::app::experiment;
 use orbit_store::contract::V2AuditEventInsertParams;
 use orbit_types::workflow::{
     ExperimentOverlayRecord, TagInstructionRole, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
@@ -69,19 +70,19 @@ fn expired_instruction_experiment(
         }),
     ];
     arms.extend(extra_arms);
-    let experiment = runtime
-        .create_experiment(
-            "treatment-delivery",
-            ExperimentDefinitionInput {
-                arms: Some(Value::Array(arms)),
-                primary_metric: Some("total_tokens".into()),
-                min_sample: Some(100),
-                max_days: Some(1),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
+    let experiment = experiment::create_experiment(
+        &runtime,
+        "treatment-delivery",
+        ExperimentDefinitionInput {
+            arms: Some(Value::Array(arms)),
+            primary_metric: Some("total_tokens".into()),
+            min_sample: Some(100),
+            max_days: Some(1),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
     let workspace_id = runtime.workspace_id().unwrap();
     let store = runtime.sqlite_store().unwrap();
     let mut record = store
@@ -97,7 +98,7 @@ fn expired_instruction_experiment(
     record.experiment.revision += 1;
     assert_eq!(
         store
-            .write(|tx| orbit_core::application::experiment::write_experiment(
+            .write(|tx| orbit_core::app::experiment::write_experiment(
                 tx,
                 &ExperimentWrite {
                     event: ExperimentEventRow {
@@ -176,7 +177,7 @@ fn expired_instruction_experiment(
             },
         );
     }
-    runtime.experiment_readout(&experiment.id, None).unwrap()
+    experiment::experiment_readout(&runtime, &experiment.id, None).unwrap()
 }
 
 /// The exp-2b6d910d shape: the treatment arm's overlaid implement step

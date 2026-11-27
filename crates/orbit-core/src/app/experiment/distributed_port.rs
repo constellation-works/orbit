@@ -8,12 +8,14 @@ use orbit_types::workflow::CapturedExperiments;
 use crate::OrbitRuntime;
 use crate::application::distributed::DistributedExperimentPort;
 
-impl DistributedExperimentPort for OrbitRuntime {
+pub(crate) struct DistributedPort<'a>(pub(crate) &'a OrbitRuntime);
+
+impl DistributedExperimentPort for DistributedPort<'_> {
     fn capture_pull_experiments(
         &self,
         task: &Task,
         ship: &AdmissionShipContract,
     ) -> Result<CapturedExperiments, OrbitError> {
-        self.capture_claimed_task_experiments(task, ship)
+        super::overlay::capture_claimed_task_experiments(self.0, task, ship)
     }
 }

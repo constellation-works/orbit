@@ -47,7 +47,7 @@ pub(crate) use crew_draw::{
 pub use distributed_gate::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 pub use drain_entry::DrainEntryPoint;
 pub(crate) use engine_host::EngineHostPort;
-pub(in crate::application) use experiment::ExperimentCrewPool;
+pub(crate) use experiment::ExperimentCrewPool;
 pub(crate) use filing_tags::{
     CI_FAILURE_TAG, CODE_SCANNING_TAG, DEPENDABOT_TAG, RECONCILIATION_FOLLOW_UP_TAG_PREFIX,
 };

@@ -10,8 +10,8 @@ use orbit_engine::{V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::workflow::activity_job::{ActivityV2Spec, AgentLoopSpec, Provider};
 
 use super::*;
-use orbit_core::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+use orbit_core::app::experiment::{
+    self, ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_types::tool::WorkerInvocation;
 
@@ -55,26 +55,30 @@ fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
             actor: "fixture operator".into(),
             reason: None,
         };
-        let experiment = owner
-            .create_experiment(
-                "claimed-authority",
-                ExperimentDefinitionInput {
-                    mode: Some("live".into()),
-                    primary_metric: Some("total_tokens".into()),
-                    arms: Some(json!([
-                        {"name":"control","control":true},
-                        {"name":"treatment","overlay":{
-                            "crew":{"pool":[{"crew":"luna","weight":1}]}
-                        }}
-                    ])),
-                    ..Default::default()
-                },
-                actor.clone(),
-            )
-            .unwrap();
-        owner
-            .change_experiment(&experiment.id, ExperimentChange::Start, actor.clone())
-            .unwrap();
+        let experiment = experiment::create_experiment(
+            owner,
+            "claimed-authority",
+            ExperimentDefinitionInput {
+                mode: Some("live".into()),
+                primary_metric: Some("total_tokens".into()),
+                arms: Some(json!([
+                    {"name":"control","control":true},
+                    {"name":"treatment","overlay":{
+                        "crew":{"pool":[{"crew":"luna","weight":1}]}
+                    }}
+                ])),
+                ..Default::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+        experiment::change_experiment(
+            owner,
+            &experiment.id,
+            ExperimentChange::Start,
+            actor.clone(),
+        )
+        .unwrap();
         // Seed unforced enrollment to keep allocation deterministic while
         // exercising the public admission and readout boundaries below.
         for task in &pair.tasks {
@@ -82,7 +86,7 @@ fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
                 .sqlite_store()
                 .unwrap()
                 .write(|tx| {
-                    orbit_core::application::experiment::assign_experiments(
+                    orbit_core::app::experiment::assign_experiments(
                         tx,
                         &owner.workspace_id().unwrap(),
                         task,
@@ -158,7 +162,7 @@ fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
                 Arc::new(ToOwner(owner.clone())),
             )
             .unwrap();
-        owner.change_experiment(&experiment.id, end, actor).unwrap();
+        experiment::change_experiment(owner, &experiment.id, end, actor).unwrap();
         let second = pair.running_leaf(&drain, 2);
         let second_admission = pair.admission(&second);
         let receipt = second_admission.receipt.as_ref().unwrap();
@@ -273,7 +277,7 @@ fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
                 .as_deref(),
             Some("explicit")
         );
-        let readout = owner.experiment_readout(&experiment.id, None).unwrap();
+        let readout = experiment::experiment_readout(owner, &experiment.id, None).unwrap();
         let treatment = readout
             .arms
             .iter()
@@ -286,8 +290,7 @@ fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
             "the fresh suppressed claim cannot borrow its old owner's treatment; the settled original claim retains its actual treatment"
         );
         assert!(
-            pair.follower
-                .task_experiments(&claim.task_id)
+            experiment::task_experiments(&pair.follower, &claim.task_id)
                 .unwrap()
                 .is_empty()
         );
@@ -470,31 +473,35 @@ fn owner_disable_suppresses_claimed_memory_delivery() {
         actor: "fixture operator".into(),
         reason: None,
     };
-    let experiment = owner
-        .create_experiment(
-            "claimed-memory",
-            ExperimentDefinitionInput {
-                mode: Some("live".into()),
-                primary_metric: Some("total_tokens".into()),
-                arms: Some(json!([
-                    {"name":"control","control":true},
-                    {"name":"treatment","overlay":{"memory":{"roles":["implement"]}}}
-                ])),
-                ..Default::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    owner
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor.clone())
-        .unwrap();
+    let experiment = experiment::create_experiment(
+        owner,
+        "claimed-memory",
+        ExperimentDefinitionInput {
+            mode: Some("live".into()),
+            primary_metric: Some("total_tokens".into()),
+            arms: Some(json!([
+                {"name":"control","control":true},
+                {"name":"treatment","overlay":{"memory":{"roles":["implement"]}}}
+            ])),
+            ..Default::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    experiment::change_experiment(
+        owner,
+        &experiment.id,
+        ExperimentChange::Start,
+        actor.clone(),
+    )
+    .unwrap();
     write_note(owner, OWNER_NOTE);
     let task = &pair.tasks[0];
     owner
         .sqlite_store()
         .unwrap()
         .write(|tx| {
-            orbit_core::application::experiment::assign_experiments(
+            orbit_core::app::experiment::assign_experiments(
                 tx,
                 &owner.workspace_id().unwrap(),
                 task,
@@ -579,8 +586,8 @@ fn owner_disable_suppresses_claimed_memory_delivery() {
     assert_eq!(claimed_memory.deliveries[0].model, SOL_MODEL);
     assert_eq!(claimed_memory.deliveries[0].block.model[0].text, OWNER_NOTE);
 
-    assert!(!pair.follower.crew_memory_experiment_running());
-    assert!(owner.crew_memory_experiment_running());
+    assert!(!experiment::crew_memory_experiment_running(&pair.follower));
+    assert!(experiment::crew_memory_experiment_running(owner));
     point_codex_at(owner, &program);
     point_codex_at(&pair.follower, &program);
 
@@ -601,10 +608,8 @@ fn owner_disable_suppresses_claimed_memory_delivery() {
         "the leaf delivers the captured owner block while it runs no memory experiment: {delivered}"
     );
 
-    owner
-        .change_experiment(&experiment.id, ExperimentChange::Pause, actor)
-        .unwrap();
-    assert!(!owner.crew_memory_experiment_running());
+    experiment::change_experiment(owner, &experiment.id, ExperimentChange::Pause, actor).unwrap();
+    assert!(!experiment::crew_memory_experiment_running(owner));
     let suppressed = dispatch_envelope(&bound, &leaf, task, &stdin_path);
     assert!(
         suppressed.get("crew_memory").is_none(),

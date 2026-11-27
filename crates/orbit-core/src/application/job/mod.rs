@@ -57,7 +57,7 @@ pub use crew_pools::{TaskCrewBackfill, TaskCrewChange};
 pub(in crate::application) use drain_leaf_port::JobDrainLeafPort;
 pub(in crate::application) use drain_port::{JobDrainPort, JobPullSettlementPort};
 pub use exec::V2JobRunResult;
-pub(in crate::application) use experiment_port::JobExperimentPort;
+pub(crate) use experiment_port::JobExperimentPort;
 pub(crate) use orphan_adoption::AdoptionAuthority;
 pub use pilot_submit::{
     TaskPilotRefusal, TaskPilotSubmission, TaskPilotSubmissionDashboardView, TaskPilotSubmitError,

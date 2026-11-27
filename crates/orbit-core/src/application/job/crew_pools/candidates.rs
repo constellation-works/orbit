@@ -675,7 +675,10 @@ impl OrbitRuntime {
                 })
                 .transpose()
         };
-        if include_experiment && let Some(pool) = self.job_experiment_crew_pool(&task.id)? {
+        if include_experiment
+            && let Some(pool) =
+                crate::app::port::JobExperiment(self).job_experiment_crew_pool(&task.id)?
+        {
             return resolved(self.pool_member_candidates(&pool.entries, &pool.source, None)?)?
                 .ok_or_else(|| {
                     OrbitError::PolicyDenied(format!(

@@ -5,6 +5,7 @@
 
 use std::fs;
 
+use orbit_core::app::experiment;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, error_code, isolated, json_ok};
@@ -219,7 +220,7 @@ fn experiment_authoring_routes_are_operator_only_and_record_core_events() {
             seed_horizon(14);
             // The detail response exposes the ordinary horizon using the
             // same calendar and origin as the public runtime readout.
-            let ordinary = fixture.runtime.experiment_readout(&id, None).unwrap();
+            let ordinary = experiment::experiment_readout(&fixture.runtime, &id, None).unwrap();
             assert_eq!(
                 ordinary.experiment.horizon_at.as_deref(),
                 started["horizon_at"].as_str()
@@ -236,7 +237,7 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
     isolated(
         "experiments::experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary",
         || {
-            use orbit_core::application::experiment::{
+            use orbit_core::app::experiment::{
                 ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
             };
             use orbit_core::application::task::TaskAddParams;
@@ -257,24 +258,23 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
                 actor: "per-line-cumulative-test".into(),
                 reason: None,
             };
-            let experiment = runtime
-                .create_experiment(
-                    "per-line-cumulative",
-                    ExperimentDefinitionInput {
-                        arms: Some(json!([
-                            { "name": "control", "control": true, "weight": 1 },
-                            { "name": "treatment", "weight": 1 }
-                        ])),
-                        primary_metric: Some("cost_per_line".into()),
-                        guardrails: Some(json!({"lines_changed": "+0"})),
-                        min_sample: Some(2),
-                        ..ExperimentDefinitionInput::default()
-                    },
-                    actor.clone(),
-                )
-                .unwrap();
-            runtime
-                .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+            let experiment = experiment::create_experiment(
+                runtime,
+                "per-line-cumulative",
+                ExperimentDefinitionInput {
+                    arms: Some(json!([
+                        { "name": "control", "control": true, "weight": 1 },
+                        { "name": "treatment", "weight": 1 }
+                    ])),
+                    primary_metric: Some("cost_per_line".into()),
+                    guardrails: Some(json!({"lines_changed": "+0"})),
+                    min_sample: Some(2),
+                    ..ExperimentDefinitionInput::default()
+                },
+                actor.clone(),
+            )
+            .unwrap();
+            experiment::change_experiment(runtime, &experiment.id, ExperimentChange::Start, actor)
                 .unwrap();
 
             let mut seq = 0u64;
@@ -294,7 +294,7 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
                     .sqlite_store()
                     .unwrap()
                     .write(|tx| {
-                        orbit_core::application::experiment::assign_experiments(
+                        orbit_core::app::experiment::assign_experiments(
                             tx,
                             &workspace_id,
                             &task.id,

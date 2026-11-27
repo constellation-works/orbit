@@ -2,6 +2,7 @@
 //! memory is dormant, so no surface decides a proposal: an open one lapses
 //! after four weeks, and the read shows it closed then.
 
+use crate::app::experiment;
 use std::collections::BTreeSet;
 
 use chrono::{Duration, Utc};
@@ -39,7 +40,7 @@ struct ClosedBoardEntry {
 /// running experiment has a memory arm both lists are empty.
 #[cfg_attr(not(feature = "test-support"), allow(dead_code))]
 pub fn crew_memory_proposal_board(rt: &OrbitRuntime) -> Result<Value, OrbitError> {
-    if !rt.crew_memory_experiment_running() {
+    if !experiment::crew_memory_experiment_running(rt) {
         return Ok(json!({
             "enabled": false,
             "open": [],

@@ -135,7 +135,7 @@ pub(crate) use escalation_triage_steps::PILOT_WARNING_TRIAGED_EVENT;
 pub(crate) use escalation_triage_steps::{PilotWarningCandidacy, pilot_warning_candidacy};
 pub use escalation_triage_steps::{PilotWarningDecision, PilotWarningTriageRequest};
 pub(crate) use evolution_port::TaskEvolutionPort;
-pub(in crate::application) use experiment_port::TaskExperimentPort;
+pub(crate) use experiment_port::TaskExperimentPort;
 pub(crate) use final_recovery::TERMINAL_REFUSAL_MARK;
 pub use final_recovery::{
     FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryOutcome,

@@ -23,7 +23,7 @@ VCS = "crates/orbit-engine/src/executor/automation/vcs"
 # Directories the architecture scan walks, even in a small manifest fixture.
 SCAN_DIRECTORIES = (
     "crates/orbit-core/src/app/agent",
-    f"{CORE_APPLICATION}/experiment",
+    "crates/orbit-core/src/app/experiment",
     f"{CORE_APPLICATION}/contracts",
     f"{CORE_APPLICATION}/task",
     f"{CORE_APPLICATION}/job",

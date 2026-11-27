@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::app::agent::AgentQuery;
-use orbit_core::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
+use orbit_core::app::experiment::{
+    self, ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::job::TaskPilotSubmitError;
 use orbit_core::application::task::{
@@ -530,25 +530,23 @@ fn an_experiment_arm_cannot_draw_a_human_crew() {
         reason: None,
     };
     let overlay = json!({ "crew": { "pool": [{ "crew": "sol", "weight": 1 }, { "crew": "dk", "weight": 1 }] } });
-    let experiment = fx
-        .runtime
-        .create_experiment(
-            "human-arm",
-            ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true },
-                    { "name": "treatment", "overlay": overlay }
-                ])),
-                primary_metric: Some("total_tokens".into()),
-                ..ExperimentDefinitionInput::default()
-            },
-            actor.clone(),
-        )
-        .unwrap();
-    let refusal = fx
-        .runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
-        .expect_err("a human crew in an arm pool refuses the start");
+    let experiment = experiment::create_experiment(
+        &fx.runtime,
+        "human-arm",
+        ExperimentDefinitionInput {
+            arms: Some(json!([
+                { "name": "control", "control": true },
+                { "name": "treatment", "overlay": overlay }
+            ])),
+            primary_metric: Some("total_tokens".into()),
+            ..ExperimentDefinitionInput::default()
+        },
+        actor.clone(),
+    )
+    .unwrap();
+    let refusal =
+        experiment::change_experiment(&fx.runtime, &experiment.id, ExperimentChange::Start, actor)
+            .expect_err("a human crew in an arm pool refuses the start");
     let message = refusal.to_string();
     assert!(message.contains("which is a human crew"), "{message}");
     assert!(message.contains("arm `treatment`"), "{message}");

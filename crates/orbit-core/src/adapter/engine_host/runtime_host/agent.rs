@@ -1,5 +1,6 @@
 //! Provider configuration and activity instructions at the engine boundary.
 
+use crate::app::experiment;
 use orbit_engine::DispatchError;
 use orbit_types::workflow::{ExperimentActivityOverlay, TagInstruction};
 use serde_json::Value;
@@ -61,7 +62,7 @@ pub(super) fn experiment_overlays_for_activity(
     input: &Value,
     model: Option<&str>,
 ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
-    OrbitRuntime::experiment_overlays_for_activity(runtime, run_id, activity_name, input, model)
+    experiment::experiment_overlays_for_activity(runtime, run_id, activity_name, input, model)
         .map_err(|failure| match failure {
             TagInstructionFailure::Store(error) => DispatchError::CliInvocationFailed(format!(
                 "load experiment overlays for `{activity_name}` (run {run_id}): {error}"

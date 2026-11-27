@@ -1663,14 +1663,14 @@ fi
 # task writes, so a decision answer applies a resident grant, and a task
 # comment write admits a resident record and refuses one needing redaction,
 # only through `TaskResidentPort`, which `resident` implements on
-# `OrbitRuntime`. `experiment` sits outside the order but above `task`
+# `OrbitRuntime`. `app::experiment` sits outside the order but above `task`
 # [ORB-23015]: it reads tasks and their crew source back, so task show's
 # assignment readout and the provider-limit gate's experiment-pool check go
-# only through `TaskExperimentPort`, which `experiment` implements on
-# `OrbitRuntime`. `app::agent` reads decision rules, task history and tasks back,
-# and reads blobs through `task::base_revision`. Task reaches it only through
+# only through `TaskExperimentPort`, bound in `app::port`. `app::agent` reads
+# decision rules, task history, tasks and blobs through `task::base_revision`.
+# Task reaches it only through
 # `TaskCorpusPort`, implemented on `app::agent::TaskPort` and bound in `app::port`.
-task_upper_modules='experiment|job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|resident'
+task_upper_modules='job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions|resident'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
@@ -1683,7 +1683,7 @@ if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, resident and experiment through its task ports, and must not name tag_instructions or backlog_forecast"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing, workspace_auto, and resident through its task ports, and must not name tag_instructions or backlog_forecast"
   fail=1
 fi
 
@@ -1695,7 +1695,7 @@ fi
 # [ORB-28427] `notice`, `search`, `evolution` and `crew_memory` live in `app/`,
 # above `task`. `task` reaches `notice` and `evolution` only through
 # `TaskNoticePort` and `TaskEvolutionPort`, bound in `app/port.rs`, and must
-# never name any of those four apps directly. Those four apps must not import
+# never name any of those four apps directly. Those apps must not import
 # `adapter` or `bootstrap`.
 for moved_app in notice search evolution crew_memory; do
   if [[ ! -d "$core_src/app/$moved_app" ]]; then
@@ -1742,19 +1742,19 @@ fi
 # tree, a `super::` chain out of `job` into any of them, or a call to an
 # inherent method they define (derived from their `impl OrbitRuntime`
 # blocks [ORB-22003]) is a reintroduced edge. Their free functions are
-# reachable only by the paths these checks refuse. `experiment` sits above
+# reachable only by the paths these checks refuse. `app::experiment` sits above
 # `job` [ORB-23015]: crew admission, fresh claim routing, claimed-leaf crew
 # installation and claimed-leaf capture validation reach it only through
 # `JobExperimentPort`, and the pool they read is the
 # `contracts::ExperimentCrewPool` value.
-job_upper_modules='admission|experiment|automation|backlog_forecast|review|sweep_filing|workspace_auto'
+job_upper_modules='admission|automation|backlog_forecast|review|sweep_filing|workspace_auto'
 if dependency_matches -n "crate::application::(${job_upper_modules})\\b" \
   "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
   dependency_matches -n -U "crate::application::\\{[^}]*\\b(${job_upper_modules})\\b" \
     "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
   ! inherent_calls_into "$app_src" job "$job_upper_modules" '' '' ||
   ! super_chains_into "$app_src" job "$job_upper_modules"; then
-  echo "orbit-core job must reach review, automation, admission, workspace_auto and experiment through its job ports"
+  echo "orbit-core job must reach review, automation, admission, and workspace_auto through its job ports"
   fail=1
 fi
 
@@ -1819,60 +1819,28 @@ if dependency_matches -n 'crate::application::auto_tasks\b' \
   fail=1
 fi
 
-# [ORB-22416] `experiment` sits outside the order, above `distributed`: its
-# readout reads the claim receipt `distributed` owns, so the owner's capture of a
-# claimed task's experiments reaches `distributed` only through
-# `distributed::DistributedExperimentPort`, which `experiment` implements on
-# `OrbitRuntime`. A path, a grouped tree, a `super::` chain into `experiment`,
-# or a call to an inherent method it defines (names derived, so the port method
-# keeps a distinct name) is a reintroduced edge. The reverse edge, `experiment`
-# reading the claim receipt, stays legal.
-if dependency_matches -n 'crate::application::experiment\b' \
-  "$app_src/distributed" -g '*.rs' -g '!**/tests/**' ||
-  dependency_matches -n -U 'crate::application::\{[^}]*\bexperiment\b' \
-    "$app_src/distributed" -g '*.rs' -g '!**/tests/**' ||
-  ! inherent_calls_into "$app_src" distributed experiment '' '' ||
-  ! super_chains_into "$app_src" distributed experiment; then
-  echo "orbit-core distributed must reach experiment through distributed::DistributedExperimentPort and must not call its inherent methods"
+# app::experiment reads tasks, runs, claim receipts, tag instructions and agent
+# facts. Lower modules that need experiment operations use their own ports
+# bound in app::port. Agent facts have no dependency on experiment.
+if ! super_chains_into "$core_src/app" experiment 'crate::adapter|crate::bootstrap|crate::composition' named-path ||
+  ! inherent_calls_into "$core_src/app" experiment 'adapter|bootstrap|composition' '' '' "$core_src"; then
+  echo "orbit-core app::experiment must not name adapter, bootstrap or composition or call their inherent OrbitRuntime methods"
   fail=1
 fi
 
-# Experiment readout consumes agent facts; `app::agent` must not reach back into
-# experiment by path or by an inherent OrbitRuntime method it owns.
-if [[ ! -d "$core_src/app/agent" ]]; then
-  echo "dependency scan path missing: $core_src/app/agent" >&2
-  exit 1
-fi
-if dependency_matches -n 'crate::application::experiment\b' \
-  "$core_src/app/agent" -g '*.rs' -g '!**/tests/**' ||
-  dependency_matches -n -U 'crate::application::\{[^}]*\bexperiment\b' \
-    "$core_src/app/agent" -g '*.rs' -g '!**/tests/**' ||
-  ! inherent_calls_into "$core_src/app" agent experiment '' '' "$app_src" ||
-  ! super_chains_into "$core_src/app" agent 'crate::application::experiment' named-path; then
-  echo "orbit-core app::agent must not name experiment or call its inherent methods"
+experiment_path='crate::app::experiment'
+for experiment_consumer in task job distributed tag_instructions.rs; do
+  if ! super_chains_into "$app_src" "$experiment_consumer" "$experiment_path" named-path; then
+    echo "orbit-core ${experiment_consumer%.rs} must reach app::experiment through its experiment port bound in app::port"
+    fail=1
+  fi
+done
+if ! super_chains_into "$core_src/app" agent "$experiment_path" named-path; then
+  echo "orbit-core app::agent must not name app::experiment"
   fail=1
 fi
-
-# [ORB-23019] `experiment` sits above `tag_instructions`: its overlays read
-# `LazyRevision`, `TagInstructionFailure` and `read_blob_at`, and call
-# `claim_base_revision`. Tag instructions reach overlay policy only through
-# `tag_instructions::TagInstructionExperimentPort`, which `experiment`
-# implements on `OrbitRuntime`. `tag_instructions` is one file, so the caller
-# scan names that file. A path, a grouped tree, a `super::` chain into
-# `experiment`, or a call to an inherent method it defines (names derived, so
-# the port method keeps a distinct name) is a reintroduced edge. The reverse
-# edge, experiment reading tag-instruction helpers, stays legal.
-if [[ ! -f "$app_src/tag_instructions.rs" ]]; then
-  echo "dependency scan path missing: $app_src/tag_instructions.rs" >&2
-  exit 1
-fi
-if dependency_matches -n 'crate::application::experiment\b' \
-  "$app_src/tag_instructions.rs" ||
-  dependency_matches -n -U 'crate::application::\{[^}]*\bexperiment\b' \
-    "$app_src/tag_instructions.rs" ||
-  ! inherent_calls_into "$app_src" tag_instructions.rs experiment '' '' ||
-  ! super_chains_into "$app_src" tag_instructions.rs experiment; then
-  echo "orbit-core tag_instructions must reach experiment through tag_instructions::TagInstructionExperimentPort and must not call its inherent methods"
+if ! super_chains_into "$core_src/runtime" "" "$experiment_path" named-path; then
+  echo "orbit-core runtime must not name app::experiment"
   fail=1
 fi
 

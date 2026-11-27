@@ -11,6 +11,7 @@
 //! unbound agent session and a task's `granted_tools` admit nothing. The
 //! same rules decide which runs' activities list the tools at all.
 
+use crate::app::experiment;
 use std::collections::BTreeSet;
 
 use chrono::{SubsecRound, Utc};
@@ -218,7 +219,7 @@ pub fn crew_memory_tool_show(
         // The routine grants a dreaming task `show` to keep it on the
         // owner; its run keeps the dreaming scope.
         Some(key) => key,
-        None if rt.task_in_memory_arm(&task.id)? => {
+        None if experiment::task_in_memory_arm(rt, &task.id)? => {
             memory_key(caller.model.as_deref()).ok_or_else(|| {
                 refused(
                     "crew memory show refused: this run records no model, and a run with no recorded model has no memory",
@@ -439,7 +440,7 @@ pub(crate) fn crew_memory_tool_suppressions(
     let mut memory_arm = false;
     if !dreaming {
         for task in tasks {
-            if rt.task_in_memory_arm(&task.id)? {
+            if experiment::task_in_memory_arm(rt, &task.id)? {
                 memory_arm = true;
                 break;
             }

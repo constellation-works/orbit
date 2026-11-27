@@ -26,12 +26,12 @@ use orbit_types::workflow::JobRunTrigger;
 
 use super::{Command, Operation};
 use crate::app::codebase::{self, TaskRiskinessModel};
-use crate::app::search::GlobalSearchResponse;
-use crate::application::change_watch::RunStateStamp;
-use crate::application::experiment::{
-    ExperimentActor, ExperimentChange, ExperimentDefinitionInput, ExperimentProgress,
+use crate::app::experiment::{
+    self, ExperimentActor, ExperimentChange, ExperimentDefinitionInput, ExperimentProgress,
     ExperimentReadout, ExperimentView,
 };
+use crate::app::search::GlobalSearchResponse;
+use crate::application::change_watch::RunStateStamp;
 use crate::application::job::scripts::grant_request::ScriptGrantOverview;
 use crate::application::job::{
     EscalationTriageSubmitError, TaskAutoFixError, TaskPilotSubmission, TaskPilotSubmitError,
@@ -286,26 +286,26 @@ dashboard_reads! {
         ));
     /// Each experiment's progress.
     experiment_progress() -> Vec<ExperimentProgress> = "experiment-progress",
-        |rt| rt.experiment_progress();
+        |rt| experiment::experiment_progress(rt);
     /// One experiment.
     experiment_view(id_or_name: &'a str) -> ExperimentView = "experiment-view",
-        |rt| rt.experiment_view(id_or_name);
+        |rt| experiment::experiment_view(rt, id_or_name);
     /// One experiment's readout.
     experiment_readout(id_or_name: &'a str, metric: Option<&'a str>) -> ExperimentReadout
         = "experiment-readout",
-        |rt| rt.experiment_readout(id_or_name, metric);
+        |rt| experiment::experiment_readout(rt, id_or_name, metric);
     /// Create an experiment.
     create_experiment(name: &'a str, input: ExperimentDefinitionInput, by: ExperimentActor)
         -> ExperimentView = "experiment-create",
-        |rt| rt.create_experiment(name, input, by);
+        |rt| experiment::create_experiment(rt, name, input, by);
     /// Replace an experiment's definition.
     update_experiment(id_or_name: &'a str, input: ExperimentDefinitionInput, by: ExperimentActor)
         -> ExperimentView = "experiment-update",
-        |rt| rt.update_experiment(id_or_name, input, by);
+        |rt| experiment::update_experiment(rt, id_or_name, input, by);
     /// Change an experiment's state.
     change_experiment(id_or_name: &'a str, change: ExperimentChange, by: ExperimentActor)
         -> ExperimentView = "experiment-change",
-        |rt| rt.change_experiment(id_or_name, change, by);
+        |rt| experiment::change_experiment(rt, id_or_name, change, by);
     /// The auto-concurrency settings.
     auto_concurrency_settings() -> AutoConcurrencySettings = "auto-concurrency-settings",
         |rt| Ok(rt.auto_concurrency_settings());
