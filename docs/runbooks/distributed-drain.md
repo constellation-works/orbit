@@ -1280,9 +1280,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   same holds the other way round: an owner-local run held for a red base, a
   missing validation tool or a provider failure pushes its candidate to
   `refs/orbit/candidates/<task>/<run>` too, and the task's next claim on any
-  host continues it. When that push fails, the hold comment says the
-  candidate is host-local and quotes the push error, and a claim on another
-  host implements fresh with a `not_durable` reason. Carried refs are not
+  host continues it. When that push fails, the candidate is host-local: the
+  hold's `candidate_held` history entry records the push error as
+  `carry_failure` (a provider-failure hold's comment quotes it as well), and
+  a claim on another host implements fresh with a `not_durable` reason. Carried refs are not
   deleted automatically; once a task is done, prune them on `origin` with
   `git push origin --delete refs/orbit/candidates/<task>/<run>`, listing
   them with `git ls-remote origin 'refs/orbit/candidates/*'`. A task

@@ -653,8 +653,14 @@ pub(super) fn hold_child_timeout_candidate<
 /// [ORB-14905] Any host may run the task next, so the candidate is pushed to
 /// its durable ref on `origin` and recorded in the task's history; admission
 /// hands it to the task's next claim, and a run on this host finds it in this
-/// handoff's output. When the push is refused the hold still happens, and its
-/// output says the candidate is host-local.
+/// handoff's output. When the push is refused the hold still happens.
+///
+/// The hold comment is one line that names the run; it does not repeat where
+/// the candidate is. Read that from the structured evidence instead. The
+/// output's `carry` is `durable` with `durable_ref` naming the ref, or `failed`
+/// with `carry_failure` holding the push diagnostic and no ref, which leaves
+/// the candidate on this host. The `candidate_held` history entry's typed
+/// `CandidateHeld` decision carries the same `durable_ref` and `carry_failure`.
 pub(super) fn hold_baseline_red_candidate<
     H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
 >(
