@@ -5,6 +5,7 @@
 //! bounded nextest causal blocks, preserving diagnostics and explicit
 //! omissions even across oversized UTF-8 output [ORB-14086] [ORB-16045].
 
+use crate::test_support::impl_test_host;
 use std::path::Path;
 
 use orbit_types::workflow::RequiredValidationFailureKind;
@@ -23,7 +24,11 @@ const EMPTY_PATH: &str = "/nonexistent-orbit-path";
 
 struct CaptureHost;
 
-impl crate::test_support::NullRuntimeHost for CaptureHost {}
+impl_test_host! { impl HostEnvironment for CaptureHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for CaptureHost {}
+}
 
 fn tool(exit_code: i32, output: &str) -> Option<Option<String>> {
     missing_tool(Some(exit_code), output, EMPTY_PATH).map(|missing| missing.tool)

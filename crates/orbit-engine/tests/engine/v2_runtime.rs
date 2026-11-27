@@ -14,6 +14,7 @@ mod worktree_failure;
 use orbit_agent::loop_engine::InMemorySink;
 use orbit_common::OrbitError;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_job_asset};
+use orbit_engine::test_support::impl_test_host;
 use orbit_engine::{
     DispatchError, JobOutcome, ReviewerInvocationRequest, V2AuditWriter, V2DispatchInput,
     V2SqliteSink, dispatch_v2_activity, execute_job_with_resume,
@@ -144,52 +145,70 @@ impl GraphHost {
         self.peak_in_flight.load(Ordering::SeqCst)
     }
 }
-impl orbit_engine::test_support::NullRuntimeHost for GraphHost {
-    fn checkpoint_step(
-        &self,
-        _run_id: &str,
-        step_index: u32,
-        _step_id: &str,
-        output: &Value,
-        compound_outputs: &BTreeMap<String, Value>,
-        _: &std::collections::BTreeMap<
-            String,
-            orbit_types::workflow::activity_job::ScriptOutputSet,
-        >,
-    ) -> Result<(), DispatchError> {
-        let mut compounds = self.compound_outputs.lock().unwrap();
-        compounds.insert(step_index, compound_outputs.clone());
-        let mut checkpoints = self.checkpoints.lock().expect("checkpoints");
-        checkpoints.insert(step_index, output.clone());
-        Ok(())
-    }
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        assert_eq!(action, "probe", "graph fixtures dispatch only `probe`");
-        self.calls.lock().expect("call log").push(input.clone());
-        let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-        self.peak_in_flight.fetch_max(in_flight, Ordering::SeqCst);
-        let flag = |name: &str| input[name] == json!(true) || input[name] == json!("true");
-        let sleep_ms = input["sleep_ms"]
-            .as_u64()
-            .or_else(|| input["sleep_ms"].as_str().and_then(|ms| ms.parse().ok()))
-            .unwrap_or(0);
-        std::thread::sleep(Duration::from_millis(sleep_ms));
-        self.in_flight.fetch_sub(1, Ordering::SeqCst);
-        assert!(!flag("panic"), "probe panicked for {}", input["label"]);
-        if flag("fail") {
-            return Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: format!("probe failed for {}", input["label"]),
-            });
+
+impl_test_host! {
+    impl Dispatch for GraphHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            assert_eq!(action, "probe", "graph fixtures dispatch only `probe`");
+            self.calls.lock().expect("call log").push(input.clone());
+            let in_flight = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+            let flag = |name: &str| input[name] == json!(true) || input[name] == json!("true");
+            let sleep_ms = input["sleep_ms"]
+                .as_u64()
+                .or_else(|| input["sleep_ms"].as_str().and_then(|ms| ms.parse().ok()))
+                .unwrap_or(0);
+            std::thread::sleep(Duration::from_millis(sleep_ms));
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            assert!(!flag("panic"), "probe panicked for {}", input["label"]);
+            if flag("fail") {
+                return Err(DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: format!("probe failed for {}", input["label"]),
+                });
+            }
+            Ok(input.clone())
         }
-        Ok(input.clone())
     }
+}
+
+impl_test_host! { impl HostEnvironment for GraphHost {} }
+
+impl_test_host! { impl RunLifecycle for GraphHost {} }
+
+impl_test_host! {
+    impl Recovery for GraphHost {
+        fn checkpoint_step(
+            &self,
+            _run_id: &str,
+            step_index: u32,
+            _step_id: &str,
+            output: &Value,
+            compound_outputs: &BTreeMap<String, Value>,
+            _: &std::collections::BTreeMap<
+                String,
+                orbit_types::workflow::activity_job::ScriptOutputSet,
+            >,
+        ) -> Result<(), DispatchError> {
+            let mut compounds = self.compound_outputs.lock().unwrap();
+            compounds.insert(step_index, compound_outputs.clone());
+            let mut checkpoints = self.checkpoints.lock().expect("checkpoints");
+            checkpoints.insert(step_index, output.clone());
+            Ok(())
+        }
+    }
+}
+
+impl_test_host! { impl ReviewGate for GraphHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for GraphHost {}
 }
 
 /// A host that records every action and answers with `respond`.
@@ -197,20 +216,54 @@ struct StubHost<F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Syn
     calls: Mutex<Vec<String>>,
     respond: F,
 }
-impl<F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync>
-    orbit_engine::test_support::NullRuntimeHost for StubHost<F>
-{
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _: &Value,
-        input: &Value,
-        _: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls.lock().unwrap().push(action.to_string());
-        (self.respond)(action, input)
+
+impl_test_host! {
+    impl [
+        <F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync>
+    ] Dispatch for StubHost<F> {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            input: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls.lock().unwrap().push(action.to_string());
+            (self.respond)(action, input)
+        }
     }
 }
+
+impl_test_host! {
+    impl [
+        <F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync>
+    ] HostEnvironment for StubHost<F> {}
+}
+
+impl_test_host! {
+    impl [
+        <F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync>
+    ] RunLifecycle for StubHost<F> {}
+}
+
+impl_test_host! {
+    impl [
+        <F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync>
+    ] Recovery for StubHost<F> {}
+}
+
+impl_test_host! {
+    impl [
+        <F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync>
+    ] ReviewGate for StubHost<F> {}
+}
+
+impl_test_host! {
+    impl [
+        <F: Fn(&str, &Value) -> Result<Value, DispatchError> + Send + Sync>
+    ] RuntimeHostProcessEnvironment for StubHost<F> {}
+}
+
 struct ScriptedHost {
     implement_output: Value,
     calls: Mutex<Vec<(String, Value)>>,
@@ -243,24 +296,39 @@ impl ScriptedHost {
         actions
     }
 }
-impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _: &Value,
-        input: &Value,
-        _: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .expect("call log")
-            .push((action.to_string(), input.clone()));
-        if action == "implement" {
-            Ok(self.implement_output.clone())
-        } else {
-            Ok(json!({}))
+
+impl_test_host! {
+    impl Dispatch for ScriptedHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            input: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls
+                .lock()
+                .expect("call log")
+                .push((action.to_string(), input.clone()));
+            if action == "implement" {
+                Ok(self.implement_output.clone())
+            } else {
+                Ok(json!({}))
+            }
         }
     }
+}
+
+impl_test_host! { impl HostEnvironment for ScriptedHost {} }
+
+impl_test_host! { impl RunLifecycle for ScriptedHost {} }
+
+impl_test_host! { impl Recovery for ScriptedHost {} }
+
+impl_test_host! { impl ReviewGate for ScriptedHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ScriptedHost {}
 }
 
 /// Serves the stub gate steps, a reviewer that fails its first `failures`
@@ -285,52 +353,82 @@ impl ReviewerHost {
         self.invocations.lock().expect("invocations").clone()
     }
 }
-impl orbit_engine::test_support::NullRuntimeHost for ReviewerHost {
-    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "worktree" => {
-                Ok(json!({"job_run_id": "review-run", "workspace_path": "/worktrees/review-run"}))
-            }
-            "review_gate_admit" => Ok(
-                json!({"applies": true, "decision": "admitted", "first_task_id": "T-1", "attempt_id": "rvw-1", "lineage_key": "lineage-1", "manifest_artifact": "review-manifest.json", "report_artifact": "review-report.json", "reviewer": {"crew": "reviewers"}}),
-            ),
-            REVIEWER => {
-                self.calls.lock().expect("call log").push(REVIEWER);
-                let mut failures_left = self.failures_left.lock().expect("failures");
-                if *failures_left == 0 {
-                    return Ok(json!({ "summary": "reviewed", "verdict": "accept" }));
+
+impl_test_host! {
+    impl Dispatch for ReviewerHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            _input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            match action {
+                "worktree" => Ok(
+                    json!({"job_run_id": "review-run", "workspace_path": "/worktrees/review-run"}),
+                ),
+                "review_gate_admit" => Ok(
+                    json!({
+                        "applies": true,
+                        "decision": "admitted",
+                        "first_task_id": "T-1",
+                        "attempt_id": "rvw-1",
+                        "lineage_key": "lineage-1",
+                        "manifest_artifact": "review-manifest.json",
+                        "report_artifact": "review-report.json",
+                        "reviewer": {"crew": "reviewers"},
+                    }),
+                ),
+                REVIEWER => {
+                    self.calls.lock().expect("call log").push(REVIEWER);
+                    let mut failures_left = self.failures_left.lock().expect("failures");
+                    if *failures_left == 0 {
+                        return Ok(json!({ "summary": "reviewed", "verdict": "accept" }));
+                    }
+                    *failures_left = failures_left.saturating_sub(1);
+                    Err(DispatchError::CliInvocationFailed(
+                        "provider overloaded".to_string(),
+                    ))
                 }
-                *failures_left = failures_left.saturating_sub(1);
-                Err(DispatchError::CliInvocationFailed(
-                    "provider overloaded".to_string(),
-                ))
+                RECOVERY => {
+                    self.calls.lock().expect("call log").push(RECOVERY);
+                    Ok(json!({ "recovered": true }))
+                }
+                other => panic!("unexpected action `{other}`"),
             }
-            RECOVERY => {
-                self.calls.lock().expect("call log").push(RECOVERY);
-                Ok(json!({ "recovered": true }))
-            }
-            other => panic!("unexpected action `{other}`"),
         }
     }
-    fn record_reviewer_invocation(
-        &self,
-        request: &ReviewerInvocationRequest,
-    ) -> Result<Option<u64>, OrbitError> {
-        self.invocations
-            .lock()
-            .expect("invocations")
-            .push(request.clone());
-        Ok(None)
+}
+
+impl_test_host! { impl HostEnvironment for ReviewerHost {} }
+
+impl_test_host! { impl RunLifecycle for ReviewerHost {} }
+
+impl_test_host! {
+    impl Recovery for ReviewerHost {
+        fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+            Ok(None)
+        }
     }
+}
+
+impl_test_host! {
+    impl ReviewGate for ReviewerHost {
+        fn record_reviewer_invocation(
+            &self,
+            request: &ReviewerInvocationRequest,
+        ) -> Result<Option<u64>, OrbitError> {
+            self.invocations
+                .lock()
+                .expect("invocations")
+                .push(request.clone());
+            Ok(None)
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ReviewerHost {}
 }
 
 /// [ORB-13115] A deterministic step's binding comes from the dispatch, not its tool arguments.
@@ -341,32 +439,50 @@ fn a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_ar
     struct BindingHost {
         seen: Mutex<Option<ToolContext>>,
     }
-    impl orbit_engine::test_support::NullRuntimeHost for BindingHost {
-        fn tool_context_for_activity(
-            &self,
-            run_id: Option<&str>,
-            _: Option<&str>,
-            _: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-            _: Option<&[String]>,
-        ) -> ToolContext {
-            ToolContext {
-                activity_binding: run_id.map(|job_run_id| ActivityBinding {
-                    job_run_id: job_run_id.to_string(),
-                    task_id: None,
-                }),
-                ..ToolContext::default()
+
+    impl_test_host! {
+        impl Dispatch for BindingHost {
+            fn run_deterministic(
+                &self,
+                _: &str,
+                _: &Value,
+                _: &Value,
+                tool_context: ToolContext,
+            ) -> Result<Value, DispatchError> {
+                *self.seen.lock().expect("seen") = Some(tool_context);
+                Ok(json!({}))
             }
         }
-        fn run_deterministic(
-            &self,
-            _: &str,
-            _: &Value,
-            _: &Value,
-            tool_context: ToolContext,
-        ) -> Result<Value, DispatchError> {
-            *self.seen.lock().expect("seen") = Some(tool_context);
-            Ok(json!({}))
+    }
+
+    impl_test_host! { impl HostEnvironment for BindingHost {} }
+
+    impl_test_host! { impl RunLifecycle for BindingHost {} }
+
+    impl_test_host! {
+        impl Recovery for BindingHost {
+            fn tool_context_for_activity(
+                &self,
+                run_id: Option<&str>,
+                _: Option<&str>,
+                _: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+                _: Option<&[String]>,
+            ) -> ToolContext {
+                ToolContext {
+                    activity_binding: run_id.map(|job_run_id| ActivityBinding {
+                        job_run_id: job_run_id.to_string(),
+                        task_id: None,
+                    }),
+                    ..ToolContext::default()
+                }
+            }
         }
+    }
+
+    impl_test_host! { impl ReviewGate for BindingHost {} }
+
+    impl_test_host! {
+        impl RuntimeHostProcessEnvironment for BindingHost {}
     }
     let spec = scripted_activity("plugin.tool_call").spec;
     let sink: Arc<dyn AuditSink> = Arc::new(NullSink);
@@ -982,53 +1098,72 @@ fn incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpo
             self.calls.lock().unwrap().clone()
         }
     }
-    impl orbit_engine::test_support::NullRuntimeHost for DiagnosticHost {
-        fn run_deterministic(
-            &self,
-            action: &str,
-            _: &Value,
-            _: &Value,
-            _: orbit_tools::ToolContext,
-        ) -> Result<Value, DispatchError> {
-            self.calls.lock().unwrap().push(action.to_string());
-            match action {
-                "probe_rebase" => match self.conflict.lock().unwrap().take() {
-                    Some(conflict) => {
-                        Err(DispatchError::RecoverableVcsConflict(Box::new(conflict)))
-                    }
-                    None => Ok(json!({"rebased": true})),
-                },
-                "resolve_conflict" => Ok(json!({})),
-                _ => panic!("unexpected action {action}"),
+
+    impl_test_host! {
+        impl Dispatch for DiagnosticHost {
+            fn run_deterministic(
+                &self,
+                action: &str,
+                _: &Value,
+                _: &Value,
+                _: orbit_tools::ToolContext,
+            ) -> Result<Value, DispatchError> {
+                self.calls.lock().unwrap().push(action.to_string());
+                match action {
+                    "probe_rebase" => match self.conflict.lock().unwrap().take() {
+                        Some(conflict) => {
+                            Err(DispatchError::RecoverableVcsConflict(Box::new(conflict)))
+                        }
+                        None => Ok(json!({"rebased": true})),
+                    },
+                    "resolve_conflict" => Ok(json!({})),
+                    _ => panic!("unexpected action {action}"),
+                }
             }
         }
-        fn checkpoint_step_diagnostic(
-            &self,
-            _: &str,
-            step_id: &str,
-            output: &Value,
-        ) -> Result<(), DispatchError> {
-            let mut state = self.state.lock().unwrap();
-            state.record_pipeline_output(step_id, output.clone());
-            Ok(())
+    }
+
+    impl_test_host! { impl HostEnvironment for DiagnosticHost {} }
+
+    impl_test_host! { impl RunLifecycle for DiagnosticHost {} }
+
+    impl_test_host! {
+        impl Recovery for DiagnosticHost {
+            fn checkpoint_step_diagnostic(
+                &self,
+                _: &str,
+                step_id: &str,
+                output: &Value,
+            ) -> Result<(), DispatchError> {
+                let mut state = self.state.lock().unwrap();
+                state.record_pipeline_output(step_id, output.clone());
+                Ok(())
+            }
+
+            fn checkpoint_step(
+                &self,
+                _: &str,
+                index: u32,
+                step_id: &str,
+                output: &Value,
+                _: &BTreeMap<String, Value>,
+                _: &std::collections::BTreeMap<
+                    String,
+                    orbit_types::workflow::activity_job::ScriptOutputSet,
+                >,
+            ) -> Result<(), DispatchError> {
+                let mut state = self.state.lock().unwrap();
+                state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+                state.record_pipeline_output(step_id, output.clone());
+                Ok(())
+            }
         }
-        fn checkpoint_step(
-            &self,
-            _: &str,
-            index: u32,
-            step_id: &str,
-            output: &Value,
-            _: &BTreeMap<String, Value>,
-            _: &std::collections::BTreeMap<
-                String,
-                orbit_types::workflow::activity_job::ScriptOutputSet,
-            >,
-        ) -> Result<(), DispatchError> {
-            let mut state = self.state.lock().unwrap();
-            state.record_step(index, JobRunState::Success, Some(output.clone()), None);
-            state.record_pipeline_output(step_id, output.clone());
-            Ok(())
-        }
+    }
+
+    impl_test_host! { impl ReviewGate for DiagnosticHost {} }
+
+    impl_test_host! {
+        impl RuntimeHostProcessEnvironment for DiagnosticHost {}
     }
     let conflict = |path: &str, resolvable: bool| RecoverableVcsConflict {
         operation: "git_rebase".into(),
@@ -1510,7 +1645,7 @@ fn run_job_resume(
     job: &orbit_types::workflow::JobV2,
     input: Value,
     run_id: &str,
-    host: &impl orbit_engine::test_support::NullRuntimeHost,
+    host: &impl orbit_engine::RuntimeHost,
     resume: Option<&PipelineState>,
 ) -> (Result<JobOutcome, DispatchError>, Vec<V2AuditEvent>) {
     let audit = tempfile::tempdir().expect("audit tempdir");
@@ -1729,41 +1864,56 @@ fn leaf_completion_records_file_and_store_waits_without_leaking_between_steps() 
         let refusal = acquire_exclusive_file_lock(&path, "fixture waiter", opts).unwrap_err();
         assert_eq!(refusal.kind(), std::io::ErrorKind::TimedOut);
     }
-    impl orbit_engine::test_support::NullRuntimeHost for WaitHost {
-        fn run_deterministic(
-            &self,
-            action: &str,
-            _: &Value,
-            _: &Value,
-            _: orbit_tools::ToolContext,
-        ) -> Result<Value, DispatchError> {
-            match action {
-                "file_wait" | "failed_wait" => {
-                    file_wait_times_out(&self.root);
-                    if action == "failed_wait" {
-                        return Err(DispatchError::DeterministicActionFailed {
-                            action: action.into(),
-                            message: "injected refusal".into(),
-                        });
+
+    impl_test_host! {
+        impl Dispatch for WaitHost {
+            fn run_deterministic(
+                &self,
+                action: &str,
+                _: &Value,
+                _: &Value,
+                _: orbit_tools::ToolContext,
+            ) -> Result<Value, DispatchError> {
+                match action {
+                    "file_wait" | "failed_wait" => {
+                        file_wait_times_out(&self.root);
+                        if action == "failed_wait" {
+                            return Err(DispatchError::DeterministicActionFailed {
+                                action: action.into(),
+                                message: "injected refusal".into(),
+                            });
+                        }
                     }
+                    "store_wait" => {
+                        let connection = self.store.connection();
+                        let barrier = Arc::new(std::sync::Barrier::new(2));
+                        let held = barrier.clone();
+                        let holder = std::thread::spawn(move || {
+                            let _held = connection.lock().unwrap();
+                            held.wait();
+                            std::thread::sleep(Duration::from_millis(25));
+                        });
+                        barrier.wait();
+                        self.store.with_transaction(|_| Ok(())).unwrap();
+                        holder.join().unwrap();
+                    }
+                    _ => {}
                 }
-                "store_wait" => {
-                    let connection = self.store.connection();
-                    let barrier = Arc::new(std::sync::Barrier::new(2));
-                    let held = barrier.clone();
-                    let holder = std::thread::spawn(move || {
-                        let _held = connection.lock().unwrap();
-                        held.wait();
-                        std::thread::sleep(Duration::from_millis(25));
-                    });
-                    barrier.wait();
-                    self.store.with_transaction(|_| Ok(())).unwrap();
-                    holder.join().unwrap();
-                }
-                _ => {}
+                Ok(json!({}))
             }
-            Ok(json!({}))
         }
+    }
+
+    impl_test_host! { impl HostEnvironment for WaitHost {} }
+
+    impl_test_host! { impl RunLifecycle for WaitHost {} }
+
+    impl_test_host! { impl Recovery for WaitHost {} }
+
+    impl_test_host! { impl ReviewGate for WaitHost {} }
+
+    impl_test_host! {
+        impl RuntimeHostProcessEnvironment for WaitHost {}
     }
     for fail in [false, true] {
         let root = tempfile::tempdir().unwrap();
@@ -1834,37 +1984,61 @@ runtime_contracts!(runtime_contracts_5: exhausted_review_preflight_stops_the_shi
 fn null_runtime_host_forwards_capability_overrides() {
     use orbit_engine::{Dispatch, HostEnvironment, Recovery};
     struct OverrideHost;
-    impl orbit_engine::test_support::NullRuntimeHost for OverrideHost {
-        fn run_settings(&self) -> orbit_engine::RunSettings {
-            orbit_engine::RunSettings {
-                validation_build_output_env: vec!["override".into()],
-                ..orbit_engine::RunSettings::default()
+
+    impl_test_host! {
+        impl Dispatch for OverrideHost {
+            fn mid_run_steering_enabled(&self) -> bool {
+                true
+            }
+
+            fn record_resident_continuity_rebuilt(&self, _: &str) -> Result<(), OrbitError> {
+                Err(OrbitError::Execution("override".into()))
             }
         }
-        fn mid_run_steering_enabled(&self) -> bool {
-            true
+    }
+
+    impl_test_host! {
+        impl HostEnvironment for OverrideHost {
+            fn run_settings(&self) -> orbit_engine::RunSettings {
+                orbit_engine::RunSettings {
+                    validation_build_output_env: vec!["override".into()],
+                    ..orbit_engine::RunSettings::default()
+                }
+            }
         }
-        fn record_resident_continuity_rebuilt(&self, _: &str) -> Result<(), OrbitError> {
-            Err(OrbitError::Execution("override".into()))
+    }
+
+    impl_test_host! { impl RunLifecycle for OverrideHost {} }
+
+    impl_test_host! {
+        impl Recovery for OverrideHost {
+            fn completion_deadline(&self, _: &str, _: &str, _: u64) -> Result<u64, OrbitError> {
+                Ok(42)
+            }
+
+            fn completion_policy_digest(
+                &self,
+                _: &str,
+                _: &[String],
+            ) -> Result<Option<String>, OrbitError> {
+                Ok(Some("override".into()))
+            }
+
+            fn authenticate_completion_tail(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<bool, OrbitError> {
+                Ok(true)
+            }
         }
-        fn completion_deadline(&self, _: &str, _: &str, _: u64) -> Result<u64, OrbitError> {
-            Ok(42)
-        }
-        fn completion_policy_digest(
-            &self,
-            _: &str,
-            _: &[String],
-        ) -> Result<Option<String>, OrbitError> {
-            Ok(Some("override".into()))
-        }
-        fn authenticate_completion_tail(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> Result<bool, OrbitError> {
-            Ok(true)
-        }
+    }
+
+    impl_test_host! { impl ReviewGate for OverrideHost {} }
+
+    impl_test_host! {
+        impl RuntimeHostProcessEnvironment for OverrideHost {}
     }
     let host = OverrideHost;
     assert_eq!(
@@ -1913,72 +2087,88 @@ fn step_recovery_footprint_unavailable_bypasses_final_recovery_and_failure_hando
         final_recovery_calls: Mutex<usize>,
     }
 
-    impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost {
-        fn acquire_deferred_footprint(
-            &self,
-            _run_id: &str,
-            activity_name: &str,
-        ) -> Result<(), DispatchError> {
-            match &self.footprint {
-                FootprintResponse::Ok => Ok(()),
-                FootprintResponse::WaitExpired(holder) => {
-                    Err(DispatchError::FootprintUnavailable(format!(
-                        "footprint_unavailable: `{activity_name}` may edit the resumed published delivery only once its context locks are free, and after 0s they are still held: {holder}"
-                    )))
+    impl_test_host! {
+        impl Dispatch for RecoveryHost {
+            fn acquire_deferred_footprint(
+                &self,
+                _run_id: &str,
+                activity_name: &str,
+            ) -> Result<(), DispatchError> {
+                match &self.footprint {
+                    FootprintResponse::Ok => Ok(()),
+                    FootprintResponse::WaitExpired(holder) => {
+                        Err(DispatchError::FootprintUnavailable(format!(
+                            "footprint_unavailable: `{activity_name}` may edit the resumed published delivery only once its context locks are free, and after 0s they are still held: {holder}"
+                        )))
+                    }
+                    FootprintResponse::RunStopped(message) => {
+                        Err(DispatchError::CliInvocationPermanent(message.clone()))
+                    }
                 }
-                FootprintResponse::RunStopped(message) => {
-                    Err(DispatchError::CliInvocationPermanent(message.clone()))
+            }
+
+            fn run_deterministic(
+                &self,
+                action: &str,
+                _config: &Value,
+                _input: &Value,
+                _tool_context: orbit_tools::ToolContext,
+            ) -> Result<Value, DispatchError> {
+                self.deterministic_calls
+                    .lock()
+                    .unwrap()
+                    .push(action.to_string());
+                if action == "setup" {
+                    return Ok(json!({
+                        "workspace_path": self.workspace_path,
+                        "base_ref": "main",
+                    }));
                 }
+                if self.fail_with_conflict {
+                    return Err(DispatchError::RecoverableVcsConflict(Box::new(
+                        RecoverableVcsConflict {
+                            operation: "git_rebase".to_string(),
+                            original_base_sha: "orig".to_string(),
+                            target_base_sha: "target".to_string(),
+                            conflicting_paths: vec!["feature.txt".to_string()],
+                            conflicting_files: Vec::new(),
+                            diagnostic: "conflict".to_string(),
+                        },
+                    )));
+                }
+                Err(DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: "original validation failure".to_string(),
+                })
             }
         }
+    }
 
-        fn run_deterministic(
-            &self,
-            action: &str,
-            _config: &Value,
-            _input: &Value,
-            _tool_context: orbit_tools::ToolContext,
-        ) -> Result<Value, DispatchError> {
-            self.deterministic_calls
-                .lock()
-                .unwrap()
-                .push(action.to_string());
-            if action == "setup" {
-                return Ok(json!({
-                    "workspace_path": self.workspace_path,
-                    "base_ref": "main",
-                }));
+    impl_test_host! { impl HostEnvironment for RecoveryHost {} }
+
+    impl_test_host! { impl RunLifecycle for RecoveryHost {} }
+
+    impl_test_host! {
+        impl Recovery for RecoveryHost {
+            fn admit_final_recovery(
+                &self,
+                _run_id: &str,
+                _request: &FinalRecoveryAdmissionRequest,
+            ) -> Result<FinalRecoveryAdmission, OrbitError> {
+                *self.final_recovery_calls.lock().unwrap() += 1;
+                Ok(FinalRecoveryAdmission::Admitted)
             }
-            if self.fail_with_conflict {
-                return Err(DispatchError::RecoverableVcsConflict(Box::new(
-                    RecoverableVcsConflict {
-                        operation: "git_rebase".to_string(),
-                        original_base_sha: "orig".to_string(),
-                        target_base_sha: "target".to_string(),
-                        conflicting_paths: vec!["feature.txt".to_string()],
-                        conflicting_files: Vec::new(),
-                        diagnostic: "conflict".to_string(),
-                    },
-                )));
+
+            fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+                Ok(None)
             }
-            Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: "original validation failure".to_string(),
-            })
         }
+    }
 
-        fn admit_final_recovery(
-            &self,
-            _run_id: &str,
-            _request: &FinalRecoveryAdmissionRequest,
-        ) -> Result<FinalRecoveryAdmission, OrbitError> {
-            *self.final_recovery_calls.lock().unwrap() += 1;
-            Ok(FinalRecoveryAdmission::Admitted)
-        }
+    impl_test_host! { impl ReviewGate for RecoveryHost {} }
 
-        fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
-            Ok(None)
-        }
+    impl_test_host! {
+        impl RuntimeHostProcessEnvironment for RecoveryHost {}
     }
 
     let deterministic_activity = |action: &str| ActivityV2 {

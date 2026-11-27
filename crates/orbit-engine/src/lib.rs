@@ -38,26 +38,14 @@
 )]
 
 pub mod activity_job;
-/// Scoped hooks and the null host base for test fixtures, enabled only in tests.
-#[cfg(feature = "test-support")]
-pub mod test_support {
-    pub use crate::activity_job::cli_runner::{
-        with_bwrap_probe_unavailable, with_cli_supervision_clock,
-    };
-    pub use crate::activity_job::job_executor::loop_clock::with_loop_clock;
-    pub use crate::context::NullRuntimeHost;
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub use crate::executor::automation::vcs::with_host_target_removal_hook;
-    pub use crate::executor::automation::vcs::{
-        with_prerequisite_clock, with_remote_probe_backoff, with_vcs_retry_wait,
-        with_worktree_setup_fetch_limits,
-    };
-}
 mod condition;
 mod context;
 mod executor;
 mod sandbox_spawn;
 mod template;
+
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 pub use context::{Dispatch, HostEnvironment, Recovery, ReviewGate, RunLifecycle, RunSettings};
 pub use executor::automation::vcs::claim::CandidateCheckout;

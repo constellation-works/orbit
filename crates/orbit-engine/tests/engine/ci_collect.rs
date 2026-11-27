@@ -1,5 +1,7 @@
 //! CI collection preserves malformed provider identities as retryable evidence.
 
+use orbit_engine::test_support::collect_ci_evidence;
+use orbit_engine::test_support::impl_test_host;
 use serde_json::{Value, json};
 
 const HEAD: &str = "1111111111111111111111111111111111111111";
@@ -79,7 +81,14 @@ esac
     }
 
     struct Host;
-    impl orbit_engine::test_support::NullRuntimeHost for Host {}
+
+    impl_test_host! { impl HostEnvironment for Host {} }
+
+    impl_test_host! { impl RunLifecycle for Host {} }
+
+    impl_test_host! {
+        impl RuntimeHostProcessEnvironment for Host {}
+    }
 
     for (identity, budget) in [
         (Value::Null, 0),
@@ -102,16 +111,7 @@ esac
         let mut input = json!({"integration_branch": "topic", "max_checkout_log_reads": 1});
         input["max_investigated_runs"] = json!(budget);
         input["workspace_path"] = json!(std::env::current_dir().expect("fixture cwd"));
-        let output = orbit_engine::execute_deterministic_action(
-            &Host,
-            "collect_ci_evidence",
-            &json!({}),
-            &input,
-            false,
-            &std::collections::HashMap::new(),
-            None,
-        )
-        .expect("collect action");
+        let output = collect_ci_evidence(&Host, &input).expect("collect action");
         let evidence = &output["ci_evidence"];
         assert_eq!(
             evidence["outcome_hint"],

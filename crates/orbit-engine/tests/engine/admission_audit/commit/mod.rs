@@ -5,21 +5,9 @@ mod settled_review;
 mod test_support;
 
 use orbit_common::OrbitError;
-use orbit_engine::{RuntimeHost, execute_deterministic_action};
-use serde_json::Value;
+use orbit_engine::test_support::git_commit;
 use std::path::Path;
 
-fn git_commit(host: &impl RuntimeHost, input: &Value) -> Result<Value, OrbitError> {
-    execute_deterministic_action(
-        host,
-        "git_commit",
-        &Value::Null,
-        input,
-        false,
-        &Default::default(),
-        None,
-    )
-}
 fn git_output(repo: &Path, args: &[&str]) -> Result<String, OrbitError> {
     let output = crate::git_test_support::command()
         .args(args)

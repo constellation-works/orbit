@@ -4,12 +4,14 @@
 //! the review task to `done` before refusing the proposed task, leaving a
 //! partial completion behind a failed result.
 
-use std::collections::{BTreeMap, HashMap};
+use orbit_engine::test_support::impl_test_host;
+use orbit_engine::test_support::task_complete;
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_engine::{TaskActivityUpdate, execute_deterministic_action};
+use orbit_engine::TaskActivityUpdate;
 use orbit_types::task::{Task, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
@@ -47,47 +49,53 @@ impl BatchHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for BatchHost {
-    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
-        self.tasks
-            .lock()
-            .expect("tasks")
-            .get(task_id)
-            .cloned()
-            .ok_or_else(|| OrbitError::Execution(format!("unknown task '{task_id}'")))
-    }
-
-    fn update_task_from_activity(
-        &self,
-        task_id: &str,
-        update: TaskActivityUpdate,
-    ) -> Result<Task, OrbitError> {
-        let mut tasks = self.tasks.lock().expect("tasks");
-        let task = tasks
-            .get_mut(task_id)
-            .ok_or_else(|| OrbitError::Execution(format!("unknown task '{task_id}'")))?;
-        if task.status != update.expected_status {
-            return Err(OrbitError::Execution(format!(
-                "task '{task_id}' status changed from {} to {}",
-                update.expected_status, task.status
-            )));
+impl_test_host! {
+    impl HostEnvironment for BatchHost {
+        fn outstanding_owed_criteria(
+            &self,
+            task_id: &str,
+            _run_id: Option<&str>,
+        ) -> Result<Vec<usize>, OrbitError> {
+            Ok(self
+                .owed
+                .lock()
+                .expect("owed")
+                .get(task_id)
+                .cloned()
+                .unwrap_or_default())
         }
-        task.status = update.status;
-        Ok(task.clone())
     }
+}
 
-    fn outstanding_owed_criteria(
-        &self,
-        task_id: &str,
-        _run_id: Option<&str>,
-    ) -> Result<Vec<usize>, OrbitError> {
-        Ok(self
-            .owed
-            .lock()
-            .expect("owed")
-            .get(task_id)
-            .cloned()
-            .unwrap_or_default())
+impl_test_host! {
+    impl RunLifecycle for BatchHost {
+        fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+            self.tasks
+                .lock()
+                .expect("tasks")
+                .get(task_id)
+                .cloned()
+                .ok_or_else(|| OrbitError::Execution(format!("unknown task '{task_id}'")))
+        }
+
+        fn update_task_from_activity(
+            &self,
+            task_id: &str,
+            update: TaskActivityUpdate,
+        ) -> Result<Task, OrbitError> {
+            let mut tasks = self.tasks.lock().expect("tasks");
+            let task = tasks
+                .get_mut(task_id)
+                .ok_or_else(|| OrbitError::Execution(format!("unknown task '{task_id}'")))?;
+            if task.status != update.expected_status {
+                return Err(OrbitError::Execution(format!(
+                    "task '{task_id}' status changed from {} to {}",
+                    update.expected_status, task.status
+                )));
+            }
+            task.status = update.status;
+            Ok(task.clone())
+        }
     }
 }
 
@@ -132,17 +140,12 @@ fn task(id: &str, status: TaskStatus) -> Task {
 }
 
 fn complete(host: &BatchHost, task_ids: &[&str]) -> Result<Value, OrbitError> {
-    execute_deterministic_action(
+    task_complete(
         host,
-        "task_complete",
-        &json!({}),
         &json!({
             "run_id": RUN_ID,
             "task_ids": task_ids,
         }),
-        false,
-        &HashMap::new(),
-        None,
     )
 }
 

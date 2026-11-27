@@ -46,6 +46,7 @@ mod tag_instructions;
 #[cfg(unix)]
 mod truncated_envelope;
 
+use orbit_engine::test_support::impl_test_host;
 use std::fs;
 use std::io::Write;
 #[cfg(unix)]
@@ -231,53 +232,79 @@ impl ScriptHost {
         self
     }
 }
-impl orbit_engine::test_support::NullRuntimeHost for ScriptHost {
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            requires_claude_worker_credential: self.requires_claude_credential,
-            ..orbit_engine::RunSettings::default()
+
+impl_test_host! {
+    impl Dispatch for ScriptHost {
+        fn run_deterministic(
+            &self,
+            _action: &str,
+            _config: &Value,
+            _input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            Err(DispatchError::DeterministicActionNotRegistered(
+                "unused".to_string(),
+            ))
+        }
+
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Ok(ResolvedCliExecutor {
+                command: self.command.clone(),
+                args: self.args.clone(),
+                inspection_args: None,
+                image_input: self.image_input.clone(),
+            })
         }
     }
+}
 
-    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        let mut env = orbit_common::security::child_env::allowlisted_child_env(
-            &orbit_common::Env::capture(),
-            &[],
-            required_env_vars,
-        );
-        env.extend(self.admitted_env.iter().cloned());
-        env
-    }
+impl_test_host! {
+    impl HostEnvironment for ScriptHost {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                requires_claude_worker_credential: self.requires_claude_credential,
+                ..orbit_engine::RunSettings::default()
+            }
+        }
 
-    fn run_deterministic(
-        &self,
-        _action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            "unused".to_string(),
-        ))
+        fn agent_subprocess_environment(
+            &self,
+            required_env_vars: &[&str],
+        ) -> Vec<(String, String)> {
+            let mut env = orbit_common::security::child_env::allowlisted_child_env(
+                &orbit_common::Env::capture(),
+                &[],
+                required_env_vars,
+            );
+            env.extend(self.admitted_env.iter().cloned());
+            env
+        }
     }
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.clone(),
-            args: self.args.clone(),
-            inspection_args: None,
-            image_input: self.image_input.clone(),
-        })
-    }
+}
 
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext::default()
+impl_test_host! { impl RunLifecycle for ScriptHost {} }
+
+impl_test_host! {
+    impl Recovery for ScriptHost {
+        fn tool_context_for_activity(
+            &self,
+            _run_id: Option<&str>,
+            _fs_profile: Option<&str>,
+            _fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
+            _proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            orbit_tools::ToolContext::default()
+        }
     }
+}
+
+impl_test_host! { impl ReviewGate for ScriptHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ScriptHost {}
 }
 
 /// Provider failures are control-plane evidence; transcripts and Orbit work

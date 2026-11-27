@@ -4,6 +4,7 @@
 //! step hands its plugin broker and tool policy, and the deferral probe Orbit
 //! runs in an implementer's lane.
 
+use orbit_engine::test_support::impl_test_host;
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -40,80 +41,101 @@ struct RecordingHost {
     panic_on_registration: bool,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
-    fn run_deterministic(
-        &self,
-        _action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            "unused".into(),
-        ))
-    }
+impl_test_host! {
+    impl Dispatch for RecordingHost {
+        fn run_deterministic(
+            &self,
+            _action: &str,
+            _config: &Value,
+            _input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            Err(DispatchError::DeterministicActionNotRegistered(
+                "unused".into(),
+            ))
+        }
 
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.display().to_string(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
-    }
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Ok(ResolvedCliExecutor {
+                command: self.command.display().to_string(),
+                args: Vec::new(),
+                inspection_args: None,
+                image_input: None,
+            })
+        }
 
-    fn resolve_executor_sandbox(
-        &self,
-        _provider: &str,
-        _fs_profile: Option<&str>,
-        _cwd: Option<&Path>,
-    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-        Ok(self.sandbox.clone())
-    }
-
-    fn resolve_activity_tool_denials(
-        &self,
-        _run_id: Option<&str>,
-        _task_ids: &[String],
-        activity: &str,
-        _disallow_list: &[String],
-    ) -> Result<ResolvedActivityTools, DispatchError> {
-        self.denial_activities
-            .lock()
-            .unwrap()
-            .push(activity.to_string());
-        Ok(ResolvedActivityTools::default())
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext {
-            workspace_root: Some(self.worktree.clone()),
-            ..Default::default()
+        fn resolve_executor_sandbox(
+            &self,
+            _provider: &str,
+            _fs_profile: Option<&str>,
+            _cwd: Option<&Path>,
+        ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+            Ok(self.sandbox.clone())
         }
     }
+}
 
-    fn start_plugin_broker(
-        &self,
-        run: &PluginBrokerRun,
-    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
-        self.broker_runs.lock().unwrap().push(run.clone());
-        Ok(None)
-    }
+impl_test_host! { impl HostEnvironment for RecordingHost {} }
 
-    fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
-        let Some(pid_file) = &self.refuse_registration_after else {
-            return Ok(());
-        };
-        assert!(wait_until(Duration::from_secs(10), || pid_file.exists()));
-        assert!(!self.panic_on_registration, "worker registration panicked");
-        Err(OrbitError::Execution("worker registration refused".into()))
+impl_test_host! {
+    impl RunLifecycle for RecordingHost {
+        fn start_plugin_broker(
+            &self,
+            run: &PluginBrokerRun,
+        ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
+            self.broker_runs.lock().unwrap().push(run.clone());
+            Ok(None)
+        }
+
+        fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
+            let Some(pid_file) = &self.refuse_registration_after else {
+                return Ok(());
+            };
+            assert!(wait_until(Duration::from_secs(10), || pid_file.exists()));
+            assert!(!self.panic_on_registration, "worker registration panicked");
+            Err(OrbitError::Execution("worker registration refused".into()))
+        }
     }
+}
+
+impl_test_host! {
+    impl Recovery for RecordingHost {
+        fn resolve_activity_tool_denials(
+            &self,
+            _run_id: Option<&str>,
+            _task_ids: &[String],
+            activity: &str,
+            _disallow_list: &[String],
+        ) -> Result<ResolvedActivityTools, DispatchError> {
+            self.denial_activities
+                .lock()
+                .unwrap()
+                .push(activity.to_string());
+            Ok(ResolvedActivityTools::default())
+        }
+
+        fn tool_context_for_activity(
+            &self,
+            _run_id: Option<&str>,
+            _fs_profile: Option<&str>,
+            _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            _proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            orbit_tools::ToolContext {
+                workspace_root: Some(self.worktree.clone()),
+                ..Default::default()
+            }
+        }
+    }
+}
+
+impl_test_host! { impl ReviewGate for RecordingHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for RecordingHost {}
 }
 
 struct MissingWrapperHost {
@@ -122,72 +144,93 @@ struct MissingWrapperHost {
     broker_starts: AtomicUsize,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for MissingWrapperHost {
-    fn run_deterministic(
-        &self,
-        _action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            "unused".into(),
-        ))
-    }
+impl_test_host! {
+    impl Dispatch for MissingWrapperHost {
+        fn run_deterministic(
+            &self,
+            _action: &str,
+            _config: &Value,
+            _input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            Err(DispatchError::DeterministicActionNotRegistered(
+                "unused".into(),
+            ))
+        }
 
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.display().to_string(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
-    }
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Ok(ResolvedCliExecutor {
+                command: self.command.display().to_string(),
+                args: Vec::new(),
+                inspection_args: None,
+                image_input: None,
+            })
+        }
 
-    fn provider_cli_config(&self, _provider: &str) -> HashMap<String, String> {
-        HashMap::from([("sandbox".into(), "read-only".into())])
-    }
+        fn provider_cli_config(&self, _provider: &str) -> HashMap<String, String> {
+            HashMap::from([("sandbox".into(), "read-only".into())])
+        }
 
-    fn resolve_executor_sandbox(
-        &self,
-        _provider: &str,
-        _fs_profile: Option<&str>,
-        _cwd: Option<&Path>,
-    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-        Ok(Some(ResolvedSandbox {
-            kind: ExecutorSandboxKind::MacosSandboxExec,
-            fs_profile: ResolvedFsProfile {
-                name: "fixture".into(),
-                read: vec!["**".into()],
-                modify: vec![format!("{}/**", self.command.parent().unwrap().display())],
-            },
-            allow_fallback: self.allow_fallback,
-            managed_worktree: false,
-            runtime_write_authority: Vec::new(),
-            mask: None,
-        }))
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext {
-            workspace_root: Some(self.command.parent().unwrap().to_path_buf()),
-            ..Default::default()
+        fn resolve_executor_sandbox(
+            &self,
+            _provider: &str,
+            _fs_profile: Option<&str>,
+            _cwd: Option<&Path>,
+        ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+            Ok(Some(ResolvedSandbox {
+                kind: ExecutorSandboxKind::MacosSandboxExec,
+                fs_profile: ResolvedFsProfile {
+                    name: "fixture".into(),
+                    read: vec!["**".into()],
+                    modify: vec![format!("{}/**", self.command.parent().unwrap().display())],
+                },
+                allow_fallback: self.allow_fallback,
+                managed_worktree: false,
+                runtime_write_authority: Vec::new(),
+                mask: None,
+            }))
         }
     }
+}
 
-    fn start_plugin_broker(
-        &self,
-        _run: &PluginBrokerRun,
-    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
-        self.broker_starts.fetch_add(1, Ordering::SeqCst);
-        Ok(None)
+impl_test_host! { impl HostEnvironment for MissingWrapperHost {} }
+
+impl_test_host! {
+    impl RunLifecycle for MissingWrapperHost {
+        fn start_plugin_broker(
+            &self,
+            _run: &PluginBrokerRun,
+        ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
+            self.broker_starts.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
     }
+}
+
+impl_test_host! {
+    impl Recovery for MissingWrapperHost {
+        fn tool_context_for_activity(
+            &self,
+            _run_id: Option<&str>,
+            _fs_profile: Option<&str>,
+            _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            _proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            orbit_tools::ToolContext {
+                workspace_root: Some(self.command.parent().unwrap().to_path_buf()),
+                ..Default::default()
+            }
+        }
+    }
+}
+
+impl_test_host! { impl ReviewGate for MissingWrapperHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for MissingWrapperHost {}
 }
 
 /// The grandchild a fake provider published. Dropping it kills the grandchild
@@ -253,59 +296,75 @@ struct ProbeHost {
     unresolvable: bool,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for ProbeHost {
-    fn run_deterministic(
-        &self,
-        _action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            "unused".into(),
-        ))
-    }
+impl_test_host! { impl HostEnvironment for ProbeHost {} }
 
-    fn resolve_executor_sandbox(
-        &self,
-        provider: &str,
-        _fs_profile: Option<&str>,
-        _cwd: Option<&Path>,
-    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-        if self.unresolvable {
-            return Err(DispatchError::CliInvocationPermanent(format!(
-                "no sandbox for `{provider}`: bwrap: No permissions to create new namespace"
-            )));
+impl_test_host! {
+    impl Dispatch for ProbeHost {
+        fn run_deterministic(
+            &self,
+            _action: &str,
+            _config: &Value,
+            _input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            Err(DispatchError::DeterministicActionNotRegistered(
+                "unused".into(),
+            ))
         }
-        Ok(None)
-    }
 
-    fn run_deferral_probe(
-        &self,
-        probe: &orbit_types::workflow::DeferralProbe,
-        provider: Option<&str>,
-        fs_profile: Option<&str>,
-        cwd: &Path,
-    ) -> orbit_types::workflow::NamespaceProbe {
-        orbit_engine::run_deferral_probe(self, probe, provider, fs_profile, cwd)
+        fn resolve_executor_sandbox(
+            &self,
+            provider: &str,
+            _fs_profile: Option<&str>,
+            _cwd: Option<&Path>,
+        ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+            if self.unresolvable {
+                return Err(DispatchError::CliInvocationPermanent(format!(
+                    "no sandbox for `{provider}`: bwrap: No permissions to create new namespace"
+                )));
+            }
+            Ok(None)
+        }
+
+        fn run_deferral_probe(
+            &self,
+            probe: &orbit_types::workflow::DeferralProbe,
+            provider: Option<&str>,
+            fs_profile: Option<&str>,
+            cwd: &Path,
+        ) -> orbit_types::workflow::NamespaceProbe {
+            orbit_engine::run_deferral_probe(self, probe, provider, fs_profile, cwd)
+        }
     }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ProbeHost {}
 }
 
 /// A host that has not opted into executing deferral probes.
 struct UnsupportedProbeHost;
 
-impl orbit_engine::test_support::NullRuntimeHost for UnsupportedProbeHost {
-    fn run_deterministic(
-        &self,
-        _action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            "unused".into(),
-        ))
+impl_test_host! { impl HostEnvironment for UnsupportedProbeHost {} }
+
+impl_test_host! {
+    impl Dispatch for UnsupportedProbeHost {
+        fn run_deterministic(
+            &self,
+            _action: &str,
+            _config: &Value,
+            _input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            Err(DispatchError::DeterministicActionNotRegistered(
+                "unused".into(),
+            ))
+        }
     }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for UnsupportedProbeHost {}
 }
 
 /// A pipeline step's id is not its activity: `task_claimed_pr_pipeline` step

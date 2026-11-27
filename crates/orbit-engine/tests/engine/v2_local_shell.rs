@@ -10,6 +10,7 @@
 //!
 //! Runs under `cargo nextest run -p orbit-engine --test engine -E 'test(/^v2_local_shell::/)'`.
 
+use orbit_engine::test_support::impl_test_host;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -58,47 +59,64 @@ impl ShellHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for ShellHost {
-    // A host bound to a registered workspace. A CLI agent launched from it
-    // would receive both of these; a shell step must not.
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            orbit_registry_root: Some("/authoritative/registry".to_string()),
-            orbit_workspace_selector: Some("ws_owner".to_string()),
-            repo_root: Some(self.root.to_string_lossy().into_owned()),
-            ..orbit_engine::RunSettings::default()
+impl_test_host! {
+    impl Dispatch for ShellHost {
+        fn resolve_local_shell_executor(
+            &self,
+            _executor: &str,
+        ) -> Result<ResolvedShellExecutor, DispatchError> {
+            Ok(ResolvedShellExecutor::default())
+        }
+
+        fn resolve_executor_sandbox(
+            &self,
+            provider: &str,
+            fs_profile: Option<&str>,
+            _subprocess_cwd: Option<&Path>,
+        ) -> Result<Option<orbit_engine::ResolvedSandbox>, DispatchError> {
+            self.observed
+                .lock()
+                .expect("lock")
+                .push((provider.to_string(), fs_profile.map(ToOwned::to_owned)));
+            Ok(None)
         }
     }
+}
 
-    fn agent_subprocess_environment(&self, _required_env_vars: &[&str]) -> Vec<(String, String)> {
-        vec![
-            (
-                "PATH".to_string(),
-                std::env::var("PATH").unwrap_or_default(),
-            ),
-            ("ORBIT_BASELINE".to_string(), "from-policy".to_string()),
-        ]
-    }
+impl_test_host! {
+    impl HostEnvironment for ShellHost {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                orbit_registry_root: Some("/authoritative/registry".to_string()),
+                orbit_workspace_selector: Some("ws_owner".to_string()),
+                repo_root: Some(self.root.to_string_lossy().into_owned()),
+                ..orbit_engine::RunSettings::default()
+            }
+        }
 
-    fn resolve_local_shell_executor(
-        &self,
-        _executor: &str,
-    ) -> Result<ResolvedShellExecutor, DispatchError> {
-        Ok(ResolvedShellExecutor::default())
+        fn agent_subprocess_environment(
+            &self,
+            _required_env_vars: &[&str],
+        ) -> Vec<(String, String)> {
+            vec![
+                (
+                    "PATH".to_string(),
+                    std::env::var("PATH").unwrap_or_default(),
+                ),
+                ("ORBIT_BASELINE".to_string(), "from-policy".to_string()),
+            ]
+        }
     }
+}
 
-    fn resolve_executor_sandbox(
-        &self,
-        provider: &str,
-        fs_profile: Option<&str>,
-        _subprocess_cwd: Option<&Path>,
-    ) -> Result<Option<orbit_engine::ResolvedSandbox>, DispatchError> {
-        self.observed
-            .lock()
-            .expect("lock")
-            .push((provider.to_string(), fs_profile.map(ToOwned::to_owned)));
-        Ok(None)
-    }
+impl_test_host! { impl RunLifecycle for ShellHost {} }
+
+impl_test_host! { impl Recovery for ShellHost {} }
+
+impl_test_host! { impl ReviewGate for ShellHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ShellHost {}
 }
 
 fn a_nonzero_exit_fails_the_activity_and_is_audited() {

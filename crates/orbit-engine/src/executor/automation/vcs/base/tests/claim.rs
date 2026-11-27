@@ -16,6 +16,9 @@ use orbit_common::test_env::{
 use serde_json::json;
 
 #[cfg(unix)]
+use crate::test_support::impl_test_host;
+
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 #[cfg(unix)]
@@ -38,7 +41,12 @@ const COMPARISON_WINDOW: Duration = Duration::from_secs(60);
 struct Host;
 
 #[cfg(unix)]
-impl crate::test_support::NullRuntimeHost for Host {}
+impl_test_host! { impl HostEnvironment for Host {} }
+
+#[cfg(unix)]
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for Host {}
+}
 
 #[cfg(unix)]
 fn cut_ready_process<T>(ready: PathBuf, operation: impl FnOnce() -> T) -> T {

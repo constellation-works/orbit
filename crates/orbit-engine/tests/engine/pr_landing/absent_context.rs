@@ -1,5 +1,6 @@
 //! Real Git and provider-source proof through public completion/landing actions.
 use super::*;
+use orbit_engine::test_support::impl_test_host;
 use orbit_engine::{ReviewGate, RunLifecycle};
 
 pub(super) const NEW: &str = "name: CI\non:\n  pull_request:\n    branches: [agent-main]\npermissions: {}\njobs:\n  check:\n    name: Protected (${{ matrix.language }})\n    strategy:\n      matrix:\n        language: [rust]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n";
@@ -12,38 +13,58 @@ pub(super) struct AcceptedLanding {
     pub(super) context: orbit_engine::HandoffLandingContext,
     pub(super) updates: Mutex<Vec<orbit_engine::HandoffLandingUpdate>>,
 }
-impl orbit_engine::test_support::NullRuntimeHost for AcceptedLanding {
-    fn admit_handoff_base_update(
-        &self,
-        _: &str,
-        request: &orbit_types::workflow::PrBaseUpdateReservation,
-    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
-        ReviewGate::admit_pr_base_update(self, &[TASK_ID.into()], request)
-    }
 
-    fn handoff_landing_context(
-        &self,
-        _: &str,
-    ) -> Result<orbit_engine::HandoffLandingContext, OrbitError> {
-        Ok(self.context.clone())
+impl_test_host! { impl Dispatch for AcceptedLanding {} }
+
+impl_test_host! { impl HostEnvironment for AcceptedLanding {} }
+
+impl_test_host! {
+    impl RunLifecycle for AcceptedLanding {
+        fn get_task_history(&self, id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+            RunLifecycle::get_task_history(&self.host, id)
+        }
     }
-    fn get_task_history(&self, id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
-        RunLifecycle::get_task_history(&self.host, id)
+}
+
+impl_test_host! { impl Recovery for AcceptedLanding {} }
+
+impl_test_host! {
+    impl ReviewGate for AcceptedLanding {
+        fn admit_handoff_base_update(
+            &self,
+            _: &str,
+            request: &orbit_types::workflow::PrBaseUpdateReservation,
+        ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+            ReviewGate::admit_pr_base_update(self, &[TASK_ID.into()], request)
+        }
+
+        fn handoff_landing_context(
+            &self,
+            _: &str,
+        ) -> Result<orbit_engine::HandoffLandingContext, OrbitError> {
+            Ok(self.context.clone())
+        }
+
+        fn admit_pr_base_update(
+            &self,
+            tasks: &[String],
+            request: &orbit_types::workflow::PrBaseUpdateReservation,
+        ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
+            ReviewGate::admit_pr_base_update(&self.host, tasks, request)
+        }
+
+        fn record_handoff_landing(
+            &self,
+            update: &orbit_engine::HandoffLandingUpdate,
+        ) -> Result<(), OrbitError> {
+            self.updates.lock().unwrap().push(update.clone());
+            Ok(())
+        }
     }
-    fn admit_pr_base_update(
-        &self,
-        tasks: &[String],
-        request: &orbit_types::workflow::PrBaseUpdateReservation,
-    ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
-        ReviewGate::admit_pr_base_update(&self.host, tasks, request)
-    }
-    fn record_handoff_landing(
-        &self,
-        update: &orbit_engine::HandoffLandingUpdate,
-    ) -> Result<(), OrbitError> {
-        self.updates.lock().unwrap().push(update.clone());
-        Ok(())
-    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for AcceptedLanding {}
 }
 
 pub(super) fn setup(sandbox: &Path, source: &str) -> (Fixture, DeliveryHost) {

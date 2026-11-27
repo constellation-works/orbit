@@ -8,7 +8,8 @@
 #![cfg(unix)]
 #![allow(missing_docs)]
 
-use std::collections::HashMap;
+use orbit_engine::test_support::collect_dependabot_alerts;
+use orbit_engine::test_support::impl_test_host;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
@@ -16,7 +17,7 @@ use std::time::Duration;
 
 use orbit_common::process::run_bounded_capped;
 use orbit_common::test_env;
-use orbit_engine::execute_deterministic_action;
+
 use serde_json::json;
 
 const CHILD_ENV: &str = "ORBIT_DEPENDABOT_COLLECT_CHILD";
@@ -80,13 +81,19 @@ struct RootHost {
     root: String,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for RootHost {
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            repo_root: Some(self.root.clone()),
-            ..orbit_engine::RunSettings::default()
+impl_test_host! {
+    impl HostEnvironment for RootHost {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                repo_root: Some(self.root.clone()),
+                ..orbit_engine::RunSettings::default()
+            }
         }
     }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for RootHost {}
 }
 
 /// A credential-shaped marker the fake `gh` prints to stderr. Built at
@@ -109,16 +116,8 @@ fn explicit_repository_reaches_alert_queries() {
     let host = RootHost {
         root: root.path().to_string_lossy().into_owned(),
     };
-    let outcome = execute_deterministic_action(
-        &host,
-        "collect_dependabot_alerts",
-        &json!({}),
-        &json!({"repo": "acme/orbit"}),
-        false,
-        &HashMap::new(),
-        None,
-    )
-    .expect("explicit repo collection reaches the alert queries");
+    let outcome = collect_dependabot_alerts(&host, &json!({"repo": "acme/orbit"}))
+        .expect("explicit repo collection reaches the alert queries");
 
     let snapshot = &outcome["dependabot_snapshot"];
     assert_eq!(outcome["phase"], "collect_dependabot_alerts");
@@ -169,16 +168,8 @@ fn zero_alert_limit_clamps_to_one_and_empty_responses_are_fully_collected() {
     let host = RootHost {
         root: root.path().to_string_lossy().into_owned(),
     };
-    let outcome = execute_deterministic_action(
-        &host,
-        "collect_dependabot_alerts",
-        &json!({}),
-        &json!({"repo": "acme/orbit", "max_alerts": 0}),
-        false,
-        &HashMap::new(),
-        None,
-    )
-    .expect("zero alert limit should be clamped before building the query");
+    let outcome = collect_dependabot_alerts(&host, &json!({"repo": "acme/orbit", "max_alerts": 0}))
+        .expect("zero alert limit should be clamped before building the query");
 
     let snapshot = &outcome["dependabot_snapshot"];
     assert_eq!(snapshot["collection_status"], "fully_collected");
@@ -217,16 +208,8 @@ fn repo_view_failure_degrades_without_losing_alert_families() {
     let host = RootHost {
         root: root.path().to_string_lossy().into_owned(),
     };
-    let outcome = execute_deterministic_action(
-        &host,
-        "collect_dependabot_alerts",
-        &json!({}),
-        &json!({"repo": "acme/orbit"}),
-        false,
-        &HashMap::new(),
-        None,
-    )
-    .expect("repo view failure should not abort alert collection");
+    let outcome = collect_dependabot_alerts(&host, &json!({"repo": "acme/orbit"}))
+        .expect("repo view failure should not abort alert collection");
 
     let snapshot = &outcome["dependabot_snapshot"];
     assert_eq!(snapshot["repository"], json!({}));
@@ -281,16 +264,8 @@ fn repo_view_credential_shaped_stderr_is_redacted() {
     let host = RootHost {
         root: root.path().to_string_lossy().into_owned(),
     };
-    let outcome = execute_deterministic_action(
-        &host,
-        "collect_dependabot_alerts",
-        &json!({}),
-        &json!({"repo": "acme/orbit"}),
-        false,
-        &HashMap::new(),
-        None,
-    )
-    .expect("repo view failure should not abort alert collection");
+    let outcome = collect_dependabot_alerts(&host, &json!({"repo": "acme/orbit"}))
+        .expect("repo view failure should not abort alert collection");
 
     let snapshot = &outcome["dependabot_snapshot"];
     assert_eq!(snapshot["repository"], json!({}));

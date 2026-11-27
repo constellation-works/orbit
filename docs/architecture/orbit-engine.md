@@ -48,7 +48,8 @@ Activity-job helpers declare the host capabilities they use. Script steps use `D
 
 - `activity_job`: v2 activity/job dispatcher, CLI provider runner, job executor, retry/recovery, and audit sinks; imports `condition`, `context`, `executor`, `sandbox_spawn`, `template`, and lower workspace crates.
 - `condition`: Expression-based step condition evaluator over `TemplateContext`; imports `template` and `orbit-common` only.
-- `context`: `RuntimeHost` capability boundary, dispatch contracts, null host, and execution-context primitives; imports `executor` (never `activity_job`) and lower workspace crates.
+- `context`: `RuntimeHost` capability boundary, dispatch contracts and execution-context primitives; imports `executor` (never `activity_job`) and lower workspace crates.
 - `executor`: Built-in deterministic automation and VCS/PR actions invoked by job steps; imports `context`, `sandbox_spawn` (never `activity_job`), and lower workspace crates.
 - `sandbox_spawn`: Sandboxed child-process spawn and permanent/transient spawn failure classification; imports `context` only inside the crate plus `orbit-common`, `orbit-exec`, and `orbit-types`.
+- `test_support`: Capability fixtures, scoped clocks and targeted automation entry points for tests.
 - `template`: Template context and `{{...}}` interpolation renderer for job steps; imports `orbit-common` and `serde_json` only.

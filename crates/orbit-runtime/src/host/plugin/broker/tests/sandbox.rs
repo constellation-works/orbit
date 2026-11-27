@@ -7,6 +7,7 @@
 //! Each test skips, naming the reason on stderr, where the platform sandbox
 //! cannot run (no Bubblewrap user namespaces, e.g. inside another sandbox).
 
+use orbit_engine::test_support::impl_test_host;
 use std::fs;
 #[cfg(not(target_os = "linux"))]
 use std::io::Write;
@@ -177,49 +178,71 @@ impl BrokerHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for BrokerHost {
-    fn start_plugin_broker(
-        &self,
-        run: &PluginBrokerRun,
-    ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
-        let broker = PluginBroker::start(&self.global_root, &run.run_id, EchoDispatch::shared())?;
-        self.sockets
-            .lock()
-            .expect("sockets")
-            .push(broker.socket_path().to_path_buf());
-        Ok(Some(Box::new(broker)))
-    }
+impl_test_host! {
+    impl Dispatch for BrokerHost {
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Ok(ResolvedCliExecutor {
+                command: self.command.display().to_string(),
+                args: Vec::new(),
+                inspection_args: None,
+                image_input: None,
+            })
+        }
 
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> ToolContext {
-        ToolContext {
-            workspace_root: Some(self.worktree.clone()),
-            ..Default::default()
+        fn resolve_executor_sandbox(
+            &self,
+            _provider: &str,
+            _fs_profile: Option<&str>,
+            _subprocess_cwd: Option<&Path>,
+        ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+            Ok(Some(self.sandbox.clone()))
         }
     }
+}
 
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.display().to_string(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
-    }
+impl_test_host! { impl HostEnvironment for BrokerHost {} }
 
-    fn resolve_executor_sandbox(
-        &self,
-        _provider: &str,
-        _fs_profile: Option<&str>,
-        _subprocess_cwd: Option<&Path>,
-    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-        Ok(Some(self.sandbox.clone()))
+impl_test_host! {
+    impl RunLifecycle for BrokerHost {
+        fn start_plugin_broker(
+            &self,
+            run: &PluginBrokerRun,
+        ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
+            let broker =
+                PluginBroker::start(&self.global_root, &run.run_id, EchoDispatch::shared())?;
+            self.sockets
+                .lock()
+                .expect("sockets")
+                .push(broker.socket_path().to_path_buf());
+            Ok(Some(Box::new(broker)))
+        }
     }
+}
+
+impl_test_host! {
+    impl Recovery for BrokerHost {
+        fn tool_context_for_activity(
+            &self,
+            _run_id: Option<&str>,
+            _fs_profile: Option<&str>,
+            _fs_audit: Option<Arc<dyn FsAuditLogger>>,
+            _proc_allowed_programs: Option<&[String]>,
+        ) -> ToolContext {
+            ToolContext {
+                workspace_root: Some(self.worktree.clone()),
+                ..Default::default()
+            }
+        }
+    }
+}
+
+impl_test_host! { impl ReviewGate for BrokerHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for BrokerHost {}
 }
 
 /// The in-sandbox half, invoked by `client_provider` with an exact test filter.

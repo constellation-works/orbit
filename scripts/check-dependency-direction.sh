@@ -145,7 +145,7 @@ allowed_dev_only_deps() {
       ;;
     orbit-engine)
       # Engine's own tests enable its `test-support` feature to build host
-      # doubles on the null host base; no other crate is reached.
+      # doubles from individual capability fixtures; no other crate is reached.
       echo "orbit-engine"
       ;;
     orbit-runtime)

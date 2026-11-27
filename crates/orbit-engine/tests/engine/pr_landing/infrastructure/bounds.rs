@@ -1,5 +1,6 @@
 //! Public completion regressions for rerun scope, DAG work and absolute budgets.
 use super::*;
+use orbit_engine::test_support::impl_test_host;
 
 const PR_READ: &str = "workflow prerequisite read repos/{owner}/{repo}/pulls/42";
 
@@ -772,74 +773,94 @@ fn infrastructure_deadline_refusal_keeps_type_and_unreadable_forge_holds() {
         fail_read: bool,
     }
 
-    impl orbit_engine::test_support::NullRuntimeHost for CompletionDeadlineHost {
-        fn get_task(
-            &self,
-            _task_id: &str,
-        ) -> Result<orbit_types::task::Task, orbit_common::OrbitError> {
-            Ok(super::super::task(super::super::TaskStatus::Review))
-        }
+    impl_test_host! { impl Dispatch for CompletionDeadlineHost {} }
 
-        fn get_job_run(
-            &self,
-            _run_id: &str,
-        ) -> Result<Option<orbit_types::workflow::JobRun>, orbit_common::OrbitError> {
-            Ok(None)
-        }
+    impl_test_host! {
+        impl HostEnvironment for CompletionDeadlineHost {
+            fn run_private_vcs_operation(
+                &self,
+                operation: &str,
+                input: Value,
+            ) -> Result<Value, orbit_common::OrbitError> {
+                match operation {
+                    "pr.status" => Ok(json!({"pull_request": {
+                        "number": 42,
+                        "state": "OPEN",
+                        "headRefOid": "candidate",
+                        "mergeStateStatus": "BLOCKED",
+                        "reviewDecision": "APPROVED",
+                        "statusCheckRollup": [{
+                            "name": "optional-check",
+                            "status": "COMPLETED",
+                            "conclusion": "FAILURE"
+                        }]
+                    }})),
+                    "pr.required_checks" => {
+                        let read = self
+                            .checks
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                            + 1;
+                        if read == 1 {
+                            return Ok(json!({"pull_request": {
+                                "headRefOid": "candidate",
+                                "commits": {"nodes": [{"commit": {
+                                    "oid": "candidate",
+                                    "statusCheckRollup": null
+                                }}]}
+                            }}));
+                        }
+                        self.clock
+                            .store(2_000_000, std::sync::atomic::Ordering::SeqCst);
+                        if self.fail_read {
+                            use orbit_common::PrivateVcsFailureClass;
 
-        fn run_private_vcs_operation(
-            &self,
-            operation: &str,
-            input: Value,
-        ) -> Result<Value, orbit_common::OrbitError> {
-            match operation {
-                "pr.status" => Ok(json!({"pull_request": {
-                    "number": 42,
-                    "state": "OPEN",
-                    "headRefOid": "candidate",
-                    "mergeStateStatus": "BLOCKED",
-                    "reviewDecision": "APPROVED",
-                    "statusCheckRollup": [{
-                        "name": "optional-check",
-                        "status": "COMPLETED",
-                        "conclusion": "FAILURE"
-                    }]
-                }})),
-                "pr.required_checks" => {
-                    let read = self
-                        .checks
-                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                        + 1;
-                    if read == 1 {
-                        return Ok(json!({"pull_request": {
-                            "headRefOid": "candidate",
-                            "commits": {"nodes": [{"commit": {
-                                "oid": "candidate",
-                                "statusCheckRollup": null
-                            }}]}
-                        }}));
+                            return Err(orbit_common::OrbitError::PrivateVcs(Box::new(
+                                orbit_common::PrivateVcsFailure {
+                                    operation: "PR required checks".into(),
+                                    class: PrivateVcsFailureClass::TransientObservation,
+                                    message: "private automation VCS PR required checks failed: \
+                                              error connecting to api.github.com"
+                                        .into(),
+                                    read_throttle: None,
+                                },
+                            )));
+                        }
+                        orbit_engine::run_private_vcs_operation(
+                            &orbit_common::Env::capture(),
+                            operation,
+                            &input,
+                        )
                     }
-                    self.clock
-                        .store(2_000_000, std::sync::atomic::Ordering::SeqCst);
-                    if self.fail_read {
-                        return Err(orbit_common::OrbitError::PrivateVcs(Box::new(
-                            orbit_common::PrivateVcsFailure {
-                                operation: "PR required checks".into(),
-                                class: orbit_common::PrivateVcsFailureClass::TransientObservation,
-                                message: "private automation VCS PR required checks failed: error connecting to api.github.com".into(),
-                                read_throttle: None,
-                            },
-                        )));
-                    }
-                    orbit_engine::run_private_vcs_operation(
-                        &orbit_common::Env::capture(),
-                        operation,
-                        &input,
-                    )
+                    _ => panic!("unexpected private VCS operation: {operation}"),
                 }
-                _ => panic!("unexpected private VCS operation: {operation}"),
             }
         }
+    }
+
+    impl_test_host! {
+        impl RunLifecycle for CompletionDeadlineHost {
+            fn get_task(
+                &self,
+                _task_id: &str,
+            ) -> Result<orbit_types::task::Task, orbit_common::OrbitError> {
+                Ok(super::super::task(super::super::TaskStatus::Review))
+            }
+
+            fn get_job_run(
+                &self,
+                _run_id: &str,
+            ) -> Result<Option<orbit_types::workflow::JobRun>, orbit_common::OrbitError> {
+                Ok(None)
+            }
+        }
+    }
+
+    impl_test_host! { impl Recovery for CompletionDeadlineHost {} }
+
+    impl_test_host! { impl ReviewGate for CompletionDeadlineHost {} }
+
+    impl_test_host! {
+        impl RuntimeHostProcessEnvironment for CompletionDeadlineHost {}
     }
 
     for (fail_read, expected_failure) in [(false, false), (true, true)] {

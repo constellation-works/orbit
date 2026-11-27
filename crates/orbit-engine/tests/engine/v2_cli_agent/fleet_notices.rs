@@ -3,6 +3,7 @@
 //! guidance whenever the dispatch may post — including on an empty board
 //! or with brief delivery off, where the host answers no brief.
 
+use orbit_engine::test_support::impl_test_host;
 use orbit_engine::{Dispatch, HostEnvironment, Recovery};
 use orbit_types::workflow::FleetNoticeBrief;
 use orbit_types::workflow::activity_job::V2AuditEventKind;
@@ -18,58 +19,82 @@ struct NoticeHost {
     brief: Option<FleetNoticeBrief>,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for NoticeHost {
-    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
-    }
+impl_test_host! {
+    impl Dispatch for NoticeHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            Dispatch::run_deterministic(&self.cli, action, config, input, tool_context)
+        }
 
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Dispatch::run_deterministic(&self.cli, action, config, input, tool_context)
-    }
+        fn resolve_cli_executor(
+            &self,
+            provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Dispatch::resolve_cli_executor(&self.cli, provider)
+        }
 
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Dispatch::resolve_cli_executor(&self.cli, provider)
-    }
+        fn task_context_for_agent_input(
+            &self,
+            _run_id: &str,
+            _step_id: &str,
+            _input: &Value,
+        ) -> Result<Option<Value>, DispatchError> {
+            Ok(Some(json!({ "id": "fixture-task", "title": "Fixture" })))
+        }
 
-    fn tool_context_for_activity(
-        &self,
-        run_id: Option<&str>,
-        fs_profile: Option<&str>,
-        fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        Recovery::tool_context_for_activity(
-            &self.cli,
-            run_id,
-            fs_profile,
-            fs_audit,
-            proc_allowed_programs,
-        )
+        fn notices_for_agent_input(
+            &self,
+            _run_id: &str,
+            _activity_name: &str,
+            _input: &Value,
+        ) -> Option<FleetNoticeBrief> {
+            self.brief.clone()
+        }
     }
+}
 
-    fn task_context_for_agent_input(
-        &self,
-        _run_id: &str,
-        _step_id: &str,
-        _input: &Value,
-    ) -> Result<Option<Value>, DispatchError> {
-        Ok(Some(json!({ "id": "fixture-task", "title": "Fixture" })))
+impl_test_host! {
+    impl HostEnvironment for NoticeHost {
+        fn agent_subprocess_environment(
+            &self,
+            required_env_vars: &[&str],
+        ) -> Vec<(String, String)> {
+            HostEnvironment::agent_subprocess_environment(&self.cli, required_env_vars)
+        }
     }
+}
 
-    fn notices_for_agent_input(
-        &self,
-        _run_id: &str,
-        _activity_name: &str,
-        _input: &Value,
-    ) -> Option<FleetNoticeBrief> {
-        self.brief.clone()
+impl_test_host! { impl RunLifecycle for NoticeHost {} }
+
+impl_test_host! {
+    impl Recovery for NoticeHost {
+        fn tool_context_for_activity(
+            &self,
+            run_id: Option<&str>,
+            fs_profile: Option<&str>,
+            fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            Recovery::tool_context_for_activity(
+                &self.cli,
+                run_id,
+                fs_profile,
+                fs_audit,
+                proc_allowed_programs,
+            )
+        }
     }
+}
+
+impl_test_host! { impl ReviewGate for NoticeHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for NoticeHost {}
 }
 
 fn brief() -> FleetNoticeBrief {

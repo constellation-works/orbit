@@ -10,6 +10,7 @@
 use super::*;
 use orbit_engine::RunLifecycle;
 use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
+use orbit_engine::test_support::impl_test_host;
 use orbit_engine::{execute_job_with_resume, resolve_job_catalog_refs_for_execution};
 use orbit_types::task::{TaskRelation, TaskRelationType};
 use orbit_types::workflow::activity_job::JobV2;
@@ -37,38 +38,52 @@ impl DispatchHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for DispatchHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _: &Value,
-        input: &Value,
-        _: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Ok(match action {
-            "list_backlog_tasks" => json!({
-                "tasks": [], "bundles": [[TASK]], "task_ids": [TASK], "excluded": [],
-            }),
-            "validate_bundles" => json!({"bundles": [[TASK]], "bundle_count": 1}),
-            "resolve_delivery_job" => json!({"job_name": LEAF}),
-            "reserve_locks" => json!({
-                "reserved": true, "reservation_id": "fixture-reservation",
-                "footprint_deferred": false, "conflicts": [], "waiting_on_deps": [],
-            }),
-            "gate_starvation_defer" => json!({"deferred": false, "reservation": {
-                "reservation_id": "fixture-reservation", "footprint_deferred": false
-            }}),
-            "invoke_and_wait" => {
-                self.dispatched.lock().unwrap().push((
-                    input["job_name"].as_str().unwrap().to_string(),
-                    input["run_input"].clone(),
-                ));
-                json!({"status": "success"})
-            }
-            "release_locks" | "pipeline_success_guard" => json!({}),
-            other => panic!("unexpected action: {other}"),
-        })
+impl_test_host! {
+    impl Dispatch for DispatchHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _: &Value,
+            input: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            Ok(match action {
+                "list_backlog_tasks" => json!({
+                    "tasks": [], "bundles": [[TASK]], "task_ids": [TASK], "excluded": [],
+                }),
+                "validate_bundles" => json!({"bundles": [[TASK]], "bundle_count": 1}),
+                "resolve_delivery_job" => json!({"job_name": LEAF}),
+                "reserve_locks" => json!({
+                    "reserved": true, "reservation_id": "fixture-reservation",
+                    "footprint_deferred": false, "conflicts": [], "waiting_on_deps": [],
+                }),
+                "gate_starvation_defer" => json!({"deferred": false, "reservation": {
+                    "reservation_id": "fixture-reservation", "footprint_deferred": false
+                }}),
+                "invoke_and_wait" => {
+                    self.dispatched.lock().unwrap().push((
+                        input["job_name"].as_str().unwrap().to_string(),
+                        input["run_input"].clone(),
+                    ));
+                    json!({"status": "success"})
+                }
+                "release_locks" | "pipeline_success_guard" => json!({}),
+                other => panic!("unexpected action: {other}"),
+            })
+        }
     }
+}
+
+impl_test_host! { impl HostEnvironment for DispatchHost {} }
+
+impl_test_host! { impl RunLifecycle for DispatchHost {} }
+
+impl_test_host! { impl Recovery for DispatchHost {} }
+
+impl_test_host! { impl ReviewGate for DispatchHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for DispatchHost {}
 }
 
 /// A shipped job and the catalog entries its first `steps` steps name.

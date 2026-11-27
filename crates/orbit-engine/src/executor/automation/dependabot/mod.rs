@@ -17,9 +17,8 @@ use super::github_host::{OUTCOME_CAPABILITY_UNAVAILABLE, query_root};
 const OUTCOME_NO_OPEN_ALERTS: &str = "no_open_alerts";
 const OUTCOME_OPEN_ALERTS: &str = "open_alerts";
 
-pub(super) fn collect_dependabot_alerts<
-    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
->(
+/// Collect the repository and its open Dependabot alerts for a sweep.
+pub fn collect_dependabot_alerts<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {

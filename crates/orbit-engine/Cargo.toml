@@ -15,7 +15,7 @@ workspace = true
 doctest = false
 
 [features]
-# Scoped deadline clocks and the null `RuntimeHost` base for test fixtures only.
+# Scoped deadline clocks and capability fixtures for tests only.
 # Enable it only from `[dev-dependencies]`, never in a shipped build.
 test-support = ["orbit-common/test-support", "orbit-tools/test-support"]
 
@@ -39,7 +39,6 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-# The crate's own tests build their host doubles on `test_support::NullRuntimeHost`.
 orbit-engine = { path = ".", features = ["test-support"] }
 orbit-store = { path = "../orbit-store", features = ["test-support"] }
 jsonschema.workspace = true

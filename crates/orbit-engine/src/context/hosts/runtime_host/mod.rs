@@ -26,9 +26,8 @@ pub use review::ReviewGate;
 /// implements all five a `RuntimeHost`.
 ///
 /// Every method is required, so a new capability fails to compile until the
-/// production host answers it. Test doubles implement
-/// `test_support::NullRuntimeHost` instead, which answers each capability the
-/// way a host without it does.
+/// production host answers it. Full dispatch and job execution compose the
+/// capability traits through this bound.
 pub trait RuntimeHost:
     RunLifecycle
     + ReviewGate

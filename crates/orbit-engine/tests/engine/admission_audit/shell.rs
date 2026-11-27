@@ -1,5 +1,7 @@
 //! Deterministic local command execution [ORB-11294].
 
+use orbit_engine::test_support::impl_test_host;
+use orbit_engine::test_support::local_shell;
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
@@ -7,39 +9,39 @@ use serde_json::{Value, json};
 
 use orbit_engine::{DispatchError, ResolvedShellExecutor};
 
-use orbit_engine::execute_deterministic_action;
-
 /// Minimal host: a workspace root and the shipped `local-shell` executor.
 struct ShellHost {
     root: PathBuf,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for ShellHost {
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            repo_root: Some(self.root.to_string_lossy().into_owned()),
-            ..orbit_engine::RunSettings::default()
+impl_test_host! {
+    impl Dispatch for ShellHost {
+        fn resolve_local_shell_executor(
+            &self,
+            _executor: &str,
+        ) -> Result<ResolvedShellExecutor, DispatchError> {
+            Ok(ResolvedShellExecutor::default())
         }
-    }
-
-    fn resolve_local_shell_executor(
-        &self,
-        _executor: &str,
-    ) -> Result<ResolvedShellExecutor, DispatchError> {
-        Ok(ResolvedShellExecutor::default())
     }
 }
 
+impl_test_host! {
+    impl HostEnvironment for ShellHost {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                repo_root: Some(self.root.to_string_lossy().into_owned()),
+                ..orbit_engine::RunSettings::default()
+            }
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ShellHost {}
+}
+
 fn run(host: &ShellHost, config: Value) -> Result<Value, OrbitError> {
-    execute_deterministic_action(
-        host,
-        "local_shell",
-        &config,
-        &json!({}),
-        false,
-        &Default::default(),
-        None,
-    )
+    local_shell(host, &config, &json!({}), None)
 }
 
 #[test]

@@ -84,9 +84,8 @@ struct ShellConfig {
     allow_nonzero_exit: bool,
 }
 
-pub(super) fn local_shell<
-    H: HostEnvironment + Dispatch + RuntimeHostProcessEnvironment + ?Sized,
->(
+/// Run a local shell action and map an unsuccessful outcome to an execution error.
+pub fn local_shell<H: HostEnvironment + Dispatch + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     config: &Value,
     input: &Value,

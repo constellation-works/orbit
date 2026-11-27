@@ -4,6 +4,7 @@
 //! catches broken step wiring or template references that action-level tests
 //! cannot see.
 
+use orbit_engine::test_support::impl_test_host;
 use std::sync::Mutex;
 
 use orbit_common::OrbitError;
@@ -149,117 +150,152 @@ impl CompletionReviewHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for CompletionReviewHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.calls
-            .lock()
-            .expect("call log")
-            .push((action.to_string(), input.clone()));
-        let output = match action {
-            "test_stub_worktree" => json!({
-                "job_run_id": RUN,
-                "workspace_path": "/worktrees/complete-review-run",
-            }),
-            "test_stub_commit" => json!({ "skipped_no_diff_expected": false }),
-            "test_stub_prepare_branch" => json!({
-                "head": "candidate-branch",
-                "head_sha": "candidate",
-                "base": "main",
-                "base_ref": "origin/main",
-                "base_sha": "base-sha",
-                "remote_sha": "candidate",
-                "commits_behind": 0,
-                "sync_required": false,
-            }),
-            "test_stub_sync_base" => json!({
-                "head": "candidate-branch",
-                "head_sha": "candidate",
-                "base": "main",
-                "base_ref": "origin/main",
-                "base_sha": "base-sha",
-                "remote_sha": "candidate",
-                "commits_behind": 0,
-                "sync_required": false,
-                "rewritten": false,
-            }),
-            "test_stub_review_gate_admit" => self.review_gate_admit(input),
-            "test_stub_agent_review_repair" => {
-                json!({ "summary": "reviewed", "verdict": "accept" })
-            }
-            "test_stub_review_gate_settle" => {
-                if input.pointer("/admission/applies") != Some(&json!(true)) {
+impl_test_host! {
+    impl Dispatch for CompletionReviewHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.calls
+                .lock()
+                .expect("call log")
+                .push((action.to_string(), input.clone()));
+            let output = match action {
+                "test_stub_worktree" => json!({
+                    "job_run_id": RUN,
+                    "workspace_path": "/worktrees/complete-review-run",
+                }),
+                "test_stub_commit" => json!({ "skipped_no_diff_expected": false }),
+                "test_stub_prepare_branch" => json!({
+                    "head": "candidate-branch",
+                    "head_sha": "candidate",
+                    "base": "main",
+                    "base_ref": "origin/main",
+                    "base_sha": "base-sha",
+                    "remote_sha": "candidate",
+                    "commits_behind": 0,
+                    "sync_required": false,
+                }),
+                "test_stub_sync_base" => json!({
+                    "head": "candidate-branch",
+                    "head_sha": "candidate",
+                    "base": "main",
+                    "base_ref": "origin/main",
+                    "base_sha": "base-sha",
+                    "remote_sha": "candidate",
+                    "commits_behind": 0,
+                    "sync_required": false,
+                    "rewritten": false,
+                }),
+                "test_stub_review_gate_admit" => self.review_gate_admit(input),
+                "test_stub_agent_review_repair" => {
+                    json!({ "summary": "reviewed", "verdict": "accept" })
+                }
+                "test_stub_review_gate_settle" => {
+                    if input.pointer("/admission/applies") != Some(&json!(true)) {
+                        json!({
+                            "gate": "not_required",
+                            "reviewed_head_sha": "",
+                            "selective_selection_head_sha": "",
+                            "selective_receipt": null,
+                            "reviewer_fixed": false,
+                        })
+                    } else {
+                        let attempt = input
+                            .pointer("/admission/attempt_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        let reviewed = |name: &str| match attempt {
+                            "rvw-re-review" => format!("rebased-{name}"),
+                            "rvw-re-review-2" => format!("rebased-{name}-2"),
+                            _ => String::new(),
+                        };
+                        let re_review = attempt != "rvw-first";
+                        json!({
+                            "gate": "passed",
+                            "reviewed_head_sha": if re_review {
+                                reviewed("head")
+                            } else {
+                                "candidate".to_string()
+                            },
+                            "selective_selection_head_sha": "",
+                            "selective_receipt": null,
+                            "reviewed_base_sha": if re_review {
+                                reviewed("base")
+                            } else {
+                                "base-sha".to_string()
+                            },
+                            "implementation_head_sha": if re_review {
+                                reviewed("implementation")
+                            } else {
+                                "candidate".to_string()
+                            },
+                            "reviewer_fixed": re_review,
+                            "review_fixes": "",
+                        })
+                    }
+                }
+                "test_stub_push" => json!({ "local_sha": "candidate", "remote_sha_before": null }),
+                "test_stub_git_push" => {
+                    let branch = input.get("branch").and_then(Value::as_str).unwrap_or("");
                     json!({
-                        "gate": "not_required",
-                        "reviewed_head_sha": "",
-                        "selective_selection_head_sha": "",
-                        "selective_receipt": null,
-                        "reviewer_fixed": false,
-                    })
-                } else {
-                    let attempt = input
-                        .pointer("/admission/attempt_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    let reviewed = |name: &str| match attempt {
-                        "rvw-re-review" => format!("rebased-{name}"),
-                        "rvw-re-review-2" => format!("rebased-{name}-2"),
-                        _ => String::new(),
-                    };
-                    let re_review = attempt != "rvw-first";
-                    json!({
-                        "gate": "passed",
-                        "reviewed_head_sha": if re_review { reviewed("head") } else { "candidate".to_string() },
-                        "selective_selection_head_sha": "",
-                        "selective_receipt": null,
-                        "reviewed_base_sha": if re_review { reviewed("base") } else { "base-sha".to_string() },
-                        "implementation_head_sha": if re_review { reviewed("implementation") } else { "candidate".to_string() },
-                        "reviewer_fixed": re_review,
-                        "review_fixes": "",
+                        "remote_sha_before": input.get("expected_remote_sha")
+                            .cloned()
+                            .unwrap_or(json!("candidate")),
+                        "local_sha": branch
+                            .strip_prefix("rebased-branch")
+                            .map_or_else(
+                                || "candidate".to_string(),
+                                |suffix| format!("rebased-head{suffix}"),
+                            ),
                     })
                 }
-            }
-            "test_stub_push" => json!({ "local_sha": "candidate", "remote_sha_before": null }),
-            "test_stub_git_push" => {
-                let branch = input.get("branch").and_then(Value::as_str).unwrap_or("");
-                json!({
-                    "remote_sha_before": input.get("expected_remote_sha").cloned().unwrap_or(json!("candidate")),
-                    "local_sha": branch
-                        .strip_prefix("rebased-branch")
-                        .map_or_else(|| "candidate".to_string(), |suffix| format!("rebased-head{suffix}")),
-                })
-            }
-            "test_stub_pr_open" => {
-                json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" })
-            }
-            "test_stub_promote_tasks" => json!({ "promoted": true }),
-            "test_stub_candidate_validate" => json!({ "decision": "passed" }),
-            "test_stub_pr_complete" => return self.pr_complete(input),
-            CONFLICT_RECOVERY => json!({}),
-            other => panic!("unexpected action `{other}`"),
-        };
-        Ok(output)
+                "test_stub_pr_open" => {
+                    json!({ "pr_number": "41", "pr_url": "https://example.invalid/41" })
+                }
+                "test_stub_promote_tasks" => json!({ "promoted": true }),
+                "test_stub_candidate_validate" => json!({ "decision": "passed" }),
+                "test_stub_pr_complete" => return self.pr_complete(input),
+                CONFLICT_RECOVERY => json!({}),
+                other => panic!("unexpected action `{other}`"),
+            };
+            Ok(output)
+        }
     }
+}
 
-    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
+impl_test_host! { impl HostEnvironment for CompletionReviewHost {} }
 
-    fn record_reviewer_invocation(
-        &self,
-        request: &ReviewerInvocationRequest,
-    ) -> Result<Option<u64>, OrbitError> {
-        self.invocations
-            .lock()
-            .expect("invocations")
-            .push(request.clone());
-        Ok(None)
+impl_test_host! { impl RunLifecycle for CompletionReviewHost {} }
+
+impl_test_host! {
+    impl Recovery for CompletionReviewHost {
+        fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+            Ok(None)
+        }
     }
+}
+
+impl_test_host! {
+    impl ReviewGate for CompletionReviewHost {
+        fn record_reviewer_invocation(
+            &self,
+            request: &ReviewerInvocationRequest,
+        ) -> Result<Option<u64>, OrbitError> {
+            self.invocations
+                .lock()
+                .expect("invocations")
+                .push(request.clone());
+            Ok(None)
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for CompletionReviewHost {}
 }
 
 /// In-memory task store for the local completion route: one `in-progress`
@@ -315,101 +351,119 @@ impl LocalCompletionHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for LocalCompletionHost {
-    fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
-        Ok(self.task())
-    }
-
-    fn get_task_history(
-        &self,
-        _: &str,
-    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
-        Ok(self.history())
-    }
-
-    fn list_run_tasks(&self, _: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
-        Ok(vec![self.task()])
-    }
-
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            completion_hold_rules: vec![
-                serde_json::from_value(json!({ "tags": ["sensitive"] }))
-                    .expect("hold rule fixture"),
-            ],
-            ..orbit_engine::RunSettings::default()
+impl_test_host! {
+    impl Dispatch for LocalCompletionHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            match action {
+                "test_stub_worktree" => Ok(json!({
+                    "job_run_id": LOCAL_RUN,
+                    "workspace_path": self.workspace,
+                })),
+                "test_stub_commit" => Ok(json!({
+                    "skipped_no_diff_expected": false,
+                    "decision": "committed",
+                })),
+                "test_stub_step_failure_recovery" => Ok(json!({})),
+                "git_merge" | "update_task" => orbit_engine::execute_deterministic_action(
+                    self,
+                    action,
+                    config,
+                    input,
+                    false,
+                    &std::collections::HashMap::new(),
+                    None,
+                )
+                .map_err(|error| DispatchError::JobExecution(error.to_string())),
+                other => panic!("unexpected action `{other}`"),
+            }
         }
     }
+}
 
-    fn apply_task_automation_update(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        self.history
-            .lock()
-            .expect("history")
-            .extend(update.append_history);
-        Ok(())
-    }
-
-    fn update_task_from_activity(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskActivityUpdate,
-    ) -> Result<orbit_types::task::Task, OrbitError> {
-        let mut task = self.task.lock().expect("task");
-        assert_eq!(task.status, update.expected_status);
-        let from_status = task.status;
-        task.status = update.status;
-        self.history
-            .lock()
-            .expect("history")
-            .push(orbit_types::task::TaskHistoryEntry {
-                at: chrono::Utc::now(),
-                by: "system".to_string(),
-                event: "status_changed".to_string(),
-                note: update.note,
-                from_status: Some(from_status),
-                to_status: Some(update.status),
-                operation_id: None,
-                decision: None,
-                surface: None,
-                caller: None,
-            });
-        Ok(task.clone())
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "test_stub_worktree" => Ok(json!({
-                "job_run_id": LOCAL_RUN,
-                "workspace_path": self.workspace,
-            })),
-            "test_stub_commit" => Ok(json!({
-                "skipped_no_diff_expected": false,
-                "decision": "committed",
-            })),
-            "test_stub_step_failure_recovery" => Ok(json!({})),
-            "git_merge" | "update_task" => orbit_engine::execute_deterministic_action(
-                self,
-                action,
-                config,
-                input,
-                false,
-                &std::collections::HashMap::new(),
-                None,
-            )
-            .map_err(|error| DispatchError::JobExecution(error.to_string())),
-            other => panic!("unexpected action `{other}`"),
+impl_test_host! {
+    impl HostEnvironment for LocalCompletionHost {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                completion_hold_rules: vec![
+                    serde_json::from_value(json!({ "tags": ["sensitive"] }))
+                        .expect("hold rule fixture"),
+                ],
+                ..orbit_engine::RunSettings::default()
+            }
         }
     }
+}
+
+impl_test_host! {
+    impl RunLifecycle for LocalCompletionHost {
+        fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
+            Ok(self.task())
+        }
+
+        fn get_task_history(
+            &self,
+            _: &str,
+        ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
+            Ok(self.history())
+        }
+
+        fn list_run_tasks(&self, _: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
+            Ok(vec![self.task()])
+        }
+
+        fn apply_task_automation_update(
+            &self,
+            _: &str,
+            update: orbit_engine::TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            self.history
+                .lock()
+                .expect("history")
+                .extend(update.append_history);
+            Ok(())
+        }
+
+        fn update_task_from_activity(
+            &self,
+            _: &str,
+            update: orbit_engine::TaskActivityUpdate,
+        ) -> Result<orbit_types::task::Task, OrbitError> {
+            let mut task = self.task.lock().expect("task");
+            assert_eq!(task.status, update.expected_status);
+            let from_status = task.status;
+            task.status = update.status;
+            self.history
+                .lock()
+                .expect("history")
+                .push(orbit_types::task::TaskHistoryEntry {
+                    at: chrono::Utc::now(),
+                    by: "system".to_string(),
+                    event: "status_changed".to_string(),
+                    note: update.note,
+                    from_status: Some(from_status),
+                    to_status: Some(update.status),
+                    operation_id: None,
+                    decision: None,
+                    surface: None,
+                    caller: None,
+                });
+            Ok(task.clone())
+        }
+    }
+}
+
+impl_test_host! { impl Recovery for LocalCompletionHost {} }
+
+impl_test_host! { impl ReviewGate for LocalCompletionHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for LocalCompletionHost {}
 }
 
 /// In-memory task store for the no-diff completion route: one review task,
@@ -455,80 +509,98 @@ impl NoDiffCompletionHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for NoDiffCompletionHost {
-    fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
-        Ok(self.task())
-    }
-
-    fn get_task_history(
-        &self,
-        _: &str,
-    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
-        Ok(self.history())
-    }
-
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            completion_hold_rules: vec![
-                serde_json::from_value(json!({ "tags": ["sensitive"] }))
-                    .expect("hold rule fixture"),
-            ],
-            ..orbit_engine::RunSettings::default()
+impl_test_host! {
+    impl Dispatch for NoDiffCompletionHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            match action {
+                "test_stub_worktree" => Ok(json!({
+                    "job_run_id": NO_DIFF_RUN,
+                    "workspace_path": self.workspace,
+                })),
+                "test_stub_commit" => Ok(json!({
+                    "skipped_no_diff_expected": true,
+                    "decision": "skipped_no_diff_expected",
+                })),
+                "pr_complete" => orbit_engine::execute_deterministic_action(
+                    self,
+                    action,
+                    config,
+                    input,
+                    false,
+                    &std::collections::HashMap::new(),
+                    None,
+                )
+                .map_err(|error| DispatchError::JobExecution(error.to_string())),
+                other => panic!("unexpected action `{other}`"),
+            }
         }
     }
+}
 
-    fn apply_task_automation_update(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        self.history
-            .lock()
-            .expect("history")
-            .extend(update.append_history);
-        Ok(())
-    }
-
-    fn update_task_from_activity(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskActivityUpdate,
-    ) -> Result<orbit_types::task::Task, OrbitError> {
-        let mut task = self.task.lock().expect("task");
-        assert_eq!(task.status, update.expected_status);
-        task.status = update.status;
-        Ok(task.clone())
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "test_stub_worktree" => Ok(json!({
-                "job_run_id": NO_DIFF_RUN,
-                "workspace_path": self.workspace,
-            })),
-            "test_stub_commit" => Ok(json!({
-                "skipped_no_diff_expected": true,
-                "decision": "skipped_no_diff_expected",
-            })),
-            "pr_complete" => orbit_engine::execute_deterministic_action(
-                self,
-                action,
-                config,
-                input,
-                false,
-                &std::collections::HashMap::new(),
-                None,
-            )
-            .map_err(|error| DispatchError::JobExecution(error.to_string())),
-            other => panic!("unexpected action `{other}`"),
+impl_test_host! {
+    impl HostEnvironment for NoDiffCompletionHost {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                completion_hold_rules: vec![
+                    serde_json::from_value(json!({ "tags": ["sensitive"] }))
+                        .expect("hold rule fixture"),
+                ],
+                ..orbit_engine::RunSettings::default()
+            }
         }
     }
+}
+
+impl_test_host! {
+    impl RunLifecycle for NoDiffCompletionHost {
+        fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
+            Ok(self.task())
+        }
+
+        fn get_task_history(
+            &self,
+            _: &str,
+        ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
+            Ok(self.history())
+        }
+
+        fn apply_task_automation_update(
+            &self,
+            _: &str,
+            update: orbit_engine::TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            self.history
+                .lock()
+                .expect("history")
+                .extend(update.append_history);
+            Ok(())
+        }
+
+        fn update_task_from_activity(
+            &self,
+            _: &str,
+            update: orbit_engine::TaskActivityUpdate,
+        ) -> Result<orbit_types::task::Task, OrbitError> {
+            let mut task = self.task.lock().expect("task");
+            assert_eq!(task.status, update.expected_status);
+            task.status = update.status;
+            Ok(task.clone())
+        }
+    }
+}
+
+impl_test_host! { impl Recovery for NoDiffCompletionHost {} }
+
+impl_test_host! { impl ReviewGate for NoDiffCompletionHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for NoDiffCompletionHost {}
 }
 
 /// The deterministic completion stub reports that the published, reviewed

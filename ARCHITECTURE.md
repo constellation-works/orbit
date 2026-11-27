@@ -65,7 +65,7 @@ no workspace crate.
 Edge rules the guard enforces beyond the table:
 
 - **Self dev-edges** (`dev: <self>`) only switch on the crate's own `test-support` feature for
-  its tests. Test seams (scoped clocks, null hosts, substitute workers, fixture `gh`) exist only
+  its tests. Test seams (scoped clocks, host fixtures, substitute workers, fixture `gh`) exist only
   behind `test-support` and are absent from shipped builds.
 - **Core → Policy is dev-only.** Shipped code reaches policy through `orbit-runtime` and
   `orbit-tools`; a normal, build or target-normal `orbit-core` → `orbit-policy` edge fails the

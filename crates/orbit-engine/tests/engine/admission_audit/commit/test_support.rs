@@ -1,3 +1,4 @@
+use orbit_engine::test_support::impl_test_host;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -152,181 +153,198 @@ impl CommitTestHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for CommitTestHost {
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            repo_root: Some(self.repo_root.to_string_lossy().to_string()),
-            data_root: self.data_root.clone(),
-            pr_config: self.pr_config.clone(),
-            ..orbit_engine::RunSettings::default()
+impl_test_host! {
+    impl HostEnvironment for CommitTestHost {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                repo_root: Some(self.repo_root.to_string_lossy().to_string()),
+                data_root: self.data_root.clone(),
+                pr_config: self.pr_config.clone(),
+                ..orbit_engine::RunSettings::default()
+            }
         }
     }
+}
 
-    fn get_job_run(&self, _run_id: &str) -> Result<Option<JobRun>, OrbitError> {
-        Ok(None)
-    }
+impl_test_host! {
+    impl RunLifecycle for CommitTestHost {
+        fn get_job_run(&self, _run_id: &str) -> Result<Option<JobRun>, OrbitError> {
+            Ok(None)
+        }
 
-    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
-        self.tasks
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|task| task.id == task_id)
-            .cloned()
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
-    }
+        fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+            self.tasks
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|task| task.id == task_id)
+                .cloned()
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
+        }
 
-    fn list_tasks_filtered(
-        &self,
-        status: Option<TaskStatus>,
-        priority: Option<TaskPriority>,
-        parent_id: Option<&str>,
-        batch_id: Option<&str>,
-        external_ref: Option<&orbit_types::task::ExternalRef>,
-        has_external_ref_system: Option<&str>,
-    ) -> Result<Vec<Task>, OrbitError> {
-        Ok(self
-            .tasks
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|task| status.is_none_or(|status| task.status == status))
-            .filter(|task| priority.is_none_or(|priority| task.priority == priority))
-            .filter(|task| parent_id.is_none_or(|parent_id| task.parent_id() == Some(parent_id)))
-            .filter(|task| {
-                batch_id.is_none_or(|batch_id| task.job_run_id.as_deref() == Some(batch_id))
-            })
-            .filter(|task| {
-                external_ref.is_none_or(|external_ref| {
-                    task.external_refs.iter().any(|candidate| {
-                        candidate.system == external_ref.system && candidate.id == external_ref.id
+        fn list_tasks_filtered(
+            &self,
+            status: Option<TaskStatus>,
+            priority: Option<TaskPriority>,
+            parent_id: Option<&str>,
+            batch_id: Option<&str>,
+            external_ref: Option<&orbit_types::task::ExternalRef>,
+            has_external_ref_system: Option<&str>,
+        ) -> Result<Vec<Task>, OrbitError> {
+            Ok(self
+                .tasks
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|task| status.is_none_or(|status| task.status == status))
+                .filter(|task| priority.is_none_or(|priority| task.priority == priority))
+                .filter(|task| {
+                    parent_id.is_none_or(|parent_id| task.parent_id() == Some(parent_id))
+                })
+                .filter(|task| {
+                    batch_id.is_none_or(|batch_id| task.job_run_id.as_deref() == Some(batch_id))
+                })
+                .filter(|task| {
+                    external_ref.is_none_or(|external_ref| {
+                        task.external_refs.iter().any(|candidate| {
+                            candidate.system == external_ref.system
+                                && candidate.id == external_ref.id
+                        })
                     })
                 })
-            })
-            .filter(|task| {
-                has_external_ref_system.is_none_or(|system| {
-                    task.external_refs
-                        .iter()
-                        .any(|candidate| candidate.system == system)
+                .filter(|task| {
+                    has_external_ref_system.is_none_or(|system| {
+                        task.external_refs
+                            .iter()
+                            .any(|candidate| candidate.system == system)
+                    })
                 })
-            })
-            .cloned()
-            .collect())
-    }
-
-    fn update_task_from_activity(
-        &self,
-        task_id: &str,
-        update: TaskActivityUpdate,
-    ) -> Result<Task, OrbitError> {
-        let mut tasks = self.tasks.lock().unwrap();
-        let task = tasks.iter_mut().find(|task| task.id == task_id).unwrap();
-        assert_eq!(task.status, update.expected_status);
-        task.status = update.status;
-        Ok(task.clone())
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        task_id: &str,
-        update: TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        let mut tasks = self.tasks.lock().unwrap();
-        let task = tasks
-            .iter_mut()
-            .find(|task| task.id == task_id)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
-        if let Some(status) = update.status {
-            task.status = status;
+                .cloned()
+                .collect())
         }
-        if let Some(execution_summary) = update.execution_summary {
-            task.execution_summary = execution_summary;
+
+        fn update_task_from_activity(
+            &self,
+            task_id: &str,
+            update: TaskActivityUpdate,
+        ) -> Result<Task, OrbitError> {
+            let mut tasks = self.tasks.lock().unwrap();
+            let task = tasks.iter_mut().find(|task| task.id == task_id).unwrap();
+            assert_eq!(task.status, update.expected_status);
+            task.status = update.status;
+            Ok(task.clone())
         }
-        Ok(())
-    }
 
-    fn worker_invocation(&self) -> Option<WorkerInvocation> {
-        self.worker.clone()
-    }
-
-    fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
-        Ok(self
-            .history
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(id, _)| id == task_id)
-            .map(|(_, entry)| entry.clone())
-            .collect())
-    }
-
-    fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
-        Ok(self
-            .comments
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(id, _)| id == task_id)
-            .map(|(_, comment)| comment.clone())
-            .collect())
-    }
-
-    /// Mirrors the owner host: exact `file:` selectors for uncovered paths
-    /// plus one provenance entry; a claimed leaf widens nothing.
-    fn widen_task_context_files(
-        &self,
-        task_id: &str,
-        run_id: &str,
-        step: ContextWideningStep,
-        activity: &str,
-        paths: &[String],
-    ) -> Result<Vec<String>, OrbitError> {
-        if self.worker.is_some() {
-            return Ok(Vec::new());
+        fn apply_task_automation_update(
+            &self,
+            task_id: &str,
+            update: TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            let mut tasks = self.tasks.lock().unwrap();
+            let task = tasks
+                .iter_mut()
+                .find(|task| task.id == task_id)
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
+            if let Some(status) = update.status {
+                task.status = status;
+            }
+            if let Some(execution_summary) = update.execution_summary {
+                task.execution_summary = execution_summary;
+            }
+            Ok(())
         }
-        let mut tasks = self.tasks.lock().unwrap();
-        let task = tasks
-            .iter_mut()
-            .find(|task| task.id == task_id)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
-        let added = paths
-            .iter()
-            .map(|path| format!("file:{path}"))
-            .filter(|selector| {
-                !task
-                    .context_files
-                    .iter()
-                    .any(|existing| orbit_common::fs::selector::overlaps(existing, selector))
-            })
-            .collect::<Vec<_>>();
-        if added.is_empty() {
-            return Ok(added);
+
+        fn worker_invocation(&self) -> Option<WorkerInvocation> {
+            self.worker.clone()
         }
-        task.context_files.extend(added.iter().cloned());
-        let widening = ContextFilesWidening {
-            run_id: run_id.to_string(),
-            step,
-            activity: activity.to_string(),
-            selectors: added.clone(),
-        };
-        let note = serde_json::to_string(&widening).unwrap();
-        self.history.lock().unwrap().push((
-            task_id.to_string(),
-            TaskHistoryEntry {
-                at: Utc::now(),
-                by: "system".to_string(),
-                event: CONTEXT_FILES_WIDENED_EVENT.to_string(),
-                note: Some(note),
-                from_status: None,
-                to_status: None,
-                operation_id: None,
-                decision: Some(TaskDecision::ContextFilesWidened(widening)),
-                surface: None,
-                caller: None,
-            },
-        ));
-        Ok(added)
+
+        fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+            Ok(self
+                .history
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(id, _)| id == task_id)
+                .map(|(_, entry)| entry.clone())
+                .collect())
+        }
+
+        fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError> {
+            Ok(self
+                .comments
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(id, _)| id == task_id)
+                .map(|(_, comment)| comment.clone())
+                .collect())
+        }
+
+        /// Mirrors the owner host: exact `file:` selectors for uncovered paths
+        /// plus one provenance entry; a claimed leaf widens nothing.
+        fn widen_task_context_files(
+            &self,
+            task_id: &str,
+            run_id: &str,
+            step: ContextWideningStep,
+            activity: &str,
+            paths: &[String],
+        ) -> Result<Vec<String>, OrbitError> {
+            if self.worker.is_some() {
+                return Ok(Vec::new());
+            }
+            let mut tasks = self.tasks.lock().unwrap();
+            let task = tasks
+                .iter_mut()
+                .find(|task| task.id == task_id)
+                .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))?;
+            let added = paths
+                .iter()
+                .map(|path| format!("file:{path}"))
+                .filter(|selector| {
+                    !task
+                        .context_files
+                        .iter()
+                        .any(|existing| orbit_common::fs::selector::overlaps(existing, selector))
+                })
+                .collect::<Vec<_>>();
+            if added.is_empty() {
+                return Ok(added);
+            }
+            task.context_files.extend(added.iter().cloned());
+            let widening = ContextFilesWidening {
+                run_id: run_id.to_string(),
+                step,
+                activity: activity.to_string(),
+                selectors: added.clone(),
+            };
+            let note = serde_json::to_string(&widening).unwrap();
+            self.history.lock().unwrap().push((
+                task_id.to_string(),
+                TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".to_string(),
+                    event: CONTEXT_FILES_WIDENED_EVENT.to_string(),
+                    note: Some(note),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: Some(TaskDecision::ContextFilesWidened(widening)),
+                    surface: None,
+                    caller: None,
+                },
+            ));
+            Ok(added)
+        }
     }
+}
+
+impl_test_host! { impl Recovery for CommitTestHost {} }
+
+impl_test_host! { impl ReviewGate for CommitTestHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for CommitTestHost {}
 }
 
 /// Detach a fixture repo from any machine-global `core.hooksPath`.

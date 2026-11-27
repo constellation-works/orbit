@@ -44,10 +44,8 @@ use super::scope::{
 use super::summary::ensure_durable_execution_summary;
 use super::tagged_no_diff;
 
-pub(in crate::executor::automation) fn git_commit<H>(
-    host: &H,
-    input: &Value,
-) -> Result<Value, OrbitError>
+/// Commit the candidate or its task artifacts according to the requested scope.
+pub fn git_commit<H>(host: &H, input: &Value) -> Result<Value, OrbitError>
 where
     H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
 {

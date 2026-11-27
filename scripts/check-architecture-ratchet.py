@@ -3,7 +3,7 @@
 
 The restructure (docs/design/architecture-restructure/2_design.md §10) moves
 about a thousand operations over many weeks while unrelated work lands daily,
-so the old shape can regrow. This check holds nine counts of that shape at
+so the old shape can regrow. This check holds eight counts of that shape at
 or below scripts/architecture-ratchet-baseline.json, the pattern of
 scripts/check-dashboard-css-literals.py:
 
@@ -39,16 +39,11 @@ CRATES = "crates"
 RUNTIME_SRC = "crates/orbit-runtime/src"
 RUNTIME_LAYERS = ("base", "stored", "host", "run")
 APPLICATION_PORT = "crates/orbit-runtime/src/application_port.rs"
-RUNTIME_HOST_DIR = "crates/orbit-engine/src/context/hosts/runtime_host"
-RUNTIME_HOST_MOD = f"{RUNTIME_HOST_DIR}/mod.rs"
 DEFINITIONS = {
     "impl_orbit_runtime_files":
         "non-test files with an inherent `impl OrbitRuntime` block",
     "orbit_runtime_ref_param_fns":
         "functions with a `&OrbitRuntime` or `&mut OrbitRuntime` parameter",
-    "runtime_host_required_methods":
-        "required methods of `RuntimeHost` and its capability supertraits: declarations "
-        "with no default body",
     "application_port_methods":
         "methods of the `ApplicationPort` trait",
     "from_kernel_ref_uses":
@@ -78,7 +73,6 @@ CLOSER = {"{": "}", "(": ")", "[": "]"}
 FN_NAME = re.compile(r"\bfn\s+([A-Za-z_]\w*)")
 FN_TOKEN = re.compile(r"->|[<>(;{]")
 FN_BEFORE = re.compile(r"\bfn\s+$")
-SUPERTRAIT = re.compile(r"\b([A-Z]\w*)\b")
 FnDecl = namedtuple("FnDecl", "name offset params body")
 
 # Count patterns.
@@ -297,27 +291,6 @@ def files_matching(sources, pattern):
     return entries
 
 
-def runtime_host_required(by_path):
-    # `RuntimeHost` declares its capabilities through supertraits, each
-    # re-exported from its own module beside `mod.rs`; their required methods
-    # count as the host's.
-    host = _source(by_path, RUNTIME_HOST_MOD)
-    start, end = _trait_body(host.masked, "RuntimeHost")
-    entries = [host.location(decl.offset, decl.name)
-               for decl in fn_decls(host.masked, start, end) if decl.body == ";"]
-    header = re.search(r"\btrait\s+RuntimeHost\b", host.masked)
-    for name in SUPERTRAIT.findall(host.masked, header.end(), start - 1):
-        export = re.search(rf"\bpub\s+use\s+(\w+)\s*::\s*{name}\s*;", host.masked)
-        if export is None:
-            continue
-        module = _source(by_path, f"{RUNTIME_HOST_DIR}/{export.group(1)}.rs")
-        body_start, body_end = _trait_body(module.masked, name)
-        entries.extend(module.location(decl.offset, decl.name)
-                       for decl in fn_decls(module.masked, body_start, body_end)
-                       if decl.body == ";")
-    return entries
-
-
 def application_port_methods(by_path):
     # The port is deleted, so its file is normally absent and the count is
     # zero. A port that comes back is counted again, and the ratchet refuses it.
@@ -347,7 +320,6 @@ def measure(root):
         source.location(decl.offset, decl.name)
         for source in sources for decl in fn_decls(source.masked)
         if RUNTIME_PARAM.search(decl.params)]
-    counts["runtime_host_required_methods"] = runtime_host_required(by_path)
     counts["application_port_methods"] = application_port_methods(by_path)
     counts["from_kernel_ref_uses"] = [
         source.location(match.start())

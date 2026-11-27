@@ -1,16 +1,14 @@
-//! Substantive execution defaults of the test-only `NullRuntimeHost`: the
-//! answers of a host without script, deferral-probe, activity-tool or crew
-//! capability. `host.rs` keeps every trait signature and calls these bodies.
+//! Shared fixture answers for scripts, deferral probes, activity tools and crews.
 
 use serde_json::Value;
 
-use super::super::super::{CrewConfig, ResolvedActivityTools, ScriptStepRequest, ScriptStepRun};
 use crate::context::dispatch_contract::DispatchError;
+use crate::{CrewConfig, ResolvedActivityTools, ScriptStepRequest, ScriptStepRun};
 use orbit_types::workflow::{DeferralProbe, NamespaceProbe};
 
 /// The `run_script_step` answer of a host that runs no scripts: a refusal
 /// for the unavailable sandbox that records the requested script.
-pub(super) fn refuse_script_step(request: &ScriptStepRequest) -> ScriptStepRun {
+pub fn refuse_script_step(request: &ScriptStepRequest) -> ScriptStepRun {
     ScriptStepRun::Refused {
         code: orbit_types::workflow::activity_job::script_refusal::SANDBOX_UNAVAILABLE,
         message: "this host runs no script steps".to_string(),
@@ -28,7 +26,7 @@ pub(super) fn refuse_script_step(request: &ScriptStepRequest) -> ScriptStepRun {
 
 /// The `run_deferral_probe` answer of a host that cannot run probes: exit
 /// code -1 with a message that says why the probe did not run.
-pub(super) fn unavailable_deferral_probe(probe: &DeferralProbe) -> NamespaceProbe {
+pub fn unavailable_deferral_probe(probe: &DeferralProbe) -> NamespaceProbe {
     NamespaceProbe {
         command: probe.command.to_string(),
         exit_code: -1,
@@ -39,7 +37,7 @@ pub(super) fn unavailable_deferral_probe(probe: &DeferralProbe) -> NamespaceProb
 /// The `resolve_activity_tools` answer of a host without tool resolution: the
 /// baseline tools are effective, and nothing is requested, granted or
 /// suppressed.
-pub(super) fn baseline_activity_tools(baseline_tools: &[String]) -> ResolvedActivityTools {
+pub fn baseline_activity_tools(baseline_tools: &[String]) -> ResolvedActivityTools {
     ResolvedActivityTools {
         requested_tools: Vec::new(),
         effective_tools: baseline_tools.to_vec(),
@@ -54,7 +52,7 @@ pub(super) fn baseline_activity_tools(baseline_tools: &[String]) -> ResolvedActi
 /// environment the host already built. The caller dispatches the host's
 /// `agent_subprocess_environment` first, so an override applies before this
 /// overlay.
-pub(super) fn overlay_crew_env(
+pub fn overlay_crew_env(
     parent_env: &orbit_common::Env,
     mut env: Vec<(String, String)>,
     crew_env: &[orbit_types::identity::CrewEnvVar],
@@ -73,7 +71,7 @@ pub(super) fn overlay_crew_env(
 
 /// The crew named by an activity input, which this host cannot resolve: an
 /// explicit crew name is refused, and no crew name is `None`.
-pub(super) fn validate_input_crew(input: &Value) -> Result<Option<CrewConfig>, DispatchError> {
+pub fn validate_input_crew(input: &Value) -> Result<Option<CrewConfig>, DispatchError> {
     if let Some(crew) = input
         .get("crew")
         .and_then(Value::as_str)

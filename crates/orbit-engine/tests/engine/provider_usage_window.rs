@@ -15,6 +15,7 @@
 //!   envelope set to Orbit's, and the window utilizations set to 0.91 and
 //!   0.42.
 
+use orbit_engine::test_support::impl_test_host;
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -49,38 +50,57 @@ struct UsageHost {
     cli_args: Vec<String>,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for UsageHost {
-    fn agent_subprocess_environment(&self, names: &[&str]) -> Vec<(String, String)> {
-        HostEnvironment::agent_subprocess_environment(&self.provider, names)
-    }
-
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        let mut executor = Dispatch::resolve_cli_executor(&self.provider, provider)?;
-        if let Some(command) = &self.cli_command {
-            executor.command = command.clone();
+impl_test_host! {
+    impl Dispatch for UsageHost {
+        fn resolve_cli_executor(
+            &self,
+            provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            let mut executor = Dispatch::resolve_cli_executor(&self.provider, provider)?;
+            if let Some(command) = &self.cli_command {
+                executor.command = command.clone();
+            }
+            if !self.cli_args.is_empty() {
+                executor.args = self.cli_args.clone();
+            }
+            Ok(executor)
         }
-        if !self.cli_args.is_empty() {
-            executor.args = self.cli_args.clone();
+    }
+}
+
+impl_test_host! {
+    impl HostEnvironment for UsageHost {
+        fn agent_subprocess_environment(&self, names: &[&str]) -> Vec<(String, String)> {
+            HostEnvironment::agent_subprocess_environment(&self.provider, names)
         }
-        Ok(executor)
-    }
 
-    fn record_provider_limit(
-        &self,
-        reading: &ProviderLimitObservation,
-    ) -> Result<(), orbit_common::OrbitError> {
-        self.store
-            .write(|tx| tx.provider_limit().put(reading))
-            .map(|_| ())
-    }
+        fn record_provider_limit(
+            &self,
+            reading: &ProviderLimitObservation,
+        ) -> Result<(), orbit_common::OrbitError> {
+            self.store
+                .write(|tx| tx.provider_limit().put(reading))
+                .map(|_| ())
+        }
 
-    fn record_provider_usage_reading(
-        &self,
-        readings: &[ProviderLimitObservation],
-    ) -> Result<(), orbit_common::OrbitError> {
-        self.store
-            .write(|tx| tx.provider_limit().put_reading(readings))
+        fn record_provider_usage_reading(
+            &self,
+            readings: &[ProviderLimitObservation],
+        ) -> Result<(), orbit_common::OrbitError> {
+            self.store
+                .write(|tx| tx.provider_limit().put_reading(readings))
+        }
     }
+}
+
+impl_test_host! { impl RunLifecycle for UsageHost {} }
+
+impl_test_host! { impl Recovery for UsageHost {} }
+
+impl_test_host! { impl ReviewGate for UsageHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for UsageHost {}
 }
 
 struct DispatchOptions<'a> {

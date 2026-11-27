@@ -1,5 +1,6 @@
 #![allow(missing_docs)]
 
+use orbit_engine::test_support::impl_test_host;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex as StdMutex;
 
@@ -22,7 +23,7 @@ pub(super) enum Action {
     Ok(Value),
 }
 
-/// A minimal `RuntimeHost` returning scripted outcomes per
+/// A fixture host returning scripted outcomes per
 /// deterministic-action name.
 pub(super) struct ScriptedHost {
     responses: StdMutex<HashMap<String, VecDeque<Action>>>,
@@ -52,31 +53,45 @@ impl ScriptedHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for ScriptedHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.call_log
-            .lock()
-            .expect("call log")
-            .push(action.to_string());
-        let next = self
-            .responses
-            .lock()
-            .expect("responses")
-            .get_mut(action)
-            .and_then(VecDeque::pop_front);
-        match next {
-            Some(Action::Ok(value)) => Ok(value),
-            // Default: succeed with `{ "action": <name> }` so untyped tests
-            // don't have to script every call.
-            None => Ok(json!({ "action": action })),
+impl_test_host! {
+    impl Dispatch for ScriptedHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            _input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.call_log
+                .lock()
+                .expect("call log")
+                .push(action.to_string());
+            let next = self
+                .responses
+                .lock()
+                .expect("responses")
+                .get_mut(action)
+                .and_then(VecDeque::pop_front);
+            match next {
+                Some(Action::Ok(value)) => Ok(value),
+                // Default: succeed with `{ "action": <name> }` so untyped tests
+                // don't have to script every call.
+                None => Ok(json!({ "action": action })),
+            }
         }
     }
+}
+
+impl_test_host! { impl HostEnvironment for ScriptedHost {} }
+
+impl_test_host! { impl RunLifecycle for ScriptedHost {} }
+
+impl_test_host! { impl Recovery for ScriptedHost {} }
+
+impl_test_host! { impl ReviewGate for ScriptedHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ScriptedHost {}
 }
 
 pub(super) fn test_writer(run_id: &str) -> V2AuditWriter {

@@ -8,6 +8,7 @@
 //! and any declared output schema must accept it. Every attempt leaves one
 //! `script.execution` audit entry.
 
+use orbit_engine::test_support::impl_test_host;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -109,26 +110,40 @@ impl ScriptedRunHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for ScriptedRunHost {
-    fn run_script_step(&self, request: &ScriptStepRequest) -> ScriptStepRun {
-        self.requests.lock().unwrap().push(request.clone());
-        ScriptStepRun::Ran(Box::new(ScriptStepRan {
-            end: self.end,
-            stdout: self.stdout.as_bytes().to_vec(),
-            stdout_over_cap: false,
-            output_schema: Value::Null,
-            log: self.log.as_bytes().to_vec(),
-            record: ScriptExecutionRecord {
-                script: request.script.clone(),
-                digest: "d".repeat(64),
-                grant_id: Some("grant-1".to_string()),
-                argv: vec!["/usr/bin/bash".to_string()],
-                duration_ms: Some(7),
-                ..ScriptExecutionRecord::default()
-            },
-            outputs: orbit_engine::ScriptStepOutputs::None,
-        }))
+impl_test_host! {
+    impl Dispatch for ScriptedRunHost {
+        fn run_script_step(&self, request: &ScriptStepRequest) -> ScriptStepRun {
+            self.requests.lock().unwrap().push(request.clone());
+            ScriptStepRun::Ran(Box::new(ScriptStepRan {
+                end: self.end,
+                stdout: self.stdout.as_bytes().to_vec(),
+                stdout_over_cap: false,
+                output_schema: Value::Null,
+                log: self.log.as_bytes().to_vec(),
+                record: ScriptExecutionRecord {
+                    script: request.script.clone(),
+                    digest: "d".repeat(64),
+                    grant_id: Some("grant-1".to_string()),
+                    argv: vec!["/usr/bin/bash".to_string()],
+                    duration_ms: Some(7),
+                    ..ScriptExecutionRecord::default()
+                },
+                outputs: orbit_engine::ScriptStepOutputs::None,
+            }))
+        }
     }
+}
+
+impl_test_host! { impl HostEnvironment for ScriptedRunHost {} }
+
+impl_test_host! { impl RunLifecycle for ScriptedRunHost {} }
+
+impl_test_host! { impl Recovery for ScriptedRunHost {} }
+
+impl_test_host! { impl ReviewGate for ScriptedRunHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ScriptedRunHost {}
 }
 
 fn script_job() -> orbit_types::workflow::JobV2 {
@@ -403,7 +418,20 @@ fn a_host_without_the_script_profile_refuses_before_spawn_and_records_the_refusa
 
     #[derive(Default)]
     struct NullHost;
-    impl orbit_engine::test_support::NullRuntimeHost for NullHost {}
+
+    impl_test_host! { impl Dispatch for NullHost {} }
+
+    impl_test_host! { impl HostEnvironment for NullHost {} }
+
+    impl_test_host! { impl RunLifecycle for NullHost {} }
+
+    impl_test_host! { impl Recovery for NullHost {} }
+
+    impl_test_host! { impl ReviewGate for NullHost {} }
+
+    impl_test_host! {
+        impl RuntimeHostProcessEnvironment for NullHost {}
+    }
 
     let (audit, store, _audit_root) = audited_writer("jrun-script-refused");
     let error = execute_job_with_resume(

@@ -59,4 +59,4 @@ mod wait_gate;
 pub use wait_gate::landing_wait_gate_cleared;
 
 pub(in crate::executor::automation) use review_watch::pr_checks_watch;
-pub(in crate::executor::automation) use run::handoff_land;
+pub use run::handoff_land;

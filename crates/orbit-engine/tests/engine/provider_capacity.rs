@@ -14,6 +14,7 @@
 //! route either, so that run takes the same skip. [ORB-19224] So does one
 //! whose required check its own sandbox refuses (`validation_route_unavailable`).
 
+use orbit_engine::test_support::impl_test_host;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -148,140 +149,165 @@ impl CapacityHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for CapacityHost {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.actions
-            .lock()
-            .unwrap()
-            .push((action.to_string(), input.clone()));
-        if action == "test_stub_red_base_validate" {
-            let hold = BaselineRedHold {
-                base_ref: "origin/main".to_string(),
-                base_sha: "b".repeat(40),
-                command: "make ci-lint".to_string(),
-                run_id: String::new(),
-                selection: None,
-                failures: Default::default(),
-            };
-            return Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: hold.text("required validation 'make ci-lint' fails on the base too"),
-            });
-        }
-        if action == "test_stub_candidate_validate" {
-            return Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: "required validation 'make test' did not pass on candidate head"
-                    .to_string(),
-            });
-        }
-        if action == "test_stub_post_recovery_owner_route" {
-            // The current call was recorded above: the first attempt is an
-            // ordinary failure, the post-recovery attempt loses its owner route.
-            let count = self
-                .actions
+impl_test_host! {
+    impl Dispatch for CapacityHost {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.actions
                 .lock()
                 .unwrap()
-                .iter()
-                .filter(|(name, _)| name == action)
-                .count();
-            if count >= 2 {
-                return Err(DispatchError::OwnerRouteUnavailable {
+                .push((action.to_string(), input.clone()));
+            if action == "test_stub_red_base_validate" {
+                let hold = BaselineRedHold {
+                    base_ref: "origin/main".to_string(),
+                    base_sha: "b".repeat(40),
+                    command: "make ci-lint".to_string(),
+                    run_id: String::new(),
+                    selection: None,
+                    failures: Default::default(),
+                };
+                return Err(DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
-                    message: "the coordinator could not be reached".to_string(),
+                    message: hold.text("required validation 'make ci-lint' fails on the base too"),
                 });
             }
-            return Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: "tests failed".to_string(),
-            });
-        }
-        if action == "test_stub_post_recovery_completion_observation" {
-            // The first attempt is an ordinary failure; the post-recovery
-            // attempt meets a transient forge read failure.
-            let count = self
-                .actions
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|(name, _)| name == action)
-                .count();
-            if count >= 2 {
-                return Err(DispatchError::CompletionObservationUnavailable {
+            if action == "test_stub_candidate_validate" {
+                return Err(DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
-                    message: "net/http: TLS handshake timeout".to_string(),
+                    message: "required validation 'make test' did not pass on candidate head"
+                        .to_string(),
                 });
             }
-            return Err(DispatchError::DeterministicActionFailed {
-                action: action.to_string(),
-                message: "tests failed".to_string(),
-            });
+            if action == "test_stub_post_recovery_owner_route" {
+                // The current call was recorded above: the first attempt is an
+                // ordinary failure, the post-recovery attempt loses its owner route.
+                let count = self
+                    .actions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(name, _)| name == action)
+                    .count();
+                if count >= 2 {
+                    return Err(DispatchError::OwnerRouteUnavailable {
+                        action: action.to_string(),
+                        message: "the coordinator could not be reached".to_string(),
+                    });
+                }
+                return Err(DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: "tests failed".to_string(),
+                });
+            }
+            if action == "test_stub_post_recovery_completion_observation" {
+                // The first attempt is an ordinary failure; the post-recovery
+                // attempt meets a transient forge read failure.
+                let count = self
+                    .actions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(name, _)| name == action)
+                    .count();
+                if count >= 2 {
+                    return Err(DispatchError::CompletionObservationUnavailable {
+                        action: action.to_string(),
+                        message: "net/http: TLS handshake timeout".to_string(),
+                    });
+                }
+                return Err(DispatchError::DeterministicActionFailed {
+                    action: action.to_string(),
+                    message: "tests failed".to_string(),
+                });
+            }
+            Ok(match action {
+                "setup" => json!({ "workspace_path": self.worktree, "base_ref": "main" }),
+                _ => json!({ "action": action }),
+            })
         }
-        Ok(match action {
-            "setup" => json!({ "workspace_path": self.worktree, "base_ref": "main" }),
-            _ => json!({ "action": action }),
-        })
-    }
 
-    fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        let mut env = allowlisted_child_env(&orbit_common::Env::capture(), &[], required_env_vars);
-        // Fake Grok runs must never read the host's real login or billing API.
-        if required_env_vars.contains(&"GROK_HOME") {
-            env.push((
-                "GROK_HOME".to_string(),
-                self.worktree.join("grok-home").display().to_string(),
-            ));
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            *self.provider_dispatches.lock().unwrap() += 1;
+            Ok(ResolvedCliExecutor {
+                command: self.cli.to_string_lossy().into_owned(),
+                args: Vec::new(),
+                inspection_args: None,
+                image_input: None,
+            })
         }
-        env.extend(self.agent_env.iter().cloned());
-        env
     }
+}
 
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        *self.provider_dispatches.lock().unwrap() += 1;
-        Ok(ResolvedCliExecutor {
-            command: self.cli.to_string_lossy().into_owned(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
-    }
+impl_test_host! {
+    impl HostEnvironment for CapacityHost {
+        fn agent_subprocess_environment(
+            &self,
+            required_env_vars: &[&str],
+        ) -> Vec<(String, String)> {
+            let mut env =
+                allowlisted_child_env(&orbit_common::Env::capture(), &[], required_env_vars);
+            // Fake Grok runs must never read the host's real login or billing API.
+            if required_env_vars.contains(&"GROK_HOME") {
+                env.push((
+                    "GROK_HOME".to_string(),
+                    self.worktree.join("grok-home").display().to_string(),
+                ));
+            }
+            env.extend(self.agent_env.iter().cloned());
+            env
+        }
 
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext::default()
+        fn record_provider_limit(
+            &self,
+            observation: &ProviderLimitObservation,
+        ) -> Result<(), OrbitError> {
+            self.limits.lock().unwrap().push(observation.clone());
+            Ok(())
+        }
     }
+}
 
-    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
+impl_test_host! { impl RunLifecycle for CapacityHost {} }
 
-    fn admit_final_recovery(
-        &self,
-        _run_id: &str,
-        _request: &FinalRecoveryAdmissionRequest,
-    ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        *self.final_recovery_admissions.lock().unwrap() += 1;
-        Ok(FinalRecoveryAdmission::Admitted)
-    }
+impl_test_host! {
+    impl Recovery for CapacityHost {
+        fn tool_context_for_activity(
+            &self,
+            _run_id: Option<&str>,
+            _fs_profile: Option<&str>,
+            _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            _proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            orbit_tools::ToolContext::default()
+        }
 
-    fn record_provider_limit(
-        &self,
-        observation: &ProviderLimitObservation,
-    ) -> Result<(), OrbitError> {
-        self.limits.lock().unwrap().push(observation.clone());
-        Ok(())
+        fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+            Ok(None)
+        }
+
+        fn admit_final_recovery(
+            &self,
+            _run_id: &str,
+            _request: &FinalRecoveryAdmissionRequest,
+        ) -> Result<FinalRecoveryAdmission, OrbitError> {
+            *self.final_recovery_admissions.lock().unwrap() += 1;
+            Ok(FinalRecoveryAdmission::Admitted)
+        }
     }
+}
+
+impl_test_host! { impl ReviewGate for CapacityHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for CapacityHost {}
 }
 
 pub(super) struct JobRun {

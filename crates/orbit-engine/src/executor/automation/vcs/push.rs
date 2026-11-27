@@ -48,7 +48,8 @@ enum PreservedRepair {
     Unpushed(String),
 }
 
-pub(in crate::executor::automation) fn push_batch_changes<
+/// Publish candidate changes while preserving the remote head and push evidence.
+pub fn push_batch_changes<
     H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
 >(
     host: &H,

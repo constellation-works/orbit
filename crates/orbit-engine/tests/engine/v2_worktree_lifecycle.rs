@@ -38,6 +38,7 @@ mod resolution_intent;
 mod trash;
 mod unlocked_revalidation;
 
+use orbit_engine::test_support::impl_test_host;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 #[cfg(unix)]
@@ -919,67 +920,192 @@ impl LifecycleHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            workspace_base_branch: BASE.to_string(),
-            unlocked_path_validation: self.unlocked_validation.lock().unwrap().clone(),
-            generated_paths: self.generated_paths.lock().unwrap().clone(),
-            validation_build_output_env: vec!["BUILD_OUTPUT_DIR".into()],
-            repo_root: Some(self.repo.to_string_lossy().into_owned()),
-            // Unset means the shipped default, as on a host without configuration.
-            worktree_reclaim_patterns: self.reclaim_patterns.clone().unwrap_or_else(|| {
-                ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
-                    .map(String::from)
-                    .to_vec()
-            }),
-            pr_config: self.pr_config.lock().unwrap().clone(),
-            ..orbit_engine::RunSettings::default()
+impl_test_host! {
+    impl Dispatch for LifecycleHost {
+        fn task_context_for_agent_input(
+            &self,
+            _run_id: &str,
+            _step_id: &str,
+            input: &Value,
+        ) -> Result<Option<Value>, DispatchError> {
+            if !self.publish_task_context {
+                return Ok(None);
+            }
+            let Some(task_id) = input.get("task_id").and_then(Value::as_str) else {
+                return Ok(None);
+            };
+            let Some(task) = self.tasks.lock().unwrap().get(task_id).cloned() else {
+                return Ok(None);
+            };
+            Ok(Some(json!({
+                "id": task.id,
+                "status": task.status.cli_name(),
+                "terminal": orbit_types::task::refuses_implementer_writes(task.status),
+            })))
+        }
+
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            let Some(reply) = stored_record(&self.stubs, action) else {
+                return Err(DispatchError::DeterministicActionNotRegistered(
+                    action.to_string(),
+                ));
+            };
+            self.stub_calls
+                .lock()
+                .unwrap()
+                .push((action.to_string(), input.clone()));
+            reply
+        }
+
+        fn resolve_cli_executor(
+            &self,
+            provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            let command = self
+                .provider
+                .as_ref()
+                .unwrap_or_else(|| panic!("no substitute CLI configured for provider {provider}"));
+            Ok(ResolvedCliExecutor {
+                command: command.to_string_lossy().into_owned(),
+                args: Vec::new(),
+                inspection_args: None,
+                image_input: None,
+            })
         }
     }
+}
 
-    fn task_context_for_agent_input(
-        &self,
-        _run_id: &str,
-        _step_id: &str,
-        input: &Value,
-    ) -> Result<Option<Value>, DispatchError> {
-        if !self.publish_task_context {
-            return Ok(None);
+impl_test_host! {
+    impl HostEnvironment for LifecycleHost {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                workspace_base_branch: BASE.to_string(),
+                unlocked_path_validation: self.unlocked_validation.lock().unwrap().clone(),
+                generated_paths: self.generated_paths.lock().unwrap().clone(),
+                validation_build_output_env: vec!["BUILD_OUTPUT_DIR".into()],
+                repo_root: Some(self.repo.to_string_lossy().into_owned()),
+                // Unset means the shipped default, as on a host without configuration.
+                worktree_reclaim_patterns: self.reclaim_patterns.clone().unwrap_or_else(|| {
+                    ["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]
+                        .map(String::from)
+                        .to_vec()
+                }),
+                pr_config: self.pr_config.lock().unwrap().clone(),
+                ..orbit_engine::RunSettings::default()
+            }
         }
-        let Some(task_id) = input.get("task_id").and_then(Value::as_str) else {
-            return Ok(None);
-        };
-        let Some(task) = self.tasks.lock().unwrap().get(task_id).cloned() else {
-            return Ok(None);
-        };
-        Ok(Some(json!({
-            "id": task.id,
-            "status": task.status.cli_name(),
-            "terminal": orbit_types::task::refuses_implementer_writes(task.status),
-        })))
-    }
 
-    fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
-        let mut environment = orbit_exec::ValidationEnvironment::launcher(
-            HostEnvironment::agent_subprocess_environment(self, &[]),
-        );
-        environment.build_output_env = vec!["BUILD_OUTPUT_DIR".into()];
-        environment
-    }
+        fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
+            let mut environment = orbit_exec::ValidationEnvironment::launcher(
+                HostEnvironment::agent_subprocess_environment(self, &[]),
+            );
+            environment.build_output_env = vec!["BUILD_OUTPUT_DIR".into()];
+            environment
+        }
 
-    fn record_direct_landing_intent(
-        &self,
-        _request: &orbit_types::workflow::automation::DirectLandingRequest,
-    ) -> Result<(), OrbitError> {
-        if let Some(path) = self.landing_advance.lock().unwrap().take() {
-            commit_file(&path, "racing.txt", "later candidate\n");
+        fn run_private_vcs_operation(
+            &self,
+            operation: &str,
+            input: Value,
+        ) -> Result<Value, OrbitError> {
+            if operation == "pr.status"
+                && let Some(status) = self.pr_status.lock().unwrap().clone()
+            {
+                return Ok(status);
+            }
+            orbit_engine::run_private_vcs_operation(
+                &orbit_common::Env::capture(),
+                operation,
+                &input,
+            )
+        }
+
+        fn required_validation_commands(&self) -> Vec<String> {
+            self.required_commands.lock().unwrap().clone()
+        }
+
+        fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
+            orbit_types::workflow::HostValidationGates {
+                gates: orbit_types::workflow::ValidationGates {
+                    required_validation_commands: self.required_commands.lock().unwrap().clone(),
+                    baseline_commands: Vec::new(),
+                    light_delivery_paths: None,
+                    review_skip_tags: None,
+                },
+                source: self
+                    .gate_source
+                    .unwrap_or(orbit_types::workflow::ValidationGateSource::LocalConfig),
+            }
+        }
+
+        fn record_validated_tree(
+            &self,
+            tree: &orbit_engine::ValidatedTree,
+        ) -> Result<(), OrbitError> {
+            store_record(&self.validated_trees, &tree.run_id, tree.clone());
+            Ok(())
+        }
+
+        fn validated_tree(
+            &self,
+            run_id: &str,
+        ) -> Result<Option<orbit_engine::ValidatedTree>, OrbitError> {
+            Ok(stored_record(&self.validated_trees, run_id))
+        }
+
+        fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
+            Ok(self.runs.lock().unwrap().clone())
+        }
+
+        fn lookup_task_for_worktree_gc(
+            &self,
+            _run_id: &str,
+            task_id: &str,
+        ) -> WorktreeGcTaskLookup {
+            if let Some(answer) = self.owner_answers.lock().unwrap().get(task_id) {
+                return answer.clone();
+            }
+            match RunLifecycle::get_task(self, task_id) {
+                Ok(task) => WorktreeGcTaskLookup::Found {
+                    status: task.status,
+                    pr_status: task.pr_status,
+                    status_since: Some(task.updated_at),
+                },
+                Err(_) => WorktreeGcTaskLookup::Unresolved,
+            }
+        }
+
+        fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String> {
+            Some(stored_record(&self.lookup_scopes, run_id).unwrap_or_else(|| "local".to_string()))
+        }
+
+        fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
+            stored_record(&self.settled_claims, run_id)
+        }
+    }
+}
+
+impl_test_host! {
+    impl RunLifecycle for LifecycleHost {
+        fn record_direct_landing_intent(
+            &self,
+            _request: &orbit_types::workflow::automation::DirectLandingRequest,
+        ) -> Result<(), OrbitError> {
+            if let Some(path) = self.landing_advance.lock().unwrap().take() {
+                commit_file(&path, "racing.txt", "later candidate\n");
         }
         if let Some((path, bytes)) = self.landing_write.lock().unwrap().take() {
             fs::write(path, bytes).unwrap();
         }
         Ok(())
     }
+
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
         stored_record(&self.tasks, task_id)
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
@@ -997,7 +1123,11 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         Ok(self.tasks.lock().unwrap().values().cloned().collect())
     }
 
-    fn admit_task_for_workflow(&self, task_id: &str, _workflow: &str) -> Result<Task, OrbitError> {
+    fn admit_task_for_workflow(
+        &self,
+        task_id: &str,
+        _workflow: &str,
+    ) -> Result<Task, OrbitError> {
         self.admitted.lock().unwrap().push(task_id.to_string());
         self.set_status(task_id, TaskStatus::InProgress);
         RunLifecycle::get_task(self, task_id)
@@ -1030,19 +1160,6 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
             self.record_history(task_id, entry);
         }
         Ok(())
-    }
-
-    fn run_private_vcs_operation(
-        &self,
-        operation: &str,
-        input: Value,
-    ) -> Result<Value, OrbitError> {
-        if operation == "pr.status"
-            && let Some(status) = self.pr_status.lock().unwrap().clone()
-        {
-            return Ok(status);
-        }
-        orbit_engine::run_private_vcs_operation(&orbit_common::Env::capture(), operation, &input)
     }
 
     fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
@@ -1085,38 +1202,8 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         Ok(stored_record(&self.run_states, run_id))
     }
 
-    fn required_validation_commands(&self) -> Vec<String> {
-        self.required_commands.lock().unwrap().clone()
-    }
-
-    fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
-        orbit_types::workflow::HostValidationGates {
-            gates: orbit_types::workflow::ValidationGates {
-                required_validation_commands: self.required_commands.lock().unwrap().clone(),
-                baseline_commands: Vec::new(),
-                light_delivery_paths: None,
-                review_skip_tags: None,
-            },
-            source: self
-                .gate_source
-                .unwrap_or(orbit_types::workflow::ValidationGateSource::LocalConfig),
-        }
-    }
-
     fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
         self.worker.clone()
-    }
-
-    fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {
-        store_record(&self.validated_trees, &tree.run_id, tree.clone());
-        Ok(())
-    }
-
-    fn validated_tree(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<orbit_engine::ValidatedTree>, OrbitError> {
-        Ok(stored_record(&self.validated_trees, run_id))
     }
 
     fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
@@ -1125,100 +1212,6 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
 
     fn register_worker_pid_namespace(&self, _pid: u32) -> Result<(), OrbitError> {
         Ok(())
-    }
-
-    fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
-        let worker = self.worker.as_ref().expect("claimed fixture");
-        Ok(orbit_engine::ClaimExecutionContext {
-            footprint: vec!["file:README.md".to_string()],
-            workspace_id: worker.owner_workspace_id.clone(),
-            task_id: worker.task_id.clone(),
-            claim_id: worker.claim_id.clone(),
-            machine_id: worker.execution.machine_id.clone(),
-            run_id: worker.bound_run_id.clone(),
-            ship_mode: "pr".to_string(),
-            base_branch: "agent-main".to_string(),
-            landing_branch: "agent-main".to_string(),
-            required_commands: self.required_commands.lock().unwrap().clone(),
-        })
-    }
-
-    fn attach_task_validation_log(
-        &self,
-        task_id: &str,
-        run_id: &str,
-        path: &str,
-        content: Vec<u8>,
-    ) -> Result<(), OrbitError> {
-        // As the runtime's host does: validate the path, refuse a run that
-        // does not own the task with a typed error, and store the bytes raw.
-        orbit_types::task::validate_relative_artifact_path(path)?;
-        if RunLifecycle::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
-            return Err(OrbitError::PolicyDenied(format!(
-                "run '{run_id}' does not own task '{task_id}'; it cannot attach validation evidence"
-            )));
-        }
-        let mut artifacts = self.artifacts.lock().unwrap();
-        let artifacts = artifacts.entry(task_id.to_string()).or_default();
-        artifacts.retain(|artifact| artifact.path != path);
-        artifacts.push(TaskArtifact {
-            path: path.to_string(),
-            content,
-            media_type: "application/json".to_string(),
-            created_by: None,
-        });
-        Ok(())
-    }
-
-    fn attach_claim_validation_log(&self, path: &str, content: Vec<u8>) -> Result<(), OrbitError> {
-        let worker = self
-            .worker
-            .as_ref()
-            .expect("claim routes evidence to its owner");
-        ReviewGate::attach_task_validation_log(
-            self,
-            &worker.task_id,
-            &worker.bound_run_id,
-            path,
-            content,
-        )
-    }
-
-    fn local_machine_id(&self) -> Option<String> {
-        self.machine.lock().unwrap().clone()
-    }
-
-    fn kept_claim_candidate(
-        &self,
-        _task_id: &str,
-    ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
-        Ok(self.kept_claim.lock().unwrap().clone())
-    }
-
-    fn list_job_runs_for_gc(&self) -> Result<Vec<JobRun>, OrbitError> {
-        Ok(self.runs.lock().unwrap().clone())
-    }
-
-    fn lookup_task_for_worktree_gc(&self, _run_id: &str, task_id: &str) -> WorktreeGcTaskLookup {
-        if let Some(answer) = self.owner_answers.lock().unwrap().get(task_id) {
-            return answer.clone();
-        }
-        match RunLifecycle::get_task(self, task_id) {
-            Ok(task) => WorktreeGcTaskLookup::Found {
-                status: task.status,
-                pr_status: task.pr_status,
-                status_since: Some(task.updated_at),
-            },
-            Err(_) => WorktreeGcTaskLookup::Unresolved,
-        }
-    }
-
-    fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String> {
-        Some(stored_record(&self.lookup_scopes, run_id).unwrap_or_else(|| "local".to_string()))
-    }
-
-    fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
-        stored_record(&self.settled_claims, run_id)
     }
 
     fn widen_task_context_files(
@@ -1237,93 +1230,100 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         ));
         Ok(paths.iter().map(|path| format!("file:{path}")).collect())
     }
-
-    /// Reserves the next attempt for a run's step as the runtime's recovery
-    /// authority does: an incomplete scope is refused and each reservation
-    /// supersedes the earlier ones.
-    fn begin_rebase_recovery_attempt(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        scope: &RebaseRecoveryAttemptScope,
-    ) -> Result<u64, DispatchError> {
-        let refuse = |error: OrbitError| {
-            DispatchError::JobExecution(format!(
-                "reserve rebase recovery attempt (run {run_id}, step `{step_id}`): {error}"
-            ))
-        };
-        if [
-            run_id,
-            step_id,
-            &scope.workspace_path,
-            &scope.head_sha_before,
-            &scope.target_base_sha,
-        ]
-        .iter()
-        .any(|value| value.is_empty())
-        {
-            return Err(refuse(OrbitError::InvalidInput(
-                "rebase recovery attempt needs a run, step, workspace, original HEAD and pinned base"
-                    .to_string(),
-            )));
-        }
-        let mut attempts = self.recovery_attempts.lock().unwrap();
-        attempts.push((run_id.to_string(), step_id.to_string(), scope.clone()));
-        Ok(attempts
-            .iter()
-            .filter(|(run, step, _)| run == run_id && step == step_id)
-            .count() as u64)
     }
+}
 
-    /// Certifies a completion as the runtime's recovery authority does, then
-    /// copies it into the run store the `git_rebase` retry reads. It refuses
-    /// a payload naming another run or step, or lacking its bindings or a
-    /// `recovery_attempt`; an attempt this host never reserved or a later
-    /// reservation superseded; evidence that does not describe the reserved
-    /// workspace, original HEAD and pinned base; and different evidence for an
-    /// attempt already certified. The copy needs the run to be Running with a
-    /// durable run state: neither is created here. As in the runtime, the
-    /// certificate is recorded before the copy is checked, so a refused copy
-    /// leaves the certificate in place for `verify_rebase_recovery`.
-    fn checkpoint_rebase_recovery(
-        &self,
-        run_id: &str,
-        step_id: &str,
-        output: &Value,
-    ) -> Result<(), DispatchError> {
-        let certify = |error: OrbitError| {
-            DispatchError::JobExecution(format!(
-                "certify rebase recovery (run {run_id}, step `{step_id}`): {error}"
-            ))
-        };
-        let attempt = self
-            .certifiable_attempt(run_id, step_id, output)
-            .map_err(certify)?;
-        let persist = |reason: &str| {
-            DispatchError::JobExecution(format!(
-                "persist rebase recovery checkpoint (run {run_id}, step `{step_id}`): {reason}"
-            ))
-        };
-        {
-            let mut certified = self.checkpoints.lock().unwrap();
-            let recorded = certified
+impl_test_host! {
+    impl Recovery for LifecycleHost {
+        /// Reserves the next attempt for a run's step as the runtime's recovery
+        /// authority does: an incomplete scope is refused and each reservation
+        /// supersedes the earlier ones.
+        fn begin_rebase_recovery_attempt(
+            &self,
+            run_id: &str,
+            step_id: &str,
+            scope: &RebaseRecoveryAttemptScope,
+        ) -> Result<u64, DispatchError> {
+            let refuse = |error: OrbitError| {
+                DispatchError::JobExecution(format!(
+                    "reserve rebase recovery attempt (run {run_id}, step `{step_id}`): {error}"
+                ))
+            };
+            if [
+                run_id,
+                step_id,
+                &scope.workspace_path,
+                &scope.head_sha_before,
+                &scope.target_base_sha,
+            ]
+            .iter()
+            .any(|value| value.is_empty())
+            {
+                return Err(refuse(OrbitError::InvalidInput(
+                    "rebase recovery attempt needs a run, step, workspace, original HEAD and pinned base"
+                        .to_string(),
+                )));
+            }
+            let mut attempts = self.recovery_attempts.lock().unwrap();
+            attempts.push((run_id.to_string(), step_id.to_string(), scope.clone()));
+            Ok(attempts
                 .iter()
-                .find(|(run, step, payload)| {
-                    run == run_id
-                        && step == step_id
-                        && payload.get("recovery_attempt").and_then(Value::as_i64) == Some(attempt)
-                })
-                .map(|(_, _, payload)| payload.clone());
-            match recorded {
-                Some(payload) if payload == *output => {}
-                Some(_) => {
-                    return Err(certify(OrbitError::Execution(format!(
-                        "rebase recovery for run {run_id} step `{step_id}` attempt {attempt} is \
-                         already certified with different evidence; the accepted certificate is \
-                         immutable"
+                .filter(|(run, step, _)| run == run_id && step == step_id)
+                .count() as u64)
+        }
+
+        /// Certifies a completion as the runtime's recovery authority does, then
+        /// copies it into the run store the `git_rebase` retry reads. It refuses
+        /// a payload naming another run or step, or lacking its bindings or a
+        /// `recovery_attempt`; an attempt this host never reserved or a later
+        /// reservation superseded; evidence that does not describe the reserved
+        /// workspace, original HEAD and pinned base; and different evidence for an
+        /// attempt already certified. The copy needs the run to be Running with a
+        /// durable run state: neither is created here. As in the runtime, the
+        /// certificate is recorded before the copy is checked, so a refused copy
+        /// leaves the certificate in place for `verify_rebase_recovery`.
+        fn checkpoint_rebase_recovery(
+            &self,
+            run_id: &str,
+            step_id: &str,
+            output: &Value,
+        ) -> Result<(), DispatchError> {
+            let certify = |error: OrbitError| {
+                DispatchError::JobExecution(format!(
+                    "certify rebase recovery (run {run_id}, step `{step_id}`): {error}"
+                ))
+            };
+            let attempt = self
+                .certifiable_attempt(run_id, step_id, output)
+                .map_err(certify)?;
+            let persist = |reason: &str| {
+                DispatchError::JobExecution(format!(
+                    "persist rebase recovery checkpoint (run {run_id}, step `{step_id}`): {reason}"
+                ))
+            };
+            {
+                let mut certified = self.checkpoints.lock().unwrap();
+                let recorded = certified
+                    .iter()
+                    .find(|(run, step, payload)| {
+                        run == run_id
+                            && step == step_id
+                            && payload.get("recovery_attempt").and_then(Value::as_i64)
+                                == Some(attempt)
+                    })
+                    .map(|(_, _, payload)| payload.clone());
+                match recorded {
+                    Some(payload) if payload == *output => {}
+                    Some(_) => {
+                        return Err(certify(OrbitError::Execution(format!(
+                            "rebase recovery for run {run_id} step `{step_id}` attempt {attempt} is \
+                             already certified with different evidence; the accepted certificate is \
+                             immutable"
                     ))));
                 }
-                None => certified.push((run_id.to_string(), step_id.to_string(), output.clone())),
+                None => {
+                    certified.push((run_id.to_string(), step_id.to_string(), output.clone()))
+                }
             }
         }
         // Certify first, as the runtime does: the run-state copy below is
@@ -1391,55 +1391,14 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         let latest = certified
             .iter()
             .filter(|(run, step, _)| run == run_id && step == step_id)
-            .filter_map(|(_, _, payload)| payload.get("recovery_attempt").and_then(Value::as_i64))
+            .filter_map(|(_, _, payload)| {
+                payload.get("recovery_attempt").and_then(Value::as_i64)
+            })
             .max();
         Ok(latest == Some(attempt)
             && certified.iter().any(|(run, step, payload)| {
                 run == run_id && step == step_id && payload == checkpoint
             }))
-    }
-
-    fn validate_step_recovery_mutation(
-        &self,
-        _run_id: &str,
-        _step_id: &str,
-        _task_ids: &[String],
-        _workspace_path: &Path,
-    ) -> Result<(), OrbitError> {
-        match self.recovery_owner_refusal.lock().unwrap().clone() {
-            Some(reason) => Err(OrbitError::Execution(reason)),
-            None => Ok(()),
-        }
-    }
-
-    fn authorize_step_recovery(
-        &self,
-        _run_id: &str,
-        _step_id: &str,
-    ) -> Result<StepRecoveryAdmission, OrbitError> {
-        Ok(match self.recovery_revocation.lock().unwrap().clone() {
-            Some(reason) => StepRecoveryAdmission::Denied { reason },
-            None => StepRecoveryAdmission::Allowed,
-        })
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        let Some(reply) = stored_record(&self.stubs, action) else {
-            return Err(DispatchError::DeterministicActionNotRegistered(
-                action.to_string(),
-            ));
-        };
-        self.stub_calls
-            .lock()
-            .unwrap()
-            .push((action.to_string(), input.clone()));
-        reply
     }
 
     /// Conflict recovery dispatched by a job draws from a complexity pool;
@@ -1488,19 +1447,6 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         })
     }
 
-    fn resolve_cli_executor(&self, provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        let command = self
-            .provider
-            .as_ref()
-            .unwrap_or_else(|| panic!("no substitute CLI configured for provider {provider}"));
-        Ok(ResolvedCliExecutor {
-            command: command.to_string_lossy().into_owned(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
-    }
-
     fn tool_context_for_activity(
         &self,
         _run_id: Option<&str>,
@@ -1513,6 +1459,113 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
             ..orbit_tools::ToolContext::default()
         }
     }
+    }
+}
+
+impl_test_host! {
+    impl ReviewGate for LifecycleHost {
+        fn claim_execution_context(
+            &self,
+        ) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
+            let worker = self.worker.as_ref().expect("claimed fixture");
+            Ok(orbit_engine::ClaimExecutionContext {
+                footprint: vec!["file:README.md".to_string()],
+                workspace_id: worker.owner_workspace_id.clone(),
+                task_id: worker.task_id.clone(),
+                claim_id: worker.claim_id.clone(),
+                machine_id: worker.execution.machine_id.clone(),
+                run_id: worker.bound_run_id.clone(),
+                ship_mode: "pr".to_string(),
+                base_branch: "agent-main".to_string(),
+                landing_branch: "agent-main".to_string(),
+                required_commands: self.required_commands.lock().unwrap().clone(),
+            })
+        }
+
+        fn attach_task_validation_log(
+            &self,
+            task_id: &str,
+            run_id: &str,
+            path: &str,
+            content: Vec<u8>,
+        ) -> Result<(), OrbitError> {
+            // As the runtime's host does: validate the path, refuse a run that
+            // does not own the task with a typed error, and store the bytes raw.
+            orbit_types::task::validate_relative_artifact_path(path)?;
+            if RunLifecycle::get_task(self, task_id)?.job_run_id.as_deref() != Some(run_id) {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "run '{run_id}' does not own task '{task_id}'; it cannot attach validation evidence"
+                )));
+            }
+            let mut artifacts = self.artifacts.lock().unwrap();
+            let artifacts = artifacts.entry(task_id.to_string()).or_default();
+            artifacts.retain(|artifact| artifact.path != path);
+            artifacts.push(TaskArtifact {
+                path: path.to_string(),
+                content,
+                media_type: "application/json".to_string(),
+                created_by: None,
+            });
+            Ok(())
+        }
+
+        fn attach_claim_validation_log(
+            &self,
+            path: &str,
+            content: Vec<u8>,
+        ) -> Result<(), OrbitError> {
+            let worker = self
+                .worker
+                .as_ref()
+                .expect("claim routes evidence to its owner");
+            ReviewGate::attach_task_validation_log(
+                self,
+                &worker.task_id,
+                &worker.bound_run_id,
+                path,
+                content,
+            )
+        }
+
+        fn local_machine_id(&self) -> Option<String> {
+            self.machine.lock().unwrap().clone()
+        }
+
+        fn kept_claim_candidate(
+            &self,
+            _task_id: &str,
+        ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
+            Ok(self.kept_claim.lock().unwrap().clone())
+        }
+
+        fn validate_step_recovery_mutation(
+            &self,
+            _run_id: &str,
+            _step_id: &str,
+            _task_ids: &[String],
+            _workspace_path: &Path,
+        ) -> Result<(), OrbitError> {
+            match self.recovery_owner_refusal.lock().unwrap().clone() {
+                Some(reason) => Err(OrbitError::Execution(reason)),
+                None => Ok(()),
+            }
+        }
+
+        fn authorize_step_recovery(
+            &self,
+            _run_id: &str,
+            _step_id: &str,
+        ) -> Result<StepRecoveryAdmission, OrbitError> {
+            Ok(match self.recovery_revocation.lock().unwrap().clone() {
+                Some(reason) => StepRecoveryAdmission::Denied { reason },
+                None => StepRecoveryAdmission::Allowed,
+            })
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for LifecycleHost {}
 }
 
 fn worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones() {

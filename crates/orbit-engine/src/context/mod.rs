@@ -18,8 +18,6 @@ mod outcome;
 mod run_config;
 
 pub(crate) use env::{ProvenanceEnv, default_python_cache_prefix, provenance_env};
-#[cfg(feature = "test-support")]
-pub use hosts::NullRuntimeHost;
 pub use hosts::{
     AGENT_STALL_MINUTES, AutoTaskAdmission, AutoTaskObservation, AutoTaskReadiness,
     AutoTaskStepRequest, ClaimExecutionContext, CompletionObservationAdmission,

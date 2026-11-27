@@ -4,6 +4,7 @@
 //! Other activities, and hosts that do not bound reviews, keep the wall clock
 //! the activity declares.
 
+use orbit_engine::test_support::impl_test_host;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -40,48 +41,69 @@ impl BoundingHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for BoundingHost {
-    fn run_deterministic(
-        &self,
-        _action: &str,
-        _config: &Value,
-        _input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        Err(DispatchError::DeterministicActionNotRegistered(
-            "unused".to_string(),
-        ))
-    }
+impl_test_host! {
+    impl Dispatch for BoundingHost {
+        fn run_deterministic(
+            &self,
+            _action: &str,
+            _config: &Value,
+            _input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            Err(DispatchError::DeterministicActionNotRegistered(
+                "unused".to_string(),
+            ))
+        }
 
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.to_string_lossy().into_owned(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Ok(ResolvedCliExecutor {
+                command: self.command.to_string_lossy().into_owned(),
+                args: Vec::new(),
+                inspection_args: None,
+                image_input: None,
+            })
+        }
     }
+}
 
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext::default()
-    }
+impl_test_host! { impl HostEnvironment for BoundingHost {} }
 
-    fn record_reviewer_invocation(
-        &self,
-        request: &ReviewerInvocationRequest,
-    ) -> Result<Option<u64>, OrbitError> {
-        self.invocations.lock().unwrap().push(request.event);
-        Ok(match request.event {
-            ReviewerInvocationEvent::Started => self.bound,
-            _ => None,
-        })
+impl_test_host! { impl RunLifecycle for BoundingHost {} }
+
+impl_test_host! {
+    impl Recovery for BoundingHost {
+        fn tool_context_for_activity(
+            &self,
+            _run_id: Option<&str>,
+            _fs_profile: Option<&str>,
+            _fs_audit: Option<std::sync::Arc<dyn orbit_tools::FsAuditLogger>>,
+            _proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            orbit_tools::ToolContext::default()
+        }
     }
+}
+
+impl_test_host! {
+    impl ReviewGate for BoundingHost {
+        fn record_reviewer_invocation(
+            &self,
+            request: &ReviewerInvocationRequest,
+        ) -> Result<Option<u64>, OrbitError> {
+            self.invocations.lock().unwrap().push(request.event);
+            Ok(match request.event {
+                ReviewerInvocationEvent::Started => self.bound,
+                _ => None,
+            })
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for BoundingHost {}
 }
 
 /// One step running `activity` as an agent loop with the declared wall clock.

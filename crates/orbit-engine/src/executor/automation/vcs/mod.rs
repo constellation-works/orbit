@@ -87,7 +87,7 @@ pub(super) use candidate_validate::candidate_validate;
 pub use checks::verify_refreshed_head_from_base;
 pub use checks::{MergedBaseRefresh, verify_merged_base_refresh};
 pub(super) use claim::{claim_candidate_carry, claim_handoff, claim_validate};
-pub(super) use commit::git_commit;
+pub use commit::git_commit;
 pub(crate) use commit::{
     PUBLISHED_REPLAY_STEPS, published_candidate_matches, require_implementer_no_diff_artifacts,
 };
@@ -106,8 +106,8 @@ pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
 pub use git::fetch_remote_base;
 #[cfg(feature = "test-support")]
 pub use git::with_worktree_setup_fetch_limits;
-pub use landing::landing_wait_gate_cleared;
-pub(super) use landing::{handoff_land, pr_checks_watch};
+pub(super) use landing::pr_checks_watch;
+pub use landing::{handoff_land, landing_wait_gate_cleared};
 pub use light_delivery::{
     judge_light_delivery, judge_light_delivery_with_key, review_skip_decision,
     run_review_skip_guard,
@@ -121,7 +121,7 @@ pub(crate) use pr::{
 pub use pr::{CheckState, PullRequestStatus, classify_rollup_context};
 pub(crate) use pr::{CompletionRecoveryChecks, completion_recovery_checks};
 pub(super) use pr::{git_merge, pr_complete, pr_open, pr_promote, ship_done_attribution};
-pub(super) use push::push_batch_changes;
+pub use push::push_batch_changes;
 pub(crate) use remote_probe::fixed_wait;
 #[cfg(feature = "test-support")]
 pub use remote_probe::{with_remote_probe_backoff, with_vcs_retry_wait};

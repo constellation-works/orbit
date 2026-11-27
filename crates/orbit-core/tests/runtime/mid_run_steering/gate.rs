@@ -9,6 +9,7 @@
 //! reading, its rounds, delivery and the `steering_unconsumed` hold are all
 //! the runtime's own records.
 
+use orbit_engine::test_support::impl_test_host;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -223,123 +224,141 @@ impl<'a> Pipeline<'a> {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        input: &Value,
-        _context: ToolContext,
-    ) -> Result<Value, DispatchError> {
-        assert_eq!(action, "probe");
-        let label = input["label"].as_str().unwrap().to_string();
-        self.calls
-            .lock()
-            .unwrap()
-            .push((label.clone(), input.clone()));
-        Ok(match label.as_str() {
-            "worktree" => json!({
-                "job_run_id": self.run,
-                "workspace_path": self.candidate.as_ref().map_or(&self.fx.workspace, |(repo, _)| repo),
-                "base_sha": self.candidate.as_ref().map_or("base", |(_, base)| base.as_str()),
-                "base_ref": "main",
-                "prior_job_run_id": null,
-                "prior_foreign_run": null,
-            }),
-            "resume_candidate" => json!({
-                "implement": self.implement,
-                "repair": null,
-                "source_run_id": self.source,
-            }),
-            "implement_one" => {
-                // Agent dispatch builds the envelope's task context this way.
-                let task = if self.round_read_fails && input.get("steering_round").is_some() {
-                    "ORB-missing"
-                } else {
-                    input["task_id"].as_str().unwrap()
-                };
-                let prompt = Dispatch::task_context_for_agent_input(
-                    &orbit_core::test_support::EngineHost::new(&self.runtime()),
-                    &self.run,
-                    "implement_one",
-                    &json!({ "task_id": task }),
-                )?
-                .unwrap();
-                let built = {
-                    let mut prompts = self.prompts.lock().unwrap();
-                    prompts.push(prompt);
-                    prompts.len() - 1
-                };
-                (self.on_implement)(self.fx, built);
-                json!({})
-            }
-            "commit" if self.candidate.is_some() => {
-                return orbit_engine::execute_deterministic_action(
-                    &orbit_core::test_support::EngineHost::new(&self.runtime()),
-                    "git_commit",
-                    &json!({}),
-                    input,
-                    false,
-                    &std::collections::HashMap::new(),
-                    None,
-                )
-                .map_err(|error| DispatchError::CliInvocationFailed(error.to_string()));
-            }
-            _ => json!({ "probed": label }),
-        })
-    }
-
-    fn steering_gate(
-        &self,
-        run_id: &str,
-        task_id: &str,
-        candidate_source: Option<&str>,
-    ) -> Result<SteeringGateReading, OrbitError> {
-        let task = if self.unreadable {
-            "ORB-missing"
-        } else {
-            task_id
-        };
-        let reading = Dispatch::steering_gate(
-            &orbit_core::test_support::EngineHost::new(&self.runtime()),
-            run_id,
-            task,
-            candidate_source,
-        );
-        if std::mem::take(&mut *self.comment_after_gate_read.lock().unwrap()) {
-            self.fx
-                .operator_comment("STEER-LATE: written while the gate's verdict stands.");
+impl_test_host! {
+    impl Dispatch for Pipeline<'_> {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            input: &Value,
+            _context: ToolContext,
+        ) -> Result<Value, DispatchError> {
+            assert_eq!(action, "probe");
+            let label = input["label"].as_str().unwrap().to_string();
+            self.calls
+                .lock()
+                .unwrap()
+                .push((label.clone(), input.clone()));
+            Ok(match label.as_str() {
+                "worktree" => json!({
+                    "job_run_id": self.run,
+                    "workspace_path": self.candidate
+                        .as_ref()
+                        .map_or(&self.fx.workspace, |(repo, _)| repo),
+                    "base_sha": self.candidate.as_ref().map_or("base", |(_, base)| base.as_str()),
+                    "base_ref": "main",
+                    "prior_job_run_id": null,
+                    "prior_foreign_run": null,
+                }),
+                "resume_candidate" => json!({
+                    "implement": self.implement,
+                    "repair": null,
+                    "source_run_id": self.source,
+                }),
+                "implement_one" => {
+                    // Agent dispatch builds the envelope's task context this way.
+                    let task = if self.round_read_fails && input.get("steering_round").is_some() {
+                        "ORB-missing"
+                    } else {
+                        input["task_id"].as_str().unwrap()
+                    };
+                    let prompt = Dispatch::task_context_for_agent_input(
+                        &orbit_core::test_support::EngineHost::new(&self.runtime()),
+                        &self.run,
+                        "implement_one",
+                        &json!({ "task_id": task }),
+                    )?
+                    .unwrap();
+                    let built = {
+                        let mut prompts = self.prompts.lock().unwrap();
+                        prompts.push(prompt);
+                        prompts.len() - 1
+                    };
+                    (self.on_implement)(self.fx, built);
+                    json!({})
+                }
+                "commit" if self.candidate.is_some() => {
+                    return orbit_engine::execute_deterministic_action(
+                        &orbit_core::test_support::EngineHost::new(&self.runtime()),
+                        "git_commit",
+                        &json!({}),
+                        input,
+                        false,
+                        &std::collections::HashMap::new(),
+                        None,
+                    )
+                    .map_err(|error| DispatchError::CliInvocationFailed(error.to_string()));
+                }
+                _ => json!({ "probed": label }),
+            })
         }
-        reading
-    }
 
-    fn admit_steering_round(
-        &self,
-        run_id: &str,
-        task_id: &str,
-        outstanding: &[CommentLogMark],
-        candidate_source: Option<&str>,
-    ) -> Result<SteeringRoundAdmission, OrbitError> {
-        Dispatch::admit_steering_round(
-            &orbit_core::test_support::EngineHost::new(&self.fx.runtime),
-            run_id,
-            task_id,
-            outstanding,
-            candidate_source,
-        )
-    }
+        fn steering_gate(
+            &self,
+            run_id: &str,
+            task_id: &str,
+            candidate_source: Option<&str>,
+        ) -> Result<SteeringGateReading, OrbitError> {
+            let task = if self.unreadable {
+                "ORB-missing"
+            } else {
+                task_id
+            };
+            let reading = Dispatch::steering_gate(
+                &orbit_core::test_support::EngineHost::new(&self.runtime()),
+                run_id,
+                task,
+                candidate_source,
+            );
+            if std::mem::take(&mut *self.comment_after_gate_read.lock().unwrap()) {
+                self.fx
+                    .operator_comment("STEER-LATE: written while the gate's verdict stands.");
+            }
+            reading
+        }
 
-    fn apply_task_automation_update(
-        &self,
-        task_id: &str,
-        update: TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        RunLifecycle::apply_task_automation_update(
-            &orbit_core::test_support::EngineHost::new(&self.fx.runtime),
-            task_id,
-            update,
-        )
+        fn admit_steering_round(
+            &self,
+            run_id: &str,
+            task_id: &str,
+            outstanding: &[CommentLogMark],
+            candidate_source: Option<&str>,
+        ) -> Result<SteeringRoundAdmission, OrbitError> {
+            Dispatch::admit_steering_round(
+                &orbit_core::test_support::EngineHost::new(&self.fx.runtime),
+                run_id,
+                task_id,
+                outstanding,
+                candidate_source,
+            )
+        }
     }
+}
+
+impl_test_host! { impl HostEnvironment for Pipeline<'_> {} }
+
+impl_test_host! {
+    impl RunLifecycle for Pipeline<'_> {
+        fn apply_task_automation_update(
+            &self,
+            task_id: &str,
+            update: TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            RunLifecycle::apply_task_automation_update(
+                &orbit_core::test_support::EngineHost::new(&self.fx.runtime),
+                task_id,
+                update,
+            )
+        }
+    }
+}
+
+impl_test_host! { impl Recovery for Pipeline<'_> {} }
+
+impl_test_host! { impl ReviewGate for Pipeline<'_> {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for Pipeline<'_> {}
 }
 
 /// The task, moved to `in-progress` as admission leaves it.

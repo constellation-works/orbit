@@ -5,6 +5,7 @@
 //! landed commits, and a publication that cannot succeed leaves the task in
 //! `review` with the reason [ORB-25144].
 
+use orbit_engine::test_support::impl_test_host;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -212,98 +213,122 @@ impl Host {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for Host {
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            completion_hold_rules: self.hold_rules.lock().expect("hold_rules").clone(),
-            repo_root: Some(self.repo.to_string_lossy().into_owned()),
-            ..orbit_engine::RunSettings::default()
-        }
-    }
-
-    fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
-        Ok(self.task.lock().expect("task").clone())
-    }
-
-    fn get_task_history(
-        &self,
-        _: &str,
-    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
-        Ok(self.history())
-    }
-
-    fn list_run_tasks(&self, _: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
-        Ok(vec![self.task.lock().expect("task").clone()])
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        self.history
-            .lock()
-            .expect("history")
-            .extend(update.append_history);
-        Ok(())
-    }
-
-    fn update_task_from_activity(
-        &self,
-        _: &str,
-        update: orbit_engine::TaskActivityUpdate,
-    ) -> Result<orbit_types::task::Task, OrbitError> {
-        let mut task = self.task.lock().expect("task");
-        assert_eq!(task.status, update.expected_status);
-        task.status = update.status;
-        Ok(task.clone())
-    }
-
-    fn run_private_vcs_operation(
-        &self,
-        operation: &str,
-        input: Value,
-    ) -> Result<Value, OrbitError> {
-        orbit_engine::run_private_vcs_operation(&orbit_common::Env::capture(), operation, &input)
-    }
-
-    fn run_deterministic(
-        &self,
-        action: &str,
-        config: &Value,
-        input: &Value,
-        _tool_context: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match action {
-            "test_stub_worktree" => Ok(json!({
-                "job_run_id": RUN,
-                "workspace_path": self.worktree,
-            })),
-            "test_stub_commit" => Ok(json!({
-                "skipped_no_diff_expected": false,
-                "decision": "committed",
-            })),
-            "test_stub_step_failure_recovery" => Ok(json!({})),
-            // `task_complete` is stubbed: it records the call and moves the
-            // task to `done`, as the real activity does after its checks.
-            "test_stub_task_complete" => {
-                *self.completed.lock().expect("completed") = true;
-                self.task.lock().expect("task").status = TaskStatus::Done;
-                Ok(json!({}))
+impl_test_host! {
+    impl Dispatch for Host {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            config: &Value,
+            input: &Value,
+            _tool_context: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            match action {
+                "test_stub_worktree" => Ok(json!({
+                    "job_run_id": RUN,
+                    "workspace_path": self.worktree,
+                })),
+                "test_stub_commit" => Ok(json!({
+                    "skipped_no_diff_expected": false,
+                    "decision": "committed",
+                })),
+                "test_stub_step_failure_recovery" => Ok(json!({})),
+                // `task_complete` is stubbed: it records the call and moves the
+                // task to `done`, as the real activity does after its checks.
+                "test_stub_task_complete" => {
+                    *self.completed.lock().expect("completed") = true;
+                    self.task.lock().expect("task").status = TaskStatus::Done;
+                    Ok(json!({}))
+                }
+                "git_merge" | "update_task" | "git_push" => {
+                    orbit_engine::execute_deterministic_action(
+                        self,
+                        action,
+                        config,
+                        input,
+                        false,
+                        &std::collections::HashMap::new(),
+                        None,
+                    )
+                    .map_err(|error| DispatchError::JobExecution(error.to_string()))
+                }
+                other => panic!("unexpected action `{other}`"),
             }
-            "git_merge" | "update_task" | "git_push" => orbit_engine::execute_deterministic_action(
-                self,
-                action,
-                config,
-                input,
-                false,
-                &std::collections::HashMap::new(),
-                None,
-            )
-            .map_err(|error| DispatchError::JobExecution(error.to_string())),
-            other => panic!("unexpected action `{other}`"),
         }
     }
+}
+
+impl_test_host! {
+    impl HostEnvironment for Host {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                completion_hold_rules: self.hold_rules.lock().expect("hold_rules").clone(),
+                repo_root: Some(self.repo.to_string_lossy().into_owned()),
+                ..orbit_engine::RunSettings::default()
+            }
+        }
+
+        fn run_private_vcs_operation(
+            &self,
+            operation: &str,
+            input: Value,
+        ) -> Result<Value, OrbitError> {
+            orbit_engine::run_private_vcs_operation(
+                &orbit_common::Env::capture(),
+                operation,
+                &input,
+            )
+        }
+    }
+}
+
+impl_test_host! {
+    impl RunLifecycle for Host {
+        fn get_task(&self, _: &str) -> Result<orbit_types::task::Task, OrbitError> {
+            Ok(self.task.lock().expect("task").clone())
+        }
+
+        fn get_task_history(
+            &self,
+            _: &str,
+        ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
+            Ok(self.history())
+        }
+
+        fn list_run_tasks(&self, _: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
+            Ok(vec![self.task.lock().expect("task").clone()])
+        }
+
+        fn apply_task_automation_update(
+            &self,
+            _: &str,
+            update: orbit_engine::TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            self.history
+                .lock()
+                .expect("history")
+                .extend(update.append_history);
+            Ok(())
+        }
+
+        fn update_task_from_activity(
+            &self,
+            _: &str,
+            update: orbit_engine::TaskActivityUpdate,
+        ) -> Result<orbit_types::task::Task, OrbitError> {
+            let mut task = self.task.lock().expect("task");
+            assert_eq!(task.status, update.expected_status);
+            task.status = update.status;
+            Ok(task.clone())
+        }
+    }
+}
+
+impl_test_host! { impl Recovery for Host {} }
+
+impl_test_host! { impl ReviewGate for Host {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for Host {}
 }
 
 #[test]

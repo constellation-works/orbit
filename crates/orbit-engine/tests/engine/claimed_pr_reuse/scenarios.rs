@@ -16,6 +16,7 @@
 #[path = "final_recovery.rs"]
 mod final_recovery;
 
+use orbit_engine::test_support::impl_test_host;
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -537,27 +538,45 @@ impl Host {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for Host {
-    fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
-        if task_id != TASK_ID {
-            return Err(OrbitError::not_found(
-                NotFoundKind::Task,
-                task_id.to_string(),
-            ));
+impl_test_host! { impl Dispatch for Host {} }
+
+impl_test_host! {
+    impl HostEnvironment for Host {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                repo_root: Some(self.repo.to_string_lossy().into_owned()),
+                pr_config: PrConfig {
+                    close_superseded: self.close_superseded,
+                    ..PrConfig::default()
+                },
+                ..orbit_engine::RunSettings::default()
+            }
         }
-        let now = Utc::now();
-        Ok(Task {
-            granted_tools: Vec::new(),
-            requires_labels: Vec::new(),
-            job_run_machine: None,
-            id: TASK_ID.to_string(),
-            title: "Continue the earlier claim's candidate".to_string(),
-            description: String::new(),
-            acceptance_criteria: Vec::new(),
-            tags: Vec::new(),
-            required_tools: Vec::new(),
-            plan: String::new(),
-            execution_summary: "Outcome: success\n\nChanges:\n- Continued.".to_string(),
+    }
+}
+
+impl_test_host! {
+    impl RunLifecycle for Host {
+        fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+            if task_id != TASK_ID {
+                return Err(OrbitError::not_found(
+                    NotFoundKind::Task,
+                    task_id.to_string(),
+                ));
+            }
+            let now = Utc::now();
+            Ok(Task {
+                granted_tools: Vec::new(),
+                requires_labels: Vec::new(),
+                job_run_machine: None,
+                id: TASK_ID.to_string(),
+                title: "Continue the earlier claim's candidate".to_string(),
+                description: String::new(),
+                acceptance_criteria: Vec::new(),
+                tags: Vec::new(),
+                required_tools: Vec::new(),
+                plan: String::new(),
+                execution_summary: "Outcome: success\n\nChanges:\n- Continued.".to_string(),
             context_files: Vec::new(),
             created_by: None,
             planned_by: None,
@@ -591,17 +610,15 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
     ) -> Result<(), OrbitError> {
         Ok(())
     }
-
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            repo_root: Some(self.repo.to_string_lossy().into_owned()),
-            pr_config: PrConfig {
-                close_superseded: self.close_superseded,
-                ..PrConfig::default()
-            },
-            ..orbit_engine::RunSettings::default()
-        }
     }
+}
+
+impl_test_host! { impl Recovery for Host {} }
+
+impl_test_host! { impl ReviewGate for Host {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for Host {}
 }
 
 /// A fresh attempt of a re-admitted task: the earlier attempt's `[BLOCKED]`

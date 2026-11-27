@@ -12,6 +12,8 @@
 
 mod log_read;
 
+use orbit_engine::test_support::handoff_land;
+use orbit_engine::test_support::impl_test_host;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -21,13 +23,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use orbit_common::{Env, OrbitError};
-use orbit_engine::test_support::{NullRuntimeHost, with_prerequisite_clock, with_vcs_retry_wait};
+use orbit_engine::test_support::{with_prerequisite_clock, with_vcs_retry_wait};
 use orbit_engine::{
     BaseSyncMode, CandidateCheckout, DispatchError, HandoffLandingContext, HandoffLandingStep,
-    HandoffLandingUpdate, PrConfig, RuntimeHost, TaskAutomationUpdate, dispatch_error_to_orbit,
-    execute_deterministic_action, execute_job_with_resume, observe_candidate,
+    HandoffLandingUpdate, HostEnvironment, PrConfig, ReviewGate, RunLifecycle,
+    RuntimeHostProcessEnvironment, TaskAutomationUpdate, dispatch_error_to_orbit,
+    execute_job_with_resume, observe_candidate,
 };
-use orbit_engine::{ReviewGate, RunLifecycle};
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::automation::DirectLandingRequest;
 use orbit_types::workflow::handoff::{
@@ -92,25 +94,45 @@ impl LandingHost {
     }
 }
 
-impl NullRuntimeHost for LandingHost {
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            repo_root: Some(self.repo.to_string_lossy().into_owned()),
-            ..orbit_engine::RunSettings::default()
+impl_test_host! {
+    impl HostEnvironment for LandingHost {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                repo_root: Some(self.repo.to_string_lossy().into_owned()),
+                ..orbit_engine::RunSettings::default()
+            }
         }
     }
-    fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
-        Ok(self.context.clone())
+}
+
+impl_test_host! {
+    impl RunLifecycle for LandingHost {
+        fn record_direct_landing_intent(
+            &self,
+            req: &DirectLandingRequest,
+        ) -> Result<(), OrbitError> {
+            let tip = git_rev(&self.repo, "main");
+            self.intents.lock().unwrap().push((req.clone(), tip));
+            Ok(())
+        }
     }
-    fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
-        self.steps.lock().unwrap().push(update.step.clone());
-        Ok(())
+}
+
+impl_test_host! {
+    impl ReviewGate for LandingHost {
+        fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
+            Ok(self.context.clone())
+        }
+
+        fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
+            self.steps.lock().unwrap().push(update.step.clone());
+            Ok(())
+        }
     }
-    fn record_direct_landing_intent(&self, req: &DirectLandingRequest) -> Result<(), OrbitError> {
-        let tip = git_rev(&self.repo, "main");
-        self.intents.lock().unwrap().push((req.clone(), tip));
-        Ok(())
-    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for LandingHost {}
 }
 
 /// Rechecked stale NoDiff/already-landed evidence stops and holds in review [ORB-25394].
@@ -120,16 +142,22 @@ struct StaleEvidenceHost {
     stops: Mutex<Vec<String>>,
 }
 
-impl NullRuntimeHost for StaleEvidenceHost {
-    fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
-        Ok(self.context.clone())
-    }
-    fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
-        if matches!(update.step, Complete) {
-            return Err(OrbitError::DeliveryRefused {
-                refusal: DeliveryRefusal::EvidenceStale,
-                message: "already_landed_unverified: task scope changed at scope.relations; \
-                          revalidate the current requirements, selectors and comments"
+impl_test_host! { impl HostEnvironment for StaleEvidenceHost {} }
+
+impl_test_host! { impl RunLifecycle for StaleEvidenceHost {} }
+
+impl_test_host! {
+    impl ReviewGate for StaleEvidenceHost {
+        fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
+            Ok(self.context.clone())
+        }
+
+        fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
+            if matches!(update.step, Complete) {
+                return Err(OrbitError::DeliveryRefused {
+                    refusal: DeliveryRefusal::EvidenceStale,
+                    message: "already_landed_unverified: task scope changed at scope.relations; \
+                              revalidate the current requirements, selectors and comments"
                     .into(),
             });
         }
@@ -139,6 +167,11 @@ impl NullRuntimeHost for StaleEvidenceHost {
         self.steps.lock().unwrap().push(update.step.clone());
         Ok(())
     }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for StaleEvidenceHost {}
 }
 
 /// Journal guards: Stop needs a resolved intent; settled attempts reject further writes.
@@ -148,42 +181,56 @@ struct ReconciliationHost {
     status: Value,
 }
 
-impl NullRuntimeHost for ReconciliationHost {
-    fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
-        Ok(self.context.lock().unwrap().clone())
-    }
-    fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
-        let mut updates = self.updates.lock().unwrap();
-        if updates
-            .last()
-            .is_some_and(|u| matches!(u.step, Stop { .. }))
-        {
-            return Err(OrbitError::InvalidInput(
-                "landing attempt is already settled".into(),
-            ));
+impl_test_host! {
+    impl HostEnvironment for ReconciliationHost {
+        fn run_private_vcs_operation(&self, op: &str, _: Value) -> Result<Value, OrbitError> {
+            assert_eq!(
+                op, "pr.status",
+                "reconciliation must not send another merge"
+            );
+            Ok(json!({"pull_request": self.status}))
         }
-        let mut ctx = self.context.lock().unwrap();
-        match &update.step {
-            ResolveIntent { intent_id, .. } => {
-                assert_eq!(ctx.unresolved_merge_intent.as_ref(), Some(intent_id));
-                ctx.unresolved_merge_intent = None;
+    }
+}
+
+impl_test_host! { impl RunLifecycle for ReconciliationHost {} }
+
+impl_test_host! {
+    impl ReviewGate for ReconciliationHost {
+        fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
+            Ok(self.context.lock().unwrap().clone())
+        }
+
+        fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
+            let mut updates = self.updates.lock().unwrap();
+            if updates
+                .last()
+                .is_some_and(|u| matches!(u.step, Stop { .. }))
+            {
+                return Err(OrbitError::InvalidInput(
+                    "landing attempt is already settled".into(),
+                ));
             }
-            Stop { .. } => assert!(
-                ctx.unresolved_merge_intent.is_none(),
-                "Stop follows resolution"
-            ),
-            other => panic!("a mismatched reconciled PR must not reach {other:?}"),
+            let mut ctx = self.context.lock().unwrap();
+            match &update.step {
+                ResolveIntent { intent_id, .. } => {
+                    assert_eq!(ctx.unresolved_merge_intent.as_ref(), Some(intent_id));
+                    ctx.unresolved_merge_intent = None;
+                }
+                Stop { .. } => assert!(
+                    ctx.unresolved_merge_intent.is_none(),
+                    "Stop follows resolution"
+                ),
+                other => panic!("a mismatched reconciled PR must not reach {other:?}"),
+            }
+            updates.push(update.clone());
+            Ok(())
         }
-        updates.push(update.clone());
-        Ok(())
     }
-    fn run_private_vcs_operation(&self, op: &str, _: Value) -> Result<Value, OrbitError> {
-        assert_eq!(
-            op, "pr.status",
-            "reconciliation must not send another merge"
-        );
-        Ok(json!({"pull_request": self.status}))
-    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ReconciliationHost {}
 }
 
 /// An open PR fixture with fixed merge state and rollup; records any non-read op.
@@ -219,31 +266,66 @@ impl OpenPullRequestHost {
     }
 }
 
-impl NullRuntimeHost for OpenPullRequestHost {
-    fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
-        Ok(self.context.clone())
-    }
-    fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
-        self.steps.lock().unwrap().push(update.step.clone());
-        Ok(())
-    }
-    fn run_private_vcs_operation(&self, op: &str, _: Value) -> Result<Value, OrbitError> {
-        let c = &self.context.candidate;
-        let head = &c.candidate.commit;
-        match op {
-            "ci.commit_jobs" => Ok(json!({"jobs": []})),
-            "pr.required_checks" => Ok(
-                json!({"pull_request":{"headRefOid":head,"commits":{"nodes":[{"commit":{"oid":head,"statusCheckRollup":null}}]}}}),
-            ),
-            "pr.status" => Ok(
-                json!({"pull_request":{"state":"OPEN","headRefName":c.source_branch,"baseRefName":c.base_branch,"headRefOid":head,"mergeStateStatus":self.merge_state,"reviewDecision":self.review_decision,"statusCheckRollup":self.rollup}}),
-            ),
-            _ => {
-                self.sent.lock().unwrap().push(op.to_string());
-                Err(OrbitError::Execution(format!("fixture sends no {op}")))
+impl_test_host! {
+    impl HostEnvironment for OpenPullRequestHost {
+        fn run_private_vcs_operation(&self, op: &str, _: Value) -> Result<Value, OrbitError> {
+            let c = &self.context.candidate;
+            let head = &c.candidate.commit;
+            match op {
+                "ci.commit_jobs" => Ok(json!({"jobs": []})),
+                "pr.required_checks" => Ok(
+                    json!({
+                        "pull_request": {
+                            "headRefOid": head,
+                            "commits": {
+                                "nodes": [{"commit": {"oid": head, "statusCheckRollup": null}}],
+                            },
+                        },
+                    }),
+                ),
+                "pr.status" => Ok(
+                    json!({
+                        "pull_request": {
+                            "state": "OPEN",
+                            "headRefName": c.source_branch,
+                            "baseRefName": c.base_branch,
+                            "headRefOid": head,
+                            "mergeStateStatus": self.merge_state,
+                            "reviewDecision": self.review_decision,
+                            "statusCheckRollup": self.rollup,
+                        },
+                    }),
+                ),
+                _ => {
+                    self.sent.lock().unwrap().push(op.to_string());
+                    Err(OrbitError::Execution(format!("fixture sends no {op}")))
+                }
             }
         }
     }
+}
+
+impl_test_host! { impl Dispatch for OpenPullRequestHost {} }
+
+impl_test_host! { impl Recovery for OpenPullRequestHost {} }
+
+impl_test_host! { impl RunLifecycle for OpenPullRequestHost {} }
+
+impl_test_host! {
+    impl ReviewGate for OpenPullRequestHost {
+        fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
+            Ok(self.context.clone())
+        }
+
+        fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
+            self.steps.lock().unwrap().push(update.step.clone());
+            Ok(())
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for OpenPullRequestHost {}
 }
 
 struct FakeJob {
@@ -424,288 +506,438 @@ impl FakeForge {
     }
 }
 
-impl NullRuntimeHost for FakeForge {
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            pr_config: PrConfig {
-                ci_infrastructure_retry: self.ci_retry_policy,
-                ..Default::default()
-            },
-            ..orbit_engine::RunSettings::default()
-        }
-    }
-    fn apply_task_automation_update(
-        &self,
-        _: &str,
-        _: TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        let msg = "active execution claim requires a claim-scoped mutation";
-        Err(OrbitError::InvalidInput(msg.into()))
-    }
-    fn admit_ci_rerun(
-        &self,
-        _: &[String],
-        _: Option<&str>,
-        plan: &CiRerunPlan,
-        now_ms: u64,
-    ) -> Result<CiRerunAdmission, OrbitError> {
-        let mut h = self.history.lock().unwrap();
-        let d = decide_ci_rerun_with_policy(&h, plan, self.ci_retry_policy, now_ms);
-        if matches!(d, CiRerunAdmission::Reserved) {
-            let ts = chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap();
-            h.push(plan.reservation_entry(ts));
-        }
-        Ok(d)
-    }
-    fn admit_handoff_base_update(
-        &self,
-        _: &str,
-        req: &PrBaseUpdateReservation,
-    ) -> Result<PrBaseUpdateAdmission, OrbitError> {
-        ReviewGate::admit_pr_base_update(self, &[TASK_ID.into()], req)
-    }
-    fn get_task_history(&self, _: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
-        Ok(self.history.lock().unwrap().clone())
-    }
-    fn admit_pr_base_update(
-        &self,
-        _: &[String],
-        req: &PrBaseUpdateReservation,
-    ) -> Result<PrBaseUpdateAdmission, OrbitError> {
-        let mut h = self.history.lock().unwrap();
-        let d = decide_pr_base_update(&h, req);
-        if matches!(d, PrBaseUpdateAdmission::Reserved) {
-            let note = Some(serde_json::to_string(req).unwrap());
-            h.push(history_row("owner", PR_BASE_UPDATE_RESERVED_EVENT, note));
-        }
-        Ok(d)
-    }
-    fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
-        Ok(self.context.clone())
-    }
-    fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
-        self.updates.lock().unwrap().push(update.clone());
-        Ok(())
-    }
-    fn record_handoff_landing_wait(&self, _: &str, reason: &str) -> Result<(), OrbitError> {
-        let row = history_row("owner", LANDING_WAITING_FOR_BASE_EVENT, Some(reason.into()));
-        self.push_history(row);
-        Ok(())
-    }
-    fn record_handoff_landing_history(
-        &self,
-        id: &str,
-        ev: &str,
-        note: &str,
-    ) -> Result<(), OrbitError> {
-        let allowed = matches!(
-            ev,
-            "ci_check_rerun"
-                | "ci_base_suspect"
-                | "ci_infrastructure_retry_backoff"
-                | "ci_infrastructure_retry_exhausted"
-                | CI_FAILURE_RECORDED_EVENT
-                | CI_FAILURE_RECLASSIFIED_EVENT
-                | CI_BASE_SUSPECT_RECLASSIFIED_EVENT
-        );
-        if id != self.context.handoff_id || !allowed {
-            let msg = "current handoff claim does not authorize this history event";
-            return Err(OrbitError::InvalidInput(msg.into()));
-        }
-        self.push_history(history_row("system", ev, Some(note.into())));
-        Ok(())
-    }
-    fn run_private_vcs_operation(&self, op: &str, input: Value) -> Result<Value, OrbitError> {
-        self.ops
-            .lock()
-            .unwrap()
-            .push((op.to_string(), input.clone()));
-        let mut s = self.state.lock().unwrap();
-        let c = &self.context.candidate;
-        match op {
-            "ci.rerun_plan" => {
-                if s.real_rerun_plan {
-                    drop(s);
-                    return orbit_engine::run_private_vcs_operation(&Env::capture(), op, &input);
-                }
-                if let Some(err) = s.rerun_plan_error {
-                    return Err(OrbitError::Execution(err.into()));
-                }
-                let job = s.jobs.get(&s.head).unwrap();
-                if job.event != "pull_request" {
-                    return Err(OrbitError::Execution("foreign retry event".into()));
-                }
-                let v = json!({"plan":CiRerunPlan{schema_version:1,repository:c.repository.clone(),repository_id:1,pr_number:"42".into(),head_sha:s.head.clone(),head_branch:c.source_branch.clone(),base_branch:c.base_branch.clone(),accepted_base:c.base.commit.clone(),run_id:job.run_id,run_attempt:job.run_attempt,workflow_id:1,roots:serde_json::from_value(input["roots"].clone()).unwrap(),failed_jobs:vec![json!({"id":job.job_id,"name":"clippy","started_at":"2026-10-26T14:00:00Z","completed_at":"2026-10-26T14:01:00Z"})],authentication:json!({})}});
-                Ok(v)
+impl_test_host! {
+    impl HostEnvironment for FakeForge {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                pr_config: PrConfig {
+                    ci_infrastructure_retry: self.ci_retry_policy,
+                    ..Default::default()
+                },
+                ..orbit_engine::RunSettings::default()
             }
-            "ci.current_gates" => {
-                if !s.gates.is_empty() {
-                    return pop_or_auth(&mut s.gates);
-                }
-                Ok(json!({"gates_passed":true,"required":[],"missing":[]}))
-            }
-            "ci.emission_evidence" => Ok(json!({"evidence":null})),
-            "pr.status" => {
-                let scripted =
-                    (!s.merge_states.is_empty()).then(|| pop_keep_last(&mut s.merge_states));
-                let (status, conc) = match s.jobs.get(&s.head).map(|j| j.conclusion) {
-                    None if s.queued_rerun => ("COMPLETED", "FAILURE"),
-                    None => ("IN_PROGRESS", ""),
-                    Some("success") => ("COMPLETED", "SUCCESS"),
-                    Some(_) => ("COMPLETED", "FAILURE"),
-                };
-                let ms = scripted.unwrap_or(match conc {
-                    _ if s.aggregate.is_some() => "BLOCKED",
-                    "SUCCESS" => "CLEAN",
-                    "" => "PENDING",
-                    _ => "BLOCKED",
-                });
-                let mut rollup = vec![check_run("clippy", "CI", status, conc)];
-                if s.aggregate.is_some() {
-                    rollup.push(check_run("CodeQL", "", "COMPLETED", "FAILURE"));
-                }
-                if s.extra_unanswered_check {
-                    rollup.push(check_run("optional", "Extra", "COMPLETED", "FAILURE"));
-                }
-                let mut pr = json!({"number":42,"url":"https://github.com/owner/repository/pull/42","state":pick(s.merged,"MERGED","OPEN"),"headRefName":c.source_branch,"baseRefName":c.base_branch,"headRefOid":s.head,"mergeStateStatus":ms,"reviewDecision":s.review_decision.unwrap_or(""),"mergeCommit":s.merged.then(|| json!({"oid":s.merge_commit.as_deref().unwrap_or("provider-merge")})),"statusCheckRollup":rollup});
-                if !s.merged && !s.observations.is_empty() {
-                    let patch = s.observations.front().unwrap().as_object().unwrap().clone();
-                    if let Some(err) = patch.get("error").and_then(Value::as_str) {
+        }
+
+        fn run_private_vcs_operation(&self, op: &str, input: Value) -> Result<Value, OrbitError> {
+            self.ops
+                .lock()
+                .unwrap()
+                .push((op.to_string(), input.clone()));
+            let mut s = self.state.lock().unwrap();
+            let c = &self.context.candidate;
+            match op {
+                "ci.rerun_plan" => {
+                    if s.real_rerun_plan {
+                        drop(s);
+                        return orbit_engine::run_private_vcs_operation(
+                            &Env::capture(),
+                            op,
+                            &input,
+                        );
+                    }
+                    if let Some(err) = s.rerun_plan_error {
                         return Err(OrbitError::Execution(err.into()));
                     }
-                    pr.as_object_mut().unwrap().extend(patch);
-                    if s.observations.len() > 1 {
-                        s.observations.pop_front();
+                    let job = s.jobs.get(&s.head).unwrap();
+                    if job.event != "pull_request" {
+                        return Err(OrbitError::Execution("foreign retry event".into()));
                     }
-                }
-                Ok(json!({"pull_request": pr}))
-            }
-            "pr.required_checks" => {
-                if s.required_check_transients > 0 {
-                    s.required_check_transients -= 1;
-                    return Err(OrbitError::PrivateVcs(Box::new(
-                        orbit_common::PrivateVcsFailure {
-                            operation: "pr.required_checks".into(),
-                            class: orbit_common::PrivateVcsFailureClass::TransientObservation,
-                            message: "gh: Something went wrong while executing your query".into(),
-                            read_throttle: None,
+                    let v = json!({
+                        "plan": CiRerunPlan {
+                            schema_version: 1,
+                            repository: c.repository.clone(),
+                            repository_id: 1,
+                            pr_number: "42".into(),
+                            head_sha: s.head.clone(),
+                            head_branch: c.source_branch.clone(),
+                            base_branch: c.base_branch.clone(),
+                            accepted_base: c.base.commit.clone(),
+                            run_id: job.run_id,
+                            run_attempt: job.run_attempt,
+                            workflow_id: 1,
+                            roots: serde_json::from_value(input["roots"].clone()).unwrap(),
+                            failed_jobs: vec![json!({
+                                "id": job.job_id,
+                                "name": "clippy",
+                                "started_at": "2026-10-26T14:00:00Z",
+                                "completed_at": "2026-10-26T14:01:00Z",
+                            })],
+                            authentication: json!({}),
                         },
-                    )));
+                    });
+                    Ok(v)
                 }
-                if !s.policies.is_empty() {
-                    return pop_or_auth(&mut s.policies);
-                }
-                let st = pick(s.jobs.contains_key(&s.head), "COMPLETED", "IN_PROGRESS");
-                let mut policy = pending_policy(&s.head, st, true);
-                if s.aggregate.is_some() {
-                    policy_nodes(&mut policy).as_array_mut().unwrap().push(json!({"__typename":"CheckRun","name":"CodeQL","status":"COMPLETED","conclusion":"FAILURE","isRequired":true,"databaseId":7001,"checkSuite":{"app":{"databaseId":57789},"workflowRun":null}}));
-                }
-                Ok(policy)
-            }
-            "ci.check_annotations" => {
-                let path = s.aggregate.expect("an aggregate was scripted");
-                let got = (&input["check_run_id"], &input["app_id"], &input["head_sha"]);
-                assert_eq!(got, (&json!(7001), &json!(57789), &json!(s.head)));
-                let ann = json!({"path":path,"start_line":1,"end_line":1,"blob_href":format!("https://github.com/owner/repository/blob/{}/{path}", s.head),"annotation_level":"failure","title":"Uncontrolled data used in path expression","message":"This path depends on a user-provided value."});
-                let v = json!({"repository":"owner/repository","pr":42,"head_sha":s.head,"check_run":{"id":7001,"name":"CodeQL","app_id":57789,"conclusion":"failure","annotations_count":1},"annotations":[ann]});
-                Ok(v)
-            }
-            "ci.commit_jobs" => {
-                if s.base_push_provider && input["base_push_tip"].is_string() {
-                    return orbit_engine::run_private_vcs_operation(&Env::capture(), op, &input);
-                }
-                let commit = input["commit"].as_str().unwrap();
-                if s.unreadable.iter().any(|bad| bad == commit) {
-                    let msg = "gh api failed: HTTP 401: Bad credentials";
-                    return Err(OrbitError::Execution(msg.into()));
-                }
-                let jobs: Vec<Value> = s.jobs.iter().filter(|(sha, _)| match input["base_push_tip"].as_str() {
-                    Some(tip) => git(&self.repo, &["merge-base", commit, sha]) == commit && git(&self.repo, &["merge-base", sha, tip]) == **sha,
-                    None => *sha == commit,
-                }).map(|(sha, j)| {
-                    let mut v = json!({"run_id":j.run_id,"job_id":j.job_id,"workflow":"CI","workflow_id":1,"started_at":"2026-10-26T14:00:00Z","completed_at":"2026-10-26T14:01:00Z","name":"clippy","status":"completed","conclusion":j.conclusion,"failed_step":(j.conclusion=="failure").then_some("Run clippy"),"run_attempt":j.run_attempt,"event":j.event,"pull_requests":[{"number":42}],"pull_request_numbers":[42],"head_sha":sha,"head_branch":c.source_branch,"repository_id":1,"repository":c.repository});
-                    if let Some((start, end)) = s.job_times.get(&j.job_id) {
-                        (v["started_at"], v["completed_at"], v["run_started_at"], v["run_status"]) = (json!(start), json!(end), json!(start), json!("completed"));
+                "ci.current_gates" => {
+                    if !s.gates.is_empty() {
+                        return pop_or_auth(&mut s.gates);
                     }
-                    v
-                }).collect();
-                Ok(json!({"commit": commit, "jobs": jobs}))
-            }
-            "ci.job_log" => {
-                let job_id: u64 = input["job_id"].as_str().unwrap().parse().unwrap();
-                if let Some(rem) = s.log_timeouts.get_mut(&job_id)
-                    && *rem > 0
-                {
-                    *rem -= 1;
-                    let v = json!({"log":"","fallback_error":"process timed out after 15000ms: gh run view --log"});
-                    return Ok(v);
+                    Ok(json!({"gates_passed":true,"required":[],"missing":[]}))
                 }
-                let log = s
-                    .jobs
-                    .values()
-                    .find(|j| j.job_id == job_id)
-                    .expect("log")
-                    .log;
-                match log {
-                    FakeLog::Text(log) => {
-                        Ok(json!({"log":log,"truncated":false,"fallback_error":null}))
+                "ci.emission_evidence" => Ok(json!({"evidence":null})),
+                "pr.status" => {
+                    let scripted =
+                        (!s.merge_states.is_empty()).then(|| pop_keep_last(&mut s.merge_states));
+                    let (status, conc) = match s.jobs.get(&s.head).map(|j| j.conclusion) {
+                        None if s.queued_rerun => ("COMPLETED", "FAILURE"),
+                        None => ("IN_PROGRESS", ""),
+                        Some("success") => ("COMPLETED", "SUCCESS"),
+                        Some(_) => ("COMPLETED", "FAILURE"),
+                    };
+                    let ms = scripted.unwrap_or(match conc {
+                        _ if s.aggregate.is_some() => "BLOCKED",
+                        "SUCCESS" => "CLEAN",
+                        "" => "PENDING",
+                        _ => "BLOCKED",
+                    });
+                    let mut rollup = vec![check_run("clippy", "CI", status, conc)];
+                    if s.aggregate.is_some() {
+                        rollup.push(check_run("CodeQL", "", "COMPLETED", "FAILURE"));
                     }
-                    FakeLog::Unrecovered => {
-                        let v = json!({"log":"","truncated":false,"fallback_error":format!("job {job_id} (`clippy`) returned no log text")});
-                        Ok(v)
+                    if s.extra_unanswered_check {
+                        rollup.push(check_run("optional", "Extra", "COMPLETED", "FAILURE"));
                     }
-                    FakeLog::Unreadable => Err(OrbitError::Execution(
-                        "gh api job logs failed: HTTP 502".into(),
-                    )),
-                }
-            }
-            "ci.rerun_failed" => {
-                let head = s.head.clone();
-                if s.queued_rerun {
-                    s.jobs.remove(&head);
-                } else {
-                    let mut rerun = s.after_rerun.take().expect("a scripted rerun");
-                    let orig = s.jobs.get(&head).unwrap();
-                    (rerun.run_attempt, rerun.event) = (orig.run_attempt + 1, orig.event);
-                    s.job_times.insert(rerun.job_id, (at("14:02"), at("14:03")));
-                    s.jobs.insert(head, rerun);
-                }
-                s.aggregate = s.after_recovery_aggregate.take();
-                Ok(json!({}))
-            }
-            "pr.update_branch" => {
-                assert_eq!(input["expected_head_sha"], s.head.as_str());
-                let merge = match &self.remote {
-                    Some(remote) => provider_update(remote, &s.head, s.update),
-                    None => {
-                        let t = git(&self.repo, &["merge-tree", "--write-tree", &s.head, "main"]);
-                        let msg = "Merge branch 'main' into orbit/T1";
-                        commit_tree(&self.repo, &t, &[&s.head, "main"], msg)
+                    let mut pr = json!({
+                        "number":42,
+                        "url":"https://github.com/owner/repository/pull/42",
+                        "state":pick(s.merged,"MERGED","OPEN"),
+                        "headRefName":c.source_branch,
+                        "baseRefName":c.base_branch,
+                        "headRefOid":s.head,
+                        "mergeStateStatus":ms,
+                        "reviewDecision":s.review_decision.unwrap_or(""),
+                        "mergeCommit": s.merged.then(|| json!({
+                            "oid": s.merge_commit.as_deref().unwrap_or("provider-merge"),
+                        })),
+                        "statusCheckRollup":rollup,
+                    });
+                    if !s.merged && !s.observations.is_empty() {
+                        let patch = s.observations.front().unwrap().as_object().unwrap().clone();
+                        if let Some(err) = patch.get("error").and_then(Value::as_str) {
+                            return Err(OrbitError::Execution(err.into()));
+                        }
+                        pr.as_object_mut().unwrap().extend(patch);
+                        if s.observations.len() > 1 {
+                            s.observations.pop_front();
+                        }
                     }
-                };
-                let after = s.after_update.take().expect("a scripted update");
-                s.jobs.insert(merge.clone(), after);
-                s.head = merge;
-                s.aggregate = s.after_recovery_aggregate.take();
-                Ok(json!({}))
-            }
-            "pr.merge_capabilities" => {
-                let v = json!({"repository":{"name_with_owner":c.repository,"base_branch":c.base_branch,"allow_squash_merge":true,"allow_rebase_merge":false,"allow_merge_commit":false,"allow_auto_merge":false,"requires_linear_history":false}});
-                Ok(v)
-            }
-            "pr.merge" => {
-                assert_eq!(input["reviewed_head_sha"], s.head.as_str());
-                if let Some(merged) = s.merge_in_progress {
-                    s.merged = merged;
-                    let v = json!({"merged":false,"refusal":"merge_in_progress","stderr":"gh: Merge already in progress (HTTP 405)"});
-                    return Ok(v);
+                    Ok(json!({"pull_request": pr}))
                 }
-                s.merged = true;
-                Ok(json!({"landed_commit": "provider-merge"}))
+                "pr.required_checks" => {
+                    if s.required_check_transients > 0 {
+                        s.required_check_transients -= 1;
+                        return Err(OrbitError::PrivateVcs(Box::new(
+                            orbit_common::PrivateVcsFailure {
+                                operation: "pr.required_checks".into(),
+                                class: orbit_common::PrivateVcsFailureClass::TransientObservation,
+                                message: "gh: Something went wrong while executing your query"
+                                    .into(),
+                                read_throttle: None,
+                            },
+                        )));
+                    }
+                    if !s.policies.is_empty() {
+                        return pop_or_auth(&mut s.policies);
+                    }
+                    let st = pick(s.jobs.contains_key(&s.head), "COMPLETED", "IN_PROGRESS");
+                    let mut policy = pending_policy(&s.head, st, true);
+                    if s.aggregate.is_some() {
+                        policy_nodes(&mut policy).as_array_mut().unwrap().push(json!({
+                            "__typename":"CheckRun",
+                            "name":"CodeQL",
+                            "status":"COMPLETED",
+                            "conclusion":"FAILURE",
+                            "isRequired":true,
+                            "databaseId":7001,
+                            "checkSuite":{"app":{"databaseId":57789},"workflowRun":null},
+                        }));
+                    }
+                    Ok(policy)
+                }
+                "ci.check_annotations" => {
+                    let path = s.aggregate.expect("an aggregate was scripted");
+                    let got = (&input["check_run_id"], &input["app_id"], &input["head_sha"]);
+                    assert_eq!(got, (&json!(7001), &json!(57789), &json!(s.head)));
+                    let ann = json!({
+                        "path":path,
+                        "start_line":1,
+                        "end_line":1,
+                        "blob_href": format!(
+                            "https://github.com/owner/repository/blob/{}/{path}",
+                            s.head,
+                        ),
+                        "annotation_level":"failure",
+                        "title":"Uncontrolled data used in path expression",
+                        "message":"This path depends on a user-provided value.",
+                    });
+                    let v = json!({
+                        "repository":"owner/repository",
+                        "pr":42,
+                        "head_sha":s.head,
+                        "check_run": {
+                            "id": 7001,
+                            "name": "CodeQL",
+                            "app_id": 57789,
+                            "conclusion": "failure",
+                            "annotations_count": 1,
+                        },
+                        "annotations":[ann],
+                    });
+                    Ok(v)
+                }
+                "ci.commit_jobs" => {
+                    if s.base_push_provider && input["base_push_tip"].is_string() {
+                        return orbit_engine::run_private_vcs_operation(
+                            &Env::capture(),
+                            op,
+                            &input,
+                        );
+                    }
+                    let commit = input["commit"].as_str().unwrap();
+                    if s.unreadable.iter().any(|bad| bad == commit) {
+                        let msg = "gh api failed: HTTP 401: Bad credentials";
+                        return Err(OrbitError::Execution(msg.into()));
+                    }
+                    let jobs: Vec<Value> = s.jobs.iter().filter(|(sha, _)| {
+                        match input["base_push_tip"].as_str() {
+                            Some(tip) => git(&self.repo, &["merge-base", commit, sha]) == commit
+                                && git(&self.repo, &["merge-base", sha, tip]) == **sha,
+                            None => *sha == commit,
+                        }
+                    }).map(|(sha, j)| {
+                        let mut v = json!({
+                            "run_id":j.run_id,
+                            "job_id":j.job_id,
+                            "workflow":"CI",
+                            "workflow_id":1,
+                            "started_at":"2026-10-26T14:00:00Z",
+                            "completed_at":"2026-10-26T14:01:00Z",
+                            "name":"clippy",
+                            "status":"completed",
+                            "conclusion":j.conclusion,
+                            "failed_step":(j.conclusion=="failure").then_some("Run clippy"),
+                            "run_attempt":j.run_attempt,
+                            "event":j.event,
+                            "pull_requests":[{"number":42}],
+                            "pull_request_numbers":[42],
+                            "head_sha":sha,
+                            "head_branch":c.source_branch,
+                            "repository_id":1,
+                            "repository":c.repository,
+                        });
+                        if let Some((start, end)) = s.job_times.get(&j.job_id) {
+                            (
+                                v["started_at"],
+                                v["completed_at"],
+                                v["run_started_at"],
+                                v["run_status"],
+                            ) = (json!(start), json!(end), json!(start), json!("completed"));
+                        }
+                        v
+                    }).collect();
+                    Ok(json!({"commit": commit, "jobs": jobs}))
+                }
+                "ci.job_log" => {
+                    let job_id: u64 = input["job_id"].as_str().unwrap().parse().unwrap();
+                    if let Some(rem) = s.log_timeouts.get_mut(&job_id)
+                        && *rem > 0
+                    {
+                        *rem -= 1;
+                        let v = json!({
+                            "log":"",
+                            "fallback_error":"process timed out after 15000ms: gh run view --log",
+                        });
+                        return Ok(v);
+                    }
+                    let log = s
+                        .jobs
+                        .values()
+                        .find(|j| j.job_id == job_id)
+                        .expect("log")
+                        .log;
+                    match log {
+                        FakeLog::Text(log) => {
+                            Ok(json!({"log":log,"truncated":false,"fallback_error":null}))
+                        }
+                        FakeLog::Unrecovered => {
+                            let v = json!({
+                                "log":"",
+                                "truncated":false,
+                                "fallback_error": format!(
+                                    "job {job_id} (`clippy`) returned no log text",
+                                ),
+                            });
+                            Ok(v)
+                        }
+                        FakeLog::Unreadable => Err(OrbitError::Execution(
+                            "gh api job logs failed: HTTP 502".into(),
+                        )),
+                    }
+                }
+                "ci.rerun_failed" => {
+                    let head = s.head.clone();
+                    if s.queued_rerun {
+                        s.jobs.remove(&head);
+                    } else {
+                        let mut rerun = s.after_rerun.take().expect("a scripted rerun");
+                        let orig = s.jobs.get(&head).unwrap();
+                        (rerun.run_attempt, rerun.event) = (orig.run_attempt + 1, orig.event);
+                        s.job_times.insert(rerun.job_id, (at("14:02"), at("14:03")));
+                        s.jobs.insert(head, rerun);
+                    }
+                    s.aggregate = s.after_recovery_aggregate.take();
+                    Ok(json!({}))
+                }
+                "pr.update_branch" => {
+                    assert_eq!(input["expected_head_sha"], s.head.as_str());
+                    let merge = match &self.remote {
+                        Some(remote) => provider_update(remote, &s.head, s.update),
+                        None => {
+                            let t =
+                                git(&self.repo, &["merge-tree", "--write-tree", &s.head, "main"]);
+                            let msg = "Merge branch 'main' into orbit/T1";
+                            commit_tree(&self.repo, &t, &[&s.head, "main"], msg)
+                        }
+                    };
+                    let after = s.after_update.take().expect("a scripted update");
+                    s.jobs.insert(merge.clone(), after);
+                    s.head = merge;
+                    s.aggregate = s.after_recovery_aggregate.take();
+                    Ok(json!({}))
+                }
+                "pr.merge_capabilities" => {
+                    let v = json!({
+                        "repository": {
+                            "name_with_owner": c.repository,
+                            "base_branch": c.base_branch,
+                            "allow_squash_merge": true,
+                            "allow_rebase_merge": false,
+                            "allow_merge_commit": false,
+                            "allow_auto_merge": false,
+                            "requires_linear_history": false,
+                        },
+                    });
+                    Ok(v)
+                }
+                "pr.merge" => {
+                    assert_eq!(input["reviewed_head_sha"], s.head.as_str());
+                    if let Some(merged) = s.merge_in_progress {
+                        s.merged = merged;
+                        let v = json!({
+                            "merged":false,
+                            "refusal":"merge_in_progress",
+                            "stderr":"gh: Merge already in progress (HTTP 405)",
+                        });
+                        return Ok(v);
+                    }
+                    s.merged = true;
+                    Ok(json!({"landed_commit": "provider-merge"}))
+                }
+                other => panic!("the landing sent an unexpected {other}"),
             }
-            other => panic!("the landing sent an unexpected {other}"),
         }
     }
+}
+
+impl_test_host! {
+    impl RunLifecycle for FakeForge {
+        fn apply_task_automation_update(
+            &self,
+            _: &str,
+            _: TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            let msg = "active execution claim requires a claim-scoped mutation";
+            Err(OrbitError::InvalidInput(msg.into()))
+        }
+
+        fn get_task_history(&self, _: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
+            Ok(self.history.lock().unwrap().clone())
+        }
+    }
+}
+
+impl_test_host! {
+    impl ReviewGate for FakeForge {
+        fn admit_ci_rerun(
+            &self,
+            _: &[String],
+            _: Option<&str>,
+            plan: &CiRerunPlan,
+            now_ms: u64,
+        ) -> Result<CiRerunAdmission, OrbitError> {
+            let mut h = self.history.lock().unwrap();
+            let d = decide_ci_rerun_with_policy(&h, plan, self.ci_retry_policy, now_ms);
+            if matches!(d, CiRerunAdmission::Reserved) {
+                let ts = chrono::DateTime::from_timestamp_millis(now_ms as i64).unwrap();
+                h.push(plan.reservation_entry(ts));
+            }
+            Ok(d)
+        }
+
+        fn admit_handoff_base_update(
+            &self,
+            _: &str,
+            req: &PrBaseUpdateReservation,
+        ) -> Result<PrBaseUpdateAdmission, OrbitError> {
+            ReviewGate::admit_pr_base_update(self, &[TASK_ID.into()], req)
+        }
+
+        fn admit_pr_base_update(
+            &self,
+            _: &[String],
+            req: &PrBaseUpdateReservation,
+        ) -> Result<PrBaseUpdateAdmission, OrbitError> {
+            let mut h = self.history.lock().unwrap();
+            let d = decide_pr_base_update(&h, req);
+            if matches!(d, PrBaseUpdateAdmission::Reserved) {
+                let note = Some(serde_json::to_string(req).unwrap());
+                h.push(history_row("owner", PR_BASE_UPDATE_RESERVED_EVENT, note));
+            }
+            Ok(d)
+        }
+
+        fn handoff_landing_context(&self, _: &str) -> Result<HandoffLandingContext, OrbitError> {
+            Ok(self.context.clone())
+        }
+
+        fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError> {
+            self.updates.lock().unwrap().push(update.clone());
+            Ok(())
+        }
+
+        fn record_handoff_landing_wait(&self, _: &str, reason: &str) -> Result<(), OrbitError> {
+            let row = history_row("owner", LANDING_WAITING_FOR_BASE_EVENT, Some(reason.into()));
+            self.push_history(row);
+            Ok(())
+        }
+
+        fn record_handoff_landing_history(
+            &self,
+            id: &str,
+            ev: &str,
+            note: &str,
+        ) -> Result<(), OrbitError> {
+            let allowed = matches!(
+                ev,
+                "ci_check_rerun"
+                    | "ci_base_suspect"
+                    | "ci_infrastructure_retry_backoff"
+                    | "ci_infrastructure_retry_exhausted"
+                    | CI_FAILURE_RECORDED_EVENT
+                    | CI_FAILURE_RECLASSIFIED_EVENT
+                    | CI_BASE_SUSPECT_RECLASSIFIED_EVENT
+            );
+            if id != self.context.handoff_id || !allowed {
+                let msg = "current handoff claim does not authorize this history event";
+                return Err(OrbitError::InvalidInput(msg.into()));
+            }
+            self.push_history(history_row("system", ev, Some(note.into())));
+            Ok(())
+        }
+    }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for FakeForge {}
 }
 
 fn pick<T>(cond: bool, t: T, f: T) -> T {
@@ -808,38 +1040,42 @@ fn owner_fixture() -> (TempDir, LandingHost) {
     (sandbox, host)
 }
 
-fn land(host: &impl RuntimeHost) -> Result<Value, OrbitError> {
+fn land(
+    host: &(impl RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment),
+) -> Result<Value, OrbitError> {
     land_with(host, json!({}))
 }
 
-fn land_with(host: &impl RuntimeHost, extra: Value) -> Result<Value, OrbitError> {
+fn land_with(
+    host: &(impl RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment),
+    extra: Value,
+) -> Result<Value, OrbitError> {
     let mut input = json!({"handoff_id": "handoff-1", "task_id": TASK_ID, "run_id": RUN_ID});
     if let (Some(i), Value::Object(e)) = (input.as_object_mut(), extra) {
         i.extend(e);
     }
-    let empty = HashMap::new();
-    execute_deterministic_action(
-        host,
-        "handoff_land",
-        &json!({}),
-        &input,
-        false,
-        &empty,
-        None,
-    )
+    handoff_land(host, &input)
 }
 
-fn land_now(host: &impl RuntimeHost) -> Result<Value, OrbitError> {
+fn land_now(
+    host: &(impl RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment),
+) -> Result<Value, OrbitError> {
     land_with(host, json!({"max_wait_seconds": 0}))
 }
 
-fn land_cycles(host: &impl RuntimeHost, cycles: u64) -> Result<Value, OrbitError> {
+fn land_cycles(
+    host: &(impl RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment),
+    cycles: u64,
+) -> Result<Value, OrbitError> {
     let input =
         json!({"max_wait_seconds": 30, "poll_interval_seconds": 5, "max_base_ci_cycles": cycles});
     with_vcs_retry_wait(|_| {}, || land_with(host, input))
 }
 
-fn counted_land(host: &impl RuntimeHost, input: Value) -> (Result<Value, OrbitError>, Vec<u64>) {
+fn counted_land(
+    host: &(impl RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment),
+    input: Value,
+) -> (Result<Value, OrbitError>, Vec<u64>) {
     let waits = Rc::new(RefCell::new(Vec::new()));
     let cap = waits.clone();
     let res = with_vcs_retry_wait(
@@ -850,7 +1086,11 @@ fn counted_land(host: &impl RuntimeHost, input: Value) -> (Result<Value, OrbitEr
     (res, durations)
 }
 
-fn land_poll(host: &impl RuntimeHost, max: u64, iv: u64) -> (Result<Value, OrbitError>, Vec<u64>) {
+fn land_poll(
+    host: &(impl RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment),
+    max: u64,
+    iv: u64,
+) -> (Result<Value, OrbitError>, Vec<u64>) {
     counted_land(
         host,
         json!({"max_wait_seconds": max, "poll_interval_seconds": iv}),

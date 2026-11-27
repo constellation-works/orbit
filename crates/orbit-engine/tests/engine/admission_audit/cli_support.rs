@@ -1,3 +1,4 @@
+use orbit_engine::test_support::impl_test_host;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -80,82 +81,101 @@ impl TestHost {
     }
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for TestHost {
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.command.clone(),
-            args: Vec::new(),
-            // As the shipped executors declare: inspection runs reach the
-            // checks after the inspection-tools gate.
-            inspection_args: Some(Vec::new()),
-            image_input: None,
-        })
-    }
+impl_test_host! {
+    impl Dispatch for TestHost {
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Ok(ResolvedCliExecutor {
+                command: self.command.clone(),
+                args: Vec::new(),
+                // As the shipped executors declare: inspection runs reach the
+                // checks after the inspection-tools gate.
+                inspection_args: Some(Vec::new()),
+                image_input: None,
+            })
+        }
 
-    /// Deny mode over the fixed [`TEST_REGISTERED_TOOLS`] registry.
-    fn resolve_activity_tool_denials(
-        &self,
-        _run_id: Option<&str>,
-        _task_ids: &[String],
-        _activity: &str,
-        disallow_list: &[String],
-    ) -> Result<ResolvedActivityTools, DispatchError> {
-        let mut effective_tools = orbit_types::workflow::tools_allowed_by_disallow_list(
-            disallow_list,
-            self.registered_tools.iter().map(String::as_str),
-        );
-        effective_tools.retain(|tool| !self.suppressed_tools.contains(tool));
-        Ok(ResolvedActivityTools {
-            requested_tools: self.required_tools.clone(),
-            effective_tools,
-            suppressed_tools: self.suppressed_tools.clone(),
-            ..Default::default()
-        })
-    }
+        fn experiment_overlays_for_activity(
+            &self,
+            _run_id: &str,
+            _activity_name: &str,
+            _input: &serde_json::Value,
+            _model: Option<&str>,
+        ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
+            Ok(self.experiment_overlays.clone())
+        }
 
-    fn resolve_activity_tools(
-        &self,
-        _task_ids: &[String],
-        baseline_tools: &[String],
-    ) -> Result<ResolvedActivityTools, DispatchError> {
-        Ok(ResolvedActivityTools {
-            requested_tools: self.required_tools.clone(),
-            effective_tools: baseline_tools.to_vec(),
-            ..Default::default()
-        })
-    }
-
-    fn experiment_overlays_for_activity(
-        &self,
-        _run_id: &str,
-        _activity_name: &str,
-        _input: &serde_json::Value,
-        _model: Option<&str>,
-    ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
-        Ok(self.experiment_overlays.clone())
-    }
-
-    fn resolve_executor_sandbox(
-        &self,
-        _provider: &str,
-        _fs_profile: Option<&str>,
-        _subprocess_cwd: Option<&Path>,
-    ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-        Ok(self.sandbox.clone())
-    }
-
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> orbit_tools::ToolContext {
-        orbit_tools::ToolContext {
-            workspace_root: self.workspace_root.clone(),
-            ..orbit_tools::ToolContext::default()
+        fn resolve_executor_sandbox(
+            &self,
+            _provider: &str,
+            _fs_profile: Option<&str>,
+            _subprocess_cwd: Option<&Path>,
+        ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+            Ok(self.sandbox.clone())
         }
     }
+}
+
+impl_test_host! { impl HostEnvironment for TestHost {} }
+
+impl_test_host! { impl RunLifecycle for TestHost {} }
+
+impl_test_host! {
+    impl Recovery for TestHost {
+        /// Deny mode over the fixed [`TEST_REGISTERED_TOOLS`] registry.
+        fn resolve_activity_tool_denials(
+            &self,
+            _run_id: Option<&str>,
+            _task_ids: &[String],
+            _activity: &str,
+            disallow_list: &[String],
+        ) -> Result<ResolvedActivityTools, DispatchError> {
+            let mut effective_tools = orbit_types::workflow::tools_allowed_by_disallow_list(
+                disallow_list,
+                self.registered_tools.iter().map(String::as_str),
+            );
+            effective_tools.retain(|tool| !self.suppressed_tools.contains(tool));
+            Ok(ResolvedActivityTools {
+                requested_tools: self.required_tools.clone(),
+                effective_tools,
+                suppressed_tools: self.suppressed_tools.clone(),
+                ..Default::default()
+            })
+        }
+
+        fn resolve_activity_tools(
+            &self,
+            _task_ids: &[String],
+            baseline_tools: &[String],
+        ) -> Result<ResolvedActivityTools, DispatchError> {
+            Ok(ResolvedActivityTools {
+                requested_tools: self.required_tools.clone(),
+                effective_tools: baseline_tools.to_vec(),
+                ..Default::default()
+            })
+        }
+
+        fn tool_context_for_activity(
+            &self,
+            _run_id: Option<&str>,
+            _fs_profile: Option<&str>,
+            _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            _proc_allowed_programs: Option<&[String]>,
+        ) -> orbit_tools::ToolContext {
+            orbit_tools::ToolContext {
+                workspace_root: self.workspace_root.clone(),
+                ..orbit_tools::ToolContext::default()
+            }
+        }
+    }
+}
+
+impl_test_host! { impl ReviewGate for TestHost {} }
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for TestHost {}
 }
 
 /// An audit writer persisting envelopes and blobs to an in-memory store and

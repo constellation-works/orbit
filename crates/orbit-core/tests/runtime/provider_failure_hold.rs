@@ -32,6 +32,8 @@ use orbit_engine::TaskAutomationUpdate;
 use orbit_engine::WORKFLOW_RUN_FAILED_EVENT;
 #[cfg(unix)]
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
+#[cfg(unix)]
+use orbit_engine::test_support::impl_test_host;
 use orbit_engine::{Dispatch, RunLifecycle};
 #[cfg(unix)]
 use orbit_engine::{
@@ -817,62 +819,88 @@ impl<'a> Pipeline<'a> {
 }
 
 #[cfg(unix)]
-impl orbit_engine::test_support::NullRuntimeHost for Pipeline<'_> {
-    fn run_deterministic(
-        &self,
-        action: &str,
-        _config: &Value,
-        _input: &Value,
-        _context: ToolContext,
-    ) -> Result<Value, DispatchError> {
-        self.actions.lock().unwrap().push(action.to_string());
-        Ok(match action {
-            "setup" => json!({ "workspace_path": self.fixture.repo, "base_ref": "main" }),
-            _ => json!({ "action": action }),
-        })
-    }
+impl_test_host! {
+    impl Dispatch for Pipeline<'_> {
+        fn run_deterministic(
+            &self,
+            action: &str,
+            _config: &Value,
+            _input: &Value,
+            _context: ToolContext,
+        ) -> Result<Value, DispatchError> {
+            self.actions.lock().unwrap().push(action.to_string());
+            Ok(match action {
+                "setup" => json!({ "workspace_path": self.fixture.repo, "base_ref": "main" }),
+                _ => json!({ "action": action }),
+            })
+        }
 
-    fn resolve_cli_executor(&self, _provider: &str) -> Result<ResolvedCliExecutor, DispatchError> {
-        Ok(ResolvedCliExecutor {
-            command: self.codex.to_string_lossy().into_owned(),
-            args: Vec::new(),
-            inspection_args: None,
-            image_input: None,
-        })
+        fn resolve_cli_executor(
+            &self,
+            _provider: &str,
+        ) -> Result<ResolvedCliExecutor, DispatchError> {
+            Ok(ResolvedCliExecutor {
+                command: self.codex.to_string_lossy().into_owned(),
+                args: Vec::new(),
+                inspection_args: None,
+                image_input: None,
+            })
+        }
     }
+}
 
-    fn tool_context_for_activity(
-        &self,
-        _run_id: Option<&str>,
-        _fs_profile: Option<&str>,
-        _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
-        _proc_allowed_programs: Option<&[String]>,
-    ) -> ToolContext {
-        ToolContext::default()
+#[cfg(unix)]
+impl_test_host! {
+    impl HostEnvironment for Pipeline<'_> {
+        fn record_provider_limit(
+            &self,
+            observation: &ProviderLimitObservation,
+        ) -> Result<(), OrbitError> {
+            self.fixture
+                .runtime
+                .record_provider_limit(observation)
+                .map(|_| ())
+        }
     }
+}
 
-    fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
+#[cfg(unix)]
+impl_test_host! { impl RunLifecycle for Pipeline<'_> {} }
 
-    fn admit_final_recovery(
-        &self,
-        _run_id: &str,
-        _request: &FinalRecoveryAdmissionRequest,
-    ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        *self.final_recovery_admissions.lock().unwrap() += 1;
-        Ok(FinalRecoveryAdmission::Admitted)
-    }
+#[cfg(unix)]
+impl_test_host! {
+    impl Recovery for Pipeline<'_> {
+        fn tool_context_for_activity(
+            &self,
+            _run_id: Option<&str>,
+            _fs_profile: Option<&str>,
+            _fs_audit: Option<Arc<dyn orbit_tools::FsAuditLogger>>,
+            _proc_allowed_programs: Option<&[String]>,
+        ) -> ToolContext {
+            ToolContext::default()
+        }
 
-    fn record_provider_limit(
-        &self,
-        observation: &ProviderLimitObservation,
-    ) -> Result<(), OrbitError> {
-        self.fixture
-            .runtime
-            .record_provider_limit(observation)
-            .map(|_| ())
+        fn final_recovery_log_tail(&self, _run_id: &str) -> Result<Option<String>, OrbitError> {
+            Ok(None)
+        }
+
+        fn admit_final_recovery(
+            &self,
+            _run_id: &str,
+            _request: &FinalRecoveryAdmissionRequest,
+        ) -> Result<FinalRecoveryAdmission, OrbitError> {
+            *self.final_recovery_admissions.lock().unwrap() += 1;
+            Ok(FinalRecoveryAdmission::Admitted)
+        }
     }
+}
+
+#[cfg(unix)]
+impl_test_host! { impl ReviewGate for Pipeline<'_> {} }
+
+#[cfg(unix)]
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for Pipeline<'_> {}
 }
 
 #[cfg(unix)]

@@ -1,5 +1,6 @@
 //! Published replay checkpoints authenticate host commits and interrupted rebases.
 use super::*;
+use orbit_engine::test_support::impl_test_host;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -35,94 +36,28 @@ struct ReplayHost<'a> {
     publications: Mutex<Vec<Value>>,
 }
 
-impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
-    fn final_recovery_log_tail(&self, _: &str) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
-
-    fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
-        assert_eq!(id, TASK_ID);
-        let mut task = RunLifecycle::get_task(&Host::new(&self.fx.repo), super::TASK_ID)?;
-        task.id = TASK_ID.into();
-        Ok(task)
-    }
-
-    fn list_run_tasks(&self, _: &str) -> Result<Vec<Task>, OrbitError> {
-        Ok(vec![RunLifecycle::get_task(self, TASK_ID)?])
-    }
-
-    fn run_settings(&self) -> orbit_engine::RunSettings {
-        orbit_engine::RunSettings {
-            repo_root: Some(path_str(&self.fx.repo).into()),
-            ..orbit_engine::RunSettings::default()
-        }
-    }
-
-    fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
-        assert_eq!(run, RUN_ID);
-        Ok(Some(self.state.lock().unwrap().clone()))
-    }
-
-    fn claim_execution_context(&self) -> Result<ClaimExecutionContext, OrbitError> {
-        Ok(ClaimExecutionContext {
-            footprint: vec!["dir:src".into()],
-            workspace_id: "ws-test".into(),
-            task_id: TASK_ID.into(),
-            claim_id: "claim-replay".into(),
-            machine_id: "machine-test".into(),
-            run_id: RUN_ID.into(),
-            ship_mode: "pr".into(),
-            base_branch: BASE.into(),
-            landing_branch: BASE.into(),
-            required_commands: vec!["git rev-parse HEAD".into()],
-        })
-    }
-
-    fn attach_claim_validation_log(&self, _: &str, content: Vec<u8>) -> Result<(), OrbitError> {
-        self.validation_logs
-            .lock()
-            .unwrap()
-            .push(serde_json::from_slice(&content).unwrap());
-        Ok(())
-    }
-
-    fn apply_task_automation_update(
-        &self,
-        _: &str,
-        update: TaskAutomationUpdate,
-    ) -> Result<(), OrbitError> {
-        assert!(
-            update.status.is_none(),
-            "a push refusal only records its diagnostic"
-        );
-        Ok(())
-    }
-
-    fn record_claim_handoff(&self, handoff: &TaskHandoff) -> Result<(), OrbitError> {
-        self.handoffs.lock().unwrap().push(handoff.clone());
-        Ok(())
-    }
-
-    fn run_deterministic(
-        &self,
-        name: &str,
-        config: &Value,
-        input: &Value,
-        _: orbit_tools::ToolContext,
-    ) -> Result<Value, DispatchError> {
-        match name {
-            "setup" => {
-                return Ok(json!({
-                    "workspace_path": self.fx.claim, "job_run_id": RUN_ID,
-                    "base_sha": self.fx.base_sha, "base_ref": BASE, "head_ref": OURS,
-                }));
-            }
-            "implement" => {
-                let mut count = self.implementations.lock().unwrap();
-                *count += 1;
-                if *count == 1 {
-                    fs::create_dir_all(self.fx.claim.join("src")).unwrap();
-                    fs::write(self.fx.claim.join("src/feature.txt"), "candidate\n").unwrap();
+impl_test_host! {
+    impl Dispatch for ReplayHost<'_> {
+        fn run_deterministic(
+            &self,
+            name: &str,
+            config: &Value,
+            input: &Value,
+            _: orbit_tools::ToolContext,
+        ) -> Result<Value, DispatchError> {
+            match name {
+                "setup" => {
+                    return Ok(json!({
+                        "workspace_path": self.fx.claim, "job_run_id": RUN_ID,
+                        "base_sha": self.fx.base_sha, "base_ref": BASE, "head_ref": OURS,
+                    }));
+                }
+                "implement" => {
+                    let mut count = self.implementations.lock().unwrap();
+                    *count += 1;
+                    if *count == 1 {
+                        fs::create_dir_all(self.fx.claim.join("src")).unwrap();
+                        fs::write(self.fx.claim.join("src/feature.txt"), "candidate\n").unwrap();
                     self.fx.advance_base();
                 } else {
                     assert!((2..=3).contains(&*count));
@@ -134,7 +69,8 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
                             if self.mode.starts_with("restart-sync") {
                                 self.syncs.lock().unwrap().last().unwrap()["head_sha"].clone()
                             } else {
-                                self.state.lock().unwrap().pipeline["commit"]["commit_sha"].clone()
+                                self.state.lock().unwrap().pipeline["commit"]["commit_sha"]
+                                    .clone()
                             }
                         );
                     } else {
@@ -184,9 +120,11 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
                             }
                             mode => {
                                 let (id, key, value) = match mode {
-                                    "inconsistent-sync" => {
-                                        ("sync_base", "head_sha_before", json!(self.fx.base_sha))
-                                    }
+                                    "inconsistent-sync" => (
+                                        "sync_base",
+                                        "head_sha_before",
+                                        json!(self.fx.base_sha),
+                                    ),
                                     "inconsistent-prepare" => {
                                         ("prepare_branch", "base_sha", json!(self.fx.base_sha))
                                     }
@@ -271,7 +209,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
                 }
                 return Ok(
                     json!({"execution_summary": "Outcome: success\nChanges: implemented candidate.",
-                    "regression_from": [if *count == 1 { TASK_ID } else { "ORB-2" }]}),
+                        "regression_from": [if *count == 1 { TASK_ID } else { "ORB-2" }]}),
                 );
             }
             "checkpoint_pause" => {
@@ -335,7 +273,7 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
                 );
                 return Ok(
                     json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "implement_bundle",
-                    "rationale": "Correct self-attribution; preserve the published candidate"}),
+                        "rationale": "Correct self-attribution; preserve the published candidate"}),
                 );
             }
             _ => {}
@@ -343,118 +281,213 @@ impl orbit_engine::test_support::NullRuntimeHost for ReplayHost<'_> {
         if name == "git_push" {
             git_fixture::assert_local_push_remote(&self.fx.repo);
         }
-        let output =
-            execute_deterministic_action(self, name, config, input, false, &HashMap::new(), None)
-                .map_err(|e| DispatchError::DeterministicActionFailed {
-                action: name.into(),
-                message: e.to_string(),
-            })?;
+        let output = execute_deterministic_action(
+            self,
+            name,
+            config,
+            input,
+            false,
+            &HashMap::new(),
+            None,
+        )
+        .map_err(|e| DispatchError::DeterministicActionFailed {
+            action: name.into(),
+            message: e.to_string(),
+        })?;
         Ok(output)
     }
+    }
+}
 
-    fn checkpoint_step(
-        &self,
-        _: &str,
-        index: u32,
-        id: &str,
-        output: &Value,
-        compound: &BTreeMap<String, Value>,
-        _: &std::collections::BTreeMap<
-            String,
-            orbit_types::workflow::activity_job::ScriptOutputSet,
-        >,
-    ) -> Result<(), DispatchError> {
-        if id == "pr_open" {
-            self.publications.lock().unwrap().push(output.clone());
-            let head = git(&self.fx.claim, &["rev-parse", "HEAD"]);
-            let mut published = self.published.lock().unwrap();
-            if !matches!(self.mode, "files" | "restart-files")
-                && !self.mode.starts_with("restart-sync")
-                && let Some(previous) = &*published
-            {
-                assert_eq!(&head, previous);
+impl_test_host! {
+    impl HostEnvironment for ReplayHost<'_> {
+        fn run_settings(&self) -> orbit_engine::RunSettings {
+            orbit_engine::RunSettings {
+                repo_root: Some(path_str(&self.fx.repo).into()),
+                ..orbit_engine::RunSettings::default()
             }
-            *published = Some(head);
         }
-        if id == "commit" {
-            self.commits.lock().unwrap().push(output.clone());
+    }
+}
+
+impl_test_host! {
+    impl RunLifecycle for ReplayHost<'_> {
+        fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
+            assert_eq!(id, TASK_ID);
+            let mut task = RunLifecycle::get_task(&Host::new(&self.fx.repo), super::TASK_ID)?;
+            task.id = TASK_ID.into();
+            Ok(task)
         }
-        if id == "sync_base" {
-            self.syncs.lock().unwrap().push(output.clone());
+
+        fn list_run_tasks(&self, _: &str) -> Result<Vec<Task>, OrbitError> {
+            Ok(vec![RunLifecycle::get_task(self, TASK_ID)?])
         }
-        if id == "validate" {
-            self.validations.lock().unwrap().push(
-                output["candidate"]["candidate"]["commit"]
-                    .as_str()
-                    .unwrap()
-                    .into(),
+
+        fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
+            assert_eq!(run, RUN_ID);
+            Ok(Some(self.state.lock().unwrap().clone()))
+        }
+
+        fn apply_task_automation_update(
+            &self,
+            _: &str,
+            update: TaskAutomationUpdate,
+        ) -> Result<(), OrbitError> {
+            assert!(
+                update.status.is_none(),
+                "a push refusal only records its diagnostic"
             );
+            Ok(())
         }
-        let mut state = self.state.lock().unwrap();
-        state.record_step(index, JobRunState::Success, Some(output.clone()), None);
-        state.record_compound_outputs(index, compound.clone());
-        state.record_pipeline_output(id, output.clone());
-        for (key, output) in compound {
-            state.record_pipeline_output(key, output.clone());
-        }
-        Ok(())
     }
+}
 
-    fn admit_final_recovery(
-        &self,
-        _: &str,
-        request: &FinalRecoveryAdmissionRequest,
-    ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        let mut state = self.state.lock().unwrap();
-        assert!(state.final_recovery.is_none());
-        state.final_recovery = Some(FinalRecoveryCheckpoint {
-            key: FinalRecoveryKey {
+impl_test_host! {
+    impl Recovery for ReplayHost<'_> {
+        fn final_recovery_log_tail(&self, _: &str) -> Result<Option<String>, OrbitError> {
+            Ok(None)
+        }
+
+        fn checkpoint_step(
+            &self,
+            _: &str,
+            index: u32,
+            id: &str,
+            output: &Value,
+            compound: &BTreeMap<String, Value>,
+            _: &std::collections::BTreeMap<
+                String,
+                orbit_types::workflow::activity_job::ScriptOutputSet,
+            >,
+        ) -> Result<(), DispatchError> {
+            if id == "pr_open" {
+                self.publications.lock().unwrap().push(output.clone());
+                let head = git(&self.fx.claim, &["rev-parse", "HEAD"]);
+                let mut published = self.published.lock().unwrap();
+                if !matches!(self.mode, "files" | "restart-files")
+                    && !self.mode.starts_with("restart-sync")
+                    && let Some(previous) = &*published
+                {
+                    assert_eq!(&head, previous);
+                }
+                *published = Some(head);
+            }
+            if id == "commit" {
+                self.commits.lock().unwrap().push(output.clone());
+            }
+            if id == "sync_base" {
+                self.syncs.lock().unwrap().push(output.clone());
+            }
+            if id == "validate" {
+                self.validations.lock().unwrap().push(
+                    output["candidate"]["candidate"]["commit"]
+                        .as_str()
+                        .unwrap()
+                        .into(),
+                );
+            }
+            let mut state = self.state.lock().unwrap();
+            state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+            state.record_compound_outputs(index, compound.clone());
+            state.record_pipeline_output(id, output.clone());
+            for (key, output) in compound {
+                state.record_pipeline_output(key, output.clone());
+            }
+            Ok(())
+        }
+
+        fn admit_final_recovery(
+            &self,
+            _: &str,
+            request: &FinalRecoveryAdmissionRequest,
+        ) -> Result<FinalRecoveryAdmission, OrbitError> {
+            let mut state = self.state.lock().unwrap();
+            assert!(state.final_recovery.is_none());
+            state.final_recovery = Some(FinalRecoveryCheckpoint {
+                key: FinalRecoveryKey {
+                    run_id: RUN_ID.into(),
+                    attempt: 1,
+                },
+                failed_step_id: request.failed_step_id.clone(),
+                task_id: TASK_ID.into(),
+                observed: None,
+                base_ref: Some(BASE.into()),
+                admitted_at: Utc::now(),
+                decision: None,
+                fault: Default::default(),
+                repair_commit: None,
+                resume_context: None,
+                outcome: None,
+            });
+            Ok(FinalRecoveryAdmission::Admitted)
+        }
+
+        fn apply_final_recovery(
+            &self,
+            _: &str,
+            application: &FinalRecoveryApplication,
+        ) -> Result<FinalRecoveryApplied, OrbitError> {
+            let mut state = self.state.lock().unwrap();
+            let checkpoint = state.final_recovery.as_mut().unwrap();
+            checkpoint.decision = Some(application.decision.clone());
+            checkpoint.outcome = Some(FinalRecoveryCheckpointOutcome::Resume);
+            checkpoint.repair_commit = application.repair_commit.clone();
+            checkpoint.resume_context = application.resume_context.clone();
+            let from = application
+                .resume_step_index
+                .unwrap_or_else(|| panic!("recovery not admitted: {application:?}"));
+            state
+                .step_states
+                .retain(|index, _| *index < from || application.preserved_steps.contains(index));
+            state
+                .step_outputs
+                .retain(|index, _| *index < from || application.preserved_steps.contains(index));
+            state.compound_outputs.retain(|index, _| *index < from);
+            if self.mode == "restart" {
+                Err(OrbitError::Execution(
+                    "fixture interruption after durable resume".into(),
+                ))
+            } else {
+                Ok(FinalRecoveryApplied::Resume)
+            }
+        }
+    }
+}
+
+impl_test_host! {
+    impl ReviewGate for ReplayHost<'_> {
+        fn claim_execution_context(&self) -> Result<ClaimExecutionContext, OrbitError> {
+            Ok(ClaimExecutionContext {
+                footprint: vec!["dir:src".into()],
+                workspace_id: "ws-test".into(),
+                task_id: TASK_ID.into(),
+                claim_id: "claim-replay".into(),
+                machine_id: "machine-test".into(),
                 run_id: RUN_ID.into(),
-                attempt: 1,
-            },
-            failed_step_id: request.failed_step_id.clone(),
-            task_id: TASK_ID.into(),
-            observed: None,
-            base_ref: Some(BASE.into()),
-            admitted_at: Utc::now(),
-            decision: None,
-            fault: Default::default(),
-            repair_commit: None,
-            resume_context: None,
-            outcome: None,
-        });
-        Ok(FinalRecoveryAdmission::Admitted)
-    }
+                ship_mode: "pr".into(),
+                base_branch: BASE.into(),
+                landing_branch: BASE.into(),
+                required_commands: vec!["git rev-parse HEAD".into()],
+            })
+        }
 
-    fn apply_final_recovery(
-        &self,
-        _: &str,
-        application: &FinalRecoveryApplication,
-    ) -> Result<FinalRecoveryApplied, OrbitError> {
-        let mut state = self.state.lock().unwrap();
-        let checkpoint = state.final_recovery.as_mut().unwrap();
-        checkpoint.decision = Some(application.decision.clone());
-        checkpoint.outcome = Some(FinalRecoveryCheckpointOutcome::Resume);
-        checkpoint.repair_commit = application.repair_commit.clone();
-        checkpoint.resume_context = application.resume_context.clone();
-        let from = application
-            .resume_step_index
-            .unwrap_or_else(|| panic!("recovery not admitted: {application:?}"));
-        state
-            .step_states
-            .retain(|index, _| *index < from || application.preserved_steps.contains(index));
-        state
-            .step_outputs
-            .retain(|index, _| *index < from || application.preserved_steps.contains(index));
-        state.compound_outputs.retain(|index, _| *index < from);
-        if self.mode == "restart" {
-            Err(OrbitError::Execution(
-                "fixture interruption after durable resume".into(),
-            ))
-        } else {
-            Ok(FinalRecoveryApplied::Resume)
+        fn attach_claim_validation_log(&self, _: &str, content: Vec<u8>) -> Result<(), OrbitError> {
+            self.validation_logs
+                .lock()
+                .unwrap()
+                .push(serde_json::from_slice(&content).unwrap());
+            Ok(())
+        }
+
+        fn record_claim_handoff(&self, handoff: &TaskHandoff) -> Result<(), OrbitError> {
+            self.handoffs.lock().unwrap().push(handoff.clone());
+            Ok(())
         }
     }
+}
+
+impl_test_host! {
+    impl RuntimeHostProcessEnvironment for ReplayHost<'_> {}
 }
 
 fn job(fx: &Fixture, mode: &str) -> JobV2 {
