@@ -903,6 +903,38 @@ class NextestOutputTransportTests(unittest.TestCase):
                 self.assertEqual(self.notices(output), [self.NOTICE], output)
                 self.assertEqual(self.summary["notices"], [self.NOTICE], output)
 
+    def test_a_passing_child_tests_genuine_skip_notice_is_relayed_and_recorded(self):
+        notice = "SKIP: genuine child host capability gap"
+        body = f"""
+#[test]
+fn parent() {{
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "skipping_child", "--ignored", "--nocapture"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.lines().any(|line| line.starts_with("test result: ok. 1 passed; 0 failed; 0 ignored;")));
+    for line in stdout.lines().chain(stderr.lines()) {{
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("SKIP:") {{
+            eprintln!("{{}}", line.trim());
+        }}
+    }}
+}}
+
+#[test]
+#[ignore]
+fn skipping_child() {{
+    eprintln!({json.dumps(notice)});
+}}
+"""
+        output = self.run_gate(body)
+        self.assertEqual([line.strip() for line in output.splitlines()].count(notice), 1, output)
+        self.assertEqual(self.summary["notices"], [notice], output)
+        self.assertEqual(self.summary["executed_tests"], ["suite::fixture parent"], output)
+
     def test_passing_noise_is_archived_and_all_host_refusal_markers_are_relayed(self):
         # A bounded fixture reproduces the output-volume incident without load
         # or timing races. Both nextest capture streams must retain notices.
