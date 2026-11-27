@@ -1009,6 +1009,102 @@ fn dependency_waiter_echoing_its_runner_command_folds_into_infrastructure() {
     assert!(open_sweep_tasks(&runtime).is_empty());
 }
 
+/// Run 8200 under a bounded `max_job_log_reads`: the aggregate waiter (job
+/// 9301) was read and names `Test partition 9` (job 9300), whose log was not.
+fn waiter_beside_uncollected_shard(checkout: &str, shard_collected: bool) -> Value {
+    let record = json!({
+        "schema_version": 1, "kind": "dependency_failed", "run_id": 8_200,
+        "dependencies": [{
+            "job_id": 9_300, "job_name": "Test partition 9", "status": "completed",
+            "conclusion": "failure", "step": null,
+        }],
+    });
+    let mut waiter = crafted_job_run(
+        checkout,
+        9_301,
+        &format!(
+            "orbit-dependency-evidence:{record}\nci-await-api: listings=1 not_modified=0 paginated=false\n"
+        ),
+    );
+    waiter["failed_jobs"][0]["name"] = json!("Check / Clippy / Test");
+    waiter["failed_jobs"][0]["failed_steps"][0]["name"] =
+        json!("Await the test build and nextest shards");
+    let mut shard = crafted_job_run(
+        checkout,
+        9_300,
+        "FAIL [ 0.123s] suite::partition_nine_test\nthread 'partition_nine_test' panicked at src/lib.rs:9:1:\nboom\n",
+    );
+    shard["failed_jobs"][0]["name"] = json!("Test partition 9");
+    if !shard_collected {
+        shard["investigated"] = json!(false);
+        shard["evidence_state"] = json!("deferred");
+        shard["log_excerpt"] = json!("");
+    }
+    let errors = if shard_collected {
+        json!([])
+    } else {
+        json!([{
+            "stage": "investigation", "operation": "job_log_budget", "run_id": 8_200,
+            "job_id": 9_300, "retryable": true,
+            "message": "job evidence was not collected because max_job_log_reads was exhausted",
+        }])
+    };
+    json!({"runs": [shard, waiter], "retryable_errors": errors})
+}
+
+fn file_waiter_beside_shard(runtime: &OrbitRuntime, fixture: &Value) -> Value {
+    let runs = fixture["runs"].as_array().unwrap().clone();
+    let input = super::evidence_input(
+        runs,
+        json!({"retryable_errors": fixture["retryable_errors"].clone()}),
+    );
+    super::file_input(runtime, input).expect("file CI")
+}
+
+#[test]
+fn dependency_waiter_is_deferred_while_its_failed_shard_log_is_uncollected() {
+    if !super::isolated(
+        "sweep::dependency_waiter_is_deferred_while_its_failed_shard_log_is_uncollected",
+    ) {
+        return;
+    }
+    let (_root, runtime, commits) = super::operator_commits("", 1);
+    let fixture = waiter_beside_uncollected_shard(&commits[0], false);
+    let filed = file_waiter_beside_shard(&runtime, &fixture);
+    assert_eq!(filed["outcome"], json!("deferred"), "{filed:#}");
+    assert_eq!(filed["filed_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["pilot_candidate_count"], json!(0), "{filed:#}");
+    assert_eq!(filed["deferred_count"], json!(2), "{filed:#}");
+    let operations: Vec<_> = filed["deferred"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|entry| entry["reasons"].as_array().unwrap())
+        .map(|reason| (reason["job_id"].clone(), reason["operation"].clone()))
+        .collect();
+    assert!(
+        operations.contains(&(json!(9_301), json!("dependency_log_pending"))),
+        "{filed:#}"
+    );
+    assert!(open_sweep_tasks(&runtime).is_empty());
+}
+
+#[test]
+fn dependency_waiter_folds_into_its_shard_once_the_shard_log_is_collected() {
+    if !super::isolated(
+        "sweep::dependency_waiter_folds_into_its_shard_once_the_shard_log_is_collected",
+    ) {
+        return;
+    }
+    let (_root, runtime, commits) = super::operator_commits("", 1);
+    let fixture = waiter_beside_uncollected_shard(&commits[0], true);
+    let filed = file_waiter_beside_shard(&runtime, &fixture);
+    assert_eq!(filed["filed_count"], json!(1), "{filed:#}");
+    assert_eq!(filed["folded_count"], json!(1), "{filed:#}");
+    assert_eq!(filed["deferred_count"], json!(0), "{filed:#}");
+    assert_eq!(open_sweep_tasks(&runtime).len(), 1, "{filed:#}");
+}
+
 #[test]
 fn dependency_waiter_with_a_specific_error_annotation_keeps_its_own_filing() {
     if !super::isolated(

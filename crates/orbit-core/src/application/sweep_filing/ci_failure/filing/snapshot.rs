@@ -30,6 +30,7 @@ use super::{
     DEFAULT_MAX_TASKS, MAX_MAX_TASKS, OUTCOME_CAPABILITY_UNAVAILABLE, OUTCOME_DEFERRED,
     OUTCOME_HINT_RATE_LIMITED, SUPPORTED_SCHEMA_VERSION,
 };
+use crate::application::sweep_filing::ci_failure::dependency_fold::split_waiters_of_deferred_leaves;
 
 /// A prepared snapshot, or the outcome that ends the filing before any
 /// cluster is formed.
@@ -276,6 +277,9 @@ where
         branch_observations,
         excluded_branch_failures,
     } = partition_branch_failures(runtime, evidence, complete, &mut deferred);
+    // A dependency-only waiter beside a deferred sibling has no diagnostic to
+    // file; hold it until the sibling's evidence is collected.
+    let complete = split_waiters_of_deferred_leaves(complete, &mut deferred);
     // A run-scoped retryable error whose run never made it into
     // `current_failures` at all — an in-flight run with an observed failed
     // job but logs collection could not read yet — has no failure row for

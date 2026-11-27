@@ -631,14 +631,13 @@ fn ci_dependency_only_aggregate_folds_into_failed_sibling() {
         "orbit-dependency-evidence:{{\"dependencies\":[{{\"conclusion\":\"success\",\"job_name\":\"Test partition 2\"}}]}}\n{tail}"
     );
     let cases = [
-        ("own_error", own.as_str(), true, true, 2, 0, None),
-        ("non_failed_dep", &df, true, true, 2, 0, None),
-        ("uninvestigated_sib", &dl, true, false, 1, 1, Some(AGG_JOB)),
-        ("malformed_json", &b1, false, true, 1, 0, None),
-        ("empty_deps", &b2, false, true, 1, 0, None),
-        ("success_dep", &b3, false, true, 1, 0, None),
+        ("own_error", own.as_str(), true, true, 2, 0),
+        ("non_failed_dep", &df, true, true, 2, 0),
+        ("malformed_json", &b1, false, true, 1, 0),
+        ("empty_deps", &b2, false, true, 1, 0),
+        ("success_dep", &b3, false, true, 1, 0),
     ];
-    for (label, log, with_sib, sib_inv, filed_cnt, def_cnt, job) in cases {
+    for (label, log, with_sib, sib_inv, filed_cnt, def_cnt) in cases {
         let (_root, rt, c) = operator_fixture("");
         let mut runs = vec![named_failure(log, 0, &c[0], 4242, AGG_JOB, agg_step)];
         if with_sib {
@@ -650,9 +649,25 @@ fn ci_dependency_only_aggregate_folds_into_failed_sibling() {
         if def_cnt > 0 {
             assert_eq!(out["deferred_count"], def_cnt, "{label}: {out}");
         }
-        if let Some(j) = job {
-            assert_eq!(out["filed"][0]["job"], j, "{label}: {out}");
-        }
+    }
+    {
+        // A waiter whose named sibling is uninvestigated is held with it: with
+        // no leaf evidence there is nothing for a waiter task to repair.
+        let (_root, rt, c) = operator_fixture("");
+        let waiter = named_failure(&dl, 0, &c[0], 4242, AGG_JOB, agg_step);
+        let payload =
+            retryable_error_payload(file_result(&rt, vec![waiter, sib(&c[0], false)]).unwrap_err());
+        let operations: Vec<_> = payload["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|error| error["operation"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            operations.contains(&"dependency_log_pending".to_string()),
+            "{payload}"
+        );
+        assert!(rt.list_tasks().unwrap().is_empty(), "{payload}");
     }
     for (old, new, same) in [
         ("\"job_id\":911", "\"job_id\":999", false),

@@ -87,6 +87,23 @@ fn sorted_failed_jobs(view: &Value) -> Vec<Value> {
     jobs
 }
 
+/// Whether a failed job's failing step is an aggregate wait on sibling jobs
+/// (the CI gate's `Await ...` step), whose log carries no diagnostic of its own.
+fn job_is_aggregate_waiter(job: &Value) -> bool {
+    job.get("failed_steps")
+        .and_then(Value::as_array)
+        .is_some_and(|steps| {
+            !steps.is_empty()
+                && steps.iter().all(|step| {
+                    step.get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| {
+                            name.trim_start().to_ascii_lowercase().starts_with("await ")
+                        })
+                })
+        })
+}
+
 /// Inspect each failed job independently. The row keeps run freshness metadata,
 /// but all diagnostic and checkout fields belong only to its named job.
 /// `cached_view` is this run's view when collection already fetched it.
@@ -142,7 +159,7 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
     }
 
     let mut findings = Vec::new();
-    let mut actionable = Vec::new();
+    let mut actionable: Vec<Value> = Vec::new();
     for job in jobs {
         if job_is_inconclusive_cancellation(&job) {
             findings.push(inconclusive_cancellation_finding(failure, Some(&job)));
@@ -154,13 +171,25 @@ pub(super) fn investigate<Q: CiQueries + ?Sized>(
         return findings;
     }
 
+    // An aggregate waiter's own log only names the sibling that failed; the
+    // sibling's log holds the diagnostic. Under a bounded budget the leaf jobs
+    // take the reads first, so a waiter is never collected while its leaf is
+    // deferred. The sort is stable, keeping `job_id` order within each group.
+    actionable.sort_by_key(job_is_aggregate_waiter);
+    let leaf_count = actionable
+        .iter()
+        .filter(|job| !job_is_aggregate_waiter(job))
+        .count();
     let remaining_reads = bounds.max_job_log_reads.saturating_sub(*job_log_reads);
     let selected = if remaining_reads == 1 {
         // Runs reserve a single slot for integration priority. Within a run,
         // equally relevant failed jobs must rotate even with only one read.
-        std::collections::BTreeSet::from([
-            (bounds.investigation_cursor % actionable.len() as u64) as usize
-        ])
+        let rotation = if leaf_count == 0 {
+            actionable.len()
+        } else {
+            leaf_count
+        };
+        std::collections::BTreeSet::from([(bounds.investigation_cursor % rotation as u64) as usize])
     } else {
         investigation_slots(
             actionable.len(),
