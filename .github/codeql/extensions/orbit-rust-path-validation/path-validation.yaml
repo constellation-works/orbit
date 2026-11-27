@@ -80,6 +80,12 @@ extensions:
           "manual",
         ]
       - [
+          "orbit_common::fs::io::lock::validated_existing_lock_parent",
+          "ReturnValue",
+          "path-injection",
+          "manual",
+        ]
+      - [
           "orbit_core::adapter::engine_host::actions::sandbox::provider_state::validated_linux_provider_state_root",
           "ReturnValue",
           "path-injection",
@@ -196,7 +202,19 @@ extensions:
           "manual",
         ]
       - [
-          "orbit_common::fs::file_lock::validated_lock_holder_parent",
+          "orbit_common::fs::file_lock::holders::validated_lock_holder_parent",
+          "ReturnValue",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_common::fs::file_lock::holders::validated_lock_holder_path",
+          "ReturnValue",
+          "path-injection",
+          "manual",
+        ]
+      - [
+          "orbit_common::fs::file_lock::holders::validated_shared_holder_record_path",
           "ReturnValue",
           "path-injection",
           "manual",

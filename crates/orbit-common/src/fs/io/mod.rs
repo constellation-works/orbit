@@ -48,7 +48,8 @@ pub use private::{
 };
 pub(crate) use private::{
     append_private_file, create_new_private_file, open_private_file,
-    set_private_file_permissions_for_open_file, write_access_error_message,
+    open_read_only_no_follow_with_path, set_private_file_permissions_for_open_file,
+    write_access_error_message,
 };
 #[cfg(all(unix, feature = "sqlite"))]
 pub(crate) use private::{

@@ -7,6 +7,7 @@ use fs2::FileExt;
 
 use crate::fs::io::{
     classify_lock_io, classify_or_wrap_lock_io, create_private_dir_all, open_private_file,
+    open_read_only_no_follow_with_path,
 };
 
 use super::hold::{HoldReport, LockReportScope, duration_millis, hold_step, record_lock_wait};
@@ -291,13 +292,22 @@ pub fn probe_file_lock(lock_path: &Path) -> io::Result<FileLockProbe> {
     // A file renamed over this name since the open is another owner's; look
     // again, a bounded number of times, then call it held.
     for _ in 0..3 {
-        let file = match File::open(lock_path) {
-            Ok(file) => file,
+        let (file, canonical_path) = match open_read_only_no_follow_with_path(lock_path) {
+            Ok(opened) => opened,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Ok(FileLockProbe::Absent);
             }
             Err(error) => return Err(error),
         };
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "private file path must be a regular file: {}",
+                    lock_path.display()
+                ),
+            ));
+        }
         match FileExt::try_lock_shared(&file) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -305,7 +315,7 @@ pub fn probe_file_lock(lock_path: &Path) -> io::Result<FileLockProbe> {
             }
             Err(error) => return Err(error),
         }
-        if same_file_still_named(&file, lock_path)? {
+        if same_file_still_named(&file, &canonical_path)? {
             return Ok(FileLockProbe::Free);
         }
     }

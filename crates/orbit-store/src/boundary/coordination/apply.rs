@@ -262,7 +262,29 @@ impl TaskCommitBoundary {
     }
 
     fn commit_leases(&self) -> Result<Vec<PathBuf>, OrbitError> {
-        let dir = self.partition_dir.join(COMMIT_LEASE_DIR);
+        let root = match self.partition_dir.canonicalize() {
+            Ok(path) => path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(OrbitError::from_write_io(&self.partition_dir, error)),
+        };
+        let dir = root.join(COMMIT_LEASE_DIR);
+        if !dir.starts_with(&root) {
+            return Err(OrbitError::InvalidInput(format!(
+                "commit lease directory escapes partition '{}'",
+                self.partition_dir.display()
+            )));
+        }
+        match std::fs::symlink_metadata(&dir) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(OrbitError::InvalidInput(format!(
+                    "commit lease directory must not be a symlink: {}",
+                    dir.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(OrbitError::from_write_io(&dir, error)),
+        }
         let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),

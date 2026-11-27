@@ -1,6 +1,7 @@
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -113,10 +114,8 @@ fn shared_holder_prefix(lock_path: &Path) -> Option<String> {
 /// directory that readers scan, so an aliased lock path is read where it was
 /// written.
 pub(super) fn write_shared_holder_record(lock_path: &Path, label: &str) -> Option<PathBuf> {
-    let prefix = shared_holder_prefix(lock_path)?;
     let sequence = SHARED_HOLDER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    let path = validated_lock_holder_parent(lock_path)?
-        .join(format!("{prefix}{}-{sequence}", std::process::id()));
+    let path = validated_shared_holder_record_path(lock_path, sequence)?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     let file = open_private_file(&path, &mut options).ok()?;
@@ -172,6 +171,36 @@ fn validated_lock_holder_parent(lock_path: &Path) -> Option<PathBuf> {
         .ok()
 }
 
+fn validated_single_normal_child(parent: &Path, leaf: &OsStr) -> Option<PathBuf> {
+    let mut components = Path::new(leaf).components();
+    let Component::Normal(name) = components.next()? else {
+        return None;
+    };
+    if components.next().is_some() {
+        return None;
+    }
+    let candidate = parent.join(name);
+    candidate.starts_with(parent).then_some(candidate)
+}
+
+/// Resolve `lock_path`'s final component under its canonical parent directory,
+/// verifying the leaf is a single normal path component contained within it.
+fn validated_lock_holder_path(lock_path: &Path) -> Option<PathBuf> {
+    let file_name = lock_path.file_name()?;
+    let canonical_parent = validated_lock_holder_parent(lock_path)?;
+    validated_single_normal_child(&canonical_parent, file_name)
+}
+
+/// Resolve the shared-holder record path beside `lock_path` under its canonical
+/// parent directory, verifying the derived leaf stays a single normal component
+/// inside that parent.
+fn validated_shared_holder_record_path(lock_path: &Path, sequence: u64) -> Option<PathBuf> {
+    let prefix = shared_holder_prefix(lock_path)?;
+    let canonical_parent = validated_lock_holder_parent(lock_path)?;
+    let record_name = format!("{prefix}{}-{sequence}", std::process::id());
+    validated_single_normal_child(&canonical_parent, OsStr::new(&record_name))
+}
+
 /// Open `lock_path`'s final component for a read-only diagnostic read
 /// without following a symlink planted there.
 ///
@@ -204,9 +233,7 @@ fn validated_lock_holder_parent(lock_path: &Path) -> Option<PathBuf> {
 /// protection and a swap landing between that check and the open is not
 /// covered there.
 fn open_lock_holder_file(lock_path: &Path, before_open: impl FnOnce(&Path)) -> Option<File> {
-    let file_name = lock_path.file_name()?;
-    let canonical_parent = validated_lock_holder_parent(lock_path)?;
-    let candidate = canonical_parent.join(file_name);
+    let candidate = validated_lock_holder_path(lock_path)?;
 
     match std::fs::symlink_metadata(&candidate) {
         Ok(metadata) if metadata.is_file() => {}

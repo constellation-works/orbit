@@ -278,13 +278,13 @@ where
     F: FnOnce() -> Result<T, E>,
     E: From<io::Error>,
 {
-    let Some(parent) = crate::fs::path::parent_dir_or_current(target_path) else {
+    let Some(parent) = validated_existing_lock_parent(target_path) else {
         return op();
     };
     if !parent.is_dir() {
         return op();
     }
-    let lock_path = resolved_lock_path(target_path)?;
+    let lock_path = resolved_lock_path_in_parent(target_path, &parent)?;
     let Some(_held) = claim_lock_path(&lock_path) else {
         return op();
     };
@@ -304,6 +304,46 @@ where
     };
 
     op()
+}
+
+/// Resolve `target_path`'s parent directory to its canonical form when it
+/// already exists.
+///
+/// Shared locks never materialize a missing parent directory, and a missing
+/// parent means no writer can hold a lock inside it. Canonicalizing the parent
+/// before checking whether it is a directory confines both the check and the
+/// sibling lock file to the resolved directory while still accepting a trusted
+/// parent alias (such as a checkout projection symlink).
+fn validated_existing_lock_parent(target_path: &Path) -> Option<PathBuf> {
+    crate::fs::path::parent_dir_or_current(target_path)?
+        .canonicalize()
+        .ok()
+}
+
+fn resolved_lock_path_in_parent(
+    target_path: &Path,
+    canonical_parent: &Path,
+) -> io::Result<PathBuf> {
+    let file_name = target_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("path '{}' has no file name", target_path.display()),
+            )
+        })?;
+    let lock_path = canonical_parent.join(format!(".{file_name}.lock"));
+    if !lock_path.starts_with(canonical_parent) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "lock path for '{}' escapes its parent directory",
+                target_path.display()
+            ),
+        ));
+    }
+    Ok(lock_path)
 }
 
 /// The lock path to open and to key re-entrancy on, resolved through symlinks
