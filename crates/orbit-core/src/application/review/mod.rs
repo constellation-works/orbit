@@ -23,6 +23,8 @@
 mod admission;
 mod automation_port;
 mod candidate_size_port;
+
+mod cargo_target;
 mod coverage;
 pub(crate) mod crew;
 mod distributed_port;

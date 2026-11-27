@@ -413,7 +413,14 @@ fn settle(
             } else {
                 BubblewrapReach::everything()
             };
-            for synthesized in judgement.synthesized_bubblewrap_requirements(&owed, &reach) {
+            for synthesized in judgement.synthesized_bubblewrap_requirements(
+                &owed,
+                &reach,
+                &crate::application::review::cargo_target::CargoOwners::at(
+                    &context.workspace_path,
+                    &final_candidate.tree,
+                ),
+            ) {
                 if !owed.iter().any(|required| {
                     required.artifact == synthesized.artifact
                         || (required.kind == synthesized.kind
@@ -564,6 +571,10 @@ fn settle(
     if crate::application::review::evidence::evidence_only(
         &certificate,
         &judgement.external_evidence,
+        &crate::application::review::cargo_target::CargoOwners::at(
+            &context.workspace_path,
+            &certificate.final_candidate.tree,
+        ),
     ) {
         let mut hold = orbit_types::workflow::ReviewEvidenceHold {
             schema_version: 1,

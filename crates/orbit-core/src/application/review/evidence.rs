@@ -22,6 +22,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
+use super::cargo_target::CargoOwners;
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams;
 use crate::application::task::TaskRecords;
@@ -31,10 +32,15 @@ use crate::application::task::TaskRecords;
 const BUILD_BUDGET_WRAPPERS: [&str; 2] = ["scripts/build-budget.py", "./scripts/build-budget.py"];
 
 /// A required `cargo test` record whose deferrals a host requirement can cover.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum RecordedCargoScope<'a> {
     /// One package and one `--test` target, with at most one positional filter.
     Integration { package: &'a str, target: &'a str },
+    /// Several selected packages and one integration target.
+    MultiIntegration {
+        packages: Vec<&'a str>,
+        target: &'a str,
+    },
     /// One package and an explicit `--lib` target, with at most one positional filter.
     Library { package: &'a str },
     /// One package and no target selector, with at most one positional filter.
@@ -88,6 +94,7 @@ impl EvidenceCarry {
 pub(super) fn evidence_only(
     certificate: &ReviewCertificate,
     requirements: &[ReviewEvidenceRequirement],
+    owners: &CargoOwners,
 ) -> bool {
     if certificate.verdict.passed()
         || certificate.task_ids.len() != 1
@@ -99,7 +106,8 @@ pub(super) fn evidence_only(
     {
         return false;
     }
-    let Some(validation) = with_external_checks_passed(&certificate.validation, requirements)
+    let Some(validation) =
+        with_external_checks_passed(&certificate.validation, requirements, owners)
     else {
         return false;
     };
@@ -129,6 +137,7 @@ pub(super) fn evidence_only(
 pub(super) fn with_external_checks_passed(
     records: &[ReviewValidation],
     requirements: &[ReviewEvidenceRequirement],
+    owners: &CargoOwners,
 ) -> Option<Vec<ReviewValidation>> {
     let requirements = canonical_requirements(requirements)?;
     let mut validation = records.to_vec();
@@ -157,7 +166,7 @@ pub(super) fn with_external_checks_passed(
                 notice.trim().is_empty()
                     || requirements
                         .iter()
-                        .any(|required| covers_deferral(required, record, notice))
+                        .any(|required| covers_deferral(required, record, notice, owners))
             });
         if covered {
             record.deferred.clear();
@@ -169,12 +178,14 @@ pub(super) fn with_external_checks_passed(
 /// [ORB-17043] Whether `required`, a `host_sandbox_test`, runs exactly the
 /// test that the deferral `notice` of `record` names, so a passing host run
 /// of it executed that deferred path. `notice` must be a Bubblewrap, Seatbelt
-/// or ps-denied deferral, `<prefix> <test>: <detail>`. Three record shapes
+/// or ps-denied deferral, `<prefix> <test>: <detail>`. Supported record shapes
 /// match (optionally prefixed with the repository-owned
 /// `scripts/build-budget.py --` scheduling wrapper):
 ///
 /// - a required `cargo test` naming one package (`-p`) and one integration
 ///   target (`--test`), covered by `cargo test -p <package> --test <target> <test>`;
+/// - a multi-package integration record when the candidate proves a unique
+///   owner among its selected packages, covered by that owner and exact test;
 /// - a required `cargo test -p <package> --lib` naming one package and the
 ///   library target, covered by `cargo test -p <package> --lib <test>`;
 /// - a required `cargo test -p <package>` with no target selector, covered by
@@ -189,6 +200,7 @@ pub(super) fn covers_deferral(
     required: &ReviewEvidenceRequirement,
     record: &ReviewValidation,
     notice: &str,
+    owners: &CargoOwners,
 ) -> bool {
     if required.kind != ReviewEvidenceKind::HostSandboxTest
         || record.role != ValidationRole::Required
@@ -211,6 +223,19 @@ pub(super) fn covers_deferral(
                 filter: Some(filter),
             }),
         ) if covered_package == package && covered_target == target && filter == test => true,
+        (
+            Some(RecordedCargoScope::MultiIntegration { packages, target }),
+            Ok(HostSandboxCommand::CargoTest {
+                package,
+                target: covered_target,
+                filter: Some(filter),
+            }),
+        ) if covered_target == target
+            && filter == test
+            && owners.unique_owner(&packages, target, &package) =>
+        {
+            true
+        }
         (
             Some(RecordedCargoScope::Library { package } | RecordedCargoScope::Package { package }),
             Ok(HostSandboxCommand::CargoLibTest {
@@ -240,8 +265,9 @@ pub(super) fn deferred_test(notice: &str) -> Option<&str> {
 /// The package, and the target selector when the record names one, of a
 /// `cargo test` command before `--` (optionally prefixed with one
 /// `scripts/build-budget.py --` or `./scripts/build-budget.py --` scheduling
-/// wrapper). `None` when it names none or several packages, combines `--lib`
-/// with `--test`, repeats `--lib`, uses another target selector, carries shell
+/// wrapper). `None` when it names no package, combines `--lib`
+/// with `--test`, selects multiple packages without one integration target,
+/// repeats `--lib`, uses another target selector, carries shell
 /// metacharacters, or uses an unknown wrapper. Flags that neither select a
 /// target nor change the build (`--locked`, `--frozen`, `--offline`,
 /// `--no-fail-fast`, `-q`, `--quiet`) are skipped. Every other option fails
@@ -306,6 +332,12 @@ pub(super) fn recorded_cargo_scope(command: &str) -> Option<RecordedCargoScope<'
         ([package], [target], false, []) | ([package], [target], false, [_]) => {
             Some(RecordedCargoScope::Integration { package, target })
         }
+        (packages, [target], false, [] | [_]) if packages.len() > 1 => {
+            Some(RecordedCargoScope::MultiIntegration {
+                packages: packages.to_vec(),
+                target,
+            })
+        }
         ([package], [], true, []) | ([package], [], true, [_]) => {
             Some(RecordedCargoScope::Library { package })
         }
@@ -361,7 +393,7 @@ pub(super) fn unreconciled_library_deferrals(
                 !notice.trim().is_empty()
                     && !eligible.iter().any(|required| {
                         required.command == record.command
-                            || covers_deferral(required, record, notice)
+                            || covers_deferral(required, record, notice, &CargoOwners::default())
                     })
             })
             .collect();
@@ -802,7 +834,14 @@ pub(crate) fn resume_evidence_hold(
     if certificate.attempt_id != hold.attempt_id
         || certificate.final_candidate != hold.candidate
         || certificate.task_meaning_digest != hold.task_meaning_digest
-        || !evidence_only(&certificate, &hold.requirements)
+        || !evidence_only(
+            &certificate,
+            &hold.requirements,
+            &CargoOwners::at(
+                &runtime.paths().repo_root,
+                &certificate.final_candidate.tree,
+            ),
+        )
         || !hold_is_current(runtime, &task, &hold)?
         || !evidence_ready(runtime, task_id, &hold)?
     {

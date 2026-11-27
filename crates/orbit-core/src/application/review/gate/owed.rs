@@ -57,6 +57,7 @@ use orbit_types::workflow::{
 
 use super::super::evidence::{RecordedCargoScope, deferred_test, recorded_cargo_scope};
 use super::super::fulfilment::fulfilment_artifact_paths;
+use crate::application::review::cargo_target::CargoOwners;
 
 use crate::OrbitRuntime;
 
@@ -212,6 +213,7 @@ impl Judgement {
         &mut self,
         owed: &[ReviewEvidenceRequirement],
         reach: &BubblewrapReach,
+        owners: &CargoOwners,
     ) -> Vec<ReviewEvidenceRequirement> {
         if !self.verdict.passed() || self.has_open_findings() {
             return Vec::new();
@@ -262,6 +264,18 @@ impl Judgement {
                                 && filter.as_deref().is_some_and(filter_matches)
                         }
                         (
+                            Some(RecordedCargoScope::MultiIntegration { packages, target }),
+                            Ok(HostSandboxCommand::CargoTest {
+                                package,
+                                target: named_target,
+                                filter,
+                            }),
+                        ) => {
+                            named_target == *target
+                                && filter.as_deref().is_some_and(|filter| filter == test)
+                                && owners.unique_owner(packages, target, &package)
+                        }
+                        (
                             Some(
                                 RecordedCargoScope::Library { package }
                                 | RecordedCargoScope::Package { package },
@@ -291,6 +305,7 @@ impl Judgement {
                         ) => {
                             format!("cargo test -p {package} --lib {test}")
                         }
+                        Some(RecordedCargoScope::MultiIntegration { .. }) => continue,
                         None => match HostSandboxCommand::admit(&record.command, &[]) {
                             Ok(HostSandboxCommand::CargoTest { filter, .. })
                             | Ok(HostSandboxCommand::CargoLibTest { filter, .. })
@@ -726,7 +741,11 @@ pub(super) fn owed_hold_received(
         && certificate.repair_commits.is_empty()
         && candidate.head.tree == hold.candidate.tree
         && candidate.base.tree == certificate.base.tree
-        && super::super::evidence::evidence_only(&certificate, &hold.requirements)
+        && crate::application::review::evidence::evidence_only(
+            &certificate,
+            &hold.requirements,
+            &CargoOwners::at(&context.workspace_path, &certificate.final_candidate.tree),
+        )
         && super::super::evidence::evidence_ready(runtime, task_id, &hold)?;
     Ok(received.then_some((hold, certificate)))
 }

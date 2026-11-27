@@ -86,6 +86,10 @@ pub(super) fn settled_outcome(
                     && crate::application::review::evidence::evidence_only(
                         &certificate,
                         &hold.requirements,
+                        &crate::application::review::cargo_target::CargoOwners::at(
+                            &context.workspace_path,
+                            &certificate.final_candidate.tree,
+                        ),
                     )
                     && hold.attempt_id == certificate.attempt_id
                     && hold.candidate == certificate.final_candidate
