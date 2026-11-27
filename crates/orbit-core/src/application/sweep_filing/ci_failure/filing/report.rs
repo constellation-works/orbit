@@ -9,10 +9,11 @@ use orbit_common::OrbitError;
 use super::super::branch_observation::BranchRetention;
 use super::super::cluster::FailureCluster;
 use super::super::dependency_fold;
-use super::super::dependency_fold::sibling_cluster_for;
+use super::super::dependency_fold::{IncompleteWaiter, sibling_cluster_for};
 use super::super::evidence::{
     deferral_is_bounded, deferred_errors, filing_audit, pending_audit, retryable_pipeline_error,
 };
+use super::super::fields::value_string;
 use super::file_clusters::{DependencyFold, FiledClusters};
 use super::snapshot::{FilingSnapshot, empty_snapshot_detail};
 use super::{OUTCOME_CURRENT_FAILURES, OUTCOME_DEFERRED, OUTCOME_NO_CURRENT_FAILURE};
@@ -26,6 +27,7 @@ pub(super) fn empty_clusters_outcome(
         capability,
         audit,
         deferred,
+        incomplete_waiters,
         evidence_incomplete,
         inconclusive,
         infrastructure,
@@ -50,12 +52,14 @@ pub(super) fn empty_clusters_outcome(
             deferred_errors(&deferred),
         ));
     }
+    let folded = incomplete_waiter_folded_entries(&incomplete_waiters, &evidence_incomplete);
     let outcome = if !deferred.is_empty() {
         OUTCOME_DEFERRED
     } else if retention.attributed.is_empty()
         && retention.deferred_attribution.is_empty()
         && excluded_branch_failures.is_empty()
         && evidence_incomplete.is_empty()
+        && incomplete_waiters.is_empty()
         && retention.observation_errors.is_empty()
         && infrastructure.is_empty()
     {
@@ -66,6 +70,14 @@ pub(super) fn empty_clusters_outcome(
     let detail = if !infrastructure.is_empty() && deferred.is_empty() {
         "the current failures carry a declared infrastructure signature, so no task is \
          filed for them; nothing here is a CI pass"
+    } else if deferred.is_empty()
+        && evidence_incomplete.is_empty()
+        && !incomplete_waiters.is_empty()
+        && inconclusive.is_empty()
+        && retention.deferred_attribution.is_empty()
+    {
+        "dependency-only waiter(s) were withheld because their failed leaf job has persistent \
+         incomplete evidence; nothing here is a CI pass"
     } else if deferred.is_empty() {
         empty_snapshot_detail(
             inconclusive.is_empty(),
@@ -76,6 +88,9 @@ pub(super) fn empty_clusters_outcome(
          each is deferred to a later sweep, which files it once its evidence is complete, \
          and nothing here is a CI pass"
     };
+    let mut final_audit = pending_audit(audit, &pending_supersession);
+    final_audit["folded_count"] = json!(folded.len());
+    final_audit["folded"] = json!(folded);
     Ok(json!({
         "outcome": outcome,
         "capability": capability,
@@ -86,6 +101,8 @@ pub(super) fn empty_clusters_outcome(
         "pilot_candidates": [],
         "skipped_existing": [],
         "withheld": [],
+        "folded_count": folded.len(),
+        "folded": folded,
         "skipped_over_cap": [],
         "deferred_count": deferred.len(),
         "deferred": deferred,
@@ -97,7 +114,7 @@ pub(super) fn empty_clusters_outcome(
         "attributed": retention.attributed,
         "deferred_attribution": retention.deferred_attribution,
         "excluded_branch_failures": excluded_branch_failures,
-        "audit": pending_audit(audit, &pending_supersession),
+        "audit": final_audit,
         "detail": detail,
     }))
 }
@@ -116,6 +133,7 @@ pub(super) fn current_failures_outcome(
         max_tasks,
         audit,
         deferred,
+        incomplete_waiters,
         evidence_incomplete,
         inconclusive,
         infrastructure,
@@ -160,7 +178,7 @@ pub(super) fn current_failures_outcome(
             })
             .filter(|task_id| !task_id.is_empty())
     };
-    let folded: Vec<Value> = folded_clusters
+    let mut folded: Vec<Value> = folded_clusters
         .iter()
         .map(|&folded_index| {
             let cluster = &clusters[folded_index];
@@ -210,6 +228,10 @@ pub(super) fn current_failures_outcome(
             })
         })
         .collect();
+    folded.extend(incomplete_waiter_folded_entries(
+        &incomplete_waiters,
+        &evidence_incomplete,
+    ));
     let mut final_audit = pending_audit(
         filing_audit(audit, &filed, &skipped_existing),
         &pending_supersession,
@@ -246,4 +268,51 @@ pub(super) fn current_failures_outcome(
         "max_tasks": max_tasks,
         "audit": final_audit,
     }))
+}
+
+fn incomplete_waiter_folded_entries(
+    incomplete_waiters: &[IncompleteWaiter],
+    evidence_incomplete: &[Value],
+) -> Vec<Value> {
+    incomplete_waiters
+        .iter()
+        .map(|item| {
+            let waiter = &item.failure;
+            let workflow = value_string(waiter, "workflow");
+            let head_branch = value_string(waiter, "head_branch");
+            let job = waiter
+                .get("failed_jobs")
+                .and_then(Value::as_array)
+                .and_then(|jobs| jobs.first())
+                .map(|job| value_string(job, "name"))
+                .unwrap_or_default();
+            let owner = evidence_incomplete.iter().find(|entry| {
+                value_string(entry, "workflow") == workflow
+                    && value_string(entry, "head_branch") == head_branch
+            });
+            let covered_by_task_id = owner
+                .and_then(|entry| entry.get("task_id").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_string();
+            let folded_into_failure_keys: Vec<String> = owner
+                .and_then(|entry| entry.get("failure_key").and_then(Value::as_str))
+                .map(|key| vec![key.to_string()])
+                .unwrap_or_default();
+            json!({
+                "outcome": "folded",
+                "reason": "dependency_leaf_evidence_incomplete",
+                "match_kind": "dependency_fold",
+                "workflow": workflow,
+                "job": job,
+                "jobs": if job.is_empty() { vec![] } else { vec![job.clone()] },
+                "run_ids": waiter.get("run_id").into_iter().cloned().collect::<Vec<_>>(),
+                "run_urls": waiter.get("url").into_iter().cloned().collect::<Vec<_>>(),
+                "dependency_jobs": item.dependency_jobs,
+                "folded_into_jobs": item.leaf_jobs,
+                "folded_into_failure_keys": folded_into_failure_keys,
+                "task_id": covered_by_task_id,
+                "covered_by_task_id": covered_by_task_id,
+            })
+        })
+        .collect()
 }
