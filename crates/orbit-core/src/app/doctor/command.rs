@@ -320,7 +320,7 @@ pub trait DoctorCommands {
 
 impl DoctorCommands for OrbitRuntime {
     fn repair_state_directory_permissions(&self) -> Result<usize, OrbitError> {
-        super::permissions::repair_state_directory_permissions(self)
+        super::permission::repair_state_directory_permissions(self)
     }
     fn doctor_workspace_with_depth(
         &self,

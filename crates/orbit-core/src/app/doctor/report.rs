@@ -16,10 +16,10 @@ use serde_json::{Value, json};
 use super::browser_kit::browser_kit_rows;
 use super::command::Probe;
 use super::git_protection::git_protection_row;
-use super::host_workspaces::host_workspace_convergence_row;
-use super::permissions::state_directory_permissions_row;
-use super::scan_workers::{forced_pool_size, spawn_scan_worker};
-use super::script_grants::script_grant_rows;
+use super::host_workspace::host_workspace_convergence_row;
+use super::permission::state_directory_permissions_row;
+use super::scan_worker::{forced_pool_size, spawn_scan_worker};
+use super::script_grant::script_grant_rows;
 use super::standing_drain::standing_drain_row;
 use super::worker_containment::worker_containment_row;
 use super::{DoctorProbe, Host, WORKSPACE_PROBES, WorkspaceDoctorResult, WorkspaceDoctorStatus};
@@ -156,17 +156,35 @@ fn host_labels_row(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
 fn build_budget_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
     match runtime.build_budget_capacity_warnings() {
         Ok(warnings) if warnings.is_empty() => vec![WorkspaceDoctorResult {
-            check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Ok, message: "No running drain exceeds host build slots.".into(),
+            check_name: "build-budget".into(),
+            status: WorkspaceDoctorStatus::Ok,
+            message: "No running drain exceeds host build slots.".into(),
             remediation: None, duration_ms: 0,
         }],
         Ok(warnings) => warnings.into_iter().map(|warning| WorkspaceDoctorResult {
-            check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Warning, message: format!("{}: {}", warning["run_id"].as_str().unwrap_or("drain"), warning["message"].as_str().unwrap_or("capacity mismatch")),
-            remediation: Some(format!("Set ORBIT_BUILD_SLOTS or edit {}; or lower orbit run concurrency.", warning["settings_file"].as_str().unwrap_or("~/.orbit/cache/build-budget/slots"))),
+            check_name: "build-budget".into(),
+            status: WorkspaceDoctorStatus::Warning,
+            message: format!(
+                "{}: {}",
+                warning["run_id"].as_str().unwrap_or("drain"),
+                warning["message"].as_str().unwrap_or("capacity mismatch")
+            ),
+            remediation: Some(format!(
+                "Set ORBIT_BUILD_SLOTS or edit {}; or lower orbit run concurrency.",
+                warning["settings_file"]
+                    .as_str()
+                    .unwrap_or("~/.orbit/cache/build-budget/slots")
+            )),
             duration_ms: 0,
         }).collect(),
         Err(error) => vec![WorkspaceDoctorResult {
-            check_name: "build-budget".into(), status: WorkspaceDoctorStatus::Warning, message: format!("Cannot inspect build-budget capacity: {error}"),
-            remediation: Some("Check ORBIT_BUILD_SLOTS and ~/.orbit/cache/build-budget/slots, then rerun orbit doctor.".into()),
+            check_name: "build-budget".into(),
+            status: WorkspaceDoctorStatus::Warning,
+            message: format!("Cannot inspect build-budget capacity: {error}"),
+            remediation: Some(
+                "Check ORBIT_BUILD_SLOTS and ~/.orbit/cache/build-budget/slots, then rerun orbit doctor."
+                    .into(),
+            ),
             duration_ms: 0,
         }],
     }

@@ -28,6 +28,17 @@ use crate::entry::resolved::Resolved;
 use super::super::{CommandOut, CommandOutput, Commands, Execute, ExecuteCore};
 use super::args::Invocation;
 
+/// Dispatch a command that runs through an app's `exec` and reads the
+/// caller's environment.
+macro_rules! core_env_dispatch {
+    ($variant:ident) => {{
+        |command, context| match command {
+            Commands::$variant(command) => command.execute_with_env(context.core()?, context.env),
+            _ => dispatch_mismatch(stringify!($variant)),
+        }
+    }};
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandMeta {
     pub command: String,
@@ -273,17 +284,6 @@ macro_rules! core_dispatch {
     ($variant:ident) => {{
         |command, context| match command {
             Commands::$variant(command) => ExecuteCore::execute(command, context.core()?),
-            _ => dispatch_mismatch(stringify!($variant)),
-        }
-    }};
-}
-
-/// Dispatch a command that runs through an app's `exec` and reads the
-/// caller's environment.
-macro_rules! core_env_dispatch {
-    ($variant:ident) => {{
-        |command, context| match command {
-            Commands::$variant(command) => command.execute_with_env(context.core()?, context.env),
             _ => dispatch_mismatch(stringify!($variant)),
         }
     }};

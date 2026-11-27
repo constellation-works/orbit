@@ -1,4 +1,4 @@
-use super::scan_workers::{forced_pool_size, spawn_scan_worker};
+use super::scan_worker::{forced_pool_size, spawn_scan_worker};
 use super::{WorkspaceDoctorResult, WorkspaceDoctorStatus};
 use crate::{OrbitError, OrbitRuntime};
 
@@ -62,7 +62,10 @@ pub(super) fn state_directory_permissions_row(runtime: &OrbitRuntime) -> Workspa
             status: WorkspaceDoctorStatus::Warning,
             message: format!("{} Orbit state director{} group/world writable under: {locations}",
                 scan.writable.len(), if scan.writable.len() == 1 { "y is" } else { "ies are" }),
-            remediation: Some("Run `orbit doctor --fix-state-directory-permissions` to restrict writable Orbit state directories to owner-only access, excluding run worktrees and target trees, then rerun `orbit doctor`.".to_string()),
+            remediation: Some(
+                "Run `orbit doctor --fix-state-directory-permissions` to restrict writable Orbit state directories to owner-only access, excluding run worktrees and target trees, then rerun `orbit doctor`."
+                    .to_string(),
+            ),
             duration_ms: 0,
         }
     }
@@ -169,7 +172,8 @@ fn inspect_state_directories(runtime: &OrbitRuntime) -> Result<PermissionScan, O
 fn open_directory_no_follow(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
-    use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::path::Component;
 
     if !path.is_absolute() {

@@ -29,19 +29,33 @@
 orbit_common::isolate_test_process!();
 
 pub mod agent_rules;
+
 pub mod browser_kit;
+
 pub mod doctor_host;
+
 pub mod hosts;
+
 pub mod log_format;
+
 pub mod mcp_clients;
+
 mod migrate;
+
 mod registry;
+
 pub mod service_environment;
+
 mod task;
+
 pub mod update;
+
 mod worker_coordination;
+
 mod workspace_catalog;
+
 pub mod workspace_rebind;
+
 pub mod workspace_removal;
 
 pub use doctor_host::doctor_host;

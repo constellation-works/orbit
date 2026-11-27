@@ -37,23 +37,41 @@
 //! never part of the report.
 
 mod automation;
+
 mod browser_kit;
+
 mod command;
+
 mod git_protection;
+
 mod host;
-mod host_workspaces;
-mod permissions;
+
+mod host_workspace;
+
+mod permission;
+
 mod report;
+
 mod retired_config;
+
 mod run;
-mod scan_workers;
-mod script_grants;
+
+mod scan_worker;
+
+mod script_grant;
+
 mod seeding;
+
 mod standing_drain;
+
 mod system;
+
 mod task;
+
 mod worker_containment;
+
 mod worker_token;
+
 mod workspace;
 
 use std::fs::OpenOptions;
@@ -92,7 +110,7 @@ pub use report::{
 };
 pub use retired_config::RetiredConfigKeyRepair;
 #[cfg(feature = "test-support")]
-pub use scan_workers::DoctorWorkerSpawnRefusal;
+pub use scan_worker::DoctorWorkerSpawnRefusal;
 pub(crate) use system::{collect_lock_files, disk_space_check, process_is_alive};
 use task::*;
 use workspace::*;
