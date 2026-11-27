@@ -25,6 +25,7 @@ const FIELDS_VERSION_TASK_ONLY: i64 = 1;
 /// counts as covered, and earlier rows fall back to the bundle matcher
 /// until a write or reindex rebuilds them.
 const FIELDS_VERSION_SIDECARS: i64 = 3;
+
 #[derive(Clone)]
 pub struct LexicalStore {
     conn: Arc<Mutex<Connection>>,

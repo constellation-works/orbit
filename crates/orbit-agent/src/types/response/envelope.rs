@@ -29,6 +29,7 @@ const MISSING_ENVELOPE_MESSAGE: &str = "stdout does not contain an Orbit respons
 /// Suffix JSON parses allowed while searching: the whole-string attempt plus
 /// each `{` candidate that is actually deserialized.
 const ENVELOPE_DISCOVERY_MAX_PARSE_ATTEMPTS: u32 = 4_096;
+
 /// JSON nodes visited while searching for an envelope or declared failure.
 const ENVELOPE_DISCOVERY_MAX_NODES: u32 = 65_536;
 

@@ -36,6 +36,7 @@ macro_rules! current_hard_limit {
 /// The most build output a host keeps: the first and last half of this many
 /// bytes, with the middle elided (§3.6).
 pub const PLUGIN_BUILD_LOG_CAP_BYTES: usize = 1024 * 1024;
+
 /// How often the build directory is measured. The cap can be overshot by
 /// what a build writes in one interval.
 const SIZE_POLL_INTERVAL: Duration = Duration::from_secs(1);

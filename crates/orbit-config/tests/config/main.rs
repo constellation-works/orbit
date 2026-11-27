@@ -135,6 +135,7 @@ use tracing_subscriber::fmt::MakeWriter;
 
 // Fixtures of `auto_effort.rs`.
 const AUTO_EFFORT_CREW: &str = "[crews.sol]\nmodel = \"gpt-5.5\"\nprovider = \"codex\"\n";
+
 const AUTO_EFFORT_BANDS: &str = "[[workflow.auto_effort.bands.sol]]\neffort = \"low\"\n\
      complexity = [\"low\"]\n\n[[workflow.auto_effort.bands.sol]]\neffort = \"high\"\n\
      complexity = [\"hard\", \"xhard\"]\n";
@@ -142,6 +143,7 @@ const AUTO_EFFORT_BANDS: &str = "[[workflow.auto_effort.bands.sol]]\neffort = \"
 // Fixtures of `config_paths.rs`.
 const GLOBAL: &str = "[execution.codex]\nsandbox = 'danger-full-access'\n\
                       [execution.env]\npass = ['GLOBAL_TOKEN']\n";
+
 const TOGGLES: &str = "[plugin_enablement]\ngraph = false\n";
 
 // Fixtures of `crew_env.rs`.
@@ -150,7 +152,9 @@ const CREW_ENV_CREW: &str = "[workflow]\ndefault_crew = \"opus-credits\"\n\n\
 
 // Fixtures of `default_crew.rs`.
 const KEY: &str = "workflow.default_crew";
+
 const PROVIDER_ENV: &str = "CONSTELLATION_DEFAULT_PROVIDER";
+
 const INVALID_PROVIDER: &str = "invalid-provider";
 
 // Fixtures of `human_crews.rs`.
@@ -159,10 +163,12 @@ const HUMAN_CREW_AGENTS: &str = "[crews.sol]\nmodel = \"m\"\nprovider = \"codex\
 
 // Fixtures of `provider_limit.rs`.
 const OVERRIDES: &str = "workflow.provider_limit_overrides";
+
 const BUDGETS: &str = "workflow.provider_limit_budgets";
 
 // Fixtures of `retired_system_crew.rs`.
 const RETIRED_SYSTEM_CREW_KEY: &str = "workflow.system_crew";
+
 const LEGACY: &str = r#"[workflow]
 default_crew = "opus"
 system_crew = "haiku"
@@ -231,6 +237,7 @@ impl Roots {
 // Fixtures of `mcp_toolsets.rs`.
 #[derive(Clone)]
 struct McpToolsetsCapture(Arc<Mutex<Vec<u8>>>);
+
 impl Write for McpToolsetsCapture {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.0.lock().expect("capture").extend_from_slice(buf);
@@ -253,6 +260,7 @@ impl<'a> MakeWriter<'a> for McpToolsetsCapture {
 // Fixtures of `retired_system_crew.rs`.
 #[derive(Clone)]
 struct Capture(Arc<Mutex<Vec<u8>>>);
+
 impl Write for Capture {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.0.lock().expect("capture").extend_from_slice(buf);
