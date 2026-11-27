@@ -36,14 +36,19 @@ The mod is 1,741 lines with 685 lines of tests, nine hooks, four settings and th
 commands. What it costs and what it returns:
 
 - **It polls.** Every session that loads the plugin runs `orbit task list` every three
-  minutes and again after a turn, to fill the band. In a replica checkout each read is an
-  SSH call to the owner. Ten sessions open on one machine make ten such loops.
+  minutes by default (`refreshMinutes` sets the periodic refresh interval). A completed
+  turn also refreshes, but only when the snapshot is missing or the last refresh attempt
+  is more than 30 seconds old. The reads fill the band. In a replica checkout each read is
+  an SSH call to the owner. Ten sessions open on one machine make ten such loops.
 - **It repeats the dashboard.** The band's counts, the board's lanes and the ship tracker
   are the dashboard's Tasks and Jobs views, drawn again in a narrower space. Approve,
   reject, ship and accept are already MCP tools and CLI commands.
 - **The prompt card is unasked context.** A prompt that names a task carries that task's
-  card from a snapshot up to three minutes old. The model can read the current task with
-  `orbit.task.show` when it needs it.
+  card from the last successful snapshot. That snapshot is up to one refresh interval old
+  while reads succeed. After a failed refresh, or with a longer `refreshMinutes`, it is
+  older, and the card shows no age. The prompt hook checks neither the snapshot's age nor
+  the last refresh error. The model can read the current task with `orbit.task.show` when
+  it needs it.
 - **The commit trailer is one Orbit does not read.** The mod adds `Task: <id>`. Delivery
   finds a task's commits by `[<id>]` in the subject or an `Orbit-Task: <id>` trailer
   (`vcs/delivery_marker.rs`), so `Task:` links nothing.
