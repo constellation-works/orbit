@@ -79,6 +79,25 @@ address and port that the reader's browser opens, such as
 when it does. Leave the setting unset when no stable reachable address is
 available.
 
+## Link to a task or run
+
+Two short paths open a record on the right host, whichever host the browser
+last picked. They sit behind the same access checks as the dashboard itself
+and redirect within whatever address you opened, so they work at the
+[public address](#set-the-public-dashboard-address) too.
+
+| Path | Opens |
+|---|---|
+| `/t/<task id>` | The task, found by its prefix. This machine's prefix opens it here; a registered host's prefix opens it on that host, in **All workspaces**. |
+| `/r/<run id>?machine=<machine id>&workspace=<workspace>` | That exact run. `machine` is the host's `[machine] id` (`orbit host list`), `workspace` is a workspace that host serves. That machine's dashboard opens, and without `workspace` it shows **All workspaces**. |
+| `/r/<run id>` | A lookup on this machine only. |
+
+Two hosts can hold a run with the same ID, so use the exact form when you
+know where the run executed. A prefix no host here claims, an id that is not
+a task or run id, and a `machine` this machine has not registered each show
+a not-found page that names it. A `machine` is never answered from this
+machine's own runs.
+
 ## Open it over Tailscale Serve
 
 To open the dashboard from another tailnet device, such as a phone, front it

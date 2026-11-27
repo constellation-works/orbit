@@ -98,6 +98,10 @@ mod metrics_trends;
 mod notices;
 #[path = "http_api/pagination.rs"]
 mod pagination;
+
+#[path = "http_api/permalink.rs"]
+mod permalink;
+
 #[path = "http_api/plugins.rs"]
 #[cfg(unix)]
 mod plugins;
