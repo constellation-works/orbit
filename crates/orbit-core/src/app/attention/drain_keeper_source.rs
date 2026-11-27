@@ -4,7 +4,7 @@
 //! reports nothing. Only the workspace owner reports them; a replica's drain
 //! intent and drain runs are not the workspace's.
 
-use super::sources::attention_reason;
+use super::source::attention_reason;
 use crate::OrbitRuntime;
 use chrono::{DateTime, TimeDelta, Utc};
 use orbit_common::OrbitError;

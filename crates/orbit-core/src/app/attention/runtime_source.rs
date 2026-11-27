@@ -1,6 +1,7 @@
 //! Observational runtime sources. Never use run listing/show or resume planners
 //! here: those entry points may reconcile owners or recover coordination journals.
-use super::sources::{
+
+use super::source::{
     AttentionCandidates, AttentionSourceContext, SharedOpenTasks, attention_reason, attention_task,
     workspace_degraded,
 };

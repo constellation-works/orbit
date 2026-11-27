@@ -10,7 +10,7 @@ doc_role: decisions
 type: design
 summary: "Decisions for orbit attention: derived view not inbox, stateless cursor, fingerprint scope, source-bound read rights, explicit caller polling, fan-out exception, blindness reporting, folding"
 tags: [operator-attention]
-paths: ["crates/orbit-core/src/application/attention/**", "crates/orbit-mcp/src/federated/**"]
+paths: ["crates/orbit-core/src/app/attention/**", "crates/orbit-mcp/src/federated/**"]
 related_features: [operator-attention, federated-mcp, human-decision-channel]
 related_artifacts: [ORB-21164, ORB-25277]
 ---

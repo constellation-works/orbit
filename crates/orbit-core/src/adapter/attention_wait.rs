@@ -1,9 +1,7 @@
 //! The shell attention wait: a session-minted grant bounds what a caller with
 //! no capability may read, and each poll runs as an agent-capability session.
 use crate::OrbitRuntime;
-use crate::application::attention::{
-    AttentionWaitOutcome, AttentionWaitScope, wait_for_attention_delta,
-};
+use crate::app::attention::{AttentionWaitOutcome, AttentionWaitScope, wait_for_attention_delta};
 use orbit_common::OrbitError;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::Value;

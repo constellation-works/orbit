@@ -12,7 +12,7 @@ use orbit_types::{
 };
 use serde_json::json;
 
-use super::sources::{
+use super::source::{
     SharedOpenTasks, Subject, attention_reason, attention_task, finalize_attention_item,
 };
 

@@ -349,7 +349,7 @@ impl DoctorCommands for OrbitRuntime {
     }
 
     fn remove_stale_definition_artifacts(&self) -> Result<usize, OrbitError> {
-        OrbitRuntime::remove_stale_definition_artifacts(self)
+        super::remove_stale_definition_artifacts(self)
     }
 
     fn remove_orphan_task_stores(

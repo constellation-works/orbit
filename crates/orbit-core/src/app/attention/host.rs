@@ -4,7 +4,8 @@
 //! an owner refusing this host's `orbit.drain.probe` on protocol skew is one
 //! of the failing rows. Registered hosts' reachability, version and protocol
 //! are judged by the federated aggregator, which probes them on every call.
-use super::sources::attention_reason;
+
+use super::source::attention_reason;
 use crate::OrbitRuntime;
 use orbit_common::{OrbitError, governance::attention::cursor};
 use orbit_types::tool::{

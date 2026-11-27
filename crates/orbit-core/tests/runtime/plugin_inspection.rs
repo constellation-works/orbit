@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::create_dir_symlink;
-use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactKind};
+use orbit_core::app::doctor::{ArtifactCondition, ArtifactKind, inspect_definition_artifacts};
 use orbit_core::application::plugin::{
     PluginAddOptions, PluginEnableOptions, PluginUpgradeOptions, enable_plugin, install_plugin,
     plugin_doctor, sync_plugins, upgrade_plugin,
@@ -155,8 +155,7 @@ fn linked_worktree_doctor_reports_faulty_routine_in_shared_catalog() {
     assert_eq!(runtime.paths().local_dir, local_root);
     assert_ne!(runtime.shared_root(), runtime.paths().local_dir);
 
-    let report = runtime
-        .inspect_definition_artifacts()
+    let report = inspect_definition_artifacts(&runtime)
         .expect("definition-artifact health from the linked worktree");
     let routines = report
         .iter()
