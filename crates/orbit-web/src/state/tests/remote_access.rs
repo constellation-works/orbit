@@ -134,3 +134,50 @@ fn active_devices_follow_the_request_window_and_open_streams() {
     assert_eq!(streaming.requests_15m, 0);
     assert_eq!(streaming.login, "b@example.com");
 }
+
+#[test]
+fn a_late_request_does_not_mask_an_expired_one() {
+    let access = RemoteAccess::default();
+    access.record_admitted_at(ip(1), "a@example.com", at(10, 15, 0));
+    access.record_admitted_at(ip(1), "a@example.com", at(10, 0, 0));
+    // The live bucket at 10:15:00 must not hide the one at 10:00:00.
+    assert_eq!(requests(&access, at(10, 15, 1)), 1);
+}
+
+#[test]
+fn a_late_request_joins_its_own_second() {
+    let access = RemoteAccess::default();
+    let start = at(10, 0, 0);
+    for second in 0..=900 {
+        access.record_admitted_at(ip(1), "a@example.com", start + Duration::seconds(second));
+    }
+    access.record_admitted_at(ip(1), "a@example.com", start + Duration::seconds(899));
+    assert_eq!(requests(&access, start + Duration::seconds(900)), 902);
+    assert_eq!(requests(&access, start + Duration::seconds(901)), 901);
+    assert_eq!(requests(&access, start + Duration::seconds(1801)), 0);
+}
+
+#[test]
+fn a_request_already_outside_the_window_is_not_counted() {
+    let access = RemoteAccess::default();
+    access.record_admitted_at(ip(1), "a@example.com", at(10, 30, 0));
+    access.record_admitted_at(ip(1), "a@example.com", at(10, 0, 0));
+    assert_eq!(requests(&access, at(10, 30, 0)), 1);
+}
+
+#[test]
+fn a_late_refusal_does_not_mask_an_expired_one() {
+    let access = RemoteAccess::default();
+    let late = at(10, 0, 0) + Duration::days(1);
+    access.record_refused_at(RefusalReason::NoIdentity, None, late);
+    access.record_refused_at(RefusalReason::NoIdentity, None, at(10, 0, 0));
+    assert_eq!(refused(&access, late + Duration::minutes(1)), 1);
+
+    // A refusal in a slot already counted joins it.
+    access.record_refused_at(
+        RefusalReason::NoIdentity,
+        None,
+        late - Duration::seconds(30),
+    );
+    assert_eq!(refused(&access, late), 2);
+}
