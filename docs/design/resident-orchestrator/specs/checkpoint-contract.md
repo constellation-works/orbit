@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: the resident.checkpoint, resident.request and resident.answer comment shapes, the stale-cycle rule, the synthesized incomplete checkpoint, and brief reconstruction on resume"
-last_validated: 2026-11-15
+last_validated: 2026-11-27
 title: Spec — Checkpoint and resume contract
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: resident-orchestrator
 tags: [resident-orchestrator, spec]
 related_features: [resident-orchestrator, activity-job, mid-run-steering]
 related_artifacts: [ORB-21229, ORB-21243, ORB-21246]
-last_updated: 2026-11-23
+last_updated: 2026-11-27
 ---
 
 # Spec: Checkpoint and resume contract
@@ -36,9 +36,8 @@ numbers each admitted write under the assignment's write lock and returns the ke
 Successful object replies carry `resident_action_key` at the top level. A ledgered write that
 projects one field with the `field` alias answers that field's bare value, which has no object to
 carry the key, so the cycle's guard refuses it as `resident_projection_refused` before the ledger
-opens; a `fields` list answers an object and keeps the key. An admitted write
-that fails as `OrbitError::RemoteTool` carries the same stored key in
-`payload.detail.resident_action_key`; the broker forwards that detail as
+opens; a `fields` list answers an object and keeps the key. An admitted write that fails as `OrbitError::RemoteTool` carries the same stored key in
+`payload.detail.resident_action_key` [ORB-25279]; the broker forwards that detail as
 `error.detail.resident_action_key`. The error's code, message and retryability stay unchanged.
 Existing object detail fields are retained, with `resident_action_key` reserved for the local
 ledger key. Absent or null detail becomes an object containing the key; other detail values
@@ -47,7 +46,7 @@ are retained as `remote_detail` inside that object.
 Every other post-admission failure or refusal of a ledgered write carries the same stored
 key in the broker error envelope's optional top-level `action_key` field (mirrored inside
 `error`), set for `PolicyDenied` refusals (`plugin_broker_refused`), `Execution` and other
-non-`RemoteTool` failures (`plugin_broker_call_failed`) alike (ORB-25284). Daniel chose this
+non-`RemoteTool` failures (`plugin_broker_call_failed`) alike ([ORB-25284]). Daniel chose this
 field, option (a), on 2026-11-16 ("Yes, field (a)"): a top-level envelope field is additive —
 omitted when there is no key, so clients that ignore unknown fields keep working — and needs
 no new `OrbitError` variant, detail reshaping or ledger change, while leaving error code,
@@ -116,7 +115,7 @@ refused as `resident_action_in_doubt`, and the agent checks the subject's state 
 | `costs[]` | Cost events ([evolution-ledger](./evolution-ledger.md)); an empty list when none |
 | `notes` | ≤ 600 characters on new writes: only what changed this cycle and what is next. Standing state stays in structured fields such as `requests[]` and `decisions[]`; operator asks go in `requests[]`/notices, not notes |
 | `continuity` | `resumed`, `rebuilt` (conversation expired or absent) or `off` |
-| `conversation_ref` | Optional provider conversation reference for the next cycle. The cycle copies `brief.conversation_ref` verbatim (`null`/omitted when the brief carries none); core forces `continuity` to `rebuilt` when a claimed `resumed` has no live prior reference |
+| `conversation_ref` | Optional provider conversation reference for the next cycle. The cycle copies `brief.conversation_ref` verbatim (`null`/omitted when the brief carries none) [ORB-27730]; core forces `continuity` to `rebuilt` when a claimed `resumed` has no live prior reference |
 | `outcome` | `progress`, `idle` (woke, nothing to do), `unchanged` (heartbeat-only check with unchanged wake items; core writes it, no model cycle, and the brief skips it, see [Resume](#resume); checkpoint admission refuses it from an agent), `waiting` (only open requests), `incomplete` (synthesized), `handoff`, `ended` |
 
 Limits: 64 KiB per record, 50 actions, 20 decisions, 20 costs. A cycle that reaches a limit does
@@ -147,7 +146,7 @@ strings on both write surfaces and in direct core writes. Unknown fields, includ
 are refused. A guarded retry of a comment that a pre-upgrade build committed after redacting it is
 reconciled, not refused: when the digest of the sanitized request matches the stored receipt, the
 call is a replay. A matching receipt acknowledges the original mutation without repeating it: the
-retry writes no second comment and returns the task's current snapshot with `replayed: true`. That
+retry writes no second comment and returns the task's current snapshot with `replayed: true` [ORB-27798]. That
 snapshot is read when the retry runs, so after an intervening edit it carries the task's current
 revision, not the one the original write produced. A guarded retry whose sanitized digest differs
 from its receipt, and a fresh guarded write of sensitive text, are refused with
@@ -169,7 +168,7 @@ action must reuse its original key. Other cycles' action keys are refused.
 
 The deterministic observer/finalizer integration is `OrbitRuntime::set_resident_live_cycle`.
 After acquiring its cycle lease, observe publishes `{cycle, run_id, expires_at}` in a
-`resident_cycle_changed` history entry. It supplies the previous cycle id as a compare-and-set
+`resident_cycle_changed` history entry (`ResidentCycleChange::Started` / `Cleared`, typed in [ORB-28711]). It supplies the previous cycle id as a compare-and-set
 precondition (null when none). Finalize clears the state with its own id as that precondition;
 a stale finalizer cannot erase a newer cycle. Cycle ids cannot be reused. There is no tool or
 CLI for publishing cycle state. The cycle job ([ORB-21244]) is its only caller: observe publishes, and finalize, or the next observe after a dead cycle, clears.
@@ -186,7 +185,7 @@ can arrive between cycles. The reported checkpoint authority never changes actua
 When the agent wrote no valid checkpoint, `resident_finalize` writes one with `outcome:
 incomplete`, `actions[]` rebuilt from the cycle's action ledger rows (the last phase of each key gives its
 `result`), empty `decisions`, `costs` and `notes`, and an
-`error` field naming why (agent failed, budget exhausted, invalid record refused). If finalize
+`error` field naming why (agent failed, budget exhausted, invalid record refused [ORB-28027]). If finalize
 itself never ran (process killed), the next observe treats the cycle as dead, writes the same
 synthesized checkpoint for it, and starts a recovery cycle whose grant and checkpoint carry
 `recovery_of`.
@@ -226,7 +225,7 @@ tool refuses any field naming rights or workspaces. A `resident.answer` is a wak
 The brief `resident_observe` builds, in order:
 
 1. the mandate artifact and the effective authority, including `observe_only` and why;
-2. `checkpoints`: the latest checkpoint whose `outcome` is not `unchanged`, in full; `earlier_checkpoint_summaries`: up to four earlier records that are not `unchanged`, newest first, each with only `cycle`, `outcome` and the first 600 characters of `notes`. There is no older-notes tail. Heartbeat `unchanged` records hold scheduling state, not an observation, so the brief leaves them out of both: after a skipped heartbeat, the full checkpoint is the last real observation, not the skip record;
+2. `checkpoints`: the latest checkpoint whose `outcome` is not `unchanged`, in full; `earlier_checkpoint_summaries`: up to four earlier records that are not `unchanged`, newest first, each with only `cycle`, `outcome` and the first 600 characters of `notes`. There is no older-notes tail. Heartbeat `unchanged` records hold scheduling state, not an observation, so the brief leaves them out of both: after a skipped heartbeat, the full checkpoint is the last real observation, not the skip record [ORB-27731];
 3. open `resident.request` entries with their decision state and answers;
 4. `resident.answer` and other non-resident comments since the last checkpoint;
 5. the wake reasons with the facts behind them (task status, run outcome, PR/CI state);
@@ -253,7 +252,12 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21243] and [
 - [ORB-21243] — implements the checkpoint tool and the request/answer shapes
 - [ORB-21244] — core-assigned action keys and the action ledger (slice 3)
 - [ORB-21246] — implements brief reconstruction and the continuity adapter
-- ORB-25279 — retains action keys in post-admission `RemoteTool` failure detail
-- ORB-25284 — carries action keys on failed and refused broker replies in the envelope `action_key`
+- [ORB-25279] — retains action keys in post-admission `RemoteTool` failure detail
+- [ORB-25284] — carries action keys on failed and refused broker replies in the envelope `action_key`
+- [ORB-27730] — preserved `conversation_ref` continuity on resumed cycles after a skipped heartbeat
+- [ORB-27731] — documented which resident checkpoints enter a cycle brief after a heartbeat skip
+- [ORB-27798] — clarified that guarded resident-comment retries return the task's current snapshot
+- [ORB-28027] — preserved the cause of a rejected resident checkpoint in the synthesized `error` field
+- [ORB-28711] — typed `ResidentCycleChange::Started` and `Cleared` in `resident_cycle_changed` history
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

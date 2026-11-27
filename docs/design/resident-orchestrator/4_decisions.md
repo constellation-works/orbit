@@ -2,8 +2,8 @@
 title: Resident Orchestrator — Decisions
 owner: claude
 created_date: 2026-07-17
-updated_date: 2026-11-22
-last_validated: 2026-11-02
+updated_date: 2026-11-27
+last_validated: 2026-11-27
 status: Draft
 feature: resident-orchestrator
 doc_role: decisions
@@ -310,7 +310,7 @@ the ability to discard a candidate through requeue.
 ## Live resident cycles read drain status without operator capability
 
 **Recorded:** 2026-11-22 · [ORB-26832] · Approved by Daniel in the chief's chat
-(2026-11-22, `ORB-26762` follow-up)
+(2026-11-22, [ORB-26762] follow-up)
 
 **Code anchors:** `crates/orbit-runtime/src/tool_exec.rs` `RuntimeKernel::authorize_registered_tool`;
 `crates/orbit-tools/src/builtin/orbit/workflow.rs` `WorkflowVerb::preempt`;
@@ -360,7 +360,7 @@ operator requirement (`capability_denied`).
 ## Resident cycles update friction records without a right, without re-homing
 
 **Recorded:** 2026-11-22 · [ORB-26833] · Requested by Daniel in the chief's chat
-(2026-11-22, `ORB-26762` follow-up); re-homing refusal decided by the formation
+(2026-11-22, [ORB-26762] follow-up); re-homing refusal decided by the formation
 chief (2026-11-22)
 
 **Code anchors:** `crates/orbit-core/assets/activities/resident_cycle.yaml` `tool_disallow_list`;
@@ -413,7 +413,7 @@ ledger row there.
 ## Refresh merges base into the PR head without re-review
 
 **Recorded:** 2026-11-22 · [ORB-26834] · Requested by Daniel in the chief's chat
-(2026-11-22, `ORB-26762` follow-up); merge-commit and review-carry-over rules
+(2026-11-22, [ORB-26762] follow-up); merge-commit and review-carry-over rules
 decided by the formation chief on Daniel's request (2026-11-22)
 
 **Code anchors:** `crates/orbit-types/src/workflow/resident/mandate.rs` `ResidentRight::Refresh`;
@@ -478,7 +478,7 @@ the run's broker with the host's credentials like `land`:
 
 ## Held proposals require a separate resident promotion grant
 
-Daniel approved option 1 on 2026-11-23. The assignment's approval comment
+**Recorded:** 2026-11-23 · [ORB-27598] · Approved by Daniel on 2026-11-23; the assignment's approval comment
 records his direction to implement the per-mandate right.
 
 A live resident cycle can use `promote_held` to move a `no-auto-approve`
@@ -504,23 +504,9 @@ human approval.
 **Code anchors:** `crates/orbit-core/src/application/task/pilot/promotion.rs::resident_promotion_assessment`,
 `crates/orbit-core/src/application/resident/guard.rs::resident_task_update_audit`.
 
-## Task References
-
-- [ORB-21229] — rewrote the resident-orchestrator design and recorded these decisions
-- [ORB-25959] — let resident cycles with `dispatch` re-pilot and requeue
-- [ORB-26184] — refuse resident cycles' candidate discards during requeue
-- [ORB-26832] — admit `orbit.workflow.auto` `status` reads for live resident cycles without operator capability
-- [ORB-26833] — let resident cycles update friction records in covered workspaces without a right and without re-homing
-- [ORB-26834] — add the `refresh` right to merge base into a held or review delivery pull request head and re-run required checks without re-review
-- [ORB-25951] — on-call whose chief ruling delegated and conditioned that change
-- [ORB-12488] — removed the epic pipeline and the earlier resident-orchestrator folder
-- [ORB-10815] — revised the earlier design to v2: epic-owned worktree and windowed drain
-- [ORB-10776] — moved the earlier design's fire clock outside Orbit and added its session log
-- ORB-27598 adds the separate resident grant for held proposals.
-
-> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
-
 ## Residents may start review-only delivery recovery under recover
+
+**Recorded:** 2026-11-23 · [ORB-26835]
 
 ### Context
 
@@ -556,4 +542,20 @@ source-repair and review budgets also apply.
 - Cost: stopped owner-local published candidates only. Cases requiring more time or
   authority remain visible to the operator with the preserved candidate intact.
 
-**Provenance:** ORB-26835.
+## Task References
+
+- [ORB-21229] — rewrote the resident-orchestrator design and recorded these decisions
+- [ORB-25959] — let resident cycles with `dispatch` re-pilot and requeue
+- [ORB-26184] — refuse resident cycles' candidate discards during requeue
+- [ORB-26762] — overnight mandate whose follow-ups motivated drain status, friction updates and PR refresh
+- [ORB-26832] — admit `orbit.workflow.auto` `status` reads for live resident cycles without operator capability
+- [ORB-26833] — let resident cycles update friction records in covered workspaces without a right and without re-homing
+- [ORB-26834] — add the `refresh` right to merge base into a held or review delivery pull request head and re-run required checks without re-review
+- [ORB-26835] — add the `recover` right and bounded review-only recovery of a held delivery
+- [ORB-27598] — add the `promote_held` right for eligible `no-auto-approve` proposals with a clean pilot
+- [ORB-25951] — on-call whose chief ruling delegated and conditioned that change
+- [ORB-12488] — removed the epic pipeline and the earlier resident-orchestrator folder
+- [ORB-10815] — revised the earlier design to v2: epic-owned worktree and windowed drain
+- [ORB-10776] — moved the earlier design's fire clock outside Orbit and added its session log
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

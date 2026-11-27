@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: the resident mandate artifact, the operator-only authority record, grant requests through a resident_authority decision, and free narrowing"
-last_validated: 2026-11-05
+last_validated: 2026-11-27
 title: Spec — Mandate and authority
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: resident-orchestrator
 tags: [resident-orchestrator, spec, security]
 related_features: [resident-orchestrator, human-decision-channel, granted-tools]
 related_artifacts: [ORB-21229, ORB-21242, ORB-26832, ORB-26833, ORB-26834]
-last_updated: 2026-11-23
+last_updated: 2026-11-27
 ---
 
 # Spec: Mandate and authority
@@ -73,7 +73,9 @@ at once, and `orbit resident show` reports both records beside the effective one
 
 A non-ended mandate is not due (`orbit resident show` state `invalid`, with the reason) when the
 task is not tagged `resident`, the artifact is missing or fails validation, its `crew` is not a
-configured crew, or its control history is unreadable. Its other states are `active`, `paused`, `taken_over`,
+configured crew, or its control history is unreadable. Adding the `resident` tag without a valid
+`resident/mandate.json` warns on task writes, and `orbit.resident.list` and dashboard cards omit
+those tasks [ORB-27745]. Its other states are `active`, `paused`, `taken_over`,
 `handed_off` (the assignment is in `review`) and `ended` (the assignment is done, archived or
 rejected, or the mandate was stopped). An ended or invalid mandate's effective authority is empty.
 
@@ -107,14 +109,14 @@ grantable to a resident in v1.
 
 | Right | Tools the cycle may call (writes in the mandate's own workspace) |
 |---|---|
-| none | read tools, `orbit.workflow` action `auto` with `mode: "status"` (drain readiness read); `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact` action `put`; `orbit.friction` action `add` (own workspace only) and `update` (without `rehome_to` or `move`, in any covered workspace); `orbit.evolution.add`; `orbit.decision` action `raise`; `orbit.notice.post`; `orbit.notice.close` for notices posted by the mandate's own cycles in its own workspace; and `orbit.resident.checkpoint`, including the `handoff` outcome that has finalize move the assignment to `review` |
+| none | read tools, `orbit.attention` runtime reads in covered workspaces [ORB-25254], `orbit.workflow` action `auto` with `mode: "status"` (drain readiness read [ORB-26832]); `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact` action `put`; `orbit.friction` action `add` (own workspace only) and `update` (without `rehome_to` or `move`, in any covered workspace [ORB-26833]); `orbit.evolution.add`; `orbit.decision` action `raise`; `orbit.notice.post`; `orbit.notice.close` for notices posted by the mandate's own cycles in its own workspace; and `orbit.resident.checkpoint`, including the `handoff` outcome that has finalize move the assignment to `review` |
 | `dispatch` | `orbit.pipeline.invoke`, `orbit.run.auto`/`ship`/`resume`, `orbit.task.recover` action `requeue`/`repilot`, drain pull and claim bind/settle, `orbit.task.update` to `in-progress` |
 | `promote` | `orbit.task.update` to `backlog` for ordinary proposals and other backlog moves, `orbit.task.add` filed `backlog` |
 | `promote_held` | `orbit.task.update` to `backlog` for eligible `no-auto-approve` proposals with a current clean pilot |
 | `merge` | `orbit.workflow` action `land`, `orbit.task.update` to `done` (refused while the task has an open pull request) |
 | `plugin_upgrade` | none yet: no builtin tool installs or upgrades a plugin |
-| `refresh` | `orbit.workflow` action `refresh` (conflict-free base-branch merge commit into a held or review delivery pull request head, starting its required checks; lands nothing) |
-| `recover` | `orbit.task.recover` action `resume_delivery` (requires before-PR or before-landing review policy; starts a recovery leaf that may edit the preserved candidate and submits it to the normal PR pipeline with review as the completion target; fresh validation and review run where their gates apply, subject to normal light-delivery exemptions; handoff remains at review) |
+| `refresh` | `orbit.workflow` action `refresh` [ORB-26834] (conflict-free base-branch merge commit into a held or review delivery pull request head, starting its required checks; lands nothing) |
+| `recover` | `orbit.task.recover` action `resume_delivery` [ORB-26835] (requires before-PR or before-landing review policy; starts a recovery leaf that may edit the preserved candidate and submits it to the normal PR pipeline with review as the completion target; fresh validation and review run where their gates apply, subject to normal light-delivery exemptions; handoff remains at review) |
 
 A held proposal must be a bug, refactor or chore with a current pilot
 assessment free of holds and warnings. The `breaking-change`, `design` and
@@ -123,9 +125,9 @@ the proposal directly to `in-progress`. The approval and its comment
 commit together, with the pilot assessment ID and the action key that
 identifies the cycle grant.
 
-The mapping lives in core's tool host beside the dispatch table (`resident_guard`), and core's cycle
+The mapping lives in core's tool host beside the dispatch table (`resident_guard`) [ORB-21244], and core's cycle
 guard applies it to every builtin tool call a `resident_cycle_pipeline` run makes; the run is
-identified from the trusted managed-run binding, never from input. Reads always pass. A write
+identified from the trusted managed-run binding, never from input, and exercising a resident right on an operator-only operation requires the run's authenticated resident broker [ORB-26169]. Reads always pass. A write
 without this run's live cycle is refused as `resident_cycle_stale`; a right-gated write without the
 right as `resident_right_refused` (naming the observe-only cause when a maintenance notice or a
 passed deadline emptied the rights); a `workspace` or `workspaces` input that resolves outside the
@@ -262,9 +264,12 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21242].
 - [ORB-21242] — implements the mandate record, grants, grant requests and narrowing
 - [ORB-21244] — the cycle that maps rights to tools
 - [ORB-21245] — `orbit.resident.control` and relay
+- [ORB-25254] — let live resident cycles read runtime attention for covered workspaces
+- [ORB-26169] — required the run's authenticated resident broker for right-gated exemptions on operator-only operations
 - [ORB-26832] — admit `orbit.workflow.auto` action `status` (drain readiness read) for live resident cycles in covered workspaces without operator capability
 - [ORB-26833] — admit `orbit.friction` action `update` (without `rehome_to` or `move`) in covered workspaces without a granted right
 - [ORB-26834] — add the `refresh` right and `orbit.workflow` action `refresh` to merge a base branch tip into a held or review delivery pull request head and re-run required checks without re-review
+- [ORB-26835] — add the `recover` right and bounded review-only recovery of a held delivery.
+- [ORB-27745] — warned on `resident`-tagged task writes without a valid `resident/mandate.json` and omitted them from `orbit.resident.list`
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
-- [ORB-26835] — add the `recover` right and bounded review-only recovery of a held delivery.

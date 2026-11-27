@@ -2,11 +2,11 @@
 title: Resident Orchestrator — Overview
 owner: claude
 created_date: 2026-07-17
-updated_date: 2026-11-08
-last_validated: 2026-11-20
+updated_date: 2026-11-27
+last_validated: 2026-11-27
 status: Draft
 stage: building
-next: "Re-file the slice 10 pilot (ORB-21251 archived 2026-11-03, not done) once a bounded mandate with an operator authority grant and a manager session is ready"
+next: "Re-file slice 10 pilot (ORB-21251 archived) once mandate, authority grant & manager are ready"
 feature: resident-orchestrator
 doc_role: overview
 type: design
@@ -39,7 +39,7 @@ records that design, why it failed and how this one differs.
 
 ## 1. Motivation
 
-Today every orchestration mandate lives in an open interactive chat. ORB-21178 is an example: the
+Today every orchestration mandate lives in an open interactive chat. [ORB-21178] is an example: the
 scribe v2 delivery in ws_orbit-office. Orbit holds the durable record, the `[orchestration]`
 assignment task, but the loop that drives it is improvised in the chat:
 
@@ -58,8 +58,8 @@ exist: the clock and routines ([routines](../routines/1_overview.md)), typed sta
 condition triggers ([condition-triggers](../condition-triggers/1_scope.md)), the activity and job
 machinery ([activity-job](../activity-job/1_overview.md)), the human decision channel
 ([human-decision-channel](../human-decision-channel/1_scope.md)), fleet notices
-([fleet-notices](../fleet-notices/1_overview.md)) and `orbit attention`
-([operator-attention](../operator-attention/1_overview.md)). A resident is a composition of those,
+([fleet-notices](../fleet-notices/1_overview.md), [ORB-21207]) and `orbit attention`
+([operator-attention](../operator-attention/1_overview.md), [ORB-21164]). A resident is a composition of those,
 plus a mandate record, a checkpoint contract and an authority boundary. Second, authority has to be
 enforced by core, not by a prompt: a resident that may dispatch but not merge must be unable to
 call the merge tool.

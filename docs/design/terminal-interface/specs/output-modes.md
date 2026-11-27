@@ -1,8 +1,8 @@
 ---
 type: design
 summary: "Spec: Output Modes and Sink Resolution"
-last_validated: 2026-11-04
-last_updated: 2026-11-04
+last_validated: 2026-11-27
+last_updated: 2026-11-27
 ---
 
 # Spec: Output Modes and Sink Resolution
@@ -29,7 +29,7 @@ The sink is resolved once at startup and answers every environment question. Not
 
 Prose blocks word-wrap to this width in terminal `table` mode: diagnostic summary prose, the `orbit task show` record and `--fields` text, and table notices. Explicit line breaks are preserved. Continuations align with the text after a `- ` bullet or a short `Label: ` prefix; other lines retain their leading indent. If the indent would split a token, the whole line wraps without hanging indentation. The wrapper uses display columns and breaks between words; a token wider than an entire line is split to fit.
 
-`config show` carries each row's trailing-prose column alongside its text, so
+`config show` carries each row's trailing-prose column alongside its text [ORB-23503], so
 values and tags containing spaces retain their padded cells when descriptions
 wrap. Continuations align with the description column when it leaves at least
 24 columns; narrower terminals use a shallow hanging indent. When even the
@@ -73,9 +73,9 @@ Precedence, first match wins:
 
 ## 5. Streams
 
-- **stdout carries the payload and nothing else.** Warnings, counts, empty-state prose, and diagnostics go to stderr in every mode. Progress follows §6. A terminal-only notice whose text is already in the `json`/`ndjson` document is written to stderr only in `table` and `plain` modes; `json` and `ndjson` keep that text in the document without duplicating it on stderr. The notes on `orbit search` use this exception.
+- **stdout carries the payload and nothing else.** Warnings, counts, empty-state prose, and diagnostics go to stderr in every mode. Progress follows §6. A terminal-only notice whose text is already in the `json`/`ndjson` document is written to stderr only in `table` and `plain` modes; `json` and `ndjson` keep that text in the document without duplicating it on stderr [ORB-26684]. The notes on `orbit search` use this exception.
 - **Errors go to stderr.** In `json`/`ndjson` modes an error is a single JSON object on stderr using the existing `error_payload` shape (`error`, `code`, and the optional `did_you_mean` / `artifact_origin` / task-bundle fields); in other modes it is a plain message. Implemented in [ORB-10570]; the payload previously went to stdout, which is a **breaking change** for a script that parsed it there.
-- **Missing values name a recovery listing.** Missing tasks, runs, jobs, tools and workspace selectors point to their listing command. Omitting the run ID on an empty workspace reports that no runs exist. Only the `request_not_found` decision refusal omits the machine-code prefix from its plain message; other decision refusals include the prefix. JSON errors keep the stable `code` field. Explicit, more specific guidance takes precedence over a generic listing. Task and run recovery uses the caller's syntax: the CLI names `orbit task list` and `orbit run history` (or `orbit task show <id> --fields delivery` when a task ID was passed); MCP names `orbit_task_list` and `orbit_run {"action":"list"}` (or `orbit_task_show {"id":"<id>","field":"delivery"}`). When a task has no delivery run, the remedy reads the task without a projection: `orbit task show <id>` on the CLI or `orbit_task_show {"id":"<id>"}` over MCP.
+- **Missing values name a recovery listing.** Missing tasks, runs, jobs, tools and workspace selectors point to their listing command. Omitting the run ID on an empty workspace reports that no runs exist. Only the `request_not_found` decision refusal omits the machine-code prefix from its plain message; other decision refusals include the prefix. JSON errors keep the stable `code` field. Explicit, more specific guidance takes precedence over a generic listing. Task and run recovery uses the caller's syntax: the CLI names `orbit task list` and `orbit run history` (or `orbit task show <id> --fields delivery` when a task ID was passed); MCP names `orbit_task_list` and `orbit_run {"action":"list"}` (or `orbit_task_show {"id":"<id>","field":"delivery"}`). When a task has no delivery run, the remedy reads the task without a projection: `orbit task show <id>` on the CLI or `orbit_task_show {"id":"<id>"}` over MCP [ORB-25809].
 - **Usage errors follow the same rule.** An argv clap rejects is reported before any matches exist, so the mode is resolved from argv lexically: the last `--format <mode>` / `--format=<mode>` whose value is a mode (rung 1), any `--json`/`--ops` token (rung 2), then `ORBIT_FORMAT` and the sink as usual; nothing after a bare `--` counts. In `json`/`ndjson` the error is `{"error": <clap's message>, "code": "usage_error"}` on stderr. A `--format` value that is not a mode — the invalid value being reported, or `audit export`'s own `--format csv` — is not a request, so it falls through to `ORBIT_FORMAT`. Help and version output, including the help clap prints in place of a missing subcommand, are never rewritten.
 - **Exit codes are load-bearing.** `0` success, `1` command failure (a missing record included — a missing task and a missing friction record are both `*_not_found`), `2` usage error. A command that printed an error object must not exit `0`.
 - **A broken pipe is not an error.** `EPIPE` on stdout exits `0` silently — `orbit task list | head` must not print a panic.
@@ -117,5 +117,8 @@ The global shorthand replaces the redundant per-command fields and the registry-
 - [ORB-11597] — Move doctor repair notices to stderr and include repair counts in structured result rows.
 - [ORB-11622] — Convert workspace initialization to shared payload rendering.
 - [ORB-21576] — Move non-record health/status trailers off stdout to stderr in every mode.
+- [ORB-23503] — Fit `orbit config show` text output to the terminal width while keeping padded cells.
+- [ORB-25809] — Keep run-not-found recovery remedies from passing a missing run ID as a task ID.
+- [ORB-26684] — Restrict terminal-only notices already present in the JSON/NDJSON document to `table` and `plain` stderr.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

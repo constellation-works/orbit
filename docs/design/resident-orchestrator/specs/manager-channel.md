@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: how a manager delegates, relays, asks for status and controls residents — orbit.resident.grant, relay, control, show/list, the opt-in resident toolset, and the attention kind residents report through"
-last_validated: 2026-11-05
+last_validated: 2026-11-27
 title: Spec — Manager channel
 owner: claude
 status: Draft
@@ -9,7 +9,7 @@ feature: resident-orchestrator
 tags: [resident-orchestrator, spec, mcp]
 related_features: [resident-orchestrator, operator-attention, fleet-notices, human-decision-channel]
 related_artifacts: [ORB-21229, ORB-21242, ORB-21245]
-last_updated: 2026-11-23
+last_updated: 2026-11-27
 ---
 
 # Spec: Manager channel
@@ -115,9 +115,9 @@ Each action is a history entry with the caller and reason.
 
 `show {task_id}` reports the mandate artifact (or why it is missing or invalid), effective authority
 and its grant/narrowing history, control and state, open grant requests, live cycle, latest parsed
-checkpoint and stalled status. `list {include_ended?}` returns `{count, mandates}` with each row's
+checkpoint and stalled status. `list {include_ended?}` returns `{count, mandates}` with each valid mandate's
 task, title, status, state and reason, goal/deadline, effective rights/workspaces, authority revision,
-open request count and stalled flag. Both are read-only and scoped to the bound workspace.
+open request count and stalled flag (`resident`-tagged tasks without a valid `resident/mandate.json` artifact are omitted [ORB-27745]). Both are read-only and scoped to the bound workspace.
 
 [ORB-21245] adds `control` (state and last action), the `paused` and `taken_over` mandate states,
 and `stalled` with `stalled_reason` to `show`; it adds `stalled` to each `list` row. Slice 1
@@ -158,5 +158,6 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21242] and [
 - [ORB-21229] — designed the manager channel
 - [ORB-21242] — implements `orbit.resident.grant`, `show` and `list`
 - [ORB-21245] — implements `relay`, `control`, the `resident` toolset and `resident_stalled`
+- [ORB-27745] — omitted `resident`-tagged tasks without a valid `resident/mandate.json` from `orbit.resident.list`
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

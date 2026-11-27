@@ -2,8 +2,8 @@
 title: Terminal Interface — Design
 owner: claude
 created_date: 2026-08-01
-updated_date: 2026-11-08
-last_validated: 2026-11-08
+updated_date: 2026-11-27
+last_validated: 2026-11-27
 status: Accepted
 feature: terminal-interface
 doc_role: design
@@ -77,7 +77,7 @@ A closed stdout is not an error. During rendering, `output/common/pipe.rs` suppr
 
 ## 8. Test Coverage of Output
 
-Clap-rendered help (flag descriptions, about text, command lists, footers) wraps to the sink width with a hanging indent: the workspace enables Clap's `wrap_help`, `cli_command` hands Clap the sink width, and `help::hang_wrap_footers` wraps footer lines first so a continuation stays under its example. A block of contiguous indented lines whose rows all fit the sink width keeps its original layout, aligned columns included. Once any row in the block overflows, a footer's aligned example column holds while it leaves at least 24 columns for the explanation; below that, every aligned explanation in the block stacks under its command, so no explanation wraps a word per line [ORB-24274]. The hand-built grouped rows are template text Clap never re-wraps. Piped help has width 0, which keeps source formatting and so stays unwrapped; the goldens pin that form. The PTY test `clap_help_wraps_to_the_terminal_width_with_a_hanging_indent` covers the terminal layout at 60, 80 and 120 columns [ORB-20753].
+Clap-rendered help (flag descriptions, about text, command lists, footers) wraps to the sink width with a hanging indent: the workspace enables Clap's `wrap_help`, `cli_command` hands Clap the sink width, and `help::hang_wrap_footers` wraps footer lines first so a continuation stays under its example. A block of contiguous indented lines whose rows all fit the sink width keeps its original layout, aligned columns included [ORB-24289]. Once any row in the block overflows, a footer's aligned example column holds while it leaves at least 24 columns for the explanation; below that, every aligned explanation in the block stacks under its command, so no explanation wraps a word per line [ORB-24274]. The hand-built grouped rows are template text Clap never re-wraps. Piped help has width 0, which keeps source formatting and so stays unwrapped; the goldens pin that form. The PTY test `clap_help_wraps_to_the_terminal_width_with_a_hanging_indent` covers the terminal layout at 60, 80 and 120 columns [ORB-20753].
 
 Checked-in output goldens under `crates/orbit-cli/tests/output_goldens/` cover the plain and JSON forms of tool, task, and skill lists; they also cover a plain task detail view and the layer provenance of `config show --json`. CLI long-help goldens live under `crates/orbit-cli/tests/help_goldens/` and are compared against the binary's `--help`. `tests/snapshots/` holds the MCP tool listing. The list-command integration goldens capture piped output; ordinary terminal table layout and doctor findings are exercised by the boundary fixtures in `crates/orbit-cli/tests/output/table_rendering.rs` and `crates/orbit-cli/tests/output/doctor.rs`. The full findings behavior landed in [ORB-14829].
 
@@ -124,6 +124,8 @@ Built-binary tests cover the global JSON shorthand at every command level, confl
 - [ORB-21575] — Add full detail recovery for audited truncated views.
 - [ORB-21576] — Move non-record health/status trailers to stderr in every mode.
 - [ORB-21940] — Wrap diagnostic summary prose to the terminal width.
+- [ORB-24274] — Stack narrow help-footer explanations under their command when the shared column leaves fewer than 24 columns.
+- [ORB-24289] — Qualify the help-footer stacking rule with its all-rows-fit exception.
 - [T20260427-43] — Extend the earlier duplicated color vocabulary for friction status.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

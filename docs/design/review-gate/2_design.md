@@ -2,8 +2,8 @@
 title: Review Gate — Design
 owner: codex
 created_date: 2026-09-21
-updated_date: 2026-11-18
-last_validated: 2026-11-14
+updated_date: 2026-11-27
+last_validated: 2026-11-27
 status: Implemented
 feature: review-gate
 doc_role: design
@@ -66,10 +66,13 @@ After-landing review is carried out by the workspace's shipped
 `orbit auto-task toggle delivery-code-review on|off`. While enabled it freezes
 landed base-branch deliveries into batches and mints one review task per batch
 at its threshold or maximum wait. When `review_crew` is set, each review task the
-consumer mints carries that crew; a pool draws one member per mint, preferring
-one that implemented none of the batch's deliveries. Unset, the shipped template
-names no crew, so each minted task is unassigned and draws from the complexity
-pool for its complexity. Changing `review_crew` changes only future mints, never the
+consumer mints carries that crew; a pool first drops members whose executor
+cannot satisfy the task's `os:` tags or whose Muse model was verified refused on
+this host within the refusal window [ORB-25562], then draws one eligible member
+per mint, preferring one that implemented none of the batch's deliveries. Unset,
+the shipped template names no crew, so each minted task is unassigned and draws
+from the complexity pool for its complexity. Changing `review_crew` changes only
+future mints, never the
 consumer's epoch or its retained debt. The consumer admits only on the machine
 that owns the workspace (see [delivery automation
 operations](../automation-triggers/references/operations.md)). After-landing review
@@ -521,9 +524,9 @@ review worktree. The refusal omits the pending-decision text, so the run is not
 held for a decision; the failure handoff pushes no reviewer commit, its comment
 says the PR already merged, and external-merge settlement then moves the task
 to `done`. An `accept_with_fixes` reviewer commit is not stranded by the
-comment: the settle comment defers to the push step, which follows the
+comment [ORB-26606]: the settle comment defers to the push step, which follows the
 `review_repair_after_merge` exception above whether the head branch survives
-or was deleted: it tries to preserve the repair and blocks the task with a
+or was deleted [ORB-26611]: it tries to preserve the repair and blocks the task with a
 follow-up recipe. If both preservation refs fail, the recipe reports that the
 repair remains local. An unconfirmed merge with a lost lease also stays local.
 One exception to "no push": a reviewer commit that settled `incomplete` is not left in the run's
@@ -889,16 +892,16 @@ or a test source whose path mentions a sandbox; it reaches a test when a
 changed test source, at the reviewed base or the final candidate, names the
 test or mentions `sandbox`, `bwrap` or `bubblewrap`. Shared test support can
 affect a sandbox test even when the helper does not mention it. For an
-unreached test the notice is cleared with a `not owed`
-note, a reviewer-named Linux requirement that covers only that notice leaves
-`external_evidence` and its required `not_run` record becomes `excluded`, and
-no hold is raised. A workspace `host_evidence` rule owing the same check
-keeps it owed. The chosen option was (b) of ORB-25096 — not owing what the
-diff cannot reach — rather than reading hosted check runs into settlement or
-routing the delivery to a capable host: a host without user namespaces can
-never fulfil the hold, and the candidate does not reach the test, so the review
-releases it without relying on a later pull request run. CI scope decides
-whether such a run executes the test (`scripts/ci-change-scope.sh`, via
+unreached test the notice is cleared with a `not owed` note, a reviewer-named
+Linux requirement that covers only that notice leaves `external_evidence` and
+its required `not_run` record becomes `excluded`, and no hold is raised. A
+workspace `host_evidence` rule owing the same check keeps it owed. The chosen
+option was (b) of [ORB-25096] — not owing what the diff cannot reach — rather
+than reading hosted check runs into settlement or routing the delivery to a
+capable host: a host without user namespaces can never fulfil the hold, and the
+candidate does not reach the test, so the review releases it without relying on
+a later pull request run. CI scope decides whether such a run executes the test
+[ORB-25143] (`scripts/ci-change-scope.sh`, via
 `scripts/ci-test-affected.py pull_request_scope`: a docs-only pull request
 runs no test job; one confined to `crates/` normally runs tests for the
 affected and always-run crates, but runs every test for a member manifest
@@ -974,7 +977,7 @@ selector, judged with the shared selector-overlap grammar. A failed required
 check therefore cannot become nonblocking by changing only its role or note:
 as a control its sources must be the task's own, as a diagnostic they must
 not be, and an honest in-scope failure satisfies neither. An unrelated
-failure — ORB-14151's workspace run failing only in engine fixtures the task
+failure — [ORB-14151]'s workspace run failing only in engine fixtures the task
 never touched — is a `diagnostic`, not an `expected_failure`: the bounded task
 still passes on its required checks, and nothing imports a workspace-green
 requirement into it.
@@ -982,7 +985,7 @@ requirement into it.
 A counterfactual names the files it temporarily mutated in `mutation_target`,
 apart from its `sources` [ORB-14616]. The mutated file is usually the
 production code the candidate's tests guard, so for a test-only change it is
-always outside the scope: ORB-14521's reviewer proved a repaired test by
+always outside the scope: [ORB-14521]'s reviewer proved a repaired test by
 deleting a conjunct from an untouched production file, and naming that file
 in `sources` settled a correct candidate `incomplete`. `sources` still names
 the candidate's checks that rejected the mutation, every one inside the
@@ -1057,7 +1060,7 @@ task's history for the attempt (an unreadable one is `incomplete`), and every
 records must name the same check as `required` (and pass) or `superseded`
 (and be replaced), or as `excluded` when the retained record never ran.
 Omitting it, or relabeling it `diagnostic` or `expected_failure`, is
-`validation_incomplete` — ORB-14191's replacement report that silently
+`validation_incomplete` — [ORB-14191]'s replacement report that silently
 dropped a failed required CodeQL run settles `incomplete`. Retained records
 the final report does not repeat verbatim are kept on the certificate as
 `retained_obligations` with their report digest and observation time. The
@@ -1073,9 +1076,9 @@ the same attempt; its earlier id-less revisions are matched by command
 identity. One `superseded` attempt and its required replacement may share an id. Matching
 an earlier record by command text could not converge: reviewers legitimately
 rename, rewrap and concretise commands between revisions, and seven correct
-candidates in one shift settled `incomplete` that way (ORB-14360 recorded the
+candidates in one shift settled `incomplete` that way ([ORB-14360] recorded the
 prose name "focused CLI reference invocation verification" `not_run`, then
-`python3 .orbit/tmp/verify-reference-examples.py` `passed`; ORB-14260 replaced
+`python3 .orbit/tmp/verify-reference-examples.py` `passed`; [ORB-14260] replaced
 a `<workspace>` placeholder with the absolute path). The reviewer gives each
 `required` record an id such as `V1` when it first files it. An earlier
 required record with an id is accounted for by that id alone, never by
@@ -1271,7 +1274,7 @@ no verdict yet (§5), commits leftover reviewer work under the reviewer
 identity (`partial_repair_commit`), leaves the implementation and reviewer
 commits as they are, pushes the candidate branch, and opens no PR.
 Substantive failures block with `review_gate_escalation`. When `review_validate`
-fails, that same task update also appends `review_fix_validation_failed`: its
+fails, that same task update also appends `review_fix_validation_failed` [ORB-24353]: its
 JSON note is a version-1 `RecordedReviewFixValidationFailure` containing the run,
 optional admitted attempt and preserved candidate commit. Existing status notes
 and escalation comments are unchanged. For failed-fix scoring, agents read the
@@ -1682,7 +1685,7 @@ step (`review_minutes_exhausted`) when nothing is left. An accept that
 finished within its deadline settles on its evidence. A reviewer commit costs
 no separate budget; there are no reviewer-start counts or repair cycles.
 Exhaustion holds the run at admission (`review_budget_exhausted:
-review_candidate_reviewed | review_minutes_exhausted`), including the early
+review_candidate_reviewed | review_minutes_exhausted`) [ORB-25395], including the early
 minutes preflight. This typed delivery hold runs no retry, recovery or failure
 handoff and is excluded from run failures. It preserves the task status,
 ledger and operator recovery text, reserving no new review. After a recorded
@@ -1732,7 +1735,7 @@ in, so the refusal still fails its landing.
 
 A narrowly classified synchronous server failure (HTTP 500, 502, 503 or 504),
 or a response that ends before it decodes (`unexpected end of JSON input`, with
-an empty or truncated body), can mean that the merge landed but its response
+an empty or truncated body) [ORB-28591], can mean that the merge landed but its response
 was lost. `pr_complete` makes
 one fresh authenticated status read within the original completion deadline.
 It accepts only explicit `MERGED` state with a merge timestamp and commit for
@@ -1805,7 +1808,7 @@ merge commit. A landing is never fabricated.
 
 ### 6.1 Completion holds [ORB-23322]
 
-The before-landing review limited to certain paths (removed in ORB-22808 for
+The before-landing review limited to certain paths (removed in [ORB-22808] for
 disuse) was a *review* gate. Completion holds are a *completion* gate: they
 decide whether a run granted `--complete` may finish without a person, scaled
 by the risk of the change rather than by who wrote it. Some paths always need a
@@ -2143,7 +2146,24 @@ candidate is the handed-off head. External pushes and rebases remain stale.
 - [ORB-18660] — an owner CodeQL run that reports results attaches them as `review-evidence-findings.json` and queues the held candidate for its implementer's repair instead of leaving the hold in place.
 - [ORB-21765] — `handoff_land` retries its synchronous merge on the same "Base branch was modified" (HTTP 405) refusal under the same three-request ceiling as completion, instead of failing the landing.
 - [ORB-22808] — removed selective before-landing review (§3.3), deprecating its four keys until 2026-12-08 and keeping its wire and persisted fields as ignored legacy fields.
+- [ORB-23322] — introduced `[[completion.hold]]` risk-based completion holds for runs granted `--complete`.
+- [ORB-23365] — wired `[[completion.hold]]` into `task_local_pipeline` and owner landing of claimed leaves.
+- [ORB-24325] — admitted `cargo test -p <crate> --lib <test>` requirements as `host_sandbox_test` evidence for deferred library unit tests.
+- [ORB-24353] — recorded `review_validate` failures as typed `review_fix_validation_failed` history events with `RecordedReviewFixValidationFailure`.
+- [ORB-24656] — synthesized Linux `host_sandbox_test` requirements automatically for Bubblewrap deferrals on passing reports with no open findings.
+- [ORB-24665] — avoided result and derived-log path collisions when synthesizing Bubblewrap host-sandbox requirements.
+- [ORB-24940] — let `[[review.host_evidence]]` rules match task tags in addition to changed paths.
+- [ORB-25096] — limited Bubblewrap deferral synthesis and holds to tests the candidate diff can reach (`BubblewrapReach`).
+- [ORB-25129] — shortened review settlement comments to 12-character SHAs and omitted empty sections, keeping the full certificate in `review-gate.json`.
+- [ORB-25143] — qualified the `crates/`-confined PR CI scope rule for member manifests, unowned paths and whole-workspace selections.
+- [ORB-25395] — turned exhausted review-budget refusals at admission and preflight into typed `review_budget_exhausted` holds instead of run failures.
+- [ORB-25562] — dropped Muse pool members whose model the owner host's account refused within the refusal window when minting after-landing review tasks.
+- [ORB-26599] — read the forge when before-landing review settles on an externally merged PR, reporting the merge without blocking for a decision.
+- [ORB-26606] — had the external-merge settle comment defer to `landing_push` for `accept_with_fixes` reviewer commits instead of calling them unpushed.
+- [ORB-26611] — routed `landing_push` on an externally merged PR with a surviving head branch through `review_repair_after_merge`.
+- [ORB-26788] — rejected contradictory `expected_failure` validation records (outcome not `failed`) when attaching `review-report.json`.
 - [ORB-27415] — completion routes the exact merge-conflict (HTTP 405) refusal to its conflict path after one read confirms the same head conflicting, instead of failing the merge.
+- [ORB-28591] — reconciled reviewed PR merges via one read-only forge check when `gh pr merge` fails with `unexpected end of JSON input` on an empty or truncated body.
 - [ORB-14151] — supplied the workspace run whose engine-fixture failures the task never touched, cited for the `diagnostic` role's unrelated-failure case.
 - [ORB-14191] — supplied the replacement report that silently dropped a failed required CodeQL run, cited for `validation_incomplete`.
 - [ORB-14260] — supplied the claimed-worker case that replaced a `<workspace>` placeholder with the absolute path, cited for validation-record identity matching.

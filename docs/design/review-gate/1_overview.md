@@ -3,7 +3,7 @@ title: Review Gate — Overview
 owner: codex
 created_date: 2026-09-21
 updated_date: 2026-11-08
-last_validated: 2026-11-08
+last_validated: 2026-11-27
 status: Implemented
 stage: shipped
 next: "Remove the legacy selective fields after 2026-12-08"

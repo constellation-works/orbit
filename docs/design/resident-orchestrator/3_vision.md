@@ -2,8 +2,8 @@
 title: Resident Orchestrator — Vision
 owner: claude
 created_date: 2026-07-17
-updated_date: 2026-11-02
-last_validated: 2026-11-02
+updated_date: 2026-11-27
+last_validated: 2026-11-27
 status: Draft
 feature: resident-orchestrator
 doc_role: vision
@@ -16,7 +16,7 @@ related_artifacts: [ORB-21229]
 
 # Resident Orchestrator — Vision
 
-What the committed design in [2_design.md](./2_design.md) leaves open, what it draws on, and what
+What the committed design in [2_design.md](./2_design.md) ([ORB-21229]) leaves open, what it draws on, and what
 may be distinctive about it. Nothing here is committed scope.
 
 ## 1. Open Questions
@@ -107,5 +107,6 @@ escalation equation. It lives in a separate repository, cited here by name.
 
 - [ORB-21229] — rewrote the resident-orchestrator design
 - [ORB-10815] — revised the removed design to its v2 epic-worktree form
+- [ORB-22808] — removed decision assistance and model-answered categories
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
