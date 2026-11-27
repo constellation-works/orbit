@@ -11,11 +11,11 @@ use orbit_tools::OwnerCoordinator;
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use serde_json::{Value, json};
 
-use super::super::super::owner::{ClaimedOwnerCall, bridge_through};
 use super::super::review::{FOLLOWER, Fixture, OWNER};
 use super::broker::refused;
 use crate::OrbitRuntime;
 use crate::adapter::command::dispatch::brokered::RunDispatch;
+use crate::adapter::command::dispatch::claimed::owner::{ClaimedOwnerCall, bridge_through};
 use crate::adapter::command::dispatch::execute::ToolEntryPoint;
 use crate::runtime::plugin::broker::{BrokerDispatch as _, BrokerRequest, EntryPoint};
 

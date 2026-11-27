@@ -19,9 +19,11 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::super::super::owner::{ClaimedOwnerCall, ClaimedOwnerRoute, bridge_through};
 use super::super::review::{FOLLOWER, Fixture, GET, PUT};
 use super::broker::{SHOW, TaskOwner, refused};
+use crate::adapter::command::dispatch::claimed::owner::{
+    ClaimedOwnerCall, ClaimedOwnerRoute, bridge_through,
+};
 use crate::adapter::command::dispatch::execute::ToolEntryPoint;
 
 /// The claimed task and a related task in the same workspace, each with a

@@ -9,6 +9,15 @@ use orbit_types::tool::WorkerInvocation;
 use orbit_types::workflow::handoff::already_landed_scope;
 
 pub(crate) const CHECK: &str = "git diff --exit-code";
+
+/// The hosts a clean-leaf fixture runs on: the follower's extra config and
+/// each side's host OS, when the case pins one.
+pub(crate) struct FixtureHosts<'a> {
+    pub(crate) follower_config: &'a str,
+    pub(crate) owner_os: Option<orbit_types::task::HostOs>,
+    pub(crate) follower_os: Option<orbit_types::task::HostOs>,
+}
+
 pub(crate) fn engine_action(
     host: &OrbitRuntime,
     action: &str,
@@ -234,13 +243,6 @@ impl From<bool> for EvidenceSeed<'_> {
             artifacts: &[],
         }
     }
-}
-/// The hosts a clean-leaf fixture runs on: the follower's extra config and
-/// each side's host OS, when the case pins one.
-pub(crate) struct FixtureHosts<'a> {
-    pub(crate) follower_config: &'a str,
-    pub(crate) owner_os: Option<orbit_types::task::HostOs>,
-    pub(crate) follower_os: Option<orbit_types::task::HostOs>,
 }
 pub(crate) struct CleanLeaf {
     pub(crate) pair: Pair,

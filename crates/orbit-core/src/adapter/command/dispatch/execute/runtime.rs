@@ -324,7 +324,7 @@ impl OrbitRuntime {
             super::super::claimed::bridge_claimed_owner_call_with_env(
                 env,
                 &self.global_root(),
-                super::super::claimed::ClaimedOwnerCall {
+                crate::adapter::command::dispatch::claimed::ClaimedOwnerCall {
                     binding: self.run().claim_owner().map(|owner| owner.binding()),
                     process_machine_id: self.automation_machine_identity(),
                     name,

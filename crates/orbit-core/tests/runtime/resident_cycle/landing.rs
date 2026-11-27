@@ -207,8 +207,22 @@ fn land(fx: &Fixture, task: &str) -> Result<Value, String> {
 fn landing_reply(fx: &Fixture, task: &str) -> Result<Value, OrbitError> {
     let env = orbit_common::Env::capture();
     fx.runtime
-        .execute_tool_command_dispatch_with_session_context_and_env(&env,
-orbit_core::adapter::command::ToolCommandCall { name: "orbit.workflow", input: json!({"action": "land", "task_id": task, "workspace": fx.runtime.workspace_id().unwrap(), "model": "codex"}), agent_override: None, model_override: None, entry_point: ToolEntryPoint::Mcp, session_context: session(McpCapability::Agent) })
+        .execute_tool_command_dispatch_with_session_context_and_env(
+            &env,
+            orbit_core::adapter::command::ToolCommandCall {
+                name: "orbit.workflow",
+                input: json!({
+                    "action": "land",
+                    "task_id": task,
+                    "workspace": fx.runtime.workspace_id().unwrap(),
+                    "model": "codex",
+                }),
+                agent_override: None,
+                model_override: None,
+                entry_point: ToolEntryPoint::Mcp,
+                session_context: session(McpCapability::Agent),
+            },
+        )
         .map(|outcome| outcome.value)
 }
 

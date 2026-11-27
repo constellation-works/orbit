@@ -87,7 +87,7 @@ impl FamilyDispatch for OrbitRuntime {
         let env = orbit_common::Env::capture();
         self.execute_tool_command_dispatch_with_session_context_and_env(
             &env,
-            super::super::execute::ToolCommandCall {
+            crate::adapter::command::ToolCommandCall {
                 name: &tool,
                 input,
                 agent_override: None,
@@ -992,7 +992,7 @@ fn a_sandboxed_resident_landing_and_completion_are_decided_on_the_host() {
     let completed = runtime
         .execute_tool_command_dispatch_with_session_context_and_env(
             &env,
-            super::super::execute::ToolCommandCall {
+            crate::adapter::command::ToolCommandCall {
                 name: UPDATE,
                 input: json!({"id": delivered, "status": "done", "execution_summary": "Delivered.",
                    "model": "codex"}),

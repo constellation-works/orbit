@@ -178,18 +178,6 @@ pub struct PullStartOptionsSupplied {
     pub review: bool,
 }
 
-/// What one pull pass records about itself: any resource throttle, why it
-/// requested no new claim, its error and code, the owner's answer, and the
-/// pass observation to count.
-pub(crate) struct PullPassRecord<'a> {
-    pub(crate) resource_throttle: Option<ResourceThrottle>,
-    pub(crate) admission_refusal: Option<&'a str>,
-    pub(crate) error: Option<&'a str>,
-    pub(crate) error_code: Option<&'a str>,
-    pub(crate) owner_answer: OwnerAnswer<'a>,
-    pub(crate) observation: Option<DrainPassObservation>,
-}
-
 impl PullStartOptionsSupplied {
     /// Why these options cannot start, in the words of `orbit run auto`, for a
     /// surface with no argument parser. It decides from the input alone, so a
@@ -211,6 +199,18 @@ impl PullStartOptionsSupplied {
         }
         pull_start_review_refusal(self.review).map(ToOwned::to_owned)
     }
+}
+
+/// What one pull pass records about itself: any resource throttle, why it
+/// requested no new claim, its error and code, the owner's answer, and the
+/// pass observation to count.
+pub(crate) struct PullPassRecord<'a> {
+    pub(crate) resource_throttle: Option<ResourceThrottle>,
+    pub(crate) admission_refusal: Option<&'a str>,
+    pub(crate) error: Option<&'a str>,
+    pub(crate) error_code: Option<&'a str>,
+    pub(crate) owner_answer: OwnerAnswer<'a>,
+    pub(crate) observation: Option<DrainPassObservation>,
 }
 
 impl crate::OrbitRuntime {

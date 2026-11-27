@@ -73,9 +73,6 @@ pub(crate) mod validation_tools;
 mod workspace_auto_port;
 mod write_response;
 
-#[cfg(test)]
-mod tests;
-
 pub(crate) use baseline_hold::standing_baseline_hold_from_history;
 pub(crate) use baseline_repair::BASELINE_RED_REPAIR_TAG;
 use decision::raise as decision_raise;
@@ -253,3 +250,6 @@ pub(in crate::application) trait TaskCodebasePort {
         task: &orbit_types::task::Task,
     );
 }
+
+#[cfg(test)]
+mod tests;

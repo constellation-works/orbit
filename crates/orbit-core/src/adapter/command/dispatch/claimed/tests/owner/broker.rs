@@ -21,10 +21,12 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use super::super::super::owner::{ClaimedOwnerCall, ClaimedOwnerRoute, bridge_through};
 use super::super::review::{FOLLOWER, Fixture, GET, PUT, TASK};
 use crate::OrbitRuntime;
 use crate::adapter::command::dispatch::brokered::RunDispatch;
+use crate::adapter::command::dispatch::claimed::owner::{
+    ClaimedOwnerCall, ClaimedOwnerRoute, bridge_through,
+};
 use crate::adapter::command::dispatch::execute::ToolEntryPoint;
 use crate::runtime::plugin::broker::{BrokerDispatch, BrokerRequest, EntryPoint};
 
