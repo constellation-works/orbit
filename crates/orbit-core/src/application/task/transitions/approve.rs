@@ -251,7 +251,7 @@ impl OrbitRuntime {
                 && matches!(task.status, TaskStatus::Proposed | TaskStatus::Review)
             {
                 let recovery = run_ownership_recovery_for_identity(
-                    self,
+                    self.actor().kind,
                     canonical_agent.as_deref(),
                     canonical_model.as_deref(),
                     effective_label.as_str(),

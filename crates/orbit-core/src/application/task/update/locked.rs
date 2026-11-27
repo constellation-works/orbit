@@ -196,7 +196,7 @@ impl OrbitRuntime {
             && !system_writer
         {
             let recovery = run_ownership_recovery_for_caller(
-                self,
+                self.actor().kind,
                 writer == TaskFieldWriter::Operator,
                 canonical_agent.as_deref(),
                 canonical_model.as_deref(),

@@ -17,6 +17,7 @@ use std::collections::HashSet;
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskJobPort;
+use crate::runtime::context::ActorKind;
 use crate::runtime::run_input::recorded_task_ids;
 
 use super::params::TaskUpdateParams;
@@ -69,7 +70,7 @@ pub(crate) enum RunOwnershipRecovery {
 /// agent identity or envelope can pass `--force`; MCP (`TaskWriteSurface::Mcp`),
 /// attributed agent callers, and agent envelopes cannot.
 pub(crate) fn run_ownership_recovery_for_caller(
-    runtime: &OrbitRuntime,
+    actor_kind: ActorKind,
     operator_authority: bool,
     canonical_agent: Option<&str>,
     canonical_model: Option<&str>,
@@ -80,7 +81,7 @@ pub(crate) fn run_ownership_recovery_for_caller(
     }
     let agent_declared = canonical_agent.is_some()
         || canonical_model.is_some()
-        || runtime.actor().kind == crate::runtime::context::ActorKind::Agent
+        || actor_kind == ActorKind::Agent
         || orbit_common::governance::authorization::agent_context_declared(
             &orbit_common::Env::capture(),
         );
@@ -97,17 +98,17 @@ pub(crate) fn run_ownership_recovery_for_caller(
 /// Choose run-ownership refusal recovery for a caller whose identity was
 /// resolved by a guarded lifecycle write.
 pub(crate) fn run_ownership_recovery_for_identity(
-    runtime: &OrbitRuntime,
+    actor_kind: ActorKind,
     canonical_agent: Option<&str>,
     canonical_model: Option<&str>,
     effective_label: &str,
 ) -> RunOwnershipRecovery {
     let operator_authority = canonical_agent.is_none()
         && canonical_model.is_none()
-        && runtime.actor().kind == crate::runtime::context::ActorKind::Human
+        && actor_kind == ActorKind::Human
         && !super::helpers::is_automation_actor(effective_label);
     run_ownership_recovery_for_caller(
-        runtime,
+        actor_kind,
         operator_authority,
         canonical_agent,
         canonical_model,

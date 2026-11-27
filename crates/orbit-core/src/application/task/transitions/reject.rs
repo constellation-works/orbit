@@ -143,7 +143,7 @@ impl OrbitRuntime {
             self.apply_transition_read_hook(id)?;
             if allow_blocked {
                 let recovery = run_ownership_recovery_for_identity(
-                    self,
+                    self.actor().kind,
                     canonical_agent.as_deref(),
                     canonical_model.as_deref(),
                     effective_label.as_str(),
@@ -208,8 +208,12 @@ impl OrbitRuntime {
                 )
                 .map(|_| ());
         }
-        let recovery =
-            run_ownership_recovery_for_identity(self, None, None, self.actor().label.as_str());
+        let recovery = run_ownership_recovery_for_identity(
+            self.actor().kind,
+            None,
+            None,
+            self.actor().label.as_str(),
+        );
         ensure_status_change_not_run_owned(self, id, recovery)?;
         // The preflight can go stale while a local run starts owning the
         // task. Re-read ownership under the task write lock and hold it
