@@ -51,23 +51,70 @@ struct PendingUpstream {
 
 /// Releases the `serve status` probes a [`gated_tailscale_stub`] holds. Dropping
 /// it releases any probe a failed test left blocked, so no stub outlives it.
-struct Gate(std::path::PathBuf);
+struct Gate {
+    path: std::path::PathBuf,
+    writer: Option<fs::File>,
+}
 
 impl Gate {
-    /// Lets every probe waiting at the gate finish. Fails when none is waiting,
-    /// since a non-blocking open for writing needs a reader.
-    fn release(&self) -> std::io::Result<()> {
-        let mut gate = fs::OpenOptions::new()
+    fn open_writer(&self) -> std::io::Result<fs::File> {
+        fs::OpenOptions::new()
             .write(true)
             .custom_flags(libc::O_NONBLOCK)
-            .open(&self.0)?;
+            .open(&self.path)
+    }
+
+    /// Confirms that the stub has opened its blocking FIFO read before release.
+    /// Keeping this writer open completes the FIFO rendezvous without sending
+    /// data, so the stub stays blocked until [`Gate::release`].
+    fn wait_for_reader(&mut self) -> std::io::Result<()> {
+        if self.writer.is_some() {
+            return Ok(());
+        }
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match self.open_writer() {
+                Ok(writer) => {
+                    self.writer = Some(writer);
+                    return Ok(());
+                }
+                Err(error)
+                    if error.raw_os_error() == Some(libc::ENXIO) && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "the gated probe did not open its FIFO reader",
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Lets every probe waiting at the gate finish after the FIFO reader has
+    /// been confirmed by [`Gate::wait_for_reader`].
+    fn release(&mut self) -> std::io::Result<()> {
+        let Some(mut gate) = self.writer.take() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "the gated probe FIFO reader was not confirmed",
+            ));
+        };
         gate.write_all(&[b'\n'; 16])
     }
 }
 
 impl Drop for Gate {
     fn drop(&mut self) {
-        let _ = self.release();
+        if let Some(mut gate) = self.writer.take() {
+            let _ = gate.write_all(&[b'\n'; 16]);
+        } else if let Ok(mut gate) = self.open_writer() {
+            let _ = gate.write_all(&[b'\n'; 16]);
+        }
     }
 }
 
@@ -724,7 +771,8 @@ fn remote_access_caps_devices_and_refusal_keys_at_capacity() {
 }
 
 /// A `tailscale` stub that logs each call to `calls.log`. Its `serve status`
-/// blocks reading the `gate` FIFO, so the test decides when that probe ends.
+/// blocks reading the `gate` FIFO, so the test confirms the FIFO reader is
+/// ready before deciding when that probe ends.
 fn gated_tailscale_stub(fixture: &Fixture) -> (std::path::PathBuf, Gate) {
     let bin = fixture.path("bin");
     fs::create_dir_all(&bin).unwrap();
@@ -752,7 +800,13 @@ esac
     // SAFETY: `c_gate` is a NUL-terminated path that outlives the call.
     let made = unsafe { libc::mkfifo(c_gate.as_ptr(), 0o600) };
     assert_eq!(made, 0, "mkfifo: {}", std::io::Error::last_os_error());
-    (bin, Gate(gate))
+    (
+        bin,
+        Gate {
+            path: gate,
+            writer: None,
+        },
+    )
 }
 
 fn tailscale_calls(bin: &Path) -> Vec<String> {
@@ -786,7 +840,7 @@ fn remote_access_overlapping_reads_share_one_tailscale_probe() {
         "remote_access::remote_access_overlapping_reads_share_one_tailscale_probe",
         || {
             let fixture = Fixture::new();
-            let (bin, gate) = gated_tailscale_stub(&fixture);
+            let (bin, mut gate) = gated_tailscale_stub(&fixture);
             let config = fixture.global.join("config.toml");
             let base = fs::read_to_string(&config).unwrap();
             fs::write(
@@ -824,6 +878,7 @@ fn remote_access_overlapping_reads_share_one_tailscale_probe() {
                 );
                 thread::sleep(Duration::from_millis(10));
             }
+            gate.wait_for_reader().unwrap();
 
             // Overlapping reads arrive while that probe is still held.
             let overlapping: Vec<_> = (0..2)
@@ -869,7 +924,7 @@ fn remote_access_overlapping_reads_bound_whois_waits() {
         "remote_access::remote_access_overlapping_reads_bound_whois_waits",
         || {
             let fixture = Fixture::new();
-            let (bin, gate) = gated_tailscale_stub(&fixture);
+            let (bin, mut gate) = gated_tailscale_stub(&fixture);
             let script = bin.join("tailscale");
             let source = fs::read_to_string(&script).unwrap().replace(
             "echo \"whois $3\" >> \"$dir/calls.log\"",
@@ -912,8 +967,10 @@ fn remote_access_overlapping_reads_bound_whois_waits() {
                 }
             };
             wait_for("serve");
+            gate.wait_for_reader().unwrap();
             gate.release().unwrap();
             wait_for("whois 100.64.0.9");
+            gate.wait_for_reader().unwrap();
 
             // The first snapshot contains only .9, whose probe remains held. The
             // second snapshot sees eight newer devices before the in-flight .9.
