@@ -213,9 +213,8 @@ pub(super) fn readiness_snapshot_with_detail(
     // Readiness admits nothing, so its envelope selections are observed
     // without the commit boundary: they neither queue behind a drain's
     // exclusive commit sections nor hold the shared boundary against them.
-    // Backlog row hydration takes short shared sections in batches. Ancestor
-    // and explicit-id loads (`include_tasks` below) also settle pending commits
-    // before reading.
+    // Backlog rows, ancestors and explicit-id loads (`include_tasks_observed`
+    // below) read the settled snapshot too, never settling a pending commit.
     let mut snapshot = backlog_snapshot_observed(
         runtime,
         "explain_workspace_auto_readiness",
@@ -248,7 +247,7 @@ pub(super) fn readiness_snapshot_with_detail(
             });
     // A live leaf may carry a task that has since closed, and an explicit
     // selection may name one; the snapshot holds only open work otherwise.
-    snapshot.include_tasks(runtime, claimed_by_task.keys().chain(task_ids))?;
+    snapshot.include_tasks_observed(runtime, claimed_by_task.keys().chain(task_ids))?;
     let admissions_stopped = active_drain
         .as_ref()
         .is_some_and(|drain| drain.admissions_stopped());
@@ -617,7 +616,7 @@ pub(super) fn readiness_snapshot_with_detail(
     // After the primary payload owns its forecast titles. Loading a closed
     // detail task into the lookup before this point would add its title.
     let detail = if let Some(task_id) = detail_task_ids.first() {
-        snapshot.include_tasks(runtime, detail_task_ids)?;
+        snapshot.include_tasks_observed(runtime, detail_task_ids)?;
         match project_tasks(&snapshot, detail_task_ids, false) {
             Ok(detail) => Some(ReadinessDetail::Tasks(detail.tasks)),
             Err(OrbitError::InvalidInput(_)) => Some(ReadinessDetail::Unavailable {

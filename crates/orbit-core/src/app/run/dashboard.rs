@@ -216,9 +216,9 @@ dashboard_reads! {
     /// Every task's metadata.
     task_metadata() -> Vec<Task> = "task-metadata",
         |rt| rt.list_task_metadata();
-    /// The metadata of the tasks in `ids`.
+    /// The metadata of the tasks in `ids`, from the settled snapshot.
     task_metadata_for_ids(ids: &'a BTreeSet<String>) -> Vec<Task> = "task-metadata-for-ids",
-        |rt| rt.list_task_metadata_for_ids(ids);
+        |rt| rt.observe_task_metadata_for_ids(ids);
     /// One task's history.
     task_history(id: &'a str) -> Vec<TaskHistoryEntry> = "task-history",
         |rt| rt.get_task_history(id);

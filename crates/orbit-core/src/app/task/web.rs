@@ -190,12 +190,14 @@ pub(super) fn read(runtime: &OrbitRuntime, read: Read) -> Result<Outcome, OrbitE
             }))
         }
         Read::Row { id } => {
-            let row = runtime.get_task_row(&id)?;
+            // Display reads answer from the settled snapshot, outside the
+            // task-commit boundary, so a held task writer never stalls them.
+            let row = runtime.observe_task_row(&id)?;
             // The coordination registry's global status index, not a
             // workspace-scoped list: a dependency on another registered
             // workspace's task labels with its real status. Archived
             // dependencies that reached `done` first label as `done`.
-            let dependency_statuses = runtime.dependency_status_index([&row.task]);
+            let dependency_statuses = runtime.observe_dependency_status_index([&row.task]);
             Ok(Outcome::Row(Box::new(RowRead {
                 row,
                 dependency_statuses,
@@ -250,10 +252,12 @@ fn pages(
     selection: PageSelection,
     render: &PageRender<'_>,
 ) -> Result<Vec<PageRead>, OrbitError> {
+    // Display pages answer from the settled snapshot, outside the
+    // task-commit boundary (see `observe_task_rows`).
     let pages = match selection {
-        PageSelection::One(query) => vec![runtime.query_task_rows(&query)?],
+        PageSelection::One(query) => vec![runtime.observe_task_rows(&query)?],
         PageSelection::Sections { query, sections } => {
-            runtime.query_task_row_pages(&query, &sections)?
+            runtime.observe_task_row_pages(&query, &sections)?
         }
     };
     pages
@@ -265,7 +269,7 @@ fn pages(
                 .detail
                 .and_then(|id| page.items.iter().find(|row| row.task.id == id));
             let detail_statuses =
-                detail_row.map(|row| runtime.dependency_status_index([&row.task]));
+                detail_row.map(|row| runtime.observe_dependency_status_index([&row.task]));
             let projection = TaskListProjection::new(runtime)
                 .with_delivery_attention(delivery_attention)
                 .with_run_branches(run_branches)

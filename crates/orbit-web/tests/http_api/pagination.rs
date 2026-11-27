@@ -326,7 +326,7 @@ fn section<'a>(grouped: &'a Value, status: &str) -> &'a Value {
 /// A settled grouped request validates the workspace task index once for all
 /// its sections, and each section answers exactly what the ungrouped listing
 /// of that status answers. A later request still sees status moves and an
-/// out-of-band envelope edit, which the stale index's fallback serves.
+/// out-of-band envelope edit, which the stale row's own envelope serves.
 #[test]
 fn grouped_task_sections_share_one_index_freshness_validation() {
     isolated(
@@ -445,9 +445,11 @@ fn grouped_task_sections_share_one_index_freshness_validation() {
                 json!(mover.id)
             );
 
-            // An out-of-band envelope edit leaves the index stale. The next
-            // grouped request takes the unbatched fallback and answers from
-            // the envelope: the retagged task no longer matches the tag filter.
+            // An out-of-band envelope edit leaves the index stale. The board
+            // is a display read: it reads the stale task from its envelope
+            // inside the same single freshness validation, so the retagged
+            // task no longer matches the tag filter, and it leaves the index
+            // for a coordinated read to repair.
             let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
                 &fixture_store::maintenance::task_registry::task_registry_path(&fixture.global),
             )
@@ -459,19 +461,21 @@ fn grouped_task_sections_share_one_index_freshness_validation() {
             envelope.tags = vec!["release".into()];
             fs::write(&envelope_path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
             let (edited, scans) = freshness_scans(&server, read);
-            assert!(
-                scans > 1,
-                "a stale index is not trusted for the batch: {scans}"
+            assert_eq!(
+                scans, 1,
+                "a stale row costs its own envelope, not another validation"
             );
             assert_eq!(section(&edited, "backlog")["total"], 5, "{edited}");
             assert!(
                 !ids(section(&edited, "backlog")).contains(&mover.id),
                 "{edited}"
             );
-            let (_, scans) = freshness_scans(&server, read);
+            let (again, scans) = freshness_scans(&server, read);
+            assert_eq!(scans, 1, "{again}");
             assert_eq!(
-                scans, 1,
-                "the fallback repaired the index for later requests"
+                section(&again, "backlog")["total"],
+                5,
+                "an unrepaired index still answers from the envelope: {again}"
             );
         },
     );

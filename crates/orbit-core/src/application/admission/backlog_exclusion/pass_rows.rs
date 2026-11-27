@@ -15,9 +15,6 @@ use orbit_types::task::{Task, TaskStatus};
 use super::super::pass_error::PassError;
 use crate::OrbitRuntime;
 
-/// Let waiting writers enter between batches, even when the backlog is large.
-const OBSERVED_ROW_BATCH_SIZE: usize = 16;
-
 /// Load one lightweight row for every backlog task in `task_lookup`, record
 /// pilot handoffs when `admission` is set and `prepared` is absent, reconcile
 /// recovery context, and cache this pass's provider holds. `task_lookup` is
@@ -46,20 +43,11 @@ pub(super) fn prepare_pass_rows(
                 rows.insert(id.clone(), row);
             }
         }
-    } else if runtime.stored().task().reads_visible() {
-        for ids in order.chunks(OBSERVED_ROW_BATCH_SIZE) {
-            // The listed reads re-enter this shared section without taking
-            // the host and partition locks again for each task.
-            let section = runtime.in_task_read_section(|| {
-                observe_backlog_rows(runtime, ids, &mut rows);
-                Ok(())
-            });
-            if section.is_err() {
-                // Keep the individual best-effort path if entry fails. One
-                // failed section must not discard other readable task rows.
-                observe_backlog_rows(runtime, ids, &mut rows);
-            }
-        }
+    } else {
+        // Observation reads each listed row from the settled snapshot, with
+        // no commit-boundary section or recovery, so a held task writer
+        // never stalls a readiness read.
+        observe_backlog_rows(runtime, &order, &mut rows);
     }
     if admission && !recorded_early {
         let written = runtime
@@ -94,7 +82,7 @@ fn observe_backlog_rows(
     rows: &mut BTreeMap<String, Option<TaskRow>>,
 ) {
     for id in ids {
-        match runtime.get_listed_task_row(id) {
+        match runtime.observe_listed_task_row(id) {
             Ok(row) => {
                 rows.insert(id.clone(), row);
             }

@@ -7,6 +7,7 @@
 //! The `index` module owns generated index reads, rebuilds, bundle translation, and task locking helpers.
 //! The `repair_gate` module bounds repeated automatic index rebuilds that keep failing over unchanged bundles.
 //! The `envelope_cache` module owns freshness-stamped reuse of parsed envelopes.
+//! The `observation` module owns informational display reads that never enter the commit boundary.
 //! The `query` module owns in-memory, sidecar, and artifact query matching.
 //! The `relations` module owns relation construction and replacement helpers.
 //! The `sequencing` module owns monotonic event and comment sequence calculations.
@@ -23,6 +24,7 @@ pub(crate) mod desktop;
 mod envelope_cache;
 mod index;
 mod listing;
+mod observation;
 mod query;
 mod relations;
 mod repair_gate;

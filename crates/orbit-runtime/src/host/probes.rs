@@ -325,12 +325,15 @@ impl RuntimeKernel {
     /// the stored delivery minutes and kept, across calls and clones, until a
     /// sampled run finishes, the `[machine.auto_concurrency]` bounds or the
     /// crew-model map change, or a template's `no-diff-expected` tag is edited.
+    /// The tag lookup reads the generated task index outside the task-commit
+    /// boundary, so a profile read never waits on a held task writer while
+    /// the cache's slot is held.
     pub fn resource_profiles(&self) -> Result<Arc<ProfileSet>, OrbitError> {
         let store = self.sqlite_store()?;
         let tasks = self.stores().tasks();
         self.host().resource_profiles.profiles(
             &store,
-            &|task_ids| tasks.task_ids_with_tag(NO_DIFF_EXPECTED_TAG, task_ids),
+            &|task_ids| tasks.observe_task_ids_with_tag(NO_DIFF_EXPECTED_TAG, task_ids),
             self.crew_models(),
             ProfileBounds::from(&self.auto_concurrency_settings()),
             Utc::now(),
@@ -358,7 +361,7 @@ impl RuntimeKernel {
         bounds.window = window.max(1);
         Ok(Arc::new(build_uncached(
             &store,
-            &|task_ids| tasks.task_ids_with_tag(NO_DIFF_EXPECTED_TAG, task_ids),
+            &|task_ids| tasks.observe_task_ids_with_tag(NO_DIFF_EXPECTED_TAG, task_ids),
             self.crew_models(),
             bounds,
             Utc::now(),

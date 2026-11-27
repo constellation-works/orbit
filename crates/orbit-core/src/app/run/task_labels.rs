@@ -7,8 +7,10 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Titles of the tasks the selected runs reference: a keyed read per
-/// referenced id, never a workspace listing. Run input is free-form, so ids
-/// that are not task ids are never read and stay unlabelled.
+/// referenced id from the settled snapshot, never a workspace listing and
+/// never the commit boundary, so a held task writer does not stall Jobs
+/// history. Run input is free-form, so ids that are not task ids are never
+/// read and stay unlabelled.
 pub(super) fn task_titles<'a>(
     runtime: &OrbitRuntime,
     runs: impl IntoIterator<Item = &'a JobRun>,
@@ -22,7 +24,7 @@ pub(super) fn task_titles<'a>(
         return Ok(BTreeMap::new());
     }
     Ok(runtime
-        .list_task_metadata_for_ids(&ids)?
+        .observe_task_metadata_for_ids(&ids)?
         .into_iter()
         .map(|task| (task.id, task.title))
         .collect())

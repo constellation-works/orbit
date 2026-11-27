@@ -368,7 +368,7 @@ fn a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit() {
 
 /// Observe diagnostics synchronously on the calling thread, including a
 /// refused acquisition before the reader can return from `get_task`.
-fn lock_events_observed<T>(
+pub(super) fn lock_events_observed<T>(
     op: impl FnOnce() -> T,
     observe: impl Fn(&BTreeMap<String, String>) + Send + Sync + 'static,
 ) -> (T, Vec<BTreeMap<String, String>>) {

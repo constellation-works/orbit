@@ -203,6 +203,17 @@ impl OrbitRuntime {
         self.stored().task().metadata_for_ids(ids)
     }
 
+    /// [`Self::list_task_metadata_for_ids`] from the settled snapshot, for
+    /// display labels: no commit-boundary section or recovery, so a held
+    /// task writer never stalls the read. An id whose bundle is in flight is
+    /// absent. Never an admission or mutation precondition.
+    pub fn observe_task_metadata_for_ids(
+        &self,
+        ids: &BTreeSet<String>,
+    ) -> Result<Vec<Task>, OrbitError> {
+        self.stored().task().observe_metadata_for_ids(ids)
+    }
+
     /// Creation time and status for settled tasks whose current status
     /// is in `statuses` or whose `updated_at` is at or after `updated_since`,
     /// projected from the validated index without parsing every envelope on
@@ -311,6 +322,17 @@ impl OrbitRuntime {
         tasks: impl IntoIterator<Item = &'a Task>,
     ) -> Result<BTreeMap<String, orbit_types::task::TaskStatus>, OrbitError> {
         let mut status_by_id = self.task_status_index()?;
+        self.satisfy_completed_archived_dependencies(&mut status_by_id, tasks);
+        Ok(status_by_id)
+    }
+
+    /// [`Self::dependency_status_index`] for display: the registry's global
+    /// projection read outside the commit boundary.
+    pub fn observe_dependency_status_index<'a>(
+        &self,
+        tasks: impl IntoIterator<Item = &'a Task>,
+    ) -> Result<BTreeMap<String, orbit_types::task::TaskStatus>, OrbitError> {
+        let mut status_by_id = self.stored().task().observe_status_index()?;
         self.satisfy_completed_archived_dependencies(&mut status_by_id, tasks);
         Ok(status_by_id)
     }
