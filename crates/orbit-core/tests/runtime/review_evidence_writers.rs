@@ -3,7 +3,7 @@
 //! never reaches the reviewer as satisfied, never settles a review, and never
 //! releases an evidence hold; an operator's result and log still do.
 
-use orbit_core::TaskStatus;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     EvidenceHostOs, JobRunState, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
     ReviewCertificate, ReviewEvidenceHold, ReviewEvidenceKind, ValidationOutcome,
@@ -195,10 +195,13 @@ fn mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity() {
     use std::collections::BTreeSet;
 
     let fixture = Fixture::new();
-    let runtime = fixture
-        .runtime
-        .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+    let runtime =
+        fixture
+            .runtime
+            .clone()
+            .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+                "human:operator",
+            ));
     let source = fixture.repo.join(".orbit/tmp/operator-looking.json");
     std::fs::create_dir_all(source.parent().unwrap()).unwrap();
     std::fs::write(&source, b"{\"output\":\"agent supplied\"}").unwrap();
@@ -257,8 +260,8 @@ fn mcp_agent_artifact_put_never_inherits_the_hosts_human_operator_identity() {
         }
     }
     for actor in [
-        orbit_core::ActorIdentity::unknown(),
-        orbit_core::ActorIdentity::agent("human:operator"),
+        orbit_core::runtime::context::ActorIdentity::unknown(),
+        orbit_core::runtime::context::ActorIdentity::agent("human:operator"),
     ] {
         runtime.clone().with_actor(actor).execute_tool_command_with_session_context(
             "orbit.task.artifact",

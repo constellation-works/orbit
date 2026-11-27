@@ -6,10 +6,12 @@
 //! provider-limit view.
 
 use chrono::{DateTime, Duration, Utc};
+use orbit_core::app::run::ShipMode;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus};
 use orbit_store::contract::InvocationInsertParams;
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{
     InvocationTrace, ProviderLimitObservation, ProviderLimitSource, TokenUsage,
 };
@@ -125,7 +127,7 @@ impl Fixture {
                 plan: "1. Deliver it.".into(),
                 complexity: TaskComplexity::Hard,
                 context_files: vec!["dir:.".into()],
-                task_type: Some(orbit_core::TaskType::Chore),
+                task_type: Some(orbit_types::task::TaskType::Chore),
                 status: Some(TaskStatus::Backlog),
                 ..Default::default()
             })

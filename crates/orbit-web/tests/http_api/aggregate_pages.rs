@@ -1,7 +1,10 @@
 use super::support::{isolated, json_ok, spawn_server};
 use chrono::Utc;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{ActorIdentity, JobRun, JobRunState, OrbitRuntime, TaskStatus};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
+use orbit_types::task::TaskStatus;
+use orbit_types::workflow::{JobRun, JobRunState};
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
 };
@@ -107,7 +110,7 @@ fn fleet_drains_exposes_idle_ready_work_beside_a_live_workspace() {
                     acceptance_criteria: vec!["The work is visible".into()],
                     plan: "Fixture plan".into(),
                     context_files: vec!["file:ready.rs".into()],
-                    complexity: orbit_core::TaskComplexity::Medium,
+                    complexity: orbit_types::task::TaskComplexity::Medium,
                     status: Some(TaskStatus::Backlog),
                     ..Default::default()
                 })
@@ -355,7 +358,7 @@ fn fleet_drains_rows_match_workspace_readiness_across_workspaces() {
                     acceptance_criteria: vec!["The work is visible".into()],
                     plan: "Fixture plan".into(),
                     context_files: vec![format!("file:{file}")],
-                    complexity: orbit_core::TaskComplexity::Medium,
+                    complexity: orbit_types::task::TaskComplexity::Medium,
                     status: Some(TaskStatus::Backlog),
                     dependencies,
                     ..Default::default()
@@ -647,7 +650,7 @@ fn check_aggregate_job_runs_pages(measure_latency: bool) {
         &alpha,
         "jrun-incomplete",
         "bulk",
-        orbit_core::JobRunState::Failed,
+        orbit_types::workflow::JobRunState::Failed,
     );
     incomplete.finished_at = None;
     incomplete.duration_ms = None;
@@ -674,7 +677,7 @@ fn check_aggregate_job_runs_pages(measure_latency: bool) {
         .expect("incomplete run");
     assert_eq!(
         (stored.state, stored.finished_at),
-        (orbit_core::JobRunState::Failed, None),
+        (orbit_types::workflow::JobRunState::Failed, None),
         "a dashboard GET must not reconcile runs"
     );
 }

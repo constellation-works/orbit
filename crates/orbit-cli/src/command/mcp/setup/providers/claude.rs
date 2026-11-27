@@ -2,8 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use orbit_common::Env;
+use orbit_common::OrbitError;
 use orbit_common::fs::directory_lock::with_directory_lock;
-use orbit_core::OrbitError;
 use orbit_types::tool::mcp_advertised_tool_name;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 

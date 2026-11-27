@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
 use clap::Args;
+use orbit_core::Core;
 use orbit_core::app::audit::{Command, Outcome, exec};
-use orbit_core::{AuditEvent, Core};
+use orbit_types::telemetry::AuditEvent;
 use orbit_types::tool::{
     ApplicationAdmissionMatch, ApplicationArtifactEvidence, ApplicationAuditRefusal,
     ApplicationInvocation, ApplicationPredicateEvidence, ApplicationTextDigest,

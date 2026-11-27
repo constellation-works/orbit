@@ -176,11 +176,9 @@ pub fn global_root_for(root_override: Option<&Path>) -> Result<PathBuf, OrbitErr
         Some(root) => std::env::current_dir()
             .map(|cwd| cwd.join(root))
             .map_err(|error| OrbitError::Io(error.to_string())),
-        None => {
-            orbit_core::runtime::resolve_global_root(&orbit_core::composition::composition_env())
-        }
+        None => orbit_runtime::resolve_global_root(&orbit_core::app::host::composition_env()),
     }?;
-    Ok(orbit_core::runtime::resolve_existing_root_traversal(root))
+    Ok(orbit_runtime::resolve_existing_root_traversal(root))
 }
 
 pub(super) fn cli_workspace_selector(input: &Value) -> Result<Option<String>, OrbitError> {
@@ -389,7 +387,7 @@ pub(super) fn recorded_git_common_dir(checkout: &WorkspaceCheckout) -> Option<Pa
 /// Git that timed out is logged and, like any `None`, matches no checkout.
 pub(super) fn canonical_git_common_dir(path: &Path) -> Option<PathBuf> {
     let common =
-        orbit_common::fs::git::git_common_dir(&orbit_core::composition::composition_env(), path)
+        orbit_common::fs::git::git_common_dir(&orbit_core::app::host::composition_env(), path)
             .inspect_err(|error| {
                 if matches!(error, OrbitError::ProcessTimeout { .. }) {
                     tracing::warn!("cannot resolve the Git common dir: {error}");
@@ -578,7 +576,7 @@ pub(super) fn replica_owner_for_checkout(checkout: &WorkspaceCheckout) -> Option
 }
 
 pub(super) fn replica_owner_for_binding(
-    binding: &orbit_core::runtime::WorkspaceRuntimeBinding,
+    binding: &orbit_runtime::WorkspaceRuntimeBinding,
 ) -> Option<String> {
     (binding.checkout_role == Some(WorkspaceCheckoutRole::Replica))
         .then(|| binding.owner_machine_id.clone())

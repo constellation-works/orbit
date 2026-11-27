@@ -55,7 +55,7 @@ fn acquisitions<T>(op: impl FnOnce() -> T) -> (T, u64) {
 }
 
 pub(crate) fn assert_one_config_show_takes_the_task_commit_lock_once(
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
 ) {
     let (view, taken) = acquisitions(|| {
         orbit_core::application::review::review_switches_view(

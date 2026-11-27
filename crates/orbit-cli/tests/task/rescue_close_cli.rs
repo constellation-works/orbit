@@ -6,7 +6,9 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{ActorIdentity, OrbitRuntime, TaskComplexity, TaskStatus};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::isolated_cli_fixture;

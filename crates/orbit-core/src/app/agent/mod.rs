@@ -25,8 +25,15 @@ use super::exec::{self, App, Operation};
 use super::tool_call;
 pub use super::tool_call::Input;
 use crate::Core;
-use crate::application::agents::{AgentFacts, CiFailureQuery, RankQuery, RankSeasons};
+use crate::application::agents::RankSeasons;
 use crate::application::vision_probe::VisionProbeReport;
+
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::application::agents::{
+    AgentFacts, AgentQuery, AgentRole, CiFailureQuery, ClaimedEffortBackfill,
+    DispatchEffortBackfill, RankQuery, agent_attribution, agent_by_type_scorecard,
+    agent_detail_with_effort, agent_rank, agent_scorecard, agent_size_curves,
+};
 
 /// What the agent app can be asked to do.
 pub enum Command {

@@ -386,7 +386,7 @@ fn released_workers_exiting_around_the_kill_deadline_are_not_forced_kills() {
             "schemaVersion: 2\nkind: Job\nmetadata:\n  name: delayed_reap\nspec:\n  state: enabled\n  steps:\n    - id: nap\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n",
         )
         .unwrap();
-        let runtime = orbit_core::OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
+        let runtime = orbit_core::runtime::OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
             .unwrap()
             .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
         let marker = root.path().join("worker-release");
@@ -467,7 +467,7 @@ fn released_workers_exiting_around_the_kill_deadline_are_not_forced_kills() {
 #[cfg(unix)]
 #[test]
 fn a_held_pre_handshake_worker_keeps_its_workspace_through_an_assertion_unwind() {
-    use orbit_core::OrbitRuntime;
+    use orbit_core::runtime::OrbitRuntime;
     use orbit_core::test_support::{pipeline_worker_observer_completed, pipeline_workers_spawned};
     use std::sync::Arc;
 
@@ -568,7 +568,7 @@ fn a_held_pre_handshake_worker_keeps_its_workspace_through_an_assertion_unwind()
 #[cfg(unix)]
 #[test]
 fn an_unwritable_release_marker_still_settles_and_keeps_the_workspace() {
-    use orbit_core::OrbitRuntime;
+    use orbit_core::runtime::OrbitRuntime;
     use orbit_core::test_support::{pipeline_worker_observer_completed, pipeline_workers_spawned};
     use std::sync::Arc;
 
@@ -670,7 +670,7 @@ fn an_unwritable_release_marker_still_settles_and_keeps_the_workspace() {
 struct CallerWorkspace {
     root: std::sync::Arc<tempfile::TempDir>,
     repo: std::path::PathBuf,
-    runtime: orbit_core::OrbitRuntime,
+    runtime: orbit_core::runtime::OrbitRuntime,
 }
 
 #[cfg(unix)]
@@ -691,7 +691,7 @@ impl CallerWorkspace {
             ),
         )
         .unwrap();
-        let runtime = orbit_core::OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
+        let runtime = orbit_core::runtime::OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
             .unwrap()
             .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
         Self {

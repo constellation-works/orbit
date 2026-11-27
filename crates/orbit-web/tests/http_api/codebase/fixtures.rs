@@ -5,17 +5,19 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{
-    AuditEventInsertParams, AuditEventStatus, JobRun, JobRunState, OrbitError, TaskStatus,
-};
-use orbit_engine::Dispatch;
+use orbit_core::test_support::fixture_engine::Dispatch;
+use orbit_core::test_support::fixture_store::AuditEventInsertParams;
+use orbit_types::task::TaskStatus;
 use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, DefectSeverity,
     RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2,
     TaskDecision, TaskEventRowV2, TaskRelation, TaskRelationType,
 };
+use orbit_types::telemetry::AuditEventStatus;
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use super::super::support::{Fixture, Server, json_ok};
@@ -181,7 +183,7 @@ pub(super) fn related(server: &Server, query: &str) -> Value {
     json_ok(codebase_get(server, "related", query))
 }
 
-pub(super) fn denied_events(fixture: &Fixture) -> Vec<orbit_core::AuditEvent> {
+pub(super) fn denied_events(fixture: &Fixture) -> Vec<orbit_types::telemetry::AuditEvent> {
     fixture
         .runtime
         .list_audit_events(
@@ -727,17 +729,19 @@ pub(in super::super) fn seed_pilot_run(
     pilot_run(fixture, run_id, crew, model, started, finished);
     fixture
         .runtime
-        .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
-            agent_execution_id: None,
-            job_run_id: run_id.into(),
-            account: None,
-            activity_id: "pilot".into(),
-            agent: "fixture".into(),
-            provider: None,
-            model: Some(model.into()),
-            task_ids: Vec::new(),
-            trace: Default::default(),
-        })
+        .insert_invocation_trace_record(
+            &orbit_core::test_support::fixture_store::InvocationInsertParams {
+                agent_execution_id: None,
+                job_run_id: run_id.into(),
+                account: None,
+                activity_id: "pilot".into(),
+                agent: "fixture".into(),
+                provider: None,
+                model: Some(model.into()),
+                task_ids: Vec::new(),
+                trace: Default::default(),
+            },
+        )
         .unwrap();
 }
 

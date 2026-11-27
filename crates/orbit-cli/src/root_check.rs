@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 /// Refuse a root that is not, and cannot become, a directory.
 ///

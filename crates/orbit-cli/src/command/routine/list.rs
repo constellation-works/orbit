@@ -4,7 +4,7 @@ use chrono::{DateTime, Local, SecondsFormat};
 use clap::Args;
 use comfy_table::Cell;
 use orbit_cmd::registry_routines::{routine_statuses, routine_statuses_for_workspace};
-use orbit_core::application::routines::{FireField, RetiredRoutine, RoutineField, RoutineStatus};
+use orbit_core::app::routine::{FireField, RetiredRoutine, RoutineField, RoutineStatus};
 use serde_json::json;
 
 use crate::command::{CommandOut, Payload};

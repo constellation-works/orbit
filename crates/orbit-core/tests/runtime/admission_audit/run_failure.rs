@@ -13,7 +13,7 @@ use orbit_types::workflow::{JobRun, JobRunState, JobTargetType};
 use tempfile::tempdir_in;
 
 use crate::task_params_test_support::task_create_params;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 
 const PIPELINE_JOB: &str = "task_pr_pipeline";
 const FAILING_STEP_MESSAGE: &str = "step `implement_one` completed with success=false";

@@ -2,7 +2,8 @@
 
 use chrono::{Duration, SecondsFormat, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{InvocationInsertParams, TaskStatus};
+use orbit_core::test_support::fixture_store::InvocationInsertParams;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::ActivityCrewDraw;
 use serde_json::{Value, json};
 

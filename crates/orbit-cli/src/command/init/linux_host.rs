@@ -13,10 +13,10 @@ use std::process::{Command, Stdio};
 
 use orbit_common::{Env, env_vars};
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 use crate::output::common::sink::stderr_is_terminal;
-use orbit_core::bootstrap::linux_sandbox_host::{
+use orbit_core::app::host::{
     BUNDLED_BWRAP_PATH, BUNDLED_BWRAP_VERSION, BwrapProbeOutcome, BwrapSource, probe_bwrap_fresh,
     probe_bwrap_fresh_for_user,
 };

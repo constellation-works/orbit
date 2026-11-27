@@ -1,8 +1,9 @@
+use orbit_common::OrbitError;
 pub(crate) use orbit_core::app::run::RunRead;
-pub(crate) use orbit_core::application::job::{
+pub(crate) use orbit_core::app::run::{
     RunDisplayStep as RunStepRecord, RunStepSource as StepSource,
 };
-use orbit_core::{JobRun, OrbitError};
+use orbit_types::workflow::JobRun;
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 

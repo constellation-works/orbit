@@ -317,7 +317,8 @@ fn application_callbacks_refuse_changed_artifact_and_second_pin_and_read_schema_
         );
         return;
     }
-    use orbit_core::{OrbitError, OrbitRuntime};
+    use orbit_common::OrbitError;
+    use orbit_core::runtime::OrbitRuntime;
     use orbit_tools::plugin::PluginCallbackSession;
     use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, ReservationOwnerContext};
     use orbit_types::tool::{

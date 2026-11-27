@@ -8,11 +8,10 @@
 use std::io::Read;
 
 use clap::{Args, Subcommand};
-use orbit_core::adapter::command::{
-    MAX_PLUGIN_SECRET_BYTES, PluginSecretStatus, PluginSecretValue,
-};
+use orbit_common::OrbitError;
+use orbit_core::Core;
 use orbit_core::app::plugin::{Command, Outcome, exec};
-use orbit_core::{Core, OrbitError};
+use orbit_core::app::plugin::{MAX_PLUGIN_SECRET_BYTES, PluginSecretStatus, PluginSecretValue};
 use serde_json::json;
 
 use crate::command::{CommandOut, ExecuteCore, Payload};

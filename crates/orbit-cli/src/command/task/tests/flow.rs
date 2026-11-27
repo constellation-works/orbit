@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
-use orbit_core::TaskStatus;
+use orbit_types::task::TaskStatus;
 
 use crate::command::task::flow::{FlowPoint, StatusChange, compute_flow};
 

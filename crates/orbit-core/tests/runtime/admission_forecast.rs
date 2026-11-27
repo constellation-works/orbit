@@ -11,7 +11,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{DateTime, Duration, DurationRound, Utc};
 use orbit_config::AUTO_CONCURRENCY_HORIZON_CAP_MINUTES;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::host_resource::forecast::{
     AdmissionReservationRequest, ForecastDecision, HostLoadForecast,
 };

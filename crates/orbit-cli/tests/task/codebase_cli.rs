@@ -6,13 +6,15 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{ActorIdentity, JobRun, JobRunState, OrbitRuntime};
-use orbit_engine::RunLifecycle;
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
 use orbit_types::task::{
     DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2,
     TaskEventRowV2, TaskRelation, TaskRelationType, TaskStatus,
 };
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::json;
 
 use crate::isolated_cli_fixture::Fixture;
@@ -898,17 +900,19 @@ fn pilot_cli_ranks_task_pilot_crews_against_the_landed_diff() {
         );
         runtime.write_run_state(&run.run_id, &state).unwrap();
         runtime
-            .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
-                agent_execution_id: None,
-                job_run_id: run.run_id.clone(),
-                account: None,
-                activity_id: "pilot".into(),
-                agent: "fixture".into(),
-                provider: None,
-                model: Some("luna-model".into()),
-                task_ids: Vec::new(),
-                trace: Default::default(),
-            })
+            .insert_invocation_trace_record(
+                &orbit_core::test_support::fixture_store::InvocationInsertParams {
+                    agent_execution_id: None,
+                    job_run_id: run.run_id.clone(),
+                    account: None,
+                    activity_id: "pilot".into(),
+                    agent: "fixture".into(),
+                    provider: None,
+                    model: Some("luna-model".into()),
+                    task_ids: Vec::new(),
+                    trace: Default::default(),
+                },
+            )
             .unwrap();
         runtime
             .add_task(TaskAddParams {

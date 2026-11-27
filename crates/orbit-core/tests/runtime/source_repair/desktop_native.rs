@@ -168,13 +168,15 @@ fn desktop_reviews_current_native_publication_after_discard() {
     }
     published_owner::save_run(&f, &f.source);
     // The same stored run is not authority for a task bound to another host.
-    let other_host =
-        orbit_core::OrbitRuntime::from_roots(&f.runtime.global_root(), &f.repo.join(".orbit"))
-            .unwrap()
-            .with_automation_execution_location(Some(orbit_types::task::ExecutionLocation {
-                machine_id: "hm_other".into(),
-                machine_name: None,
-            }));
+    let other_host = orbit_core::runtime::OrbitRuntime::from_roots(
+        &f.runtime.global_root(),
+        &f.repo.join(".orbit"),
+    )
+    .unwrap()
+    .with_automation_execution_location(Some(orbit_types::task::ExecutionLocation {
+        machine_id: "hm_other".into(),
+        machine_name: None,
+    }));
     let foreign = other_host
         .desktop_task_snapshot(&f.task, &operator())
         .unwrap();
@@ -335,13 +337,15 @@ fn same_pr_task_link_uses_authenticated_target() {
         std::fs::read_to_string(&config).unwrap()
     );
     std::fs::write(&config, configured).unwrap();
-    f.runtime =
-        orbit_core::OrbitRuntime::from_roots(&f.runtime.global_root(), &f.repo.join(".orbit"))
-            .unwrap()
-            .with_automation_execution_location(Some(orbit_types::task::ExecutionLocation {
-                machine_id: "hm_fixture".into(),
-                machine_name: None,
-            }));
+    f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
+        &f.runtime.global_root(),
+        &f.repo.join(".orbit"),
+    )
+    .unwrap()
+    .with_automation_execution_location(Some(orbit_types::task::ExecutionLocation {
+        machine_id: "hm_fixture".into(),
+        machine_name: None,
+    }));
     f.runtime
         .apply_task_automation_update(
             &f.task,

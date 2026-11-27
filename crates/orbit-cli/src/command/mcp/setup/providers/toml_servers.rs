@@ -1,9 +1,9 @@
 //! Providers whose MCP servers live under `[mcp_servers.<id>]` in a TOML
 //! config: Codex and Grok share the exact shape.
 
+use orbit_common::OrbitError;
 use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
 use orbit_common::{Env, env_vars};
-use orbit_core::OrbitError;
 use toml_edit::{Array, Item, Table, value};
 
 use super::super::dispatch::ConfigTarget;

@@ -148,7 +148,7 @@ fn experiment_authoring_routes_are_operator_only_and_record_core_events() {
                             "UPDATE experiments SET max_days = ?1 WHERE id = ?2 AND workspace_id = ?3",
                             (days, &id, "ws_http_fixture"),
                         )
-                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                        .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                     Ok(())
                 }).unwrap();
             };
@@ -240,11 +240,11 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
                 ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
             };
             use orbit_core::application::task::TaskAddParams;
-            use orbit_core::{TaskComplexity, TaskStatus, TaskType};
-            use orbit_store::contract::{
+            use orbit_core::test_support::fixture_store::contract::{
                 DiffClassCounts, ExperimentAssignment, LandedDiffSource, LandedDiffStats,
                 ReviewableLines,
             };
+            use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
             use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 
             let fixture = Fixture::new();
@@ -334,7 +334,7 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
                     .unwrap();
                 runtime
                     .insert_invocation_trace_record(
-                        &orbit_store::contract::InvocationInsertParams {
+                        &orbit_core::test_support::fixture_store::contract::InvocationInsertParams {
                             agent_execution_id: None,
                             job_run_id: format!("fixture-{}", task.id),
                             account: None,

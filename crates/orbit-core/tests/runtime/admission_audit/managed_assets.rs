@@ -126,9 +126,9 @@ use sha2::{Digest, Sha256};
 use tempfile::tempdir_in;
 
 use orbit_config::ConfigSeed;
-use orbit_core::OrbitRuntime;
-use orbit_core::RoutineSeedIdentity;
+use orbit_core::app::routine::RoutineSeedIdentity;
 use orbit_core::bootstrap::init::{InitOptions, InitResult, init_workspace_at_root};
+use orbit_core::runtime::OrbitRuntime;
 
 const MANAGED_ASSET_MANIFEST_FILE: &str = ".orbit-managed-assets.json";
 
@@ -345,7 +345,7 @@ fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
         add_managed_manifest_entry(&catalog, name, &old);
     }
     use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactProvenance};
-    use orbit_core::{
+    use orbit_core::application::workspace_sync::{
         ManagedArtifactOutcome, ManagedArtifactScope, reconcile_workspace_managed_artifacts,
     };
     let activity_catalog = workspace.join("resources/activities");

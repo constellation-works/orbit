@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use tempfile::tempdir_in;
 
-use orbit_core::OrbitRuntime;
 use orbit_core::application::health::artifact::{ArtifactCondition, ArtifactHealth, ArtifactKind};
+use orbit_core::runtime::OrbitRuntime;
 
 use orbit_common::security::release::sha256_hex;
 

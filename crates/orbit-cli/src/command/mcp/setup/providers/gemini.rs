@@ -1,5 +1,5 @@
 use orbit_common::Env;
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 use super::super::dispatch::ConfigTarget;
 use super::common::ServerLaunch;

@@ -5,7 +5,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
 
 use super::protocol::version_mismatch_message;

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_core::composition::Opening;
+use orbit_core::app::workspace::Opening;
 use orbit_mcp::McpHost;
 use orbit_mcp::federated::{self, FederatedMcpHost, SshDestinationProbe};
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator};
@@ -52,10 +52,8 @@ impl OwnerCoordinator for WorkerOwner {
         // the run's coordinator carries to it before they reach here; any
         // other owner read from this process has no route at all.
         #[cfg(unix)]
-        if orbit_core::runtime::plugin::sandbox_mask::plugin_trees_masked(
-            &self.runtime.global_root(),
-        ) {
-            return Err(orbit_core::adapter::command::owner_route_unavailable(
+        if orbit_runtime::plugin::sandbox_mask::plugin_trees_masked(&self.runtime.global_root()) {
+            return Err(orbit_core::app::tool::owner_route_unavailable(
                 name,
                 "this sandboxed process has no owner route of its own; only the claimed-owner \
                  tools cross the coordinator",

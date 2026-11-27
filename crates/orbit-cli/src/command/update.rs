@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use clap::Args;
 use orbit_common::Env;
+use orbit_common::OrbitError;
 use orbit_common::fs::generation;
-use orbit_core::OrbitError;
 use orbit_core::app::update::{
     CandidateManifestRequest, LocalCandidateRequest, UpdateOutcome, UpdateReport, UpdateRequest,
     run_local_candidate_update, run_update, write_candidate_manifest,
@@ -107,7 +107,7 @@ impl UpdateCommand {
     /// Run the update and render its report.
     pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
         if self.contract {
-            let identity = orbit_core::composition::compiled_compatibility();
+            let identity = orbit_core::app::host::compiled_compatibility();
             return Ok(Payload::detail(
                 serde_json::json!({
                     "schema_version": 1,
@@ -163,7 +163,7 @@ impl UpdateCommand {
                     "admission_roots": roots,
                     "contract": generation::LEGACY_GENERATION_CONTRACT,
                     "admission_contract": generation::GENERATION_CONTRACT,
-                    "compatibility": orbit_core::composition::compiled_compatibility(),
+                    "compatibility": orbit_core::app::host::compiled_compatibility(),
                     "quiesce_timeout_secs": quiesce,
                     "candidate": self.candidate,
                     "handover": handover.iter().map(|holder| serde_json::json!({

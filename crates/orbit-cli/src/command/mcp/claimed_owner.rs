@@ -10,11 +10,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_core::adapter::command::{
+use orbit_core::app::task::{TaskListResultPolicy, TaskListResultProfile};
+use orbit_core::app::tool::{
     ClaimedOwnerCall, ClaimedOwnerRoute, GlobalToolCall, ToolEntryPoint, bridge_claimed_owner_call,
     execute_global_in_process_tool_dispatch,
 };
-use orbit_core::application::task::{TaskListResultPolicy, TaskListResultProfile};
 use orbit_mcp::McpHost;
 use orbit_types::tool::{McpToolDefinition, ToolSessionContext, tool_family_operation_call};
 use serde_json::Value;
@@ -99,7 +99,7 @@ impl McpHost for ClaimedOwnerBridge {
                     execute_global_in_process_tool_dispatch(
                         &self.env,
                         GlobalToolCall {
-                            opener: orbit_core::composition::store_opener(),
+                            opener: orbit_core::app::workspace::store_opener(),
                             global_root: &self.global_root,
                             name: &operation,
                             input,

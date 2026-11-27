@@ -31,7 +31,8 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use axum::http::{HeaderName, header};
-use orbit_core::{Core, OrbitError};
+use orbit_common::OrbitError;
+use orbit_core::Core;
 use serde_json::Value;
 
 /// Freshness bound for the dashboard memos the 30 s poll reads: audit summary,

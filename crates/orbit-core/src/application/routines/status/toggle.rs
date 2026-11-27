@@ -274,7 +274,7 @@ fn bypass_routine_breaker(
 /// Select routine `name` from `report` and reset or bypass its circuit
 /// breaker, recording the action under `actor`.
 ///
-/// Selection is the one every routine edit runs ([`select_listed_routine`]):
+/// Selection is the one every routine edit runs (`select_listed_routine`):
 /// an owner-only routine is refused with the owner named and an unlisted name
 /// is not found. `source` is the caller's workspace name, and the `.orbit`
 /// directory when it knows one; a routine of another source is refused. Every

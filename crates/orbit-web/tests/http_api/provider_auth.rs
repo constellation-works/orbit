@@ -5,10 +5,10 @@
 //! credentials for other accounts are not covered here.
 
 use chrono::{Duration, Utc};
-use orbit_core::{JobRun, JobRunState};
 use orbit_types::task::ExecutionLocation;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{ActivityCrewDraw, JobRunStep, JobTargetType, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};

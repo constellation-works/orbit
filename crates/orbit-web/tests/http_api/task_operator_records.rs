@@ -1,6 +1,6 @@
-use orbit_core::TaskStatus;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_engine::HostEnvironment;
+use orbit_core::test_support::fixture_engine::HostEnvironment;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::OwedCriterion;
 use serde_json::json;
 

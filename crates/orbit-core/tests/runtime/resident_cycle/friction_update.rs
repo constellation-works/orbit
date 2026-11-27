@@ -8,7 +8,9 @@
 use std::sync::{Arc, OnceLock};
 
 use orbit_common::OrbitError;
-use orbit_core::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
+use orbit_core::runtime::workspace::catalog::{
+    FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope,
+};
 use orbit_types::task::TaskArtifact;
 use orbit_types::workflow::activity_job::ActivityV2Spec;
 

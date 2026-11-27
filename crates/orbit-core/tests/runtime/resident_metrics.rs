@@ -12,7 +12,8 @@ use orbit_core::application::resident::{
     ResidentChannelCaller, ResidentControlAction, ResidentControlParams,
 };
 use orbit_core::application::task::{AgentDecisionRaise, TaskAddParams, TaskUpdateParams};
-use orbit_core::{ActorIdentity, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
 use orbit_engine::RunLifecycle;
 use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{

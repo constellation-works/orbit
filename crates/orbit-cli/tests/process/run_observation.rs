@@ -44,7 +44,7 @@ use crate::{fixture_crew, git_repo};
 use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::workflow::{DrainAdmissionPass, PipelineState};
 use rusqlite::{Connection, params};
 use serde_json::Value;
@@ -508,7 +508,7 @@ fn shipped_security_job_uses_the_fixed_floor_unless_run_input_overrides_it() {
             assert_eq!(waited.results.len(), 1);
             assert_eq!(
                 waited.results[0].status,
-                orbit_core::PipelineWaitStatus::Success
+                orbit_core::application::job::PipelineWaitStatus::Success
             );
         }
         let shown = fixture.json(&[
@@ -558,7 +558,7 @@ fn dispatch(
     ));
 }
 fn run_det(runtime: &OrbitRuntime, name: &str, input: Value) -> Value {
-    orbit_engine::Dispatch::run_deterministic(
+    orbit_core::test_support::fixture_engine::Dispatch::run_deterministic(
         runtime,
         name,
         &serde_json::json!({}),
@@ -571,7 +571,7 @@ fn submit_fixture_run(
     runtime: &OrbitRuntime,
     job: &str,
     input: Value,
-) -> orbit_core::PipelineInvokeResult {
+) -> orbit_core::application::job::PipelineInvokeResult {
     runtime
         .submit_pipeline_run(job, input, None, Some("fixture"))
         .unwrap()
@@ -579,13 +579,13 @@ fn submit_fixture_run(
 fn task_params(
     title: String,
     description: String,
-    status: orbit_core::TaskStatus,
+    status: orbit_types::task::TaskStatus,
 ) -> orbit_core::application::task::TaskAddParams {
     orbit_core::application::task::TaskAddParams {
         title,
         description,
-        task_type: Some(orbit_core::TaskType::Feature),
-        complexity: orbit_core::TaskComplexity::Low,
+        task_type: Some(orbit_types::task::TaskType::Feature),
+        complexity: orbit_types::task::TaskComplexity::Low,
         status: Some(status),
         ..Default::default()
     }
@@ -639,7 +639,7 @@ fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
     fixture.assert_snapshot(&before, "invalid readiness must also preserve state");
 }
 fn readiness_repeated_task_ids_are_counted_once_before_limit() {
-    use orbit_core::TaskStatus;
+    use orbit_types::task::TaskStatus;
 
     let fixture = Fixture::init();
     let task_id = fixture
@@ -797,7 +797,7 @@ fn readiness_reuses_validation_warning_across_processes() {
     }
 }
 fn readiness_reports_total_and_notifies_only_when_backlog_is_truncated() {
-    use orbit_core::TaskStatus;
+    use orbit_types::task::TaskStatus;
     let fixture = Fixture::init();
     let runtime = fixture.runtime();
     for index in 0..3 {
@@ -1523,7 +1523,7 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
     assert_eq!(fixture.run_state(&run_id), "cancelled");
 }
 fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
-    use orbit_core::TaskStatus;
+    use orbit_types::task::TaskStatus;
     use orbit_types::workflow::PipelineState;
     use serde_json::json;
     let fixture = Fixture::init();
@@ -2076,7 +2076,7 @@ fn run_show_exposes_degraded_pull_pass_health() {
     let skew_message = pass.last_pass_error.clone();
     runtime.write_run_state(id, &state).unwrap();
     fixture.db().execute("INSERT INTO job_run_steps (workspace_id, run_id, step_index, target_type, target_id, state, started_at, finished_at, error_code, error_message) VALUES (?1, ?2, 0, 'job', 'workspace_pull_pipeline', 'failed', ?3, ?3, 'protocol_skew', ?4)", params![fixture.workspace_id(), id, now.to_rfc3339(), skew_message]).unwrap();
-    orbit_engine::RunLifecycle::finalize_job_run(
+    orbit_core::test_support::fixture_engine::RunLifecycle::finalize_job_run(
         &runtime,
         id,
         orbit_types::workflow::JobRunState::Failed,
@@ -2157,7 +2157,7 @@ fn force_cancel_reports_unstopped_local_children_and_exits_one() {
     }
 }
 fn a_surface_reservation_reaches_readiness_and_drain_run_show() {
-    use orbit_core::{TaskComplexity, TaskPriority, TaskStatus};
+    use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus};
     let fixture = Fixture::init();
     let runtime = fixture.runtime();
     for file in ["held.rs", "shared.rs"] {
@@ -2371,7 +2371,7 @@ contract!(
     force_cancel_reports_unstopped_local_children_and_exits_one
 );
 fn warnings_hold_findings_reach_run_show_and_readiness() {
-    use orbit_core::TaskStatus;
+    use orbit_types::task::TaskStatus;
     let fixture = Fixture::init();
     fs::write(fixture.work.join("README.md"), "fixture\n").unwrap();
     for args in [

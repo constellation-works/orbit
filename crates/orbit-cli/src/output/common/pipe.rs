@@ -42,8 +42,8 @@ pub fn install_handler() {
 /// Let rendering finish normally on a closed pipe so its caller can finalize
 /// the command audit before exiting. Other panics retain their usual behavior.
 pub(crate) fn catch_closed_stdout(
-    render: impl FnOnce() -> Result<(), orbit_core::OrbitError>,
-) -> Result<(), orbit_core::OrbitError> {
+    render: impl FnOnce() -> Result<(), orbit_common::OrbitError>,
+) -> Result<(), orbit_common::OrbitError> {
     let previous = CATCH_CLOSED_STDOUT.replace(true);
     // Only a stdout EPIPE panic becomes a result; all other panics resume
     // unwinding, and the consumed rendering state is never reused.

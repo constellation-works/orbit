@@ -27,7 +27,7 @@ use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::JobRuns;
-use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::TaskAutomationUpdate;
 use orbit_engine::WORKFLOW_RUN_FAILED_EVENT;
 #[cfg(unix)]
@@ -40,6 +40,7 @@ use orbit_engine::{
 };
 use orbit_store::contract::JobRunStepParams;
 use orbit_tools::ToolContext;
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 #[cfg(unix)]
 use orbit_types::telemetry::ProviderLimitObservation;
 #[cfg(unix)]
@@ -155,7 +156,7 @@ impl Fixture {
     }
 
     /// An admissible backlog task carrying `tags`, pinned to `crew` when one is given.
-    pub(super) fn tagged_task(&self, tags: &[&str], crew: Option<&str>) -> orbit_core::Task {
+    pub(super) fn tagged_task(&self, tags: &[&str], crew: Option<&str>) -> orbit_types::task::Task {
         std::fs::write(self.repo.join("feature.txt"), "feature\n").unwrap();
         self.runtime
             .add_task(TaskAddParams {

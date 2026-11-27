@@ -6,7 +6,7 @@ use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt}
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 use super::LEASE_INTAKE_SOCKET_PATH;
 

@@ -3,7 +3,7 @@
 
 use chrono::Utc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{Task, TaskComplexity, TaskStatus};
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 

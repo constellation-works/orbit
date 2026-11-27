@@ -326,7 +326,7 @@ fn expired_inline_publication_gets_fresh_same_pr_repair() {
 }
 
 pub(super) fn reload(f: &mut Fixture) {
-    f.runtime = orbit_core::OrbitRuntime::from_roots(
+    f.runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &f._root.path().join("global"),
         &f.repo.join(".orbit"),
     )

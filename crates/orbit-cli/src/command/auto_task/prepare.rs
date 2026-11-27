@@ -2,8 +2,8 @@
 //! structured `schedule`, `template`, `template_patch` and `waive_batch`
 //! objects. Each CLI-only parameter is consumed here, so none reaches the tool.
 
+use orbit_common::OrbitError;
 use orbit_common::governance::auto_task::AutoTaskVerb;
-use orbit_core::OrbitError;
 use serde_json::{Map, Value, json};
 
 /// The `list` state filter, applied to the tool's rows before rendering.

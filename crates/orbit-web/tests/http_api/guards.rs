@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use orbit_core::JobRunState;
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated};
@@ -540,8 +540,10 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                     )
                     .unwrap_err();
                     let message = match expected {
-                        orbit_core::OrbitError::InvalidInput(message)
-                        | orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => message,
+                        orbit_common::OrbitError::InvalidInput(message)
+                        | orbit_common::OrbitError::InvalidInputDiagnostic { message, .. } => {
+                            message
+                        }
                         other => panic!("key admission error: {other}"),
                     };
                     assert_eq!(error["error"], message, "CLI and HTTP share key admission");
@@ -652,7 +654,7 @@ fn config_key_global_admission_and_dashboard_audit_stay_intact() {
                 ConfigWriteInit::RequireExisting,
             )
             .unwrap_err();
-            let orbit_core::OrbitError::InvalidInput(message) = expected else {
+            let orbit_common::OrbitError::InvalidInput(message) = expected else {
                 panic!("layer admission error")
             };
             let refused = server.send("PUT", url, json!({"value":85,"scope":"global"}));
@@ -679,7 +681,9 @@ fn config_key_global_admission_and_dashboard_audit_stay_intact() {
             );
             let events = fixture
                 .runtime
-                .list_audit_events_filtered(&orbit_core::AuditEventFilter::default())
+                .list_audit_events_filtered(
+                    &orbit_core::test_support::fixture_store::AuditEventFilter::default(),
+                )
                 .unwrap();
             assert!(
                 events.iter().any(|event| {

@@ -13,8 +13,8 @@ use orbit_common::{
     security::release::sha256_hex,
 };
 use orbit_core::app::run::Command as RunCommand;
+use orbit_core::app::task::ProposedTaskInput;
 use orbit_core::app::task::{DashboardAction, Outcome};
-use orbit_core::application::task::ProposedTaskInput;
 use orbit_types::{
     tool::{McpCapability, ToolSessionContext},
     workspace::WorkspaceCheckoutRole,

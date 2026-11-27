@@ -1,7 +1,7 @@
 //! Grants must be usable by an agent before either task write persists them.
 
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Recovery;
 use orbit_types::tool::StoredTool;
 

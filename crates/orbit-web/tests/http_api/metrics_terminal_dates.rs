@@ -3,7 +3,9 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskUpdateParams;
-use orbit_store::contract::{InvocationInsertParams, TaskArtifactUpdateParams};
+use orbit_core::test_support::fixture_store::contract::{
+    InvocationInsertParams, TaskArtifactUpdateParams,
+};
 use orbit_types::task::{ArtifactWriter, TaskArtifact, TaskComplexity, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage, ToolCallTrace};
 use serde_json::Value;
@@ -132,7 +134,7 @@ fn record_delivery(fixture: &Fixture, task: &str, at: DateTime<Utc>) {
                     "UPDATE invocations SET ts = ?1 WHERE job_run_id = ?2",
                     (at.to_rfc3339(), &run),
                 )
-                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
             Ok(())
         })
         .unwrap();

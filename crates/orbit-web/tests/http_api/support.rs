@@ -11,8 +11,8 @@ use std::collections::BTreeSet;
 use chrono::{DateTime, TimeZone, Utc};
 use orbit_core::test_support::V2AuditEventInsertParams;
 use orbit_core::test_support::{FixtureRuntime, fixture_core, fixture_store};
-use orbit_core::{JobRun, JobRunState, JobRunStep, JobTargetType};
 use orbit_types::workflow::{ChildDispatch, PipelineState};
+use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType};
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
 };
@@ -942,7 +942,7 @@ fn install_selection_barrier(parties: usize) {
             .wait_timeout_while(count, Duration::from_secs(5), |count| *count < parties)
             .unwrap_or_else(PoisonError::into_inner);
         if *count < parties {
-            return Err(orbit_core::OrbitError::Execution(format!(
+            return Err(orbit_common::OrbitError::Execution(format!(
                 "only {} of {parties} workspace selections were in flight; the per-workspace scans are serialised",
                 *count
             )));
@@ -1038,7 +1038,7 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
              ALTER TABLE job_runs DROP COLUMN commit_decision;
              ALTER TABLE job_runs DROP COLUMN commit_committed;",
                 )
-                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
             Ok(())
         })
         .unwrap();

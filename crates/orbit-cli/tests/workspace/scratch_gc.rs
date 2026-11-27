@@ -94,8 +94,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
-use orbit_core::OrbitRuntime;
-use orbit_engine::HostEnvironment;
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::test_support::fixture_engine::HostEnvironment;
 use orbit_types::workflow::PipelineState;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
@@ -249,7 +249,7 @@ impl Fixture {
             .expect("scratch GC wait entry");
         assert_eq!(
             entry.status,
-            orbit_core::PipelineWaitStatus::Success,
+            orbit_core::application::job::PipelineWaitStatus::Success,
             "scratch GC job failed: {entry:?}"
         );
         entry.pipeline.expect("scratch GC pipeline")["reap"].clone()
@@ -465,7 +465,7 @@ fn unreadable_retrying_inventory_or_state_prevents_all_scratch_deletion() {
         // Use the public GC host boundary so corrupt inventory cannot be
         // rejected earlier by the CLI's own run submission or observation.
         let error = HostEnvironment::gc_scratch(&runtime, 0).unwrap_err();
-        assert!(matches!(error, orbit_core::OrbitError::Store(_)), "{error}");
+        assert!(matches!(error, orbit_common::OrbitError::Store(_)), "{error}");
         for name in ["from-input", "from-state", "unrelated"] {
             assert_eq!(fs::read(fixture.tmp().join(name)).unwrap(), name.as_bytes());
         }

@@ -1,10 +1,12 @@
 use orbit_common::Env;
+use orbit_common::OrbitError;
+use orbit_core::Core;
 use orbit_core::app::doctor::{
     AttemptPinCleanup, Command, OrphanTaskStoreRemoval, Outcome, Repaired, Repairs,
     RetiredConfigKeyRepair, WorkspaceDoctorResult, WorkspaceDoctorStatus, doctor_row_json, exec,
     misplaced_plugin_enablement_row,
 };
-use orbit_core::{Core, DOCTOR_FINDINGS_MESSAGE_PREFIX, OrbitError};
+use orbit_types::telemetry::incident::DOCTOR_FINDINGS_MESSAGE_PREFIX;
 use serde_json::Value;
 
 use super::command::DoctorCommand;

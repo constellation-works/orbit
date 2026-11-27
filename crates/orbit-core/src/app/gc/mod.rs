@@ -13,6 +13,9 @@ use crate::application::gc::{
     AuditGcReport, DeploymentGcResult, JournalGcReport, RunGcReport, TmpGcResult,
 };
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::application::gc::DEFAULT_DEPLOYMENT_KEEP;
+
 /// What the gc app can be asked to do: one variant per garbage class.
 pub enum Command {
     /// Reap job-run worktrees whose task or claim has settled.

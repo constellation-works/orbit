@@ -1,7 +1,7 @@
 use std::io::Read;
 
 use flate2::read::GzDecoder;
-use orbit_core::JobRunState;
+use orbit_types::workflow::JobRunState;
 use serde_json::Value;
 
 use super::support::{Fixture, isolated};

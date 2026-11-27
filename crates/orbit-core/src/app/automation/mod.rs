@@ -25,6 +25,9 @@ use super::tool_call;
 pub use super::tool_call::Input;
 use crate::Core;
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::application::automation::projection::automation_summary;
+
 /// What the automation app can be asked to do.
 pub enum Command {
     /// One registry verb and the fields it is called with.

@@ -18,8 +18,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use orbit_core::OrbitRuntime;
 use orbit_core::runtime::JobRuns;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::test_support::{
     WorkerReapPhase, install_substitute_pipeline_worker, install_worker_reap_hook,
     pipeline_worker_observer_completed,

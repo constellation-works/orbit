@@ -170,9 +170,7 @@ pub struct TaskAddParams {
     /// Every other creator leaves it unset.
     pub rule_fingerprint: Option<String>,
     /// Creation intent an operator surface's selector screening established
-    /// for `context_files` ([`OrbitRuntime::add_task_screened`]).
-    ///
-    /// [`OrbitRuntime::add_task_screened`]: crate::OrbitRuntime::add_task_screened
+    /// for `context_files` (`OrbitRuntime::add_task_screened`).
     pub context_creation: ContextCreationAuthorization,
     /// Typed decision recorded on the task's `created` history event.
     pub creation_decision: Option<TaskDecision>,

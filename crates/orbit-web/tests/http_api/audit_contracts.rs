@@ -1,7 +1,8 @@
 use super::support::{Fixture, isolated};
 use axum::http::{StatusCode, header};
+use orbit_core::application::auto_tasks::AutoTaskAddParams;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{AutoTaskAddParams, TaskStatus};
+use orbit_types::task::TaskStatus;
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, JobRunState};
 use serde_json::{Value, json};
@@ -442,12 +443,12 @@ fn force_cancel_exposes_stopped_and_unstopped_local_children() {
             let drain = fixture.seed_run(
                 "jrun-web-local-drain",
                 "workspace_auto_pipeline",
-                orbit_core::JobRunState::Pending,
+                orbit_types::workflow::JobRunState::Pending,
             );
             let mut failed = fixture.seed_run(
                 "jrun-web-unstopped-child",
                 "task_auto_pipeline",
-                orbit_core::JobRunState::Running,
+                orbit_types::workflow::JobRunState::Running,
             );
             failed.pid = Some(server.pid());
             runtime
@@ -461,7 +462,7 @@ fn force_cancel_exposes_stopped_and_unstopped_local_children() {
             let stopped = fixture.seed_run(
                 "jrun-web-stopped-child",
                 "task_auto_pipeline",
-                orbit_core::JobRunState::Pending,
+                orbit_types::workflow::JobRunState::Pending,
             );
             let mut state = PipelineState::new(drain.run_id.clone(), drain.job_id, json!({}));
             for child in [&failed.run_id, &stopped.run_id] {

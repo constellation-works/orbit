@@ -3,7 +3,7 @@
 //!
 //! Workers that change a UI check it by scripting headless Chromium through
 //! Playwright. The kit at `~/.local/chromium-deps` (layout:
-//! [`crate::bootstrap::browser_kit`]) holds the Playwright release this
+//! `crate::bootstrap::browser_kit`) holds the Playwright release this
 //! Orbit release pins and the browser it launches; Chromium is downloaded
 //! from Playwright's CDN at install time, never bundled. Node is a
 //! prerequisite this group reports rather than installs.

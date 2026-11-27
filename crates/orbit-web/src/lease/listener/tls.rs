@@ -5,7 +5,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use super::config::{LeaseListenerTlsSettings, refused};
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 
 pub(super) fn load_listener_tls(

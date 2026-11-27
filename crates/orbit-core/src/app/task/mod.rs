@@ -64,17 +64,26 @@ use super::exec::{self, App, Operation, SessionAudit};
 use crate::Core;
 use crate::application::codebase::TaskRiskinessModel;
 use crate::application::resident::ResidentActionTicket;
-use crate::application::task::InfraBlockedTask;
-use crate::application::task::{
-    DecisionChannelInfo, ExternalMergeSettlement, LockContentionReport, PostDeployOperatorRecord,
-    ProposedTaskInput, ScreenedTaskWrite, TaskAddParams, TaskListFilter, TaskListQuery, TaskPage,
-    TaskRow, TaskUpdateAuthority, TaskUpdateParams, TransientInfraBlockedTask,
+use crate::application::task::{DecisionChannelInfo, ScreenedTaskWrite, TaskPage, TaskRow};
+use crate::application::task_bundle::migration::{ExportOutcome, ImportOutcome, ReindexOutcome};
+use crate::application::task_bundle::publication::PublicationRestoreOutcome;
+
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::application::backlog_forecast::BacklogForecastHistory;
+pub use crate::application::task::{
+    CrewUsagePressure, ExternalMergeSettlement, ExternalMergeSettlementProfile, InfraBlockedTask,
+    LockContentionReport, PostDeployOperatorRecord, PostDeployRecordRefusal, ProposedTaskInput,
+    ProviderLimitReading, ProviderUsageStatus, TaskAddParams, TaskArtifactRead, TaskListFilter,
+    TaskListQuery, TaskListResultPolicy, TaskListResultProfile, TaskUpdateAuthority,
+    TaskUpdateParams, TransientInfraBlockedTask, artifact_put_result,
 };
-use crate::application::task_bundle::migration::{
-    ExportOutcome, ExportSelection, ImportConflictPolicy, ImportOutcome, ReindexOutcome,
+pub use crate::application::task_bundle::migration::{
+    ExportSelection, ImportAction, ImportConflictPolicy,
 };
-use crate::application::task_bundle::publication::{
-    AttachmentPolicy, PublicationInspection, PublicationPublishOutcome, PublicationRestoreOutcome,
+pub use crate::application::task_bundle::publication::{
+    AttachmentPolicy, AttachmentPolicyKind, PublicationFreshness, PublicationInspection,
+    PublicationPublishOutcome, PublicationPublishStatus, PublicationRecoveryCompleteness,
+    PublicationRenderAuthority, ScannerFailureBehavior,
 };
 
 macro_rules! outcome_accessors {

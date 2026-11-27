@@ -9,7 +9,7 @@ use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_DRAIN_AUTO_FIX, DASHBOARD_AUTO_DRAIN_COMPLETE,
 };
 use orbit_core::app::run::Command as RunCommand;
-use orbit_core::application::job::TaskAutoFixError;
+use orbit_core::app::run::TaskAutoFixError;
 use serde_json::json;
 
 use crate::api::routines::{authorization_denied, authorized_caller};

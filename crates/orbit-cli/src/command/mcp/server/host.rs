@@ -10,14 +10,16 @@ use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::{BoundWorkspaceRemedy, Env, NotFoundKind, OrbitError};
 use orbit_core::Core;
-use orbit_core::adapter::command::{
-    GlobalAuditStoreCache, GlobalToolCall, HostPluginMcpCache, HostPluginMcpSurface,
-    ToolEntryPoint, execute_global_in_process_tool_dispatch_with_audit_writer,
-    execute_global_plugin_tool,
+use orbit_core::app::plugin::{
+    HostPluginMcpCache, HostPluginMcpSurface, execute_global_plugin_tool,
+};
+use orbit_core::app::resident::route_resident_delivery_recovery_to_broker;
+use orbit_core::app::run::HostLifetime;
+use orbit_core::app::tool::{
+    GlobalAuditStoreCache, GlobalToolCall, ToolEntryPoint,
+    execute_global_in_process_tool_dispatch_with_audit_writer,
 };
 use orbit_core::app::{agent, plugin, tool};
-use orbit_core::runtime::HostLifetime;
-use orbit_core::runtime::authorization::route_resident_delivery_recovery_to_broker;
 use orbit_mcp::federated;
 use orbit_mcp::{McpHost, McpSessionAuthority};
 use orbit_types::tool::{
@@ -84,11 +86,11 @@ impl ServerMcpHost {
             process_machine_name,
             host_facts,
             workspace_runtimes: WorkspaceRuntimeCache::default(),
-            plugin_surface: HostPluginMcpCache::new(orbit_core::composition::store_opener()),
+            plugin_surface: HostPluginMcpCache::new(orbit_core::app::workspace::store_opener()),
             definitions: Mutex::new(None),
             owner_route_sessions: federated::RoutedSessionPool::default(),
             task_owners: TaskOwnerLookup::default(),
-            audit_store: GlobalAuditStoreCache::new(orbit_core::composition::store_opener()),
+            audit_store: GlobalAuditStoreCache::new(orbit_core::app::workspace::store_opener()),
             env: env.clone(),
         }
     }
@@ -121,7 +123,7 @@ impl ServerMcpHost {
                     Some(surface.plugins.as_ref()),
                     Some(&surface.definitions),
                 );
-                orbit_core::adapter::command::tool_suggestions::unknown_tool_error(
+                orbit_core::app::tool::unknown_tool_error(
                     name,
                     surface
                         .definitions
@@ -130,7 +132,7 @@ impl ServerMcpHost {
                             definition.schema.builtin && !hidden.contains(&definition.schema.name)
                         })
                         .map(|definition| definition.schema.name.as_str()),
-                    &orbit_core::adapter::command::tool_suggestion_context(
+                    &orbit_core::app::tool::tool_suggestion_context(
                         &self.env,
                         ToolEntryPoint::Mcp,
                         context.clone(),
@@ -384,7 +386,7 @@ impl ServerMcpHost {
         execute_global_in_process_tool_dispatch_with_audit_writer(
             &self.env,
             GlobalToolCall {
-                opener: orbit_core::composition::store_opener(),
+                opener: orbit_core::app::workspace::store_opener(),
                 global_root: &self.global_root,
                 name,
                 input,
@@ -420,7 +422,7 @@ impl ServerMcpHost {
     ) -> Result<Value, OrbitError> {
         execute_global_plugin_tool(
             &self.env,
-            orbit_core::composition::store_opener(),
+            orbit_core::app::workspace::store_opener(),
             &self.global_root,
             name,
             input,
@@ -642,7 +644,7 @@ impl ServerMcpHost {
         execute_global_in_process_tool_dispatch_with_audit_writer(
             &self.env,
             GlobalToolCall {
-                opener: orbit_core::composition::store_opener(),
+                opener: orbit_core::app::workspace::store_opener(),
                 global_root: &self.global_root,
                 name,
                 input,

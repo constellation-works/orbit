@@ -55,7 +55,7 @@ pub(super) fn warn_unresolved_crew(doc: &serde_json::Map<String, Value>) {
 /// stored task, carrying the write's metadata. Rendering stays here: each
 /// warning is also printed to stderr so a text-mode caller sees it, as is
 /// an unresolved crew.
-pub(super) fn task_write_json(written: Written) -> (Value, orbit_core::Task) {
+pub(super) fn task_write_json(written: Written) -> (Value, orbit_types::task::Task) {
     let Written {
         document,
         task,

@@ -61,7 +61,7 @@ async fn served_cost(
             move || {
                 let cost = exec(&core, Command::cost(window))?.value;
                 let body = serde_json::to_value(&cost)
-                    .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                    .map_err(|e| orbit_common::OrbitError::Store(e.to_string()))?;
                 Ok(body)
             },
         )

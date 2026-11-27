@@ -39,6 +39,8 @@ pub use crate::application::auto_tasks::{
 };
 use crate::{Core, Task};
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+
 /// What the auto-task app can be asked to do.
 pub enum Command {
     /// One registry verb and the fields it is called with.

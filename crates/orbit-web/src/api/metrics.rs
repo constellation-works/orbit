@@ -6,8 +6,8 @@ use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
+use orbit_core::app::audit::{InvocationInsertParams, InvocationQuery};
 use orbit_core::app::run::{Command, exec};
-use orbit_core::{InvocationInsertParams, InvocationQuery};
 use serde::Deserialize;
 
 use super::{
@@ -47,7 +47,7 @@ pub(super) struct OrchestratorMetricsQuery {
 }
 
 impl MetricsInvocationsQuery {
-    fn into_invocation_query(self) -> Result<InvocationQuery, orbit_core::OrbitError> {
+    fn into_invocation_query(self) -> Result<InvocationQuery, orbit_common::OrbitError> {
         Ok(InvocationQuery {
             succeeded_candidate_only: false,
             since: parse_rfc3339_opt(self.since, "since")?,
@@ -175,12 +175,12 @@ pub(super) async fn ingest_invocation(
 fn parse_rfc3339_opt(
     value: Option<String>,
     field_name: &str,
-) -> Result<Option<DateTime<Utc>>, orbit_core::OrbitError> {
+) -> Result<Option<DateTime<Utc>>, orbit_common::OrbitError> {
     match optional_query_string(value) {
         Some(raw) => DateTime::parse_from_rfc3339(&raw)
             .map(|dt| Some(dt.with_timezone(&Utc)))
             .map_err(|error| {
-                orbit_core::OrbitError::InvalidInput(format!("invalid {field_name}: {error}"))
+                orbit_common::OrbitError::InvalidInput(format!("invalid {field_name}: {error}"))
             }),
         None => Ok(None),
     }

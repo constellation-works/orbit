@@ -5,7 +5,7 @@
 use std::fs;
 
 use chrono::{Duration, Utc};
-use orbit_core::AutoTaskAddParams;
+use orbit_core::application::auto_tasks::AutoTaskAddParams;
 use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::automation::{AcceptedCoverage, BatchState};

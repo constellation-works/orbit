@@ -4,7 +4,7 @@
 //! state, which a retry or a resumed run reads, and a timed window that has
 //! expired, a stop or a cancel never gains it.
 
-use orbit_core::DrainAdmissionsStopRequest;
+use orbit_core::application::job::DrainAdmissionsStopRequest;
 use orbit_engine::Dispatch;
 
 use super::*;
@@ -45,7 +45,7 @@ fn bound_follower(pair: &Pair) -> (OrbitRuntime, String) {
         owner_machine_id: None,
         checkout_role: None,
         repo_root: pair.follower_repo.clone(),
-        ship_mode: orbit_core::ShipMode::Local,
+        ship_mode: orbit_core::app::run::ShipMode::Local,
         base_branch: Some("main".to_string()),
     };
     let follower = calm_host(
@@ -157,7 +157,7 @@ fn run_single_pass_drain(
     let (follower, selector) = bound_follower(pair);
     let submitted = follower
         .submit_workspace_pull_run(
-            orbit_core::WorkspacePullRequest {
+            orbit_core::application::distributed::WorkspacePullRequest {
                 selector: &selector,
                 for_seconds,
                 max_active_leaf_runs: Some(slots),
@@ -487,7 +487,7 @@ fn a_legacy_zero_window_checkpoint_resumed_through_the_job_api_cannot_claim() {
     let (follower, selector) = bound_follower(&pair);
     let source = follower
         .submit_workspace_pull_run(
-            orbit_core::WorkspacePullRequest {
+            orbit_core::application::distributed::WorkspacePullRequest {
                 selector: &selector,
                 for_seconds: None,
                 max_active_leaf_runs: Some(1),

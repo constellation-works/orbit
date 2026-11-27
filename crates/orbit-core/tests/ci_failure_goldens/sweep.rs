@@ -10,8 +10,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use orbit_core::OrbitRuntime;
-use orbit_engine::{Dispatch, RunLifecycle};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_engine::Dispatch;
+use orbit_engine::RunLifecycle;
 use orbit_tools::ToolContext;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -296,7 +297,7 @@ fn missing_failed_jobs_are_held_then_escalated_or_filed_when_available() {
     }
     let incidents = workspace
         .runtime
-        .audit_failure_incidents(&orbit_core::FailureIncidentQuery::default())
+        .audit_failure_incidents(&orbit_types::telemetry::incident::FailureIncidentQuery::default())
         .unwrap();
     assert_eq!(incidents.affected_runs_by_class.get("deferred"), Some(&2));
     assert_eq!(incidents.affected_runs_by_class.get("unexpected"), None);
@@ -583,7 +584,7 @@ fn ci_agent_main_red_for_three_sweeps_always_has_an_open_task() {
     }
     let incidents = workspace
         .runtime
-        .audit_failure_incidents(&orbit_core::FailureIncidentQuery::default())
+        .audit_failure_incidents(&orbit_types::telemetry::incident::FailureIncidentQuery::default())
         .unwrap();
     assert_eq!(
         incidents.affected_runs_by_class.get("deferred"),
@@ -695,7 +696,7 @@ fn ci_missing_checkout_sha_defers_then_escalates_on_landing_branch() {
     }
     let incidents = workspace
         .runtime
-        .audit_failure_incidents(&orbit_core::FailureIncidentQuery::default())
+        .audit_failure_incidents(&orbit_types::telemetry::incident::FailureIncidentQuery::default())
         .unwrap();
     assert_eq!(
         incidents.affected_runs_by_class.get("deferred"),

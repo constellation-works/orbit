@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry};
 

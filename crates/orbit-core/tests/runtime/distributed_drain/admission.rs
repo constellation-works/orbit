@@ -1,7 +1,7 @@
 //! Pull admission: cancel-state reads, owner negotiation, the failure breaker, the crew window, `os:` tag routing, host throttling and local/claim exclusion.
 
-use orbit_core::WorkspacePullRequest;
 use orbit_core::application::contracts::DrainEntryPoint;
+use orbit_core::application::distributed::WorkspacePullRequest;
 use orbit_core::application::distributed::{PullCrewWindow, RESOURCE_THROTTLED};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
@@ -1174,7 +1174,7 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
             let task = if automated {
                 std::fs::write(pair.owner_repo.join(&file), "fn work() {}\n").unwrap();
                 let definition = owner
-                    .auto_task_add(orbit_core::AutoTaskAddParams {
+                    .auto_task_add(orbit_core::application::auto_tasks::AutoTaskAddParams {
                         name: format!("tool-routing-{}", held.len()),
                         description: "Preclaim requirement regression".into(),
                         schedule: orbit_types::workflow::AutoTaskSchedule::every_minutes(60),

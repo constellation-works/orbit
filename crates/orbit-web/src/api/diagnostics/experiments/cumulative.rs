@@ -6,7 +6,7 @@
 //! experiment started, or at its first assignment, and closes now.
 
 use chrono::{DateTime, Utc};
-use orbit_core::application::experiment::ExperimentReadout;
+use orbit_core::app::experiment::ExperimentReadout;
 use serde_json::{Value, json};
 
 use super::super::metrics::DiagnosticsRange;

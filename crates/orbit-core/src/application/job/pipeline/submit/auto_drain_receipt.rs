@@ -216,7 +216,7 @@ impl AutoDrainSubmissionReceipt {
     }
 
     /// Submission warnings in display order, including pull gate drift
-    /// after standard [`SubmissionNotices`] warnings on a pull start.
+    /// after standard `SubmissionNotices` warnings on a pull start.
     #[must_use]
     pub fn warnings(&self) -> &[String] {
         &self.warnings

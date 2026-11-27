@@ -2,11 +2,11 @@
 
 use chrono::Utc;
 use orbit_core::application::job::job_run_to_json;
-use orbit_core::{JobRun, JobRunState};
 use orbit_types::workflow::{
     ChildDispatch, DrainAdmissionsStop, DrainCancelRequest, DrainWindowExtension, DrainWorkerLimit,
     JobRunTrigger, PipelineState,
 };
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -32,8 +32,8 @@ fn expected_item(run: &JobRun) -> Value {
 /// progress hook sees every VM instruction, including rows discarded before
 /// LIMIT; returned row counts alone cannot detect a scan of success history.
 fn page_work(
-    store: &orbit_store::Store,
-    query: &orbit_store::contract::JobRunQuery,
+    store: &orbit_core::test_support::fixture_store::Store,
+    query: &orbit_core::test_support::fixture_store::contract::JobRunQuery,
 ) -> (Vec<String>, usize) {
     use std::sync::{
         Arc,
@@ -74,13 +74,14 @@ fn multi_state_pages_do_not_scan_unrelated_success_history() {
     isolated(
         "job_run_lists::multi_state_pages_do_not_scan_unrelated_success_history",
         || {
-            use orbit_store::contract::{JobRunOrder, JobRunQuery};
+            use orbit_core::test_support::fixture_store::contract::{JobRunOrder, JobRunQuery};
 
             let fixture = Fixture::new();
             let template = fixture.seed_run("template", "list-fixture", JobRunState::Success);
             let mut measurements = Vec::new();
             for success_count in [12, 120] {
-                let store = orbit_store::Store::open_in_memory().unwrap();
+                let store =
+                    orbit_core::test_support::fixture_store::Store::open_in_memory().unwrap();
                 // Five old matching rows and a tiny, growing unrelated history.
                 // Equal timestamps also exercise the run-ID tiebreak across states.
                 for (index, state) in [

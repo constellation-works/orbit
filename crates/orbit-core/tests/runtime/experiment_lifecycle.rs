@@ -3,12 +3,12 @@
 mod admission;
 
 use orbit_common::OrbitError;
-use orbit_core::OrbitRuntime;
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{TaskComplexity, TaskStatus, TaskType};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 use serde_json::json;
 
 #[test]

@@ -91,7 +91,7 @@ fn answer(
     f: &Fixture,
     request: &DecisionRequest,
     option: &str,
-) -> Result<(), orbit_core::OrbitError> {
+) -> Result<(), orbit_common::OrbitError> {
     f.runtime
         .answer_decision_request_as_human(
             &request.id,

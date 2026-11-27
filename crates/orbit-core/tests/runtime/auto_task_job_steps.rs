@@ -11,8 +11,10 @@ mod reuse;
 #[path = "auto_task_shared_completion.rs"]
 mod shared_completion;
 
+use orbit_core::application::auto_tasks::AutoTaskAddParams;
 use orbit_core::application::job::JobRunListParams;
-use orbit_core::{AutoTaskAddParams, OrbitRuntime, TaskPriority, TaskStatus, TaskType};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
 
@@ -589,7 +591,7 @@ fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
                 owner_machine_id: None,
                 checkout_role: None,
                 repo_root: repo,
-                ship_mode: orbit_core::ShipMode::Pr,
+                ship_mode: orbit_core::app::run::ShipMode::Pr,
                 base_branch: Some("main".into()),
             },
         )

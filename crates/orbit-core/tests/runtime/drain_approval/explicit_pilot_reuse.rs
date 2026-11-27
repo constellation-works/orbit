@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use orbit_core::DrainAdmissionsStopRequest;
+use orbit_core::application::job::DrainAdmissionsStopRequest;
 use orbit_types::workflow::ExecutorSandboxKind;
 
 use super::step_graph::PILOT_JOB;

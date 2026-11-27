@@ -5,9 +5,9 @@
 //! Fixtures drive the real prepare and apply actions in isolated children.
 
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{Task, TaskStatus};
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
+use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
 use super::Workspace;

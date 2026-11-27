@@ -3,7 +3,7 @@ use crate::git_repo::WorkCheckout;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use orbit_config::{ConfigRoots, OperationLayerSource, ResolvedConfig};
-use orbit_core::DOCTOR_FINDINGS_MESSAGE_PREFIX;
+use orbit_types::telemetry::incident::DOCTOR_FINDINGS_MESSAGE_PREFIX;
 use rusqlite::Connection;
 use serde_json::Value;
 use std::{
@@ -2464,9 +2464,11 @@ fn bare_doctor_reports_a_stale_run_without_reconciling_it() {
     }
     let f = WorkCheckout::new();
     run_ok(&f, &["workspace", "init", "--name", "doctor-readonly"]);
-    let runtime =
-        orbit_core::OrbitRuntime::from_roots(&f.home.join(".orbit"), &f.work.join(".orbit"))
-            .expect("runtime");
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
+        &f.home.join(".orbit"),
+        &f.work.join(".orbit"),
+    )
+    .expect("runtime");
     let workspace_id = runtime.workspace_id().expect("workspace id");
     drop(runtime);
     let mut gone = std::process::Command::new("true").spawn().expect("spawn");
@@ -2527,9 +2529,11 @@ fn read_only_doctor_sweep_leaves_a_stale_pull_drain_and_its_reservations_as_foun
     }
     let f = WorkCheckout::new();
     run_ok(&f, &["workspace", "init", "--name", "doctor-pull-observe"]);
-    let runtime =
-        orbit_core::OrbitRuntime::from_roots(&f.home.join(".orbit"), &f.work.join(".orbit"))
-            .expect("runtime");
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
+        &f.home.join(".orbit"),
+        &f.work.join(".orbit"),
+    )
+    .expect("runtime");
     let workspace_id = runtime.workspace_id().expect("workspace id");
     drop(runtime);
     let mut gone = std::process::Command::new("true").spawn().expect("spawn");

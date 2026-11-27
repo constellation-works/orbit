@@ -1,10 +1,10 @@
 //! Multiple completed checks must leave findings readable through the artifact tool.
 
-use orbit_core::TaskStatus;
 use orbit_core::test_support::with_review_evidence_completion;
 use orbit_engine::Dispatch;
 use orbit_tools::{ReservationOwnerContext, ToolContext};
 use orbit_types::task::MAX_TASK_ARTIFACT_CONTENT_BYTES;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     REVIEW_EVIDENCE_FINDINGS_ARTIFACT, ReviewEvidenceFinding, ReviewEvidenceFindings,
     ReviewEvidenceFlowStep,

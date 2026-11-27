@@ -80,7 +80,7 @@ pub(super) fn is_clock_tick(command: &command::Commands) -> bool {
 /// `orbit doctor` [ORB-15260].
 pub(super) fn report_refused_clock_tick(
     root: &std::path::Path,
-    error: &orbit_core::OrbitError,
+    error: &orbit_common::OrbitError,
     env: &orbit_common::Env,
 ) {
     let recorded = orbit_common::fs::generation::process_generation(env).and_then(|digest| {

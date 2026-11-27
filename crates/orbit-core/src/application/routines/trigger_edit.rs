@@ -43,7 +43,7 @@ pub struct RoutineTriggerOptions {
     pub seeded: bool,
 }
 
-/// The trigger kinds `routine` may be switched to by [`set_routine_trigger`].
+/// The trigger kinds `routine` may be switched to by `set_routine_trigger`.
 pub fn trigger_options(routine: &LoadedRoutine) -> RoutineTriggerOptions {
     let definition = &routine.definition;
     let forbid = definition.policy.overlap == OverlapPolicy::Forbid;

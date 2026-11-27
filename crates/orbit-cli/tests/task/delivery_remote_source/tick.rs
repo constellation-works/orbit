@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 const SECOND: &str = "tick-other-consumer";
 
-fn consumers(fixture: &Fixture) -> orbit_core::OrbitRuntime {
+fn consumers(fixture: &Fixture) -> orbit_core::runtime::OrbitRuntime {
     let runtime = baselined_remote_consumer(fixture);
     fixture.json(&[
         "auto-task",
@@ -320,7 +320,7 @@ fn clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched() {
                         "UPDATE automation_consumers SET state_json=?1 WHERE consumer=?2",
                         [raw.as_str(), key.as_str()],
                     )
-                    .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                 Ok(())
             })
             .unwrap();

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Args;
 use orbit_cmd::workspace_rebind::{self, CheckoutRebindOptions};
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_types::workspace::WorkspaceCheckout;
 use serde_json::json;
 

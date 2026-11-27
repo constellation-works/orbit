@@ -33,6 +33,8 @@ orbit-core = { path = "../orbit-core" }
 orbit-mcp = { path = "../orbit-mcp" }
 orbit-tools = { path = "../orbit-tools" }
 orbit-registry = { path = "../orbit-registry" }
+# Implements the runtime kernel's workspace-catalog and owner-route traits.
+orbit-runtime = { path = "../orbit-runtime" }
 orbit-store = { path = "../orbit-store" }
 reqwest.workspace = true
 serde.workspace = true

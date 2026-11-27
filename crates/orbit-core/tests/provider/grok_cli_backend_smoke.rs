@@ -3,7 +3,7 @@
 // expect/assert for fixture setup and end-to-end validation.
 #![allow(clippy::expect_used)]
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::{V2AuditWriter, V2DispatchInput, dispatch_v2_activity};
 use orbit_types::resource::{EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource};
 use orbit_types::workflow::ExecutorDef;

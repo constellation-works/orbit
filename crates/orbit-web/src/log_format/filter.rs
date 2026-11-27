@@ -2,7 +2,7 @@
 
 use crate::parse::parse_since;
 use orbit_cmd::log_format::{Filters, LevelFilter};
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 pub(crate) fn filters_from_query_parts(
     target: Option<String>,

@@ -8,8 +8,8 @@
 use std::collections::BTreeSet;
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{Task, TaskComplexity, TaskStatus};
 use orbit_types::task::HostOs;
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use orbit_types::workflow::{ExecutorDef, ExecutorType};
 use serde_json::{Value, json};
 

@@ -7,9 +7,10 @@
 //! single-slot drain and an explicitly selected ship keep admitting it.
 
 use orbit_core::application::task::TaskUpdateParams;
-use orbit_core::{OrbitRuntime, TaskStatus};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
+use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 
 use super::{
@@ -400,7 +401,7 @@ fn an_operator_waiver_admits_unprepared_work_like_ready_work() {
             acceptance_criteria: vec!["Fixture task is observable.".into()],
             plan: "Fixture plan.".into(),
             context_files: Vec::new(),
-            complexity: orbit_core::TaskComplexity::Unassessed,
+            complexity: orbit_types::task::TaskComplexity::Unassessed,
             status: Some(TaskStatus::Backlog),
             ..Default::default()
         })
@@ -449,7 +450,7 @@ fn an_operator_waiver_admits_unprepared_work_like_ready_work() {
         )
         .unwrap_err();
     assert!(
-        matches!(refused, orbit_core::OrbitError::CapabilityDenied(_)),
+        matches!(refused, orbit_common::OrbitError::CapabilityDenied(_)),
         "{refused}"
     );
     assert!(runtime.get_task(&empty_task).unwrap().tags.is_empty());
@@ -459,7 +460,7 @@ fn an_operator_waiver_admits_unprepared_work_like_ready_work() {
         ..Default::default()
     });
     assert!(
-        matches!(filed, Err(orbit_core::OrbitError::InvalidInput(_))),
+        matches!(filed, Err(orbit_common::OrbitError::InvalidInput(_))),
         "{filed:?}"
     );
 

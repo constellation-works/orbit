@@ -1,7 +1,7 @@
 //! The `workspace` field projects the registry identity the runtime's open
 //! recorded, a miss included, without reading `workspaces.json` again.
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 

@@ -10,13 +10,14 @@
 use orbit_core::application::task::TaskAddParams;
 use std::collections::BTreeSet;
 
+use orbit_common::OrbitError;
+use orbit_core::app::run::{CompletionPolicy, ShipMode};
 use orbit_core::application::job::JobRunListParams;
-use orbit_core::{
-    CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, Task, TaskComplexity, TaskStatus,
-};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_engine::HostEnvironment;
 use orbit_tools::ToolContext;
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
@@ -97,8 +98,8 @@ fn ship(
     runtime: &OrbitRuntime,
     task: &str,
     operator_override: bool,
-) -> Result<orbit_core::PipelineInvokeResult, OrbitError> {
-    runtime.submit_ship_run(orbit_core::ShipRunRequest {
+) -> Result<orbit_core::application::job::PipelineInvokeResult, OrbitError> {
+    runtime.submit_ship_run(orbit_core::application::job::ShipRunRequest {
         mode: ShipMode::Local,
         base_branch: Some("main"),
         task_ids: &[task.to_string()],

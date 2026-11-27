@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_core::app::host::{self, Command, HostChange, HostRow, HostWorkspace, Outcome};
 use serde_json::Value;
 

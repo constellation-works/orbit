@@ -1,7 +1,8 @@
 //! Task writes scrub prose and reject invalid artifacts atomically [ORB-14345].
 
+use orbit_common::OrbitError;
 use orbit_core::application::task::{TaskAddParams, TaskStartRequest, TaskUpdateParams};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::task::{TaskArtifact, TaskComplexity, TaskStatus};
 use orbit_types::workflow::REVIEW_REPORT_HISTORY_ARTIFACT;
 use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, EVIDENCE_AUTHORITY_ARTIFACT};

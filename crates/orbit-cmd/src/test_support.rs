@@ -5,8 +5,8 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_core::composition::Opening;
-use orbit_core::runtime::OrbitRuntimeRoots;
+use orbit_core::app::workspace::Opening;
+use orbit_runtime::OrbitRuntimeRoots;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 
 use crate::registry_runtime::RegisteredRuntimeFactory;

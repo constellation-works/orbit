@@ -3,7 +3,7 @@
 #![allow(missing_docs)]
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 

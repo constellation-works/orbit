@@ -4,13 +4,14 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{JobRunState, JobRunStep, JobTargetType};
-use orbit_store::contract::InvocationInsertParams;
+use orbit_core::test_support::fixture_store;
+use orbit_core::test_support::fixture_store::contract::InvocationInsertParams;
 use orbit_types::task::{
     TaskComplexity, TaskEventRowV2, TaskRelation, TaskRelationType, TaskStatus, TaskType,
 };
 use orbit_types::telemetry::{InvocationTrace, ToolCallTrace};
 use orbit_types::workflow::PipelineState;
+use orbit_types::workflow::{JobRunState, JobRunStep, JobTargetType};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -23,7 +24,9 @@ fn diff_stats_keeps_named_crews_distinct_from_attribution_buckets() {
     isolated(
         "metrics_trends::diff_stats_keeps_named_crews_distinct_from_attribution_buckets",
         || {
-            use orbit_store::contract::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
+            use orbit_core::test_support::fixture_store::contract::{
+                DiffClassCounts, LandedDiffSource, LandedDiffStats,
+            };
 
             let fixture = Fixture::new();
             let store = fixture.runtime.sqlite_store().unwrap();
@@ -181,7 +184,7 @@ fn record_run(
                      WHERE id = (SELECT MAX(id) FROM invocations WHERE job_run_id = ?3)",
                     (at.to_rfc3339(), partition, run),
                 )
-                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
             Ok(())
         })
         .unwrap();
@@ -298,13 +301,13 @@ fn implement_one_outcome_filters_every_aggregation_and_retry_attempt() {
                 .unwrap();
             fixture.runtime.sqlite_store().unwrap().with_transaction(|tx| {
             tx.connection().execute("DELETE FROM job_run_states WHERE workspace_id = 'ws_http_fixture' AND run_id = 'unknown'", [])
-                .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                .map_err(|e| orbit_common::OrbitError::Store(e.to_string()))?;
             Ok(())
         }).unwrap();
 
             fixture.runtime.sqlite_store().unwrap().with_transaction(|tx| {
                 tx.connection().execute("UPDATE job_runs SET commit_decision = NULL, commit_committed = NULL WHERE workspace_id = 'ws_http_fixture' AND run_id = 'unknown'", [])
-                    .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                    .map_err(|e| orbit_common::OrbitError::Store(e.to_string()))?;
                 Ok(())
             }).unwrap();
             let server = fixture.server(false);
@@ -375,8 +378,8 @@ pub(super) fn rewrite_task_events(
 }
 
 pub(super) fn task_events_path(fixture: &Fixture, task: &str) -> std::path::PathBuf {
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(
+    let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+        &fixture_store::maintenance::task_registry::task_registry_path(
             &fixture.runtime.global_root(),
         ),
     )
@@ -886,7 +889,7 @@ fn succeeded_durations_survive_run_gc_and_upgrade_backfill() {
                             "UPDATE job_runs SET created_at = ?1, finished_at = ?1",
                             [at.to_rfc3339()],
                         )
-                        .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                        .map_err(|e| orbit_common::OrbitError::Store(e.to_string()))?;
                     Ok(())
                 })
                 .unwrap();
@@ -900,7 +903,7 @@ fn succeeded_durations_survive_run_gc_and_upgrade_backfill() {
                 .with_transaction(|tx| {
                     tx.connection()
                         .execute("UPDATE job_runs SET finished_at = ?1", [at.to_rfc3339()])
-                        .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+                        .map_err(|e| orbit_common::OrbitError::Store(e.to_string()))?;
                     Ok(())
                 })
                 .unwrap();
@@ -1227,7 +1230,7 @@ fn record_implement(
                      WHERE id = (SELECT MAX(id) FROM invocations WHERE job_run_id = ?2)",
                     (at.to_rfc3339(), run),
                 )
-                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
             Ok(())
         })
         .unwrap();
@@ -1893,7 +1896,9 @@ fn diff_stats_keeps_lead_only_crews_for_per_day() {
     isolated(
         "metrics_trends::diff_stats_keeps_lead_only_crews_for_per_day",
         || {
-            use orbit_store::contract::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
+            use orbit_core::test_support::fixture_store::contract::{
+                DiffClassCounts, LandedDiffSource, LandedDiffStats,
+            };
 
             let fixture = Fixture::new();
             let store = fixture.runtime.sqlite_store().unwrap();

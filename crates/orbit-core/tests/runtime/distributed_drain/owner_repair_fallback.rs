@@ -71,7 +71,7 @@ fn owner_fallback(busy: bool, with_backlog: bool, distinct_logical: bool) {
                     owner_machine_id: None,
                     checkout_role: None,
                     repo_root: unbound.paths().repo_root.clone(),
-                    ship_mode: orbit_core::ShipMode::Pr,
+                    ship_mode: orbit_core::app::run::ShipMode::Pr,
                     base_branch: Some("main".into()),
                 },
             )

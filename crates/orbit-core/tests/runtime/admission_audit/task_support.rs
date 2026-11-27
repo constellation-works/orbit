@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use tempfile::tempdir_in;
 
 /// Names the one test a re-executed child of this test binary runs in-process.

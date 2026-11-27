@@ -6,7 +6,8 @@
 //! `gemini` declares no `inspection_args`.
 
 use chrono::Utc;
-use orbit_core::{ActorIdentity, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
 use orbit_engine::Dispatch;
 use orbit_types::workflow::{ActivityCrewDraw, JobRunState, PipelineState};
 use serde_json::{Value, json};

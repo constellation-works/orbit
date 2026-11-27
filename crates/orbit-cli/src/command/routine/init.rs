@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::command::{CommandOut, Payload};
 use clap::Args;
-use orbit_core::application::routines::install_clock;
+use orbit_core::app::routine::install_clock;
 use orbit_registry::load_machine_identity;
 use serde_json::json;
 

@@ -13,7 +13,7 @@ use orbit_auth::client_address::{LeaseClientAddressPolicy, resolve_lease_client_
 use orbit_auth::limiter::{KeyedLimiter, LimitKey};
 use orbit_auth::scope::{LeaseTokenRefusal, LeaseTokenVerb};
 use orbit_auth::store::{LeaseTokenDecision, LeaseTokenStore};
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use tokio::sync::Semaphore;
 
 use super::router::{bearer_secret, listener_refusal, route_verb, unauthorized};

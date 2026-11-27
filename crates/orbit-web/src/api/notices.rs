@@ -210,8 +210,10 @@ fn operator_caller(state: &DashboardState) -> Result<NoticeCaller, Box<Response>
 
 /// The notice app's answer to a dashboard command, which is always the record
 /// that command asked for.
-fn mismatched(command: &str) -> orbit_core::OrbitError {
-    orbit_core::OrbitError::Execution(format!("the notice {command} answered with another record"))
+fn mismatched(command: &str) -> orbit_common::OrbitError {
+    orbit_common::OrbitError::Execution(format!(
+        "the notice {command} answered with another record"
+    ))
 }
 
 /// `GET /api/notices` — open notices plus the last 24h of closed/expired.
@@ -266,7 +268,7 @@ pub(super) async fn list_notices(
                 by_id.entry(notice.id.clone()).or_insert(notice);
             }
         }
-        Ok::<_, orbit_core::OrbitError>((by_id.into_values().collect::<Vec<_>>(), degraded))
+        Ok::<_, orbit_common::OrbitError>((by_id.into_values().collect::<Vec<_>>(), degraded))
     })
     .await
     {

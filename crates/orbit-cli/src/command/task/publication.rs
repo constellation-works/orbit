@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand, ValueEnum};
 use orbit_core::Core;
 use orbit_core::app::task::{self, Command, Outcome, Publication, PublicationSource};
-use orbit_core::application::task_bundle::publication::{
+use orbit_core::app::task::{
     AttachmentPolicy, AttachmentPolicyKind, PublicationFreshness, PublicationInspection,
     PublicationPublishOutcome, PublicationPublishStatus, PublicationRecoveryCompleteness,
     PublicationRenderAuthority, ScannerFailureBehavior,
@@ -95,7 +95,7 @@ impl ExecuteCore for TaskPublicationPublishArgs {
         if self.allow_unscanned_attachments
             && !matches!(self.attachments, CliAttachmentPolicy::Include)
         {
-            return Err(orbit_core::OrbitError::InvalidInput(
+            return Err(orbit_common::OrbitError::InvalidInput(
                 "--allow-unscanned-attachments is valid only with --attachments include"
                     .to_string(),
             ));

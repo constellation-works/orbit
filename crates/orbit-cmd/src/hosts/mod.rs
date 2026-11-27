@@ -74,7 +74,7 @@ impl PullDrains for RegisteredPullDrains {
             workspace,
             checkout,
         )
-        .map(orbit_core::composition::Opening::into_command_core)
+        .map(orbit_core::app::workspace::Opening::into_command_core)
     }
 }
 

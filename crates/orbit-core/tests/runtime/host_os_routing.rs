@@ -5,13 +5,14 @@
 //! The fixture composes the host OS, so each test behaves the same on the
 //! Linux and macOS machines CI runs it on.
 
+use orbit_common::OrbitError;
+use orbit_core::app::run::{CompletionPolicy, ShipMode};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{
-    CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, Task, TaskComplexity, TaskStatus,
-};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
 use orbit_types::task::HostOs;
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use orbit_types::workflow::{JobRunState, JobRunTrigger, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -101,7 +102,7 @@ fn running_run(runtime: &OrbitRuntime, job: &str, input: Value) -> String {
 
 fn ship(runtime: &OrbitRuntime, task: &str) -> OrbitError {
     runtime
-        .submit_ship_run(orbit_core::ShipRunRequest {
+        .submit_ship_run(orbit_core::application::job::ShipRunRequest {
             mode: ShipMode::Local,
             base_branch: Some("main"),
             task_ids: &[task.to_string()],

@@ -1,7 +1,8 @@
 use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::{JobRun, JobRunState, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_types::workflow::{JobRun, JobRunState};
 use orbit_types::workflow::{PipelineState, RunRootCause};
 use orbit_types::workspace::WorkspaceCheckout;
 use serde_json::{Value, json};
@@ -79,7 +80,7 @@ fn set_created_at(runtime: &OrbitRuntime, id: &str, at: DateTime<Utc>) {
                     "UPDATE job_runs SET created_at = ?1 WHERE workspace_id = ?2 AND run_id = ?3",
                     (at.to_rfc3339(), workspace_id.as_str(), id),
                 )
-                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))
+                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))
         })
         .unwrap();
 }
@@ -108,7 +109,7 @@ fn set_unknown_state(runtime: &OrbitRuntime, id: &str) {
                     "UPDATE job_runs SET state = ?1 WHERE workspace_id = ?2 AND run_id = ?3",
                     ("future_state", workspace_id.as_str(), id),
                 )
-                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))
+                .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))
         })
         .unwrap();
 }

@@ -1,9 +1,10 @@
 use super::test_support::{assert_isolated_child, enter_isolated_child};
 use crate::state::{DashboardState, RegistrySource};
 use chrono::Utc;
+use orbit_core::app::audit::ActorIdentity;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::test_support::{FixtureRuntime, fixture_runtime};
-use orbit_core::{ActorIdentity, TaskStatus};
+use orbit_types::task::TaskStatus;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -90,7 +91,10 @@ fn registry_state(global_root: &Path) -> DashboardState {
 /// Metadata selection used by the aggregate exposes a runtime's binding.
 fn runtime_task_titles(runtime: &FixtureRuntime) -> Vec<String> {
     runtime
-        .task_candidates(&Default::default(), orbit_core::DEFAULT_TASK_LIST_LIMIT)
+        .task_candidates(
+            &Default::default(),
+            orbit_types::task::DEFAULT_TASK_LIST_LIMIT,
+        )
         .expect("list candidates")
         .items
         .into_iter()

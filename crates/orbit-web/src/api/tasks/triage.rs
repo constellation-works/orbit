@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_JOB_RUN;
 use orbit_core::app::run::Command as RunCommand;
-use orbit_core::application::job::EscalationTriageSubmitError;
+use orbit_core::app::run::EscalationTriageSubmitError;
 use serde_json::json;
 
 use crate::api::routines::{authorization_denied, authorized_caller};

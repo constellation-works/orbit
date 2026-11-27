@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, ValueEnum};
 use orbit_core::Core;
 use orbit_core::app::task::{self, Command, Outcome};
-use orbit_core::application::task_bundle::migration::{ImportAction, ImportConflictPolicy};
+use orbit_core::app::task::{ImportAction, ImportConflictPolicy};
 use serde_json::json;
 
 use crate::command::{CommandOut, ExecuteCore, Payload};

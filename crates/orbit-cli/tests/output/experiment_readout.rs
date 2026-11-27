@@ -8,11 +8,11 @@
 use std::path::PathBuf;
 use std::process::Output;
 
-use orbit_core::OrbitRuntime;
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use serde_json::json;
 
@@ -308,7 +308,7 @@ fn shadow_memory_readout_labels_captures_not_delivered() {
                 "memory": { "enabled": true, "deliveries": [delivery] }
             }]
         });
-        orbit_engine::RunLifecycle::insert_job_run(
+        orbit_core::test_support::fixture_engine::RunLifecycle::insert_job_run(
             &runtime,
             "task_local_pipeline",
             1,

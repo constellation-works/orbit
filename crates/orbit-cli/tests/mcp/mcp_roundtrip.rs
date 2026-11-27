@@ -1154,8 +1154,8 @@ fn agent_task_deletion_is_denied_through_every_dispatch_path() {
         return;
     }
 
-    use orbit_core::OrbitRuntime;
     use orbit_core::adapter::command::ToolEntryPoint;
+    use orbit_core::runtime::OrbitRuntime;
     use orbit_types::tool::{McpCapability, McpTransport, ToolSessionContext};
 
     let runtime = OrbitRuntime::in_memory().expect("isolated runtime");
@@ -2142,7 +2142,7 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
 
     // The run row and its checkpoints, written against the fixture's own
     // disposable roots exactly as the host's pipeline worker leaves them.
-    let runtime = orbit_core::OrbitRuntime::from_roots(
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &workspace.home.join(".orbit"),
         &workspace.work.join(".orbit"),
     )

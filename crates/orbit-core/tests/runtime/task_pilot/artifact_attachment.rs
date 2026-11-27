@@ -12,7 +12,7 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{Task, TaskComplexity, TaskStatus};
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use orbit_types::workflow::{ChildDispatch, PipelineState};
 use serde_json::{Value, json};
 

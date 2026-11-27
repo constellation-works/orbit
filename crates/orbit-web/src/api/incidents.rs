@@ -18,11 +18,12 @@ use crate::state::run_read;
 use axum::extract::{Path, Query};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_core::app::run::Command as RunCommand;
-use orbit_core::{
+use orbit_types::telemetry::incident::{
     FailureClass, FailureIncident, FailureIncidentQuery, FailureIncidentReport, IncidentEventRef,
-    JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, OrbitError, PropagationLink,
+    JOB_RUN_LIFECYCLE_LABEL, LIFECYCLE_DIAGNOSTIC_LABEL, PropagationLink,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};

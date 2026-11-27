@@ -755,7 +755,7 @@ fn auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning() {
                         "UPDATE automation_consumers SET state_json=?1 WHERE consumer=?2",
                         [raw.as_str(), consumer.as_str()],
                     )
-                    .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    .map_err(|error| orbit_common::OrbitError::Store(error.to_string()))?;
                 Ok(())
             })
             .unwrap();
@@ -933,13 +933,13 @@ pub(crate) fn baselined_delivery_consumer(
     fixture: &Fixture,
     trigger: &serde_json::Value,
 ) -> (
-    orbit_core::OrbitRuntime,
+    orbit_core::runtime::OrbitRuntime,
     orbit_types::workflow::AutoTaskDefinition,
 ) {
     use chrono::Utc;
     use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
-    use orbit_core::ActorIdentity;
     use orbit_core::application::automation::evaluate_auto_task;
+    use orbit_core::runtime::context::ActorIdentity;
 
     git(fixture, &["checkout", "-b", "fixture-delivery"]);
     fs::write(fixture.repo.join("fixture.txt"), "baseline\n").unwrap();

@@ -1,8 +1,11 @@
-use orbit_core::application::job::{
+use orbit_common::OrbitError;
+use orbit_core::Core;
+use orbit_core::app::run::{
     JobRunProjectionEvidence, JobRunProjectionProfile, ResumeSubmissionProfile,
     ResumeSubmissionReceipt, project_job_run,
 };
-use orbit_core::{Core, JobRun, OrbitError, PipelineInvokeResult, PipelineWaitEntry};
+use orbit_core::app::run::{PipelineInvokeResult, PipelineWaitEntry};
+use orbit_types::workflow::JobRun;
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 
@@ -252,7 +255,7 @@ pub(crate) fn cli_job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -
 /// inspectable; their activity status is explicitly `unavailable` instead of
 /// borrowing the requested run crew as an actual model claim.
 pub(crate) fn cli_job_run_to_json_with_activity_provenance(
-    evidence: &[orbit_core::application::job::ActivityInvocationEvidence],
+    evidence: &[orbit_core::app::run::ActivityInvocationEvidence],
     run: &JobRun,
     state: Option<&PipelineState>,
 ) -> Value {

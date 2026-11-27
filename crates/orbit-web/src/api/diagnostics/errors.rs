@@ -6,9 +6,11 @@ use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
+use orbit_core::Core;
+use orbit_core::app::audit::V2AuditEventFilter;
 use orbit_core::app::run::Command as RunCommand;
-use orbit_core::runtime::audit::run::{AuditStepOutcome, RunAuditStep};
-use orbit_core::{Core, JobRunState, V2AuditEventFilter};
+use orbit_core::app::run::{AuditStepOutcome, RunAuditStep};
+use orbit_types::workflow::JobRunState;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -137,7 +139,7 @@ fn diagnostics_errors(
     env: &orbit_common::Env,
     range: &DiagnosticsRange,
     limit: usize,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let mut coverage_since = range.since;
     let rows = if limit == 0 {
         Vec::new()
@@ -162,7 +164,7 @@ fn diagnostics_error_rows(
     env: &orbit_common::Env,
     range: &DiagnosticsRange,
     limit: usize,
-) -> Result<ErrorRowsWithCoverage, orbit_core::OrbitError> {
+) -> Result<ErrorRowsWithCoverage, orbit_common::OrbitError> {
     // Read beyond the display cap so duplicate events cannot crowd out distinct failures.
     let (mut rows, process_coverage) = global_error_rows_in_range(env, range, 50_000)?;
     rows.sort_by_key(|row| std::cmp::Reverse(row_timestamp(row)));
@@ -275,7 +277,7 @@ fn global_error_rows_in_range(
     env: &orbit_common::Env,
     range: &DiagnosticsRange,
     limit: usize,
-) -> Result<(Vec<Value>, Option<DateTime<Utc>>), orbit_core::OrbitError> {
+) -> Result<(Vec<Value>, Option<DateTime<Utc>>), orbit_common::OrbitError> {
     let path = resolve_log_path(None, env)?;
     let filters = LogFilters::new(
         None,
@@ -285,7 +287,7 @@ fn global_error_rows_in_range(
     .with_until(range.until);
     let scanned =
         read_recent_matching_events_across_segments(&path, &filters, limit).map_err(|error| {
-            orbit_core::OrbitError::Io(format!("read log {}: {error}", path.display()))
+            orbit_common::OrbitError::Io(format!("read log {}: {error}", path.display()))
         })?;
     let home = env.home().and_then(std::ffi::OsStr::to_str);
     let rows = scanned
@@ -367,7 +369,7 @@ fn agent_stderr_error_rows(
     runtime: &Core,
     range: &DiagnosticsRange,
     limit: usize,
-) -> Result<(Vec<Value>, Option<DateTime<Utc>>), orbit_core::OrbitError> {
+) -> Result<(Vec<Value>, Option<DateTime<Utc>>), orbit_common::OrbitError> {
     // Ancestors can precede the selected window. Keep them for step attribution,
     // but only read stderr blobs belonging to invocations in the requested range.
     let (events, mut coverage_since) = stderr_scan_events(runtime, range.until)?;
@@ -536,7 +538,7 @@ fn string_field<'de, D: serde::Deserializer<'de>>(
 fn stderr_scan_events(
     runtime: &Core,
     until: DateTime<Utc>,
-) -> Result<(Vec<StderrScanEvent>, Option<DateTime<Utc>>), orbit_core::OrbitError> {
+) -> Result<(Vec<StderrScanEvent>, Option<DateTime<Utc>>), orbit_common::OrbitError> {
     let mut events = Vec::new();
     let mut scanned = 0;
     let mut oldest_scanned = None;

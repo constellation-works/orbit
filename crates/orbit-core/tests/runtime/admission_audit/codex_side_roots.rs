@@ -20,7 +20,7 @@ struct CodexSideRootFixture {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl CodexSideRootFixture {
-    fn new(runtime: &orbit_core::OrbitRuntime) -> Self {
+    fn new(runtime: &orbit_core::runtime::OrbitRuntime) -> Self {
         let canonical = |path: &std::path::Path| path.canonicalize().expect("canonical root");
         let orbit = canonical(&runtime.paths().orbit_dir);
         let global = canonical(&runtime.paths().global_dir);
@@ -80,7 +80,7 @@ impl CodexSideRootFixture {
 
 /// The side roots must be in play, or the reachability assertions are vacuous.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn assert_codex_side_roots_configured(runtime: &orbit_core::OrbitRuntime) {
+fn assert_codex_side_roots_configured(runtime: &orbit_core::runtime::OrbitRuntime) {
     let config = HostEnvironment::agent_provider_config(runtime);
     let dirs: Vec<String> = serde_json::from_str(
         config
@@ -189,7 +189,7 @@ fn linux_codex_side_roots_from_a_managed_checkout_reach_only_runtime_stores() {
 /// as the real SQLite file set a sandbox grant must lease. Returns the
 /// canonical semantic.db path.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn seed_indexed_task(runtime: &orbit_core::OrbitRuntime) -> std::path::PathBuf {
+fn seed_indexed_task(runtime: &orbit_core::runtime::OrbitRuntime) -> std::path::PathBuf {
     runtime
         .add_task(orbit_core::application::task::TaskAddParams {
             title: "Resident indexing fixture quasarbeacon".into(),

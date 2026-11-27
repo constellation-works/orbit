@@ -6,9 +6,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use orbit_common::OrbitError;
 use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
 use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 
 struct SlowPeerScan {

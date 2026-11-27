@@ -4,7 +4,7 @@
 use super::*;
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{TaskComplexity, TaskStatus, TaskType};
+use orbit_types::task::{TaskComplexity, TaskStatus, TaskType};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{PipelineState, PullCrewPreflight};
 use toml_edit::{DocumentMut, value};
@@ -381,20 +381,22 @@ fn every_surface_reads_the_seeded_provider_limit_store() {
 
     // A seven-day ledger reading with a live reset still stays neutral.
     runtime
-        .insert_invocation_trace_record(&orbit_core::InvocationInsertParams {
-            agent_execution_id: None,
-            job_run_id: "pressure-ledger-fixture".into(),
-            account: None,
-            activity_id: "implement_one".into(),
-            agent: "grok".into(),
-            provider: Some("grok".into()),
-            model: None,
-            task_ids: Vec::new(),
-            trace: orbit_types::telemetry::InvocationTrace {
-                provider_cost_usd: Some(90.0),
-                ..Default::default()
+        .insert_invocation_trace_record(
+            &orbit_core::test_support::fixture_store::InvocationInsertParams {
+                agent_execution_id: None,
+                job_run_id: "pressure-ledger-fixture".into(),
+                account: None,
+                activity_id: "implement_one".into(),
+                agent: "grok".into(),
+                provider: Some("grok".into()),
+                model: None,
+                task_ids: Vec::new(),
+                trace: orbit_types::telemetry::InvocationTrace {
+                    provider_cost_usd: Some(90.0),
+                    ..Default::default()
+                },
             },
-        })
+        )
         .unwrap();
     // The same public snapshot adds pressure without changing the existing gate.
     let weekly = |provider, window: &str, used, remaining| {

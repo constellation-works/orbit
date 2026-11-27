@@ -5,7 +5,7 @@
 //! derives one from evidence the automation would accept for the frozen
 //! batch, and from nothing else.
 
-use orbit_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
 use std::path::PathBuf;
 
 use orbit_core::application::task::TaskAddParams;
@@ -40,11 +40,11 @@ fn clean_worktree(fixture: &Fixture, name: &str) -> PathBuf {
 }
 
 fn git_commit(
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     run_id: &str,
     worktree: &Path,
 ) -> Result<Value, orbit_common::OrbitError> {
-    orbit_engine::execute_deterministic_action(
+    orbit_core::test_support::fixture_engine::execute_deterministic_action(
         runtime,
         "git_commit",
         &json!({}),

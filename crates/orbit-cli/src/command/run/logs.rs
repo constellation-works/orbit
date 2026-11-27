@@ -1,9 +1,10 @@
 use clap::Args;
 use orbit_common::Env;
+use orbit_core::Core;
+use orbit_core::app::run::PipelineWorkerLogSnapshot;
+use orbit_core::app::run::RunCliInvocationProfile;
 use orbit_core::app::run::{Command, exec};
-use orbit_core::application::job::PipelineWorkerLogSnapshot;
-use orbit_core::runtime::audit::run_logs::RunCliInvocationProfile;
-use orbit_core::{Core, JobRun};
+use orbit_types::workflow::JobRun;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -62,12 +63,12 @@ impl RunLogsArgs {
 }
 
 enum FollowError {
-    Runtime(orbit_core::OrbitError),
+    Runtime(orbit_common::OrbitError),
     Io(std::io::Error),
 }
 
-impl From<orbit_core::OrbitError> for FollowError {
-    fn from(error: orbit_core::OrbitError) -> Self {
+impl From<orbit_common::OrbitError> for FollowError {
+    fn from(error: orbit_common::OrbitError) -> Self {
         Self::Runtime(error)
     }
 }

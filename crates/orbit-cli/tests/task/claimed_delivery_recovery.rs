@@ -22,7 +22,14 @@ const CONSUMER: &str = "delivery-code-review";
 
 /// Mint real keyed tasks, retain an accepted receipt from an earlier batch,
 /// and simulate either side of the action-id checkpoint crash window.
-fn claimed(checkpointed_id: bool) -> (Fixture, orbit_core::OrbitRuntime, AutomationState, String) {
+fn claimed(
+    checkpointed_id: bool,
+) -> (
+    Fixture,
+    orbit_core::runtime::OrbitRuntime,
+    AutomationState,
+    String,
+) {
     let fixture = Fixture::new();
     enable_review_crew(&fixture);
     git(&fixture, &["checkout", "-b", "fixture-delivery"]);
@@ -555,12 +562,12 @@ fn scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks() {
 /// A receipt accepted under evidence schema 1 stays settled and still reads
 /// as the task's accepted coverage [ORB-15186].
 fn version_one_receipts_still_read_as_accepted_coverage(
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     receipts: &[AcceptedCoverage],
 ) {
     assert_eq!(receipts.len(), 1);
     let evidence =
-        orbit_engine::RunLifecycle::accepted_automation_coverage(runtime, &receipts[0].action_id)
+        orbit_core::test_support::fixture_engine::RunLifecycle::accepted_automation_coverage(runtime, &receipts[0].action_id)
             .unwrap()
             .expect("version 1 coverage reads");
     assert_eq!(evidence.schema_version, 1);

@@ -7,14 +7,15 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
 use orbit_config::AUTO_CONCURRENCY_PROFILE_WINDOW as WINDOW;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::host_resource::profile::{
     BaseClass, ProfileLookup, ProfileSource, ResourceProfile,
 };
-use orbit_core::{JobRunState, OrbitRuntime};
 use orbit_engine::RunLifecycle;
 use orbit_store::Store;
 use orbit_store::contract::RunResourceMinute;
 use orbit_types::task::TaskStatus;
+use orbit_types::workflow::JobRunState;
 use serde_json::json;
 use tempfile::TempDir;
 

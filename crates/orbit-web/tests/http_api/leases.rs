@@ -164,7 +164,8 @@ fn lease_routes_share_runtime_state_and_gate_writes() {
             std::fs::write(fixture.work.parent().unwrap().join("held.txt"), "held\n").unwrap();
             std::fs::write(fixture.work.parent().unwrap().join("other.txt"), "other\n").unwrap();
             let runtime =
-                orbit_core::OrbitRuntime::from_roots(&fixture.global, &fixture.work).unwrap();
+                orbit_core::runtime::OrbitRuntime::from_roots(&fixture.global, &fixture.work)
+                    .unwrap();
             let operator = fixture.server_with_leases(true);
             let read_only = fixture.server_with_leases(false);
             let request = json!({"principal": "alice", "selectors": ["file:held.txt"], "mode": "hard", "ttl_seconds": 600});

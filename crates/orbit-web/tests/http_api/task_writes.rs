@@ -2,9 +2,10 @@
 //! warnings, as the CLI and the task tools do. Warnings are identified by the
 //! record they name, never by their wording.
 
-use orbit_core::JobRunState;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::test_support::fixture_store;
 use orbit_types::task::TaskStatus;
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use super::support::Server;
@@ -479,7 +480,7 @@ fn dashboard_approval_refuses_while_a_local_run_owns_the_task() {
     );
 }
 
-fn own_pending(fixture: &Fixture, task_id: &str) -> orbit_core::JobRun {
+fn own_pending(fixture: &Fixture, task_id: &str) -> orbit_types::workflow::JobRun {
     let mut run = fixture.seed_run(
         &format!("jrun-owner-{task_id}"),
         "fixture",
@@ -582,8 +583,8 @@ fn dashboard_answers_a_decision_request_as_human() {
     isolated(
         "task_writes::dashboard_answers_a_decision_request_as_human",
         || {
-            use orbit_engine::RunLifecycle;
-            use orbit_engine::TaskAutomationUpdate;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
             use orbit_types::task::{
                 DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest,
             };
@@ -737,8 +738,8 @@ fn web_status_updates_record_surface_caller_note_audit_and_preserve_legacy_event
 
             // Append a pre-change event row (no `surface` or `caller` keys)
             // directly to `events.jsonl` to prove older history still loads.
-            let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-                &orbit_store::maintenance::task_registry::task_registry_path(
+            let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+                &fixture_store::maintenance::task_registry::task_registry_path(
                     &fixture.runtime.global_root(),
                 ),
             )

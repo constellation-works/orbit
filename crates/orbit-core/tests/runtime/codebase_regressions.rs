@@ -1,10 +1,10 @@
 //! Directory regression sites cover descendant keys introduced by other
 //! sites, including paths neither culprit declared in its footprint.
 
-use orbit_core::OrbitRuntime;
-use orbit_core::TaskStatus;
 use orbit_core::application::codebase::CodebaseQuery;
 use orbit_core::application::task::{TaskAddParams, TaskWriteScreen};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_types::task::TaskStatus;
 use orbit_types::task::{
     DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
     TaskRelation, TaskRelationType,

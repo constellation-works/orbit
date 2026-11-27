@@ -3,8 +3,8 @@ use std::path::Path;
 use crate::command::{CommandOut, Payload};
 use clap::Args;
 use orbit_cmd::registry_routines::routine_statuses;
-use orbit_core::OrbitError;
-use orbit_core::application::routines::pause_routine;
+use orbit_common::OrbitError;
+use orbit_core::app::routine::pause_routine;
 use serde_json::json;
 
 #[derive(Args)]
@@ -41,7 +41,7 @@ impl RoutinePauseArgs {
             )));
         }
         let changed = pause_routine(
-            orbit_core::composition::store_opener(),
+            orbit_core::app::workspace::store_opener(),
             global_root,
             &self.name,
             "human",

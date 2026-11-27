@@ -1,7 +1,7 @@
 //! Prerequisite prose becomes durable dependencies at the real pilot boundary.
 
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_core::{Task, TaskComplexity, TaskStatus};
+use orbit_types::task::{Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
 use super::{Workspace, races::apply_input};

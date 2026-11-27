@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 use orbit_core::bootstrap::linux_sandbox_host::{
     BUNDLED_BWRAP_PATH, BUNDLED_BWRAP_VERSION, BwrapProbeOutcome, BwrapSource,
 };

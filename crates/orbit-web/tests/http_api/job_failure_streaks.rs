@@ -3,13 +3,17 @@
 //! the fixed warning threshold, in isolated children.
 
 use chrono::{Duration, Utc};
-use orbit_core::JobRunState;
+use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
 
 /// Seed `states` as `job`'s finished runs, oldest first, ending now.
-fn seed_runs(fixture: &Fixture, job: &str, states: &[JobRunState]) -> Vec<orbit_core::JobRun> {
+fn seed_runs(
+    fixture: &Fixture,
+    job: &str,
+    states: &[JobRunState],
+) -> Vec<orbit_types::workflow::JobRun> {
     let now = Utc::now();
     let mut runs = Vec::new();
     for (index, state) in states.iter().enumerate() {
@@ -146,7 +150,7 @@ fn failure_streaks_claim_agreement_only_for_inspected_runs() {
         "job_failure_streaks::failure_streaks_claim_agreement_only_for_inspected_runs",
         || {
             use super::support::{run_step, save_record_step};
-            use orbit_core::JobTargetType;
+            use orbit_types::workflow::JobTargetType;
             let fixture = Fixture::new();
             fixture.job("long");
             fixture.job("silent");
@@ -208,7 +212,7 @@ fn failed_steps_without_errors_do_not_establish_agreement() {
         "job_failure_streaks::failed_steps_without_errors_do_not_establish_agreement",
         || {
             use super::support::{run_step, save_record_step};
-            use orbit_core::JobTargetType;
+            use orbit_types::workflow::JobTargetType;
             let fixture = Fixture::new();
             fixture.job("silent-steps");
             for run in seed_runs(&fixture, "silent-steps", &[JobRunState::Failed; 5]) {

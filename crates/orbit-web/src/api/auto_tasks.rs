@@ -6,17 +6,18 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
+use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_CREATE, DASHBOARD_AUTO_TASK_DELETE, DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
 };
+use orbit_core::Core;
 use orbit_core::app::DashboardOrigin;
 use orbit_core::app::auto_task::{
     AutoTaskDeleteError, AutoTaskDeleteParams, AutoTaskDeleteProfile, AutoTaskDeleteRefusal,
     AutoTaskToggleError, AutoTaskToggleOutcome, Command, DashboardWrite, DashboardWritten, Listing,
     Outcome, exec, project_auto_task_delete_receipt,
 };
-use orbit_core::{Core, OrbitError};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -389,14 +390,14 @@ fn delete_refusal(name: &str, error: AutoTaskDeleteError) -> Response {
     }
 }
 
-pub(super) fn auto_task_control_error(error: orbit_core::OrbitError) -> Response {
+pub(super) fn auto_task_control_error(error: orbit_common::OrbitError) -> Response {
     match error {
-        orbit_core::OrbitError::CapabilityRefused(message) => (
+        orbit_common::OrbitError::CapabilityRefused(message) => (
             StatusCode::FORBIDDEN,
             Json(json!({"error": message, "code": "capability_refused"})),
         )
             .into_response(),
-        orbit_core::OrbitError::PolicyDenied(message) => (
+        orbit_common::OrbitError::PolicyDenied(message) => (
             StatusCode::FORBIDDEN,
             Json(json!({"error": message, "code": "policy_denied"})),
         )

@@ -10,7 +10,7 @@
 //! [ORB-21174].
 
 use orbit_core::application::task::TaskAddParams;
-use orbit_core::{Task, TaskStatus};
+use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
 use super::Workspace;

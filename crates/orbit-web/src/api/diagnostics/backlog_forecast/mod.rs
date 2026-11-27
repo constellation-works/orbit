@@ -7,8 +7,8 @@ use orbit_core::app::run::Command as RunCommand;
 use serde::Deserialize;
 
 use crate::state::Ws;
-use orbit_core::BacklogForecastHistory;
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
+use orbit_core::app::task::BacklogForecastHistory;
 
 #[derive(Deserialize, Default)]
 pub(in crate::api) struct BacklogForecastQuery {

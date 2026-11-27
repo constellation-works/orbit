@@ -2,11 +2,12 @@
 
 use std::path::Path;
 
+use orbit_common::OrbitError;
 use orbit_common::fs::{git::run_git, io::atomic_write_text};
 use orbit_common::observability::audit_id::audit_execution_id;
-use orbit_core::runtime::JobRuns;
-use orbit_core::{OrbitError, workspace_live_run_ids};
+use orbit_core::app::run::workspace_live_run_ids;
 use orbit_registry::workspace_registry;
+use orbit_runtime::JobRuns;
 use orbit_store::compose::workspace_observational_backends;
 use orbit_store::contract::{AuditEventInsertParams, BindWorkspaceParams};
 use orbit_store::maintenance::task_registry::{
@@ -311,7 +312,7 @@ pub fn rebind_checkout_directory(
 
 fn validate_target_git(target: &Path, remote: Option<&str>) -> Result<(), OrbitError> {
     let root = run_git(
-        &orbit_core::composition::composition_env(),
+        &orbit_core::app::host::composition_env(),
         target,
         &["rev-parse", "--show-toplevel"],
     )?;
@@ -325,7 +326,7 @@ fn validate_target_git(target: &Path, remote: Option<&str>) -> Result<(), OrbitE
         )));
     }
     let origin = run_git(
-        &orbit_core::composition::composition_env(),
+        &orbit_core::app::host::composition_env(),
         target,
         &["remote", "get-url", "origin"],
     )?;
@@ -347,7 +348,7 @@ fn validate_target_git(target: &Path, remote: Option<&str>) -> Result<(), OrbitE
 
 fn reject_managed_worktrees(target: &Path, old: &WorkspaceCheckout) -> Result<(), OrbitError> {
     let listing = run_git(
-        &orbit_core::composition::composition_env(),
+        &orbit_core::app::host::composition_env(),
         target,
         &["worktree", "list", "--porcelain", "-z"],
     )?;
@@ -390,7 +391,7 @@ fn reject_checkout_activity(
     decision: &RebindDecision,
     registry: TaskRegistryStore,
 ) -> Result<(), OrbitError> {
-    let opener = orbit_core::composition::store_opener();
+    let opener = orbit_core::app::workspace::store_opener();
     let store = opener.open_read_only(&global_root.join("orbit.db"))?;
     let jobs = JobRuns::shared(store.clone(), &decision.partition_id);
     if !workspace_live_run_ids(opener, global_root, &decision.new.orbit_dir)?.is_empty() {
@@ -464,7 +465,7 @@ fn record_checkout_rebind_audit(
     global_root: &Path,
     decision: &RebindDecision,
 ) -> Result<(), OrbitError> {
-    if orbit_core::composition::store_opener()
+    if orbit_core::app::workspace::store_opener()
         .open_read_only(&global_root.join("orbit.db"))?
         .read()?
         .audit_event()

@@ -8,10 +8,10 @@ use crate::state::{DashboardState, Ws, WsCore, WsRejection};
 use axum::extract::{Path, RawQuery, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_core::app::Session;
+use orbit_core::app::task::TaskListQuery;
 use orbit_core::app::task::{
     self, Command, Outcome, PageRead, PageSelect, PageSelection, Read, RowRead, TaskPages,
 };
-use orbit_core::application::task::TaskListQuery;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -41,7 +41,7 @@ struct TaskOwner {
 /// - `detail` — optionally include the full projection for a task on this page.
 /// - `detail_candidate=true` — with `detail`, include discard availability.
 /// - `detail_runs=true` — with `detail`, include its bounded Runs tab page.
-/// - `limit` — positive integer, defaulting to [`orbit_core::DEFAULT_TASK_LIST_LIMIT`].
+/// - `limit` — positive integer, defaulting to [`orbit_types::task::DEFAULT_TASK_LIST_LIMIT`].
 /// - `cursor` — opaque continuation returned as `next_cursor`; it is rejected
 ///   when malformed or reused with a different workspace, endpoint, or filter.
 ///
@@ -140,7 +140,7 @@ pub(in crate::api) async fn list_tasks(
         let mut query = query;
         query
             .bind_cursor(&scope)
-            .map_err(orbit_core::OrbitError::InvalidInput)?;
+            .map_err(orbit_common::OrbitError::InvalidInput)?;
         Ok(pages.and_then(|pages| {
             if query.groups_by_status() {
                 status_sections_json((&ws, session), &query, &scope, pages)
@@ -168,10 +168,10 @@ fn workspace_scope(workspace_id: &str) -> String {
 fn select_pages(
     mut query: TaskPageQuery,
     workspace_id: &str,
-) -> Result<PageSelection, orbit_core::OrbitError> {
+) -> Result<PageSelection, orbit_common::OrbitError> {
     query
         .bind_cursor(&workspace_scope(workspace_id))
-        .map_err(orbit_core::OrbitError::InvalidInput)?;
+        .map_err(orbit_common::OrbitError::InvalidInput)?;
     if query.groups_by_status() {
         return Ok(PageSelection::Sections {
             query: TaskListQuery {
@@ -200,7 +200,7 @@ fn status_sections_json(
     query: &TaskPageQuery,
     scope: &str,
     pages: Vec<PageRead>,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let mut result = json!({ "group": "status", "limit": query.limit() });
     let mut sections = Vec::new();
     let mut total = 0_u64;
@@ -229,9 +229,9 @@ fn task_list_page_json(
     query: &TaskPageQuery,
     scope: &str,
     pages: Vec<PageRead>,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let page = pages.into_iter().next().ok_or_else(|| {
-        orbit_core::OrbitError::Execution("task list read answered no page".to_string())
+        orbit_common::OrbitError::Execution("task list read answered no page".to_string())
     })?;
     task_page_json(ws, query, scope, page)
 }
@@ -242,7 +242,7 @@ fn task_page_json(
     query: &TaskPageQuery,
     scope: &str,
     read: PageRead,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let PageRead {
         page,
         items,
@@ -259,7 +259,7 @@ fn task_page_json(
             })
             .transpose()
             .map_err(|error| {
-                orbit_core::OrbitError::Execution(format!("encode task cursor: {error}"))
+                orbit_common::OrbitError::Execution(format!("encode task cursor: {error}"))
             })?
     } else {
         None
@@ -314,7 +314,7 @@ fn read_task_row(
     ws: &Ws,
     session: Session,
     id: &str,
-) -> Result<Box<RowRead>, orbit_core::OrbitError> {
+) -> Result<Box<RowRead>, orbit_common::OrbitError> {
     let WsCore(core) = WsCore::over(&ws.0, session);
     task::exec(&core, Command::Read(Read::Row { id: id.to_string() })).and_then(Outcome::into_row)
 }
@@ -387,10 +387,13 @@ fn has_query_value(query: Option<&str>, name: &str, expected: &str) -> bool {
 /// warning; if no owner is found and one was skipped, its error is returned
 /// instead of a not-found, because the id may live in the workspace that
 /// could not be read.
-fn find_task_owner(state: &DashboardState, id: &str) -> Result<TaskOwner, orbit_core::OrbitError> {
+fn find_task_owner(
+    state: &DashboardState,
+    id: &str,
+) -> Result<TaskOwner, orbit_common::OrbitError> {
     let pinned = state.pin();
-    let home = orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
-    let mut skipped: Option<orbit_core::OrbitError> = None;
+    let home = orbit_common::fs::path::home_dir(&orbit_core::app::host::composition_env()).ok();
+    let mut skipped: Option<orbit_common::OrbitError> = None;
     for entry in pinned
         .entries()
         .iter()
@@ -402,7 +405,7 @@ fn find_task_owner(state: &DashboardState, id: &str) -> Result<TaskOwner, orbit_
             Err(_) => {
                 tracing::warn!(workspace = %entry.id, "task owner lookup could not open workspace");
                 skipped.get_or_insert_with(|| {
-                    orbit_core::OrbitError::Execution(format!(
+                    orbit_common::OrbitError::Execution(format!(
                         "failed to open workspace '{}'",
                         entry.id
                     ))
@@ -423,8 +426,8 @@ fn find_task_owner(state: &DashboardState, id: &str) -> Result<TaskOwner, orbit_
                     read,
                 });
             }
-            Err(orbit_core::OrbitError::NotFound {
-                kind: orbit_core::NotFoundKind::Task,
+            Err(orbit_common::OrbitError::NotFound {
+                kind: orbit_common::NotFoundKind::Task,
                 ..
             }) => {}
             Err(error) => {
@@ -434,7 +437,7 @@ fn find_task_owner(state: &DashboardState, id: &str) -> Result<TaskOwner, orbit_
         }
     }
     Err(skipped.unwrap_or_else(|| {
-        orbit_core::OrbitError::not_found(orbit_core::NotFoundKind::Task, id.to_string())
+        orbit_common::OrbitError::not_found(orbit_common::NotFoundKind::Task, id.to_string())
     }))
 }
 

@@ -9,16 +9,17 @@
 
 use std::path::Path;
 
+use orbit_common::OrbitError;
+use orbit_core::app::run::{CompletionPolicy, ShipMode};
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{
-    CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, TaskComplexity, TaskStatus,
-};
 use orbit_engine::Dispatch;
 use orbit_engine::HostEnvironment;
 use orbit_tools::{ReservationOwnerContext, ToolContext};
 use orbit_types::task::{PipelineChildAdmissionMeta, ReservationOwnerMetadata};
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::{JobRunTrigger, PipelineState, ReviewAdmission, ReviewLayer};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -95,8 +96,8 @@ fn ship(
     runtime: &OrbitRuntime,
     mode: ShipMode,
     review: Option<ReviewLayer>,
-) -> Result<orbit_core::PipelineInvokeResult, OrbitError> {
-    runtime.submit_ship_run(orbit_core::ShipRunRequest {
+) -> Result<orbit_core::application::job::PipelineInvokeResult, OrbitError> {
+    runtime.submit_ship_run(orbit_core::application::job::ShipRunRequest {
         mode,
         base_branch: Some("main"),
         task_ids: &[],
@@ -115,8 +116,8 @@ fn ship(
 fn drain(
     runtime: &OrbitRuntime,
     review: Option<ReviewLayer>,
-) -> Result<orbit_core::PipelineInvokeResult, OrbitError> {
-    runtime.submit_workspace_auto_run(orbit_core::AutoDrainRequest {
+) -> Result<orbit_core::application::job::PipelineInvokeResult, OrbitError> {
+    runtime.submit_workspace_auto_run(orbit_core::application::job::AutoDrainRequest {
         for_seconds: Some(600),
         max_active_leaf_runs: Some(1),
         completion: CompletionPolicy::Review,
@@ -133,7 +134,9 @@ fn drain(
     })
 }
 
-fn refusal(result: Result<orbit_core::PipelineInvokeResult, OrbitError>) -> String {
+fn refusal(
+    result: Result<orbit_core::application::job::PipelineInvokeResult, OrbitError>,
+) -> String {
     match result {
         Err(OrbitError::InvalidInput(message)) => message,
         other => panic!("expected an invalid-input refusal, got {other:?}"),
@@ -280,7 +283,7 @@ fn a_run_option_adds_review_that_children_and_resumes_keep() {
             plan: "Fixture plan.".into(),
             complexity: TaskComplexity::Medium,
             context_files: vec!["dir:.".into()],
-            task_type: Some(orbit_core::TaskType::Chore),
+            task_type: Some(orbit_types::task::TaskType::Chore),
             status: Some(TaskStatus::Backlog),
             tags: vec!["delivery:task_local_pipeline".into()],
             ..Default::default()

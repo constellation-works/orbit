@@ -49,7 +49,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use axum::extract::{Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
-use orbit_core::{Core, V2AuditEventFilter};
+use orbit_core::Core;
+use orbit_core::app::audit::V2AuditEventFilter;
 use orbit_types::task::{Task, TaskStatus, complexity_bucket, complexity_bucket_ord};
 use orbit_types::workflow::{PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker};
 use serde::Deserialize;
@@ -323,7 +324,7 @@ pub(in crate::api) async fn diagnostics_delivery_friction(
     let filters = match parse_filters(&q) {
         Ok(filters) => filters,
         Err(message) => {
-            return map_runtime_error(orbit_core::OrbitError::InvalidInput(message));
+            return map_runtime_error(orbit_common::OrbitError::InvalidInput(message));
         }
     };
     let range = match trend_range(&DiagnosticsQuery {
@@ -389,7 +390,7 @@ fn delivery_friction_trend(
     runtime: &Core,
     range: &DiagnosticsRange,
     filters: &Filters,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let read_since = TrendWindow::read_since(range);
     let dates = run_read(runtime, RunCommand::task_terminal_dates(read_since))?;
     let done: Vec<_> = dates
@@ -639,7 +640,7 @@ fn audit_occurrences(
     runtime: &Core,
     since: Option<DateTime<Utc>>,
     families: &[Family],
-) -> Result<Vec<Occurrence>, orbit_core::OrbitError> {
+) -> Result<Vec<Occurrence>, orbit_common::OrbitError> {
     let mut body_kinds = Vec::new();
     if families.contains(&Family::StepRecovery) || families.contains(&Family::MergeConflict) {
         body_kinds.push("step_recovery_attempted".to_string());
@@ -731,7 +732,7 @@ fn history_occurrences(
     since: Option<DateTime<Utc>>,
     tasks: &HashMap<String, Task>,
     families: &[Family],
-) -> Result<Vec<Occurrence>, orbit_core::OrbitError> {
+) -> Result<Vec<Occurrence>, orbit_common::OrbitError> {
     let mut occurrences = Vec::new();
     // Failed heads, first observation kept: (pr, head) → (at, task).
     let mut failed_heads: BTreeMap<(String, String), (DateTime<Utc>, String)> = BTreeMap::new();

@@ -161,7 +161,7 @@ fn sustained_pool_warning_reaches_run_show_and_readiness_text() {
     use serde_json::json;
 
     let fixture = Fixture::new();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &fixture.home.join(".orbit"),
         &fixture.repo.join(".orbit"),
     )

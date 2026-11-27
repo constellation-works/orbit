@@ -3,11 +3,12 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::Env;
+use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
-use orbit_core::application::workspace_preset::WorkspacePreset;
-use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
-use orbit_core::runtime::HostLifetime;
-use orbit_core::{OrbitError, RoutineSeedIdentity};
+use orbit_core::app::routine::RoutineSeedIdentity;
+use orbit_core::app::run::HostLifetime;
+use orbit_core::app::workspace::WorkspacePreset;
+use orbit_core::app::workspace::{InitOptions, init_workspace_at_root};
 use orbit_registry::workspace_registry;
 use orbit_registry::{MachineIdentityState, inspect_machine_identity};
 use orbit_types::identity::validate_machine_id;
@@ -75,7 +76,7 @@ impl WorkspaceInitArgs {
         if let Some(preset) = &preset {
             preset.validate_for_workspace(
                 env,
-                orbit_core::composition::store_opener(),
+                orbit_core::app::workspace::store_opener(),
                 &global_root,
                 &orbit_dir,
             )?;
@@ -129,7 +130,7 @@ impl WorkspaceInitArgs {
         // Validate before bootstrapping any workspace state so invalid modes
         // fail closed at the command boundary.
         if let Some(mode) = self.ship_mode.as_deref() {
-            orbit_core::ShipMode::parse(mode)?;
+            orbit_core::app::run::ShipMode::parse(mode)?;
         }
         let (local_machine_id, task_prefix) = match inspect_machine_identity(global_root)? {
             MachineIdentityState::Present(identity) => {
@@ -202,10 +203,10 @@ impl WorkspaceInitArgs {
                 let seeded_ship_mode = self
                     .ship_mode
                     .as_deref()
-                    .map(orbit_core::ShipMode::parse)
+                    .map(orbit_core::app::run::ShipMode::parse)
                     .transpose()?
-                    .or_else(|| existing_workspace.map(orbit_core::resolved_ship_mode))
-                    .unwrap_or(orbit_core::ShipMode::Pr);
+                    .or_else(|| existing_workspace.map(orbit_core::app::run::resolved_ship_mode))
+                    .unwrap_or(orbit_core::app::run::ShipMode::Pr);
                 // Seeded routine names are suffixed with the registered workspace
                 // name, not the checkout directory, so two checkouts sharing a
                 // basename stay distinct on one host [ORB-12107]. Validate the
@@ -378,7 +379,7 @@ impl WorkspaceInitArgs {
                         local_machine_id.as_deref(),
                     )?;
                 }
-                orbit_core::adapter::HubCoordinationExecutor::register_workspace(
+                orbit_core::app::workspace::HubCoordinationExecutor::register_workspace(
                     global_root,
                     &id,
                     &name,
@@ -388,7 +389,7 @@ impl WorkspaceInitArgs {
                 // orbit_dir (UNIQUE) and must not steal that row. `--force` rebinds
                 // a leftover synthetic parent(data-dir) mint.
                 if !registered_shared_root {
-                    orbit_core::adapter::HubCoordinationExecutor::bind_checkout(
+                    orbit_core::app::workspace::HubCoordinationExecutor::bind_checkout(
                         global_root,
                         &id,
                         &name,

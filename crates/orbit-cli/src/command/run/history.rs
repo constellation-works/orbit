@@ -3,7 +3,7 @@ use orbit_core::app::run::FailureRow;
 use clap::Args;
 use orbit_core::Core;
 use orbit_core::app::run::{Command, exec};
-use orbit_core::application::job::{
+use orbit_core::app::run::{
     JobRunListParams, fold_run_incidents, job_run_task_ids, run_error_step, run_upgrade_paused,
 };
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};

@@ -7,7 +7,7 @@ mod artifact_get {
     use serde_json::{Value, json};
 
     use crate::admission_audit::tool_support::{create_task, run_tool_as_operator, test_runtime};
-    use orbit_core::OrbitRuntime;
+    use orbit_core::runtime::OrbitRuntime;
 
     fn attach(runtime: &OrbitRuntime, task_id: &str, path: &str, content: Vec<u8>) {
         let source = runtime.paths().repo_root.join(format!(
@@ -385,7 +385,7 @@ fn artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error() {
 }
 
 fn seed_open_delivery_batch_attempt(
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     machine_id: &str,
     task_id: &str,
 ) -> orbit_types::workflow::automation::BatchAttempt {

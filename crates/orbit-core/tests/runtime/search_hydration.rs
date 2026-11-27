@@ -6,10 +6,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use orbit_common::OrbitError;
 use orbit_common::test_env::{self, FixtureProgress};
+use orbit_core::app::search::{GlobalSearchKind, GlobalSearchParams};
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::stored::friction::WorkspaceFrictions as FrictionStore;
-use orbit_core::{GlobalSearchKind, GlobalSearchParams, OrbitError, OrbitRuntime};
 use orbit_store::contract::FrictionAddParams;
 use serde_json::json;
 use tempfile::TempDir;
@@ -529,8 +531,11 @@ fn one_search_takes_the_task_commit_lock_once() {
     let global = root.path().join("global");
     let workspace = root.path().join("repo/.orbit");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
-    for (index, status) in std::iter::repeat_n(orbit_core::TaskStatus::Done, 8)
-        .chain(std::iter::repeat_n(orbit_core::TaskStatus::Backlog, 6))
+    for (index, status) in std::iter::repeat_n(orbit_types::task::TaskStatus::Done, 8)
+        .chain(std::iter::repeat_n(
+            orbit_types::task::TaskStatus::Backlog,
+            6,
+        ))
         .enumerate()
     {
         runtime

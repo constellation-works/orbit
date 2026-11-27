@@ -13,12 +13,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use orbit_core::app::run::ShipMode;
 use orbit_core::application::plugin::{PluginAddOptions, install_plugin};
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
-use orbit_core::{OrbitRuntime, ShipMode, TaskComplexity, TaskStatus};
-use orbit_engine::{Dispatch, Recovery, RunLifecycle};
+use orbit_engine::Dispatch;
+use orbit_engine::Recovery;
+use orbit_engine::RunLifecycle;
 use orbit_tools::{ActivityBinding, ToolCaller, ToolContext};
+use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -293,7 +297,7 @@ exit 99
                 tags: tags.iter().map(ToString::to_string).collect(),
                 complexity: TaskComplexity::Low,
                 context_files: vec!["file:docs/standards/STD-01.md".into()],
-                task_type: Some(orbit_core::TaskType::Chore),
+                task_type: Some(orbit_types::task::TaskType::Chore),
                 status: Some(TaskStatus::Backlog),
                 ..Default::default()
             })

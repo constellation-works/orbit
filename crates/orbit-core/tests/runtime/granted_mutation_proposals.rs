@@ -7,10 +7,13 @@ use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TaskAddParams,
     TaskUpdateParams,
 };
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
-use orbit_core::{OrbitRuntime, TaskStatus};
-use orbit_engine::{Dispatch, RunLifecycle};
-use orbit_engine::{TaskActivityUpdate, TaskAutomationUpdate};
+use orbit_engine::Dispatch;
+use orbit_engine::RunLifecycle;
+use orbit_engine::TaskActivityUpdate;
+use orbit_engine::TaskAutomationUpdate;
+use orbit_types::task::TaskStatus;
 use orbit_types::task::{ExternalRef, MutationProposal, MutationReceipt, MutationReceiptState};
 use orbit_types::workflow::{REVIEW_MANIFEST_ARTIFACT, ReviewManifest, ReviewTiming};
 use serde_json::{Value, json};
@@ -453,7 +456,9 @@ fn approve_unapplied_proposal_blocks_and_force_completes_case() {
     );
     let human = runtime
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+        .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+            "human:operator",
+        ));
     human
         .force_update_task_with_identity(
             &task_id,
@@ -533,7 +538,9 @@ fn final_recovery_refuses_already_done_unapplied_proposal_case() {
     let (root, runtime, task_id) = unapplied_review_task();
     let human = runtime
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+        .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+            "human:operator",
+        ));
     human
         .force_update_task_with_identity(
             &task_id,

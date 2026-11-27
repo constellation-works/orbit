@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::{
     DispatchError, DispatchOutcome, V2AuditWriter, V2DispatchInput, dispatch_v2_activity,
 };

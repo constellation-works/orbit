@@ -2,7 +2,7 @@
 
 use std::future::Future;
 
-use orbit_core::OrbitError;
+use orbit_common::OrbitError;
 
 /// Prepare shutdown notification, installing Unix handlers before returning.
 pub(crate) fn shutdown_signal() -> Result<impl Future<Output = ()> + Send, OrbitError> {

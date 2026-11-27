@@ -585,7 +585,9 @@ fn already_done_unapplied_proposal_settles_without_the_failure_handoff() {
     fixture
         .runtime
         .clone()
-        .with_actor(orbit_core::ActorIdentity::human("human:operator"))
+        .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+            "human:operator",
+        ))
         .force_update_task_with_identity(
             &task_id,
             TaskUpdateParams {

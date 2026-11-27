@@ -78,7 +78,7 @@ pub(in crate::api) async fn list_all_tasks(
         let mut query = query;
         query
             .bind_cursor(&scope)
-            .map_err(orbit_core::OrbitError::InvalidInput)?;
+            .map_err(orbit_common::OrbitError::InvalidInput)?;
         let entries = aggregate_task_entries(&pinned, &query);
         let resume_index = aggregate_resume_index(&entries, &query)?;
         Ok(aggregate_tasks_json(
@@ -105,8 +105,8 @@ fn aggregate_tasks_json(
     scope: &str,
     entries: &[&WsEntry],
     resume_index: usize,
-) -> Result<Value, orbit_core::OrbitError> {
-    let home = orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
+) -> Result<Value, orbit_common::OrbitError> {
+    let home = orbit_common::fs::path::home_dir(&orbit_core::app::host::composition_env()).ok();
     if query.groups_by_status() {
         let section_queries = query.status_section_queries();
         if section_queries.is_empty() {
@@ -136,7 +136,7 @@ fn aggregate_tasks_json(
     let opened = open_workspaces(pinned, entries);
     let pages = fetch_aggregate_pages(entries, &opened, vec![section_spec(query)], resume_index)?;
     let page = pages.sections.into_iter().next().ok_or_else(|| {
-        orbit_core::OrbitError::Execution("aggregate task list answered no page".to_string())
+        orbit_common::OrbitError::Execution("aggregate task list answered no page".to_string())
     })?;
     let context = RenderContext {
         state,
@@ -165,12 +165,12 @@ fn aggregate_task_entries<'a>(pinned: &'a Pinned, query: &TaskPageQuery) -> Vec<
 fn aggregate_resume_index(
     entries: &[&WsEntry],
     query: &TaskPageQuery,
-) -> Result<usize, orbit_core::OrbitError> {
+) -> Result<usize, orbit_common::OrbitError> {
     let Some(cursor) = query.cursor() else {
         return Ok(0);
     };
     let workspace_id = cursor.workspace_id.as_deref().ok_or_else(|| {
-        orbit_core::OrbitError::InvalidInput(
+        orbit_common::OrbitError::InvalidInput(
             "task cursor predates workspace-ordered pages; reload the list".to_string(),
         )
     })?;
@@ -178,7 +178,7 @@ fn aggregate_resume_index(
         .iter()
         .position(|entry| entry.id == workspace_id)
         .ok_or_else(|| {
-            orbit_core::OrbitError::InvalidInput(
+            orbit_common::OrbitError::InvalidInput(
                 "task cursor names a workspace outside this listing".to_string(),
             )
         })
@@ -227,7 +227,7 @@ fn fetch_aggregate_pages(
     opened: &[Result<Source, String>],
     sections: Vec<AggregateTaskSection>,
     resume_index: usize,
-) -> Result<AggregateTaskPages, orbit_core::OrbitError> {
+) -> Result<AggregateTaskPages, orbit_common::OrbitError> {
     let Some((bound_index, bound_core)) = opened.iter().enumerate().find_map(|(index, slot)| {
         slot.as_ref()
             .ok()
@@ -295,7 +295,7 @@ fn render_grouped_pages(
     query: &TaskPageQuery,
     section_queries: Vec<(TaskStatus, TaskPageQuery)>,
     pages: AggregateTaskPages,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let mut sections = Vec::with_capacity(section_queries.len());
     let mut total = 0_u64;
     let mut unavailable = Vec::new();
@@ -332,7 +332,7 @@ fn render_task_page(
     context: &RenderContext<'_>,
     query: &TaskPageQuery,
     page: AggregateTaskPage,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let offset = query.offset();
     let next_offset = offset.saturating_add(page.candidate_count);
     let next_cursor = page
@@ -349,7 +349,7 @@ fn render_task_page(
         })
         .transpose()
         .map_err(|error| {
-            orbit_core::OrbitError::Execution(format!("encode task cursor: {error}"))
+            orbit_common::OrbitError::Execution(format!("encode task cursor: {error}"))
         })?;
     let total = page.total;
     let unavailable: Vec<Value> = page
@@ -379,7 +379,7 @@ fn render_task_page(
 fn project_rows(
     context: &RenderContext<'_>,
     mut page: AggregateTaskPage,
-) -> Result<Vec<Value>, orbit_core::OrbitError> {
+) -> Result<Vec<Value>, orbit_common::OrbitError> {
     // Rows are rendered a workspace at a time, each by its own task app, and
     // set back in page order.
     let mut by_workspace: BTreeMap<usize, (Vec<usize>, Vec<_>)> = BTreeMap::new();
@@ -396,7 +396,7 @@ fn project_rows(
     for (workspace_index, (positions, rows)) in by_workspace {
         let entry = context.entries[workspace_index];
         let source = context.opened[workspace_index].as_ref().map_err(|error| {
-            orbit_core::OrbitError::Execution(format!(
+            orbit_common::OrbitError::Execution(format!(
                 "missing opened workspace for hydrated row: {error}"
             ))
         })?;

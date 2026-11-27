@@ -262,7 +262,7 @@ impl DoctorProbe {
     }
 }
 
-/// The doctor's repairs and checks on [`OrbitRuntime`], which the doctor
+/// The doctor's repairs and checks on `OrbitRuntime`, which the doctor
 /// app's flows and the surfaces not yet routed through it call.
 pub trait DoctorCommands {
     /// Restrict writable Orbit-owned state directories to owner-only access,

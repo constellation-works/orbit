@@ -1,9 +1,10 @@
 //! Host-output controls driven by the existing public CLI and GC routine.
 
 use super::*;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::OrbitRuntimeRoots;
-use orbit_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
 use orbit_types::workflow::JobRunState;
 
 pub(super) struct HostOutput {
@@ -16,7 +17,7 @@ pub(super) struct HostOutput {
     runtime: OrbitRuntime,
     active_run: String,
     owner: crate::child_guard::ChildGuard,
-    _lease: orbit_engine::review_gate::ScratchHostTargetLease,
+    _lease: fixture_engine::review_gate::ScratchHostTargetLease,
 }
 
 impl HostOutput {
@@ -53,7 +54,7 @@ impl HostOutput {
         .map(orbit_core::composition::Opening::into_runtime)
         .unwrap();
         let build = |checkout: &Path| {
-            let result = orbit_engine::review_gate::run_required_validation(
+            let result = fixture_engine::review_gate::run_required_validation(
                 &runtime, checkout,
                 "mkdir -p \"$BUILD_OUTPUT_DIR/debug\" && printf 'fixture host output' > \"$BUILD_OUTPUT_DIR/debug/output\"",
             ).unwrap();
@@ -168,10 +169,10 @@ impl HostOutput {
                 "HEAD",
             ],
         );
-        let lease = orbit_engine::review_gate::lease_scratch_host_target(
+        let lease = fixture_engine::review_gate::lease_scratch_host_target(
             &orbit_common::Env::capture(),
             &leased_source,
-            orbit_engine::review_gate::ScratchHostTarget::Recovery,
+            fixture_engine::review_gate::ScratchHostTarget::Recovery,
         )
         .unwrap();
         let leased = build(&leased_source);
@@ -285,7 +286,7 @@ impl Drop for HostOutput {
 fn attach_run(runtime: &OrbitRuntime, workspace: &Workspace, run_id: &str) -> PathBuf {
     let run = runtime.show_job_run(run_id).unwrap();
     let source =
-        orbit_engine::run_worktree_paths(&orbit_common::Env::capture(), &workspace.repo, &run)
+        fixture_engine::run_worktree_paths(&orbit_common::Env::capture(), &workspace.repo, &run)
             .unwrap()
             .remove(0);
     crate::git_repo::run(

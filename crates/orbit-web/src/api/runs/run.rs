@@ -4,7 +4,7 @@ use crate::state::DashboardState;
 use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::application::job::JobRunCancelResultProfile;
+use orbit_core::app::run::JobRunCancelResultProfile;
 use serde_json::json;
 
 use super::locate::{RunLookupFailure, requested_workspace, with_run};
@@ -104,8 +104,8 @@ pub(in crate::api) async fn cancel_run_action(
     .await
     {
         Ok(Ok(Ok(result))) => Json(result.to_json(JobRunCancelResultProfile::Http)).into_response(),
-        Ok(Ok(Err(orbit_core::OrbitError::JobValidation(msg))))
-        | Ok(Ok(Err(orbit_core::OrbitError::JobRunStateTransition(msg)))) => {
+        Ok(Ok(Err(orbit_common::OrbitError::JobValidation(msg))))
+        | Ok(Ok(Err(orbit_common::OrbitError::JobRunStateTransition(msg)))) => {
             (StatusCode::CONFLICT, Json(json!({ "error": msg }))).into_response()
         }
         Ok(Ok(Err(e))) => map_runtime_error(e),

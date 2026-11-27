@@ -49,7 +49,8 @@ pub use operation::args as operation_args;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use orbit_core::{Core, OrbitError};
+use orbit_common::OrbitError;
+use orbit_core::Core;
 
 // Re-exported so a command file imports its return type from the module that
 // defines the trait, rather than reaching into `output` for half of it.

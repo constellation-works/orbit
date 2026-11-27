@@ -1,6 +1,6 @@
 use clap::Args;
 use orbit_core::Core;
-use orbit_core::adapter::command::PluginRemoveOptions;
+use orbit_core::app::plugin::PluginRemoveOptions;
 use orbit_core::app::plugin::{Command, Outcome, exec};
 use serde_json::json;
 

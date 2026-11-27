@@ -9,7 +9,7 @@ use axum::{
 use orbit_core::app::automation::{Command, Consumer, Outcome, exec};
 use serde_json::json;
 
-pub(super) use orbit_core::application::automation::projection::automation_summary as summary;
+pub(super) use orbit_core::app::automation::automation_summary as summary;
 
 enum EvidenceLookup {
     Body(Vec<u8>),

@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use axum::extract::State;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::application::job::{JobRunListParams, JobRunOrder};
-use orbit_core::{JobRun, JobRunState};
+use orbit_core::app::run::{JobRunListParams, JobRunOrder};
+use orbit_types::workflow::{JobRun, JobRunState};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -108,7 +108,7 @@ pub(super) fn all_job_runs_json(
     limit: usize,
     state_filter: AllJobRunsState,
     scope: &JobRunScope,
-) -> Result<Value, orbit_core::OrbitError> {
+) -> Result<Value, orbit_common::OrbitError> {
     let pinned = state.pin();
     let entries: Vec<&crate::state::WsEntry> = pinned
         .entries()

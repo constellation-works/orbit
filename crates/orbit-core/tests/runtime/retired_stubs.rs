@@ -5,7 +5,7 @@
 //! Production dispatch returns `DeterministicActionFailed` and must not
 //! report `Ok` for a red head.
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_engine::Dispatch;
 use orbit_engine::DispatchError;
 use orbit_tools::ToolContext;

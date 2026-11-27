@@ -1,9 +1,10 @@
 //! `orbit run ship` CLI entrypoint.
 
 use clap::{Args, ValueEnum};
+use orbit_core::Core;
+use orbit_core::app::run::ShipSubmissionProfile;
 use orbit_core::app::run::{Command, exec};
-use orbit_core::application::job::ShipSubmissionProfile;
-use orbit_core::{CompletionPolicy, Core, ShipRunRequest};
+use orbit_core::app::run::{CompletionPolicy, ShipRunRequest};
 
 use crate::command::{CommandOut, ExecuteCore};
 
@@ -16,10 +17,10 @@ pub enum ShipMode {
 }
 
 impl ShipMode {
-    pub(super) fn to_core(self) -> orbit_core::ShipMode {
+    pub(super) fn to_core(self) -> orbit_core::app::run::ShipMode {
         match self {
-            ShipMode::Pr => orbit_core::ShipMode::Pr,
-            ShipMode::Local => orbit_core::ShipMode::Local,
+            ShipMode::Pr => orbit_core::app::run::ShipMode::Pr,
+            ShipMode::Local => orbit_core::app::run::ShipMode::Local,
         }
     }
 }

@@ -65,7 +65,7 @@ pub(super) async fn control_routine_breaker(
                 RoutineBreakerAction::Bypass => CoreBreakerAction::Bypass,
             },
             global_root: state.global_root().to_path_buf(),
-            opener: orbit_core::composition::store_opener(),
+            opener: orbit_core::app::workspace::store_opener(),
             statuses: statuses_read(&state),
         },
     )

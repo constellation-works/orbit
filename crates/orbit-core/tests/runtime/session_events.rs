@@ -1,6 +1,6 @@
 //! Bounded session observability through the runtime's public event boundary.
 
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::event_bus::SESSION_EVENT_CAPACITY;
 use orbit_types::record::OrbitEvent;
 

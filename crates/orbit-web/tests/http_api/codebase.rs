@@ -8,9 +8,10 @@ mod fixtures;
 use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
+use orbit_common::OrbitError;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
-use orbit_core::{OrbitError, TaskStatus};
-use orbit_engine::Dispatch;
+use orbit_core::test_support::fixture_engine::Dispatch;
+use orbit_types::task::TaskStatus;
 use orbit_types::task::{
     DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
     TaskComplexity, TaskOrigin,
@@ -2674,7 +2675,9 @@ analytics_test!(
 /// A landed-delivery row of `lines` changed lines for `task_id`; `seq`
 /// keeps each row's commit distinct.
 fn landed_row(fixture: &Fixture, task_id: &str, seq: usize, lines: u64) {
-    use orbit_store::contract::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
+    use orbit_core::test_support::fixture_store::contract::{
+        DiffClassCounts, LandedDiffSource, LandedDiffStats,
+    };
     fixture
         .runtime
         .sqlite_store()

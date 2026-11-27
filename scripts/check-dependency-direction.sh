@@ -94,8 +94,9 @@ allowed_internal_deps() {
       ;;
     orbit-cmd)
       # The shared application composition layer joins Core runtime kernels to
-      # machine-local Registry state for CLI and dashboard consumers.
-      echo "orbit-common orbit-config orbit-core orbit-mcp orbit-registry orbit-store orbit-tools orbit-types"
+      # machine-local Registry state for CLI and dashboard consumers. It
+      # implements the kernel's workspace-catalog trait, so it names the kernel.
+      echo "orbit-common orbit-config orbit-core orbit-mcp orbit-registry orbit-runtime orbit-store orbit-tools orbit-types"
       ;;
     orbit-mcp)
       # MCP owns framing, canonical discovery, and direct SSH stdio transport.
@@ -104,13 +105,16 @@ allowed_internal_deps() {
       ;;
     orbit-web)
       # Lease token scopes and startup machine settings are host-local inputs.
+      # It reaches a workspace only through orbit-core's apps, so it has no
+      # edge to orbit-runtime, orbit-store or orbit-engine.
       # Its dev-only self dependency enables the `test-support` feature.
-      echo "orbit-auth orbit-common orbit-cmd orbit-config orbit-core orbit-registry orbit-types orbit-engine orbit-store orbit-web"
+      echo "orbit-auth orbit-common orbit-cmd orbit-config orbit-core orbit-registry orbit-types orbit-web"
       ;;
     orbit-cli)
       # The executable assembles MCP and Web feature crates with Registry state
-      # and Core's authoritative runtime dispatcher.
-      echo "orbit-common orbit-cmd orbit-config orbit-core orbit-mcp orbit-registry orbit-web orbit-types orbit-engine orbit-exec orbit-tools"
+      # and Core's apps; it has no edge to orbit-runtime, orbit-store or
+      # orbit-engine.
+      echo "orbit-common orbit-cmd orbit-config orbit-core orbit-mcp orbit-registry orbit-web orbit-types orbit-exec orbit-tools"
       ;;
     *)
       return 1
@@ -134,10 +138,10 @@ allowed_dev_only_deps() {
       ;;
     orbit-web)
       # Only integration tests enable its test-support fixture hooks.
-      echo "orbit-engine orbit-store orbit-web"
+      echo "orbit-web"
       ;;
     orbit-cli)
-      echo "orbit-engine orbit-exec orbit-tools"
+      echo "orbit-exec orbit-tools"
       ;;
     orbit-engine)
       # Engine's own tests enable its `test-support` feature to build host

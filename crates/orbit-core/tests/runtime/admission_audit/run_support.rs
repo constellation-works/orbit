@@ -1,5 +1,5 @@
 use chrono::Utc;
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_types::workflow::JobRun;
 use tempfile::tempdir_in;
 pub(crate) fn test_runtime() -> (tempfile::TempDir, OrbitRuntime) {

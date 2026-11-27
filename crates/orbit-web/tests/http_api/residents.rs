@@ -4,10 +4,11 @@
 //! wrapper. Each dashboard write leaves a dashboard audit row beside the history
 //! entry core writes.
 
+use orbit_core::test_support::fixture_store;
 use std::fs;
 
 use chrono::{DateTime, Utc};
-use orbit_store::contract::TaskHistoryUpdateParams;
+use orbit_core::test_support::fixture_store::contract::TaskHistoryUpdateParams;
 use orbit_types::task::TaskComment;
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
@@ -124,13 +125,13 @@ fn resident_reads_report_checkpoint_comment_time_and_keep_empty_state_with_notic
                 "error": null,
                 "conversation_ref": null,
             });
-            let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-                &orbit_store::maintenance::task_registry::task_registry_path(
+            let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+                &fixture_store::maintenance::task_registry::task_registry_path(
                     &fixture.runtime.global_root(),
                 ),
             )
             .unwrap();
-            let history = orbit_store::compose::workspace_coordinated_backends(
+            let history = fixture_store::compose::workspace_coordinated_backends(
                 registry,
                 fixture.runtime.workspace_id().unwrap(),
                 fixture.runtime.sqlite_store().unwrap(),

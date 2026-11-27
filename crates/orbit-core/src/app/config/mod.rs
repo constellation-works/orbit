@@ -15,8 +15,8 @@ pub use crate::application::config::{
     ConfigScope, ConfigUnsetRefusal, ConfigWriteInit, ConfigWriteOutcome, GuardedConfigUnset,
     parse_config_scope,
 };
-pub use crate::runtime::refuse_indirect_uninitialized_caller_orbit;
 pub use dashboard::{DashboardConfigWrite, DashboardConfigWriteKind, DashboardConfigWriteResult};
+pub use orbit_runtime::refuse_indirect_uninitialized_caller_orbit;
 pub use read::{
     ConfigGetResult, ConfigReadScope, ConfigShowData, ConfigShowRoots, ConfigShowWorkspaceBinding,
 };

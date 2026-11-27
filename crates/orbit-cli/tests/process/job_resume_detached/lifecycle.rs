@@ -9,10 +9,11 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use orbit_common::process::identity::{ProcessLiveness, probe_process_liveness};
 use orbit_common::test_env;
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{FinalRecoveryCompletion, FinalRecoveryRequest};
-use orbit_engine::RunLifecycle;
-use orbit_engine::{TaskAutomationUpdate, execute_deterministic_action};
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
+use orbit_core::test_support::fixture_engine::execute_deterministic_action;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{DeliveryRefusal, JobRunState, PipelineState};
 use rusqlite::{Connection, params};
@@ -390,7 +391,9 @@ fn resumed_terminal_runs_block_readmitted_tasks() {
         fx.runtime
             .apply_task_automation_update(
                 &fx.task,
-                orbit_engine::blocked_workflow_failure_update(JOB, &fx.run, None, None),
+                orbit_core::test_support::fixture_engine::blocked_workflow_failure_update(
+                    JOB, &fx.run, None, None,
+                ),
             )
             .unwrap();
         let companion = fx.cli.json(&[
@@ -578,7 +581,7 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
             fx.runtime
                 .apply_task_automation_update(
                     &fx.task,
-                    orbit_engine::blocked_workflow_failure_update(
+                    orbit_core::test_support::fixture_engine::blocked_workflow_failure_update(
                         JOB,
                         &fx.run,
                         Some("fixture_failure"),

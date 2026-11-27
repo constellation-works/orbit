@@ -61,7 +61,7 @@ impl Drop for Bystander {
 /// command-line pattern, so it cannot signal another run's worker. Dropping the
 /// guard (including on unwind) terminates and reaps that worker.
 struct AutoTaskWorkerGuard<'a> {
-    runtime: &'a orbit_core::OrbitRuntime,
+    runtime: &'a orbit_core::runtime::OrbitRuntime,
     run_id: String,
     pid_file: PathBuf,
 }
@@ -1147,7 +1147,7 @@ fn assert_contract_present(fixture: &Fixture, task: &Value) {
     );
 }
 
-fn open_runtime(fixture: &Fixture) -> orbit_core::OrbitRuntime {
+fn open_runtime(fixture: &Fixture) -> orbit_core::runtime::OrbitRuntime {
     use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 
     let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&fixture.repo, Some(&fixture.root))
@@ -1155,7 +1155,9 @@ fn open_runtime(fixture: &Fixture) -> orbit_core::OrbitRuntime {
     orbit_cmd::test_support::open_resolved_roots(roots)
         .map(orbit_core::composition::Opening::into_runtime)
         .unwrap_or_else(|error| panic!("runtime: {error}"))
-        .with_actor(orbit_core::ActorIdentity::human("fixture"))
+        .with_actor(orbit_core::runtime::context::ActorIdentity::human(
+            "fixture",
+        ))
 }
 
 fn runtime_roots(fixture: &Fixture) -> (PathBuf, PathBuf) {
@@ -1177,7 +1179,11 @@ fn stalled_worker_pid(guard: &AutoTaskWorkerGuard<'_>) -> u32 {
         .unwrap_or_else(|| panic!("no worker pid for {}", guard.run_id))
 }
 
-fn assert_worker_terminated_and_reaped(runtime: &orbit_core::OrbitRuntime, run_id: &str, pid: u32) {
+fn assert_worker_terminated_and_reaped(
+    runtime: &orbit_core::runtime::OrbitRuntime,
+    run_id: &str,
+    pid: u32,
+) {
     assert!(
         orbit_core::test_support::pipeline_worker_observer_completed(
             &runtime.paths().repo_root,
@@ -1215,7 +1221,7 @@ fn stalled_auto_task_worker_is_terminated_and_reaped_on_timeout_and_unwind() {
             "600".to_string(),
         ],
     );
-    let runtime = orbit_core::OrbitRuntime::from_roots(&global, &workspace)
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(&global, &workspace)
         .unwrap_or_else(|error| panic!("runtime: {error}"));
     let bystander = Bystander(
         std::process::Command::new("/bin/sleep")
@@ -1320,8 +1326,9 @@ fn execute_submitted_auto_task_job() {
     let workspace =
         std::env::var_os("ORBIT_TEST_AUTO_TASK_WORKSPACE").expect("worker workspace root");
     let run = std::env::var("ORBIT_TEST_AUTO_TASK_RUN").expect("worker run id");
-    let runtime = orbit_core::OrbitRuntime::from_roots(Path::new(&global), Path::new(&workspace))
-        .unwrap_or_else(|error| panic!("worker runtime: {error}"));
+    let runtime =
+        orbit_core::runtime::OrbitRuntime::from_roots(Path::new(&global), Path::new(&workspace))
+            .unwrap_or_else(|error| panic!("worker runtime: {error}"));
     runtime
         .execute_pipeline_run_worker(&run)
         .unwrap_or_else(|error| panic!("worker {run}: {error}"));
@@ -1343,7 +1350,7 @@ fn run_auto_task_step(fixture: &Fixture, job: &str, auto_task: &str) -> String {
     let path = write_auto_task_job(fixture, job, auto_task);
     let (global, workspace) = runtime_roots(fixture);
     install_auto_task_job_worker(&global, &workspace);
-    let runtime = orbit_core::OrbitRuntime::from_roots(&global, &workspace)
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(&global, &workspace)
         .unwrap_or_else(|error| panic!("{job} runtime: {error}"));
     let guard = submit_auto_task_job(&runtime, &global, &path, job, auto_task);
     await_auto_task_park(&runtime, job, &guard, AUTO_TASK_PARK_TIMEOUT)
@@ -1352,7 +1359,7 @@ fn run_auto_task_step(fixture: &Fixture, job: &str, auto_task: &str) -> String {
 /// Submit the job and own its worker from the moment the run exists, so an
 /// unwind anywhere after submission still terminates and reaps it.
 fn submit_auto_task_job<'a>(
-    runtime: &'a orbit_core::OrbitRuntime,
+    runtime: &'a orbit_core::runtime::OrbitRuntime,
     global: &Path,
     path: &Path,
     job: &str,
@@ -1374,7 +1381,7 @@ fn submit_auto_task_job<'a>(
 }
 
 fn await_auto_task_park(
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     job: &str,
     guard: &AutoTaskWorkerGuard<'_>,
     timeout: Duration,
@@ -1409,7 +1416,7 @@ fn await_auto_task_park(
 /// The park text, once this process has reaped the substitute worker.
 /// A worker that exits without parking fails the test.
 fn parked_after_worker_exit(
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     job: &str,
     run_id: &str,
 ) -> Option<String> {
@@ -1437,7 +1444,7 @@ fn parked_after_worker_exit(
     }))
 }
 
-fn worker_log(runtime: &orbit_core::OrbitRuntime, run_id: &str) -> String {
+fn worker_log(runtime: &orbit_core::runtime::OrbitRuntime, run_id: &str) -> String {
     match runtime.read_pipeline_worker_log(run_id) {
         Ok(Some(snapshot)) => snapshot
             .content
@@ -1448,7 +1455,7 @@ fn worker_log(runtime: &orbit_core::OrbitRuntime, run_id: &str) -> String {
 }
 
 fn evaluate_named(
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     name: &str,
 ) -> orbit_types::workflow::automation::AutomationDiagnostic {
     let definition = runtime.auto_task_show(name).unwrap().expect(name);
@@ -1469,7 +1476,7 @@ fn commit_file(fixture: &Fixture, name: &str, content: &str) -> SourceRevision {
 
 fn land_delivery(
     fixture: &Fixture,
-    runtime: &orbit_core::OrbitRuntime,
+    runtime: &orbit_core::runtime::OrbitRuntime,
     name: &str,
     branch: &str,
     file: &str,

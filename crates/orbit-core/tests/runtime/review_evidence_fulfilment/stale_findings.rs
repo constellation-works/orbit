@@ -5,8 +5,9 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use orbit_common::OrbitError;
 use orbit_common::fs::io::{FileLockOptions, with_exclusive_file_lock_options};
-use orbit_core::{OrbitError, OrbitRuntime};
+use orbit_core::runtime::OrbitRuntime;
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 
 use orbit_core::application::task::TaskUpdateParams;
@@ -20,8 +21,8 @@ use orbit_types::workflow::{
 
 use super::{CODEQL, Fixture, Stub, artifact, held, latest_decision, seed_runtime_hold};
 use chrono::Utc;
-use orbit_core::TaskStatus;
 use orbit_engine::Dispatch;
+use orbit_types::task::TaskStatus;
 use serde_json::{Value, json};
 
 #[test]

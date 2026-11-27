@@ -1,9 +1,7 @@
 use clap::Args;
 use orbit_core::Core;
-use orbit_core::adapter::command::{
-    PluginPermissionChange, PluginUpgradeOptions, PluginUpgradeResult,
-};
 use orbit_core::app::plugin::{Command, Outcome, exec};
+use orbit_core::app::plugin::{PluginPermissionChange, PluginUpgradeOptions, PluginUpgradeResult};
 
 use crate::command::{CommandOut, ExecuteCore, Payload};
 

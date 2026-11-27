@@ -3,9 +3,11 @@
 use std::path::Path;
 
 use chrono::Utc;
-use orbit_core::{ActorIdentity, OrbitRuntime, TaskStatus};
-use orbit_engine::RunLifecycle;
-use orbit_engine::TaskActivityUpdate;
+use orbit_core::runtime::OrbitRuntime;
+use orbit_core::runtime::context::ActorIdentity;
+use orbit_core::test_support::fixture_engine::RunLifecycle;
+use orbit_core::test_support::fixture_engine::TaskActivityUpdate;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::JobRunState;
 use serde_json::json;
 

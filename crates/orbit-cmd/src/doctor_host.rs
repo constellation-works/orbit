@@ -10,9 +10,9 @@ use orbit_core::app::doctor::{
     BrowserKit, Host, KitProblem, OrphanTaskStoreRemoval, TaskStorePartition, TaskStorePartitions,
     UnreachableTaskStorePartition, WorkspaceDoctorResult,
 };
+use orbit_core::app::host::KitLayout;
 use orbit_core::app::host::browser_kit;
-use orbit_core::application::routines::RoutineStatusReport;
-use orbit_core::bootstrap::browser_kit::KitLayout;
+use orbit_core::app::routine::RoutineStatusReport;
 use orbit_types::identity::CrewEnvVar;
 
 use crate::task_store::{

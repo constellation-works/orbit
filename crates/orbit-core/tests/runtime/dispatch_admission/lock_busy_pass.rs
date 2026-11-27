@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use orbit_common::fs::io::{
     FileLockOptions, with_exclusive_file_lock_options, with_shared_file_lock_options,
 };
-use orbit_core::OrbitRuntime;
+use orbit_core::runtime::OrbitRuntime;
 use orbit_core::runtime::host_resource::forecast::{ForecastDecision, HostLoadForecast};
 use orbit_engine::Dispatch;
 use orbit_tools::ToolContext;
@@ -310,7 +310,7 @@ fn passes_held_out_by_a_shared_holder() {
     // Held out of the admission section, and the release of the wave's
     // reservations loses to the host store as well.
     let deferred = orbit_core::test_support::with_reservation_release_failure(
-        || orbit_core::OrbitError::Store("the host store is busy".into()),
+        || orbit_common::OrbitError::Store("the host store is busy".into()),
         || classify(&runtime, &unreleased, json!({})),
     )
     .expect("a failed release still leaves a lock-busy pass deferred");

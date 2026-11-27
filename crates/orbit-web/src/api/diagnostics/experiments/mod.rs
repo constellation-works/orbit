@@ -20,8 +20,8 @@ use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::DASHBOARD_EXPERIMENT_CONCLUDE;
+use orbit_core::app::experiment::{ExperimentActor, ExperimentChange};
 use orbit_core::app::run::Command as RunCommand;
-use orbit_core::application::experiment::{ExperimentActor, ExperimentChange};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -72,7 +72,7 @@ pub(in crate::api) async fn diagnostics_experiment(
     match super::super::blocking("experiment show", move || {
         let view = run_read(&runtime, RunCommand::experiment_view(&id))?;
         let mut body = serde_json::to_value(&view).map_err(|error| {
-            orbit_core::OrbitError::Execution(format!("experiment view is not JSON: {error}"))
+            orbit_common::OrbitError::Execution(format!("experiment view is not JSON: {error}"))
         })?;
         body["conclude_authorized"] = json!(conclude_authorized);
         body["authoring"] = authoring::experiment_authoring(&runtime, operator_session)?;
@@ -146,7 +146,7 @@ pub(in crate::api) async fn diagnostics_experiment_readout(
         )?;
         let cumulative = cumulative::primary_cumulative(&readout);
         let mut body = serde_json::to_value(&readout).map_err(|error| {
-            orbit_core::OrbitError::Execution(format!("experiment readout is not JSON: {error}"))
+            orbit_common::OrbitError::Execution(format!("experiment readout is not JSON: {error}"))
         })?;
         body["cumulative"] = cumulative;
         Ok(body)

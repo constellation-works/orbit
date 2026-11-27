@@ -13,8 +13,8 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_TASK_REQUEUE, DASHBOARD_TASK_SETTLE_MERGED,
 };
+use orbit_core::app::task::ExternalMergeSettlementProfile;
 use orbit_core::app::task::{DashboardAction, Outcome};
-use orbit_core::application::task::ExternalMergeSettlementProfile;
 use serde_json::json;
 
 pub(in crate::api) async fn approve_task_action(
@@ -71,10 +71,10 @@ pub(in crate::api) async fn reject_task_action(
 
 /// Map a trusted human-write error onto the operator routes' refusal contract.
 /// A missing task is 404 `task_not_found`; invalid input is 409 with `code`.
-pub(super) fn recovery_refusal(error: orbit_core::OrbitError, code: &'static str) -> Response {
+pub(super) fn recovery_refusal(error: orbit_common::OrbitError, code: &'static str) -> Response {
     match error {
-        orbit_core::OrbitError::NotFound {
-            kind: orbit_core::NotFoundKind::Task,
+        orbit_common::OrbitError::NotFound {
+            kind: orbit_common::NotFoundKind::Task,
             id,
             guidance,
         } => (
@@ -82,7 +82,7 @@ pub(super) fn recovery_refusal(error: orbit_core::OrbitError, code: &'static str
             Json(json!({ "error": format!("task not found: {id}{}", guidance.as_deref().unwrap_or_default()), "code": "task_not_found" })),
         )
             .into_response(),
-        orbit_core::OrbitError::InvalidInput(message) => (
+        orbit_common::OrbitError::InvalidInput(message) => (
             StatusCode::CONFLICT,
             Json(json!({ "error": message, "code": code })),
         )
@@ -182,7 +182,7 @@ pub(in crate::api) async fn settle_merged_task_action(
         )
         .and_then(|outcome| {
             outcome.into_settled()?.pop().ok_or_else(|| {
-                orbit_core::OrbitError::Execution(
+                orbit_common::OrbitError::Execution(
                     "settle-merged answered no settlement".to_string(),
                 )
             })

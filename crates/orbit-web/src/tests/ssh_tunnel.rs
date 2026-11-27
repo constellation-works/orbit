@@ -464,7 +464,7 @@ fn run_establish(
     spec: TunnelSpec,
     local_port: u16,
     wait: Duration,
-) -> Result<TunnelOrigin, orbit_core::OrbitError> {
+) -> Result<TunnelOrigin, orbit_common::OrbitError> {
     let (tx, rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
         let outcome = ssh_tunnel::establish(&spec, |limit| healthz_ok(local_port, limit));
@@ -478,7 +478,7 @@ fn run_establish(
         .unwrap_or_else(|_| {
             panic!("establish hung; a probe must return within the readiness budget")
         })
-        .map_err(orbit_core::OrbitError::from)
+        .map_err(orbit_common::OrbitError::from)
 }
 
 fn child_pids(count_path: &Path) -> Vec<i32> {

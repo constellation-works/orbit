@@ -118,7 +118,7 @@ pub struct ResumeSubmissionReceipt {
 }
 
 impl ResumeSubmissionReceipt {
-    /// Capture the receipt of the run [`OrbitRuntime::submit_resume_run`]
+    /// Capture the receipt of the run `OrbitRuntime::submit_resume_run`
     /// accepted as a resume of `source_run_id`.
     #[must_use]
     pub fn new(

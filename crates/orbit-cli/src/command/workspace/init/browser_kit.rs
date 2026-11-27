@@ -7,7 +7,7 @@ use std::path::Path;
 
 use orbit_common::Env;
 use orbit_core::app::host::browser_kit::{self, InstallOptions};
-use orbit_core::bootstrap::browser_kit::{KitInspection, KitLayout};
+use orbit_core::app::host::{KitInspection, KitLayout};
 use serde_json::{Value, json};
 
 use crate::output::common::sink::{stderr_is_terminal, stdin_is_terminal};

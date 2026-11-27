@@ -16,6 +16,15 @@ pub use crate::adapter::command::{
 use super::exec::{self, App, Operation};
 use crate::Core;
 
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use crate::adapter::command::tool_suggestions::unknown_tool_error;
+pub use crate::adapter::command::{
+    ClaimedOwnerCall, ClaimedOwnerRoute, GlobalAuditStoreCache, GlobalToolCall,
+    bridge_claimed_owner_call, execute_global_in_process_tool_dispatch,
+    execute_global_in_process_tool_dispatch_with_audit_writer, owner_route_unavailable,
+    tool_suggestion_context,
+};
+
 const LOCAL_MACHINE_ID_FALLBACK: &str = "host/local";
 
 /// One tool command, shared by the CLI and MCP surfaces.

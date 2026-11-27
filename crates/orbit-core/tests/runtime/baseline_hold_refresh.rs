@@ -112,7 +112,7 @@ fn recorded_failures_keep_the_hold_without_a_full_run_and_reuse_the_cache() {
     let mut config = std::fs::read_to_string(&path).unwrap();
     config.push_str("\n[workflow.validation_env]\nbuild_output_env = ['DIST_DIR']\n");
     std::fs::write(path, config).unwrap();
-    let runtime = orbit_core::OrbitRuntime::from_roots(
+    let runtime = orbit_core::runtime::OrbitRuntime::from_roots(
         &fixture._root.path().join("global"),
         &fixture.repo.join(".orbit"),
     )
