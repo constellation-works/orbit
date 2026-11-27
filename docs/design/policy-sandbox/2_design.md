@@ -406,7 +406,7 @@ several names is accepted when the scan finds every one of them inside that
 directory. A name that is also reachable from outside `objects/` is refused, as
 is any hard link elsewhere in the metadata. When the refused entry is a git
 temporary name, the message says it is a leftover of an interrupted Git write
-and to delete it and run `git fsck`. `orbit doctor` (row `git-protection`) runs
+and to delete it and run `git fsck`. Any other hard link outside `objects/` is refused with its path and the remedy of replacing that name with an independent copy, since its other names are not counted; a hard-linked object with a name outside the store keeps the local-clone remedy. `orbit doctor` (row `git-protection`) runs
 the same scan on the registered checkout, and `orbit run auto` and
 `orbit run auto --pull` run it once before submitting a drain on a host with an
 OS-sandboxed executor, so a refusing host is not admitted rather than failing

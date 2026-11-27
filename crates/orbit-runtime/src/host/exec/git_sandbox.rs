@@ -44,6 +44,18 @@ enum ScanScope {
     ObjectStore,
 }
 
+/// Why a metadata entry is refused. The remedy the message names follows from it.
+#[derive(Clone, Copy)]
+enum RefusedEntry {
+    /// A symlink or special file, with no other name to repair.
+    Special,
+    /// A hard link outside `objects/`. Its other names are not counted, so the
+    /// remedy is to break this alias.
+    Alias,
+    /// A hard link inside `objects/` whose other name lies outside the store.
+    ObjectEscape,
+}
+
 /// Git writes an object to a temporary name, links it to the final name and
 /// unlinks the temporary one. A write interrupted between the last two steps
 /// leaves both names, so `objects/` may hold hard links that are Git's own.
@@ -104,7 +116,7 @@ impl ObjectLinks {
         self.inodes
             .values()
             .find(|inode| inode.names_seen < inode.nlink)
-            .map(|inode| metadata_entry_refusal(&inode.reported, true))
+            .map(|inode| metadata_entry_refusal(&inode.reported, RefusedEntry::ObjectEscape))
     }
 }
 
@@ -415,19 +427,24 @@ fn is_git_temp_name(path: &Path) -> bool {
         })
 }
 
-fn metadata_entry_refusal(path: &Path, hard_linked: bool) -> OrbitError {
-    let remedy = if hard_linked && is_git_temp_name(path) {
-        format!(
+fn metadata_entry_refusal(path: &Path, refused: RefusedEntry) -> OrbitError {
+    let remedy = match refused {
+        RefusedEntry::Special => String::new(),
+        RefusedEntry::Alias | RefusedEntry::ObjectEscape if is_git_temp_name(path) => format!(
             "; it is a temporary file left by an interrupted Git write. Delete `{}` and run \
              `git fsck`",
             path.display()
-        )
-    } else if hard_linked {
-        "; a local `git clone` (or `cp -l`) of this checkout usually hard-links its objects: \
-         delete the clone, or re-clone with `--no-hardlinks`"
-            .to_string()
-    } else {
-        String::new()
+        ),
+        RefusedEntry::Alias => format!(
+            "; another path shares its inode: replace `{0}` with an independent copy (`cp` it \
+             to a new name beside it, then `mv` the copy over `{0}`)",
+            path.display()
+        ),
+        RefusedEntry::ObjectEscape => {
+            "; a local `git clone` (or `cp -l`) of this checkout usually \
+             hard-links its objects: delete the clone, or re-clone with `--no-hardlinks`"
+                .to_string()
+        }
     };
     OrbitError::PolicyDenied(format!(
         "Git protection refuses symlink, special-file or hard-linked metadata entry `{}`{remedy}",
@@ -463,13 +480,13 @@ fn scan_git_tree_with_pinned(
             .map_err(|error| scan_error(&path, error))?;
         let metadata = fs::symlink_metadata(&path).map_err(|error| scan_error(&path, error))?;
         if !metadata.is_file() && !metadata.is_dir() {
-            return Err(metadata_entry_refusal(&path, false).into());
+            return Err(metadata_entry_refusal(&path, RefusedEntry::Special).into());
         }
         if metadata.is_file() && metadata.nlink() > 1 {
             if scope == ScanScope::ObjectStore {
                 links.record(&path, &metadata);
             } else {
-                return Err(metadata_entry_refusal(&path, true).into());
+                return Err(metadata_entry_refusal(&path, RefusedEntry::Alias).into());
             }
         }
         if metadata.is_dir() {
@@ -587,7 +604,7 @@ fn list_object_store(root: &Path) -> Vec<ObjectStoreEntry> {
             entries.push(ObjectStoreEntry::Directory(path, metadata));
         } else if !metadata.is_file() {
             entries.push(ObjectStoreEntry::Failed(
-                metadata_entry_refusal(&path, false).into(),
+                metadata_entry_refusal(&path, RefusedEntry::Special).into(),
             ));
             break;
         } else if metadata.nlink() > 1 {
