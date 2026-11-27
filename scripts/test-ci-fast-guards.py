@@ -231,6 +231,11 @@ else:
             path.parent.mkdir(parents=True, exist_ok=True)
             self.write_executable(path,
                                   f'#!/bin/bash\nprintf "%s\\n" "$@" > "$GUARD_TEST_CALLS/{path.name}"\nprintf "call\n" >> "$GUARD_TEST_COUNTS/{path.name}.count"\n')
+        # The Node guard runs this module directly, so the fixture needs an
+        # empty one for `node` to load and pass.
+        linkify = self.root / "plugin/hooks/mod/tests/linkify.mjs"
+        linkify.parent.mkdir(parents=True, exist_ok=True)
+        linkify.touch()
         shutil.copy2(SCRIPTS / "ci-guardrails.sh", self.scripts / "ci-guardrails.sh")
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
         # The lint wrapper is the environment under test, not a guard.

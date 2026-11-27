@@ -262,6 +262,12 @@ pub(crate) fn task_write_response_from_row(
             )?
         }
     };
+    if !matches!(policy, TaskWriteResponsePolicy::Projected(_))
+        && let Some(url) = runtime.task_permalink_url(&task.id)
+        && let Some(object) = response.as_object_mut()
+    {
+        object.insert("url".to_string(), Value::String(url));
+    }
     metadata.insert_into(&mut response);
     Ok(response)
 }

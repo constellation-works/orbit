@@ -10,12 +10,6 @@ pub(crate) use super::routine::ResidentRoutineStatus;
 use crate::application::resident::ResidentRoutineStatusPort;
 use crate::application::task::{TaskEvolutionPort, TaskNoticePort};
 
-impl ResidentRoutineStatusPort for ResidentRoutineStatus<'_> {
-    fn disabled_resident_cycle_routine_name(&self) -> Option<String> {
-        self.disabled_cycle_routine_name()
-    }
-}
-
 const _: () = {
     const fn binds_task_evolution<T: TaskEvolutionPort>() {}
     const fn binds_task_notice<T: TaskNoticePort>() {}
@@ -23,3 +17,9 @@ const _: () = {
     binds_task_evolution::<TaskEvolution<'_>>();
     binds_task_notice::<TaskNotice<'_>>();
 };
+
+impl ResidentRoutineStatusPort for ResidentRoutineStatus<'_> {
+    fn disabled_resident_cycle_routine_name(&self) -> Option<String> {
+        self.disabled_cycle_routine_name()
+    }
+}

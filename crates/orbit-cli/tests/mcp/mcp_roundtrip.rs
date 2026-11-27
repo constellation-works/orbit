@@ -30,6 +30,8 @@ mod search;
 #[cfg(unix)]
 mod worker_routing;
 
+mod permalink_url;
+
 use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};

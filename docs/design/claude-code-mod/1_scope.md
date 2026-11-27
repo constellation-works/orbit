@@ -94,7 +94,7 @@ workspace check are unchanged.
 | Task card on a prompt | Removed | Stale and unasked; `orbit.task.show` is current |
 | `Task:` commit trailer | Removed | Orbit reads `[<id>]` and `Orbit-Task:`, not `Task:` |
 | `ownerHost`, `refreshMinutes`, `band`, `commitTrailer` | Removed | Nothing left reads them |
-| Session state contract (`plugin/types/index.d.ts`) | Removed | The mod keeps no state |
+| Session state contract | Removed | The mod needs no persisted session state |
 | `check-workspace.sh` at session start | Kept | A shell hook, not part of the mod; it costs one line |
 
 After the change the module is one `session.start` hook, one `ui.render` hook and a pure

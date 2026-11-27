@@ -149,6 +149,9 @@ pub struct JobRunProjectionEvidence<'a> {
     /// Recovery evidence for the embedded profile; `None` renders the
     /// explicit `unavailable` shape.
     pub recovery: Option<&'a RunRecoveryAttempts>,
+    /// Exact web permalink for single-run results when `machine.web.public_url`
+    /// is configured. List callers leave this `None` so list rows omit `url`.
+    pub url: Option<&'a str>,
 }
 
 /// Every activity crew draw the run froze, with the rule that chose it: the
@@ -459,11 +462,15 @@ pub fn project_job_run(
     evidence: JobRunProjectionEvidence<'_>,
 ) -> Value {
     if profile == JobRunProjectionProfile::BoundedSummary {
-        return json!({"id": run.run_id, "run_id": run.run_id, "job_id": run.job_id,
+        let mut value = json!({"id": run.run_id, "run_id": run.run_id, "job_id": run.job_id,
             "state": run.state, "attempt": run.attempt, "scheduled_at": run.scheduled_at,
             "started_at": run.started_at, "finished_at": run.finished_at,
             "created_at": run.created_at, "duration_ms": run.duration_ms,
             "usage": {"state": "unavailable"}});
+        if let Some(url) = evidence.url {
+            value["url"] = Value::String(url.to_string());
+        }
+        return value;
     }
     let mut value = match evidence.activity_evidence {
         Some(activity) => job_run_to_json_with_activity_provenance(run, evidence.state, activity),
@@ -510,6 +517,11 @@ pub fn project_job_run(
                 None => RunRecoveryAttempts::unavailable().to_json(),
             };
         }
+    }
+    if let Some(url) = evidence.url
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("url".to_string(), Value::String(url.to_string()));
     }
     value
 }

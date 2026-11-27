@@ -258,6 +258,7 @@ pub(crate) fn cli_job_run_to_json_with_activity_provenance(
     evidence: &[orbit_core::app::run::ActivityInvocationEvidence],
     run: &JobRun,
     state: Option<&PipelineState>,
+    url: Option<&str>,
 ) -> Value {
     project_job_run(
         run,
@@ -265,6 +266,7 @@ pub(crate) fn cli_job_run_to_json_with_activity_provenance(
         JobRunProjectionEvidence {
             state,
             activity_evidence: Some(evidence),
+            url,
             ..JobRunProjectionEvidence::default()
         },
     )

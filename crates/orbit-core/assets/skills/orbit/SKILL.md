@@ -30,6 +30,10 @@ Read `degraded` before interpreting an empty result. See [Attention](references/
   `orbit tool run orbit.task.show --input '{"id":"<task-id>"}'`.
   Provenance comes from the session, not a `model` argument. Use `fields` for
   compact reads. The advertised schema decides which inputs and tools are available.
+- When a single-task or single-run result includes `url`, format the ID in newly
+  authored Markdown prose as `[<id>](<url>)`, leave IDs in commands and code
+  as plain text so they stay copyable, and make no claim about rewriting
+  earlier transcript rows.
 - Update task state through tools, not files under `.orbit/`. Creating a task
   does not authorize dispatch or completion. In a managed activity, implement
   the assigned work; the pipeline owns delivery and lifecycle transitions.

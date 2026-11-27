@@ -2197,6 +2197,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "url",
  "yaml_serde",
 ]
 
