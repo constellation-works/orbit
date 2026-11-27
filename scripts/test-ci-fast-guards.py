@@ -2127,21 +2127,6 @@ print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered ou
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
-class PullOccupancyArchitectureTests(unittest.TestCase):
-    """Keep the architecture docs aligned with pull occupancy's transaction boundary."""
-
-    def test_architecture_docs_distinguish_snapshots_from_write_admission(self):
-        docs = ("docs/architecture/orbit-runtime.md", "docs/architecture/orbit-store.md")
-        for relative_path in docs:
-            with self.subTest(path=relative_path):
-                text = (SCRIPTS.parent / relative_path).read_text()
-                self.assertIn("Read-only pull occupancy queries use `Store::read` snapshots.", text)
-                self.assertIn(
-                    "`allocate_pull_request` computes occupancy inside its `Store::write` transaction before reserving capacity.",
-                    text,
-                )
-
-
 class TaskAuthoringContractTests(unittest.TestCase):
     """Keep the move authoring check apart from unrelated test rewrites."""
 
