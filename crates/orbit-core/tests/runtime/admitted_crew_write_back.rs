@@ -12,9 +12,10 @@ use orbit_core::TaskComplexity;
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
-use orbit_core::application::job::JobRunListParams;
+use orbit_core::application::job::{JobRunCancelOutcome, JobRunListParams};
 use orbit_core::application::task::TaskUpdateParams;
-use orbit_types::workflow::ProviderFailureClass;
+use orbit_core::test_support::{WorkerReapPhase, install_worker_reap_hook};
+use orbit_types::workflow::{JobRunState, ProviderFailureClass};
 use serde_json::{Value, json};
 
 use super::dispatch_admission::isolated;
@@ -55,6 +56,8 @@ model = "luna-model"
 provider = "claude"
 model = "opus-model"
 "#;
+
+const HOLD_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The control arm keeps ordinary routing; `cheap-pool` runs luna.
 fn started_crew_experiment(runtime: &OrbitRuntime) -> String {
@@ -763,6 +766,41 @@ fn backfill_leaves_an_explicit_crew_newer_than_its_latest_run() {
     );
 }
 
+/// Submit a delivery of `task` whose substitute worker exits at once, and
+/// cancel the run before the worker's startup observer settles it. Without the
+/// hold the observer interrupts a run its worker left unclaimed, and under load it
+/// can do so before the cancel lands, leaving an `interrupted` run the backfill
+/// rightly copies from.
+fn submit_and_cancel_before_the_worker_settles(
+    fx: &Fixture,
+    job: &std::path::Path,
+    task: &str,
+) -> String {
+    let (reached, at_observer) = std::sync::mpsc::sync_channel::<()>(1);
+    let (release, resume) = std::sync::mpsc::sync_channel::<()>(1);
+    install_worker_reap_hook(WorkerReapPhase::BeforeReap, move |_| {
+        reached.send(()).unwrap();
+        resume.recv_timeout(HOLD_DEADLINE).unwrap();
+    });
+    let submitted = fx
+        .runtime
+        .submit_job_run(
+            job.to_str().unwrap(),
+            json!({ "task_id": task }),
+            Some("admitted-crew-test"),
+        )
+        .unwrap();
+    at_observer.recv_timeout(HOLD_DEADLINE).unwrap();
+    let cancelled = fx.runtime.cancel_job_run(&submitted.run_id).unwrap();
+    assert_eq!(
+        cancelled.outcome,
+        JobRunCancelOutcome::Cancelled,
+        "{cancelled:?}"
+    );
+    release.send(()).unwrap();
+    submitted.run_id
+}
+
 /// [ORB-19602] The backfill skips a latest run cancelled before it
 /// implemented: its crew selection never ran, so it must not replace the
 /// task's crew. The seeded legacy redraw below is a system assignment, not
@@ -778,15 +816,9 @@ fn backfill_skips_a_latest_run_cancelled_before_implementation() {
     let job = delivery_job(&fx);
     let task = fx.tagged_task(&[], None).id;
     assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("sol"));
-    let submitted = fx
-        .runtime
-        .submit_job_run(
-            job.to_str().unwrap(),
-            json!({ "task_id": task }),
-            Some("admitted-crew-test"),
-        )
-        .unwrap();
-    fx.runtime.cancel_job_run(&submitted.run_id).unwrap();
+    let run_id = submit_and_cancel_before_the_worker_settles(&fx, &job, &task);
+    let run = fx.runtime.show_job_run_observed(&run_id).unwrap();
+    assert_eq!(run.state, JobRunState::Cancelled, "{run:?}");
     // Seed the historical system redraw that older binaries allowed after
     // cancellation, without an explicit assignment.
     seed_historical_scope_redraw(&fx, &task);
@@ -798,6 +830,62 @@ fn backfill_skips_a_latest_run_cancelled_before_implementation() {
         "{report:?}"
     );
     assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("luna"));
+}
+
+/// The ordering that made the test above fail under load: the substitute
+/// worker exits unclaimed and its startup observer interrupts the run before the
+/// cancel arrives. The cancel then finds a terminal run and the backfill, which
+/// skips only a `cancelled` run, copies the crew that run drew. The reap hook
+/// pins that ordering, which a loaded host only hits sometimes.
+#[test]
+fn backfill_copies_from_a_latest_run_its_worker_abandoned_before_the_cancel() {
+    if !isolated(
+        "admitted_crew_write_back::backfill_copies_from_a_latest_run_its_worker_abandoned_before_the_cancel",
+    ) {
+        return;
+    }
+    let fx = fixture(RERATE_CREWS);
+    let job = delivery_job(&fx);
+    let task = fx.tagged_task(&[], None).id;
+    let submitted = fx
+        .runtime
+        .submit_job_run(
+            job.to_str().unwrap(),
+            json!({ "task_id": task }),
+            Some("admitted-crew-test"),
+        )
+        .unwrap();
+    let deadline = std::time::Instant::now() + HOLD_DEADLINE;
+    while !fx
+        .runtime
+        .show_job_run_observed(&submitted.run_id)
+        .unwrap()
+        .state
+        .is_terminal()
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the worker never settled"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let cancelled = fx.runtime.cancel_job_run(&submitted.run_id).unwrap();
+    assert_eq!(
+        cancelled.outcome,
+        JobRunCancelOutcome::AlreadyTerminal,
+        "{cancelled:?}"
+    );
+    let run = fx.runtime.show_job_run_observed(&submitted.run_id).unwrap();
+    assert_eq!(run.state, JobRunState::Interrupted, "{run:?}");
+    seed_historical_scope_redraw(&fx, &task);
+    assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("luna"));
+
+    let report = fx.runtime.backfill_admitted_task_crews().unwrap();
+    assert!(
+        report.tasks.iter().any(|change| change.task_id == task),
+        "{report:?}"
+    );
+    assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("sol"));
 }
 
 /// [ORB-19623] An explicit crew assignment that lands after the backfill has
