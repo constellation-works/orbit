@@ -8,12 +8,12 @@ use orbit_types::record::{AuthorClass, NoticeEvidence, NoticeKind, NoticeScope};
 use orbit_types::tool::McpCapability;
 use serde_json::Value;
 
+use super::{
+    NoticeCaller, NoticeListFilter, NoticePostRawFields, NoticePostRequest, NoticeSelector,
+    NoticeStatusFilter, close, post, read,
+};
 use crate::OrbitRuntime;
 use crate::app::tool_call::Caller;
-use crate::application::notice::{
-    NoticeCaller, NoticeListFilter, NoticePostRawFields, NoticePostRequest, NoticeSelector,
-    NoticeStatusFilter,
-};
 use crate::runtime::authorization::resolved_caller_capabilities;
 
 fn invalid(message: impl Into<String>) -> OrbitError {
@@ -46,7 +46,11 @@ pub(super) fn dispatch(
         })
     };
     match verb {
-        NoticeVerb::Post => to_json(&runtime.post_notice(&notice_caller()?, post_request(input)?)?),
+        NoticeVerb::Post => to_json(&post::post_notice(
+            runtime,
+            &notice_caller()?,
+            post_request(input)?,
+        )?),
         NoticeVerb::Close => {
             let selector = match (
                 input.optional_string("id")?,
@@ -56,18 +60,23 @@ pub(super) fn dispatch(
                 (None, Some(key)) => NoticeSelector::DedupeKey(key),
                 _ => return Err(invalid("pass exactly one of `id` or `dedupe_key`")),
             };
-            to_json(&runtime.close_notice(
+            to_json(&close::close_notice(
+                runtime,
                 &notice_caller()?,
                 selector,
                 &input.optional_raw_string("reason")?.unwrap_or_default(),
             )?)
         }
-        NoticeVerb::List => to_json(&runtime.list_notices(&list_filter(input)?)?),
+        NoticeVerb::List => to_json(&read::list_notices(runtime, &list_filter(input)?)?),
         NoticeVerb::Show => {
             let operator = session_context.worker_invocation.is_none()
                 && resolved_caller_capabilities(runtime.env(), session_context)
                     .contains(&McpCapability::Operator);
-            to_json(&runtime.show_notice(&input.required_string("id")?, operator)?)
+            to_json(&read::show_notice(
+                runtime,
+                &input.required_string("id")?,
+                operator,
+            )?)
         }
     }
 }

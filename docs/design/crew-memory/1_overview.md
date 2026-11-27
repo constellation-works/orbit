@@ -48,13 +48,13 @@ Slices M1–M4 were built and M5 concluded with no difference. M1 provided the s
 | Concern | Source or design | Task |
 |---------|------|------|
 | Spaces, revisions, proposals (owner store) | `crates/orbit-store/src/driver/sqlite/host/schema/crew_memory_revisions.rs`, `crates/orbit-store/src/repository/crew_memory.rs` | [ORB-23113] |
-| Write validation: caps, provenance, lint | `crates/orbit-core/src/application/crew_memory/validate.rs` | [ORB-23113] |
-| Memory key and the one write path | `crates/orbit-core/src/application/crew_memory/key.rs`, `operations.rs` | [ORB-23113] |
-| Memory overlay, receipt capture and dispatch resolution | `crates/orbit-core/src/application/experiment/definition.rs`, `crates/orbit-core/src/application/experiment/capture.rs`, `crates/orbit-core/src/application/experiment/overlay.rs`, `crates/orbit-core/src/application/crew_memory/delivery.rs`, `crates/orbit-engine/src/activity_job/cli_runner/envelope.rs` | [ORB-23114] |
+| Write validation: caps, provenance, lint | `crates/orbit-core/src/app/crew_memory/validate.rs` | [ORB-23113] |
+| Memory key and the one write path | `crates/orbit-core/src/app/crew_memory/key.rs`, `space.rs` | [ORB-23113] |
+| Memory overlay, receipt capture and dispatch resolution | `crates/orbit-core/src/application/experiment/definition.rs`, `crates/orbit-core/src/application/experiment/capture.rs`, `crates/orbit-core/src/application/experiment/overlay.rs`, `crates/orbit-core/src/app/crew_memory/delivery.rs`, `crates/orbit-engine/src/activity_job/cli_runner/envelope.rs` | [ORB-23114] |
 | Evidence pack from the scorecards | `crates/orbit-core/src/application/agents/memory_evidence.rs` | [ORB-23115] |
-| Weekly dreaming routine | `crates/orbit-core/src/application/crew_memory/dream.rs` | [ORB-23115] |
-| Run-bound agent tools (`orbit.memory.show`, `write`, `propose`; unlisted and ungrantable) | `crates/orbit-common/src/governance/memory.rs`, `crates/orbit-core/src/application/crew_memory/agent.rs` | [ORB-23115] |
-| Proposal read (review surface removed; open proposals lapse after four weeks) | `crates/orbit-core/src/application/crew_memory/proposals.rs` | [ORB-23116] |
+| Weekly dreaming routine | `crates/orbit-core/src/app/crew_memory/dream.rs` | [ORB-23115] |
+| Run-bound agent tools (`orbit.memory.show`, `write`, `propose`; unlisted and ungrantable) | `crates/orbit-common/src/governance/memory.rs`, `crates/orbit-core/src/app/crew_memory/agent.rs` | [ORB-23115] |
+| Proposal read (review surface removed; open proposals lapse after four weeks) | `crates/orbit-core/src/app/crew_memory/proposal.rs` | [ORB-23116] |
 | The one switch: a running experiment with a memory arm | `crates/orbit-core/src/application/experiment/memory_arms.rs` | [ORB-26501] |
 | Memory-on vs memory-off experiment: shadow from 2026-11-08 (exp-57f1ef67); live from 2026-11-10 (exp-5342a4d6), readout 2026-11-21 "no difference"; concluded with no winner (M5) | `docs/design/crew-memory/2_design.md` §7 | [ORB-23117] |
 | Proposed, not built: one consolidator model, trigger-and-action notes and a per-note ledger | [specs/consolidation.md](./specs/consolidation.md) | [ORB-25838] |

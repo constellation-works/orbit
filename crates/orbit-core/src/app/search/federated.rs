@@ -28,7 +28,7 @@ use crate::runtime::workspace::catalog::{
 };
 
 use super::merge_round_robin;
-use super::types::{
+use super::model::{
     GlobalSearchHit, GlobalSearchMode, GlobalSearchParams, GlobalSearchResponse, HitWorkspace,
     WorkspaceSearchReport,
 };
@@ -52,59 +52,6 @@ pub(super) const MAX_FEDERATED_CONCURRENCY: usize = 8;
 
 const NO_MATCHING_WORKSPACE_NOTE: &str = "no registered workspace matched the requested scope";
 
-impl OrbitRuntime {
-    pub(super) fn federated_search(
-        &self,
-        params: GlobalSearchParams,
-    ) -> Result<GlobalSearchResponse, OrbitError> {
-        ensure_federated_scope_supported(&params)?;
-        ensure_federated_scope_permitted(crate::runtime::run_input::managed_run_context_from_env(
-            self.env(),
-        ))?;
-
-        let catalog = self
-            .workspace_catalog()
-            .ok_or_else(federation_unavailable)?;
-
-        let mut notes = Vec::new();
-        let mut targets = catalog.resolve_scope(&params.workspaces)?;
-        if let Some(note) = apply_workspace_cap(&mut targets) {
-            notes.push(note);
-        }
-        if targets.is_empty() {
-            notes.push(NO_MATCHING_WORKSPACE_NOTE.to_string());
-            return Ok(GlobalSearchResponse {
-                mode: GlobalSearchMode::Lexical,
-                kind: params.kind,
-                results: Vec::new(),
-                notes,
-                skipped_kinds: Vec::new(),
-                workspaces: Vec::new(),
-            });
-        }
-
-        let outcomes = fan_out(catalog.as_ref(), &targets, &params);
-
-        let mut branches = Vec::with_capacity(outcomes.len());
-        let mut reports = Vec::with_capacity(outcomes.len());
-        for outcome in outcomes {
-            notes.extend(outcome.notes);
-            branches.push(outcome.hits);
-            reports.push(outcome.report);
-        }
-
-        let results = merge_round_robin(branches, params.normalized_limit());
-        Ok(GlobalSearchResponse {
-            mode: GlobalSearchMode::Lexical,
-            kind: params.kind,
-            results,
-            notes,
-            skipped_kinds: Vec::new(),
-            workspaces: reports,
-        })
-    }
-}
-
 /// What one workspace contributed to the fused answer.
 ///
 /// `notes` is carried per workspace rather than appended to one shared buffer
@@ -114,6 +61,55 @@ struct WorkspaceOutcome {
     hits: Vec<GlobalSearchHit>,
     report: WorkspaceSearchReport,
     notes: Vec<String>,
+}
+
+pub(super) fn federated_search(
+    rt: &OrbitRuntime,
+    params: GlobalSearchParams,
+) -> Result<GlobalSearchResponse, OrbitError> {
+    ensure_federated_scope_supported(&params)?;
+    ensure_federated_scope_permitted(crate::runtime::run_input::managed_run_context_from_env(
+        rt.env(),
+    ))?;
+
+    let catalog = rt.workspace_catalog().ok_or_else(federation_unavailable)?;
+
+    let mut notes = Vec::new();
+    let mut targets = catalog.resolve_scope(&params.workspaces)?;
+    if let Some(note) = apply_workspace_cap(&mut targets) {
+        notes.push(note);
+    }
+    if targets.is_empty() {
+        notes.push(NO_MATCHING_WORKSPACE_NOTE.to_string());
+        return Ok(GlobalSearchResponse {
+            mode: GlobalSearchMode::Lexical,
+            kind: params.kind,
+            results: Vec::new(),
+            notes,
+            skipped_kinds: Vec::new(),
+            workspaces: Vec::new(),
+        });
+    }
+
+    let outcomes = fan_out(catalog.as_ref(), &targets, &params);
+
+    let mut branches = Vec::with_capacity(outcomes.len());
+    let mut reports = Vec::with_capacity(outcomes.len());
+    for outcome in outcomes {
+        notes.extend(outcome.notes);
+        branches.push(outcome.hits);
+        reports.push(outcome.report);
+    }
+
+    let results = merge_round_robin(branches, params.normalized_limit());
+    Ok(GlobalSearchResponse {
+        mode: GlobalSearchMode::Lexical,
+        kind: params.kind,
+        results,
+        notes,
+        skipped_kinds: Vec::new(),
+        workspaces: reports,
+    })
 }
 
 /// Query every target over a bounded pool, in target order.
@@ -207,7 +203,7 @@ fn query_one_workspace(
     // own — takes the plain single-workspace path and cannot recurse.
     let mut scoped = params.clone();
     scoped.workspaces = WorkspaceScope::Current;
-    match runtime.workspace_search(scoped) {
+    match super::runtime::workspace_search(&runtime, scoped) {
         Ok(response) => {
             for note in response.notes {
                 notes.push(workspace_note(&target.name, &note));

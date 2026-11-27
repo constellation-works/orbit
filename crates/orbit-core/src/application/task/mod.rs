@@ -133,7 +133,7 @@ pub(crate) use distributed_port::execution_claim_phase_label;
 pub(crate) use escalation_triage_steps::PILOT_WARNING_TRIAGED_EVENT;
 pub(crate) use escalation_triage_steps::{PilotWarningCandidacy, pilot_warning_candidacy};
 pub use escalation_triage_steps::{PilotWarningDecision, PilotWarningTriageRequest};
-pub(in crate::application) use evolution_port::TaskEvolutionPort;
+pub(crate) use evolution_port::TaskEvolutionPort;
 pub(in crate::application) use experiment_port::TaskExperimentPort;
 pub(crate) use final_recovery::TERMINAL_REFUSAL_MARK;
 pub use final_recovery::{
@@ -165,7 +165,7 @@ pub use mutation_audit::{
     TASK_MUTATION_AUDIT_COMMAND, TaskMutationAudit, audit_status_for_task_mutation_error,
     with_task_write_provenance,
 };
-pub(in crate::application) use notice_port::TaskNoticePort;
+pub(crate) use notice_port::TaskNoticePort;
 pub use os_readout::TaskOsReadout;
 pub(crate) use params::TaskRecordUpdateParams;
 pub use params::{TaskAddParams, TaskUpdateParams};

@@ -108,6 +108,7 @@ pub mod test_support {
     /// [`FixtureRuntime`], for fixtures that drive engine entry points or host
     /// traits directly.
     pub use crate::adapter::engine_host::EngineHost;
+    pub use crate::app::notice::{with_notice_close_snapshot_hook, with_notice_post_time};
     pub use crate::application::auto_tasks::completion_test_support::with_completion_adapter_run;
     /// Freeze source budget time in an isolated test process and its CLI children.
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
@@ -143,8 +144,6 @@ pub mod test_support {
     pub use crate::application::job::with_run_root_cause_write_hook;
     pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
-    pub use crate::application::notice::test_support::with_notice_close_snapshot_hook;
-    pub use crate::application::notice::test_support::with_notice_post_time;
     pub use crate::application::resident::{
         with_resident_action_close_failure, with_resident_cycle_admission_checkpoint,
     };
@@ -285,6 +284,7 @@ pub use orbit_common::OrbitError as Error;
 
 // Crate-private shorthands the modules below name as `crate::…`.
 pub(crate) use app::routine::RoutineSeedIdentity;
+pub(crate) use app::search::{GlobalSearchKind, SearchRequest, SearchRequestProfile};
 pub(crate) use application::backlog_forecast::BacklogForecastHistory;
 pub(crate) use application::contracts::DrainEntryPoint;
 pub(crate) use application::distributed::WorkspacePullRequest;
@@ -293,7 +293,6 @@ pub(crate) use application::job::{
     DrainWindowExtensionRequest, DrainWorkerLimitRequest, PipelineInvokeResult, PipelineWaitEntry,
     PipelineWaitStatus, ShipModeResolutionProfile, ShipRunRequest,
 };
-pub(crate) use application::search::{GlobalSearchKind, SearchRequest, SearchRequestProfile};
 pub(crate) use application::workflow::{
     CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode,
 };

@@ -5,17 +5,17 @@
 //! and root bootstrap live outside this module.
 //!
 //! - Tasks, jobs, and delivery: `task`, `task_bundle`, `job`, `workflow`,
-//!   `landing`, `review`, `notice`, `operator_input`.
+//!   `landing`, `review`, `operator_input`.
 //! - Automation: `auto_tasks`, `automation`, `workspace_auto`,
 //!   `sweep_filing`, `seeding_policy`.
-//! - Agents and runs: `agents`, `executor`, `agent_corpus`, `crew_memory`,
-//!   `evolution`, `experiment`, `resident`, `vision_probe`, `statistics`.
+//! - Agents and runs: `agents`, `executor`, `agent_corpus`, `experiment`,
+//!   `resident`, `vision_probe`, `statistics`.
 //! - Plugins and skills: `plugin`, `skill`, `tool_name_migration`.
 //! - Workspace and host: `workspace`, `codebase`, `config`, `distributed`,
 //!   `pull_drain`, `host_labels`, `gc`, `change_watch`,
 //!   `managed_assets`.
-//! - Policy, search, and audit: `application_authority`, `audit_event`,
-//!   `contracts`, `admission`, `search`, `backlog_forecast`,
+//! - Policy and audit: `application_authority`, `audit_event`,
+//!   `contracts`, `admission`, `backlog_forecast`,
 //!   `tag_instructions`.
 //! - `test_support` is compiled only for tests.
 
@@ -31,9 +31,7 @@ pub mod change_watch;
 pub mod codebase;
 pub mod config;
 pub mod contracts;
-pub mod crew_memory;
 pub mod distributed;
-pub mod evolution;
 pub(crate) mod executor;
 pub mod experiment;
 pub mod gc;
@@ -41,13 +39,11 @@ pub(crate) mod host_labels;
 pub mod job;
 pub mod landing;
 pub(crate) mod managed_assets;
-pub mod notice;
 pub mod operator_input;
 pub mod plugin;
 pub(crate) mod pull_drain;
 pub mod resident;
 pub mod review;
-pub(crate) mod search;
 pub mod seeding_policy;
 pub mod skill;
 pub(crate) mod statistics;

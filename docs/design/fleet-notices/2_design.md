@@ -56,10 +56,10 @@ needed: every crate below already depends on the ones it would call.
 | Registration in the `notice` toolset | `operation::register_noun(registry, &NOTICE)` in `crates/orbit-tools/src/builtin/orbit/register.rs` (the toolset comes from the `builtin_mcp_toolset` table in `crates/orbit-tools/src/mcp/toolsets.rs`); `McpToolset::Notice` in `crates/orbit-types/src/tool/mcp_toolset.rs`; `orbit.notice.list`/`show` annotated read-only in `crates/orbit-tools/src/mcp/annotations.rs` |
 | Authorization catalog entries for `post` and `close` (Agent, Operator and Runner as an identity floor, like leases; poster-class resolution in core; `list` and `show` are open reads) | `crates/orbit-common/src/governance/authorization/catalog/operation.rs` |
 | Store table and migration; repository contract | the `notices.rs` migration (schema v85) under `crates/orbit-store/src/driver/sqlite/host/schema/`, `crates/orbit-store/src/contract/notice.rs`, `crates/orbit-store/src/repository/notice.rs`, the store schema golden |
-| Post, close, list, show, effective state, dedupe, limits, poster class | `crates/orbit-core/src/application/notice/` |
-| Closure materializer | `materialize_notice_closures_for_done_task` in `application/notice/close.rs`. A transition into `done` calls it through `task::TaskNoticePort` (`close_linked_notices_for_done_transition`), right after the transition rather than inside its transaction; the hook keeps the helper's best-effort log. Reads derive the closure for anything it missed; the scheduler sweep (`run_notice_closure_tick` from `app/routine/sweep/tick.rs`) materializes cross-workspace closures |
+| Post, close, list, show, effective state, dedupe, limits, poster class | `crates/orbit-core/src/app/notice/` |
+| Closure materializer | `materialize_notice_closures_for_done_task` in `app/notice/close.rs`. A transition into `done` calls it through `task::TaskNoticePort` (`close_linked_notices_for_done_transition`), right after the transition rather than inside its transaction; the hook keeps the helper's best-effort log. Reads derive the closure for anything it missed; the scheduler sweep (`run_notice_closure_tick` from `app/routine/sweep/tick.rs`) materializes cross-workspace closures |
 | Brief block | the required `Dispatch::notices_for_agent_input` method, implemented by Core in `actions/task_context.rs`, with a test fixture default; attached in `dispatch/preparation.rs`, emitting `NoticesDelivered`; a claimed leaf reads through `route_worker_host_tool("orbit.notice.list", …)` |
-| Fixed limits | `crates/orbit-core/src/application/notice/limits.rs` |
+| Fixed limits | `crates/orbit-core/src/app/notice/limit.rs` |
 | CLI | registry-derived `orbit notice`; `crates/orbit-cli/src/command/notice/` holds the CLI-only flag folding and `crates/orbit-cli/src/output/notice.rs` holds the rendering |
 | Dashboard banner and view | `crates/orbit-web` (`assets/dashboard/js/notices.js`, `css/notices.css`) |
 | Attention kind `notice_open` | `crates/orbit-core/src/app/attention/notice_source.rs` |
@@ -134,7 +134,7 @@ Delivery is specified in [notice-delivery](./specs/notice-delivery.md). The desi
 
 ## 6. Configuration
 
-None. Every limit is a fixed constant in `application/notice/limits.rs`; the former `[notice]`
+None. Every limit is a fixed constant in `app/notice/limit.rs`; the former `[notice]`
 keys were removed [ORB-22808] and load with a deprecation warning until 2026-12-08:
 
 | Former key | Fixed value | Meaning |

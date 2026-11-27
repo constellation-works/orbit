@@ -1,4 +1,4 @@
-use super::types::GlobalSearchHit;
+use super::model::GlobalSearchHit;
 
 const TASK_SEARCH_SUMMARY_MAX_CHARS: usize = 240;
 

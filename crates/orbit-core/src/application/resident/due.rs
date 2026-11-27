@@ -40,7 +40,7 @@ use super::wake::{
     ResidentTaskWakeItem, ResidentWakeItemKey, ResidentWakeObservation, settled_decisions,
 };
 use crate::OrbitRuntime;
-use crate::application::notice::{NoticeListFilter, NoticeStatusFilter};
+use crate::app::notice::{NoticeListFilter, NoticeStatusFilter};
 
 /// Most watched tasks one digest reads.
 const MAX_WATCHED_TASKS: usize = 200;
@@ -137,11 +137,14 @@ impl OrbitRuntime {
     ) -> Result<Vec<Notice>, OrbitError> {
         let mut workspaces: BTreeSet<String> = mandate.workspaces.iter().cloned().collect();
         workspaces.insert(self.workspace_id()?);
-        let listing = self.list_notices(&NoticeListFilter {
-            status: NoticeStatusFilter::All,
-            all_workspaces: true,
-            ..Default::default()
-        })?;
+        let listing = crate::app::notice::list_notices(
+            self,
+            &NoticeListFilter {
+                status: NoticeStatusFilter::All,
+                all_workspaces: true,
+                ..Default::default()
+            },
+        )?;
         Ok(listing
             .notices
             .into_iter()

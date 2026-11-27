@@ -70,7 +70,8 @@ impl OrbitRuntime {
         self.record_landed_diff_stats_on_done(previous_status, task);
         // ...and closes the fleet notices linked to the task.
         if previous_status != TaskStatus::Done {
-            self.close_linked_notices_for_done_transition(task.id.as_str());
+            crate::app::port::TaskNotice(self)
+                .close_linked_notices_for_done_transition(task.id.as_str());
         }
         let task_history = match self.resolves_task_history(&task.id) {
             Ok(history) => history,

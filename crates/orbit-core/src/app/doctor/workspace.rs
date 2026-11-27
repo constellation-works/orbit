@@ -318,7 +318,7 @@ pub(super) fn doctor_check_disk_space(runtime: &OrbitRuntime) -> WorkspaceDoctor
 
 /// Compare lexical index coverage with the workspace's local search corpus.
 pub(super) fn doctor_check_search_index(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
-    match runtime.search_index_coverage() {
+    match crate::app::search::search_index_coverage(runtime) {
         Err(error) => check(
             "search-index",
             WorkspaceDoctorStatus::Warning,

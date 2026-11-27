@@ -3,7 +3,7 @@
 use super::definition::{ExperimentOverlay, overlay_digest};
 use super::overlay::instruction_role;
 use crate::OrbitRuntime;
-use crate::application::crew_memory::memory_key;
+use crate::app::crew_memory::memory_key;
 use orbit_common::OrbitError;
 use orbit_types::{
     task::{CrewSource, Task},
@@ -172,7 +172,8 @@ impl OrbitRuntime {
         let mut deliveries = Vec::new();
         if enabled && let Some(key) = memory_key(model) {
             for role in &memory.roles {
-                deliveries.push(self.render_crew_memory_delivery(
+                deliveries.push(crate::app::crew_memory::render_crew_memory_delivery(
+                    self,
                     instruction_role(*role),
                     &key,
                     memory.global,

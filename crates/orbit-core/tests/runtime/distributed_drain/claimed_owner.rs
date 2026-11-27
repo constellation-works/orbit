@@ -746,17 +746,19 @@ fn claim_evidence_is_searchable_without_reindex() {
         }),
     );
     let search = |query: &str| {
-        owner
-            .global_search(GlobalSearchParams {
+        orbit_core::app::search::global_search(
+            &owner,
+            GlobalSearchParams {
                 query: Some(query.into()),
                 kind: GlobalSearchKind::Task,
                 limit: 10,
                 ..Default::default()
-            })
-            .unwrap()
-            .results
-            .iter()
-            .any(|hit| hit.id.as_deref() == Some(task.as_str()))
+            },
+        )
+        .unwrap()
+        .results
+        .iter()
+        .any(|hit| hit.id.as_deref() == Some(task.as_str()))
     };
     // The task was indexed when it was created and planned, before either
     // token existed.

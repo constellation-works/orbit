@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use super::record::{parse_status, record_to_json};
 use crate::OrbitRuntime;
-use crate::application::search::whitespace_query_note;
+use crate::app::search::whitespace_query_note;
 
 pub(super) fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
     list_in(

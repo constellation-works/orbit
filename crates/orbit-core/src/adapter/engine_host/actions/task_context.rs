@@ -13,9 +13,7 @@ use serde_json::Value;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 
 use crate::OrbitRuntime;
-use crate::application::notice::limits::{
-    BRIEF_BODY_CHARS, BRIEF_MAX_ITEMS, BRIEF_READ_TIMEOUT_MS,
-};
+use crate::app::notice::{BRIEF_BODY_CHARS, BRIEF_MAX_ITEMS, BRIEF_READ_TIMEOUT_MS};
 use crate::application::task::{context_workspace_root, finding_fingerprint, is_review_finding};
 use crate::runtime::run_input::singular_task_id_from_input;
 
@@ -249,12 +247,14 @@ fn read_open_notices_for_brief(
             orbit_common::OrbitError::Store(format!("owner notice read response: {error}"))
         });
     }
-    Ok(runtime
-        .list_notices(&crate::application::notice::NoticeListFilter {
+    Ok(crate::app::notice::list_notices(
+        runtime,
+        &crate::app::notice::NoticeListFilter {
             limit: Some(200),
             ..Default::default()
-        })?
-        .notices)
+        },
+    )?
+    .notices)
 }
 
 /// Order, bound and quote `notices` as the `untrusted_data` block: kind,

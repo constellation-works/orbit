@@ -44,8 +44,8 @@ unit coverage, path existence, first-line `//!` doc comments, and one destinatio
    review gate (admit, settle, certificates); `crates/orbit-core/src/application/landing/` (above
    `crates/orbit-core/src/application/distributed/`) consumes the authorized handoff outbox and lands.
 6. **Done.** Task state transitions close linked notices
-   (`crates/orbit-core/src/application/notice/` via `task::TaskNoticePort`) and project costs
-   (`crates/orbit-core/src/application/evolution/`); terminal tasks close their Orbit-authored PRs.
+   (`crates/orbit-core/src/app/notice/` via `task::TaskNoticePort`) and project costs
+   (`crates/orbit-core/src/app/evolution/`); terminal tasks close their Orbit-authored PRs.
 
 Scheduling alongside the flow: `orbit-automation` evaluates routines and
 auto-tasks (due, overlap, retry, CEL condition triggers in

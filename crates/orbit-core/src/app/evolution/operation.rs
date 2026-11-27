@@ -23,7 +23,8 @@ pub(super) fn dispatch(
                 serde_json::from_value(input.as_value()["event"].clone()).map_err(|error| {
                     OrbitError::InvalidInput(format!("invalid cost event: {error}"))
                 })?;
-            runtime.add_evolution_cost(
+            super::ledger::add_evolution_cost(
+                runtime,
                 event,
                 input.optional_string("mandate")?,
                 input.optional_string("cycle")?,
@@ -50,9 +51,11 @@ pub(super) fn dispatch(
                         })
                 })
                 .transpose()?;
-            runtime.list_evolution_records(state, since)
+            super::ledger::list_evolution_records(runtime, state, since)
         }
-        EvolutionVerb::Show => runtime.show_evolution_record(&input.required_string("id")?),
+        EvolutionVerb::Show => {
+            super::ledger::show_evolution_record(runtime, &input.required_string("id")?)
+        }
         EvolutionVerb::Decline => {
             let days = input
                 .as_value()
@@ -66,10 +69,12 @@ pub(super) fn dispatch(
                         })
                 })
                 .transpose()?
-                .unwrap_or(crate::application::evolution::EVOLUTION_DECLINE_SUPPRESS_DAYS);
-            serde_json::to_value(
-                runtime.decline_evolution_record(&input.required_string("id")?, days)?,
-            )
+                .unwrap_or(super::EVOLUTION_DECLINE_SUPPRESS_DAYS);
+            serde_json::to_value(super::ledger::decline_evolution_record(
+                runtime,
+                &input.required_string("id")?,
+                days,
+            )?)
             .map_err(|error| OrbitError::Execution(error.to_string()))
         }
     }

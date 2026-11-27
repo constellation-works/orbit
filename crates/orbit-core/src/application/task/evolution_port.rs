@@ -8,7 +8,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::TaskComment;
 
 /// The checkpoint projection task writes request from evolution.
-pub(in crate::application) trait TaskEvolutionPort {
+pub(crate) trait TaskEvolutionPort {
     /// Project checkpoint costs after the comments commit, under the task's
     /// write lock. An error propagates without rolling back the durable write;
     /// the comments remain the canonical source for idempotent reconciliation.

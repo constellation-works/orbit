@@ -11,7 +11,25 @@
 //!
 //! Reindexing is local maintenance outside the registry.
 
+mod candidate;
+
+mod convert;
+
+mod federated;
+
+mod filter;
+
+mod friction;
+
+mod merge;
+
+mod model;
+
 mod operation;
+
+mod request;
+
+mod runtime;
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationVerb;
@@ -23,11 +41,25 @@ use super::exec::{self, App, Operation};
 use super::tool_call;
 pub use super::tool_call::Input;
 use crate::Core;
-
-// Surface re-exports: what the CLI, dashboard and composition name from this subject.
-pub use crate::application::search::{
-    GlobalSearchKind, GlobalSearchParams, SearchRequest, SearchRequestProfile,
+use merge::merge_round_robin;
+pub(crate) use model::{
+    GlobalSearchHit, GlobalSearchMode, GlobalSearchResponse, whitespace_query_note,
 };
+pub use model::{GlobalSearchKind, GlobalSearchParams};
+pub(crate) use request::search_with_profile;
+// Surface re-exports: what the CLI, dashboard and composition name from this subject.
+pub use request::{SearchRequest, SearchRequestProfile};
+pub(crate) use runtime::search_index_coverage;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use runtime::{global_search, search_reindex};
+
+const DEFAULT_LIMIT: usize = 10;
+
+/// Upper bound on results per query. The limit comes straight from CLI and
+/// MCP callers and sizes result buffers, so an unbounded value could request
+/// an allocation large enough to abort the process.
+const MAX_LIMIT: usize = 1_000;
 
 /// What the search app can be asked to do.
 pub enum Command {
@@ -101,7 +133,7 @@ impl App for SearchApp {
                 input,
                 |runtime, input, _caller| operation::dispatch(runtime, verb, input),
             )?),
-            Command::Reindex(_) => Outcome::Reindexed(core.runtime().search_reindex()?),
+            Command::Reindex(_) => Outcome::Reindexed(runtime::search_reindex(core.runtime())?),
         })
     }
 }

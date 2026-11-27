@@ -166,7 +166,7 @@ impl OrbitRuntime {
     /// once it has lapsed or been closed. `null` before the first line, or
     /// when the notices cannot be read.
     fn resident_status_line_json(&self, task_id: &str) -> Value {
-        match self.resident_status_line(task_id) {
+        match crate::app::notice::resident_status_line(self, task_id) {
             Ok(Some(notice)) => status_line_notice_json(&notice),
             Ok(None) => Value::Null,
             Err(error) => {
@@ -221,10 +221,11 @@ impl OrbitRuntime {
             tasks.push(task);
         }
         let ids: Vec<String> = tasks.iter().map(|task| task.id.clone()).collect();
-        let status_lines = self.resident_status_lines(&ids).unwrap_or_else(|error| {
-            tracing::warn!(%error, "resident cards could not read status lines");
-            Default::default()
-        });
+        let status_lines =
+            crate::app::notice::resident_status_lines(self, &ids).unwrap_or_else(|error| {
+                tracing::warn!(%error, "resident cards could not read status lines");
+                Default::default()
+            });
         struct Card {
             shown: Value,
             task_id: String,

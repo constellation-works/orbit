@@ -482,7 +482,9 @@ impl OrbitRuntime {
                 entry.reason.trim_end_matches('.')
             )
         };
-        if let Err(error) = self.post_resident_control_line(task_id, &title, &body, lasting) {
+        if let Err(error) =
+            crate::app::notice::post_resident_control_line(self, task_id, &title, &body, lasting)
+        {
             tracing::warn!(task = task_id, %error, "failed to leave the resident's status line");
         }
     }

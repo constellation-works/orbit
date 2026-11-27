@@ -53,14 +53,17 @@ pub(super) fn notice_attention_items(
     host: &AttentionHost,
     now: DateTime<Utc>,
 ) -> Result<Vec<AttentionItem>, OrbitError> {
-    use crate::application::notice::{NoticeListFilter, NoticeStatusFilter};
-    let listing = runtime.list_notices(&NoticeListFilter {
-        status: NoticeStatusFilter::Open,
-        include_global: true,
-        all_workspaces: false,
-        limit: None,
-        ..NoticeListFilter::default()
-    })?;
+    use crate::app::notice::{NoticeListFilter, NoticeStatusFilter};
+    let listing = crate::app::notice::list_notices(
+        runtime,
+        &NoticeListFilter {
+            status: NoticeStatusFilter::Open,
+            include_global: true,
+            all_workspaces: false,
+            limit: None,
+            ..NoticeListFilter::default()
+        },
+    )?;
     let mut items = Vec::new();
     for notice in &listing.notices {
         // A resident's status line asks nothing of anyone, and lapsing is
@@ -72,8 +75,7 @@ pub(super) fn notice_attention_items(
         let mut refs = json!({"notice_id": notice.id});
         let task = notice.linked_task.as_ref().and_then(|linked| {
             refs["task_id"] = json!(linked.id);
-            runtime
-                .notice_linked_task(&linked.id)
+            crate::app::notice::notice_linked_task(runtime, &linked.id)
                 .map(|task| attention_task(&task))
         });
         let ws = workspace.id.replace('\'', "'\\''");

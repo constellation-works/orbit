@@ -123,7 +123,7 @@ pub(super) fn lost_reply_retries_bypass_a_reached_post_rate_only_for_the_latest_
         }
         // Reach the fixed cap with distinct writes of the same open subject.
         let mut last = Value::Null;
-        for report in 0..orbit_core::application::notice::limits::AGENT_POSTS_PER_TASK_PER_DAY {
+        for report in 0..orbit_core::app::notice::AGENT_POSTS_PER_TASK_PER_DAY {
             request["body"] = json!(format!("Report {report}"));
             last = call(&runtime, "orbit.notice.post", request.clone(), &agent).unwrap();
         }

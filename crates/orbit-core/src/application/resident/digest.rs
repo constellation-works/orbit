@@ -20,7 +20,7 @@ impl OrbitRuntime {
                 "top must be between 1 and 100".into(),
             ));
         }
-        let default_window = format!("{}d", crate::application::evolution::EVOLUTION_WINDOW_DAYS);
+        let default_window = format!("{}d", crate::app::evolution::EVOLUTION_WINDOW_DAYS);
         let since = since.unwrap_or(&default_window);
         let now = Utc::now();
         let start = super::metrics::parse_window_start(Some(since), now)?;
@@ -147,7 +147,7 @@ impl OrbitRuntime {
                 .cmp(&raised_at(b))
                 .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
         });
-        let records = self.list_evolution_records(None, Some(start))?;
+        let records = crate::app::evolution::list_evolution_records(self, None, Some(start))?;
         let pains: Vec<Value> = records["records"]
             .as_array()
             .into_iter()
@@ -165,7 +165,7 @@ impl OrbitRuntime {
                 record
             })
             .collect();
-        let all_records = self.list_evolution_records(None, None)?;
+        let all_records = crate::app::evolution::list_evolution_records(self, None, None)?;
         let linked: BTreeSet<&str> = all_records["records"]
             .as_array()
             .into_iter()

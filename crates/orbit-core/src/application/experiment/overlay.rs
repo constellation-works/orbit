@@ -30,7 +30,7 @@ use serde_json::Value;
 use super::capture::{validate_claimed_experiment_capture, validate_experiment_capture};
 use super::definition::{ExperimentOverlay, InstructionOverlay, OverlayRole};
 use crate::OrbitRuntime;
-use crate::application::crew_memory::memory_key;
+use crate::app::crew_memory::memory_key;
 use crate::application::job::granted_tool_refusal;
 use crate::application::tag_instructions::{LazyRevision, TagInstructionFailure, read_blob_at};
 use crate::runtime::run_input::singular_task_id_from_input;
@@ -164,7 +164,7 @@ impl OrbitRuntime {
         if let Some(captured) = captured_memory_delivery(assignment, role, key.as_str()) {
             return Ok(Some(captured.clone()));
         }
-        self.render_crew_memory_delivery(role, &key, surface.global)
+        crate::app::crew_memory::render_crew_memory_delivery(self, role, &key, surface.global)
             .map(Some)
     }
 

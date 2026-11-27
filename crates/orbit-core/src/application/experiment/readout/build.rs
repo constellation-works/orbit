@@ -7,7 +7,7 @@ use orbit_types::workflow::TagInstructionRole;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::crew_memory::CREW_MEMORY_DREAM_TAG;
+use crate::app::crew_memory::CREW_MEMORY_DREAM_TAG;
 use crate::application::experiment::assignment::{
     EXPLICIT_CREW_EXCLUSION, SURFACE_CONFLICT_EXCLUSION,
 };

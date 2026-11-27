@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use super::GlobalSearchHit;
 
-pub(in crate::application) fn merge_round_robin(
+pub(super) fn merge_round_robin(
     branches: Vec<Vec<GlobalSearchHit>>,
     limit: usize,
 ) -> Vec<GlobalSearchHit> {

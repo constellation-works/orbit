@@ -7,9 +7,9 @@ use orbit_types::record::{
     resident_notice_key_prefix,
 };
 
-use super::super::authority::NoticePoster;
-use super::super::{limits, refuse};
 use crate::OrbitRuntime;
+use crate::app::notice::authority::NoticePoster;
+use crate::app::notice::{limit as limits, refuse};
 
 /// The shortest expiry a post may set.
 const MIN_EXPIRY_MINUTES: i64 = 5;
@@ -136,244 +136,6 @@ pub(super) struct ValidatedPost {
     fingerprint_request: NoticePostRequest,
 }
 
-impl OrbitRuntime {
-    pub(super) fn validate_notice_post(
-        &self,
-        poster: &NoticePoster,
-        request: NoticePostRequest,
-    ) -> Result<ValidatedPost, OrbitError> {
-        let mut fingerprint_request = request.clone();
-        let NoticePostRequest {
-            kind,
-            title,
-            body,
-            scope,
-            dedupe_key,
-            linked_task,
-            close_on_linked_done,
-            evidence,
-            hosts,
-            expires_in_hours: _,
-            expires_at: _,
-        } = request;
-        if let Some(scope) = scope
-            && !poster.may_post_scope(scope)
-        {
-            return Err(refuse(
-                NoticeRefusalCode::ScopeRefused,
-                "a managed agent may post only workspace-scoped notices",
-            ));
-        }
-        if !poster.may_post_kind(kind) {
-            return Err(refuse(
-                NoticeRefusalCode::KindRefused,
-                "a managed agent may post only incident or info notices (a resident cycle may also post warn)",
-            ));
-        }
-        let title = title.trim().to_string();
-        if title.is_empty() || has_control(&title, false) {
-            return Err(refuse(
-                NoticeRefusalCode::InvalidField,
-                "`title` must be non-empty single-line text",
-            ));
-        }
-        if title.chars().count() > limits::MAX_TITLE_CHARS as usize {
-            return Err(limit("max_title_chars", limits::MAX_TITLE_CHARS));
-        }
-        let body = body.unwrap_or_default();
-        if has_control(&body, true) {
-            return Err(refuse(
-                NoticeRefusalCode::InvalidField,
-                "`body` may not contain control characters other than newline and tab",
-            ));
-        }
-        if body.len() > limits::MAX_BODY_BYTES as usize {
-            return Err(limit("max_body_bytes", limits::MAX_BODY_BYTES));
-        }
-        if evidence.len() > limits::MAX_EVIDENCE as usize {
-            return Err(limit("max_evidence", limits::MAX_EVIDENCE));
-        }
-        for item in &evidence {
-            if !NoticeEvidence::TYPES.contains(&item.kind.as_str()) {
-                return Err(refuse(
-                    NoticeRefusalCode::InvalidField,
-                    format!(
-                        "evidence type `{}` is not one of {}",
-                        item.kind,
-                        NoticeEvidence::TYPES.join(", ")
-                    ),
-                ));
-            }
-            let value = item.value.trim();
-            if value.is_empty()
-                || value.chars().count() > MAX_EVIDENCE_VALUE_CHARS
-                || has_control(value, false)
-            {
-                return Err(refuse(
-                    NoticeRefusalCode::InvalidField,
-                    format!("evidence values are 1 to {MAX_EVIDENCE_VALUE_CHARS} characters"),
-                ));
-            }
-        }
-        let evidence: Vec<NoticeEvidence> = evidence
-            .into_iter()
-            .map(|item| NoticeEvidence {
-                kind: item.kind,
-                value: item.value.trim().to_string(),
-            })
-            .collect();
-        let hosts: Vec<String> = hosts
-            .iter()
-            .map(|host| host.trim().to_string())
-            .filter(|host| !host.is_empty())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        if !hosts.is_empty() && kind != NoticeKind::Maintenance {
-            return Err(refuse(
-                NoticeRefusalCode::InvalidField,
-                "`hosts` applies only to maintenance notices",
-            ));
-        }
-        if hosts.len() > MAX_HOSTS {
-            return Err(refuse(
-                NoticeRefusalCode::InvalidField,
-                format!("a notice names at most {MAX_HOSTS} hosts"),
-            ));
-        }
-        let linked_task = match linked_task
-            .as_deref()
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-        {
-            Some(id) => {
-                // A link must resolve on this owner: the home workspace or
-                // another workspace the same host owns. A task another host
-                // holds is refused, because this owner could not evaluate
-                // linked-task closure without a cross-host read.
-                use orbit_store::RegisteredTaskResolution;
-                let task = match self.resolve_dependency_task(id) {
-                    Ok(RegisteredTaskResolution::Resolved(task)) => *task,
-                    Ok(RegisteredTaskResolution::ForeignAuthority) => {
-                        return Err(refuse(
-                            NoticeRefusalCode::InvalidField,
-                            format!(
-                                "linked task `{id}` is held by another host; a notice links only a task this workspace's owner holds"
-                            ),
-                        ));
-                    }
-                    Ok(RegisteredTaskResolution::Missing) | Err(_) => {
-                        return Err(refuse(
-                            NoticeRefusalCode::InvalidField,
-                            format!(
-                                "linked task `{id}` is not a task any workspace on this host holds"
-                            ),
-                        ));
-                    }
-                };
-                Some(NoticeLinkedTask {
-                    id: task.id.to_string(),
-                    workspace_id: self
-                        .registered_task_workspace(&task.id.to_string())
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| self.workspace_id().unwrap_or_default()),
-                    status: None,
-                })
-            }
-            None => None,
-        };
-        // A resident's notices are attributed to its mandate, which is the
-        // evidence: its status line has nothing else to cite.
-        if poster.class == AuthorClass::Agent
-            && poster.resident.is_none()
-            && linked_task.is_none()
-            && evidence.is_empty()
-        {
-            return Err(refuse(
-                NoticeRefusalCode::EvidenceRequired,
-                "a managed agent's notice needs a linked task or at least one evidence reference",
-            ));
-        }
-        let dedupe_key = match dedupe_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|key| !key.is_empty())
-        {
-            Some(key) => {
-                if key.chars().count() > MAX_DEDUPE_KEY_CHARS || !key.chars().all(dedupe_key_char) {
-                    return Err(refuse(
-                        NoticeRefusalCode::InvalidField,
-                        format!(
-                            "`dedupe_key` is 1 to {MAX_DEDUPE_KEY_CHARS} characters of a-z, 0-9 and . _ : / -"
-                        ),
-                    ));
-                }
-                key.to_string()
-            }
-            None => {
-                let derived = derive_dedupe_key(
-                    kind,
-                    &title,
-                    linked_task.as_ref().map(|task| task.id.as_str()),
-                );
-                // A resident's warn is keyed under its own mandate, so it
-                // can always replace and close it: `resident:<mandate>:`
-                // then the blocker (`task:<id>`, or the slugged title).
-                match (kind, &poster.resident, poster.task_id.as_deref()) {
-                    (NoticeKind::Warn, Some(_), Some(mandate)) => {
-                        format!("{}{derived}", resident_notice_key_prefix(mandate))
-                            .chars()
-                            .take(MAX_DEDUPE_KEY_CHARS)
-                            .collect()
-                    }
-                    _ => derived,
-                }
-            }
-        };
-        if dedupe_key.is_empty() {
-            return Err(refuse(
-                NoticeRefusalCode::InvalidField,
-                "no dedupe key could be derived; pass `dedupe_key`",
-            ));
-        }
-        if !poster.may_post_key(&dedupe_key) {
-            return Err(refuse(
-                NoticeRefusalCode::InvalidField,
-                "`dedupe_key` values under `resident:` are reserved for that resident mandate's own cycles",
-            ));
-        }
-        let status_line = poster.resident_status_key().as_deref() == Some(dedupe_key.as_str());
-        if status_line && kind != NoticeKind::Info {
-            return Err(refuse(
-                NoticeRefusalCode::KindRefused,
-                "a resident's status line is an info notice; post an operator ask as a warn under its own key",
-            ));
-        }
-        let close_on_linked_done = linked_task.is_some() && close_on_linked_done.unwrap_or(true);
-        fingerprint_request.body.get_or_insert_default();
-        fingerprint_request
-            .dedupe_key
-            .get_or_insert_with(|| dedupe_key.clone());
-        fingerprint_request
-            .close_on_linked_done
-            .get_or_insert(close_on_linked_done);
-        Ok(ValidatedPost {
-            kind,
-            title,
-            body,
-            scope,
-            dedupe_key,
-            status_line,
-            linked_task,
-            close_on_linked_done,
-            evidence,
-            hosts,
-            fingerprint_request,
-        })
-    }
-}
-
 impl ValidatedPost {
     /// Fingerprint the given request and the complete resolved poster, resolving
     /// only the defaults. In particular, ignore neither a corroborator's content
@@ -463,6 +225,242 @@ impl ValidatedPost {
             (None, None) => Ok(None),
         }
     }
+}
+
+pub(super) fn validate_notice_post(
+    rt: &OrbitRuntime,
+    poster: &NoticePoster,
+    request: NoticePostRequest,
+) -> Result<ValidatedPost, OrbitError> {
+    let mut fingerprint_request = request.clone();
+    let NoticePostRequest {
+        kind,
+        title,
+        body,
+        scope,
+        dedupe_key,
+        linked_task,
+        close_on_linked_done,
+        evidence,
+        hosts,
+        expires_in_hours: _,
+        expires_at: _,
+    } = request;
+    if let Some(scope) = scope
+        && !poster.may_post_scope(scope)
+    {
+        return Err(refuse(
+            NoticeRefusalCode::ScopeRefused,
+            "a managed agent may post only workspace-scoped notices",
+        ));
+    }
+    if !poster.may_post_kind(kind) {
+        return Err(refuse(
+            NoticeRefusalCode::KindRefused,
+            "a managed agent may post only incident or info notices (a resident cycle may also post warn)",
+        ));
+    }
+    let title = title.trim().to_string();
+    if title.is_empty() || has_control(&title, false) {
+        return Err(refuse(
+            NoticeRefusalCode::InvalidField,
+            "`title` must be non-empty single-line text",
+        ));
+    }
+    if title.chars().count() > limits::MAX_TITLE_CHARS as usize {
+        return Err(limit("max_title_chars", limits::MAX_TITLE_CHARS));
+    }
+    let body = body.unwrap_or_default();
+    if has_control(&body, true) {
+        return Err(refuse(
+            NoticeRefusalCode::InvalidField,
+            "`body` may not contain control characters other than newline and tab",
+        ));
+    }
+    if body.len() > limits::MAX_BODY_BYTES as usize {
+        return Err(limit("max_body_bytes", limits::MAX_BODY_BYTES));
+    }
+    if evidence.len() > limits::MAX_EVIDENCE as usize {
+        return Err(limit("max_evidence", limits::MAX_EVIDENCE));
+    }
+    for item in &evidence {
+        if !NoticeEvidence::TYPES.contains(&item.kind.as_str()) {
+            return Err(refuse(
+                NoticeRefusalCode::InvalidField,
+                format!(
+                    "evidence type `{}` is not one of {}",
+                    item.kind,
+                    NoticeEvidence::TYPES.join(", ")
+                ),
+            ));
+        }
+        let value = item.value.trim();
+        if value.is_empty()
+            || value.chars().count() > MAX_EVIDENCE_VALUE_CHARS
+            || has_control(value, false)
+        {
+            return Err(refuse(
+                NoticeRefusalCode::InvalidField,
+                format!("evidence values are 1 to {MAX_EVIDENCE_VALUE_CHARS} characters"),
+            ));
+        }
+    }
+    let evidence: Vec<NoticeEvidence> = evidence
+        .into_iter()
+        .map(|item| NoticeEvidence {
+            kind: item.kind,
+            value: item.value.trim().to_string(),
+        })
+        .collect();
+    let hosts: Vec<String> = hosts
+        .iter()
+        .map(|host| host.trim().to_string())
+        .filter(|host| !host.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if !hosts.is_empty() && kind != NoticeKind::Maintenance {
+        return Err(refuse(
+            NoticeRefusalCode::InvalidField,
+            "`hosts` applies only to maintenance notices",
+        ));
+    }
+    if hosts.len() > MAX_HOSTS {
+        return Err(refuse(
+            NoticeRefusalCode::InvalidField,
+            format!("a notice names at most {MAX_HOSTS} hosts"),
+        ));
+    }
+    let linked_task = match linked_task
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        Some(id) => {
+            // A link must resolve on this owner: the home workspace or
+            // another workspace the same host owns. A task another host
+            // holds is refused, because this owner could not evaluate
+            // linked-task closure without a cross-host read.
+            use orbit_store::RegisteredTaskResolution;
+            let task = match rt.resolve_dependency_task(id) {
+                Ok(RegisteredTaskResolution::Resolved(task)) => *task,
+                Ok(RegisteredTaskResolution::ForeignAuthority) => {
+                    return Err(refuse(
+                        NoticeRefusalCode::InvalidField,
+                        format!(
+                            "linked task `{id}` is held by another host; a notice links only a task this workspace's owner holds"
+                        ),
+                    ));
+                }
+                Ok(RegisteredTaskResolution::Missing) | Err(_) => {
+                    return Err(refuse(
+                        NoticeRefusalCode::InvalidField,
+                        format!(
+                            "linked task `{id}` is not a task any workspace on this host holds"
+                        ),
+                    ));
+                }
+            };
+            Some(NoticeLinkedTask {
+                id: task.id.to_string(),
+                workspace_id: rt
+                    .registered_task_workspace(&task.id.to_string())
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| rt.workspace_id().unwrap_or_default()),
+                status: None,
+            })
+        }
+        None => None,
+    };
+    // A resident's notices are attributed to its mandate, which is the
+    // evidence: its status line has nothing else to cite.
+    if poster.class == AuthorClass::Agent
+        && poster.resident.is_none()
+        && linked_task.is_none()
+        && evidence.is_empty()
+    {
+        return Err(refuse(
+            NoticeRefusalCode::EvidenceRequired,
+            "a managed agent's notice needs a linked task or at least one evidence reference",
+        ));
+    }
+    let dedupe_key = match dedupe_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    {
+        Some(key) => {
+            if key.chars().count() > MAX_DEDUPE_KEY_CHARS || !key.chars().all(dedupe_key_char) {
+                return Err(refuse(
+                    NoticeRefusalCode::InvalidField,
+                    format!(
+                        "`dedupe_key` is 1 to {MAX_DEDUPE_KEY_CHARS} characters of a-z, 0-9 and . _ : / -"
+                    ),
+                ));
+            }
+            key.to_string()
+        }
+        None => {
+            let derived = derive_dedupe_key(
+                kind,
+                &title,
+                linked_task.as_ref().map(|task| task.id.as_str()),
+            );
+            // A resident's warn is keyed under its own mandate, so it
+            // can always replace and close it: `resident:<mandate>:`
+            // then the blocker (`task:<id>`, or the slugged title).
+            match (kind, &poster.resident, poster.task_id.as_deref()) {
+                (NoticeKind::Warn, Some(_), Some(mandate)) => {
+                    format!("{}{derived}", resident_notice_key_prefix(mandate))
+                        .chars()
+                        .take(MAX_DEDUPE_KEY_CHARS)
+                        .collect()
+                }
+                _ => derived,
+            }
+        }
+    };
+    if dedupe_key.is_empty() {
+        return Err(refuse(
+            NoticeRefusalCode::InvalidField,
+            "no dedupe key could be derived; pass `dedupe_key`",
+        ));
+    }
+    if !poster.may_post_key(&dedupe_key) {
+        return Err(refuse(
+            NoticeRefusalCode::InvalidField,
+            "`dedupe_key` values under `resident:` are reserved for that resident mandate's own cycles",
+        ));
+    }
+    let status_line = poster.resident_status_key().as_deref() == Some(dedupe_key.as_str());
+    if status_line && kind != NoticeKind::Info {
+        return Err(refuse(
+            NoticeRefusalCode::KindRefused,
+            "a resident's status line is an info notice; post an operator ask as a warn under its own key",
+        ));
+    }
+    let close_on_linked_done = linked_task.is_some() && close_on_linked_done.unwrap_or(true);
+    fingerprint_request.body.get_or_insert_default();
+    fingerprint_request
+        .dedupe_key
+        .get_or_insert_with(|| dedupe_key.clone());
+    fingerprint_request
+        .close_on_linked_done
+        .get_or_insert(close_on_linked_done);
+    Ok(ValidatedPost {
+        kind,
+        title,
+        body,
+        scope,
+        dedupe_key,
+        status_line,
+        linked_task,
+        close_on_linked_done,
+        evidence,
+        hosts,
+        fingerprint_request,
+    })
 }
 
 fn blank_optional(

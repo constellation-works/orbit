@@ -22,6 +22,7 @@ use orbit_types::task::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use super::space::crew_memory_vocabulary;
 use super::validate::strip_score_blind_tokens;
 use super::{MemoryKey, MemoryLintVocabulary, memory_key};
 use crate::OrbitRuntime;
@@ -59,281 +60,6 @@ const REVISION_WRITTEN: &str = "revision_written";
 /// The routine's audit actor.
 const ROUTINE_ACTOR: &str = "crew_memory_dream";
 
-impl OrbitRuntime {
-    /// One pass of the `crew_memory_dream` routine. Returns what it minted,
-    /// skipped and settled; the gate's reason when it did nothing.
-    pub fn crew_memory_dream(&self) -> Result<Value, OrbitError> {
-        let now = Utc::now();
-        let week = iso_week(now);
-        let experiments = self.running_memory_experiments()?;
-        if experiments.is_empty() {
-            return Ok(json!({
-                "week": week,
-                "minted": [],
-                "skipped_reason": "no_memory_experiment",
-                "message": "no running shadow or live experiment in this workspace has a memory arm; nothing was minted",
-            }));
-        }
-        self.ensure_coordination_task_write_permitted()?;
-        // One tag-indexed read serves the settle step and every key's
-        // open-task check; a per-key filtered listing reads every task
-        // bundle in the workspace once for each model.
-        let dreaming_tasks = self.list_tasks_by_tags(&[CREW_MEMORY_DREAM_TAG.to_string()])?;
-        let no_revision = self.settle_dreaming_tasks(now, &dreaming_tasks)?;
-        let facts = self.agent_scan()?;
-        let mut minted = Vec::new();
-        let mut skipped = Vec::new();
-        let mut below_support = Vec::new();
-        for (model, units) in implementer_units_by_model(&facts)? {
-            let Some(key) = memory_key(Some(&model)) else {
-                continue;
-            };
-            if units < CREW_MEMORY_DREAM_MIN_SUPPORT {
-                below_support.push(json!({ "key": key, "units": units }));
-                continue;
-            }
-            if let Some(open) = open_dreaming_task(&dreaming_tasks, &key) {
-                self.record_dream_skip(&key, &week, now, "open_task", Some(&open.id))?;
-                skipped.push(json!({ "key": key, "reason": "open_task", "task_id": open.id }));
-                continue;
-            }
-            let Some(crew) = self.crew_memory_base_crew(&key) else {
-                self.record_dream_skip(&key, &week, now, "no_base_crew", None)?;
-                skipped.push(json!({ "key": key, "reason": "no_base_crew" }));
-                continue;
-            };
-            let vocabulary = self.crew_memory_vocabulary(&[&key]);
-            let pack = render_evidence_pack(
-                &key,
-                &week,
-                now,
-                model_evidence(&facts, &model)?,
-                &vocabulary,
-            )?;
-            // A write must cite evidence from the pack, so a pack with none
-            // leaves the run nothing it could write: skip rather than spend
-            // a run on it.
-            if pack.evidence_ids.is_empty() {
-                self.record_dream_skip(&key, &week, now, "no_evidence", None)?;
-                skipped.push(json!({ "key": key, "reason": "no_evidence" }));
-                continue;
-            }
-            let task = self.mint_dreaming_task(&key, &crew, &pack)?;
-            // Resolve the workspace and build the row before the writer opens:
-            // resolving the workspace reads config.yaml from disk.
-            let event = CrewMemoryEventRow {
-                workspace_id: self.workspace_id()?,
-                memory_key: key.to_string(),
-                at: now,
-                action: DREAM_MINTED.to_string(),
-                actor: ROUTINE_ACTOR.to_string(),
-                revision: None,
-                detail_json: json!({
-                    "task_id": task.id,
-                    "week": week,
-                    "crew": crew,
-                    "evidence_ids": pack.evidence_ids,
-                    "pack_digest": pack.digest,
-                    "pack_bytes": pack.bytes.len(),
-                    "dropped_tasks": pack.dropped_tasks,
-                    "dropped_occurrences": pack.dropped_occurrences,
-                })
-                .to_string(),
-            };
-            self.sqlite_store()?
-                .write(|tx| tx.crew_memory().put_event(&event))?;
-            minted.push(json!({
-                "key": key,
-                "task_id": task.id,
-                "crew": crew,
-                "evidence_ids": pack.evidence_ids.len(),
-                "pack_bytes": pack.bytes.len(),
-                "dropped_occurrences": pack.dropped_occurrences,
-            }));
-        }
-        Ok(json!({
-            "week": week,
-            "experiments": experiments,
-            "min_support": CREW_MEMORY_DREAM_MIN_SUPPORT,
-            "minted": minted,
-            "skipped": skipped,
-            "below_support": below_support,
-            "no_revision": no_revision,
-        }))
-    }
-
-    /// The crew a model's dreaming task runs on: an enabled crew of that
-    /// model at its own effort, else the one at the lowest configured
-    /// effort, by name on a tie. `None` when no enabled crew runs the model.
-    pub(super) fn crew_memory_base_crew(&self, key: &MemoryKey) -> Option<String> {
-        self.settings()
-            .crews()
-            .values()
-            .filter(|crew| crew.enabled && crew.assignment.model.trim() == key.as_str())
-            .min_by_key(|crew| {
-                (
-                    crew.assignment.effort.is_some(),
-                    crew.assignment.effort,
-                    crew.name.clone(),
-                )
-            })
-            .map(|crew| crew.name.clone())
-    }
-
-    fn record_dream_skip(
-        &self,
-        key: &MemoryKey,
-        week: &str,
-        now: DateTime<Utc>,
-        reason: &str,
-        task_id: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        // Resolve the workspace and build the row before the writer opens:
-        // resolving the workspace reads config.yaml from disk.
-        let event = CrewMemoryEventRow {
-            workspace_id: self.workspace_id()?,
-            memory_key: key.to_string(),
-            at: now,
-            action: DREAM_SKIPPED.to_string(),
-            actor: ROUTINE_ACTOR.to_string(),
-            revision: None,
-            detail_json: json!({ "week": week, "reason": reason, "task_id": task_id }).to_string(),
-        };
-        self.sqlite_store()?
-            .write(|tx| tx.crew_memory().put_event(&event))
-    }
-
-    /// Record `no_revision` for each finished dreaming task whose run wrote
-    /// no revision of its key, once. Returns what it recorded.
-    fn settle_dreaming_tasks(
-        &self,
-        now: DateTime<Utc>,
-        dreaming_tasks: &[Task],
-    ) -> Result<Vec<Value>, OrbitError> {
-        let mut finished: BTreeMap<MemoryKey, Vec<&Task>> = BTreeMap::new();
-        for task in dreaming_tasks {
-            if task.status.is_terminal()
-                && let Some(key) = dreaming_task_key(task)
-            {
-                finished.entry(key).or_default().push(task);
-            }
-        }
-        let store = self.sqlite_store()?;
-        let workspace_id = self.workspace_id()?;
-        let mut recorded = Vec::new();
-        for (key, tasks) in finished {
-            let events = store
-                .read()?
-                .crew_memory()
-                .events(&workspace_id, key.as_str())?;
-            let mut minted_week: BTreeMap<String, String> = BTreeMap::new();
-            let mut settled: BTreeSet<String> = BTreeSet::new();
-            for event in &events {
-                let detail: Value = serde_json::from_str(&event.detail_json).unwrap_or(Value::Null);
-                let Some(task_id) = detail["task_id"].as_str() else {
-                    continue;
-                };
-                match event.action.as_str() {
-                    DREAM_MINTED => {
-                        minted_week.insert(
-                            task_id.to_string(),
-                            detail["week"].as_str().unwrap_or_default().to_string(),
-                        );
-                    }
-                    REVISION_WRITTEN | NO_REVISION => {
-                        settled.insert(task_id.to_string());
-                    }
-                    _ => {}
-                }
-            }
-            for task in tasks {
-                let Some(week) = minted_week.get(task.id.as_str()) else {
-                    continue;
-                };
-                if settled.contains(task.id.as_str()) {
-                    continue;
-                }
-                store.write(|tx| {
-                    tx.crew_memory().put_event(&CrewMemoryEventRow {
-                        workspace_id: workspace_id.clone(),
-                        memory_key: key.to_string(),
-                        at: now,
-                        action: NO_REVISION.to_string(),
-                        actor: ROUTINE_ACTOR.to_string(),
-                        revision: None,
-                        detail_json: json!({
-                            "task_id": task.id,
-                            "week": week,
-                            "status": task.status.to_string(),
-                        })
-                        .to_string(),
-                    })
-                })?;
-                recorded.push(json!({ "key": key, "task_id": task.id, "week": week }));
-            }
-        }
-        Ok(recorded)
-    }
-
-    /// Mint the dreaming task for `key` on `crew` to `backlog` and attach
-    /// its evidence pack.
-    fn mint_dreaming_task(
-        &self,
-        key: &MemoryKey,
-        crew: &str,
-        pack: &RenderedPack,
-    ) -> Result<Task, OrbitError> {
-        let task = self.add_task(TaskAddParams {
-            title: format!("Crew memory: reflect on {key}'s week"),
-            description: dreaming_description(key),
-            acceptance_criteria: vec![
-                "Read the current memory space with orbit.memory.show and the task artifact crew-memory-evidence.json.".to_string(),
-                "Either rewrite the space whole with one orbit.memory.write that cites, for each note, evidence task ids from the pack, or leave the space unchanged.".to_string(),
-                "Open at most 2 orbit.memory.propose proposals for the global memory, each citing evidence task ids from the pack.".to_string(),
-            ],
-            tags: vec![CREW_MEMORY_DREAM_TAG.to_string(), NO_DIFF_TAG.to_string()],
-            // The grant keeps the task on the owner, whose store holds the
-            // memory; the tools themselves are admitted per call.
-            granted_tools: CREW_MEMORY_AGENT_TOOLS
-                .iter()
-                .map(|tool| (*tool).to_string())
-                .collect(),
-            priority: TaskPriority::Low,
-            complexity: TaskComplexity::Low,
-            task_type: Some(TaskType::Chore),
-            status: Some(TaskStatus::Backlog),
-            system_created: true,
-            external_refs: vec![key_reference(key)],
-            crew: Some(crew.to_string()),
-            origin: Some(TaskOrigin::Automation),
-            ..TaskAddParams::default()
-        })?;
-        let actor = self.actor().resolve_write_label(None, None)?;
-        self.stores()
-            .task_records()
-            .update(
-                &task.id,
-                TaskRecordUpdateParams {
-                    actor,
-                    upsert_artifacts: vec![TaskArtifact {
-                        path: CREW_MEMORY_EVIDENCE_ARTIFACT.to_string(),
-                        content: pack.bytes.clone(),
-                        media_type: "application/json".to_string(),
-                        created_by: None,
-                    }],
-                    ..Default::default()
-                },
-            )
-            .map_err(|error| {
-                OrbitError::Execution(format!(
-                    "dreaming task {} was created but {CREW_MEMORY_EVIDENCE_ARTIFACT} was not attached: {error}",
-                    task.id
-                ))
-            })?;
-        Ok(task)
-    }
-}
-
 /// An evidence pack rendered for the artifact.
 pub(super) struct RenderedPack {
     pub(super) bytes: Vec<u8>,
@@ -341,6 +67,294 @@ pub(super) struct RenderedPack {
     pub(super) evidence_ids: Vec<String>,
     pub(super) dropped_tasks: usize,
     pub(super) dropped_occurrences: usize,
+}
+
+/// One pass of the `crew_memory_dream` routine. Returns what it minted,
+/// skipped and settled; the gate's reason when it did nothing.
+pub(crate) fn crew_memory_dream(rt: &OrbitRuntime) -> Result<Value, OrbitError> {
+    let now = Utc::now();
+    let week = iso_week(now);
+    let experiments = rt.running_memory_experiments()?;
+    if experiments.is_empty() {
+        return Ok(json!({
+            "week": week,
+            "minted": [],
+            "skipped_reason": "no_memory_experiment",
+            "message": concat!(
+                "no running shadow or live experiment in this workspace has a memory arm; ",
+                "nothing was minted",
+            ),
+        }));
+    }
+    rt.ensure_coordination_task_write_permitted()?;
+    // One tag-indexed read serves the settle step and every key's
+    // open-task check; a per-key filtered listing reads every task
+    // bundle in the workspace once for each model.
+    let dreaming_tasks = rt.list_tasks_by_tags(&[CREW_MEMORY_DREAM_TAG.to_string()])?;
+    let no_revision = settle_dreaming_tasks(rt, now, &dreaming_tasks)?;
+    let facts = rt.agent_scan()?;
+    let mut minted = Vec::new();
+    let mut skipped = Vec::new();
+    let mut below_support = Vec::new();
+    for (model, units) in implementer_units_by_model(&facts)? {
+        let Some(key) = memory_key(Some(&model)) else {
+            continue;
+        };
+        if units < CREW_MEMORY_DREAM_MIN_SUPPORT {
+            below_support.push(json!({ "key": key, "units": units }));
+            continue;
+        }
+        if let Some(open) = open_dreaming_task(&dreaming_tasks, &key) {
+            record_dream_skip(rt, &key, &week, now, "open_task", Some(&open.id))?;
+            skipped.push(json!({ "key": key, "reason": "open_task", "task_id": open.id }));
+            continue;
+        }
+        let Some(crew) = crew_memory_base_crew(rt, &key) else {
+            record_dream_skip(rt, &key, &week, now, "no_base_crew", None)?;
+            skipped.push(json!({ "key": key, "reason": "no_base_crew" }));
+            continue;
+        };
+        let vocabulary = crew_memory_vocabulary(rt, &[&key]);
+        let pack = render_evidence_pack(
+            &key,
+            &week,
+            now,
+            model_evidence(&facts, &model)?,
+            &vocabulary,
+        )?;
+        // A write must cite evidence from the pack, so a pack with none
+        // leaves the run nothing it could write: skip rather than spend
+        // a run on it.
+        if pack.evidence_ids.is_empty() {
+            record_dream_skip(rt, &key, &week, now, "no_evidence", None)?;
+            skipped.push(json!({ "key": key, "reason": "no_evidence" }));
+            continue;
+        }
+        let task = mint_dreaming_task(rt, &key, &crew, &pack)?;
+        // Resolve the workspace and build the row before the writer opens:
+        // resolving the workspace reads config.yaml from disk.
+        let event = CrewMemoryEventRow {
+            workspace_id: rt.workspace_id()?,
+            memory_key: key.to_string(),
+            at: now,
+            action: DREAM_MINTED.to_string(),
+            actor: ROUTINE_ACTOR.to_string(),
+            revision: None,
+            detail_json: json!({
+                "task_id": task.id,
+                "week": week,
+                "crew": crew,
+                "evidence_ids": pack.evidence_ids,
+                "pack_digest": pack.digest,
+                "pack_bytes": pack.bytes.len(),
+                "dropped_tasks": pack.dropped_tasks,
+                "dropped_occurrences": pack.dropped_occurrences,
+            })
+            .to_string(),
+        };
+        rt.sqlite_store()?
+            .write(|tx| tx.crew_memory().put_event(&event))?;
+        minted.push(json!({
+            "key": key,
+            "task_id": task.id,
+            "crew": crew,
+            "evidence_ids": pack.evidence_ids.len(),
+            "pack_bytes": pack.bytes.len(),
+            "dropped_occurrences": pack.dropped_occurrences,
+        }));
+    }
+    Ok(json!({
+        "week": week,
+        "experiments": experiments,
+        "min_support": CREW_MEMORY_DREAM_MIN_SUPPORT,
+        "minted": minted,
+        "skipped": skipped,
+        "below_support": below_support,
+        "no_revision": no_revision,
+    }))
+}
+
+/// The crew a model's dreaming task runs on: an enabled crew of that
+/// model at its own effort, else the one at the lowest configured
+/// effort, by name on a tie. `None` when no enabled crew runs the model.
+pub(super) fn crew_memory_base_crew(rt: &OrbitRuntime, key: &MemoryKey) -> Option<String> {
+    rt.settings()
+        .crews()
+        .values()
+        .filter(|crew| crew.enabled && crew.assignment.model.trim() == key.as_str())
+        .min_by_key(|crew| {
+            (
+                crew.assignment.effort.is_some(),
+                crew.assignment.effort,
+                crew.name.clone(),
+            )
+        })
+        .map(|crew| crew.name.clone())
+}
+
+fn record_dream_skip(
+    rt: &OrbitRuntime,
+    key: &MemoryKey,
+    week: &str,
+    now: DateTime<Utc>,
+    reason: &str,
+    task_id: Option<&str>,
+) -> Result<(), OrbitError> {
+    // Resolve the workspace and build the row before the writer opens:
+    // resolving the workspace reads config.yaml from disk.
+    let event = CrewMemoryEventRow {
+        workspace_id: rt.workspace_id()?,
+        memory_key: key.to_string(),
+        at: now,
+        action: DREAM_SKIPPED.to_string(),
+        actor: ROUTINE_ACTOR.to_string(),
+        revision: None,
+        detail_json: json!({ "week": week, "reason": reason, "task_id": task_id }).to_string(),
+    };
+    rt.sqlite_store()?
+        .write(|tx| tx.crew_memory().put_event(&event))
+}
+
+/// Record `no_revision` for each finished dreaming task whose run wrote
+/// no revision of its key, once. Returns what it recorded.
+fn settle_dreaming_tasks(
+    rt: &OrbitRuntime,
+    now: DateTime<Utc>,
+    dreaming_tasks: &[Task],
+) -> Result<Vec<Value>, OrbitError> {
+    let mut finished: BTreeMap<MemoryKey, Vec<&Task>> = BTreeMap::new();
+    for task in dreaming_tasks {
+        if task.status.is_terminal()
+            && let Some(key) = dreaming_task_key(task)
+        {
+            finished.entry(key).or_default().push(task);
+        }
+    }
+    let store = rt.sqlite_store()?;
+    let workspace_id = rt.workspace_id()?;
+    let mut recorded = Vec::new();
+    for (key, tasks) in finished {
+        let events = store
+            .read()?
+            .crew_memory()
+            .events(&workspace_id, key.as_str())?;
+        let mut minted_week: BTreeMap<String, String> = BTreeMap::new();
+        let mut settled: BTreeSet<String> = BTreeSet::new();
+        for event in &events {
+            let detail: Value = serde_json::from_str(&event.detail_json).unwrap_or(Value::Null);
+            let Some(task_id) = detail["task_id"].as_str() else {
+                continue;
+            };
+            match event.action.as_str() {
+                DREAM_MINTED => {
+                    minted_week.insert(
+                        task_id.to_string(),
+                        detail["week"].as_str().unwrap_or_default().to_string(),
+                    );
+                }
+                REVISION_WRITTEN | NO_REVISION => {
+                    settled.insert(task_id.to_string());
+                }
+                _ => {}
+            }
+        }
+        for task in tasks {
+            let Some(week) = minted_week.get(task.id.as_str()) else {
+                continue;
+            };
+            if settled.contains(task.id.as_str()) {
+                continue;
+            }
+            store.write(|tx| {
+                tx.crew_memory().put_event(&CrewMemoryEventRow {
+                    workspace_id: workspace_id.clone(),
+                    memory_key: key.to_string(),
+                    at: now,
+                    action: NO_REVISION.to_string(),
+                    actor: ROUTINE_ACTOR.to_string(),
+                    revision: None,
+                    detail_json: json!({
+                        "task_id": task.id,
+                        "week": week,
+                        "status": task.status.to_string(),
+                    })
+                    .to_string(),
+                })
+            })?;
+            recorded.push(json!({ "key": key, "task_id": task.id, "week": week }));
+        }
+    }
+    Ok(recorded)
+}
+
+/// Mint the dreaming task for `key` on `crew` to `backlog` and attach
+/// its evidence pack.
+fn mint_dreaming_task(
+    rt: &OrbitRuntime,
+    key: &MemoryKey,
+    crew: &str,
+    pack: &RenderedPack,
+) -> Result<Task, OrbitError> {
+    let task = rt.add_task(TaskAddParams {
+        title: format!("Crew memory: reflect on {key}'s week"),
+        description: dreaming_description(key),
+        acceptance_criteria: vec![
+            concat!(
+                "Read the current memory space with orbit.memory.show and the task artifact ",
+                "crew-memory-evidence.json.",
+            )
+            .to_string(),
+            concat!(
+                "Either rewrite the space whole with one orbit.memory.write that cites, ",
+                "for each note, evidence task ids from the pack, or leave the space unchanged.",
+            )
+            .to_string(),
+            concat!(
+                "Open at most 2 orbit.memory.propose proposals for the global memory, ",
+                "each citing evidence task ids from the pack.",
+            )
+            .to_string(),
+        ],
+        tags: vec![CREW_MEMORY_DREAM_TAG.to_string(), NO_DIFF_TAG.to_string()],
+        // The grant keeps the task on the owner, whose store holds the
+        // memory; the tools themselves are admitted per call.
+        granted_tools: CREW_MEMORY_AGENT_TOOLS
+            .iter()
+            .map(|tool| (*tool).to_string())
+            .collect(),
+        priority: TaskPriority::Low,
+        complexity: TaskComplexity::Low,
+        task_type: Some(TaskType::Chore),
+        status: Some(TaskStatus::Backlog),
+        system_created: true,
+        external_refs: vec![key_reference(key)],
+        crew: Some(crew.to_string()),
+        origin: Some(TaskOrigin::Automation),
+        ..TaskAddParams::default()
+    })?;
+    let actor = rt.actor().resolve_write_label(None, None)?;
+    rt.stores()
+        .task_records()
+        .update(
+            &task.id,
+            TaskRecordUpdateParams {
+                actor,
+                upsert_artifacts: vec![TaskArtifact {
+                    path: CREW_MEMORY_EVIDENCE_ARTIFACT.to_string(),
+                    content: pack.bytes.clone(),
+                    media_type: "application/json".to_string(),
+                    created_by: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .map_err(|error| {
+            OrbitError::Execution(format!(
+                "dreaming task {} was created but {CREW_MEMORY_EVIDENCE_ARTIFACT} was not attached: {error}",
+                task.id
+            ))
+        })?;
+    Ok(task)
 }
 
 /// The model key a dreaming task reflects on: its one `crew-memory-key`

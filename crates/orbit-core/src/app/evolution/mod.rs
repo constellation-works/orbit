@@ -10,6 +10,8 @@
 //! evolution tool handler. The handler calls [`exec`] again from inside that
 //! entry, and that call runs the flow.
 
+mod ledger;
+
 mod operation;
 
 use orbit_common::OrbitError;
@@ -20,6 +22,23 @@ use super::exec::{self, App, Operation};
 use super::tool_call;
 pub use super::tool_call::Input;
 use crate::Core;
+pub(crate) use ledger::{TaskPort, list_evolution_records};
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use ledger::{decline_evolution_record, reconcile_evolution_checkpoint};
+
+/// Days of evolution-ledger cost the resident digest and a decline baseline
+/// count.
+///
+/// The former `resident.evolution.window_days` default, fixed when the key was removed [ORB-22808].
+pub(crate) const EVOLUTION_WINDOW_DAYS: u32 = 14;
+
+/// Days a rejected evolution proposal stays declined when the decline names
+/// no days of its own.
+///
+/// The former `resident.evolution.decline_suppress_days` default, fixed when
+/// the key was removed [ORB-22808].
+pub(crate) const EVOLUTION_DECLINE_SUPPRESS_DAYS: u32 = 30;
 
 /// One evolution verb and the fields it is called with.
 pub struct Command {
