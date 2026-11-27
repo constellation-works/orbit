@@ -13,8 +13,6 @@ pub(crate) use shell::dispatch_local_shell;
 #[cfg(feature = "test-support")]
 pub use ci::collect_ci_evidence;
 #[cfg(feature = "test-support")]
-pub use dependabot::collect_dependabot_alerts;
-#[cfg(feature = "test-support")]
 pub use shell::local_shell;
 #[cfg(feature = "test-support")]
 pub use task_update::task_complete;

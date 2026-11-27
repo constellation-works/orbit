@@ -16,6 +16,5 @@ pub use crate::executor::automation::vcs::{
 pub use crate::impl_test_host;
 
 pub use crate::executor::automation::{
-    collect_ci_evidence, collect_dependabot_alerts, git_commit, handoff_land, local_shell,
-    push_batch_changes, task_complete,
+    collect_ci_evidence, git_commit, handoff_land, local_shell, push_batch_changes, task_complete,
 };
