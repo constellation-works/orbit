@@ -4,6 +4,10 @@
 
 - [Dashboard](#dashboard)
   - [Switching hosts in the dashboard](#switching-hosts-in-the-dashboard)
+- [Dashboard over Tailscale Serve](#dashboard-over-tailscale-serve)
+  - [Set it up](#set-it-up)
+  - [Identity and origin boundary](#identity-and-origin-boundary)
+  - [Restart and verify](#restart-and-verify)
 
 ## Dashboard
 
@@ -204,3 +208,97 @@ Fetch Metadata protection.
 Anyone with access to the forwarded port can reach
 mutation endpoints with the server's application authority. Keep access within
 the intended operator boundary.
+
+## Dashboard over Tailscale Serve
+
+Use this route to open the dashboard from another device on your tailnet, such
+as a phone with a browser and no SSH client. For a machine you reach over SSH,
+use `orbit web connect` instead.
+
+The dashboard has no login of its own and binds only to loopback. Tailscale
+Serve is the front door: it publishes a tailnet HTTPS name, forwards it to the
+local port, and sets the signed-in tailnet login on each request. Orbit admits
+that name only for the logins you list.
+
+### Set it up
+
+Run these on the machine that runs `orbit web serve`:
+
+```bash
+tailscale serve --bg 7878
+orbit config set --global machine.web.trusted_hosts '["<node>.<tailnet>.ts.net"]'
+orbit config set --global machine.web.trusted_logins '["<tailnet-login>"]'
+orbit config set --global machine.web.public_url 'https://<node>.<tailnet>.ts.net'
+```
+
+Replace the placeholders with the HTTPS name that `tailscale serve status`
+prints and the login the tailnet user signs in with, as `tailscale whois`
+shows it. The same keys sit under **Settings › Machine**, in the **Remote
+access** group.
+
+- `machine.web.trusted_hosts` lists DNS names only: lowercase, with no scheme
+  and no port. Not an IP address, and not `localhost`.
+- `machine.web.trusted_logins` lists the tailnet logins admitted through those
+  hosts, matched exactly. It is required whenever trusted hosts is set.
+  `orbit web serve` refuses to start with hosts and no logins.
+- `machine.web.public_url` is the HTTP or HTTPS origin readers use to open this
+  machine's dashboard links. It takes no path, query or fragment. Set it to the
+  Serve origin, or to `http://localhost:<port>` for a local server or an
+  `orbit web connect` tunnel. It admits no request; only the two lists above
+  do.
+
+### Identity and origin boundary
+
+A request through a trusted name is admitted only when all of these hold:
+
+- Its `Host` is that name, on port 443 or with no port.
+- It carries exactly one `Tailscale-User-Login` header, and that login is in
+  `trusted_logins`.
+- When it carries an `Origin` header, or its method is `POST`, `PUT`, `PATCH` or
+  `DELETE`, the `Origin` is exactly `https://<that name>`.
+- When the browser sends `Sec-Fetch-Site`, it is `same-origin` or `none`. This
+  covers the shell and assets as well as the API.
+
+Any other request gets `403` with `cross-origin requests not allowed`.
+
+The login check is only as strong as the listener's reach:
+
+- Tailscale Serve strips any `Tailscale-User-*` header a client sends, then sets
+  the header for tailnet users only. Funnel and tagged-device requests carry no
+  login header, so they are refused. Keep Funnel off for this port anyway: the
+  Remote access panel warns when it is on.
+- The header is trusted because the listener stays on loopback. Any process on
+  this machine can send the header, the same trust loopback requests already
+  get. The dashboard refuses non-loopback binds, so do not put another proxy in
+  front of it that forwards traffic from outside the machine.
+- A trusted login gets no operator capability of its own. It gets whatever
+  `orbit web serve` grants, and mutation endpoints use the server's authority.
+  Start the server with `--operator` only when these logins should change
+  state, and list only the logins meant to operate it.
+
+### Restart and verify
+
+The trusted host and login keys are read once at startup. After changing them,
+restart `orbit web serve`. If the saved host list has no login, the server will
+not start with it: add a login first, then restart.
+
+1. Open **Observe › Fleet** and find the **Remote access** card. Its policy
+   matches the names and logins you set, and it reports no warning. If it says
+   the saved keys differ from the running policy, restart to apply them.
+2. Confirm the **Serve** fact routes this name to this dashboard's port. A
+   warning means Serve sends an untrusted name here (every request is refused),
+   a trusted name is not served, or Funnel is on.
+3. Open the HTTPS name from the other device and confirm the dashboard loads.
+   Then check **Remote connections** lists that device with recent requests.
+   **Remote refusals** groups the last 24 hours by reason, such as no Tailscale
+   login or an unlisted login.
+
+The same status is available from a shell on the machine. Loopback requests are
+not counted and need no headers. Use the dashboard's port, 7878 by default:
+
+```bash
+curl -s http://127.0.0.1:7878/api/remote-access
+```
+
+Check that `restart_required` is `false`, and that `tailscale.handlers` lists
+the name and port you set.
