@@ -2,7 +2,9 @@ use orbit_common::OrbitError;
 use orbit_types::task::{ExternalRef, NO_DIFF_EXPECTED_TAG, TaskStatus};
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+};
 
 use super::super::super::input::{input_string_field, required_input_string};
 use super::super::base::obsolescence::ensure_base_can_still_land;
@@ -13,7 +15,9 @@ use super::super::handoff::{
 };
 use super::attribution::pr_review_attribution;
 
-pub(in crate::executor::automation) fn pr_promote<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn pr_promote<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {

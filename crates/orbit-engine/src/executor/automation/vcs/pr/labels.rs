@@ -4,12 +4,12 @@ use std::collections::BTreeSet;
 
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 
 use super::super::handoff::HandoffContext;
 use super::super::operations;
 
-pub(super) fn apply_task_labels<H: RuntimeHost + ?Sized>(
+pub(super) fn apply_task_labels<H: HostEnvironment + ?Sized>(
     host: &H,
     context: &HandoffContext,
     output: &mut Value,

@@ -20,7 +20,7 @@ use super::unreadable_log::{
 use super::{
     CiRerunStep, PlanMismatch, RerunPlanRequest, authenticated_plan, is_no_authenticated_plan_error,
 };
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT, CiBaseSuspectLegacy, CiBaseSuspectRecord,
@@ -51,7 +51,9 @@ pub(in crate::executor::automation::vcs) struct CiRerunPlanInputs<'a> {
     pub(in crate::executor::automation::vcs) allow_unreadable_log_rerun: bool,
 }
 
-pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn plan_ci_rerun<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     inputs: CiRerunPlanInputs<'_>,
     execution: &str,
@@ -77,7 +79,9 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
     result
 }
 
-fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
+fn plan_ci_rerun_observed<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     inputs: CiRerunPlanInputs<'_>,
     diagnostic: &mut CiRerunDiagnostic,

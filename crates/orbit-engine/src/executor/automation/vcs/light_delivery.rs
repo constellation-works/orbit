@@ -19,7 +19,9 @@ use orbit_types::task::{
     RecordedLightDeliveryDecision, ReviewSkipProfile,
 };
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, RunLifecycle, RuntimeHost, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+};
 
 use super::baseline::in_detached_worktree;
 use super::git::{git_output_paths, git_run_bytes};
@@ -91,7 +93,9 @@ pub fn judge_light_delivery_with_key(
 
 /// The decision for `tag` over `task_ids` and the candidate `head` on
 /// `base`, or `None` when no delivered task carries the tag.
-pub(super) fn light_delivery_decision<H: RuntimeHost + ?Sized>(
+pub(super) fn light_delivery_decision<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace: &Path,
     base: &str,
@@ -296,7 +300,7 @@ fn shell_quote(value: &str) -> String {
 
 /// Record `decision` in each delivered task's history unless the task's
 /// latest entry already records it, so a retried step records it once.
-pub(super) fn record_light_delivery<H: RuntimeHost + ?Sized>(
+pub(super) fn record_light_delivery<H: RunLifecycle + ?Sized>(
     host: &H,
     task_ids: &[String],
     decision: &LightDeliveryDecision,

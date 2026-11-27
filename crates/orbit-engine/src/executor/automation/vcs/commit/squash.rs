@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::Task;
 use orbit_types::workflow::MergeMessage;
 
-use crate::context::{PrConfig, RuntimeHost};
+use crate::context::{HostEnvironment, PrConfig, RuntimeHostProcessEnvironment};
 
 use super::super::forge_text;
 use super::super::git::{git_command_success, git_output_raw};
@@ -114,7 +114,9 @@ fn inner_commits(
 
 /// The `commit_title` and `commit_message` fields a `pr.merge` request
 /// carries for pull request `pr_number` (as its selector text).
-pub(in crate::executor::automation::vcs) fn squash_merge_fields<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn squash_merge_fields<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     repo: &Path,
     tasks: &[Task],

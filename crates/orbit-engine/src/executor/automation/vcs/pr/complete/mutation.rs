@@ -7,7 +7,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::super::super::input::input_string_field;
 use super::super::super::commit::squash_merge_fields;
@@ -46,7 +46,7 @@ enum CompletionHistory {
 /// answers. A merge or auto-merge mutation in this invocation or recorded
 /// write-ahead merge-mutation provenance keeps the failure, as does every other
 /// failure class.
-pub(super) fn observation_failure<H: RuntimeHost + ?Sized>(
+pub(super) fn observation_failure<H: RunLifecycle + ?Sized>(
     host: &H,
     input: &Value,
     mutated: bool,
@@ -91,7 +91,7 @@ pub(super) fn observation_failure<H: RuntimeHost + ?Sized>(
 /// from the forge. Every outcome `observation_failure` already decided
 /// (a resumable read-only observation, a forge hold, a typed refusal, or a
 /// non-transient failure) is returned unchanged.
-pub(super) fn checked_required_check_observation_failure<H: RuntimeHost + ?Sized>(
+pub(super) fn checked_required_check_observation_failure<H: RunLifecycle + ?Sized>(
     host: &H,
     input: &Value,
     mutated: bool,
@@ -145,7 +145,7 @@ fn is_merge_completion_mutation(entry: &orbit_types::task::TaskHistoryEntry) -> 
 /// as after polling. `ReadOnly` is only eligibility: the host still
 /// authenticates the exact original publication, native receipts and current
 /// policy.
-fn completion_history<H: RuntimeHost + ?Sized>(
+fn completion_history<H: RunLifecycle + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<CompletionHistory, OrbitError> {
@@ -165,7 +165,7 @@ fn completion_history<H: RuntimeHost + ?Sized>(
 
 /// Persist before entering a mutation boundary. In particular an unknown merge
 /// reply must remain disqualified when a later invocation's local flags reset.
-pub(super) fn record_completion_mutation<H: RuntimeHost + ?Sized>(
+pub(super) fn record_completion_mutation<H: RunLifecycle + ?Sized>(
     host: &H,
     input: &Value,
     operation: &str,
@@ -194,7 +194,9 @@ pub(super) fn record_completion_mutation<H: RuntimeHost + ?Sized>(
     Ok(())
 }
 
-pub(super) fn request_merge<H: RuntimeHost + ?Sized>(
+pub(super) fn request_merge<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     workspace_path: &str,
@@ -231,7 +233,7 @@ pub(super) fn request_merge<H: RuntimeHost + ?Sized>(
     Ok(ReviewedMergeOutcome::from_response(&response))
 }
 
-pub(super) fn resolved_capabilities<H: RuntimeHost + ?Sized>(
+pub(super) fn resolved_capabilities<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,

@@ -7,7 +7,9 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBaseRed, PrAutoFixBlocker};
 use serde_json::json;
 
-use crate::context::RuntimeHost;
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::super::super::input::input_string_field;
 
@@ -31,11 +33,14 @@ use super::drive_phases::{DispatchFlow, ObservedPoll, PollDriver, RedBaseStep};
 use super::mutation::{observation_failure, request_merge, resolved_capabilities};
 use super::reviewed::{ensure_pr_head_is_reviewed, merge_condition_sha};
 
-impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
+impl<H: ?Sized> PollDriver<'_, H> {
     pub(super) fn dispatch_state(
         &mut self,
         observed: ObservedPoll,
-    ) -> Result<DispatchFlow, OrbitError> {
+    ) -> Result<DispatchFlow, OrbitError>
+    where
+        H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + RuntimeHostProcessEnvironment,
+    {
         let ObservedPoll {
             status,
             state,
@@ -141,7 +146,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         &self,
         previous: &PullRequestStatus,
         diagnostic: &str,
-    ) -> Result<DispatchFlow, OrbitError> {
+    ) -> Result<DispatchFlow, OrbitError>
+    where
+        H: HostEnvironment,
+    {
         self.read_reconciled_merge(previous)
             .and_then(|delivery| {
                 delivery.ok_or_else(|| {
@@ -161,7 +169,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         &mut self,
         previous: &PullRequestStatus,
         diagnostic: &str,
-    ) -> Result<DispatchFlow, OrbitError> {
+    ) -> Result<DispatchFlow, OrbitError>
+    where
+        H: HostEnvironment,
+    {
         let polling = (|| {
             for reads in 1..=BASE_MODIFIED_MERGE_ATTEMPTS {
                 if let Some(delivery) = self.read_reconciled_merge(previous)? {
@@ -194,7 +205,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     fn read_reconciled_merge(
         &self,
         previous: &PullRequestStatus,
-    ) -> Result<Option<Delivery>, OrbitError> {
+    ) -> Result<Option<Delivery>, OrbitError>
+    where
+        H: HostEnvironment,
+    {
         let repository = self
             .merge_capabilities
             .as_ref()
@@ -255,7 +269,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         status: PullRequestStatus,
         reason: super::super::merge_state::PrMergeBlock,
         pending_required: bool,
-    ) -> Result<DispatchFlow, OrbitError> {
+    ) -> Result<DispatchFlow, OrbitError>
+    where
+        H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + RuntimeHostProcessEnvironment,
+    {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;
@@ -430,7 +447,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         Ok(DispatchFlow::WaitPoll(None))
     }
 
-    fn dispatch_conflict(&mut self, status: PullRequestStatus) -> Result<DispatchFlow, OrbitError> {
+    fn dispatch_conflict(&mut self, status: PullRequestStatus) -> Result<DispatchFlow, OrbitError>
+    where
+        H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + RuntimeHostProcessEnvironment,
+    {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;
@@ -506,10 +526,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         Ok(DispatchFlow::ContinuePoll)
     }
 
-    fn dispatch_mergeable(
-        &mut self,
-        status: PullRequestStatus,
-    ) -> Result<DispatchFlow, OrbitError> {
+    fn dispatch_mergeable(&mut self, status: PullRequestStatus) -> Result<DispatchFlow, OrbitError>
+    where
+        H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + RuntimeHostProcessEnvironment,
+    {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;
@@ -627,7 +647,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         refused_head: Option<&str>,
         strategy: &str,
         diagnostic: &str,
-    ) -> Result<DispatchFlow, OrbitError> {
+    ) -> Result<DispatchFlow, OrbitError>
+    where
+        H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + RuntimeHostProcessEnvironment,
+    {
         let pr_number = self.pr_number;
         let refused = |observed: String| {
             OrbitError::Execution(format!(
@@ -681,7 +704,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         self.dispatch_conflict(fresh)
     }
 
-    fn dispatch_pending(&mut self, status: PullRequestStatus) -> Result<DispatchFlow, OrbitError> {
+    fn dispatch_pending(&mut self, status: PullRequestStatus) -> Result<DispatchFlow, OrbitError>
+    where
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment,
+    {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;

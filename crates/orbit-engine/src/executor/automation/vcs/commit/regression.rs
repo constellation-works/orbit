@@ -7,7 +7,7 @@ use std::path::Path;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus};
 use orbit_types::workflow::handoff::EXTERNAL_MERGE_SETTLED_EVENT;
 
-use crate::context::{PrConfig, RuntimeHost};
+use crate::context::{PrConfig, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::delivery_marker::commits_matching;
 use super::super::git::git_output;
@@ -15,7 +15,9 @@ use super::message::{RegressionLandedCommit, RegressionLandedCommits};
 
 /// Best-effort: a target that cannot be resolved is simply absent, which
 /// omits its `Fixes:` line and never fails the commit.
-pub(super) fn resolve_regression_landed_commits<H: RuntimeHost + ?Sized>(
+pub(super) fn resolve_regression_landed_commits<
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace: &Path,
     tasks: &[Task],
@@ -41,7 +43,7 @@ pub(super) fn resolve_regression_landed_commits<H: RuntimeHost + ?Sized>(
     landed
 }
 
-fn resolve_one<H: RuntimeHost + ?Sized>(
+fn resolve_one<H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     target: &str,

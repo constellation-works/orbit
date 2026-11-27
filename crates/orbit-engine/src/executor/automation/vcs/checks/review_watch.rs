@@ -10,7 +10,7 @@
 //!
 //! [`recover_failed_checks`]: super::recover_failed_checks
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::super::completion_deadline::now_ms;
 use super::head::{BaseComparison, classify_logged_job};
@@ -61,7 +61,9 @@ impl WatchedFailure {
 /// Classify the failed checks on `head`, a pull request whose fork point
 /// from `base_branch` is `base`; `moved_tip` is that branch's current
 /// commit when it moved past `base`.
-pub(in crate::executor::automation::vcs) fn classify_watched_failures<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn classify_watched_failures<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     mut comparison: BaseComparison<'_, H>,
     failed: &[(Option<String>, String)],
 ) -> WatchedFailure {

@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::answers::{CheckState, read_required_checks};
 use crate::executor::automation::vcs::checks::{
@@ -22,7 +22,9 @@ pub(crate) enum CompletionRecoveryChecks {
 /// earlier step error. A partial or changing rollup cannot authorize a recovery
 /// diagnosis. Completion already spent its bounded watch waiting for settlement;
 /// recovery must not start a new watch budget after that deadline.
-pub(crate) fn completion_recovery_checks<H: RuntimeHost + ?Sized>(
+pub(crate) fn completion_recovery_checks<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace: &Path,
     input: &Value,

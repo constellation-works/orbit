@@ -2,7 +2,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::pr_auto_fix_pushes;
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::RunLifecycle;
 
 use super::super::delivery::DeliveryPin;
 use super::{admission, ledger};
@@ -17,7 +17,9 @@ pub(crate) const AUTHENTICATED_PUBLISHED_HEAD_SHA: &str = "authenticated_publish
 /// Pin the contiguous heads this execution or its authenticated retry
 /// ancestors published for the same pull request. Branch and review pins
 /// remain enforced by completion on every provider read.
-pub(in crate::executor::automation::vcs::pr) fn adopt_published_repairs<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn adopt_published_repairs<
+    H: RunLifecycle + ?Sized,
+>(
     host: &H,
     auto_fix: &admission::AutoFix,
     pr_number: &str,
@@ -38,7 +40,7 @@ pub(in crate::executor::automation::vcs::pr) fn adopt_published_repairs<H: Runti
 /// contiguous, host-recorded push chain the watcher adopts. Provider input
 /// and the live branch cannot supply a replacement head or retry authority.
 pub(crate) fn recovery_published_head(
-    host: &dyn RuntimeHost,
+    host: &dyn RunLifecycle,
     run_id: &str,
     task_id: &str,
     pr_number: &str,
@@ -64,7 +66,7 @@ pub(crate) fn recovery_published_head(
 /// resolved the way admission resolves them, rather than guessing. The raw
 /// publication fields are not modified.
 pub(crate) fn provider_authenticated_published_head(
-    host: &dyn RuntimeHost,
+    host: &dyn RunLifecycle,
     run_id: &str,
     recovery_input: &Value,
     failed_step_input: &Value,
@@ -97,7 +99,7 @@ pub(crate) fn provider_authenticated_published_head(
 /// a caller-supplied pin so the provider cannot trust one the host did not
 /// authenticate.
 pub(crate) fn apply_authenticated_published_head(
-    host: &dyn RuntimeHost,
+    host: &dyn RunLifecycle,
     run_id: &str,
     recovery_input: &mut Value,
 ) {

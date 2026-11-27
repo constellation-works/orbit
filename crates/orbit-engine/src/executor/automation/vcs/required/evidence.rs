@@ -12,7 +12,7 @@ use orbit_common::security::{redaction::redact_all, release::sha256_hex};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::ReviewGate;
 
 pub(in crate::executor::automation::vcs) use orbit_common::env_vars::ORBIT_COMMAND_EVIDENCE_DIR as DIRECTORY_ENV;
 pub(in crate::executor::automation::vcs) use orbit_common::env_vars::ORBIT_COMMAND_EVIDENCE_INVOCATION as INVOCATION_ENV;
@@ -197,7 +197,7 @@ pub(in crate::executor::automation::vcs) fn capture(
 /// Attach every chunk before publishing a manifest that names it. Any failed
 /// or unknown write is recorded as incomplete; there is no retry or successful completeness
 /// claim when attachment did not conclusively complete.
-pub(in crate::executor::automation::vcs) fn retain<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn retain<H: ReviewGate + ?Sized>(
     host: &H,
     task_ids: &[String],
     run_id: &str,
@@ -333,7 +333,7 @@ pub(in crate::executor::automation::vcs) fn retain<H: RuntimeHost + ?Sized>(
     serde_json::to_vec(&log).map_err(|error| OrbitError::Execution(error.to_string()))
 }
 
-fn attach<H: RuntimeHost + ?Sized>(
+fn attach<H: ReviewGate + ?Sized>(
     host: &H,
     task_ids: &[String],
     run_id: &str,

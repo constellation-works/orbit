@@ -7,7 +7,7 @@ use orbit_types::workflow::{
 use serde_json::json;
 
 use super::auto_fix::{self, AutoFix};
-use crate::context::RuntimeHost;
+use crate::context::{ReviewGate, RunLifecycle};
 
 pub(super) fn failed_workflow_diagnosis(evidence: &PrInfrastructureEvidence) -> String {
     let failure = evidence.failed_workflow_run();
@@ -32,7 +32,7 @@ pub(super) fn failed_workflow_diagnosis(evidence: &PrInfrastructureEvidence) -> 
 
 /// Admit the ordinary failed-check repair directly, retaining the workflow
 /// evidence before the reservation. No classification rerun precedes it.
-pub(super) fn repair_failed_workflow<H: RuntimeHost + ?Sized>(
+pub(super) fn repair_failed_workflow<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     auto_fix: &AutoFix,
     pr: &str,

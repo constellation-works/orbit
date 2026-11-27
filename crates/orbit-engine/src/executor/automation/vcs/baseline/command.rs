@@ -1,7 +1,7 @@
 use super::super::required::command::{
     RequiredCommandRun, VALIDATION_TIMEOUT_MS, run_required_command,
 };
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 use orbit_common::OrbitError;
 use regex::Regex;
 use serde_json::Value;
@@ -36,7 +36,9 @@ pub(in super::super) fn network_inconclusive(output: &str) -> Option<String> {
 /// Run one required command, rerunning a network-inconclusive failure with
 /// backoff. The returned run records how many reruns it took. `selection`,
 /// from a candidate run's summary, is what a base run must test.
-pub(in super::super) fn run_validation_command<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn run_validation_command<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     command: &str,
@@ -48,7 +50,9 @@ pub(in super::super) fn run_validation_command<H: RuntimeHost + ?Sized>(
 /// [`run_validation_command`], ending by `deadline` when one is set: each
 /// attempt's timeout is shortened to what is left, and no rerun starts after
 /// it.
-pub(in super::super) fn run_validation_command_until<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn run_validation_command_until<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     command: &str,

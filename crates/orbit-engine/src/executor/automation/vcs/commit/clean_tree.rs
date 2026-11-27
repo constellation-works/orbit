@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskArtifact};
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::git::git_output;
 
@@ -27,7 +27,7 @@ pub(super) trait Verifier {
     const SPEC: Specification;
 
     /// Recheck Git state before parsing evidence, preserving refusal order.
-    fn verify<H: RuntimeHost + ?Sized>(
+    fn verify<H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
         host: &H,
         task: &Task,
         workspace: &Path,
@@ -40,12 +40,17 @@ pub(super) trait Verifier {
     }
 
     /// Optional guidance before evidence parsing, after the clean-tree check.
-    fn check_artifacts<H: RuntimeHost + ?Sized>(_host: &H, _task: &Task) -> Result<(), OrbitError> {
+    fn check_artifacts<H: RunLifecycle + ?Sized>(
+        _host: &H,
+        _task: &Task,
+    ) -> Result<(), OrbitError> {
         Ok(())
     }
 
     /// Verify evidence against immutable Git objects and task artifacts.
-    fn verify_at_revision<H: RuntimeHost + ?Sized>(
+    fn verify_at_revision<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         task: &Task,
         workspace: &Path,
@@ -56,7 +61,9 @@ pub(super) trait Verifier {
     /// [`Self::verify_at_revision`] allowing the owner's recording of the
     /// `regression_from` relations the handoff itself supplied [ORB-24696].
     /// Only the already-landed verifier's scope comparison uses them.
-    fn verify_at_revision_with_supplied_regression_from<H: RuntimeHost + ?Sized>(
+    fn verify_at_revision_with_supplied_regression_from<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         task: &Task,
         workspace: &Path,
@@ -69,7 +76,9 @@ pub(super) trait Verifier {
 
     /// [`Self::verify`] through
     /// [`Self::verify_at_revision_with_supplied_regression_from`].
-    fn verify_with_supplied_regression_from<H: RuntimeHost + ?Sized>(
+    fn verify_with_supplied_regression_from<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         task: &Task,
         workspace: &Path,
@@ -110,7 +119,9 @@ pub(super) trait Verifier {
     }
 
     /// Promotion and completion require the exact evidence accepted at commit.
-    fn verify_handoff<H: RuntimeHost + ?Sized>(
+    fn verify_handoff<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         tasks: &[Task],
         workspace: &Path,
@@ -126,7 +137,9 @@ pub(super) trait Verifier {
     }
 
     /// Recheck against the owner's observed base without changing its checkout.
-    fn verify_handoff_at_revision<H: RuntimeHost + ?Sized>(
+    fn verify_handoff_at_revision<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         task: &Task,
         workspace: &Path,
@@ -145,7 +158,9 @@ pub(super) trait Verifier {
 
     /// [`Self::verify_handoff_at_revision`] allowing the owner's recording of
     /// the `regression_from` relations the handoff itself supplied.
-    fn verify_handoff_at_revision_with_supplied_regression_from<H: RuntimeHost + ?Sized>(
+    fn verify_handoff_at_revision_with_supplied_regression_from<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         task: &Task,
         workspace: &Path,
@@ -175,7 +190,7 @@ pub(super) trait Verifier {
         Ok(())
     }
 
-    fn artifact<H: RuntimeHost + ?Sized>(
+    fn artifact<H: RunLifecycle + ?Sized>(
         host: &H,
         task_id: &str,
         path: &str,

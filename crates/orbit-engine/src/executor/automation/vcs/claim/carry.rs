@@ -27,7 +27,7 @@ use orbit_common::text::floor_char_boundary;
 use orbit_types::workflow::{CandidateCarry, CandidateCarryOutput};
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHost, RuntimeHostProcessEnvironment};
 use crate::executor::automation::input::{input_string_field, required_input_string};
 
 use super::super::commit::commit_claimed_partial;
@@ -225,7 +225,9 @@ fn branch_tip(
 /// `refs/orbit/candidates/<task_id>/<run_id>` on `origin`, so a run on any
 /// host can fetch it. Returns the ref, or the bounded push diagnostic.
 /// [ORB-14905] An owner-local hold carries its candidate the same way.
-pub(in crate::executor::automation::vcs) fn carry_to_durable_ref<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn carry_to_durable_ref<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     branch: &str,
@@ -240,7 +242,9 @@ pub(in crate::executor::automation::vcs) fn carry_to_durable_ref<H: RuntimeHost 
 /// Push `commit`, made in the checkout of `branch`, to `target_ref` under
 /// `refs/orbit/candidates/` on `origin`. The error is the bounded push
 /// diagnostic.
-pub(in crate::executor::automation::vcs) fn push_candidate_ref<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn push_candidate_ref<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     branch: &str,

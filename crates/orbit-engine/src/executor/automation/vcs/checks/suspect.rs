@@ -6,7 +6,9 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use serde_json::json;
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+};
 use orbit_types::workflow::{
     CI_BASE_SUSPECT_EVENT, CI_CHECK_RERUN_EVENT, CiBaseSuspectLegacy, CiBaseSuspectRecord,
     CiCheckRerunRecord,
@@ -128,7 +130,9 @@ pub(super) fn base_suspect_legacy_event(
 }
 
 /// Independently guard the repair evidence path, including job-level recovery.
-pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
+pub(super) fn watcher_suspicion<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace: &Path,
     tasks: &[String],
@@ -278,7 +282,9 @@ fn repository_citations(
 /// Whether a matching base check passes. A pass alone only authorizes one
 /// unchanged-head pull-request rerun; only a repeated signature on that
 /// rerun can attribute the failure to the candidate.
-pub(super) fn stale_untouched_failure<H: RuntimeHost + ?Sized>(
+pub(super) fn stale_untouched_failure<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     recheck: BaseRecheck<'_, H>,
     job: &CiCommitJobEvidence,
     log: &str,
@@ -323,7 +329,7 @@ pub(super) fn started_after_completion(
     }
 }
 
-fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
+fn untouched_base_evidence<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     recheck: BaseRecheck<'_, H>,
     job: &CiCommitJobEvidence,
     paths: BTreeSet<String>,
@@ -404,7 +410,7 @@ pub(super) fn is_verified_pull_request_job(
 /// recognize the same evidence as an in-process rerun; a durable
 /// `ci_check_rerun` note written before PR identity was recorded still
 /// qualifies when the current job itself carries that identity.
-pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
+pub(super) fn has_matching_candidate_rerun<H: RunLifecycle + ?Sized>(
     host: &H,
     tasks: &[String],
     head: &str,
@@ -567,7 +573,7 @@ fn names_other_pull_request(noted: impl Iterator<Item = u64>, pr_number: Option<
 /// Surface the base-wide suspicion once per owning task and exact failure,
 /// keyed by head, check and signature, even when the base advances.
 /// This spends no repair reservation.
-pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
+pub(super) fn record_base_suspect<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     tasks: &[String],
     evidence: &CiBaseSuspectRecord,
@@ -613,7 +619,7 @@ pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
 /// through `tip`, with no same-check failure on that commit or on `tip`.
 /// `Ok(None)` is an unproven base: no such pass, or a red tip. A read the
 /// provider refused is an `Err`, and proves nothing either.
-pub(super) fn green_base_proof<H: RuntimeHost + ?Sized>(
+pub(super) fn green_base_proof<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace: &Path,
     base: &str,

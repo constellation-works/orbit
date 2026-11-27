@@ -9,7 +9,10 @@ use orbit_types::task::{ContextWideningStep, NO_DIFF_EXPECTED_TAG};
 use orbit_types::workflow::CommitType;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle,
+    RuntimeHostProcessEnvironment as ProcessEnvironment,
+};
 
 use super::super::super::input::{
     canonicalize_existing_dir, input_string_field, required_job_run_id,
@@ -41,10 +44,13 @@ use super::scope::{
 use super::summary::ensure_durable_execution_summary;
 use super::tagged_no_diff;
 
-pub(in crate::executor::automation) fn git_commit<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn git_commit<H>(
     host: &H,
     input: &Value,
-) -> Result<Value, OrbitError> {
+) -> Result<Value, OrbitError>
+where
+    H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
+{
     let scope = input.get("scope").and_then(Value::as_str).unwrap_or("all");
     match scope {
         "per_task" => commit_task_artifact_changes(host, input),
@@ -56,7 +62,9 @@ pub(in crate::executor::automation) fn git_commit<H: RuntimeHost + ?Sized>(
     }
 }
 
-pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
+pub(super) fn commit_task_artifact_changes<
+    H: RunLifecycle + HostEnvironment + ProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -157,7 +165,9 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
     }))
 }
 
-pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
+pub(super) fn commit_finalize_artifact_changes<
+    H: RunLifecycle + HostEnvironment + ProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -226,10 +236,10 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
     }))
 }
 
-pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
-    host: &H,
-    input: &Value,
-) -> Result<Value, OrbitError> {
+pub(super) fn commit_batch_changes<H>(host: &H, input: &Value) -> Result<Value, OrbitError>
+where
+    H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
+{
     let batch_id = required_job_run_id(input, "commit_batch_changes")?;
     let batch_tasks = host.list_run_tasks(batch_id)?;
     let [task] = batch_tasks.as_slice() else {
@@ -569,7 +579,9 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
 /// Commit a terminally-failed shipment's dirty candidate without consulting
 /// the normal success-summary delivery gate. ADR-0246 confines this bypass to
 /// the failure handoff, which blocks rather than promotes the task.
-pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn commit_failure_candidate<
+    H: RunLifecycle + HostEnvironment + ProcessEnvironment + ?Sized,
+>(
     host: &H,
     run_id: &str,
     workspace_path: &Path,
@@ -647,7 +659,7 @@ fn already_committed_result(task_id: &str, base_sha: Option<&str>) -> Value {
     result
 }
 
-fn resolve_workspace_path<H: RuntimeHost + ?Sized>(
+fn resolve_workspace_path<H: HostEnvironment + ProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     batch_id: &str,

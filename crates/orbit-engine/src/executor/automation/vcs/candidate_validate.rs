@@ -63,7 +63,10 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate, ValidatedTree};
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle,
+    RuntimeHostProcessEnvironment as ProcessEnvironment, TaskAutomationUpdate, ValidatedTree,
+};
 use crate::executor::automation::input::{input_string_field, required_job_run_id};
 
 use super::baseline::{
@@ -101,10 +104,13 @@ use super::validation_scope::validation_scope;
 /// decision is `passed_with_known_red` and `known_red` names them. A passing
 /// base also permits a bounded isolated failing-test replay: tests passing it
 /// are recorded in `flaky`, and delivery proceeds with the rerun evidence.
-pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn candidate_validate<H>(
     host: &H,
     input: &Value,
-) -> Result<Value, OrbitError> {
+) -> Result<Value, OrbitError>
+where
+    H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
+{
     let owned_paths = match input_string_field(input, "ownership_base_sha") {
         Some(ownership_base) => Some(attribute_reviewed_paths(host, input, &ownership_base)?),
         None => None,
@@ -465,7 +471,7 @@ pub(in crate::executor::automation) fn candidate_validate<H: RuntimeHost + ?Size
 /// none of the tasks' selectors covers widens the first task's selectors with
 /// review provenance rather than refusing. Shared ownership is accepted: a
 /// reviewer fix may touch a path two batched tasks both declare.
-fn attribute_reviewed_paths<H: RuntimeHost + ?Sized>(
+fn attribute_reviewed_paths<H: RunLifecycle + ProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     ownership_base: &str,
@@ -515,7 +521,7 @@ fn attribute_reviewed_paths<H: RuntimeHost + ?Sized>(
 
 /// Record `known` on each delivered task's history, the decision `pr_open`
 /// reads for the pull request.
-fn record_known_red<H: RuntimeHost + ?Sized>(
+fn record_known_red<H: RunLifecycle + ?Sized>(
     host: &H,
     task_ids: &[String],
     known: &KnownRedValidation,
@@ -547,7 +553,7 @@ fn record_known_red<H: RuntimeHost + ?Sized>(
     Ok(())
 }
 
-fn attach_logs<H: RuntimeHost + ?Sized>(
+fn attach_logs<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     task_ids: &[String],
     run_id: &str,

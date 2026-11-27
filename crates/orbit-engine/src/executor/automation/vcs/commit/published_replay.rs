@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::super::super::input::input_string_field;
 use super::checkpoint::pinned_object_id;
-use crate::context::RuntimeHost;
+use crate::context::{RunLifecycle, RuntimeHostProcessEnvironment};
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
     FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, PipelineState,
@@ -145,7 +145,9 @@ pub(crate) fn published_candidate_matches(
 
 /// The governed alternative to comparing a published candidate against setup.
 /// Unknown HEADs still go through the unchanged immutable-pin refusal.
-pub(super) fn final_recovery_published_candidate<H: RuntimeHost + ?Sized>(
+pub(super) fn final_recovery_published_candidate<
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     owner: &str,
@@ -205,7 +207,7 @@ pub(super) fn final_recovery_published_candidate<H: RuntimeHost + ?Sized>(
 /// nothing left to rewrite. Keep publication leased to the preceding host
 /// push, rather than treating that no-op as authority to overwrite a remote.
 pub(in crate::executor::automation::vcs) fn final_recovery_publication_lease<
-    H: RuntimeHost + ?Sized,
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
 >(
     host: &H,
     input: &Value,

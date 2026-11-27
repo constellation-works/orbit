@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment};
 use crate::executor::automation::input::{canonicalize_existing_dir, input_string_field};
 
 use super::super::git::{
@@ -37,7 +37,9 @@ struct FastForwardTarget<'a> {
     base_sync_mode: BaseSyncMode,
 }
 
-pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn merge_batch_worktree_into_base<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {

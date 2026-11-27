@@ -6,7 +6,7 @@ use orbit_types::task::{Task, TaskComment, TaskStatus};
 use orbit_types::workflow::DeliveryRefusal;
 use serde_json::Value;
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate};
 
 use super::super::input::{
     canonicalize_existing_dir, input_string_field, required_input_string, required_job_run_id,
@@ -159,7 +159,7 @@ pub(super) fn reports_failure(summary: &str) -> bool {
 /// A claimed implementer that reported no summary is not refused; its handoff
 /// carries a generic delivery statement. Without the binding, or without
 /// implementer output in the input, the durable gate applies unchanged.
-pub(super) fn reject_failed_attempt<H: RuntimeHost + ?Sized>(
+pub(super) fn reject_failed_attempt<H: RunLifecycle + ?Sized>(
     host: &H,
     input: &Value,
     task: &Task,
@@ -182,7 +182,7 @@ pub(super) fn reject_failed_attempt<H: RuntimeHost + ?Sized>(
 /// judge it: `None` outside a claimed leaf, for a task other than the claim's,
 /// or when the step was handed no implementer output; `Some(None)` when the
 /// implementer output carries no summary text.
-pub(super) fn claimed_attempt_summary<H: RuntimeHost + ?Sized>(
+pub(super) fn claimed_attempt_summary<H: RunLifecycle + ?Sized>(
     host: &H,
     input: &Value,
     task: &Task,
@@ -194,7 +194,7 @@ pub(super) fn claimed_attempt_summary<H: RuntimeHost + ?Sized>(
     Some(implementer_summary(input))
 }
 
-pub(super) fn load_handoff_context<H: RuntimeHost + ?Sized>(
+pub(super) fn load_handoff_context<H: RunLifecycle + ?Sized>(
     host: &H,
     input: &Value,
     action: &str,
@@ -260,7 +260,7 @@ pub(super) fn completed_task_ids_from_input(input: &Value) -> Option<Vec<String>
     (!ids.is_empty()).then_some(ids)
 }
 
-pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
+pub(super) fn record_failed_handoff<H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     context: &HandoffContext,
     input: &Value,

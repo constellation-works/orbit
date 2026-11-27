@@ -4,7 +4,10 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::PrAutoFixBlocker;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle,
+    RuntimeHostProcessEnvironment as ProcessEnvironment,
+};
 
 use super::super::super::super::input::input_string_field;
 use super::super::super::freshness::{
@@ -36,7 +39,7 @@ pub(super) fn is_blocked_merge_state(status: &PullRequestStatus) -> bool {
 
 /// Admit an auto-fix repair of the conflict on the pull request's head
 /// before the pinned rebase can reach conflict recovery.
-pub(super) fn admit_conflict_repair<H: RuntimeHost + ?Sized>(
+pub(super) fn admit_conflict_repair<H: ReviewGate + ?Sized>(
     host: &H,
     auto_fix: &AutoFix,
     pr_number: &str,
@@ -83,13 +86,16 @@ pub(super) fn completion_conflict_error(pr_number: &str) -> OrbitError {
 ///
 /// Returns the rewritten candidate SHA now published on the branch, which
 /// completion adopts for subsequent provider readback and delivery checks.
-pub(super) fn refresh_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
+pub(super) fn refresh_conflicting_pr_branch<H>(
     host: &H,
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
     pull_request: &PullRequestStatus,
-) -> Result<Option<String>, OrbitError> {
+) -> Result<Option<String>, OrbitError>
+where
+    H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
+{
     let synced =
         rebase_conflicting_pr_branch(host, input, workspace_path, pr_number, pull_request)?;
     let push_input = json!({
@@ -112,13 +118,16 @@ pub(super) fn refresh_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
 /// Rebase the published candidate onto the base GitHub currently sees,
 /// locally, returning the `git_rebase` checkpoint a lease-checked push of the
 /// rewritten branch needs.
-pub(super) fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
+pub(super) fn rebase_conflicting_pr_branch<H>(
     host: &H,
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
     pull_request: &PullRequestStatus,
-) -> Result<Value, OrbitError> {
+) -> Result<Value, OrbitError>
+where
+    H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
+{
     let head =
         input_string_field(input, "head").ok_or_else(|| completion_conflict_error(pr_number))?;
     let published_head_sha = input_string_field(input, "published_head_sha")

@@ -77,7 +77,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, default_python_cache_prefix};
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment, default_python_cache_prefix};
 
 use super::super::base::claim::{failure_identities, normalize_output};
 use super::super::baseline::diagnostic;
@@ -437,7 +437,9 @@ pub(crate) fn environment_record(environment: &ValidationEnvironment) -> Value {
 /// [`VALIDATION_TIMEOUT_MS`]).
 /// With configured output bindings, `workspace_path` must belong to a primary
 /// Git checkout for managed host output isolation.
-pub(in crate::executor::automation::vcs) fn run_required_command<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn run_required_command<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     command: &str,

@@ -31,7 +31,7 @@ use orbit_types::task::Task;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::context::RuntimeHost;
+use crate::context::{Recovery, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::freshness::recorded_workspace_matches;
 use super::git::{git_command_success, git_output, git_output_paths, git_output_raw};
@@ -219,7 +219,9 @@ pub(crate) fn covering_commit(
 /// in `workspace`, for `task_id`: the certificate and its identity, the
 /// checkout's branch, HEAD and cleanliness, the covering commit, its
 /// reachability from the freshly resolved base ref, and the task's scope.
-pub(crate) fn verify_absorbed_candidate<H: RuntimeHost + ?Sized>(
+pub(crate) fn verify_absorbed_candidate<
+    H: RunLifecycle + Recovery + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     run_id: &str,
     step_id: &str,

@@ -12,7 +12,9 @@ use orbit_types::workflow::handoff::HandoffCandidate;
 use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBaseRed};
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::super::completion_hold::CompletionHoldCheck;
 use super::super::super::remote_probe::fixed_wait as sleep;
@@ -75,7 +77,7 @@ pub(super) enum RedBaseStep {
 }
 
 /// Mutable poll state shared by the phases, owned by one driver.
-pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
+pub(super) struct PollDriver<'a, H: ?Sized> {
     pub(super) host: &'a H,
     pub(super) input: &'a Value,
     pub(super) workspace_path: &'a str,
@@ -119,7 +121,7 @@ pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
     pub(super) hold_cleared_candidate: Option<String>,
 }
 
-impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
+impl<H: ?Sized> PollDriver<'_, H> {
     /// Whether this completion invocation already sent a merge or auto-merge
     /// request to the forge (distinct from local rebases/branch refreshes).
     pub(super) fn merge_mutated(&self) -> bool {
@@ -137,7 +139,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     pub(super) fn completion_hold_for_candidate(
         &mut self,
         candidate: Option<&str>,
-    ) -> Result<Option<Delivery>, OrbitError> {
+    ) -> Result<Option<Delivery>, OrbitError>
+    where
+        H: RuntimeHostProcessEnvironment,
+    {
         let Some(check) = &self.hold_check else {
             return Ok(None);
         };
@@ -168,7 +173,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         &self,
         auto_fix: &AutoFix,
         deferred: &super::super::super::checks::DeferredLogRead,
-    ) -> Result<(), OrbitError> {
+    ) -> Result<(), OrbitError>
+    where
+        H: RunLifecycle,
+    {
         let wait_ms = defer_throttled_read(
             self.host,
             auto_fix,
@@ -188,7 +196,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         auto_fix: &AutoFix,
         status: &PullRequestStatus,
         failed: &[(Option<String>, String)],
-    ) -> Result<RedBaseStep, OrbitError> {
+    ) -> Result<RedBaseStep, OrbitError>
+    where
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment,
+    {
         let reason = match red_base_wait(
             self.host,
             AutoFixPull {
@@ -244,30 +255,29 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         ))
     }
 
-    /// Run the poll loop until a phase delivers or fails.
-    pub(super) fn run(mut self) -> Result<Delivery, OrbitError> {
-        loop {
-            let mut observed = match self.observe_poll()? {
-                ObserveFlow::ContinuePoll => continue,
-                ObserveFlow::Ready(observed) => *observed,
-            };
-            match self.recover_blocked_checks(&mut observed)? {
-                RecoveryFlow::ContinuePoll => continue,
-                RecoveryFlow::Ready => {}
-            }
-            self.recover_absent_check_runs(&observed)?;
-            match self.dispatch_state(observed)? {
-                DispatchFlow::ContinuePoll => continue,
-                DispatchFlow::Deliver(delivery) => return Ok(*delivery),
-                DispatchFlow::WaitPoll(base_red_reason) => {
-                    self.wait_for_next_poll(base_red_reason.as_deref())?
-                }
-            }
+    /// Phase 3: act on the classified merge state.
+    pub(super) fn wait_for_next_poll(
+        &mut self,
+        base_red_reason: Option<&str>,
+    ) -> Result<(), OrbitError> {
+        if let Some(error) = self.expired(base_red_reason) {
+            return Err(error);
         }
+        let remaining_seconds = self.max_wait_seconds.saturating_sub(self.waited_seconds);
+        let sleep_seconds = self.poll_interval_seconds.min(remaining_seconds);
+        sleep(Duration::from_secs(sleep_seconds));
+        self.waited_seconds = self.waited_seconds.saturating_add(sleep_seconds);
+        if let Some(error) = self.expired(base_red_reason) {
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Phase 1: read the PR, pin its candidate and classify its merge state.
-    fn observe_poll(&mut self) -> Result<ObserveFlow, OrbitError> {
+    fn observe_poll(&mut self) -> Result<ObserveFlow, OrbitError>
+    where
+        H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment,
+    {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;
@@ -523,7 +533,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     fn recover_blocked_checks(
         &mut self,
         observed_poll: &mut ObservedPoll,
-    ) -> Result<RecoveryFlow, OrbitError> {
+    ) -> Result<RecoveryFlow, OrbitError>
+    where
+        H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment,
+    {
         let host = self.host;
         let input = self.input;
         let workspace_path = self.workspace_path;
@@ -764,7 +777,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     /// the forge started no workflow run and no required check run for, or
     /// hold once that re-trigger produced none. A workflow run in any state
     /// keeps the ordinary wait [ORB-24457].
-    fn recover_absent_check_runs(&mut self, observed: &ObservedPoll) -> Result<(), OrbitError> {
+    fn recover_absent_check_runs(&mut self, observed: &ObservedPoll) -> Result<(), OrbitError>
+    where
+        H: RunLifecycle + HostEnvironment,
+    {
         let absent = !observed.infrastructure_wait
             && !self.auto_merge_requested
             && !self.merge_requested
@@ -795,21 +811,28 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         )
     }
 
-    /// Phase 3: act on the classified merge state.
-    pub(super) fn wait_for_next_poll(
-        &mut self,
-        base_red_reason: Option<&str>,
-    ) -> Result<(), OrbitError> {
-        if let Some(error) = self.expired(base_red_reason) {
-            return Err(error);
+    /// Run the poll loop until a phase delivers or fails.
+    pub(super) fn run(mut self) -> Result<Delivery, OrbitError>
+    where
+        H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + RuntimeHostProcessEnvironment,
+    {
+        loop {
+            let mut observed = match self.observe_poll()? {
+                ObserveFlow::ContinuePoll => continue,
+                ObserveFlow::Ready(observed) => *observed,
+            };
+            match self.recover_blocked_checks(&mut observed)? {
+                RecoveryFlow::ContinuePoll => continue,
+                RecoveryFlow::Ready => {}
+            }
+            self.recover_absent_check_runs(&observed)?;
+            match self.dispatch_state(observed)? {
+                DispatchFlow::ContinuePoll => continue,
+                DispatchFlow::Deliver(delivery) => return Ok(*delivery),
+                DispatchFlow::WaitPoll(base_red_reason) => {
+                    self.wait_for_next_poll(base_red_reason.as_deref())?
+                }
+            }
         }
-        let remaining_seconds = self.max_wait_seconds.saturating_sub(self.waited_seconds);
-        let sleep_seconds = self.poll_interval_seconds.min(remaining_seconds);
-        sleep(Duration::from_secs(sleep_seconds));
-        self.waited_seconds = self.waited_seconds.saturating_add(sleep_seconds);
-        if let Some(error) = self.expired(base_red_reason) {
-            return Err(error);
-        }
-        Ok(())
     }
 }

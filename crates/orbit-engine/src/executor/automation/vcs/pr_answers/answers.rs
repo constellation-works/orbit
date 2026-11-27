@@ -12,7 +12,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 
 use super::super::operations;
 
@@ -616,7 +616,7 @@ pub fn classify_rollup_context(check: &Value) -> Option<CheckState> {
 }
 
 /// Read pull request `pr_number`'s merge-relevant state.
-pub(in crate::executor::automation::vcs) fn read_pr_status<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn read_pr_status<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     pr_number: &str,
@@ -625,7 +625,7 @@ pub(in crate::executor::automation::vcs) fn read_pr_status<H: RuntimeHost + ?Siz
 }
 
 /// The same status observation within an existing completion/landing budget.
-pub(in crate::executor::automation::vcs) fn read_pr_status_before<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn read_pr_status_before<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     pr_number: &str,
@@ -634,7 +634,7 @@ pub(in crate::executor::automation::vcs) fn read_pr_status_before<H: RuntimeHost
     read_pr_status_with_deadline(host, workspace_path, pr_number, Some(deadline_ms))
 }
 
-fn read_pr_status_with_deadline<H: RuntimeHost + ?Sized>(
+fn read_pr_status_with_deadline<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     pr_number: &str,
@@ -650,7 +650,7 @@ fn read_pr_status_with_deadline<H: RuntimeHost + ?Sized>(
 
 /// Read which checks branch protection requires on pull request
 /// `pr_number`'s head.
-pub(in crate::executor::automation::vcs) fn read_required_checks<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn read_required_checks<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     pr_number: &str,
@@ -659,7 +659,7 @@ pub(in crate::executor::automation::vcs) fn read_required_checks<H: RuntimeHost 
 }
 
 pub(in crate::executor::automation::vcs) fn read_required_checks_observed<
-    H: RuntimeHost + ?Sized,
+    H: HostEnvironment + ?Sized,
 >(
     host: &H,
     workspace_path: &Path,

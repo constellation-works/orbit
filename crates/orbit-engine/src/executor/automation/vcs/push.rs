@@ -9,7 +9,9 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+};
 
 use super::super::input::{canonicalize_existing_dir, input_string_field, required_job_run_id};
 use super::claim::carry_to_durable_ref;
@@ -46,7 +48,9 @@ enum PreservedRepair {
     Unpushed(String),
 }
 
-pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn push_batch_changes<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -89,7 +93,7 @@ pub(in crate::executor::automation) fn push_batch_changes<H: RuntimeHost + ?Size
 /// Bind a before-landing reviewer push (`landing_push`) onto the PR's
 /// host-recorded published-head chain so completion conflict recovery and
 /// repair adoption authenticate the post-review head.
-fn record_landing_push<H: RuntimeHost + ?Sized>(
+fn record_landing_push<H: RunLifecycle + ?Sized>(
     host: &H,
     context: &HandoffContext,
     input: &Value,
@@ -118,7 +122,7 @@ fn record_landing_push<H: RuntimeHost + ?Sized>(
 }
 
 /// Record a head this run published on the pull request.
-pub(in crate::executor::automation::vcs) fn record_published_pr_head<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn record_published_pr_head<H: RunLifecycle + ?Sized>(
     host: &H,
     task_id: &str,
     run_id: &str,
@@ -162,7 +166,7 @@ pub(in crate::executor::automation::vcs) fn record_published_pr_head<H: RuntimeH
 /// Tell the task's readers once per batch that its push is held for the
 /// forge [ORB-14617]. The failed-handoff comment would ask for a manual
 /// reconcile that nothing here needs.
-fn record_forge_hold<H: RuntimeHost + ?Sized>(
+fn record_forge_hold<H: RunLifecycle + ?Sized>(
     host: &H,
     context: &HandoffContext,
     hold: &ForgeUnavailableHold,
@@ -210,7 +214,9 @@ fn record_forge_hold<H: RuntimeHost + ?Sized>(
     Ok(())
 }
 
-pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
+pub(super) fn push_batch_changes_inner<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     workspace_path: &Path,
@@ -543,7 +549,7 @@ fn repository_identity(process_env: &orbit_common::Env, path: &Path) -> Option<P
     Some(std::fs::canonicalize(&resolved).unwrap_or(resolved))
 }
 
-fn resolve_workspace_path<H: RuntimeHost + ?Sized>(
+fn resolve_workspace_path<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<PathBuf, OrbitError> {
@@ -647,7 +653,7 @@ fn validate_rewrite_checkpoint(
 /// A Git timeout is returned, so a stalled fetch is not recorded as a lost
 /// lease. `Ok(Some(_))` is the typed failure, after the repair was pushed to
 /// the evidence ref or the durable candidate ref.
-fn review_repair_after_merge<H: RuntimeHost + ?Sized>(
+fn review_repair_after_merge<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     workspace_path: &Path,
@@ -735,7 +741,7 @@ fn repair_commits(
 /// The merge commit when pull request `pr_number` is merged at `lease`.
 /// `Ok(None)` is any other state, including a status the forge could not
 /// confirm. A timeout is the caller's to surface.
-fn merged_at_lease<H: RuntimeHost + ?Sized>(
+fn merged_at_lease<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     pr_number: &str,
@@ -785,7 +791,7 @@ fn merge_commit_on_base(
 /// Push `local_sha` to the evidence-hold ref, then to the durable candidate
 /// ref. A refused evidence ref does not hide the repair: the fallback is
 /// tried, and a double refusal is named rather than dropped.
-fn preserve_review_repair<H: RuntimeHost + ?Sized>(
+fn preserve_review_repair<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     workspace_path: &Path,

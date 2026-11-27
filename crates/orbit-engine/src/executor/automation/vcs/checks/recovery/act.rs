@@ -9,7 +9,9 @@ use serde_json::json;
 
 use orbit_types::workflow::{CI_BASE_SUSPECT_RECLASSIFIED_EVENT, CiBaseSuspectReclassification};
 
-use crate::context::{HandoffLandingContext, RuntimeHost};
+use crate::context::{
+    HandoffLandingContext, HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::super::operations;
 use super::super::super::pr_answers::PullRequestStatus;
@@ -33,7 +35,9 @@ const CANDIDATE_OUTCOME: &str = "the owner ends the claim and returns the task t
 ///
 /// `reason` is the failure as the landing words it. `landing_tip` is the
 /// landing branch's current commit in the owner checkout.
-pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn recover_failed_checks<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     context: &HandoffLandingContext,
     status: &PullRequestStatus,
@@ -398,7 +402,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
 /// commit and check that proved the base green. Any unproven job (no such
 /// pass, a red base, or an unreadable base) changes nothing, so the landing
 /// keeps its base hold.
-fn reclassify_proven_candidates<H: RuntimeHost + ?Sized>(
+fn reclassify_proven_candidates<H: ReviewGate + HostEnvironment + ?Sized>(
     host: &H,
     context: &HandoffLandingContext,
     head: &str,

@@ -8,8 +8,8 @@ use orbit_types::workflow::activity_job::JobV2;
 use orbit_types::workflow::{FailureHandoffDecision, JobRunState, PipelineState};
 use serde_json::Value;
 
-use crate::context::RuntimeHost;
 use crate::context::dispatch_contract::DispatchError;
+use crate::context::{Recovery, RunLifecycle, RuntimeHost, RuntimeHostProcessEnvironment};
 use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string,
 };
@@ -408,7 +408,9 @@ fn ensure_run_is_resumable_owner<H: RuntimeHost + ?Sized>(
 /// Re-authenticate the evidence carried into `git_commit` against the source
 /// run's immutable state. This is deliberately separate from the ordinary
 /// moved-HEAD escape hatch used by stacked local merges.
-pub(super) fn commit_head_matches_failure_handoff<H: RuntimeHost + ?Sized>(
+pub(super) fn commit_head_matches_failure_handoff<
+    H: RunLifecycle + Recovery + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     task: &orbit_types::task::Task,
@@ -445,7 +447,10 @@ pub(super) fn commit_head_matches_failure_handoff<H: RuntimeHost + ?Sized>(
     Ok(true)
 }
 
-fn validate_failure_handoff_evidence<'a, H: RuntimeHost + ?Sized>(
+fn validate_failure_handoff_evidence<
+    'a,
+    H: RunLifecycle + Recovery + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     active_run_id: &str,
     checkpoint_owner: &str,
@@ -547,7 +552,7 @@ fn validate_failure_handoff_evidence<'a, H: RuntimeHost + ?Sized>(
     Ok(evidence)
 }
 
-fn source_state_step_owns_head<H: RuntimeHost + ?Sized>(
+fn source_state_step_owns_head<H: RunLifecycle + ?Sized>(
     host: &H,
     handoff_run_id: &str,
     task_id: &str,
@@ -562,7 +567,7 @@ fn source_state_step_owns_head<H: RuntimeHost + ?Sized>(
     }))
 }
 
-fn ensure_preservation_parent_owned<H: RuntimeHost + ?Sized>(
+fn ensure_preservation_parent_owned<H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     handoff_run_id: &str,
@@ -624,7 +629,7 @@ fn resume_preservation_error(error: OrbitError) -> DispatchError {
     }
 }
 
-pub(super) fn ensure_retry_descends_from<H: RuntimeHost + ?Sized>(
+pub(super) fn ensure_retry_descends_from<H: RunLifecycle + ?Sized>(
     host: &H,
     operation: &str,
     ancestor_label: &str,
@@ -673,7 +678,7 @@ pub(super) fn ensure_retry_descends_from<H: RuntimeHost + ?Sized>(
 /// The bounded retry chain from `run_id` up to `ancestor_run_id`, both ends
 /// included, or `None` when `run_id` does not descend from that ancestor
 /// through same-job `retry_source_run_id` links.
-pub(super) fn retry_chain_to<H: RuntimeHost + ?Sized>(
+pub(super) fn retry_chain_to<H: RunLifecycle + ?Sized>(
     host: &H,
     run_id: &str,
     ancestor_run_id: &str,

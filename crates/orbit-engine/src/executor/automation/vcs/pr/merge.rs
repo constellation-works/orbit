@@ -4,7 +4,9 @@ use orbit_common::OrbitError;
 use orbit_types::task::{GITHUB_PR_EXTERNAL_REF_SYSTEM, TaskStatus};
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+};
 
 use super::super::super::input::{
     canonicalize_existing_dir, input_string_field, required_job_run_id,
@@ -47,7 +49,7 @@ impl MergeStrategy {
     }
 }
 
-pub(super) fn resolve_merge_strategy<H: RuntimeHost + ?Sized>(
+pub(super) fn resolve_merge_strategy<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,
@@ -55,7 +57,7 @@ pub(super) fn resolve_merge_strategy<H: RuntimeHost + ?Sized>(
     Ok(resolve_permitted_merge(host, workspace_path, pr_number)?.strategy)
 }
 
-pub(in crate::executor::automation::vcs) fn resolve_permitted_merge<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn resolve_permitted_merge<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,
@@ -109,7 +111,9 @@ pub(in crate::executor::automation::vcs) fn resolve_permitted_merge<H: RuntimeHo
     )))
 }
 
-pub(in crate::executor::automation) fn git_merge<H: RuntimeHost + Sync + ?Sized>(
+pub(in crate::executor::automation) fn git_merge<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + Sync + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -146,7 +150,9 @@ pub(in crate::executor::automation) fn git_merge<H: RuntimeHost + Sync + ?Sized>
 /// whose candidate diff or tasks match a `completion.hold` rule, or `None`
 /// when the merge may proceed. Only a run whose input carries
 /// `completion: done` is held; a run without it already ends in review.
-fn local_completion_hold<H: RuntimeHost + ?Sized>(
+fn local_completion_hold<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     batch_id: &str,
@@ -196,7 +202,9 @@ fn local_completion_hold<H: RuntimeHost + ?Sized>(
     })))
 }
 
-pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
+pub(super) fn merge_batch_pr<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -329,7 +337,7 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
     }))
 }
 
-fn resolve_batch_workspace_path<H: RuntimeHost + ?Sized>(
+fn resolve_batch_workspace_path<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     batch_id: &str,

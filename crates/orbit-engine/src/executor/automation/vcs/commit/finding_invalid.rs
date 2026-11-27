@@ -11,7 +11,7 @@ use orbit_types::task::{self, SourceLocationEmptyComponents, Task};
 use orbit_types::workflow::handoff::FindingInvalidReport;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::git::{git_command_success, git_output_raw};
 use super::super::retry_lineage::{LineageStep, LineageStop, RETRY_LINEAGE_MAX_HOPS, RetryLineage};
@@ -38,7 +38,9 @@ impl Verifier for FindingInvalid {
         evidence_changed: "accepted finding-invalid report changed; rerun the commit step",
     };
 
-    fn verify_at_revision<H: RuntimeHost + ?Sized>(
+    fn verify_at_revision<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         task: &Task,
         workspace: &Path,
@@ -104,7 +106,7 @@ impl Verifier for FindingInvalid {
 /// shadows this run's no-diff or already-landed evidence. A report that does
 /// name this run still fails verification, and the refusal names the parse
 /// error.
-pub(super) fn claims_run<H: RuntimeHost + ?Sized>(
+pub(super) fn claims_run<H: RunLifecycle + ?Sized>(
     host: &H,
     task: &Task,
     run_id: &str,
@@ -143,7 +145,7 @@ pub(super) fn claims_run<H: RuntimeHost + ?Sized>(
 /// of its retry ancestors. The current run needs no stored run to match; an
 /// ancestor matches only when the walk reaches it, mirroring
 /// [`run_in_lineage`].
-fn raw_text_names_lineage<H: RuntimeHost + ?Sized>(
+fn raw_text_names_lineage<H: RunLifecycle + ?Sized>(
     host: &H,
     run_id: &str,
     content: &[u8],
@@ -177,7 +179,7 @@ fn raw_text_names_lineage<H: RuntimeHost + ?Sized>(
 
 /// Verify the report against the clean pinned HEAD, then have the host
 /// record the REJECTED verdict. The checkpoint skips every delivery step.
-pub(super) fn reject<H: RuntimeHost + ?Sized>(
+pub(super) fn reject<H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     task: &Task,
     workspace: &Path,
@@ -204,7 +206,7 @@ pub(super) fn claimed_refusal() -> OrbitError {
 
 /// The task's report, `None` when it has none. A report that does not
 /// parse is refused.
-fn read_report<H: RuntimeHost + ?Sized>(
+fn read_report<H: RunLifecycle + ?Sized>(
     host: &H,
     task: &Task,
 ) -> Result<Option<FindingInvalidReport>, OrbitError> {

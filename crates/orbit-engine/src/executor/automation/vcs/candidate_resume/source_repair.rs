@@ -4,7 +4,7 @@ use super::super::pr_answers::read_pr_status;
 use super::adopt::{Adoption, adopt_published_branch};
 use super::apply::{Applied, apply, output, record};
 use super::{Candidate, Outcome};
-use crate::context::RuntimeHost;
+use crate::context::{ReviewGate, RunLifecycle, RuntimeHost};
 use orbit_common::OrbitError;
 use orbit_types::task::Task;
 use orbit_types::workflow::{JobRun, SourceRepairAdmission, source_repair_authorizations};
@@ -238,7 +238,9 @@ pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
 
 /// Publication reads the immutable run input, not a caller-shaped candidate
 /// checkpoint. The owner pipeline and claimed pipeline pass different fields.
-pub(in crate::executor::automation::vcs) fn publication_admission<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn publication_admission<
+    H: RunLifecycle + ReviewGate + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError> {
@@ -283,7 +285,7 @@ pub(in crate::executor::automation::vcs) fn publication_admission<H: RuntimeHost
 
 /// A before-landing reviewer fix follows this run's own successful initial
 /// publication. Its explicit lease cannot authorize an unrelated caller head.
-pub(in crate::executor::automation::vcs) fn publication_lease<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn publication_lease<H: RunLifecycle + ?Sized>(
     host: &H,
     input: &Value,
     binding: &orbit_types::workflow::SourceRepairBinding,

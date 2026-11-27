@@ -23,7 +23,9 @@ use super::super::{
     remote_probe::{exact_remote_ref_sha, fixed_wait, remote_ref_output},
 };
 use super::read_pr_status;
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{
+    HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate,
+};
 
 // `mismatches` and its projections live in `pr_answers::identity`. This
 // re-export keeps `pr::source_identity::mismatches` compiling for concurrently
@@ -49,7 +51,7 @@ struct Settling {
 }
 
 impl Settling {
-    fn load<H: RuntimeHost + ?Sized>(host: &H, task: &str, run: &str) -> Result<Self, OrbitError> {
+    fn load<H: RunLifecycle + ?Sized>(host: &H, task: &str, run: &str) -> Result<Self, OrbitError> {
         let mut budget = Self::default();
         for entry in host.get_task_history(task)? {
             if entry.by != "system" || entry.event != OBSERVED {
@@ -97,7 +99,9 @@ struct PushCheckpoint {
 
 /// Only authenticated replacement metadata can settle. Every observation,
 /// including convergence, reapplies authority, identity and merge predicates.
-pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
+pub(super) fn verify_publication<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     context: &HandoffContext,
     binding: &SourceRepairBinding,
@@ -300,7 +304,7 @@ fn replacement_previous<'a>(push: &'a PublicationPushProof, head: &str) -> Optio
     .then_some(previous)
 }
 
-fn record_observation<H: RuntimeHost + ?Sized>(
+fn record_observation<H: RunLifecycle + ?Sized>(
     host: &H,
     binding: &SourceRepairBinding,
     at: DateTime<Utc>,
@@ -359,7 +363,7 @@ fn admission_evidence(binding: &SourceRepairBinding) -> Result<Value, OrbitError
 /// with its named pipeline checkpoint and the exact branch/published head.
 /// Missing or unreadable provenance is recorded as unconfirmed, never invented
 /// from the caller's input or the PR answer. This does not authorize a push.
-fn successful_push<H: RuntimeHost + ?Sized>(
+fn successful_push<H: RunLifecycle + ?Sized>(
     host: &H,
     run_id: &str,
     binding: &SourceRepairBinding,

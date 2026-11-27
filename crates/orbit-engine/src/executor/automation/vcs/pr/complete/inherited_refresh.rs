@@ -9,7 +9,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_types::workflow::{PR_BASE_INHERITED_REFRESH_CAUSE, pr_base_update_reservations};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::super::checks::verify_refreshed_head_from_base;
 use super::super::super::git::git_output;
@@ -27,10 +27,13 @@ pub(super) enum RerunFailureStep {
     Hold(String),
 }
 
-impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
+impl<H: ?Sized> PollDriver<'_, H> {
     /// Accept an out-of-run refresh only when the exact first-parent path
     /// matches successful Orbit refreshes of this task and PR.
-    pub(super) fn adopt_audited_refresh(&mut self, status: &PullRequestStatus) {
+    pub(super) fn adopt_audited_refresh(&mut self, status: &PullRequestStatus)
+    where
+        H: ReviewGate + RuntimeHostProcessEnvironment,
+    {
         let (Some(head), Some(candidate), Some(head_branch), Some(base_branch), Ok(number)) = (
             status.head_sha.as_deref(),
             self.pin.candidate_sha(),
@@ -115,7 +118,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         auto_fix: &AutoFix,
         status: &PullRequestStatus,
         rerun_failure: &str,
-    ) -> Result<RerunFailureStep, OrbitError> {
+    ) -> Result<RerunFailureStep, OrbitError>
+    where
+        H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment,
+    {
         match refresh_inherited_failure(
             self.host,
             AutoFixPull {
@@ -151,11 +157,10 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
     /// reserved base-inherited refresh of the pinned candidate and
     /// [`verify_refreshed_head_from_base`] accepts it. Any other moved head
     /// is left to the delivery identity checks, which refuse it.
-    pub(super) fn adopt_inherited_refresh(
-        &mut self,
-        auto_fix: &AutoFix,
-        status: &PullRequestStatus,
-    ) {
+    pub(super) fn adopt_inherited_refresh(&mut self, auto_fix: &AutoFix, status: &PullRequestStatus)
+    where
+        H: RunLifecycle + RuntimeHostProcessEnvironment,
+    {
         if self.base_adopted {
             return;
         }
@@ -194,7 +199,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
 
 /// Whether a task this run watches reserved the base-inherited refresh of
 /// `head` on this pull request. An unreadable history is no reservation.
-fn refresh_reserved<H: RuntimeHost + ?Sized>(
+fn refresh_reserved<H: RunLifecycle + ?Sized>(
     host: &H,
     auto_fix: &AutoFix,
     pr_number: &str,

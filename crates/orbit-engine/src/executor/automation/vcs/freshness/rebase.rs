@@ -16,7 +16,10 @@ use super::rebase_recovery::{
     recover_started_rebase_timeout, recovered_rewrite, refuse_or_recover_existing_rebase,
     unmerged_paths,
 };
-use crate::context::RuntimeHost;
+use crate::context::{
+    HostEnvironment, Recovery, ReviewGate, RunLifecycle, RuntimeHost,
+    RuntimeHostProcessEnvironment as ProcessEnvironment,
+};
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -119,10 +122,13 @@ fn prepare_error(error: OrbitError) -> Box<(FailedHandoffPhase, OrbitError)> {
     Box::new((FailedHandoffPhase::Prepare, error))
 }
 
-pub(in crate::executor::automation) fn rebase_pr_branch<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation) fn rebase_pr_branch<H>(
     host: &H,
     input: &Value,
-) -> Result<Value, OrbitError> {
+) -> Result<Value, OrbitError>
+where
+    H: RunLifecycle + ReviewGate + HostEnvironment + Recovery + ProcessEnvironment + ?Sized,
+{
     let context = load_handoff_context(host, input, "git_rebase")?;
     let result = {
         let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
@@ -170,7 +176,7 @@ pub(in crate::executor::automation) fn rebase_pr_branch<H: RuntimeHost + ?Sized>
     }
 }
 
-fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
+fn rebase_pr_branch_inner<H: RunLifecycle + Recovery + ProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
@@ -380,7 +386,7 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
 /// pinned base absorbed the candidate: a typed settlement failure once
 /// [`verify_absorbed_candidate`] re-observes it, otherwise today's empty-branch
 /// refusal with the typed reason.
-fn absorbed_outcome<H: RuntimeHost + ?Sized>(
+fn absorbed_outcome<H: RunLifecycle + Recovery + ProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,

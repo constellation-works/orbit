@@ -7,7 +7,7 @@ use orbit_types::workflow::{
     PrSectionGap, REPO_PR_TEMPLATE_LOCATIONS, SCREENSHOT_ARTIFACT_PREFIX, SCREENSHOTS_SECTION,
 };
 
-use crate::context::{PrConfig, RuntimeHost, TaskAutomationUpdate};
+use crate::context::{PrConfig, RunLifecycle, TaskAutomationUpdate};
 
 use super::super::super::git::git_output_raw;
 use super::super::super::handoff::HandoffContext;
@@ -96,7 +96,7 @@ fn repository_template_path(
 /// Only a single-task delivery with agent-filled sections configured reads
 /// it. A missing or malformed artifact fills nothing, so required sections
 /// surface as gaps rather than as a failed step.
-pub(super) fn filled_sections<H: RuntimeHost + ?Sized>(
+pub(super) fn filled_sections<H: RunLifecycle + ?Sized>(
     host: &H,
     tasks: &[Task],
     pr_config: &PrConfig,
@@ -170,7 +170,7 @@ fn quoted_sections(sections: &[String]) -> String {
 /// Record in each task's history which required sections had no content and
 /// what delivery did about it. The note renders the typed decision; readers
 /// use the decision.
-pub(super) fn record_section_gap<H: RuntimeHost + ?Sized>(
+pub(super) fn record_section_gap<H: RunLifecycle + ?Sized>(
     host: &H,
     context: &HandoffContext,
     gap: &PrSectionGap,

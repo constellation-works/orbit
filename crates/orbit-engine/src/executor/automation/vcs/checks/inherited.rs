@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment};
 
 use super::super::git::git_output;
 use super::base_tip::base_tip_check_evidence;
@@ -34,7 +34,9 @@ pub(in crate::executor::automation::vcs) enum InheritedFailure {
 /// log cites a path the candidate changed against its fork point. A stopped
 /// job with no log, or a log that cannot be read, proves nothing and is not
 /// inherited; a throttled read defers.
-pub(in crate::executor::automation::vcs) fn base_inherited_failure<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn base_inherited_failure<
+    H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace: &Path,
     head: &str,

@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::HostEnvironment;
 
 use super::super::super::super::input::input_string_field;
 use super::super::super::operations;
@@ -16,7 +16,7 @@ use super::super::answers::{PullRequestSummary, read_pr_status};
 /// opened stands either way: a failed close is reported in the output and
 /// logged, never a step failure. `Null` when there was no earlier pull
 /// request or this run reused it.
-pub(super) fn supersede_prior_pull_request<H: RuntimeHost + ?Sized>(
+pub(super) fn supersede_prior_pull_request<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &std::path::Path,
     input: &Value,
@@ -97,7 +97,7 @@ pub(super) fn supersede_prior_pull_request<H: RuntimeHost + ?Sized>(
 /// effort: a failed lookup or close is reported and logged, never a step
 /// failure.
 pub(in crate::executor::automation::vcs) fn close_earlier_task_pull_requests<
-    H: RuntimeHost + ?Sized,
+    H: HostEnvironment + ?Sized,
 >(
     host: &H,
     workspace_path: &std::path::Path,

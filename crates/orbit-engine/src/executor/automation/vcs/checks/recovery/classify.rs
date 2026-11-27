@@ -10,7 +10,9 @@ use orbit_common::OrbitError;
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{CiBaseSuspectLegacy, CiBaseSuspectRecord};
 
-use crate::context::{HandoffLandingContext, RuntimeHost};
+use crate::context::{
+    HandoffLandingContext, HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::super::operations::{CiCommitJobEvidence, CiJobEvent};
 
@@ -49,7 +51,10 @@ pub(super) struct LandingChecks<'a> {
 
 /// Classify the failed checks on `head`. `Break` is a step the landing takes
 /// before any rerun is planned; `Continue` carries the classified jobs.
-pub(super) fn classify_failed_checks<'a, H: RuntimeHost + ?Sized>(
+pub(super) fn classify_failed_checks<
+    'a,
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     checks: LandingChecks<'a>,
     recovery: &mut CheckRecovery,
@@ -406,7 +411,7 @@ pub(super) fn classify_failed_checks<'a, H: RuntimeHost + ?Sized>(
 
 /// The task history the failure ledger reads, read once per pass. An
 /// unreadable history reads as empty.
-pub(super) fn task_history<'c, H: RuntimeHost + ?Sized>(
+pub(super) fn task_history<'c, H: RunLifecycle + ?Sized>(
     history: &'c OnceCell<Vec<TaskHistoryEntry>>,
     host: &H,
     task_id: &str,

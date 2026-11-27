@@ -12,9 +12,9 @@ use serde_json::json;
 
 use super::super::{handoff::HandoffContext, operations};
 use super::{answers::PullRequestStatus, body};
-use crate::context::{PrConfig, RuntimeHost, TaskAutomationUpdate};
+use crate::context::{HostEnvironment, PrConfig, RunLifecycle, TaskAutomationUpdate};
 
-pub(super) fn recover_section_gap_draft<H: RuntimeHost + ?Sized>(
+pub(super) fn recover_section_gap_draft<H: RunLifecycle + HostEnvironment + ?Sized>(
     host: &H,
     context: &HandoffContext,
     pr: &PullRequestStatus,
@@ -93,7 +93,9 @@ pub(super) fn recover_section_gap_draft<H: RuntimeHost + ?Sized>(
 /// Identify the section repair a handed-off draft needs. The repair leaf's
 /// resumed `pr_open` rebuilds the body and uses `recover_section_gap_draft`;
 /// landing itself never invents missing content or marks a draft ready.
-pub(in crate::executor::automation::vcs) fn handed_off_section_gaps<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn handed_off_section_gaps<
+    H: RunLifecycle + HostEnvironment + ?Sized,
+>(
     host: &H,
     workspace: &std::path::Path,
     task_id: &str,
@@ -123,7 +125,7 @@ pub(in crate::executor::automation::vcs) fn handed_off_section_gaps<H: RuntimeHo
 /// 3. Only without any typed publication for the branch, the legacy reader
 ///    recognizes Orbit's missing-section note in a body published before the
 ///    typed record existed.
-pub(in crate::executor::automation::vcs) fn draft_section_gap<'a, H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn draft_section_gap<'a, H: RunLifecycle + ?Sized>(
     host: &H,
     task_ids: impl Iterator<Item = &'a str>,
     pr: &PullRequestStatus,
@@ -175,7 +177,7 @@ fn legacy_section_gap(live_body: &str, head: Option<&str>) -> Option<PrSectionGa
     })
 }
 
-fn record_draft_recovery<H: RuntimeHost + ?Sized>(
+fn record_draft_recovery<H: RunLifecycle + ?Sized>(
     host: &H,
     context: &HandoffContext,
     record: &PrDraftRecovery,

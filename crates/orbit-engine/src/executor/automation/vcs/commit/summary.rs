@@ -37,7 +37,7 @@ use orbit_types::task::{DERIVED_EXECUTION_SUMMARY_PREFIX, EXECUTION_SUMMARY_DERI
 use orbit_types::workflow::automation::{COVERAGE_ARTIFACT, CoverageEvidence, DeliveryVerdict};
 use serde_json::{Value, json};
 
-use crate::context::{RuntimeHost, TaskAutomationUpdate};
+use crate::context::{RunLifecycle, RuntimeHostProcessEnvironment, TaskAutomationUpdate};
 
 use super::super::claim::{carries_implementer_output, implementer_summary};
 use super::super::conventions::meaningful_execution_summary;
@@ -64,7 +64,7 @@ struct WorktreeChange {
 /// This run's implementation output for commit evidence. Explicit step input
 /// wins; owner pipelines otherwise checkpoint it under `implement_one`.
 /// A resumed run that skipped implementation may have no such output.
-pub(super) fn commit_implementation_input<H: RuntimeHost + ?Sized>(
+pub(super) fn commit_implementation_input<H: RunLifecycle + ?Sized>(
     host: &H,
     run_id: &str,
     input: &Value,
@@ -84,7 +84,9 @@ pub(super) fn commit_implementation_input<H: RuntimeHost + ?Sized>(
 /// from here on: unchanged when a meaningful summary is already persisted or
 /// none can be recovered, otherwise carrying the returned or derived summary
 /// just written to the record.
-pub(super) fn ensure_durable_execution_summary<H: RuntimeHost + ?Sized>(
+pub(super) fn ensure_durable_execution_summary<
+    H: RunLifecycle + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     task: Task,
     workspace_path: &Path,
@@ -165,7 +167,7 @@ pub(super) fn ensure_durable_execution_summary<H: RuntimeHost + ?Sized>(
 /// `implementation`). Otherwise the `implement_one` output this run
 /// checkpointed is read. A resumed run that skipped implementation has none,
 /// so the derivations still apply.
-fn returned_summary<H: RuntimeHost + ?Sized>(
+fn returned_summary<H: RunLifecycle + ?Sized>(
     host: &H,
     run_id: &str,
     input: &Value,

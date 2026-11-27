@@ -2,7 +2,7 @@
 
 use super::super::operations::{CiCommitJobEvidence, CiCommitJobIdentity};
 use super::super::pr_answers::PullRequestStatus;
-use crate::context::RuntimeHost;
+use crate::context::{ReviewGate, RunLifecycle};
 use orbit_common::{OrbitError, security::redaction::redact_all_and_home};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -184,7 +184,7 @@ fn bounded_ci_rerun_reason(reason: &str) -> String {
 /// back on resume to deduplicate unchanged refusals across invocations too.
 /// The ring preserves cause/head transitions; current is cleared by a later
 /// successful planner read, and always scoped to observed_head.
-fn update_ci_rerun_journal<H: RuntimeHost + ?Sized>(
+fn update_ci_rerun_journal<H: RunLifecycle + ReviewGate + ?Sized>(
     host: &H,
     tasks: &[String],
     execution: &str,
@@ -234,7 +234,9 @@ fn update_ci_rerun_journal<H: RuntimeHost + ?Sized>(
     Ok(())
 }
 
-pub(in crate::executor::automation::vcs) fn record_ci_rerun_observation<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn record_ci_rerun_observation<
+    H: RunLifecycle + ReviewGate + ?Sized,
+>(
     host: &H,
     tasks: &[String],
     execution: &str,
@@ -262,7 +264,9 @@ pub(in crate::executor::automation::vcs) fn record_ci_rerun_observation<H: Runti
 
 /// Invalidate a persisted prior-head refusal even on a resumed invocation
 /// that stops at the pin check before it can call the planner again.
-pub(in crate::executor::automation::vcs) fn observe_ci_rerun_head<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn observe_ci_rerun_head<
+    H: RunLifecycle + ReviewGate + ?Sized,
+>(
     host: &H,
     tasks: &[String],
     execution: &str,
@@ -288,7 +292,10 @@ pub(in crate::executor::automation::vcs) fn observe_ci_rerun_head<H: RuntimeHost
     }
 }
 
-pub(in crate::executor::automation::vcs) fn record_ci_rerun_outcome<H: RuntimeHost + ?Sized, T>(
+pub(in crate::executor::automation::vcs) fn record_ci_rerun_outcome<
+    H: RunLifecycle + ReviewGate + ?Sized,
+    T,
+>(
     host: &H,
     tasks: &[String],
     execution: &str,

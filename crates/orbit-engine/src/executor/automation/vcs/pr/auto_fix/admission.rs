@@ -6,7 +6,7 @@ use orbit_types::workflow::{
 };
 use serde_json::Value;
 
-use crate::context::{PrAutoFixAdmission, PrAutoFixRequest, RuntimeHost};
+use crate::context::{PrAutoFixAdmission, PrAutoFixRequest, ReviewGate, RunLifecycle};
 
 use super::super::super::super::input::input_string_field;
 use super::{ledger, verdict};
@@ -24,7 +24,7 @@ pub(in crate::executor::automation::vcs::pr) struct AutoFix {
 
 impl AutoFix {
     /// `Some` when the step's input carries `auto_fix: true`.
-    pub(in crate::executor::automation::vcs::pr) fn from_input<H: RuntimeHost + ?Sized>(
+    pub(in crate::executor::automation::vcs::pr) fn from_input<H: RunLifecycle + ?Sized>(
         host: &H,
         input: &Value,
         task_ids: &[String],
@@ -67,7 +67,7 @@ impl AutoFix {
 
 /// Ask the host to admit one repair of `head_sha`, returning the attempt
 /// the repair runs as. Every refusal is a stop with its diagnostics.
-pub(in crate::executor::automation::vcs::pr) fn admit<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::pr) fn admit<H: ReviewGate + ?Sized>(
     host: &H,
     auto_fix: &AutoFix,
     pr_number: &str,

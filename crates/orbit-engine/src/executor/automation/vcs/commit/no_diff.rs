@@ -12,7 +12,7 @@ use orbit_types::task::Task;
 use orbit_types::workflow::handoff::NoDiffEvidence;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::already::landed::{log_matches, run_in_lineage};
 use super::checkpoint::pinned_object_id;
@@ -37,7 +37,9 @@ impl Verifier for NoDiff {
         evidence_changed: "accepted no-diff evidence changed; rerun the commit verification step",
     };
 
-    fn verify_at_revision<H: RuntimeHost + ?Sized>(
+    fn verify_at_revision<
+        H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+    >(
         host: &H,
         task: &Task,
         _workspace: &Path,
@@ -80,7 +82,7 @@ impl Verifier for NoDiff {
     }
 }
 
-fn verify_checks<H: RuntimeHost + ?Sized>(
+fn verify_checks<H: RunLifecycle + ?Sized>(
     host: &H,
     task_id: &str,
     evidence: &NoDiffEvidence,

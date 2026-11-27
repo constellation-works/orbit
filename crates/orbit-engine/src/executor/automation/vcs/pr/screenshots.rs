@@ -16,7 +16,7 @@ use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact};
 use orbit_types::workflow::{EVIDENCE_REF_PREFIX, SCREENSHOT_ARTIFACT_PREFIX};
 use serde_json::{Value, json};
 
-use crate::context::{PrConfig, RuntimeHost};
+use crate::context::{HostEnvironment, PrConfig, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::git::git_run_bytes;
 use super::super::operations;
@@ -64,7 +64,9 @@ type RowKey<'a> = (&'a str, Reverse<u32>, &'a str);
 /// Publish the task's screenshots when the section applies to this delivery,
 /// and return what the body renders. Only a single-task delivery has the
 /// section; with it off, nothing is read or pushed.
-pub(super) fn publish_screenshots<H: RuntimeHost + ?Sized>(
+pub(super) fn publish_screenshots<
+    H: RunLifecycle + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     workspace_path: &Path,
     tasks: &[Task],
@@ -84,7 +86,7 @@ pub(super) fn publish_screenshots<H: RuntimeHost + ?Sized>(
 }
 
 /// Push the evidence tree and render the section around it.
-fn publish<H: RuntimeHost + ?Sized>(
+fn publish<H: HostEnvironment + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     task: &Task,

@@ -7,7 +7,7 @@ use orbit_types::task::{
     CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, Task,
 };
 
-use crate::context::RuntimeHost;
+use crate::context::RunLifecycle;
 
 use super::super::git::{git_output_exact_paths, git_output_paths};
 
@@ -378,7 +378,7 @@ pub fn validate_claim_new_paths(
 /// the first owner in bundle order. A path no selector covers goes to the
 /// task whose agent changed it, else the first task, and that task's
 /// selectors widen to cover it with `step` provenance.
-pub(in crate::executor::automation::vcs) fn attribute_candidate_paths<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn attribute_candidate_paths<H: RunLifecycle + ?Sized>(
     host: &H,
     provenance: WideningProvenance<'_>,
     candidate_paths: &BTreeSet<String>,
@@ -465,7 +465,7 @@ pub(in crate::executor::automation::vcs) fn attribute_candidate_paths<H: Runtime
 
 /// Which participating task's agent changed each path, from the widenings
 /// the tasks' histories record (the first recorded task wins).
-fn agent_changed_paths<'a, H: RuntimeHost + ?Sized>(
+fn agent_changed_paths<'a, H: RunLifecycle + ?Sized>(
     host: &H,
     tasks: &'a [Task],
 ) -> BTreeMap<String, &'a str> {

@@ -13,7 +13,9 @@ use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
 use crate::context::dispatch_contract::DispatchError;
-use crate::context::{RebaseRecoveryAttemptScope, RuntimeHost};
+use crate::context::{
+    RebaseRecoveryAttemptScope, Recovery, RunLifecycle, RuntimeHostProcessEnvironment,
+};
 
 use super::super::super::input::{input_string_field, required_input_string};
 use super::super::freshness::{
@@ -43,7 +45,9 @@ const MAX_BASE_CHASES: usize = 2;
 /// the prepared pre-rewrite HEAD, so the ordinary bounded conflict recovery
 /// can be admitted on its stopped rebase. Each chase onto a new base counts
 /// against [`MAX_BASE_CHASES`] in the host's own attempt record.
-pub(in crate::executor::automation::vcs) fn chase_advanced_base<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn chase_advanced_base<
+    H: RunLifecycle + Recovery + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
@@ -197,7 +201,7 @@ pub(in crate::executor::automation::vcs) fn chase_advanced_base<H: RuntimeHost +
 
 /// Certify a clean chase as `checkpoint`'s step's newest recovery: the
 /// prepared rewrite, landed on the prepared base, with the host's own attempt.
-fn certify_chase<H: RuntimeHost + ?Sized>(
+fn certify_chase<H: Recovery + RuntimeHostProcessEnvironment + ?Sized>(
     host: &H,
     input: &Value,
     context: &HandoffContext,

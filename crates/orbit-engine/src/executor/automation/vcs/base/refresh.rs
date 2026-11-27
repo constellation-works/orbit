@@ -4,7 +4,7 @@ use super::super::pr_answers::{
     read_pr_status_before,
 };
 use super::super::{completion_deadline::Deadline, operations};
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 use orbit_common::OrbitError;
 use orbit_types::workflow::handoff::HandoffCandidate;
 use orbit_types::workflow::{
@@ -35,7 +35,9 @@ pub(in crate::executor::automation::vcs) struct BaseRefreshOwner<'a> {
 /// Called only with captured auto-fix or accepted landing authority. The
 /// provider's status and adapter proof are re-read after reserving, before
 /// the single write. No caller-authored evidence reaches this operation.
-pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn recover<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     owner: BaseRefreshOwner<'_>,
     status: &PullRequestStatus,

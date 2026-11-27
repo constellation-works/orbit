@@ -7,7 +7,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{HostEnvironment, ReviewGate, RunLifecycle, RuntimeHostProcessEnvironment};
 
 use super::super::super::super::input::{input_string_field, required_input_string};
 use super::super::super::base::obsolescence::ensure_base_can_still_land;
@@ -24,7 +24,9 @@ use super::super::body::{
 };
 use super::{evidence, lookup, superseded, template};
 
-pub(in crate::executor::automation) fn pr_open<H: RuntimeHost + Sync + ?Sized>(
+pub(in crate::executor::automation) fn pr_open<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + Sync + ?Sized,
+>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
@@ -62,7 +64,9 @@ pub(in crate::executor::automation) fn pr_open<H: RuntimeHost + Sync + ?Sized>(
     }
 }
 
-fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
+fn open_or_reuse_pr<
+    H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvironment + ?Sized,
+>(
     host: &H,
     input: &Value,
     context: &HandoffContext,
@@ -397,7 +401,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     clippy::type_complexity,
     reason = "the decided Result over a boxed (phase, error) tuple scores above clippy's threshold"
 )]
-fn view_created_pr<H: RuntimeHost + ?Sized>(
+fn view_created_pr<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &Path,
     created: &Value,
@@ -424,7 +428,7 @@ fn view_created_pr<H: RuntimeHost + ?Sized>(
 /// Create or reuse a PR for an already-pushed recovery branch without the
 /// normal freshness/success gate. The caller owns candidate validation and
 /// must block, never promote, the associated task.
-pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: HostEnvironment + ?Sized>(
     host: &H,
     workspace_path: &std::path::Path,
     head: &str,
