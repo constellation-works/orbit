@@ -189,11 +189,12 @@ pub(super) async fn list_jobs(WsCore(core): WsCore) -> Response {
     }
 }
 
-/// Jobs whose current failure streak has reached the fixed
-/// configured failure-streak threshold, with that threshold. The dashboard reads this for the catalogue badges and
-/// the Jobs rail count. Only manual-runnable jobs — the jobs the Catalogue
-/// shows — are counted, so the badge stays consistent with what the operator
-/// can see there; delivery and other non-runnable jobs' streaks do not count.
+/// Jobs whose current failure streak has reached the fixed failure-streak
+/// threshold of five consecutive failures, with that threshold. The dashboard
+/// reads this for the catalogue badges and the Jobs rail count. Only
+/// manual-runnable jobs — the jobs the Catalogue shows — are counted, so the
+/// badge stays consistent with what the operator can see there; delivery and
+/// other non-runnable jobs' streaks do not count.
 /// Display only.
 pub(super) async fn list_job_failure_streaks(WsCore(core): WsCore) -> Response {
     match blocking("list job failure streaks", move || {
