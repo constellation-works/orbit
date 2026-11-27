@@ -260,7 +260,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     // A live leaf may carry a task that has since closed; its claim and its
     // light slot still count.
     snapshot
-        .include_tasks(runtime, &claimed)
+        .include_tasks(runtime, &claimed, false)
         .map_err(|error| PassError::store(action, "read claimed tasks", error))?;
     // [ORB-22892] A leaf of this drain that failed at job load (no activity
     // step started, which the audit trail records) holds its task for the

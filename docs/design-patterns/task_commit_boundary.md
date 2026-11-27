@@ -58,6 +58,17 @@ journal is its only writer. Queued behind owner admissions that were themselves 
 long dashboard reads, it once made one PR completion wait 62.5 s, including a 30 s acquisition
 timeout. A changed journal is still written through ordinary sections.
 
+Display reads take no section at all. The dashboard board and task detail, readiness (and the
+fleet drains rows built from it), Jobs title labels and resource profiles' `no-diff-expected`
+lookup read through the `TaskV2Store::observe_*` methods (`boundary/v2/observation.rs`). Those
+answer from the settled snapshot: the generated index validated without persisting proofs, settled
+envelopes and bundles, and registry projections. They never settle a pending commit or repair the
+index, so a held writer cannot stall them. A bundle a writer holds in flight reads as absent,
+and a stale index row is read from its envelope. A task detail or board page that the snapshot
+cannot serve, such as a bundle whose interrupted commit awaits replay, falls back to the
+coordinated read, which settles it. Admission and task mutation keep their coordinated reads.
+Nothing observed may feed a decision that admits or writes.
+
 A pass that makes many task reads (a search, the config view's review section) enters one shared
 section around all of them with `TaskV2Store::in_read_section`. Its nested reads re-enter
 that section, so the pass queues, takes the locks and writes its holder record once instead of

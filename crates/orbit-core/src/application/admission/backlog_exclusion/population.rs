@@ -19,10 +19,17 @@ impl BacklogSnapshot {
     /// status: a live leaf can still carry a task that has since closed, and
     /// an explicit readiness request may name one. An id no task in this
     /// workspace has, malformed ones included, stays absent.
+    ///
+    /// `observed` selects the informational read for an observational
+    /// snapshot: the envelopes come from the settled snapshot, with no commit
+    /// recovery, so a readiness read never waits on a held task writer. A task
+    /// whose bundle a writer holds in flight stays absent. Admission reads pass
+    /// `false`.
     pub(crate) fn include_tasks<'a>(
         &mut self,
         runtime: &OrbitRuntime,
         ids: impl IntoIterator<Item = &'a String>,
+        observed: bool,
     ) -> Result<(), OrbitError> {
         let missing = ids
             .into_iter()
@@ -32,7 +39,7 @@ impl BacklogSnapshot {
         if missing.is_empty() || !runtime.stored().task().reads_visible() {
             return Ok(());
         }
-        let envelopes = runtime.stores().tasks().task_envelopes_for_ids(&missing)?;
+        let envelopes = envelopes_for_ids(runtime.stores().tasks(), &missing, observed)?;
         self.task_lookup.extend(into_lookup(envelopes));
         Ok(())
     }
@@ -55,8 +62,8 @@ impl BacklogSnapshot {
 /// persisted freshness proofs. Readiness — a read-only projection that
 /// admits nothing — observes; the drain's own snapshot keeps the
 /// coordinated read its admission decisions require. The ancestor loads
-/// (`include_ancestors`) read envelopes by id and settle a pending commit
-/// first in either mode.
+/// (`include_ancestors`) read envelopes by id in the same mode: only the
+/// coordinated one settles a pending commit first.
 pub(super) fn admission_population(
     store: &TaskV2Store,
     observed: bool,
@@ -107,7 +114,7 @@ pub(super) fn admission_population(
         frontier = next;
     }
 
-    include_ancestors(store, &mut lookup)?;
+    include_ancestors(store, &mut lookup, observed)?;
     Ok(lookup)
 }
 
@@ -115,6 +122,7 @@ pub(super) fn admission_population(
 fn include_ancestors(
     store: &TaskV2Store,
     lookup: &mut BTreeMap<String, Task>,
+    observed: bool,
 ) -> Result<(), OrbitError> {
     let mut requested = BTreeSet::new();
     let mut loaded = lookup.keys().cloned().collect::<Vec<_>>();
@@ -129,7 +137,7 @@ fn include_ancestors(
         if missing.is_empty() {
             break;
         }
-        let parents = into_lookup(store.task_envelopes_for_ids(&missing)?);
+        let parents = into_lookup(envelopes_for_ids(store, &missing, observed)?);
         loaded = parents.keys().cloned().collect();
         lookup.extend(parents);
     }
@@ -148,6 +156,20 @@ fn candidates(
         store.observe_task_candidates(filter, usize::MAX)
     } else {
         store.task_candidates(filter, usize::MAX)
+    }
+}
+
+/// Envelopes of `ids` by keyed read, through the coordinated or the
+/// observational store read (see [`admission_population`]).
+fn envelopes_for_ids(
+    store: &TaskV2Store,
+    ids: &BTreeSet<String>,
+    observed: bool,
+) -> Result<Vec<orbit_types::task::TaskEnvelopeV2>, OrbitError> {
+    if observed {
+        store.observe_task_envelopes_for_ids(ids)
+    } else {
+        store.task_envelopes_for_ids(ids)
     }
 }
 

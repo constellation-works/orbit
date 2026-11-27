@@ -171,7 +171,7 @@ fn list_backlog_tasks_impl(
             }
         })?;
         snapshot
-            .include_tasks(runtime, &live_tasks)
+            .include_tasks(runtime, &live_tasks, false)
             .map_err(|error| DispatchError::DeterministicActionFailed {
                 action: action.to_string(),
                 message: format!("read live leaf tasks: {error}"),

@@ -9,6 +9,16 @@ use crate::contract::{
 use orbit_types::task::satisfy_completed_archived_dependencies;
 
 impl TaskV2Store {
+    /// How many candidates a page selects: all of them when a residual
+    /// filter still decides membership, else the page size.
+    pub(super) fn selection_limit(limit: usize, residual: TaskResidualFilter<'_>) -> usize {
+        if residual.is_some() {
+            usize::MAX
+        } else {
+            limit
+        }
+    }
+
     pub(crate) fn task_candidates_bare(
         &self,
         filter: &TaskListFilter,
@@ -104,20 +114,204 @@ impl TaskV2Store {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<TaskCandidates, OrbitError> {
+        let usable = self.observe_index_tolerating_stale()?;
+        self.observed_candidates(filter, limit, usable.as_ref(), &mut None)
+    }
+
+    /// One page of [`Self::observe_task_candidates`] over a freshness answer
+    /// the caller already took, so several pages of one request share it.
+    /// `scanned` holds the settled envelopes once a page without a usable
+    /// index has listed them, for the request's later pages.
+    pub(super) fn observed_candidates(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+        usable: Option<&IndexUsable>,
+        scanned: &mut Option<Vec<TaskEnvelopeV2>>,
+    ) -> Result<TaskCandidates, OrbitError> {
         let filter = filter.normalized();
-        if let Some(usable) = self.observe_index_tolerating_stale()? {
+        if let Some(usable) = usable {
             if usable.stale.is_empty() {
-                return self.indexed_candidates(&filter, limit, usable.unsettled);
+                return self.indexed_candidates(&filter, limit, usable.unsettled.clone());
             }
-            return self.indexed_candidates_with_stale(&filter, limit, usable);
+            return self.indexed_candidates_with_stale(
+                &filter,
+                limit,
+                IndexUsable {
+                    snapshot: Arc::clone(&usable.snapshot),
+                    unsettled: usable.unsettled.clone(),
+                    stale: usable.stale.clone(),
+                },
+            );
         }
-        let envelopes = self
-            .bundle_store
-            .list_bundles()?
-            .into_iter()
-            .map(|bundle| bundle.envelope)
-            .collect();
+        let envelopes = match scanned {
+            Some(envelopes) => envelopes.clone(),
+            None => {
+                let envelopes = self
+                    .bundle_store
+                    .list_bundles()?
+                    .into_iter()
+                    .map(|bundle| bundle.envelope)
+                    .collect::<Vec<_>>();
+                scanned.insert(envelopes).clone()
+            }
+        };
         Ok(select_candidates(envelopes, &filter, limit))
+    }
+
+    /// Hydrate the page `candidates` select for the normalized `filter`.
+    pub(super) fn page_from_candidates(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+        residual: TaskResidualFilter<'_>,
+        hydration: TaskListHydration,
+        candidates: TaskCandidates,
+    ) -> Result<TaskPage, OrbitError> {
+        let status_by_id = self.listing_status_index(&candidates.items)?;
+        let mut selected = candidates.items;
+        if let Some(matches) = residual {
+            // The residual is decidable from envelope metadata (see
+            // [`TaskResidualFilter`]), so selection applies it to every
+            // candidate here and only the survivors that fit the page pay for
+            // a bundle: a lock, seven file reads and their parses. Each
+            // hydrated task is checked again below, which is the authority.
+            selected.retain(|candidate| matches(&Self::metadata_task(candidate), &status_by_id));
+        }
+        let residual_total_without_cursor = selected.len();
+        if residual.is_some() && filter.scan_before.is_some() {
+            selected.retain(|candidate| filter.matches_cursor(candidate));
+        }
+        let selected_total = selected.len();
+        let mut items = Vec::with_capacity(selected_total.min(limit));
+        for candidate in selected {
+            if items.len() >= limit {
+                break;
+            }
+            if hydration == TaskListHydration::EnvelopeOnly {
+                // Compact page: the candidate envelope is the whole row.
+                // No bundle read, so no body documents or sidecars, and a
+                // task a concurrent writer holds still lists from the
+                // envelope selection already validated.
+                let task = Self::metadata_task(&candidate);
+                if residual.is_none_or(|matches| matches(&task, &status_by_id)) {
+                    items.push(TaskRow {
+                        task,
+                        comments: Vec::new(),
+                        history: Vec::new(),
+                        artifacts: Vec::new(),
+                    });
+                }
+                continue;
+            }
+            // A settled bundle with a provable freshness stamp may serve
+            // its remembered row; anything else is read exactly as before.
+            // The stamp is taken before any read below, so it labels that
+            // read or something older, never something newer.
+            let stamp = match self.bundle_store.settled_bundle_dir(&candidate.id) {
+                Ok(Some(bundle_dir)) => {
+                    super::bundle_stamp::task_bundle_freshness_stamp(&bundle_dir)
+                }
+                _ => None,
+            };
+            if let Some(stamp) = &stamp
+                && let Some((envelope, row)) = self.row_cache.cached_row(&candidate.id, stamp)
+            {
+                if envelope != candidate {
+                    // An update raced selection. One strict scan re-evaluates
+                    // filters before the limit; no stale row escapes.
+                    return self.scan_task_page(filter, limit, residual);
+                }
+                if residual.is_none_or(|matches| matches(&row.task, &status_by_id)) {
+                    items.push(row);
+                }
+                continue;
+            }
+            let Some(bundle) = self.bundle_store.read_bundle_if_settled(&candidate.id)? else {
+                self.row_cache.forget(&candidate.id);
+                continue;
+            };
+            if bundle.envelope != candidate {
+                // An update raced selection. One strict scan re-evaluates filters
+                // before the limit; no retry loop or stale selected row escapes.
+                return self.scan_task_page(filter, limit, residual);
+            }
+            let envelope = bundle.envelope.clone();
+            let row = self.row_from_bundle(bundle)?;
+            if let Some(stamp) = stamp {
+                self.row_cache
+                    .remember(&candidate.id, stamp, envelope, row.clone());
+            }
+            if residual.is_none_or(|matches| matches(&row.task, &status_by_id)) {
+                items.push(row);
+            }
+        }
+        let total = if residual.is_some() {
+            selected_total
+        } else {
+            candidates.total
+        };
+        let total_without_cursor = if residual.is_some() {
+            residual_total_without_cursor
+        } else {
+            candidates.total_without_cursor
+        };
+        items.truncate(limit);
+        Ok(TaskPage {
+            items,
+            total,
+            total_without_cursor,
+            status_by_id,
+        })
+    }
+
+    /// The listed row of `id` from its settled bundle, served from the
+    /// freshness-stamped row cache when the stamp proves it current. Listed
+    /// rows serve observational listings: a readiness snapshot reads one per
+    /// backlog task on every request. The stamp is taken before the read it
+    /// labels, and a bundle that is not settled is never served from the
+    /// cache. Settles nothing; callers decide whether to recover first.
+    pub(super) fn listed_row_settled(&self, id: &str) -> Result<Option<TaskRow>, OrbitError> {
+        let stamp = match self.bundle_store.settled_bundle_dir(id) {
+            Ok(Some(bundle_dir)) => super::bundle_stamp::task_bundle_freshness_stamp(&bundle_dir),
+            _ => None,
+        };
+        if let Some(stamp) = &stamp
+            && let Some((_, row)) = self.row_cache.cached_row(id, stamp)
+        {
+            return Ok(Some(row));
+        }
+        let Some(bundle) = self.bundle_store.read_bundle_if_settled(id)? else {
+            self.row_cache.forget(id);
+            return Ok(None);
+        };
+        let envelope = bundle.envelope.clone();
+        let row = self.row_from_bundle(bundle)?;
+        if let Some(stamp) = stamp {
+            self.row_cache.remember(id, stamp, envelope, row.clone());
+        }
+        Ok(Some(row))
+    }
+
+    /// [`Self::task_envelopes_for_ids_bare`] without settling a pending
+    /// commit first: an id whose bundle is in flight is absent.
+    pub(super) fn settled_envelopes_for_ids(
+        &self,
+        ids: &BTreeSet<String>,
+    ) -> Result<Vec<TaskEnvelopeV2>, OrbitError> {
+        let mut envelopes = Vec::with_capacity(ids.len());
+        for id in ids {
+            let _span = orbit_common::tracing::trace_span!(
+                target: "orbit.store.task_query",
+                "task_metadata_read",
+                task_id = %id,
+            )
+            .entered();
+            if let Some(envelope) = self.bundle_store.read_envelope_if_settled(id)? {
+                envelopes.push(envelope);
+            }
+        }
+        Ok(envelopes)
     }
 
     /// Selection over a validated index. SQL answers every predicate it
@@ -405,122 +599,6 @@ impl TaskV2Store {
             .collect()
     }
 
-    /// How many candidates a page selects: all of them when a residual
-    /// filter still decides membership, else the page size.
-    fn selection_limit(limit: usize, residual: TaskResidualFilter<'_>) -> usize {
-        if residual.is_some() {
-            usize::MAX
-        } else {
-            limit
-        }
-    }
-
-    /// Hydrate the page `candidates` select for the normalized `filter`.
-    fn page_from_candidates(
-        &self,
-        filter: &TaskListFilter,
-        limit: usize,
-        residual: TaskResidualFilter<'_>,
-        hydration: TaskListHydration,
-        candidates: TaskCandidates,
-    ) -> Result<TaskPage, OrbitError> {
-        let status_by_id = self.listing_status_index(&candidates.items)?;
-        let mut selected = candidates.items;
-        if let Some(matches) = residual {
-            // The residual is decidable from envelope metadata (see
-            // [`TaskResidualFilter`]), so selection applies it to every
-            // candidate here and only the survivors that fit the page pay for
-            // a bundle: a lock, seven file reads and their parses. Each
-            // hydrated task is checked again below, which is the authority.
-            selected.retain(|candidate| matches(&Self::metadata_task(candidate), &status_by_id));
-        }
-        let residual_total_without_cursor = selected.len();
-        if residual.is_some() && filter.scan_before.is_some() {
-            selected.retain(|candidate| filter.matches_cursor(candidate));
-        }
-        let selected_total = selected.len();
-        let mut items = Vec::with_capacity(selected_total.min(limit));
-        for candidate in selected {
-            if items.len() >= limit {
-                break;
-            }
-            if hydration == TaskListHydration::EnvelopeOnly {
-                // Compact page: the candidate envelope is the whole row.
-                // No bundle read, so no body documents or sidecars, and a
-                // task a concurrent writer holds still lists from the
-                // envelope selection already validated.
-                let task = Self::metadata_task(&candidate);
-                if residual.is_none_or(|matches| matches(&task, &status_by_id)) {
-                    items.push(TaskRow {
-                        task,
-                        comments: Vec::new(),
-                        history: Vec::new(),
-                        artifacts: Vec::new(),
-                    });
-                }
-                continue;
-            }
-            // A settled bundle with a provable freshness stamp may serve
-            // its remembered row; anything else is read exactly as before.
-            // The stamp is taken before any read below, so it labels that
-            // read or something older, never something newer.
-            let stamp = match self.bundle_store.settled_bundle_dir(&candidate.id) {
-                Ok(Some(bundle_dir)) => {
-                    super::bundle_stamp::task_bundle_freshness_stamp(&bundle_dir)
-                }
-                _ => None,
-            };
-            if let Some(stamp) = &stamp
-                && let Some((envelope, row)) = self.row_cache.cached_row(&candidate.id, stamp)
-            {
-                if envelope != candidate {
-                    // An update raced selection. One strict scan re-evaluates
-                    // filters before the limit; no stale row escapes.
-                    return self.scan_task_page(filter, limit, residual);
-                }
-                if residual.is_none_or(|matches| matches(&row.task, &status_by_id)) {
-                    items.push(row);
-                }
-                continue;
-            }
-            let Some(bundle) = self.bundle_store.read_bundle_if_settled(&candidate.id)? else {
-                self.row_cache.forget(&candidate.id);
-                continue;
-            };
-            if bundle.envelope != candidate {
-                // An update raced selection. One strict scan re-evaluates filters
-                // before the limit; no retry loop or stale selected row escapes.
-                return self.scan_task_page(filter, limit, residual);
-            }
-            let envelope = bundle.envelope.clone();
-            let row = self.row_from_bundle(bundle)?;
-            if let Some(stamp) = stamp {
-                self.row_cache
-                    .remember(&candidate.id, stamp, envelope, row.clone());
-            }
-            if residual.is_none_or(|matches| matches(&row.task, &status_by_id)) {
-                items.push(row);
-            }
-        }
-        let total = if residual.is_some() {
-            selected_total
-        } else {
-            candidates.total
-        };
-        let total_without_cursor = if residual.is_some() {
-            residual_total_without_cursor
-        } else {
-            candidates.total_without_cursor
-        };
-        items.truncate(limit);
-        Ok(TaskPage {
-            items,
-            total,
-            total_without_cursor,
-            status_by_id,
-        })
-    }
-
     fn scan_task_page(
         &self,
         filter: &TaskListFilter,
@@ -628,32 +706,7 @@ impl TaskV2Store {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
         if list_read {
-            // Listed rows serve observational listings. A readiness snapshot
-            // reads one per backlog task on every request, so this path
-            // reuses the freshness-stamped row cache a hydrated page uses.
-            // The stamp is taken before the read it labels, and a bundle
-            // that is not settled is never served from the cache.
-            let stamp = match self.bundle_store.settled_bundle_dir(id) {
-                Ok(Some(bundle_dir)) => {
-                    super::bundle_stamp::task_bundle_freshness_stamp(&bundle_dir)
-                }
-                _ => None,
-            };
-            if let Some(stamp) = &stamp
-                && let Some((_, row)) = self.row_cache.cached_row(id, stamp)
-            {
-                return Ok(Some(row));
-            }
-            let Some(bundle) = self.bundle_store.read_bundle_if_settled(id)? else {
-                self.row_cache.forget(id);
-                return Ok(None);
-            };
-            let envelope = bundle.envelope.clone();
-            let row = self.row_from_bundle(bundle)?;
-            if let Some(stamp) = stamp {
-                self.row_cache.remember(id, stamp, envelope, row.clone());
-            }
-            return Ok(Some(row));
+            return self.listed_row_settled(id);
         }
         let bundle = match self.bundle_store.read_bundle(id) {
             Ok(bundle) => Some(bundle),
@@ -677,19 +730,7 @@ impl TaskV2Store {
         ids: &BTreeSet<String>,
     ) -> Result<Vec<TaskEnvelopeV2>, OrbitError> {
         self.ensure_recovered()?;
-        let mut envelopes = Vec::with_capacity(ids.len());
-        for id in ids {
-            let _span = orbit_common::tracing::trace_span!(
-                target: "orbit.store.task_query",
-                "task_metadata_read",
-                task_id = %id,
-            )
-            .entered();
-            if let Some(envelope) = self.bundle_store.read_envelope_if_settled(id)? {
-                envelopes.push(envelope);
-            }
-        }
-        Ok(envelopes)
+        self.settled_envelopes_for_ids(ids)
     }
 
     pub(crate) fn row_from_bundle(&self, mut bundle: TaskBundleV2) -> Result<TaskRow, OrbitError> {

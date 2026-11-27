@@ -130,6 +130,74 @@ impl OrbitRuntime {
         )
     }
 
+    /// [`Self::query_task_rows`] for a display surface: candidates come from
+    /// the settled snapshot ([`Self::observe_task_candidates`]) and rows from
+    /// settled bundles, with no commit-boundary section, recovery or index
+    /// repair, so a board poll never waits on a held task writer. A page the
+    /// snapshot cannot serve (a bundle whose interrupted commit awaits
+    /// replay) takes the coordinated read, which settles it. Never an
+    /// admission or mutation precondition.
+    pub fn observe_task_rows(&self, query: &TaskListQuery) -> Result<TaskPage, OrbitError> {
+        if !self.stored().task().reads_visible() {
+            return Ok(TaskPage::default());
+        }
+        let os_readout = query
+            .runs_on
+            .map(|_| super::TaskOsReadout::new(self))
+            .transpose()?;
+        let observed = with_task_residual(
+            self,
+            query,
+            os_readout.as_ref(),
+            |store, residual, hydration| {
+                store.observe_task_rows(&query.filter, query.limit, residual, hydration)
+            },
+        );
+        match observed {
+            Ok(page) => Ok(page),
+            Err(error) => {
+                tracing::debug!(%error, "observed task page unavailable; reading it coordinated");
+                query_task_store(self, query, os_readout.as_ref())
+            }
+        }
+    }
+
+    /// [`Self::query_task_row_pages`] under the observational terms of
+    /// [`Self::observe_task_rows`], falling back to the coordinated batch
+    /// the same way.
+    pub fn observe_task_row_pages(
+        &self,
+        query: &TaskListQuery,
+        pages: &[(TaskListFilter, usize)],
+    ) -> Result<Vec<TaskPage>, OrbitError> {
+        if pages.is_empty() {
+            return Ok(Vec::new());
+        }
+        if !self.stored().task().reads_visible() {
+            return Ok(pages.iter().map(|_| TaskPage::default()).collect());
+        }
+        let os_readout = query
+            .runs_on
+            .map(|_| super::TaskOsReadout::new(self))
+            .transpose()?;
+        let observed = with_task_residual(
+            self,
+            query,
+            os_readout.as_ref(),
+            |store, residual, hydration| store.observe_task_row_pages(pages, residual, hydration),
+        );
+        match observed {
+            Ok(pages) => Ok(pages),
+            Err(error) => {
+                tracing::debug!(
+                    %error,
+                    "observed task pages unavailable; reading them coordinated"
+                );
+                self.query_task_row_pages(query, pages)
+            }
+        }
+    }
+
     /// Query every lifecycle status with active work first, preserving newest
     /// first ordering within each status bucket. One candidate scan serves
     /// both buckets: the store partitions the ordered candidates so the page
@@ -290,11 +358,41 @@ impl OrbitRuntime {
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))
     }
 
+    /// [`Self::get_task_row`] for a display surface: the same strict bundle
+    /// read, with no commit-boundary section or recovery. A task the
+    /// snapshot cannot serve (in flight, or awaiting replay of an
+    /// interrupted commit) takes the coordinated read, which settles it.
+    pub fn observe_task_row(&self, id: &str) -> Result<TaskRow, OrbitError> {
+        match self.stores().tasks().observe_task_row(id) {
+            Ok(Some(row)) => Ok(row),
+            Ok(None) => Err(OrbitError::not_found(NotFoundKind::Task, id.to_string())),
+            Err(error) => {
+                tracing::debug!(
+                    task_id = %id,
+                    %error,
+                    "observed task row unavailable; reading it coordinated"
+                );
+                self.get_task_row(id)
+            }
+        }
+    }
+
     pub fn get_listed_task_row(&self, id: &str) -> Result<Option<TaskRow>, OrbitError> {
         if !self.stored().task().reads_visible() {
             return Ok(None);
         }
         self.stores().tasks().get_task_row(id, true)
+    }
+
+    /// [`Self::get_listed_task_row`] from the settled snapshot: no
+    /// commit-boundary section or recovery, so an observational caller never
+    /// waits on a held task writer. `None` also when a writer has the
+    /// bundle in flight. Never an admission or mutation precondition.
+    pub fn observe_listed_task_row(&self, id: &str) -> Result<Option<TaskRow>, OrbitError> {
+        if !self.stored().task().reads_visible() {
+            return Ok(None);
+        }
+        self.stores().tasks().observe_listed_task_row(id)
     }
 
     /// [`Self::get_listed_task_row`] through this process's task access: a

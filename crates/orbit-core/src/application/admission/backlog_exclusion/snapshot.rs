@@ -173,7 +173,12 @@ pub(super) fn backlog_snapshot_in_mode(
             runtime.satisfy_completed_archived_dependencies(&mut status_by_id, backlog_tasks);
             status_by_id
         }
-        _ => runtime
+        BacklogReadMode::Observation { .. } => runtime
+            .observe_dependency_status_index(backlog_tasks)
+            .map_err(|error| {
+                PassError::store(action, "load global task status projection", error)
+            })?,
+        BacklogReadMode::Admission { .. } => runtime
             .dependency_status_index(backlog_tasks)
             .map_err(|error| {
                 PassError::store(action, "load global task status projection", error)
