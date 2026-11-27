@@ -15,7 +15,7 @@ use orbit_registry::workspace_registry::{
 use orbit_registry::{MachineIdentity, inspect_machine_identity};
 use orbit_types::workspace::WorkspaceCheckoutRole;
 
-use super::dependents::host_dependents;
+use super::dependent::host_dependents;
 use super::{
     HostDetail, HostList, HostRow, HostWorkspace, Ports, in_parallel, local_binary_version,
     local_protocol_fingerprint,

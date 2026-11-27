@@ -19,6 +19,8 @@ use orbit_registry::hosts::HostEntry;
 use orbit_types::workflow::JobRunState;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 
+use crate::registry_runtime::RegisteredRuntimeFactory;
+
 pub use probe::local_host_facts;
 pub use route::{
     HostWorkspaceRoute, TaskIdRoute, host_ssh_target, local_mirror_workspace, pull_selector,
@@ -68,7 +70,7 @@ impl PullDrains for RegisteredPullDrains {
         workspace: &Workspace,
         checkout: &WorkspaceCheckout,
     ) -> Vec<PullDrainDependent> {
-        let runtime = match crate::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout_read_only(
+        let runtime = match RegisteredRuntimeFactory::open_registered_checkout_read_only(
             global_root,
             workspace,
             checkout,

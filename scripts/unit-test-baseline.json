@@ -67,8 +67,6 @@
     },
     "orbit-cmd": {
       "test_function_paths": [
-        "browser_kit/tests/libraries.rs::fonts_only_no_install_path_names_the_font_gap_and_a_fix",
-        "browser_kit/tests/libraries.rs::resolved_libraries_without_a_font_gap_stay_resolved",
         "update/tests/converge.rs::probe_timeouts_tear_down_descendants_before_and_after_parent_exit",
         "update/tests/flow.rs::http_rejects_declared_and_streamed_oversized_bodies",
         "update/tests/flow.rs::installed_verification_failures_preserve_both_causes_when_restore_fails",
@@ -206,6 +204,8 @@
         "app/doctor/tests/worker_token.rs::clock_file_is_ready_only_when_it_holds_a_credential_the_workspace_admits",
         "app/doctor/tests/worker_token.rs::config_load_failure_is_reported_instead_of_no_routed_claude_crew",
         "app/doctor/tests/worker_token.rs::warns_for_each_place_the_worker_token_can_be_lost_and_is_ok_when_none_is",
+        "app/host/browser_kit/tests/libraries.rs::fonts_only_no_install_path_names_the_font_gap_and_a_fix",
+        "app/host/browser_kit/tests/libraries.rs::resolved_libraries_without_a_font_gap_stay_resolved",
         "application/agents/tests/api.rs::attempt_without_a_run_cannot_borrow_a_later_runs_effort",
         "application/agents/tests/api.rs::crew_label_effort_counts_when_no_effort_is_recorded",
         "application/agents/tests/api.rs::implementer_rows_group_by_model_and_recorded_effort",
