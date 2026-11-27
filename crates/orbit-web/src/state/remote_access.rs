@@ -404,11 +404,37 @@ impl Activity {
                 let Some(oldest) = oldest else {
                     return;
                 };
-                if let Some(evicted) = self.refusals.remove(&oldest) {
+                // If this reason has no aggregate yet, fold two login keys
+                // into one: one slot for the aggregate and one for the new
+                // reason. Only unlisted logins have login-specific keys.
+                let aggregate = (oldest.0, None);
+                if oldest.0 != key.0 && !self.refusals.contains_key(&aggregate) {
+                    let second = self
+                        .refusals
+                        .iter()
+                        .filter(|(candidate, _)| {
+                            candidate.0 == oldest.0
+                                && candidate.1.is_some()
+                                && **candidate != oldest
+                        })
+                        .min_by_key(|(_, entry)| entry.last_at)
+                        .map(|(candidate, _)| candidate.clone());
+                    let Some(second) = second else {
+                        return;
+                    };
+                    if let Some(mut folded) = self.refusals.remove(&second) {
+                        if let Some(first) = self.refusals.remove(&oldest) {
+                            merge_buckets(&mut folded.counts, &first.counts, REFUSAL_WINDOW, at);
+                            folded.last_at = folded.last_at.max(first.last_at);
+                        }
+                        self.refusals.insert(aggregate, folded);
+                    }
+                } else if let Some(evicted) = self.refusals.remove(&oldest) {
                     if oldest.0 == key.0 {
                         merged_counts = Some(evicted.counts);
                     } else if let Some(overflow) = self.refusals.get_mut(&(oldest.0, None)) {
                         merge_buckets(&mut overflow.counts, &evicted.counts, REFUSAL_WINDOW, at);
+                        overflow.last_at = overflow.last_at.max(evicted.last_at);
                     }
                 }
             }
