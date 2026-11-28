@@ -6,7 +6,7 @@ updated_date: 2026-11-28
 last_validated: 2026-11-28
 status: Draft
 stage: shipped
-next: "Add the hold record and the optional `hold` input [ORB-29663]"
+next: "Add the hold record and the optional `hold` input [ORB-29656]"
 feature: operator-attention
 doc_role: overview
 type: design
@@ -84,7 +84,7 @@ All four slices ([ORB-21168], [ORB-21169], [ORB-21170], [ORB-21171]) have landed
 
 One slice is approved and not built: a backlog task that only the `no-drain` tag keeps out of
 a drain becomes a `held_ready` item, and the tag carries a stated reason
-([task-hold](./specs/task-hold.md), [ORB-29623]). [ORB-29663] builds the hold record first.
+([task-hold](./specs/task-hold.md), [ORB-29623]). [ORB-29656] builds the hold record first.
 The kind list above does not include it until it ships.
 
 ## Task References
@@ -102,6 +102,6 @@ The kind list above does not include it until it ships.
 - [ORB-21127] — carried a pilot warning in the motivating example
 - [ORB-20363] — carried a pilot warning and contract finding in the motivating example
 - [ORB-29623] — designed the hold record and the `held_ready` kind
-- [ORB-29663] — builds the hold record and the optional `hold` input
+- [ORB-29656] — builds the hold record and the optional `hold` input
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

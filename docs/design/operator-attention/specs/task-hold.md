@@ -8,7 +8,7 @@ status: Draft
 feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, standing-drain, distributed-drain]
-related_artifacts: [ORB-29623, ORB-29656, ORB-29657, ORB-29658, ORB-29663]
+related_artifacts: [ORB-29623, ORB-29656, ORB-29657, ORB-29658, ORB-29662]
 last_updated: 2026-11-28
 ---
 
@@ -188,7 +188,7 @@ The refusal ships last, on its own. An Orbit that predates the `hold` input reje
 unknown field, and an Orbit with the refusal rejects the tag without it. Shipped together they
 would leave a caller no write that works on both versions.
 
-1. **The record, with an optional input** ([ORB-29663]). The `hold` field, the `hold` input on
+1. **The record, with an optional input** ([ORB-29656]). The `hold` field, the `hold` input on
    add and update, the CLI flags, the history events, the readouts in `orbit.task.show`,
    `orbit.task.list`, `orbit task show` and readiness, and the skill and config text that
    tells a writer to pass a hold. A tag added without a hold is still accepted and reads as
@@ -197,7 +197,7 @@ would leave a caller no write that works on both versions.
    `next`, and the skill's attention reference.
 3. **The dashboard** ([ORB-29658]). The hold on a task's detail, and the two texts in the tag
    control.
-4. **The refusal** ([ORB-29656]). Turned on once every host runs an Orbit that accepts the
+4. **The refusal** ([ORB-29662]). Turned on once every host runs an Orbit that accepts the
    input and the known writers of the tag pass a hold: the shipped skills from phase 1, the
    dashboard from phase 3, and the adopter's own skills. This is the breaking change.
 
@@ -224,9 +224,9 @@ would leave a caller no write that works on both versions.
 ## Task References
 
 - [ORB-29623] — designed the hold record, the refusal and the `held_ready` kind.
-- [ORB-29663] — builds the hold record and the optional `hold` input.
+- [ORB-29656] — builds the hold record and the optional `hold` input.
 - [ORB-29657] — builds the `held_ready` kind.
 - [ORB-29658] — shows a hold on the dashboard and asks for it in the tag control.
-- [ORB-29656] — turns on the refusal of `no-drain` without a hold.
+- [ORB-29662] — turns on the refusal of `no-drain` without a hold.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
