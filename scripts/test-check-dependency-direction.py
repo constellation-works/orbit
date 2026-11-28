@@ -718,6 +718,22 @@ class RelativeImportTests(unittest.TestCase):
                 self.check_files({"app/codebase/risk.rs": codebase, relative: source},
                                  rejected=True, base=core_src)
 
+    def test_codebase_parent_module_aliases_are_rejected(self):
+        core = self.root / "crates/orbit-core/src"
+        for module in ("backlog_forecast", "review", "task"):
+            for source in (
+                "use crate::app as apps;\nuse apps::codebase::TaskRiskinessModel;\n",
+                "use crate::{app as apps};\nuse apps::{codebase::TaskRiskinessModel};\n",
+                "use crate::app as apps;\nuse apps as renamed;\nuse renamed::codebase::TaskRiskinessModel;\n",
+            ):
+                with self.subTest(module=module, source=source):
+                    self.check_files({f"application/{module}/probe.rs": source},
+                                     rejected=True, base=core)
+        self.check_files({
+            "application/backlog_forecast/probe.rs":
+                "use crate::app as apps;\nuse apps::port::Other;\n",
+        }, rejected=False, base=core)
+
     def test_review_cannot_name_codebase(self):
         # Selective-review retirement removed this edge, but the guard still
         # accepted its reintroduction. Exercise each detector independently.
