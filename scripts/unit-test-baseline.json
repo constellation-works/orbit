@@ -348,6 +348,7 @@
         "application/pull_drain/tests/drain.rs::pull_lost_request_and_binding_responses_recover_the_same_leaf",
         "application/review/gate/tests/admit.rs::before_pr_is_captured_at_submission_and_an_in_flight_run_keeps_it",
         "application/review/gate/tests/judgement.rs::system_writes_cannot_borrow_the_operator_for_history",
+        "application/review/tests/scenario_row.rs::unclosed_attribute_at_target_end_does_not_panic_and_earlier_declarations_still_index",
         "application/task/blocked_recovery/tests/backstop.rs::a_human_field_edit_after_the_block_is_never_overridden",
         "application/task/blocked_recovery/tests/backstop.rs::a_legacy_unattributed_field_edit_after_the_block_is_never_overridden",
         "application/task/blocked_recovery/tests/backstop.rs::a_recovery_applies_one_decision_recorded_with_its_run_id",

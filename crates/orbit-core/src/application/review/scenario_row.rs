@@ -331,20 +331,25 @@ fn extract_mod_decls(base_dir: &str, tokens: &[Tok<'_>]) -> (BTreeSet<String>, V
             Tok::Punct('#')
                 if depth == 0 && matches!(tokens.get(index + 1), Some(Tok::Punct('['))) =>
             {
-                let end = skip_balanced(tokens, index + 1, '[', ']');
-                let attr_tokens = &tokens[index + 2..end.saturating_sub(1)];
-                if let Some(raw_path) = extract_path_attr(attr_tokens) {
-                    has_path_attr = true;
-                    if let Some(rel) = normalize_rel_path(base_dir, &raw_path) {
-                        path_targets.push(rel);
+                if let Some(end) = skip_balanced(tokens, index + 1, '[', ']') {
+                    let attr_tokens = &tokens[index + 2..end - 1];
+                    if let Some(raw_path) = extract_path_attr(attr_tokens) {
+                        has_path_attr = true;
+                        if let Some(rel) = normalize_rel_path(base_dir, &raw_path) {
+                            path_targets.push(rel);
+                        }
                     }
+                    index = end;
+                } else {
+                    // An unclosed attribute consumes the rest of this file; do
+                    // not inspect a partial token range or infer a module path.
+                    break;
                 }
-                index = end;
             }
             Tok::Ident("pub") if depth == 0 => {
                 index += 1;
                 if matches!(tokens.get(index), Some(Tok::Punct('('))) {
-                    index = skip_balanced(tokens, index, '(', ')');
+                    index = skip_balanced(tokens, index, '(', ')').unwrap_or(tokens.len());
                 }
             }
             Tok::Ident("mod") if depth == 0 => {
@@ -384,7 +389,7 @@ fn extract_path_attr(attr_tokens: &[Tok<'_>]) -> Option<String> {
     None
 }
 
-fn skip_balanced(tokens: &[Tok<'_>], start: usize, open: char, close: char) -> usize {
+fn skip_balanced(tokens: &[Tok<'_>], start: usize, open: char, close: char) -> Option<usize> {
     let mut depth = 0_usize;
     let mut index = start;
     while index < tokens.len() {
@@ -393,14 +398,14 @@ fn skip_balanced(tokens: &[Tok<'_>], start: usize, open: char, close: char) -> u
             Tok::Punct(ch) if ch == close => {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    return index + 1;
+                    return Some(index + 1);
                 }
             }
             _ => {}
         }
         index += 1;
     }
-    tokens.len()
+    None
 }
 
 fn parent_dir(fs_path: &str) -> &str {
