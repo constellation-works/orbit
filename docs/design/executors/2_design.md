@@ -51,9 +51,10 @@ it to `local_shell` before loading (see
 
 ## 4. Concerns & Honest Limitations
 
-- The shipped `local-shell` definition is unsandboxed by default; confinement depends on
-  `cwd` containment and whatever already contains the Orbit process (see
-  [specs/local-shell.md](./specs/local-shell.md)).
+- The shipped `local-shell` definition has no OS sandbox. `cwd` containment validates
+  only the child's initial working directory; restrictions on subsequent filesystem
+  access come from an explicitly configured OS sandbox or restrictions inherited by
+  the Orbit process (see [specs/local-shell.md](./specs/local-shell.md)).
 - There is no out-of-process extension point for new executor kinds; one would need a new
   design against v2 dispatch.
 
