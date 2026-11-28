@@ -50,13 +50,14 @@ fn stationary_primary_generation_records_are_benign() {
             base_branch: base_branch.clone(),
             base_tip: Some(head_before.clone()),
         },
+        claimed_paths: None,
         rebase_recovery: None,
         activity: "implement_one".to_string(),
         audit: None,
     };
 
     guard
-        .verify()
+        .verify(true)
         .expect("ORB-23736: stationary generation-record dirt is benign");
 
     assert_head_unchanged(&primary, &head_before);
@@ -72,7 +73,7 @@ fn stationary_primary_generation_records_are_benign() {
     fs::write(primary.join("src-drift.txt"), "drift\n").expect("source dirt");
 
     let error = guard
-        .verify()
+        .verify(true)
         .expect_err("ORB-23736: stationary source dirt must still drift");
     match error {
         DispatchError::WorktreeIntegrity { code, diagnostic } => {

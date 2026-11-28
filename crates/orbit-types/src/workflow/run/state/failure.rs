@@ -133,6 +133,9 @@ pub(in crate::workflow::run) const OWNER_SIGNOFF_REQUIRED_DIAGNOSTIC_TOKEN: &str
 /// and cancellation is never a hold.
 pub const FOOTPRINT_UNAVAILABLE_ERROR_CODE: &str = "footprint_unavailable";
 
+/// The claimed leaf held after a disjoint primary checkout move.
+pub const CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE: &str = "claimed_primary_checkout_moved";
+
 /// Leads the failure Orbit raises when it refuses an implementer's handoff
 /// before delivery: a malformed `unfiled_findings`, or a
 /// `deferred_sandbox_validation` the delivery contract does not sanction
@@ -188,6 +191,8 @@ pub enum StepFailureCode {
     /// A resumed published delivery's deferred footprint stayed held past
     /// its wait ([`FOOTPRINT_UNAVAILABLE_ERROR_CODE`]). The run holds.
     FootprintUnavailable,
+    /// A confined claimed leaf observed disjoint primary checkout movement.
+    ClaimedPrimaryCheckoutMoved,
     /// Muse's failed terminal refused access to the invoked model.
     MuseModelAccessRefused,
     /// Any other agent- or host-declared code, preserved as declared.
@@ -203,6 +208,7 @@ impl StepFailureCode {
             OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
             OWNER_SIGNOFF_REQUIRED_ERROR_CODE => Self::OwnerSignoffRequired,
             FOOTPRINT_UNAVAILABLE_ERROR_CODE => Self::FootprintUnavailable,
+            CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE => Self::ClaimedPrimaryCheckoutMoved,
             MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE => Self::MuseModelAccessRefused,
             other => Self::Other(other.to_string()),
         }
@@ -215,6 +221,7 @@ impl StepFailureCode {
             Self::OwnerRouteUnavailable => OWNER_ROUTE_UNAVAILABLE_ERROR_CODE,
             Self::OwnerSignoffRequired => OWNER_SIGNOFF_REQUIRED_ERROR_CODE,
             Self::FootprintUnavailable => FOOTPRINT_UNAVAILABLE_ERROR_CODE,
+            Self::ClaimedPrimaryCheckoutMoved => CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE,
             Self::MuseModelAccessRefused => MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE,
             Self::Other(code) => code,
         }
@@ -245,6 +252,7 @@ impl From<String> for StepFailureCode {
             OWNER_ROUTE_UNAVAILABLE_ERROR_CODE => Self::OwnerRouteUnavailable,
             OWNER_SIGNOFF_REQUIRED_ERROR_CODE => Self::OwnerSignoffRequired,
             FOOTPRINT_UNAVAILABLE_ERROR_CODE => Self::FootprintUnavailable,
+            CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE => Self::ClaimedPrimaryCheckoutMoved,
             MUSE_MODEL_ACCESS_REFUSED_ERROR_CODE => Self::MuseModelAccessRefused,
             _ => Self::Other(code),
         }
@@ -421,11 +429,9 @@ impl ClaimFailureClass {
                 .is_some()
         {
             Some(Self::BaselineRed)
-        } else if is_footprint_unavailable(error_code, message) {
-            // The leaf never edited: its deferred footprint stayed held.
-            // Release the claim for a later admission, like other transients.
-            Some(Self::Transient)
-        } else if typed(STALLED_ERROR_CODE, STALLED_MARKER)
+        } else if is_footprint_unavailable(error_code, message)
+            || error_code == Some(CLAIMED_PRIMARY_CHECKOUT_MOVED_ERROR_CODE)
+            || typed(STALLED_ERROR_CODE, STALLED_MARKER)
             || typed(TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER)
             || super::super::is_forge_unavailable(error_code, message)
             || super::super::is_upgrade_pending(error_code, message)

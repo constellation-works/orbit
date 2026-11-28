@@ -325,6 +325,14 @@ pub fn execute_job_with_resume(
             // neither final recovery nor the failure handoff may touch it.
             // Finalization holds the run for a later admission.
             Err((error @ DispatchError::FootprintUnavailable(_), _, _)) => return Err(error),
+            // A fresh claim can retry against the new primary baseline.
+            // There is no checkout repair or failure handoff to run.
+            Err((error @ DispatchError::ClaimedPrimaryCheckoutMoved { .. }, _, code)) => {
+                overall_ok = false;
+                overall_message = Some(error.to_string());
+                overall_failure_code = code;
+                break;
+            }
             Err((error, unsuccessful, failure_code)) => {
                 let verdict = attempt_final_recovery(
                     job,

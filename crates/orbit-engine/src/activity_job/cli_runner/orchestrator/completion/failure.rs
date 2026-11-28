@@ -511,8 +511,13 @@ pub(super) fn completion_failure(input: CompletionFailureInput<'_>) -> Completio
         failure_code: if muse_model_refused {
             Some(StepFailureCode::MuseModelAccessRefused)
         } else {
-            declared_failure_code(declared_failure.as_ref())
-                .filter(|code| *code != StepFailureCode::MuseModelAccessRefused)
+            declared_failure_code(declared_failure.as_ref()).filter(|code| {
+                !matches!(
+                    code,
+                    StepFailureCode::MuseModelAccessRefused
+                        | StepFailureCode::ClaimedPrimaryCheckoutMoved
+                )
+            })
         },
         declared_failure_evidence,
         observed_limit,

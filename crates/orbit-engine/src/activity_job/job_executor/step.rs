@@ -81,6 +81,7 @@ pub(super) fn run_admitted_step(
         Err(
             error @ (DispatchError::ForgeUnavailableHold(_)
             | DispatchError::DeliveryRefused { .. }
+            | DispatchError::ClaimedPrimaryCheckoutMoved { .. }
             | DispatchError::FootprintUnavailable(_)),
         ) => ("held", Some(error.to_string())),
         Err(error @ DispatchError::ChildRunCancelled { .. }) => {

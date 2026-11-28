@@ -170,6 +170,7 @@ fn dispatch_v2_activity_inner(
             DispatchError::ReviewEvidenceHold(_)
             | DispatchError::ForgeUnavailableHold(_)
             | DispatchError::DeliveryRefused { .. }
+            | DispatchError::ClaimedPrimaryCheckoutMoved { .. }
             | DispatchError::FootprintUnavailable(_),
         ) => "held",
         Err(DispatchError::ChildRunCancelled { .. }) => "cancelled",

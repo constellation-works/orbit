@@ -1,6 +1,8 @@
 //! Linked-worktree workspace resolution and the provider boundary guard.
 
 mod boundary_guard;
+
+mod claimed_primary_move;
 mod cwd;
 mod declared_pair;
 pub(crate) mod fingerprint;
@@ -59,6 +61,8 @@ pub(crate) struct WorktreeBoundaryGuard {
     /// What a primary move is judged against: `workflow.base_branch` and its
     /// tip at capture, never whichever branch the primary had checked out.
     primary_baseline: boundary_guard::PrimaryBaseline,
+    /// Declared paths, present only for an OS-sandboxed, host-bound claim.
+    claimed_paths: Option<Vec<PathBuf>>,
     rebase_recovery: Option<RebaseRecoveryCheckpoint>,
     /// The dispatched activity, whose changed paths widen its task's
     /// selectors when it is an implementer or recovery agent.

@@ -65,8 +65,8 @@ pub(super) fn step_error_after_provider_evidence(
                 ),
             }
         }
+        Err(DispatchError::ClaimedPrimaryCheckoutMoved { .. }) | Ok(_) => cited_post_run,
         Err(error) => cite_output_evidence(error, stdout_blob_ref, stderr_blob_ref),
-        Ok(_) => cited_post_run,
     };
     Err(error)
 }

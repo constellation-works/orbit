@@ -284,8 +284,16 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
                 emit_audit(pending_audit.take());
                 return failure.into_blocked(&blocker);
             }
-            RecoveryAdmission::FootprintUnavailable(error) => {
+            RecoveryAdmission::Held(error) => {
                 emit_audit(pending_audit.take());
+                if matches!(error, DispatchError::ClaimedPrimaryCheckoutMoved { .. })
+                    && matches!(
+                        &failure,
+                        StepFailure::Error(DispatchError::WorktreeIntegrity { .. })
+                    )
+                {
+                    return failure.into_result();
+                }
                 return Err(error);
             }
         };
@@ -333,6 +341,14 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
             PostRecovery::RecoverAgain(next) => {
                 failure = StepFailure::Error(next);
                 round += 1;
+            }
+            PostRecovery::Settled(Err(DispatchError::ClaimedPrimaryCheckoutMoved { .. }))
+                if matches!(
+                    &failure,
+                    StepFailure::Error(DispatchError::WorktreeIntegrity { .. })
+                ) =>
+            {
+                return failure.into_result();
             }
             PostRecovery::Settled(result) => return result,
         }
@@ -434,6 +450,9 @@ fn post_recovery_attempt(
         Err(DispatchError::ReviewEvidenceHold(_) | DispatchError::DeliveryRefused { .. }) => {
             ("held", None)
         }
+        Err(error @ DispatchError::ClaimedPrimaryCheckoutMoved { .. }) => {
+            ("held", Some(error.to_string()))
+        }
         Err(error @ DispatchError::ChildRunCancelled { .. }) => {
             ("cancelled", Some(error.to_string()))
         }
@@ -485,7 +504,10 @@ fn post_recovery_attempt(
         // [ORB-14313] A settled review awaiting named evidence holds the run
         // whether the first attempt or the retry after recovery reached it:
         // neither final recovery nor the failure handoff may run for it.
-        Err(hold @ DispatchError::ReviewEvidenceHold(_)) => PostRecovery::Settled(Err(hold)),
+        Err(
+            hold @ (DispatchError::ReviewEvidenceHold(_)
+            | DispatchError::ClaimedPrimaryCheckoutMoved { .. }),
+        ) => PostRecovery::Settled(Err(hold)),
         // [ORB-15202] Nor for a child the retry found cancelled: an
         // operator's cancel is not a parent failure. The original error
         // stays on the message for diagnosis.

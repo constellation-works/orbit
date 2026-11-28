@@ -189,6 +189,7 @@ pub(in super::super) fn dispatch_prepared_provider(
         notice_posting_instruction: _,
         tool_ctx,
         declared_worktree_pair,
+        bound_claim,
         source_checkout,
         experiment_overlays,
         experiment_records,
@@ -400,6 +401,9 @@ pub(in super::super) fn dispatch_prepared_provider(
         tool_ctx.workspace_root.as_deref(),
         declared_worktree_pair.as_ref(),
         &host.run_settings().workspace_base_branch,
+        // The effective OS sandbox protects Git metadata on both backends.
+        // An input claim flag or a bare fallback cannot establish that.
+        sandbox.is_some() && bound_claim,
     )?
     // A violation's full fingerprints belong in the run's blob store, not in
     // the error string every downstream reader copies [ORB-12467].

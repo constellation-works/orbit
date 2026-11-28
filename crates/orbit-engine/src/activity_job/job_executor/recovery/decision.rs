@@ -20,9 +20,8 @@ pub(super) enum RecoveryAdmission {
     Original { no_edit_eligible: bool },
     /// Fail the step as the blocker recovery declared [ORB-14268].
     Blocked(AgentBlocker),
-    /// Hold the step without failing or consuming final recovery when
-    /// recovery dispatch expired waiting on a deferred footprint.
-    FootprintUnavailable(DispatchError),
+    /// Hold the step when recovery dispatch met a retryable host condition.
+    Held(DispatchError),
 }
 
 /// Deferred `StepRecoveryAttempted` event so `retry.rs` can settle check-repair
@@ -148,7 +147,7 @@ pub(super) fn attempt_recovery_activity(
         }),
     };
 
-    let mut held_footprint: Option<DispatchError> = None;
+    let mut held_dispatch: Option<DispatchError> = None;
     let (recovery_succeeded, failure_phase, error_message, output, read, recovery_model) =
         match result {
             Ok(RecoveryDispatch {
@@ -180,9 +179,9 @@ pub(super) fn attempt_recovery_activity(
                     recovery_model,
                 )
             }
-            Err(RecoveryDispatchError::FootprintUnavailable(error)) => {
+            Err(RecoveryDispatchError::Held(error)) => {
                 let message = error.to_string();
-                held_footprint = Some(error);
+                held_dispatch = Some(error);
                 (
                     false,
                     Some("dispatch".to_string()),
@@ -207,8 +206,8 @@ pub(super) fn attempt_recovery_activity(
     };
     // Without a slot (custom or conflict recovery, or a host without the
     // capability) a completed recovery keeps the legacy single re-attempt.
-    let admission = match (held_footprint, &decision, blocker) {
-        (Some(error), _, _) => RecoveryAdmission::FootprintUnavailable(error),
+    let admission = match (held_dispatch, &decision, blocker) {
+        (Some(error), _, _) => RecoveryAdmission::Held(error),
         (_, _, _) if !recovery_succeeded => RecoveryAdmission::Original {
             no_edit_eligible: false,
         },
