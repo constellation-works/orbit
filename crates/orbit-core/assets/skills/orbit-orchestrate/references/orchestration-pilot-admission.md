@@ -152,19 +152,36 @@ can inspect new work without repeating the expensive assessment.
 
 Explicit
 `task_ids` audits exactly the named `proposed` and `backlog` tasks, including
-ones that already have selectors, while excluding non-assessable statuses as
-`status_not_eligible` (with `status`) and tasks held by another active run as
-`already_preparing` with `prepared_by_run_ids`. A child pilot, such as one an
-approve-proposed drain dispatched, is not this operator request: it reuses an
-assessment an explicit or routine pilot already certified instead of calling
-the provider again. Preparation continues for the
-free eligible named tasks.
+ones that already have selectors. Two layers handle a named task that is not
+assessable, and they differ:
 
-Apply settles each held task as `superseded` with reason `piloted_elsewhere`,
-and each non-assessable skip as `superseded` with reason `status_not_eligible`
-unless a CI-sweep caller required an assessment; if every named task is held
-or non-assessable, the run succeeds without
-agent work. Inspect or resume the owning run for a held task's assessment.
+- **Native CLI preflight** (`orbit run task-pilot <id>`) reads every named task
+  before it submits anything. If any task is not `proposed` or `backlog`, the
+  command refuses the whole selection and names each refused task with its
+  status. No run is submitted and no task changes. Eligible siblings in that
+  selection are refused too; none runs alone.
+- **Prepare** (a direct pipeline caller, or a status move after the CLI read)
+  does not refuse on status. It excludes each non-assessable task as
+  `status_not_eligible` (with `status`), continues with the free eligible named
+  tasks, and excludes a task held by another active run as `already_preparing`
+  with `prepared_by_run_ids`.
+
+A child pilot, such as one an approve-proposed drain dispatched, is not this
+operator request: it reuses an assessment an explicit or routine pilot already
+certified instead of calling the provider again.
+
+Apply settles each held task as `superseded` with reason `piloted_elsewhere`.
+For an explicit run with no CI-sweep caller, it also settles each
+non-assessable skip as `superseded` with reason `status_not_eligible`. A run
+whose named tasks are all held or skipped succeeds with an empty assessment and
+no provider call; the outcomes record each task. Inspect or resume the owning
+run for a held task's assessment.
+
+A CI-sweep child is different. It needs exactly one prepared task. If prepare
+skipped its filed task for status, nothing is prepared, and the child fails at
+apply with `CI-sweep admission requires exactly one prepared task`. A held
+CI-sweep task whose holder evidence is valid still settles as
+`piloted_elsewhere`.
 
 The dashboard's **Run pilot** action on a `proposed` or `backlog` task in the
 task details panel makes this same single-task submission (`POST /api/tasks/<id>/pilot`,
