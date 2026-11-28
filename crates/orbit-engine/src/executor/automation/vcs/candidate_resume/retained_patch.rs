@@ -15,7 +15,8 @@ use orbit_common::security::release::sha256_hex;
 use orbit_types::workflow::SourceRepairRetainedPatch;
 
 use crate::executor::automation::vcs::git::{
-    git_output_bytes, git_run_bytes, git_success, timeout_recovery_error,
+    git_output, git_output_bytes, git_output_bytes_with_env, git_output_with_env, git_run_bytes,
+    git_success, git_timeout_error, timeout_recovery_error,
 };
 
 const CONFLICT_SIDES_DIR: &str = ".orbit/tmp/retained-patch-conflicts";
@@ -71,7 +72,11 @@ pub(super) fn apply_retained_patch(
     // to agree with the working copy on every path it touches. Stage the
     // candidate for the apply and unstage everything after, so the successor
     // still sees one plain dirty checkout without unmerged index entries.
+    // Snapshot the staged pre-apply tree so conflict-marker checks read the
+    // same attributes `git apply --3way` used at merge time, before the patch
+    // updates `.gitattributes`.
     git_success(process_env, workspace, &["add", "--all"])?;
+    let pre_apply_tree = git_output(process_env, workspace, &["write-tree"])?;
     let applied = match git_run_bytes(
         process_env,
         workspace,
@@ -144,6 +149,7 @@ pub(super) fn apply_retained_patch(
         process_env,
         workspace,
         &bound.sha256,
+        &pre_apply_tree,
         &unmerged,
         &mut written,
     ) {
@@ -261,6 +267,7 @@ fn preserve_unmarked_conflict_sides(
     process_env: &orbit_common::Env,
     workspace: &Path,
     patch_sha256: &str,
+    pre_apply_tree: &str,
     unmerged: &BTreeMap<String, UnmergedStages>,
     written: &mut Vec<String>,
 ) -> Result<Vec<RetainedConflictSide>, OrbitError> {
@@ -272,6 +279,7 @@ fn preserve_unmarked_conflict_sides(
             process_env,
             workspace,
             &conflict_root,
+            pre_apply_tree,
             path,
             stages,
             written,
@@ -286,6 +294,7 @@ fn preserve_path(
     process_env: &orbit_common::Env,
     workspace: &Path,
     conflict_root: &str,
+    pre_apply_tree: &str,
     path: &str,
     [stage1, stage2, stage3]: &UnmergedStages,
     written: &mut Vec<String>,
@@ -302,7 +311,8 @@ fn preserve_path(
         .is_some_and(|ours| working_bytes.as_ref() == Some(ours));
     let lacks_markers = match working_bytes.as_deref() {
         Some(bytes) if !working_matches_current => {
-            let configured_width = configured_conflict_marker_size(process_env, workspace, path);
+            let configured_width =
+                configured_conflict_marker_size(process_env, workspace, pre_apply_tree, path)?;
             !has_conflict_markers(bytes, configured_width)
         }
         _ => true,
@@ -333,22 +343,103 @@ fn preserve_path(
     }))
 }
 
+/// Read `conflict-marker-size` from `pre_apply_tree` (the merge-time attributes
+/// before `git apply --3way` writes patch edits) using Git's signed 32-bit
+/// `int` range so out-of-range values fall back to the default marker width.
 fn configured_conflict_marker_size(
     process_env: &orbit_common::Env,
     workspace: &Path,
+    pre_apply_tree: &str,
     path: &str,
-) -> Option<usize> {
-    let raw = git_output_bytes(
+) -> Result<Option<usize>, OrbitError> {
+    let args = [
+        "check-attr",
+        "--source",
+        pre_apply_tree,
+        "-z",
+        "conflict-marker-size",
+        "--",
+        path,
+    ];
+    let outcome = git_run_bytes(process_env, workspace, &args, None)?;
+    if outcome.timed_out {
+        return Err(git_timeout_error(
+            workspace,
+            &args,
+            outcome.timeout_ms,
+            &outcome.stderr,
+        ));
+    }
+    if outcome.success {
+        return Ok(parse_conflict_marker_size(&outcome.stdout));
+    }
+    // Git < 2.40 lacks `check-attr --source`; fall back to a scratch index so
+    // pre-apply attributes still win over any `.gitattributes` applied later.
+    let raw = configured_conflict_marker_size_from_scratch_index(
         process_env,
         workspace,
-        &["check-attr", "-z", "conflict-marker-size", "--", path],
-    )
-    .ok()?;
+        pre_apply_tree,
+        path,
+    )?;
+    Ok(parse_conflict_marker_size(&raw))
+}
+
+fn configured_conflict_marker_size_from_scratch_index(
+    process_env: &orbit_common::Env,
+    workspace: &Path,
+    pre_apply_tree: &str,
+    path: &str,
+) -> Result<Vec<u8>, OrbitError> {
+    let raw_git_path = git_output(
+        process_env,
+        workspace,
+        &[
+            "rev-parse",
+            "--git-path",
+            &format!("orbit-retained-attr-index-{}", std::process::id()),
+        ],
+    )?;
+    let scratch_path = if Path::new(&raw_git_path).is_absolute() {
+        std::path::PathBuf::from(raw_git_path)
+    } else {
+        workspace.join(raw_git_path)
+    };
+    let index_env = scratch_path.to_string_lossy().into_owned();
+    let env = [("GIT_INDEX_FILE", index_env.as_str())];
+    let result = (|| {
+        git_output_with_env(process_env, workspace, &["read-tree", pre_apply_tree], &env)?;
+        git_output_bytes_with_env(
+            process_env,
+            workspace,
+            &[
+                "check-attr",
+                "--cached",
+                "-z",
+                "conflict-marker-size",
+                "--",
+                path,
+            ],
+            &env,
+        )
+    })();
+    if let Err(error) = std::fs::remove_file(&scratch_path)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(index = %scratch_path.display(), %error, "scratch attr index left behind");
+    }
+    result
+}
+
+fn parse_conflict_marker_size(raw: &[u8]) -> Option<usize> {
     let mut fields = raw.split(|byte| *byte == 0);
     let _attr_path = fields.next()?;
     let _attr_name = fields.next()?;
     let value = std::str::from_utf8(fields.next()?).ok()?;
-    value.parse::<usize>().ok().filter(|width| *width > 0)
+    value
+        .parse::<i32>()
+        .ok()
+        .filter(|width| *width > 0)
+        .and_then(|width| usize::try_from(width).ok())
 }
 
 /// Read `relative_path` beneath `workspace` only when every traversed component
