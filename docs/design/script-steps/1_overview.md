@@ -75,7 +75,9 @@ bullet was rechecked at `d10fae79b`).
   `cwd` check validates only the child's initial working directory: the directory must
   resolve inside the workspace root. Filesystem access after launch is limited only by an
   effective OS sandbox or by restrictions the Orbit process inherited. Kernel confinement is
-  opt-in, through a `sandbox:` on the executor definition and an `fsProfile` on the activity
+  opt-in, through a `sandbox:` on the executor definition, which wraps every activity that uses
+  it. An activity's optional `fsProfile` selects the named policy profile; without one, the
+  built-in `unrestricted` profile applies with the policy's denies
   (`crates/orbit-core/assets/executors/local-shell.yaml`). A nonzero exit fails the step
   (`LocalShellFailed`) unless `allow_nonzero_exit` is set.
 - **The non-success outcome survives.** `StepOutcome { success, output, message }`

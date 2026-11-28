@@ -241,7 +241,7 @@ config:
 
 Step input can choose the checkout with `workspace_path`, but it never reaches the argument list.
 
-The step's output is `{ success, exit_code, stdout, stderr, log_tail, log_tail_truncated, duration_ms, timed_out, timeout_ms, argv, cwd, sandbox }`. The shipped `local-shell` executor declares no OS sandbox. To confine shell steps, add a `sandbox` to the executor definition and an `fsProfile` to the activity.
+The step's output is `{ success, exit_code, stdout, stderr, log_tail, log_tail_truncated, duration_ms, timed_out, timeout_ms, argv, cwd, sandbox }`. The shipped `local-shell` executor declares no OS sandbox. To wrap shell steps in the host's OS backend, set `sandbox` on the executor definition; it applies to every activity that uses that executor. An activity's `fsProfile` is optional. It names the policy profile the sandbox enforces, and when it is omitted the `unrestricted` profile applies with the policy's deny rules still in effect.
 
 ## Job envelope
 
