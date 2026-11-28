@@ -96,9 +96,11 @@ style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'non
 form-action 'none'; base-uri 'none'; frame-ancestors 'self'
 ```
 
-`script-src` lists one hash per script Orbit wrote, computed from the bytes it wrote. The
-policy is therefore fixed by the bundle and the kit version. The document is written once
-per bundle digest from the bytes the plugin load hashed and served from memory, as
+`script-src` lists one SHA-256 hash per script Orbit writes, computed from its
+HTML-preprocessed UTF-8 text: the bytes are decoded lossily as UTF-8, with CRLF and lone
+CR normalized to LF. The document still writes each script's original raw bytes unchanged.
+The policy is therefore fixed by the bundle and the kit version. The document is written
+once per bundle digest from the bytes the plugin load hashed and served from memory, as
 `text/html; charset=utf-8` with `nosniff` and `no-store`. An unknown page, a page whose
 files fail their checks or digest, and a plugin that is inactive or disabled for the
 workspace each answer 404 with the reason.
