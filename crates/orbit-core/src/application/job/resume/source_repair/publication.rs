@@ -1,5 +1,10 @@
-//! Authenticate reviewer transitions between base synchronization and publication.
+//! Authenticate head transitions between base synchronization and publication.
+
+mod validation_repair;
+
 use super::*;
+
+pub(super) use validation_repair::ValidationEvidence;
 
 /// The before-landing settlement whose `incomplete` verdict the failure
 /// handoff preserves by pushing the reviewer's commit.
@@ -204,17 +209,16 @@ pub(super) fn published_head<'a>(
     state: &'a PipelineState,
     checkpoint: &impl Fn(&str, &str) -> Result<&'a Value, OrbitError>,
     source_state: JobRunState,
-    (sync, push): (&'a Value, &'a Value),
+    (implementation, base, push): (&'a str, &str, &'a Value),
     branch: &str,
     repo: &std::path::Path,
 ) -> Result<&'a str, OrbitError> {
-    let base = field(sync, "base_sha")?;
     let initial = reviewed_head(
         job,
         state,
         checkpoint,
         false,
-        field(sync, "head_sha")?,
+        implementation,
         (branch, base),
         repo,
     )?;

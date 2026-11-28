@@ -1,3 +1,6 @@
+#[path = "held_publication/validation_repair.rs"]
+mod validation_repair;
+
 use super::*;
 use orbit_core::app::resident;
 use orbit_engine::RunLifecycle;
@@ -13,28 +16,37 @@ fn held_completion_fixture_with(code: DeliveryRefusal) -> Fixture {
 }
 
 fn held_completion_fixture_with_policy(code: DeliveryRefusal, timing: &str) -> Fixture {
-    let mut f = Fixture::with_policy(timing);
-    f.source.state = JobRunState::Held;
-    f.runtime
+    let mut fixture = Fixture::with_policy(timing);
+    hold_completion(&mut fixture, code);
+    fixture
+}
+
+fn hold_completion(fixture: &mut Fixture, code: DeliveryRefusal) {
+    fixture.source.state = JobRunState::Held;
+    fixture
+        .runtime
         .sqlite_store()
         .unwrap()
         .write(|tx| {
-            tx.job_run()
-                .put(&f.runtime.workspace_id().unwrap(), &f.source, None)
+            tx.job_run().put(
+                &fixture.runtime.workspace_id().unwrap(),
+                &fixture.source,
+                None,
+            )
         })
         .unwrap();
     // Completion failed after publication. The worker leaves the last
     // successful checkpoints intact and appends a run-level diagnostic.
-    orbit_core::test_support::EngineHost::new(&f.runtime)
+    orbit_core::test_support::EngineHost::new(&fixture.runtime)
         .complete_job_run_step(
-            &f.source.run_id,
+            &fixture.source.run_id,
             &JobRunStepParams {
                 step_index: 6,
                 target_type: JobTargetType::Job,
-                target_id: f.source.job_id.clone(),
+                target_id: fixture.source.job_id.clone(),
                 state: JobRunState::Held,
-                started_at: f.source.created_at,
-                finished_at: f.source.finished_at.unwrap(),
+                started_at: fixture.source.created_at,
+                finished_at: fixture.source.finished_at.unwrap(),
                 duration_ms: None,
                 exit_code: None,
                 lock_wait_ms: None,
@@ -44,7 +56,6 @@ fn held_completion_fixture_with_policy(code: DeliveryRefusal, timing: &str) -> F
             },
         )
         .unwrap();
-    f
 }
 
 fn published_completion_hold_starts_repair_at_published_head() {
