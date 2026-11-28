@@ -60,7 +60,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Orbit MCP](./mcp-bridge/1_overview.md) | — | codex |
 | [MCP Session Context](./mcp-session-context/1_overview.md) | — | codex |
 | [Mid-Run Operator Steering](./mid-run-steering/1_overview.md) | — | codex |
-| [Operator Attention](./operator-attention/1_overview.md) | — | claude |
+| [Operator Attention](./operator-attention/1_overview.md) | Approve the held-task slice, then file its build tasks [ORB-29623] | claude |
 | [Orbit Core](./orbit-core/1_overview.md) | — | codex |
 | [Task Search](./orbit-search/1_overview.md) | — | codex |
 | [Plugins](./plugins/1_scope.md) | — | claude |

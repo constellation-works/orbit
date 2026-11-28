@@ -2,8 +2,8 @@
 title: Operator Attention — Design
 owner: claude
 created_date: 2026-11-01
-updated_date: 2026-11-14
-last_validated: 2026-11-27
+updated_date: 2026-11-28
+last_validated: 2026-11-28
 status: Draft
 feature: operator-attention
 doc_role: design
@@ -12,7 +12,7 @@ summary: "Design of orbit attention: derived-view architecture, code placement, 
 tags: [operator-attention, operator-ux]
 paths: ["crates/orbit-core/src/app/attention/**", "crates/orbit-types/src/tool/attention.rs", "crates/orbit-common/src/governance/**", "crates/orbit-cli/src/command/**", "crates/orbit-mcp/src/federated/**"]
 related_features: [operator-attention, human-decision-channel, federated-mcp, host-registry, distributed-drain]
-related_artifacts: [ORB-21164, ORB-21171]
+related_artifacts: [ORB-21164, ORB-21171, ORB-29623]
 ---
 
 # Operator Attention — Design
@@ -175,6 +175,15 @@ References below; all four implementation tasks are done.
    destination's candidate set. Depends on slice 1; its unreachable-host item is useful
    before slices 2 and 3 land. It consumes the shared §5 fixed fan-out value.
 
+5. **Designed, not built — held tasks: the hold record and `held_ready`** ([ORB-29623]). A
+   task tagged `no-drain` gains a hold record that states its reason and its release
+   condition, adding the tag without one is refused, and a backlog task that only the tag
+   keeps out of a drain becomes a `held_ready` item. The contract, its phasing and its
+   acceptance are in [task-hold](./specs/task-hold.md); the reasoning is in the
+   [decisions](./4_decisions.md#a-hold-states-its-reason-and-the-tag-cannot-be-added-without-one).
+   The kind first needed a source, as §1 requires of any new kind: the hold record is that
+   source. Its two-hour bound is a fixed constant under §5. Depends on slice 1.
+
 No session hook, automation, notification or live configuration change is authorized.
 
 Slice 1 also measures per-source cost on the real workspace so explicit polling guidance in
@@ -257,5 +266,6 @@ Slice 1 also measures per-source cost on the real workspace so explicit polling 
 - [ORB-21680] — made CI attention use the fetched base-branch head
 - [ORB-25277] — shell wait through a session-minted read grant
 - [ORB-22808] — fixed the former `[attention]` bounds at their defaults and deprecated the keys
+- [ORB-29623] — designed slice 5: the hold record and the `held_ready` kind
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
