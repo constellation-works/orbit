@@ -60,6 +60,25 @@ const PAGES: &str = concat!(
     "        tools: [status]\n",
 );
 
+const TOGGLE_PAGE: &str = concat!(
+    "  web:\n",
+    "    pages:\n",
+    "      - id: toggle\n",
+    "        root: web/plain\n",
+    "        scripts: [plain.js]\n",
+    "        tools: [status]\n",
+);
+
+const TOGGLE_PAGE_KIT: &str = concat!(
+    "  web:\n",
+    "    pages:\n",
+    "      - id: toggle\n",
+    "        root: web/plain\n",
+    "        scripts: [plain.js]\n",
+    "        kit: 1\n",
+    "        tools: [status]\n",
+);
+
 const PREPROCESSING_PAGE: &str = concat!(
     "  web:\n",
     "    pages:\n",
@@ -70,6 +89,11 @@ const PREPROCESSING_PAGE: &str = concat!(
     "        kit: 1\n",
     "        tools: [status]\n",
 );
+
+struct ServedPage {
+    body: String,
+    policy: String,
+}
 
 fn write_executable(path: &Path, body: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -92,7 +116,14 @@ fn backend(control: &Path) -> String {
 }
 
 fn install(fixture: &Fixture, namespace: &str, spec: &str) -> PathBuf {
-    install_with_files(fixture, namespace, spec, &[])
+    install_with_files(fixture, namespace, spec, &[], false)
+}
+
+/// Publish `spec` over an install that is already serving, keeping the page
+/// files `install_with_files` writes. A kit-only manifest change leaves the
+/// bundle digest where it was.
+fn reinstall(fixture: &Fixture, namespace: &str, spec: &str) {
+    install_with_files(fixture, namespace, spec, &[], true);
 }
 
 fn install_with_files(
@@ -100,6 +131,7 @@ fn install_with_files(
     namespace: &str,
     spec: &str,
     files: &[(&str, &[u8])],
+    force: bool,
 ) -> PathBuf {
     let control = fixture.path(&format!("control-{namespace}"));
     fs::create_dir_all(&control).unwrap();
@@ -140,7 +172,10 @@ fn install_with_files(
     plugin::add_plugin(
         &fixture.runtime,
         source.to_str().unwrap(),
-        &PluginAddOptions::default(),
+        &PluginAddOptions {
+            force,
+            ..PluginAddOptions::default()
+        },
     )
     .unwrap();
     plugin::enable_plugin(
@@ -211,6 +246,26 @@ fn get_page_frame(server: &Server, path: &str) -> reqwest::blocking::Response {
         .unwrap()
 }
 
+fn served_page(server: &Server, path: &str) -> ServedPage {
+    let response = get_page_frame(server, path);
+    let status = response.status().as_u16();
+    let policy = header(&response, "content-security-policy").to_string();
+    let body = response.text().unwrap();
+    assert_eq!(status, 200, "{path}: {body}");
+    ServedPage { body, policy }
+}
+
+/// `index.html` and `plain.js` as installed. A kit-only reinstall must leave
+/// both bytes alone, so the bundle digest stays put.
+fn installed_plain_files(fixture: &Fixture, namespace: &str) -> (Vec<u8>, Vec<u8>) {
+    let installed = plugin::show_plugin(&fixture.runtime, namespace).unwrap();
+    let root = Path::new(&installed.install_path).join("web/plain");
+    (
+        fs::read(root.join("index.html")).unwrap(),
+        fs::read(root.join("plain.js")).unwrap(),
+    )
+}
+
 fn header<'a>(response: &'a reqwest::blocking::Response, name: &str) -> &'a str {
     response
         .headers()
@@ -244,6 +299,7 @@ fn script_hash_matches_html_preprocessing_while_response_preserves_script_bytes(
                     ("web/preprocessing/lone-cr.js", LONE_CR_JS),
                     ("web/preprocessing/invalid.js", INVALID_UTF8_JS),
                 ],
+                false,
             );
             let server = fixture.server(false);
 
@@ -498,6 +554,102 @@ fn a_page_is_one_document_under_its_frame_policy_and_only_while_active() {
                 &page_path("pages", "plain"),
                 "disabled in this workspace",
             );
+        },
+    );
+}
+
+#[test]
+fn a_running_server_rebuilds_the_document_when_only_kit_changes() {
+    isolated(
+        "plugin_page::a_running_server_rebuilds_the_document_when_only_kit_changes",
+        || {
+            let fixture = Fixture::new();
+            install(&fixture, "pages", TOGGLE_PAGE);
+            let files = installed_plain_files(&fixture, "pages");
+            let server = fixture.server(false);
+            let path = page_path("pages", "toggle");
+
+            let without = served_page(&server, &path);
+            assert!(
+                !without.body.contains(KIT_STYLE_MARK),
+                "a page without kit has no kit stylesheet: {}",
+                without.body
+            );
+            assert!(
+                !without.body.contains(KIT_SCRIPT_MARK),
+                "a page without kit has no kit script: {}",
+                without.body
+            );
+            assert!(without.body.contains(PLAIN_JS), "{}", without.body);
+            assert_eq!(without.policy, expected_policy(&[PLAIN_JS]));
+
+            reinstall(&fixture, "pages", TOGGLE_PAGE_KIT);
+            assert_eq!(
+                installed_plain_files(&fixture, "pages"),
+                files,
+                "adding kit rewrote the page files"
+            );
+
+            let with_kit = served_page(&server, &path);
+            assert!(
+                with_kit.body.contains(KIT_STYLE_MARK),
+                "kit stylesheet missing after a kit-only reinstall: {}",
+                with_kit.body
+            );
+            let scripts = script_contents(&with_kit.body);
+            assert_eq!(scripts.len(), 2, "kit and plain.js: {}", with_kit.body);
+            assert!(
+                scripts[0].contains(KIT_SCRIPT_MARK),
+                "kit script missing after a kit-only reinstall: {}",
+                with_kit.body
+            );
+            assert_eq!(&scripts[1..], &[PLAIN_JS]);
+            let order = [
+                position(&with_kit.body, KIT_STYLE_MARK),
+                position(&with_kit.body, MARKUP),
+                position(&with_kit.body, KIT_SCRIPT_MARK),
+                position(&with_kit.body, &format!("<script>{PLAIN_JS}</script>")),
+            ];
+            assert!(
+                order.windows(2).all(|pair| pair[0] < pair[1]),
+                "{order:?}\n{}",
+                with_kit.body
+            );
+            assert_eq!(with_kit.policy, expected_policy(&scripts));
+            assert_ne!(with_kit.policy, without.policy);
+            let kit_hash = expected_hash(scripts[0].as_bytes());
+            assert!(
+                with_kit.policy.contains(&kit_hash),
+                "updated policy omits the kit script hash: {}",
+                with_kit.policy
+            );
+            assert!(
+                !without.policy.contains(&kit_hash),
+                "the no-kit policy already contained the kit hash: {}",
+                without.policy
+            );
+
+            reinstall(&fixture, "pages", TOGGLE_PAGE);
+            assert_eq!(
+                installed_plain_files(&fixture, "pages"),
+                files,
+                "removing kit rewrote the page files"
+            );
+
+            let removed = served_page(&server, &path);
+            assert!(
+                !removed.body.contains(KIT_STYLE_MARK),
+                "kit stylesheet remains after kit was removed: {}",
+                removed.body
+            );
+            assert!(
+                !removed.body.contains(KIT_SCRIPT_MARK),
+                "kit script remains after kit was removed: {}",
+                removed.body
+            );
+            assert_eq!(script_contents(&removed.body), vec![PLAIN_JS]);
+            assert_eq!(removed.policy, without.policy);
+            assert_ne!(removed.policy, with_kit.policy);
         },
     );
 }
