@@ -1,0 +1,79 @@
+{
+  "model_version": 24,
+  "generated_at": "2026-11-28T07:00:00Z",
+  "served_from": "stored",
+  "backlog": {
+    "backlog": 29,
+    "in_progress": 0,
+    "proposed": 0,
+    "review": 0,
+    "blocked": 0
+  },
+  "inputs": {
+    "concurrency": 15,
+    "history_deliveries": 100,
+    "min_cell_samples": 5,
+    "min_metric_samples": 5,
+    "regression_rework": {
+      "max_bounded_gap_share": 0.1
+    }
+  },
+  "forecast": {
+    "tasks": 29,
+    "time_to_drain_hours": { "p50": 20, "p90": 36 },
+    "effective_parallelism": { "p50": 4, "p90": 6 },
+    "usd": { "p50": 120, "p90": 220 },
+    "tokens": { "p50": 2000000, "p90": 3500000 },
+    "schedulable_subset": {
+      "tasks": 21,
+      "of": 29,
+      "time_to_drain_hours": { "p50": 18, "p90": 32 },
+      "usd": { "p50": 100, "p90": 180 },
+      "tokens": { "p50": 1700000, "p90": 3000000 }
+    },
+    "regression_rework": {
+      "available": true,
+      "bounded_gap": {
+        "tasks": 12,
+        "gaps": 6,
+        "drawn_fixes": 54,
+        "gap_share": 0.1,
+        "max_gap_share": 0.1,
+        "by_reason": {
+          "unmeasured_delivery": 6,
+          "footprint_unrecoverable": 0,
+          "origin_completion_missing": 0
+        }
+      }
+    }
+  },
+  "coverage": {
+    "tasks": 29,
+    "regression_history_missing": 0,
+    "regression_history_bounded": 29,
+    "risk_unestimated": 0,
+    "regression_history_thin": 0,
+    "unassessed": 0,
+    "thin_cell_fallbacks": 0,
+    "uncovered_model": 0,
+    "uncosted": 0,
+    "no_history": 0,
+    "dependency_unforecastable": 0,
+    "unverifiable_dependencies": 0,
+    "review_lock_overlaps": 0,
+    "blocked": 0,
+    "outcome_fallbacks": 0,
+    "outcome_no_history": 0,
+    "return_unsupported": 0,
+    "return_tail_unsupported": 0,
+    "phase_age_unknown": 0
+  },
+  "arrivals": {
+    "coverage": {
+      "deliveries": 100,
+      "conflict_donors": 12,
+      "missing_tokens": 0,
+      "missing_usd": 0
+    }
+  }
+}
