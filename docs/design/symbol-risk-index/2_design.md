@@ -517,7 +517,7 @@ same protocol and margin; the rerun has to clear it again from scratch.
 - **One language has been looked at.** ws_orbit is Rust. Other workspaces depend on the
   indexer's extractor quality for their languages, and no gate has been run on them.
 - **Exposure inherits the landed-diff rules.** A rebase merge of several commits counts only
-  its last commit, as in `diff_stats.rs`. Hotfixes and commits that no task owns add changes
+  its last commit, as in `codebase/diff_stat.rs`. Hotfixes and commits that no task owns add changes
   without exposure.
 - **The production fit uses today's sizes for past tasks.** That is honest at prediction time
   but blurs the fit for symbols that grew or shrank. G1 measures the effect, not an idealized
