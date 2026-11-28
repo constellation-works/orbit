@@ -46,58 +46,6 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
         .map_err(|error| self.stop_on(error))
     }
 
-    fn in_progress_budget_spent(&self) -> Result<bool, OrbitError> {
-        if self.deadline_passed()? {
-            return Ok(true);
-        }
-        Ok(self.max_wait_seconds > 0 && self.waited_seconds >= self.max_wait_seconds)
-    }
-
-    /// Settles a merged pull request as this handoff's delivery.
-    pub(super) fn settle_merged(
-        &mut self,
-        process_env: &orbit_common::Env,
-        status: &PullRequestStatus,
-        updated_head: Option<String>,
-    ) -> Result<Value, OrbitError> {
-        let (host, context) = (self.host, self.context);
-        let delivered = match self.pin.ensure_delivered(status, &self.pr_number) {
-            Ok(delivered) => delivered,
-            // A merged pull request whose identity is not ours is not this
-            // handoff's delivery, whatever it merged.
-            Err(error) => return Err(self.stop(false, &error.to_string())?),
-        };
-        let mut evidence = json!({
-            "delivery": delivered.as_json(),
-            "pull_request": self.number,
-            "candidate": context.candidate.candidate.commit,
-        });
-        if let Some(head) = &updated_head {
-            evidence["updated_head"] = json!(head);
-        }
-        if let Some(actions) = self.recovery.evidence() {
-            evidence["check_recovery"] = actions;
-        }
-        let observed = observe_candidate(process_env, context, Some(status), self.view)
-            .map_err(|e| self.stop_on(e))?;
-        // A merge with no intent of ours is the operator's; the completion
-        // record carries that in its history note.
-        evidence["external_merge"] = json!(self.intent.is_none());
-        if let Some(intent_id) = self.intent.take() {
-            record(
-                host,
-                context,
-                HandoffLandingStep::ResolveIntent {
-                    intent_id,
-                    merged: true,
-                },
-                Some(observed.clone()),
-                &evidence,
-            )?;
-        }
-        complete(host, context, observed, &evidence)
-    }
-
     /// Every non-merged state is read against the pinned identity first: a
     /// repointed branch or base must never receive a merge request.
     pub(super) fn ensure_pinned(&self, status: &PullRequestStatus) -> Result<(), OrbitError> {
@@ -223,6 +171,51 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
             // read, so it never reaches this phase.
             PrMergeState::Merged | PrMergeState::Mergeable | PrMergeState::Pending => Ok(()),
         }
+    }
+
+    /// Settles a merged pull request as this handoff's delivery.
+    pub(super) fn settle_merged(
+        &mut self,
+        process_env: &orbit_common::Env,
+        status: &PullRequestStatus,
+        updated_head: Option<String>,
+    ) -> Result<Value, OrbitError> {
+        let (host, context) = (self.host, self.context);
+        let delivered = match self.pin.ensure_delivered(status, &self.pr_number) {
+            Ok(delivered) => delivered,
+            // A merged pull request whose identity is not ours is not this
+            // handoff's delivery, whatever it merged.
+            Err(error) => return Err(self.stop(false, &error.to_string())?),
+        };
+        let mut evidence = json!({
+            "delivery": delivered.as_json(),
+            "pull_request": self.number,
+            "candidate": context.candidate.candidate.commit,
+        });
+        if let Some(head) = &updated_head {
+            evidence["updated_head"] = json!(head);
+        }
+        if let Some(actions) = self.recovery.evidence() {
+            evidence["check_recovery"] = actions;
+        }
+        let observed = observe_candidate(process_env, context, Some(status), self.view)
+            .map_err(|e| self.stop_on(e))?;
+        // A merge with no intent of ours is the operator's; the completion
+        // record carries that in its history note.
+        evidence["external_merge"] = json!(self.intent.is_none());
+        if let Some(intent_id) = self.intent.take() {
+            record(
+                host,
+                context,
+                HandoffLandingStep::ResolveIntent {
+                    intent_id,
+                    merged: true,
+                },
+                Some(observed.clone()),
+                &evidence,
+            )?;
+        }
+        complete(host, context, observed, &evidence)
     }
 
     /// Requests the merge under a durable intent, and re-reads after a
@@ -413,10 +406,10 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
             if let Some(done) = self.complete_explicit_merge(process_env, &status)? {
                 return Ok(done);
             }
+            if self.in_progress_budget_spent()? {
+                return self.stop_in_progress_at_deadline();
+            }
             if reads < attempts {
-                if self.in_progress_budget_spent()? {
-                    return self.stop_in_progress_at_deadline();
-                }
                 self.wait_one_poll();
                 if self.in_progress_budget_spent()? {
                     return self.stop_in_progress_at_deadline();
@@ -441,21 +434,6 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
                  the landing holds and does not send another merge request"
             ),
         )?)
-    }
-
-    /// The wait budget ended before the observation ceiling. Resolve the open
-    /// intent so the existing timeout can record, and do not claim the
-    /// ceiling was reached.
-    fn stop_in_progress_at_deadline(&mut self) -> Result<Step, OrbitError> {
-        self.resolve_merge_intent(
-            false,
-            &json!({
-                "reconciled": "pull_request_open",
-                "pull_request": self.number,
-                "reason": "landing deadline",
-            }),
-        )?;
-        Err(self.timeout(&self.context.owed_hosted_checks)?)
     }
 
     /// Explicit merged evidence is landing's existing bar: a merged state and
@@ -486,6 +464,29 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
                 Err(self.stop(false, &error.to_string())?)
             }
         }
+    }
+
+    fn in_progress_budget_spent(&mut self) -> Result<bool, OrbitError> {
+        self.note_elapsed()?;
+        if self.deadline_passed()? {
+            return Ok(true);
+        }
+        Ok(self.max_wait_seconds > 0 && self.waited_seconds >= self.max_wait_seconds)
+    }
+
+    /// The wait budget ended before the observation ceiling. Resolve the open
+    /// intent so the existing timeout can record, and do not claim the
+    /// ceiling was reached.
+    fn stop_in_progress_at_deadline(&mut self) -> Result<Step, OrbitError> {
+        self.resolve_merge_intent(
+            false,
+            &json!({
+                "reconciled": "pull_request_open",
+                "pull_request": self.number,
+                "reason": "landing deadline",
+            }),
+        )?;
+        Err(self.timeout(&self.context.owed_hosted_checks)?)
     }
 
     fn resolve_merge_intent(&mut self, merged: bool, evidence: &Value) -> Result<(), OrbitError> {

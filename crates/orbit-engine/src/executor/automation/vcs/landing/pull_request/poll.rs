@@ -156,7 +156,63 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
         }
     }
 
-    fn note_elapsed(&mut self) -> Result<(), OrbitError> {
+    /// The stop for a landing wait whose deadline passed, naming the owed
+    /// hosted checks still waited on.
+    pub(super) fn timeout(&self, owed: &[String]) -> Result<OrbitError, OrbitError> {
+        let (number, max_wait_seconds) = (self.number, self.max_wait_seconds);
+        let mut waiting = if owed.is_empty() {
+            String::new()
+        } else {
+            format!(" (owed hosted checks not yet passed: {})", owed.join(", "))
+        };
+        waiting.push_str(&self.unreported.timeout_note());
+        if let Some(gap) = self.diagnostic["log_read_gap"]["reason"].as_str() {
+            return self.hold(
+                false,
+                DeliveryRefusal::ForgeObservationUnavailable,
+                &format!(
+                    "pull request #{number} is waiting for failed-job logs after \
+                     {max_wait_seconds}s: {gap}; the owner will re-read the logs and \
+                     resume when evidence is available; the candidate stays in review"
+                ),
+            );
+        }
+        if let Some(suspicion) = self.diagnostic["base_suspicion"].as_str() {
+            return self.hold(
+                false,
+                DeliveryRefusal::BaseChecksPending,
+                &format!(
+                    "pull request #{number} is waiting for the base's own check result after \
+                     {max_wait_seconds}s: the base never recovered before the landing deadline; {suspicion}; the candidate stays in review"
+                ),
+            );
+        }
+        let reason = format!(
+            "pull request #{number} did not reach a merged state within {max_wait_seconds}s{waiting}; the candidate stays in review"
+        );
+        if self.waiting_for_checks {
+            super::super::record::stop_waiting_checks(
+                self.host,
+                self.context,
+                &self.diagnostic,
+                &reason,
+            )
+        } else {
+            self.stop(false, &reason)
+        }
+    }
+
+    fn ensure_within_deadline(&self) -> Result<(), OrbitError> {
+        if self.max_wait_seconds > 0
+            && (self.waited_seconds >= self.max_wait_seconds
+                || super::super::super::completion_deadline::now_ms()? >= self.deadline_ms)
+        {
+            return Err(self.timeout(&self.context.owed_hosted_checks)?);
+        }
+        Ok(())
+    }
+
+    pub(super) fn note_elapsed(&mut self) -> Result<(), OrbitError> {
         self.waited_seconds = self.waited_seconds.max(
             super::super::super::completion_deadline::now_ms()?.saturating_sub(self.started_ms)
                 / 1000,
@@ -171,16 +227,6 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
             .min(self.max_wait_seconds.saturating_sub(self.waited_seconds));
         sleep(Duration::from_secs(delay));
         self.waited_seconds = self.waited_seconds.saturating_add(delay);
-    }
-
-    fn ensure_within_deadline(&self) -> Result<(), OrbitError> {
-        if self.max_wait_seconds > 0
-            && (self.waited_seconds >= self.max_wait_seconds
-                || super::super::super::completion_deadline::now_ms()? >= self.deadline_ms)
-        {
-            return Err(self.timeout(&self.context.owed_hosted_checks)?);
-        }
-        Ok(())
     }
 
     /// Records this observation in the diagnostic and classifies it.
@@ -281,52 +327,6 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
         }
         self.wait_one_poll();
         Ok(())
-    }
-
-    /// The stop for a landing wait whose deadline passed, naming the owed
-    /// hosted checks still waited on.
-    pub(super) fn timeout(&self, owed: &[String]) -> Result<OrbitError, OrbitError> {
-        let (number, max_wait_seconds) = (self.number, self.max_wait_seconds);
-        let mut waiting = if owed.is_empty() {
-            String::new()
-        } else {
-            format!(" (owed hosted checks not yet passed: {})", owed.join(", "))
-        };
-        waiting.push_str(&self.unreported.timeout_note());
-        if let Some(gap) = self.diagnostic["log_read_gap"]["reason"].as_str() {
-            return self.hold(
-                false,
-                DeliveryRefusal::ForgeObservationUnavailable,
-                &format!(
-                    "pull request #{number} is waiting for failed-job logs after \
-                     {max_wait_seconds}s: {gap}; the owner will re-read the logs and \
-                     resume when evidence is available; the candidate stays in review"
-                ),
-            );
-        }
-        if let Some(suspicion) = self.diagnostic["base_suspicion"].as_str() {
-            return self.hold(
-                false,
-                DeliveryRefusal::BaseChecksPending,
-                &format!(
-                    "pull request #{number} is waiting for the base's own check result after \
-                     {max_wait_seconds}s: the base never recovered before the landing deadline; {suspicion}; the candidate stays in review"
-                ),
-            );
-        }
-        let reason = format!(
-            "pull request #{number} did not reach a merged state within {max_wait_seconds}s{waiting}; the candidate stays in review"
-        );
-        if self.waiting_for_checks {
-            super::super::record::stop_waiting_checks(
-                self.host,
-                self.context,
-                &self.diagnostic,
-                &reason,
-            )
-        } else {
-            self.stop(false, &reason)
-        }
     }
 }
 

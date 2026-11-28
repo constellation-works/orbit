@@ -377,8 +377,8 @@ struct ForgeState {
     in_progress_status_reads: u32,
     saw_in_progress_merge: bool,
     /// When set, the in-progress merge answer moves the landing clock to this
-    /// value, so a merge response can arrive after the landing deadline.
-    in_progress_clock: Option<Arc<AtomicU64>>,
+    /// value, so tests can model the response consuming the landing budget.
+    in_progress_clock: Option<(Arc<AtomicU64>, u64)>,
     merge_commit: Option<String>,
     jobs: HashMap<String, FakeJob>,
     job_times: HashMap<u64, (String, String)>,
@@ -852,8 +852,8 @@ impl_test_host! {
                     assert_eq!(input["reviewed_head_sha"], s.head.as_str());
                     if let Some(merged) = s.merge_in_progress {
                         s.saw_in_progress_merge = true;
-                        if let Some(clock) = &s.in_progress_clock {
-                            clock.store(2_000_000, Ordering::SeqCst);
+                        if let Some((clock, now_ms)) = &s.in_progress_clock {
+                            clock.store(*now_ms, Ordering::SeqCst);
                         }
                         if s.in_progress_merged_on_read.is_none() {
                             s.merged = merged;
@@ -3515,6 +3515,51 @@ fn handoff_merge_in_progress_contracts() {
         );
     }
 
+    // The merge response uses four seconds of the five-second budget. The
+    // remaining poll wait is one second, then the intent resolves as unmerged.
+    {
+        let (_sb, forge, head, _) = forge_fixture(false, false);
+        forge.job(&head, passed(1, 11));
+        let clock = Arc::new(AtomicU64::new(1_000_000));
+        forge.with_state(|s| {
+            s.merge_in_progress = Some(false);
+            s.in_progress_clock = Some((clock.clone(), 1_004_000));
+        });
+        let now = clock.clone();
+        let (result, waits) = with_prerequisite_clock(
+            move || now.load(Ordering::SeqCst),
+            |_, _| {},
+            || {
+                counted_land(
+                    &forge,
+                    json!({"max_wait_seconds": 5, "poll_interval_seconds": 5}),
+                )
+            },
+        );
+        let err = result
+            .expect_err("the remaining budget ends the observations")
+            .to_string();
+        assert!(
+            err.contains("did not reach a merged state within 5s"),
+            "{err}"
+        );
+        assert_eq!(
+            waits,
+            vec![1],
+            "the first status read leaves only one second in the budget: {waits:?}"
+        );
+        forge.assert_sent("pr.merge", 1, "no second mutation");
+        forge.assert_sent("pr.status", 2, "poll plus one observation");
+        assert!(forge.steps().contains(&STOP));
+        assert!(
+            forge
+                .steps()
+                .iter()
+                .any(|step| matches!(step, ResolveIntent { merged: false, .. })),
+            "the deadline resolves the intent after the unmerged read"
+        );
+    }
+
     // The merge answer arrives after the landing deadline has passed. The first
     // observation is still read before the intent resolves, so the unmerged
     // record rests on a read, and the run stops without waiting or merging again.
@@ -3524,7 +3569,7 @@ fn handoff_merge_in_progress_contracts() {
         let clock = Arc::new(AtomicU64::new(1_000_000));
         forge.with_state(|s| {
             s.merge_in_progress = Some(false);
-            s.in_progress_clock = Some(clock.clone());
+            s.in_progress_clock = Some((clock.clone(), 2_000_000));
         });
         let now = clock.clone();
         let (result, waits) = with_prerequisite_clock(
