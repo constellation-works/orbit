@@ -121,7 +121,6 @@ function pilotNotesForSummary(task, comment) {
 }
 
 function pilotNotesView(notes) {
-  if (!notes.length) return null;
   return el("div", { class: "pilot-notes" }, notes.map((note) => el("div", { class: "pilot-note" }, [
     el("div", { class: "pilot-note-label", text: note.label }),
     el("p", { class: "pilot-note-text", text: note.text }),
@@ -369,8 +368,11 @@ function buildCommentCard(task, comment, index) {
 
   const notes = pilotLine ? pilotNotesForSummary(task, comment) : [];
   let view;
-  if (pilotLine) {
+  if (notes.length) {
     view = el("div", {}, [el("p", { text: pilotLine }), pilotNotesView(notes)]);
+  } else if (pilotLine) {
+    // Without notes the summary stays the bare paragraph it was before.
+    view = el("p", { text: pilotLine });
   } else if (resident) {
     view = residentCommentView(resident, task);
   } else {
