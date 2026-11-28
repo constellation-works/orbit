@@ -123,6 +123,18 @@ is_versioned() {
   git -C "$repo_root" ls-files --cached --others --exclude-standard --error-unmatch -- "$relative" >/dev/null 2>&1
 }
 
+# A directory counts as a feature candidate only when Git sees at least one
+# file inside it (tracked, or untracked but not ignored). Local-only
+# directories such as Git-ignored notes never reach the strict entry-doc rule.
+dir_is_versioned() {
+  local directory="$1"
+  local relative="${directory#"$repo_root/"}"
+  local visible
+
+  visible="$(git -C "$repo_root" ls-files --cached --others --exclude-standard -- "$relative/")"
+  [[ -n "$visible" ]]
+}
+
 # An active feature's entry doc is its 1_overview.md (STD-06 §R2); there is no fallback.
 design_entry_doc() {
   local directory="$1"
@@ -333,6 +345,9 @@ render_feature_board() {
   local -a entries=()
 
   while IFS= read -r directory; do
+    if ! dir_is_versioned "$directory"; then
+      continue
+    fi
     entry="$(design_entry_doc "$directory")" || return 1
     if ! is_versioned "$entry"; then
       continue
