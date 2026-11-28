@@ -19,7 +19,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use orbit_common::{Env, OrbitError};
@@ -376,6 +376,9 @@ struct ForgeState {
     in_progress_merged_on_read: Option<u32>,
     in_progress_status_reads: u32,
     saw_in_progress_merge: bool,
+    /// When set, the in-progress merge answer moves the landing clock to this
+    /// value, so a merge response can arrive after the landing deadline.
+    in_progress_clock: Option<Arc<AtomicU64>>,
     merge_commit: Option<String>,
     jobs: HashMap<String, FakeJob>,
     job_times: HashMap<u64, (String, String)>,
@@ -849,6 +852,9 @@ impl_test_host! {
                     assert_eq!(input["reviewed_head_sha"], s.head.as_str());
                     if let Some(merged) = s.merge_in_progress {
                         s.saw_in_progress_merge = true;
+                        if let Some(clock) = &s.in_progress_clock {
+                            clock.store(2_000_000, Ordering::SeqCst);
+                        }
                         if s.in_progress_merged_on_read.is_none() {
                             s.merged = merged;
                         }
@@ -3474,6 +3480,83 @@ fn handoff_merge_in_progress_contracts() {
                 .iter()
                 .any(|step| matches!(step, ResolveIntent { merged: false, .. })),
             "the ceiling resolves the intent as unmerged before the hold"
+        );
+    }
+
+    // The landing deadline arrives before the observation ceiling. The first
+    // read is unmerged and the poll wait spends the budget: the intent resolves
+    // as unmerged after that read, the existing timeout stops the run, and no
+    // second merge is sent.
+    {
+        let (_sb, forge, head, _) = forge_fixture(false, false);
+        forge.job(&head, passed(1, 11));
+        forge.with_state(|s| s.merge_in_progress = Some(false));
+        let (result, waits) = counted_land(
+            &forge,
+            json!({"max_wait_seconds": 5, "poll_interval_seconds": 5}),
+        );
+        let err = result
+            .expect_err("the landing deadline ends the observations")
+            .to_string();
+        assert!(
+            err.contains("did not reach a merged state within 5s"),
+            "{err}"
+        );
+        assert_eq!(waits, vec![5], "one poll spends the budget: {waits:?}");
+        forge.assert_sent("pr.merge", 1, "no second mutation");
+        forge.assert_sent("pr.status", 2, "poll plus one observation");
+        assert!(forge.steps().contains(&STOP));
+        assert!(
+            forge
+                .steps()
+                .iter()
+                .any(|step| matches!(step, ResolveIntent { merged: false, .. })),
+            "the deadline resolves the intent only after an unmerged read"
+        );
+    }
+
+    // The merge answer arrives after the landing deadline has passed. The first
+    // observation is still read before the intent resolves, so the unmerged
+    // record rests on a read, and the run stops without waiting or merging again.
+    {
+        let (_sb, forge, head, _) = forge_fixture(false, false);
+        forge.job(&head, passed(1, 11));
+        let clock = Arc::new(AtomicU64::new(1_000_000));
+        forge.with_state(|s| {
+            s.merge_in_progress = Some(false);
+            s.in_progress_clock = Some(clock.clone());
+        });
+        let now = clock.clone();
+        let (result, waits) = with_prerequisite_clock(
+            move || now.load(Ordering::SeqCst),
+            |_, _| {},
+            || {
+                counted_land(
+                    &forge,
+                    json!({"max_wait_seconds": 5, "poll_interval_seconds": 5}),
+                )
+            },
+        );
+        let err = result
+            .expect_err("the landing deadline ends the observations")
+            .to_string();
+        assert!(
+            err.contains("did not reach a merged state within 5s"),
+            "{err}"
+        );
+        assert!(
+            waits.is_empty(),
+            "no wait starts past the deadline: {waits:?}"
+        );
+        forge.assert_sent("pr.merge", 1, "no second mutation");
+        forge.assert_sent("pr.status", 2, "the first observation is read");
+        assert!(forge.steps().contains(&STOP));
+        assert!(
+            forge
+                .steps()
+                .iter()
+                .any(|step| matches!(step, ResolveIntent { merged: false, .. })),
+            "the intent resolves as unmerged after that read"
         );
     }
 }

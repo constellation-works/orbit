@@ -14,7 +14,7 @@ use super::super::super::commit::squash_merge_fields;
 use super::super::super::operations;
 use super::super::super::pr::{
     PrMergeState, PullRequestStatus, ReviewedMergeOutcome, classify_pr_state, draft_recovery,
-    resolve_permitted_merge,
+    read_pr_status, resolve_permitted_merge,
 };
 use super::super::intent::reconcile_intent;
 use super::super::observe::observe_candidate;
@@ -400,14 +400,23 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
     ) -> Result<Step, OrbitError> {
         let attempts = operations::BASE_MODIFIED_MERGE_ATTEMPTS;
         for reads in 1..=attempts {
-            if self.in_progress_budget_spent()? {
-                return self.stop_in_progress_at_deadline();
-            }
-            let status = self.read_status()?;
+            // The first observation is the reconciliation read the landing
+            // has always taken after an in-progress answer, so it is not
+            // bounded by the deadline. The intent then resolves only after a
+            // read of this pull request, even when the merge request itself
+            // ran past the deadline. Later reads follow a wait within budget.
+            let status = if reads == 1 {
+                read_pr_status(self.host, &self.workspace, &self.pr_number)?
+            } else {
+                self.read_status()?
+            };
             if let Some(done) = self.complete_explicit_merge(process_env, &status)? {
                 return Ok(done);
             }
             if reads < attempts {
+                if self.in_progress_budget_spent()? {
+                    return self.stop_in_progress_at_deadline();
+                }
                 self.wait_one_poll();
                 if self.in_progress_budget_spent()? {
                     return self.stop_in_progress_at_deadline();
