@@ -62,7 +62,7 @@ retry, then reconnect.
 Rerunning the
 same command is idempotent and finishes partial convergence; `needs_recovery`
 (exit 4) carries the exact retry command in `local_candidate.retry_command`.
-See the upgrades runbook for the full procedure.
+See the [upgrades runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/upgrades.md) for the full procedure.
 
 ### Reclaim what deploys leave behind
 
@@ -79,5 +79,5 @@ orbit gc deployments --confirm  # remove what the report lists as would_remove
 Each class keeps its newest `--keep` entries (default 2). `orbit.previous`, and
 any deployment whose candidate manifest names the installed or rollback
 executable's digest, are always kept and do not count toward `--keep`. Links are
-unlinked, never followed. The upgrades runbook's "Reclaim old deployments and
-backups" section has the full rule.
+unlinked, never followed. See the ["Reclaim old deployments and backups"
+section of the upgrades runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/upgrades.md#reclaim-old-deployments-and-backups) for the full rule.
