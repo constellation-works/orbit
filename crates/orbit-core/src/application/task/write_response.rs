@@ -693,7 +693,7 @@ pub fn task_detail_with_dashboard_extras(
     status_by_id: &BTreeMap<String, TaskStatus>,
     page: &DashboardPageReads<'_>,
 ) -> Result<Value, OrbitError> {
-    let object = super::record_json::observe_task_show_json(runtime, row, status_by_id)?;
+    let object = runtime.observe_task_show_json(row, status_by_id)?;
     let mut value = with_dashboard_extras_from(runtime, &row.task, object, page)?;
     let attention = match page.delivery_attention {
         Some(map) => map.get(&row.task.id).cloned(),

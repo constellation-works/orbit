@@ -15,6 +15,58 @@ use crate::OrbitRuntime;
 use crate::application::task::{TaskExperimentPort, TaskReviewPort};
 
 impl OrbitRuntime {
+    fn with_task_show_extras(
+        &self,
+        row: &TaskRow,
+        mut object: Map<String, Value>,
+    ) -> Result<Map<String, Value>, OrbitError> {
+        object.insert(
+            "experiments".into(),
+            serde_json::to_value(
+                crate::app::port::TaskExperiment(self)
+                    .task_experiment_assignment_readout(&row.task.id)?,
+            )
+            .map_err(serialize_error("experiments"))?,
+        );
+        if let Some(block) = super::blocked_recovery::block_json(row) {
+            object.insert("block".to_string(), block);
+        }
+        if let Some(next) = self.blocked_next_step(&row.task, &row.history) {
+            object.insert(
+                "next_step".to_string(),
+                serde_json::to_value(next).map_err(serialize_error("next_step"))?,
+            );
+        }
+        if let Some(record) = super::FinalRecoveryRecord::last(&row.history) {
+            object.insert("final_recovery".to_string(), final_recovery_json(&record));
+        }
+        if let Some(hold) =
+            orbit_types::workflow::current_completion_hold(row.task.status, &row.history)
+        {
+            object.insert(
+                "completion_hold".to_string(),
+                serde_json::to_value(hold).map_err(serialize_error("completion_hold"))?,
+            );
+        }
+        if let Some(owed) = super::owed_criteria_json(&row.history)? {
+            object.insert("owed_criteria".to_string(), owed);
+        }
+        if row
+            .history
+            .iter()
+            .any(|entry| entry.event == orbit_types::task::DECISION_REQUESTED_EVENT)
+        {
+            let open = self.open_decisions_json_in(&row.task, &row.history, &row.comments)?;
+            if open.as_array().is_some_and(|items| !items.is_empty()) {
+                object.insert("open_decisions".to_string(), open);
+            }
+        }
+        if let Some(url) = self.task_permalink_url(&row.task.id) {
+            object.insert("url".to_string(), Value::String(url));
+        }
+        Ok(object)
+    }
+
     /// `task` with its comment, history and artifact sidecars read from this
     /// runtime's stores.
     pub fn task_row_with_sidecars(&self, task: Task) -> Result<TaskRow, OrbitError> {
@@ -27,6 +79,114 @@ impl OrbitRuntime {
             history,
             artifacts,
         })
+    }
+
+    /// The dashboard's show projection observes pilot evidence from settled
+    /// bundles so a warning or admission-hold hint cannot wait on task commits.
+    pub(super) fn observe_task_show_json(
+        &self,
+        row: &TaskRow,
+        status_by_id: &BTreeMap<String, TaskStatus>,
+    ) -> Result<Map<String, Value>, OrbitError> {
+        let object = self.task_record_json_with_pilot(row, status_by_id, true)?;
+        self.with_task_show_extras(row, object)
+    }
+
+    /// The full task record with its pilot evidence read either coordinated
+    /// (`observational` false) or from settled bundles (`observational` true).
+    fn task_record_json_with_pilot(
+        &self,
+        row: &TaskRow,
+        status_by_id: &BTreeMap<String, TaskStatus>,
+        observational: bool,
+    ) -> Result<Map<String, Value>, OrbitError> {
+        let task = &row.task;
+        let mut object = task_base_json(task, status_by_id);
+        if let Some(at) = orbit_types::task::task_started_at(&row.history) {
+            object.insert("started_at".into(), serde_json::json!(at));
+        }
+        if let Some(at) = task.not_before {
+            object.insert(
+                "scheduled_hold".into(),
+                serde_json::json!(
+                    task.status == TaskStatus::Backlog
+                        && at > chrono::Utc::now()
+                        && !orbit_types::task::schedule_overridden(&row.history, at)
+                ),
+            );
+        }
+        TaskOsReadout::new(self)?.insert_into(task, &mut object);
+        // Read projections must tolerate corrupt pilot receipts: the CLI contract
+        // keeps malformed task-pilot comments as ordinary text (see orbit-cli
+        // `pilot_comment_rendering`). A strict decode failure therefore means "no
+        // resolvable hold", not a failed record. Other errors still propagate.
+        let resolvable_pilot_admission_hold = if task.status.is_terminal() {
+            false
+        } else {
+            match self.pilot_admission_hold_with_audit(
+                task,
+                &row.comments,
+                &|| Ok(row.history.clone()),
+                &|receipt| {
+                    if observational {
+                        self.observe_task_pilot_audit(&task.id, receipt)
+                    } else {
+                        self.task_pilot_audit(&task.id, receipt)
+                    }
+                },
+            ) {
+                Ok(hold) => hold.is_some_and(|hold| hold.is_resolvable()),
+                Err(OrbitError::Execution(message))
+                    if message.starts_with("decode ")
+                        || message.contains("pilot receipt")
+                        || message.contains("pilot assessment") =>
+                {
+                    false
+                }
+                // Missing, unreadable or invalid assessment evidence cannot
+                // resolve a hold in this read projection. Admission stays strict.
+                Err(OrbitError::NotFound {
+                    kind: NotFoundKind::Artifact,
+                    ..
+                })
+                | Err(OrbitError::Io(_))
+                | Err(OrbitError::InvalidInput(_)) => false,
+                // A dangling or tampered artifact blob fails the full bundle
+                // read that resolves pilot evidence, even though the task's
+                // structural metadata (envelope, sidecars, manifest) is
+                // readable through the lightweight reads that built this row.
+                // Degrade only that payload failure; any other bundle damage
+                // keeps propagating below.
+                Err(error) if pilot_artifact_payload_corruption(&error) => false,
+                Err(error) => return Err(error),
+            }
+        };
+        object.insert(
+            "resolvable_pilot_admission_hold".into(),
+            serde_json::json!(resolvable_pilot_admission_hold),
+        );
+        let warnings = if observational {
+            self.observe_task_pilot_warning_findings(task, &row.comments)
+        } else {
+            self.task_pilot_warning_findings(task, &row.comments, &|id| {
+                task_is_done(self, Some(status_by_id), id)
+            })
+        };
+        object.insert("pilot_warnings".into(), serde_json::json!(warnings));
+        object.insert("comments".to_string(), comments_json(&row.comments)?);
+        object.insert(
+            "history".to_string(),
+            serde_json::to_value(&row.history).map_err(serialize_error("history"))?,
+        );
+        object.insert(
+            "artifacts".to_string(),
+            task_artifact_manifest_json(&row.artifacts),
+        );
+        if let Some(review) = self.task_review_evidence(task, &row.artifacts)? {
+            object.insert("review".to_string(), review);
+        }
+        self.task_crew_read(task).insert_into(&mut object);
+        Ok(object)
     }
 }
 
@@ -42,102 +202,7 @@ pub fn task_record_json(
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Map<String, Value>, OrbitError> {
-    task_record_json_with_pilot(runtime, row, status_by_id, false)
-}
-
-fn task_record_json_with_pilot(
-    runtime: &OrbitRuntime,
-    row: &TaskRow,
-    status_by_id: &BTreeMap<String, TaskStatus>,
-    observational: bool,
-) -> Result<Map<String, Value>, OrbitError> {
-    let task = &row.task;
-    let mut object = task_base_json(task, status_by_id);
-    if let Some(at) = orbit_types::task::task_started_at(&row.history) {
-        object.insert("started_at".into(), serde_json::json!(at));
-    }
-    if let Some(at) = task.not_before {
-        object.insert(
-            "scheduled_hold".into(),
-            serde_json::json!(
-                task.status == TaskStatus::Backlog
-                    && at > chrono::Utc::now()
-                    && !orbit_types::task::schedule_overridden(&row.history, at)
-            ),
-        );
-    }
-    TaskOsReadout::new(runtime)?.insert_into(task, &mut object);
-    // Read projections must tolerate corrupt pilot receipts: the CLI contract
-    // keeps malformed task-pilot comments as ordinary text (see orbit-cli
-    // `pilot_comment_rendering`). A strict decode failure therefore means "no
-    // resolvable hold", not a failed record. Other errors still propagate.
-    let resolvable_pilot_admission_hold = if task.status.is_terminal() {
-        false
-    } else {
-        match runtime.pilot_admission_hold_with_audit(
-            task,
-            &row.comments,
-            &|| Ok(row.history.clone()),
-            &|receipt| {
-                if observational {
-                    runtime.observe_task_pilot_audit(&task.id, receipt)
-                } else {
-                    runtime.task_pilot_audit(&task.id, receipt)
-                }
-            },
-        ) {
-            Ok(hold) => hold.is_some_and(|hold| hold.is_resolvable()),
-            Err(OrbitError::Execution(message))
-                if message.starts_with("decode ")
-                    || message.contains("pilot receipt")
-                    || message.contains("pilot assessment") =>
-            {
-                false
-            }
-            // Missing, unreadable or invalid assessment evidence cannot
-            // resolve a hold in this read projection. Admission stays strict.
-            Err(OrbitError::NotFound {
-                kind: NotFoundKind::Artifact,
-                ..
-            })
-            | Err(OrbitError::Io(_))
-            | Err(OrbitError::InvalidInput(_)) => false,
-            // A dangling or tampered artifact blob fails the full bundle
-            // read that resolves pilot evidence, even though the task's
-            // structural metadata (envelope, sidecars, manifest) is
-            // readable through the lightweight reads that built this row.
-            // Degrade only that payload failure; any other bundle damage
-            // keeps propagating below.
-            Err(error) if pilot_artifact_payload_corruption(&error) => false,
-            Err(error) => return Err(error),
-        }
-    };
-    object.insert(
-        "resolvable_pilot_admission_hold".into(),
-        serde_json::json!(resolvable_pilot_admission_hold),
-    );
-    let warnings = if observational {
-        runtime.observe_task_pilot_warning_findings(task, &row.comments)
-    } else {
-        runtime.task_pilot_warning_findings(task, &row.comments, &|id| {
-            task_is_done(runtime, Some(status_by_id), id)
-        })
-    };
-    object.insert("pilot_warnings".into(), serde_json::json!(warnings));
-    object.insert("comments".to_string(), comments_json(&row.comments)?);
-    object.insert(
-        "history".to_string(),
-        serde_json::to_value(&row.history).map_err(serialize_error("history"))?,
-    );
-    object.insert(
-        "artifacts".to_string(),
-        task_artifact_manifest_json(&row.artifacts),
-    );
-    if let Some(review) = runtime.task_review_evidence(task, &row.artifacts)? {
-        object.insert("review".to_string(), review);
-    }
-    runtime.task_crew_read(task).insert_into(&mut object);
-    Ok(object)
+    runtime.task_record_json_with_pilot(row, status_by_id, false)
 }
 
 /// The show record: `task_record_json` plus the operator guidance only a
@@ -159,70 +224,7 @@ pub fn task_show_json(
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Map<String, Value>, OrbitError> {
     let object = task_record_json(runtime, row, status_by_id)?;
-    with_task_show_extras(runtime, row, object)
-}
-
-/// The dashboard's show projection observes pilot evidence from settled
-/// bundles so a warning or admission-hold hint cannot wait on task commits.
-pub(super) fn observe_task_show_json(
-    runtime: &OrbitRuntime,
-    row: &TaskRow,
-    status_by_id: &BTreeMap<String, TaskStatus>,
-) -> Result<Map<String, Value>, OrbitError> {
-    let object = task_record_json_with_pilot(runtime, row, status_by_id, true)?;
-    with_task_show_extras(runtime, row, object)
-}
-
-fn with_task_show_extras(
-    runtime: &OrbitRuntime,
-    row: &TaskRow,
-    mut object: Map<String, Value>,
-) -> Result<Map<String, Value>, OrbitError> {
-    object.insert(
-        "experiments".into(),
-        serde_json::to_value(
-            crate::app::port::TaskExperiment(runtime)
-                .task_experiment_assignment_readout(&row.task.id)?,
-        )
-        .map_err(serialize_error("experiments"))?,
-    );
-    if let Some(block) = super::blocked_recovery::block_json(row) {
-        object.insert("block".to_string(), block);
-    }
-    if let Some(next) = runtime.blocked_next_step(&row.task, &row.history) {
-        object.insert(
-            "next_step".to_string(),
-            serde_json::to_value(next).map_err(serialize_error("next_step"))?,
-        );
-    }
-    if let Some(record) = super::FinalRecoveryRecord::last(&row.history) {
-        object.insert("final_recovery".to_string(), final_recovery_json(&record));
-    }
-    if let Some(hold) =
-        orbit_types::workflow::current_completion_hold(row.task.status, &row.history)
-    {
-        object.insert(
-            "completion_hold".to_string(),
-            serde_json::to_value(hold).map_err(serialize_error("completion_hold"))?,
-        );
-    }
-    if let Some(owed) = super::owed_criteria_json(&row.history)? {
-        object.insert("owed_criteria".to_string(), owed);
-    }
-    if row
-        .history
-        .iter()
-        .any(|entry| entry.event == orbit_types::task::DECISION_REQUESTED_EVENT)
-    {
-        let open = runtime.open_decisions_json_in(&row.task, &row.history, &row.comments)?;
-        if open.as_array().is_some_and(|items| !items.is_empty()) {
-            object.insert("open_decisions".to_string(), open);
-        }
-    }
-    if let Some(url) = runtime.task_permalink_url(&row.task.id) {
-        object.insert("url".to_string(), Value::String(url));
-    }
-    Ok(object)
+    runtime.with_task_show_extras(row, object)
 }
 
 /// The last final-recovery decision as `task show` and the `final_recovery`
