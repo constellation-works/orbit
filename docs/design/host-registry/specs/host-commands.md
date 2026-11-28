@@ -189,8 +189,11 @@ when the remote reports it; `--no-probe` uses the stored snapshot.
 ### `orbit host show <host>`
 
 One host, probed as in `list`. It also lists what on this machine depends on that host:
-local replica checkouts whose owner is the host, and running pull drains whose destination
-is the host. For the local host, it shows `[machine]` and the local workspaces.
+local replica checkouts whose owner is the host, and pull-drain runs whose destination is
+the host. Those runs are read as stored: `show` reports the `pending` and `running`
+pull-drain records without determining whether their process is alive, so a stale
+`pending` or `running` record may appear. For the local host, it shows `[machine]` and the
+local workspaces.
 
 ### `orbit host rename <host> <new-name>`
 
@@ -201,9 +204,10 @@ pointer to `orbit config set --global machine.name <value>`.
 ### `orbit host remove <host> [--force]`
 
 Refuses with `host_in_use` while a local replica checkout names the host as owner or a
-running `orbit run auto --pull` drain targets it. The error lists the dependents. `--force`
-removes the entry anyway and prints which dependents will lose their route. Removing the
-local host is `host_is_local`.
+`pending` or `running` `orbit run auto --pull` drain record targets it. Removal reads those
+records as stored, as `show` does, without determining process liveness, so a stale record
+can refuse removal. The error lists the dependents. `--force` removes the entry anyway and
+prints which dependents will lose their route. Removing the local host is `host_is_local`.
 
 ### `orbit host offline <host> --reason <reason> [--until <timestamp>]`
 
