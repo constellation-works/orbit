@@ -137,6 +137,17 @@ impl OrbitRuntime {
         }
     }
 
+    /// Observational [`Self::open_decisions_json_in`]: resolves pilot audits
+    /// from settled bundles without entering the task-commit boundary.
+    pub(crate) fn observe_open_decisions_json_in(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        comments: &[TaskComment],
+    ) -> Result<Value, OrbitError> {
+        self.open_decisions_json_with(task, history, comments, true)
+    }
+
     fn scan_decision_requests(
         &self,
         gate: Option<DecisionGate>,
@@ -314,17 +325,6 @@ impl OrbitRuntime {
         comments: &[TaskComment],
     ) -> Result<Value, OrbitError> {
         self.open_decisions_json_with(task, history, comments, false)
-    }
-
-    /// Observational [`Self::open_decisions_json_in`]: resolves pilot audits
-    /// from settled bundles without entering the task-commit boundary.
-    pub(crate) fn observe_open_decisions_json_in(
-        &self,
-        task: &Task,
-        history: &[TaskHistoryEntry],
-        comments: &[TaskComment],
-    ) -> Result<Value, OrbitError> {
-        self.open_decisions_json_with(task, history, comments, true)
     }
 
     fn open_decisions_json_with(
