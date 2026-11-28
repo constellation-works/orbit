@@ -13,7 +13,7 @@ checklist. An injected task snapshot is your starting context.
 
 Start an orchestrator or on-call inspection with `orbit attention --json` or the read-only `orbit.attention` tool.
 
-Task-level kinds report pilot warnings and holds, human-waiting blocks, open decisions and settled reviews; runtime kinds report failed or stuck runs and possibly stale claims (Operator capability required, or a live resident cycle for its covered workspaces); `ci_red` reports a red base branch and `friction_untriaged` lists open friction records; `host_unhealthy` reports failing doctor checks and, across registered hosts, hosts that cannot be read.
+Task-level kinds report pilot warnings and holds, human-waiting blocks, open decisions and settled reviews; runtime kinds report failed or stuck runs, possibly stale claims, and stale owner-base deliveries (Operator capability required, or a live resident cycle for its covered workspaces; see [Attention](references/attention-reading.md)); `ci_red` reports a red base branch and `friction_untriaged` lists open friction records; `host_unhealthy` reports failing doctor checks and, across registered hosts, hosts that cannot be read.
 
 Read `degraded` before interpreting an empty result. See [Attention](references/attention-reading.md) for filters, local scopes, suggested actions and the delta cursor.
 
@@ -141,10 +141,14 @@ filed instead of writing a free-text human task: a question, two to four options
 (one-line label and consequence, exactly one `recommended`), and a `topic` when
 a corpus rule should be able to match the request exactly.
 
-The operator answers,
-or a current corpus rule the operator marked `auto` answers an exact topic or
-rule id and records that answer as precedent. Either way the answer is in the
-task's history, completes the task and unblocks its `blocked_by` dependents.
+The operator can answer directly. Precedent can answer an eligible newly
+raised request only when its topic matches the exact qualified rule
+(`topic/rule`) or a unique bare rule ID, the rule is current and
+operator-approved for auto-answer (`auto`), and its answer chooses one of the
+request's offered options.
+Re-raising an identical open question returns the existing request unchanged.
+A manual operator answer or precedent answer is recorded in task history,
+completes the task and unblocks its `blocked_by` dependents.
 Free text stays for open-ended asks. Raw decision history is not authority.
 
 Only a merged `current` rule may be cited, and only while its review date has

@@ -13,13 +13,13 @@ use orbit_types::record::OrbitEvent;
 use crate::OrbitRuntime;
 use crate::runtime::plugin::build_witness::record_build_witness;
 use crate::runtime::plugin::grants::{
-    record_authorization, record_authorized_grants, verify_install_path,
+    PageActionConsent, record_authorization, record_authorized_grants, verify_install_path,
 };
 use crate::runtime::plugin::host::projected_status;
 use crate::runtime::plugin::paths::plugin_install_path;
 
-use super::super::inspect::{PluginSummary, summary_for_installed};
-use super::super::lifecycle::{resolve_consented_programs, unrequested_grant_warnings};
+use crate::app::plugin::inspect::{PluginSummary, summary_for_installed};
+use crate::app::plugin::lifecycle::{resolve_consented_programs, unrequested_grant_warnings};
 use crate::app::plugin::secret::{prune_undeclared_secrets, unset_secret_warnings};
 
 use super::permissions::{
@@ -329,6 +329,13 @@ fn install_plugin_inner(
         build,
         enabled,
         grants,
+        // The strict load above refused any page it could not read, so every
+        // page has a digest of the source files the copy just published.
+        page_digests: plugin
+            .pages
+            .iter()
+            .filter_map(|page| Some((page.id.clone(), page.digest()?.to_string())))
+            .collect(),
         first_party,
         certified_orbit_version,
         // The store keeps the original `installed_at`; these are the values a
@@ -384,7 +391,14 @@ fn install_plugin_inner(
             runtime.execution_env_policy().process_env(),
         );
         program_warnings = warnings;
-        record_authorization(&global_root, &name, enabled, &record.grants, &programs)?;
+        record_authorization(
+            &global_root,
+            &name,
+            enabled,
+            &record.grants,
+            &programs,
+            &PageActionConsent::from_plugin(&plugin),
+        )?;
     }
 
     // `--enable` is an enable: the plugin's schedules are seeded and its

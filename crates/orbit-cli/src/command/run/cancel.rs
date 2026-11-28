@@ -10,7 +10,31 @@ use crate::command::{CommandOut, ExecuteCore, Payload, require_confirmation};
 #[derive(Args)]
 #[command(
     about = "Cancel a job run, or report its existing terminal outcome",
-    after_help = "Stops a pending or running run, releases its task reservations and marks it `cancelled`;\na finished run reports `already_terminal`. A cancelled task leaf returns its task to the\nbacklog unless `--block`. A pull drain cancels gracefully, waiting for launched leaves\nunless `--force`; `--force` also stops a local drain's child runs. Exits 1 if a stop\ncannot be confirmed.\n\nExamples:\n  orbit run cancel jrun-20260706-0120-2 --confirm\n  orbit run cancel jrun-20260706-0120-2 --confirm --block --reason \"needs review\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --force --reason \"host maintenance\"\n  orbit run cancel jrun-20260706-0120-2 --confirm --json"
+    after_help = "Stops a pending or running run and marks it cancelled. Without --confirm it \
+                  changes nothing. A finished run reports `already_terminal`. A cancelled task \
+                  leaf returns to the backlog unless `--block`. Exits 1 if a stop cannot be \
+                  confirmed.\n\n\
+                  Examples:\n  \
+                  orbit run cancel jrun-20260706-0120-2 --confirm\n  \
+                  orbit run cancel jrun-20260706-0120-2 --confirm --block \
+                  --reason \"needs review\"\n  \
+                  orbit run cancel jrun-20260706-0120-2 --confirm --force \
+                  --reason \"host maintenance\"\n  \
+                  orbit run cancel jrun-20260706-0120-2 --confirm --json",
+    after_long_help = "Stops a pending or running run, releases its task reservations and marks \
+                       it `cancelled`. Without --confirm it changes nothing. A finished run \
+                       reports `already_terminal`. A cancelled task leaf returns its task to \
+                       the backlog unless `--block`. Exits 1 if a stop cannot be confirmed.\n\n\
+                       A pull drain waits for launched leaves unless `--force`. What `--force` \
+                       also stops: installed orbit-orchestrate skill \
+                       `references/workflows-cancel-and-diagnose.md`.\n\n\
+                       Examples:\n  \
+                       orbit run cancel jrun-20260706-0120-2 --confirm\n  \
+                       orbit run cancel jrun-20260706-0120-2 --confirm --block \
+                       --reason \"needs review\"\n  \
+                       orbit run cancel jrun-20260706-0120-2 --confirm --force \
+                       --reason \"host maintenance\"\n  \
+                       orbit run cancel jrun-20260706-0120-2 --confirm --json"
 )]
 pub struct RunCancelArgs {
     /// Job run ID to cancel

@@ -1,6 +1,6 @@
 //! Plugin authority at the installed-plugin boundary: every case installs a
 //! plugin with `orbit plugin add`, then calls it through the built `orbit`
-//! binary (design `docs/design/plugins/1_scope.md` §4.1, §4.3;
+//! binary (design `docs/design/plugins/2_design.md` §4.1, §4.3;
 //! `specs/agent-call-broker.md` §6).
 //!
 //! On Linux the first case also runs the real CLI and MCP transports inside

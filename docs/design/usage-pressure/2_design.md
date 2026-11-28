@@ -1,0 +1,208 @@
+---
+title: Usage Pressure — Design
+owner: claude
+created_date: 2026-10-23
+updated_date: 2026-11-28
+last_validated: 2026-11-20
+status: Accepted
+feature: usage-pressure
+doc_role: design
+type: design
+summary: "Design: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not"
+tags: [usage-pressure, crews, crew-pools, provider-limits, admission]
+---
+
+# Usage Pressure — Design
+
+This doc holds the mechanisms behind [1_overview.md](./1_overview.md), which states the problem and the goal.
+
+## Shape
+
+### Pressure of one window
+
+For a live, gating reading with a known reset and window length:
+
+```
+headroom  = max(0, 1 − used_percent / 100)
+remaining = clamp((resets_at − now) / window_length, ε, 1)
+pressure  = headroom / remaining
+```
+
+Pressure is the headroom left per unit of window time left. `1` means the account is exactly on
+pace to use the window. Above `1`, capacity will expire unless Orbit speeds up, and below `1`
+the account is ahead of pace and should be spared.
+
+| Reading | headroom | remaining | pressure |
+|---|---|---|---|
+| Claude `seven_day` 10% used, resets in 6 h | 0.90 | 6 / 168 = 0.036 | 25 |
+| Codex weekly 0% used, resets in 7 d | 1.00 | 1.00 | 1.0 |
+| Claude `seven_day` 95% used, resets in 6 d | 0.05 | 0.86 | 0.06 |
+| Any window whose reset has passed with no new reading | 1.00 | 1.00 | 1.0 |
+
+Dividing by window length makes accounts comparable without knowing their absolute token
+capacity, which no subscription reports. Pressure therefore measures **waste risk**, not value:
+it assumes every account's window is worth what its pool weight says it is.
+
+### Pressure of a crew
+
+Only **weekly** windows count: eligible gating readings with `window_minutes = 10080`, including
+Claude `seven_day` and model-scoped windows, Codex `secondary`, and Muse `weekly`. Grok
+and Antigravity usage collection was added by [ORB-17774] and [ORB-17775]; their eligible
+weekly readings also count. Every other window is ignored for pressure, the 5-hour ones (`five_hour`, Codex
+`primary`, Muse `window`) included.
+
+1. **The scarcest weekly window binds.** A crew's pressure is the **minimum** over the weekly
+   windows that cover it: its account's, and the model-scoped one for its model, if any. Each
+   token spent counts against both, so spending a near-empty `seven_day_opus` is not free just
+   because `seven_day` has room.
+2. **Unknown means neutral.** A crew with no live weekly reading, a provider that reports
+   no eligible weekly reading, a weekly reading with no reset, an `error` reading and a
+   `ledger` budget all have pressure `1`.
+3. **Accounts follow [ORB-17288].** A crew that sets `env` uses only its own account's readings,
+   and the other crews use their provider's default login.
+
+The existing usage-limit gate is untouched. It still removes a crew whose window of any length
+reaches the provider-limit threshold (90%, or its `provider_limit_overrides` entry), before pressure weights what is left.
+
+### Effective weight
+
+```
+effective_weight = weight × clamp(pressure ^ strength, 1 / cap, cap)
+```
+
+- A weight of `0` stays `0`: a parked crew is never revived.
+- `cap` (default `8`) bounds how far pressure can move a draw. In the example, Claude's ×8
+  against Codex's ×1 turns `opus:50, sonnet:25, sol:25` into 96% Claude (600 of 625 tickets). That moves
+  most of the traffic while still exercising the Codex crew.
+- `strength` (default `1`) is the exponent. `0` disables pressure, and values above `1` sharpen
+  it.
+- The draw keeps integer tickets: effective weights are scaled (×1000) and rounded, so
+  `weighted_draw` and its seeded reproducibility are unchanged.
+
+### Where pressure applies
+
+Pressure is computed at the draw, from **the readings of the host whose login the run will
+spend**, from the same provider-limit observations that gating reads.
+
+1. **Admission re-draws automatic assignments.** With pressure on, a task whose crew came from
+   an automatic source (`pool:<complexity>`, `purpose:<purpose>`, `type:<type>/<tier>`, or
+   `default`) is re-drawn from
+   its pool when its run is admitted (`capture_auto_task_selection`). The member chosen at
+   creation is no longer kept just because it can run. An explicit crew (`explicit`, a legacy
+   pin, an explicit run-input crew) is never re-drawn. The re-draw respects the task's OS
+   requirement, the run's crew allowlist, holds and limit narrowing, exactly as today's
+   narrowing does. When it changes the crew, it persists the new crew on the task with the same
+   automatic source, so the task record, review crew choice and history agree with the run.
+   [ORB-17638] already persists a reassignment at this seam for auto-task crews.
+2. **Creation still draws.** The creation draw keeps its role: OS routing, `runs_on`, and a crew
+   to show before the task runs. It uses pressure too, but admission makes the final choice.
+3. **Other pool draws share the seam.** Ordinary complexity/purpose activity pools and review
+   crew pools still call `weighted_draw`. They remove candidates covered by a provider limit
+   when another eligible candidate remains, then apply the same multiplier through one helper.
+   The final-recovery activity and escalation-triage purpose/inspection fallback draws also
+   call the shared draw, but do not narrow candidates by provider threshold. In those draws, a
+   non-exhausted reading above the threshold keeps its pressure-weighted tickets; only a live
+   exhausted reading can reduce its tickets to zero when another drawable candidate has
+   quota. No active draw site computes pressure on its own. The original shared-seam rollout also covered
+   finding-verification partitions and agent explore; those paths were later retired with
+   [ORB-22844] and [ORB-20383], respectively.
+4. **Pull drains.** A follower spends its own login ([ORB-16324]). The owner must never weigh a
+   follower's run with the owner's readings. On a claimed leaf, the follower re-draws eligible
+   automatic sources (`pool:`, `purpose:`, or `default`) from its own readings; a `type:` source
+   keeps the owner's crew because the claim snapshot does not include tags or context files.
+   See Phasing and Open questions.
+
+### Configuration
+
+```toml
+[workflow]
+crew_selection = "usage_pressure"   # "static" (default until rollout) | "usage_pressure"
+```
+
+[ORB-22808] fixed `cap` at 8 and `strength` at 1 and removed their keys
+(`usage_pressure_cap`, `usage_pressure_strength`). `crew_selection` is a `workflow.*` key and can be overridden per workspace, like `provider_limit_*`.
+Readings stay per host.
+
+### Surfaces
+
+- **Run provenance.** `crew_selection.eligible_pool` gains `pressure` and `effective_weight` per
+  member, and `source` gains `; usage pressure`, so `orbit run show` explains a draw that went
+  against the configured odds.
+- **Readiness, doctor and the dashboard limit strip** show each account's pressure next to its
+  readings ([ORB-14698]), e.g. `claude ×25.2 (seven_day 10%, resets 18:00)` (raw pressure,
+  before any draw cap), plus which window set it.
+- **Task history.** An admission re-draw that changes the crew records `crew_redrawn`, the event
+  a complexity re-rate already uses, with the old crew, the new one and the pressures that
+  decided it.
+
+## Concerns and honest limitations
+
+- **Readings lag.** A window is read only after a run of that account. A drain that admits 15
+  Claude tasks in one pass draws all of them against the same reading. The existing limit gate
+  bounds the overshoot, and the next reading corrects it.
+- **Herding is intended but blunt.** A high-pressure account takes most draws until the limit
+  gate removes it. Then the draw falls back to the pool's other members, as today. Under heavy
+  load this alternates rather than spreading smoothly.
+- **Weekly only.** Pressure ignores how fast the 5-hour windows let an account spend. Ninety
+  percent of a week with 6 hours left may not all be spendable. Pressure still points the right
+  way, but its size can overstate what is recoverable. This is accepted to keep the model to one
+  window per account.
+- **Re-drawing changes a long-standing behaviour.** Under `static`, a runnable pool assignment
+  is retained. Operators reading `task.crew` before the run can see it change at admission when
+  pressure is on.
+
+## Phasing
+
+1. **Pressure view (done: [ORB-17769]).** Compute per-account and per-crew pressure from the existing readings, and
+   show it in readiness, doctor and the dashboard strip. Selection does not change. This lets an
+   operator check the numbers against the provider's own page before they steer anything.
+2. **Pressure-weighted task draws (done: [ORB-17770]).** The `crew_selection` / `usage_pressure_*` keys, the
+   multiplier in the creation draw, the admission re-draw of automatic assignments, run
+   provenance and history. Default `static`.
+3. **Shared seam for other draws (done: [ORB-17771]).** The original rollout applied the
+   multiplier through one helper to activity, review, finding-verification and explore pools.
+   Activity and review draws remain active; finding-verification pools were retired with
+   [ORB-22844], and agent explore was removed with [ORB-20383].
+4. **Pull drains (done: [ORB-17773]).** The follower applies pressure from its own readings when it re-draws an
+   eligible pulled leaf (`pool:`, `purpose:`, or `default`; a `type:` source keeps the owner's
+   crew), and reports per-crew pressure in its crew window. The owner then offers first the tasks
+   whose pools contain the follower's highest-pressure crews.
+
+## Open questions
+
+1. **Admission order.** When the backlog is mostly hard tasks and the pressured account's crews
+   sit only in the low pool, should pressure also promote low tasks ahead of hard ones? This
+   trades priority for capacity and probably wants its own switch.
+2. **Rolling budgets.** Should a `ledger` budget get a pressure, using the share of the budget
+   that ages out within the next hour?
+3. **Default.** After a trial, should `usage_pressure` become the default in `ws_orbit` only, or
+   everywhere?
+
+Settled: **follower offers (phase 4).** Both parts shipped [ORB-17773]: the follower re-draws an
+eligible claimed leaf's automatic assignment (`pool:`, `purpose:`, or `default`) on its own
+readings; a `type:` source keeps the owner's crew because the claim snapshot has no tags or
+context files. The follower also reports per-crew pressure in its pull capability so the owner
+offers it first, among tasks tied on band, priority, expiry and census affinity, the ones whose
+pools hold its highest-pressure crews. Neither alone was
+enough: the re-draw can only choose within the pool of the task already offered, and offer
+order alone would still spend the owner's draw on the follower's login. Owner and followers
+run the same exact version, and the capability field is additive and optional — absent reads
+as neutral 1.0 — so an older or `static` follower orders exactly as before.
+
+## Task References
+
+- [ORB-14698] — shows provider limits and gated crews in readiness, run show, doctor and the dashboard
+- [ORB-16324] — reads a pull executor's limits from its own login
+- [ORB-17288] — makes a crew that sets `env` its own provider account
+- [ORB-17638] — reassigns an auto-task's limited explicit crew from its complexity pool at admission
+- [ORB-17769] — computes and displays weekly usage pressure
+- [ORB-17770] — weights task draws and redraws automatic crews at admission
+- [ORB-17771] — applies pressure to shared pool draws
+- [ORB-17773] — applies follower pressure to pull-drain draws and offers
+- [ORB-17774] — records Grok usage windows
+- [ORB-17775] — records Antigravity usage windows
+- [ORB-20383] — removes the explorer agent and its explore job
+- [ORB-22808] — removes the `usage_pressure_cap` and `usage_pressure_strength` keys and fixes both at 8 and 1.
+- [ORB-22844] — removes the finding-verification routine whose pool partitions the shared draw seam had served.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -207,11 +207,13 @@ pub(in crate::activity_job) fn task_id_from_input(input: &Value) -> Option<&str>
                 .and_then(non_empty)
         })
         .or_else(|| {
-            input
-                .get("task_ids")
-                .and_then(Value::as_array)
-                .and_then(|items| items.iter().find_map(Value::as_str))
-                .and_then(non_empty)
+            // A bundle does not identify the activity's owner by order.
+            let items = input.get("task_ids")?.as_array()?;
+            if items.len() == 1 {
+                items.first()?.as_str().and_then(non_empty)
+            } else {
+                None
+            }
         })
 }
 

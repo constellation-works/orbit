@@ -44,6 +44,12 @@ pub struct InstalledPlugin {
     /// the loader checks this against.
     #[serde(default)]
     pub build: Option<PluginBuildRecord>,
+    /// Digest of each `spec.web.pages[]` bundle at install time, by page
+    /// id: SHA-256 over `index.html` and the listed files, hex encoded
+    /// (plugin-pages design §1). A load whose files no longer hash to this
+    /// registers that page inactive. Empty for a plugin with no pages.
+    #[serde(default)]
+    pub page_digests: std::collections::BTreeMap<String, String>,
     pub installed_at: String,
     pub updated_at: String,
 }
@@ -108,7 +114,7 @@ pub struct PluginProvenance {
 }
 
 /// What the host did with one entry of a backend's `secret_updates`
-/// (design `docs/design/plugins/1_scope.md` §3, "Plugin secrets"): the whole
+/// (design `docs/design/plugins/2_design.md` §3, "Plugin secrets"): the whole
 /// record an audit row keeps about a rotation, beside the secret's name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

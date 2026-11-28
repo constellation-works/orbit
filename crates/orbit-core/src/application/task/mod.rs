@@ -84,7 +84,7 @@ pub(crate) use provider_hold::AdmissionProviderPass;
 pub(crate) use retained_candidate::RetainedCandidate;
 pub(crate) use schedule::schedule_hold_in;
 pub use terminal_dates::TerminalTaskDates;
-pub(in crate::application) use terminal_dates::latest_status_entry_at;
+pub(crate) use terminal_dates::latest_status_entry_at;
 
 /// The shared non-pruning footprint calculation. Task reads, projections,
 /// reservations, status-derived locks, and the admission work that freezes a
@@ -93,7 +93,7 @@ pub use crate::runtime::base::path::declared_context::{
     DeclaredContextFiles, declared_context_files,
 };
 pub use artifact_export::TaskArtifactRead;
-pub(in crate::application) use automation_port::{SourceGit, TaskAutomationPort};
+pub(crate) use automation_port::{SourceGit, TaskAutomationPort};
 pub(crate) use baseline_hold::refresh_baseline_holds_step;
 pub use baseline_hold::{BASELINE_HOLD_REFRESH_JOB, BaselineHoldRefresh};
 pub(crate) use block_cause::{
@@ -150,9 +150,7 @@ pub(crate) use finding_verification::{
 };
 pub use finding_verification::{FindingVerdict, VerdictSource};
 use job_port::CrewPools;
-pub(in crate::application) use job_port::{
-    DeliveryCompletion, NativePublicationIdentity, TaskJobPort,
-};
+pub(crate) use job_port::{DeliveryCompletion, NativePublicationIdentity, TaskJobPort};
 pub(crate) use lint::TaskLintReport;
 pub use lint::{TaskLintFinding, TaskLintSeverity};
 pub use list_result::{TaskListResultPolicy, TaskListResultProfile};
@@ -191,10 +189,10 @@ pub(crate) use record_json::task_record_json;
 pub use record_json::task_show_json;
 pub(crate) use records::TaskRecords;
 pub(crate) use resident_port::{DisabledCycleRoutine, ResidentMandateAttachment, TaskResidentPort};
-pub(in crate::application) use review_port::TaskReviewPort;
+pub(crate) use review_port::TaskReviewPort;
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskUpdateIdentity, TaskWriteScreen};
 pub(crate) use selector_match::task_selectors_contain_path;
-pub(in crate::application) use sweep_filing_port::TaskSweepFilingPort;
+pub(crate) use sweep_filing_port::TaskSweepFilingPort;
 pub(crate) use sweep_filing_port::{
     AdmissionClosure, CiSweepAdmission, CiSweepAdmissionDecision, CiSweepAdmissionRequest,
     CiSweepFilingEvidence, CiSweepFilingSource, PromotionDecision,

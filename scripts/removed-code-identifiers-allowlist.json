@@ -66,7 +66,7 @@
   },
   {
     "identifier": "experiment_assignments",
-    "doc": "docs/design/experiments/1_scope.md",
+    "doc": "docs/design/experiments/2_design.md",
     "reason": "Names the `experiment_assignments` SQLite table, which ORB-28375 kept; only the store method of the same name became a repository method."
   },
   {

@@ -18,7 +18,7 @@ on:
 # run, while the newest commit always does. This bounds the queue on the two
 # macOS runners. A workflow_dispatch run instead gets a group per run, so a
 # deploy-candidate dispatch for a chosen SHA is never queued behind, replaced
-# or cancelled by later agent-main pushes (see docs/DEVELOPMENT.md, Hosted CI).
+# or cancelled by later agent-main pushes (see docs/development/hosted-ci.md).
 # Ordinary pushes keep the exact group below; no extra macOS push runs are added.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('run-{0}', github.run_id) || github.ref }}

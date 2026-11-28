@@ -112,6 +112,10 @@ pub struct LoadedPlugin {
     /// when the plugin was loaded with `load_plugin_dir_without_tests`
     /// (the host serving path, which never reads goldens).
     pub tests: Vec<LoadedPluginTestFile>,
+    /// `spec.web.pages[]`, each with its files read and hashed, or the
+    /// reason they could not be. The strict loader refuses a plugin with a
+    /// page that failed; the serving loader keeps the failure on the page.
+    pub pages: Vec<LoadedPluginPage>,
 }
 
 /// One resolved `spec.tests` file and its parsed cases.
@@ -152,10 +156,27 @@ pub fn manifest_digest(bytes: &[u8]) -> String {
 /// so a link to `/proc/self/environ` (or any other readable path) would leak
 /// into a location the sandbox is supposed to hide.
 pub fn refuse_plugin_tree_symlinks(root: &Path) -> Result<(), PluginLoadError> {
-    refuse_plugin_tree_symlinks_in(root, root)
+    match find_plugin_tree_symlink(root)? {
+        Some((entry, target)) => Err(PluginLoadError::SymlinkRefused(plugin_symlink_refusal(
+            &entry,
+            target.as_deref(),
+        ))),
+        None => Ok(()),
+    }
 }
 
-fn refuse_plugin_tree_symlinks_in(root: &Path, dir: &Path) -> Result<(), PluginLoadError> {
+/// The first symbolic link under `root`, relative to it, with its target
+/// when it can be read.
+pub(super) fn find_plugin_tree_symlink(
+    root: &Path,
+) -> Result<Option<(PathBuf, Option<PathBuf>)>, PluginLoadError> {
+    find_plugin_tree_symlink_in(root, root)
+}
+
+fn find_plugin_tree_symlink_in(
+    root: &Path,
+    dir: &Path,
+) -> Result<Option<(PathBuf, Option<PathBuf>)>, PluginLoadError> {
     let entries = std::fs::read_dir(dir).map_err(|error| {
         PluginLoadError::io(format!("read {}: {error}", dir.display()), error.kind())
     })?;
@@ -169,16 +190,16 @@ fn refuse_plugin_tree_symlinks_in(root: &Path, dir: &Path) -> Result<(), PluginL
         })?;
         if file_type.is_symlink() {
             let target = std::fs::read_link(&path).ok();
-            return Err(PluginLoadError::SymlinkRefused(plugin_symlink_refusal(
-                path.strip_prefix(root).unwrap_or(&path),
-                target.as_deref(),
-            )));
+            let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+            return Ok(Some((relative, target)));
         }
-        if file_type.is_dir() {
-            refuse_plugin_tree_symlinks_in(root, &path)?;
+        if file_type.is_dir()
+            && let Some(found) = find_plugin_tree_symlink_in(root, &path)?
+        {
+            return Ok(Some(found));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Diagnostic that names the offending plugin-tree entry.

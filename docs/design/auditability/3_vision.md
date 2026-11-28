@@ -39,7 +39,7 @@ This document captures the questions that remain before Orbit's auditability sto
 
 Activity / Job's audit-envelope section and ADRs in [../activity-job/2_design.md](../activity-job/2_design.md) and [../activity-job/4_decisions.md](../activity-job/4_decisions.md) document the v2 envelope, backend differences, CLI allowlist delegation, file-backed audit placement, and invocation trace persistence.
 
-The product contract lives in [../../../README.md](../../../README.md) and [../../POSITIONING.md](../../POSITIONING.md): auditability should answer what, why, and who; audit rows should be structured and queryable; provider interactions should be reproducible after redaction; retention should become tamper-evident; and identity should attach to every write.
+The product contract lives in [../../../README.md](../../../README.md) and [../../principles/positioning.md](../../principles/positioning.md): auditability should answer what, why, and who; audit rows should be structured and queryable; provider interactions should be reproducible after redaction; retention should become tamper-evident; and identity should attach to every write.
 
 The redaction and blob-store implementation is the existing write-side safety boundary. Future query tools should preserve it even if they read blobs more directly.
 
@@ -81,7 +81,7 @@ Orbit-internal:
 - [specs/actor-identity.md](./specs/actor-identity.md) — canonical actor projection and its versioned alias map.
 - [../activity-job/specs/audit-envelope.md](../activity-job/specs/audit-envelope.md) — v2 activity/job audit envelope spec.
 - [../../../README.md](../../../README.md) — product-level auditability commitments and public status.
-- [../../POSITIONING.md](../../POSITIONING.md) — auditability as a non-negotiable.
+- [../../principles/positioning.md](../../principles/positioning.md) — auditability as a non-negotiable.
 
 External reference categories:
 

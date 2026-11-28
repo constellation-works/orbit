@@ -319,7 +319,7 @@ impl<'de> Deserialize<'de> for RetiredAgentBackend {
 /// crew parsing, activity resolution, CLI executor selection, setup
 /// detection — routes through [`Provider::parse`] so canonical IDs, alias
 /// normalization, and capability predicates cannot drift across layers.
-/// The set mirrors the Constellation provider-resolution contract (see `docs/CONFIG.md`).
+/// The set mirrors the Constellation provider-resolution contract (see `docs/config/providers.md`).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {

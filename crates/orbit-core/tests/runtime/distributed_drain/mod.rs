@@ -25,6 +25,8 @@ mod allow_crew;
 mod auth_recovery;
 mod auto_concurrency;
 mod before_landing;
+
+mod before_landing_repair;
 mod before_pr;
 mod browser_kit;
 mod cancel;

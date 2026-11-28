@@ -99,14 +99,29 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
-        let Some(kept) = self.stores().tasks().kept_claim_candidate(
-            &task.id,
-            self.automation_machine_identity().unwrap_or_default(),
-        )?
-        else {
+        self.kept_claim_requeue_with(task, None, false)
+    }
+
+    pub(super) fn kept_claim_requeue_with(
+        &self,
+        task: &Task,
+        history: Option<&[orbit_types::task::TaskHistoryEntry]>,
+        observational: bool,
+    ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
+        let machine_id = self.automation_machine_identity().unwrap_or_default();
+        let Some(kept) = (match history.filter(|_| observational) {
+            Some(history) => self
+                .stores()
+                .tasks()
+                .observe_kept_claim_candidate(task, history, machine_id)?,
+            None => self
+                .stores()
+                .tasks()
+                .kept_claim_candidate(&task.id, machine_id)?,
+        }) else {
             return Ok(None);
         };
-        if self.stopped_run_holds_candidate(task)? {
+        if self.stopped_run_holds_candidate_with(task, history)? {
             return Ok(None);
         }
         match kept.fresh.as_ref().map(|(reason, _)| *reason) {
@@ -139,47 +154,6 @@ impl OrbitRuntime {
                 .job_run_machine
                 .as_ref()
                 .is_none_or(|origin| origin.machine_id == kept.machine_id)
-    }
-
-    /// Whether admission offers a candidate `task`'s stopped run held, rather
-    /// than the latest claim settlement. The run id matches only together
-    /// with the machine, the same linkage admission uses.
-    fn stopped_run_holds_candidate(&self, task: &Task) -> Result<bool, OrbitError> {
-        Ok(self.stopped_run_held_candidate(task)?.is_some())
-    }
-
-    /// The candidate `task`'s stopped run held, while the task is still
-    /// linked to that run. The run id matches only together with the
-    /// machine, the same linkage admission uses.
-    fn stopped_run_held_candidate(
-        &self,
-        task: &Task,
-    ) -> Result<Option<(HeldCandidate, chrono::DateTime<Utc>)>, OrbitError> {
-        use orbit_types::workflow::CANDIDATE_HELD_EVENT;
-
-        let history = self.get_task_history(&task.id)?;
-        let Some(entry) = history
-            .iter()
-            .rev()
-            .find(|entry| entry.event == CANDIDATE_HELD_EVENT)
-        else {
-            return Ok(None);
-        };
-        let Some(held) = HeldCandidate::from_entry(entry) else {
-            return Ok(None);
-        };
-        if task.job_run_id.as_deref() != Some(held.run_id.as_str()) {
-            return Ok(None);
-        }
-        // Run ids are unique only per machine.
-        if !task
-            .job_run_machine
-            .as_ref()
-            .is_none_or(|origin| held.machine_id.as_deref() == Some(origin.machine_id.as_str()))
-        {
-            return Ok(None);
-        }
-        Ok(Some((held, entry.at)))
     }
 
     /// The held candidate a requeue reports as resumed: the one admission
@@ -290,6 +264,17 @@ impl OrbitRuntime {
         description: Option<&str>,
         acceptance_criteria: Option<&[String]>,
     ) -> Result<bool, OrbitError> {
+        self.rewrite_strands_candidate_with(task, None, description, acceptance_criteria, false)
+    }
+
+    pub(crate) fn rewrite_strands_candidate_with(
+        &self,
+        task: &Task,
+        history: Option<&[orbit_types::task::TaskHistoryEntry]>,
+        description: Option<&str>,
+        acceptance_criteria: Option<&[String]>,
+        observational: bool,
+    ) -> Result<bool, OrbitError> {
         let mut rewritten = task.clone();
         if let Some(description) = description {
             rewritten.description = description.to_string();
@@ -301,18 +286,18 @@ impl OrbitRuntime {
             return Ok(false);
         }
         // Discarding a live run would race a handoff that may still publish.
-        if self.unsettled_run(task)?.is_some() {
+        if self.unsettled_run_with(task, observational)?.is_some() {
             return Ok(false);
         }
-        if self.preserved_candidate_bound(task)? {
+        if self.preserved_candidate_bound_with(task, history, observational)? {
             return Ok(true);
         }
-        match self.authenticate_published_backlog_return(task) {
+        match self.authenticate_published_backlog_return_with(task, history, observational) {
             Ok(_) => {}
             Err(OrbitError::InvalidInput(_)) => return Ok(false),
             Err(error) => return Err(error),
         }
-        match self.authenticate_published_backlog_return(&rewritten) {
+        match self.authenticate_published_backlog_return_with(&rewritten, history, observational) {
             Ok(_) => Ok(false),
             Err(OrbitError::InvalidInput(_)) => Ok(true),
             Err(error) => Err(error),
@@ -323,7 +308,12 @@ impl OrbitRuntime {
     /// receipt, a pipeline publication the failure handoff kept, or a kept
     /// claim that has not been discarded. A live run can still be bound; the
     /// caller decides whether that run may be discarded.
-    pub(crate) fn preserved_candidate_bound(&self, task: &Task) -> Result<bool, OrbitError> {
+    pub(crate) fn preserved_candidate_bound_with(
+        &self,
+        task: &Task,
+        history: Option<&[orbit_types::task::TaskHistoryEntry]>,
+        observational: bool,
+    ) -> Result<bool, OrbitError> {
         if self.handoff_receipt(task)?.is_some() {
             return Ok(true);
         }
@@ -332,20 +322,88 @@ impl OrbitRuntime {
         }
         // Admission offers a held candidate instead of the kept claim, and a
         // plain requeue does not refuse that hold for a specification change.
-        if self.stopped_run_holds_candidate(task)? {
+        if self.stopped_run_holds_candidate_with(task, history)? {
             return Ok(false);
         }
-        let Some(kept) = self.stores().tasks().kept_claim_candidate(
-            &task.id,
-            self.automation_machine_identity().unwrap_or_default(),
-        )?
-        else {
+        let machine_id = self.automation_machine_identity().unwrap_or_default();
+        let Some(kept) = (match history.filter(|_| observational) {
+            Some(history) => self
+                .stores()
+                .tasks()
+                .observe_kept_claim_candidate(task, history, machine_id)?,
+            None => self
+                .stores()
+                .tasks()
+                .kept_claim_candidate(&task.id, machine_id)?,
+        }) else {
             return Ok(false);
         };
         Ok(!matches!(
             kept.fresh.as_ref().map(|(reason, _)| *reason),
             Some(CandidateFreshReason::Discarded)
         ))
+    }
+
+    /// Whether admission offers a candidate `task`'s stopped run held, rather
+    /// than the latest claim settlement. The run id matches only together
+    /// with the machine, the same linkage admission uses.
+    fn stopped_run_holds_candidate_with(
+        &self,
+        task: &Task,
+        history: Option<&[orbit_types::task::TaskHistoryEntry]>,
+    ) -> Result<bool, OrbitError> {
+        Ok(self
+            .stopped_run_held_candidate_with(task, history)?
+            .is_some())
+    }
+
+    /// The candidate `task`'s stopped run held, while the task is still
+    /// linked to that run. The run id matches only together with the
+    /// machine, the same linkage admission uses.
+    fn stopped_run_held_candidate(
+        &self,
+        task: &Task,
+    ) -> Result<Option<(HeldCandidate, chrono::DateTime<Utc>)>, OrbitError> {
+        self.stopped_run_held_candidate_with(task, None)
+    }
+
+    fn stopped_run_held_candidate_with(
+        &self,
+        task: &Task,
+        history: Option<&[orbit_types::task::TaskHistoryEntry]>,
+    ) -> Result<Option<(HeldCandidate, chrono::DateTime<Utc>)>, OrbitError> {
+        use orbit_types::workflow::CANDIDATE_HELD_EVENT;
+
+        let loaded;
+        let history = match history {
+            Some(history) => history,
+            None => {
+                loaded = self.get_task_history(&task.id)?;
+                &loaded
+            }
+        };
+        let Some(entry) = history
+            .iter()
+            .rev()
+            .find(|entry| entry.event == CANDIDATE_HELD_EVENT)
+        else {
+            return Ok(None);
+        };
+        let Some(held) = HeldCandidate::from_entry(entry) else {
+            return Ok(None);
+        };
+        if task.job_run_id.as_deref() != Some(held.run_id.as_str()) {
+            return Ok(None);
+        }
+        // Run ids are unique only per machine.
+        if !task
+            .job_run_machine
+            .as_ref()
+            .is_none_or(|origin| held.machine_id.as_deref() == Some(origin.machine_id.as_str()))
+        {
+            return Ok(None);
+        }
+        Ok(Some((held, entry.at)))
     }
 
     /// Whether `task`'s current run pushed its own pull request and the

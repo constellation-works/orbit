@@ -2,7 +2,7 @@
 title: Crew Memory — Vision
 owner: claude
 created_date: 2026-11-08
-updated_date: 2026-11-27
+updated_date: 2026-11-28
 last_validated: 2026-11-08
 status: Accepted
 feature: crew-memory
@@ -62,9 +62,9 @@ Nothing here is proven yet.
 
 - [Crew Memory — Design](./2_design.md)
 - [Outcome-checked memory consolidation (proposal)](./specs/consolidation.md)
-- [Experiments scope](../experiments/1_scope.md)
+- [Experiments scope](../experiments/1_overview.md)
 - [Agent Scorecards — Design](../agent-scorecards/2_design.md)
-- [Project Learnings — Decisions](../project-learnings/4_decisions.md)
+- [Project Learnings — Decisions](../_archived/project-learnings/4_decisions.md)
 
 **External**
 

@@ -3,6 +3,7 @@
 use orbit_common::OrbitError;
 
 use crate::OrbitRuntime;
+use crate::app::plugin::install;
 use crate::runtime::plugin::paths::plugin_namespace_dir;
 
 use super::super::inspect::PluginSummary;
@@ -17,8 +18,9 @@ use crate::app::plugin::skill::unlink_plugin_skills;
 /// carry an operator's edits, and a re-enable must not have to recreate them
 /// (§3).
 pub fn disable_plugin(runtime: &OrbitRuntime, name: &str) -> Result<PluginSummary, OrbitError> {
+    let _namespace_lock = install::lock_plugin_namespace(&runtime.global_root(), name)?;
     verified_install_path(runtime, &installed_plugin(runtime, name)?)?;
-    let summary = set_enabled(runtime, name, false, None, None)?;
+    let summary = set_enabled(runtime, name, false, None, None, None)?;
     unlink_namespace_skills(runtime, name)?;
     Ok(summary)
 }

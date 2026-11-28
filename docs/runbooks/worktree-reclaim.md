@@ -2,7 +2,7 @@
 type: runbook
 summary: Reclaim declared rebuildable outputs from kept terminal run worktrees and their host validation output.
 tags: [disk, worktree, gc]
-paths: ["crates/orbit-engine/src/executor/automation/vcs/worktree/", "crates/orbit-core/src/application/gc/"]
+paths: ["crates/orbit-engine/src/executor/automation/vcs/worktree/", "crates/orbit-core/src/app/gc/"]
 last_validated: 2026-10-19
 ---
 
@@ -71,7 +71,7 @@ declare caches and build output: evidence matching a declaration is reclaimable.
 ## Host validation output
 
 Workspaces opt into managed host output through
-`workflow.validation_env.build_output_env` ([contract](../CONFIG.md#workspace-build-output)).
+`workflow.validation_env.build_output_env` ([contract](../config/workflow-validation.md#workspace-build-output)).
 Required validation and host evidence then build into
 `<primary-repository>/.orbit/state/host-validation-targets/<sha256(canonical-checkout)>`,
 outside the checkout ([host build isolation](compiler-cache.md#host-validation-builds-apart)).

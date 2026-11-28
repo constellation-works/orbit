@@ -2,7 +2,7 @@
 title: Orbit Core — Overview
 owner: codex
 created_date: 2026-07-04
-updated_date: 2026-11-26
+updated_date: 2026-11-27
 last_validated: 2026-11-14
 status: Implemented
 stage: shipped
@@ -135,7 +135,7 @@ source scan, enforces the runtime direction.
 | Task-owned checkpoint cost projection | `crates/orbit-core/src/application/task/evolution_port.rs` (`TaskEvolutionPort`), implemented in `app/evolution/ledger.rs` and bound in `app/port.rs` | [ORB-23018] |
 | Task-owned corpus appends and digest | `crates/orbit-core/src/application/task/corpus_port.rs` (`TaskCorpusPort`), implemented in `agent_corpus.rs` | [ORB-23421] |
 | Task-owned commit-pinned readers and executor `host_os` limits | `crates/orbit-core/src/application/task/{base_revision,executor_host_os}.rs`; the declared hosts and per-crew limits are read in `crates/orbit-runtime/src/run/engine/crew/host_os.rs`; the host-OS wait is `job/crew_pools/host_os_wait.rs` | [ORB-22289], [ORB-28395] |
-| Backlog forecast, above `workspace_auto` | `crates/orbit-core/src/application/backlog_forecast/`; `BacklogForecastHistory` at the crate root and the budget override in `test_support`, both directly from `backlog_forecast` | [ORB-22287], [ORB-24548] |
+| Backlog forecast, above `workspace_auto` | `crates/orbit-core/src/unit/backlog_forecast/`; `BacklogForecastHistory` at the crate root and the budget override in `test_support`, both directly from `backlog_forecast` | [ORB-22287], [ORB-24548] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
 | Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and `pull_drain/job_port.rs` | [ORB-17937] |
 | Job-owned automation, admission and auto-concurrency ports | `crates/orbit-core/src/application/job/{automation,admission,auto_concurrency}_port.rs`, implemented in `automation/job_port.rs`, `admission/job_port.rs` and `workspace_auto/job_port.rs` | [ORB-17938] |
@@ -160,11 +160,16 @@ source scan, enforces the runtime direction.
 
 ## 4. Store Access Boundary
 
-`OrbitStores`, defined in `orbit-runtime`'s `context` module, is the typed holder
-for `orbit-store` backends; it is not an external SDK surface. Code inside Core
-delegates ordinary persistence to the owning backend traits [ORB-10355], while
-outer crates use explicit `OrbitRuntime` methods and application APIs. Runtime exposes mechanisms; coordination across
-stores or side effects belongs to the owning application operation.
+`OrbitStores`, defined in `orbit-runtime`'s `stored` module, holds the concrete
+access handles used by Core: a `TaskV2Store`, `TaskCoordination`, the task
+document, history, artifact and reservation repositories, the lexical index,
+job runs, executor and policy `FileStore`s, and the host SQLite `Store`. Core
+uses these stores and repositories directly; for example, executor definition
+reads and writes go through a `FileStore` and its `executor_def` repository.
+These handles are internal, not an external SDK surface. Outer crates use
+explicit `OrbitRuntime` methods and application APIs. Runtime exposes
+mechanisms; coordination across stores or side effects belongs to the owning
+application operation.
 
 ## 5. Application-Internal Layering
 

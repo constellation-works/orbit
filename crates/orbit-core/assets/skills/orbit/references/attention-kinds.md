@@ -11,6 +11,7 @@ Contents:
 - [Stalled residents](#stalled-residents)
 - [Tripped routines](#tripped-routines)
 - [Standing-drain keeper](#standing-drain-keeper)
+- [Stale owner base](#stale-owner-base)
 
 ## Review waits
 
@@ -127,3 +128,7 @@ The sweep lets one trial fire through after a backoff (15 minutes, doubling per 
 `drain_breaker_open` (high) reports that the keeper stopped submitting because `max_failed_resubmits` of its drains ended failed or interrupted within an hour, and stays open until a hand start however much time passes; `detail` carries `failed_in_last_hour` (the failures inside the hour that tripped it) and `threshold`, and `since` is the newest failure.
 
 Both are default-selected; `next` suggests starting a drain by hand (`orbit run auto --for 24h`), which lifts the pause or closes the breaker, with `orbit run readiness` as the follow-up. Reading them starts nothing.
+
+## Stale owner base
+
+`delivery_stale_base` reports held deliveries when the owner base diverges from origin or a behind checkout has tracked changes. Inspect the owner-only commits and preserve them and any tracked work before reconciling the base and retrying. The item uses local remote-tracking refs and clears when setup admits again.

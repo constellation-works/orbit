@@ -2467,9 +2467,211 @@ fn warnings_hold_findings_reach_run_show_and_readiness() {
     assert_eq!(held["reason"], "warnings");
     assert_eq!(held["findings"], findings);
 }
+
+fn run_show_distinguishes_pull_supervisor_local_review_from_claimed_owner_review() {
+    let fixture = Fixture::init();
+    fs::write(
+        fixture.work.join(".orbit/config.toml"),
+        "[review]\ntiming = \"before_landing\"\n",
+    )
+    .unwrap();
+    let workspace = fixture.workspace_id();
+    let db = fixture.db();
+    let at = chrono::Utc::now();
+    let drain = "jrun-cli-pull-review-drain";
+    let repair_leaf = "jrun-cli-pull-review-repair";
+    let legacy_leaf = "jrun-cli-pull-review-legacy";
+
+    let supervisor_input = serde_json::json!({
+        "review": {
+            "contract_version": orbit_types::workflow::REVIEW_CONTRACT_VERSION,
+            "policy_version": 1,
+            "timing": "before-landing",
+            "timing_source": "workspace",
+            "crew": "sol",
+            "crew_source": "workspace",
+            "budget": orbit_types::workflow::ReviewBudget::default(),
+            "required_validation_commands": [],
+            "captured_at": at,
+        }
+    });
+    let repair_input = serde_json::json!({
+        "review": {
+            "contract_version": orbit_types::workflow::REVIEW_CONTRACT_VERSION,
+            "policy_version": 1,
+            "timing": "none",
+            "timing_source": "claim",
+            "crew_source": "claim",
+            "budget": orbit_types::workflow::ReviewBudget::default(),
+            "captured_at": at,
+        }
+    });
+    let legacy_input = serde_json::json!({});
+
+    for (run_id, job_id, input) in [
+        (drain, "workspace_pull_pipeline", &supervisor_input),
+        (repair_leaf, "task_claimed_pr_pipeline", &repair_input),
+        (legacy_leaf, "task_claimed_pr_pipeline", &legacy_input),
+    ] {
+        db.execute(
+            "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, input_json, scheduled_at, started_at, created_at, pid) \
+             VALUES (?1,?2,?3,1,'running',?4,?5,?5,?5,?6)",
+            params![
+                run_id,
+                workspace,
+                job_id,
+                input.to_string(),
+                at.to_rfc3339(),
+                std::process::id()
+            ],
+        )
+        .unwrap();
+    }
+
+    let make_record =
+        |req_id: &str, claim_id: &str, leaf_id: &str, repair: Option<serde_json::Value>| {
+            let request = serde_json::json!({
+                "request_id": req_id,
+                "caller_version": "fixture",
+                "caller_schema": 1,
+                "run_context": {
+                    "run_id": drain,
+                    "job_name": "workspace_pull_pipeline",
+                    "machine_name": "fixture-mac"
+                },
+                "ship": {
+                    "mode": "pr",
+                    "base_branch": "agent-main",
+                    "landing_branch": "agent-main",
+                    "completion": "owner"
+                }
+            });
+            serde_json::json!({
+                "destination": {
+                    "owner_machine_id": "fixture-owner",
+                    "owner_workspace_id": "owner-workspace",
+                    "execution_machine_id": "fixture-host",
+                    "selector": "fixture-owner/owner-workspace"
+                },
+                "request": request,
+                "receipt": {
+                    "schema_version": 1,
+                    "request": request,
+                    "machine_id": "fixture-host",
+                    "claim": {
+                        "claim_id": claim_id,
+                        "task_id": "ORB-99999",
+                        "request_id": req_id,
+                        "executed_on": {
+                            "machine_id": "fixture-host",
+                            "machine_name": "fixture-mac"
+                        },
+                        "run_context": {
+                            "run_id": drain,
+                            "job_name": "workspace_pull_pipeline",
+                            "machine_name": "fixture-mac"
+                        },
+                        "footprint": [],
+                        "reservation_id": "res-fixture",
+                        "reservation_expires_at": at.to_rfc3339(),
+                        "phase": "claimed",
+                        "repair": repair
+                    },
+                    "task": null,
+                    "invalid_candidates": [],
+                    "deferred_conflicts": [],
+                    "queue_depth": 0
+                },
+                "leaf_run_id": leaf_id,
+                "phase": "launched",
+                "settlement": null
+            })
+        };
+
+    let repair_payload = serde_json::json!({
+        "repairs_claim_id": "claim-prev",
+        "handoff_id": "handoff-prev",
+        "owner_review_timing": "none",
+        "candidate": {
+            "repository": "owner/repository",
+            "source_branch": "orbit/ORB-99999",
+            "base_branch": "agent-main",
+            "landing_branch": "agent-main",
+            "base": {
+                "commit": "1111111111111111111111111111111111111111",
+                "tree": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "candidate": {
+                "commit": "2222222222222222222222222222222222222222",
+                "tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "delivery": { "kind": "pull_request", "number": 42 }
+        },
+        "stop_evidence": "conflicts with base"
+    });
+    for (req_id, claim_id, leaf_id, repair) in [
+        (
+            "req-repair",
+            "claim-repair",
+            repair_leaf,
+            Some(repair_payload),
+        ),
+        ("req-legacy", "claim-legacy", legacy_leaf, None),
+    ] {
+        let record = make_record(req_id, claim_id, leaf_id, repair);
+        db.execute(
+            "INSERT INTO local_pull_admissions VALUES (?1,'fixture-owner','owner-workspace','fixture-host',?2,?3,?4,?5)",
+            params![workspace, req_id, claim_id, leaf_id, record.to_string()],
+        )
+        .unwrap();
+    }
+
+    let drain_text = fixture.show_text(drain);
+    contains(
+        &drain_text,
+        "Local review: before-landing (workspace policy, workspace; owner decides per claim)",
+    );
+    contains(&drain_text, "owner_review=none");
+    let drain_json = fixture.show_json(drain);
+    assert_eq!(
+        drain_json["run"]["review_layer"],
+        serde_json::json!({
+            "timing": "before-landing",
+            "source": "workspace",
+            "scope": "supervisor_local"
+        })
+    );
+    assert_eq!(
+        drain_json["claimed_leaves"][0]["owner_review_timing"],
+        "none"
+    );
+
+    let repair_text = fixture.show_text(repair_leaf);
+    contains(&repair_text, "Review: none (the owner's claim)");
+    contains(&repair_text, "repairs claim-prev");
+    contains(&repair_text, "owner_review=none");
+    let repair_json = fixture.show_json(repair_leaf);
+    assert_eq!(
+        repair_json["run"]["review_layer"],
+        serde_json::json!({"timing": "none", "source": "claim"})
+    );
+    assert_eq!(repair_json["pull_claim"]["owner_review_timing"], "none");
+    assert_eq!(repair_json["pull_claim"]["repairs_claim_id"], "claim-prev");
+
+    let legacy_text = fixture.show_text(legacy_leaf);
+    contains(&legacy_text, "Review: none (the owner's claim)");
+    assert!(
+        !legacy_text.contains("before-landing"),
+        "legacy owner-off claim must not infer follower before-landing config:\n{legacy_text}"
+    );
+    let legacy_json = fixture.show_json(legacy_leaf);
+    assert!(legacy_json["run"]["review_layer"].is_null());
+    assert_eq!(legacy_json["pull_claim"]["owner_review_timing"], "none");
+}
 contract!(
     run_observation_contracts_7,
-    warnings_hold_findings_reach_run_show_and_readiness
+    warnings_hold_findings_reach_run_show_and_readiness,
+    run_show_distinguishes_pull_supervisor_local_review_from_claimed_owner_review
 );
 #[test]
 fn run_observation_contracts_6() {

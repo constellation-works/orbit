@@ -49,3 +49,4 @@ libc.workspace = true
 
 [dev-dependencies]
 orbit-common = { path = "../orbit-common", features = ["test-support"] }
+orbit-core = { path = "../orbit-core", features = ["test-support"] }

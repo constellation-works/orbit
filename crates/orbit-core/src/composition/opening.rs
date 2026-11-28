@@ -232,6 +232,11 @@ impl Opening {
             .execute_owner_coordination(name, input, session)
     }
 
+    /// Clear any worker-process binding when opening an in-process owner route.
+    pub fn without_worker_routing(self) -> Self {
+        self.map(|runtime| runtime.without_worker_routing())
+    }
+
     /// The `Core` of a process that runs one command and exits.
     pub fn into_command_core(self) -> Core {
         core_for_command(self.runtime)

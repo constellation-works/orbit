@@ -80,6 +80,16 @@ impl TaskV2Store {
     ) -> Result<Option<TaskArtifact>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
+        self.observe_task_artifact(id, path)
+    }
+
+    /// Read a pilot receipt's artifact from its canonical bundle without
+    /// coordinating or recovering the partition.
+    pub(crate) fn observe_task_artifact(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
         let path = normalize_v2_artifact_path(path)?;
         let bundle = match self.bundle_store.read_bundle(id) {
             Ok(bundle) => bundle,

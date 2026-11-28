@@ -3,10 +3,10 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 
-use crate::application::managed_assets::{
+use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
+use crate::unit::managed_asset::{
     ManagedAssetLayout, ManagedAssetReconciliation, reconcile_managed_assets,
 };
-use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 
 /// Seed every entry in [`DEFAULT_ACTIVITY_FILES`] as a YAML file under
 /// `activities_dir`. Mirrors the skill / executor / policy seeding pattern:

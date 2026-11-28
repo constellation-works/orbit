@@ -8,16 +8,18 @@
 use crate::app::resident;
 use chrono::Duration;
 use orbit_common::{NoticeRefusalCode, OrbitError};
+use orbit_tools::ActivityBinding;
 use orbit_types::record::{
     AuthorClass, NoticeAuthor, NoticeKind, NoticeScope, resident_notice_key_prefix,
     resident_status_notice_key,
 };
 use orbit_types::tool::{McpCapability, ToolSessionContext};
-use orbit_types::workflow::RESIDENT_TAG;
+use orbit_types::workflow::{JobRun, RESIDENT_CYCLE_JOB, RESIDENT_TAG};
 
 use super::limit as limits;
 use crate::OrbitRuntime;
 use crate::runtime::authorization::resolved_caller_capabilities;
+use crate::runtime::run_input::carried_task_ids;
 
 /// What the tool layer knows about a notice caller.
 #[derive(Debug, Clone, Default)]
@@ -28,6 +30,11 @@ pub struct NoticeCaller {
     /// The task a run-stamped tool context names (`orbit tool run` inside a
     /// managed run).
     pub scope_task_id: Option<String>,
+    /// The managed activity the dispatching host attested for this call:
+    /// the only source of a non-resident managed run's leaf task. The tool
+    /// host sets it from its own run binding; tool input and the process
+    /// environment the notice flow could re-read never do.
+    pub activity: Option<ActivityBinding>,
     /// The run a run-stamped tool context names.
     pub scope_run_id: Option<String>,
     /// Orchestrator attribution: the session's crew or a per-call name.
@@ -209,8 +216,12 @@ pub(super) fn resolve_notice_poster(
     let capabilities = resolved_caller_capabilities(rt.env(), &caller.session);
     let machine_id = rt.automation_machine_identity().map(ToOwned::to_owned);
     let model = non_empty(caller.model.as_deref());
-    if capabilities.contains(&McpCapability::Operator) && caller.session.worker_invocation.is_none()
-    {
+    let scope_task_id = non_empty(caller.scope_task_id.as_deref());
+    let scope_run_id = non_empty(caller.scope_run_id.as_deref());
+    let has_managed_binding = caller.session.worker_invocation.is_some()
+        || scope_run_id.is_some()
+        || scope_task_id.is_some();
+    if capabilities.contains(&McpCapability::Operator) && !has_managed_binding {
         return Ok(NoticePoster {
             class: AuthorClass::Operator,
             crew: None,
@@ -221,6 +232,50 @@ pub(super) fn resolve_notice_poster(
             resident: None,
         });
     }
+    let resolve_managed_binding = |run_id: &str, scope_task_id: Option<&str>| {
+        let run = rt
+            .stores()
+            .jobs()
+            .get_job_run(run_id)
+            .map_err(|_| {
+                OrbitError::notice_refused(
+                    NoticeRefusalCode::PosterUnidentified,
+                    "only the operator, an orchestrator session or a managed agent run may write notices",
+                )
+            })?
+            .ok_or_else(|| {
+                OrbitError::notice_refused(
+                    NoticeRefusalCode::PosterUnidentified,
+                    format!("run `{run_id}` is not a managed run in this workspace"),
+                )
+            })?;
+        let resident_mandate = if run.job_id == RESIDENT_CYCLE_JOB {
+            Some(
+                resident::resident_cycle_mandate_of_run(rt, run_id).map_err(|_| {
+                    OrbitError::notice_refused(
+                        NoticeRefusalCode::PosterUnidentified,
+                        format!("resident run `{run_id}` has no single bound mandate"),
+                    )
+                })?,
+            )
+        } else {
+            None
+        };
+        let leaf_task = match resident_mandate {
+            Some(_) => scope_task_id.map(ToOwned::to_owned),
+            None => Some(attested_activity_task(
+                caller.activity.as_ref(),
+                run_id,
+                scope_task_id,
+            )?),
+        };
+        resolve_managed_run_task_binding(
+            &run,
+            run_id,
+            leaf_task.as_deref(),
+            resident_mandate.as_deref(),
+        )
+    };
     let bound = match &caller.session.worker_invocation {
         Some(binding) => {
             binding.validate().map_err(|error| {
@@ -241,17 +296,24 @@ pub(super) fn resolve_notice_poster(
                 Some(binding.execution.machine_id.clone()),
             ))
         }
-        None => match (
-            non_empty(caller.scope_task_id.as_deref()),
-            non_empty(caller.scope_run_id.as_deref()),
-        ) {
-            (Some(task_id), Some(run_id)) => Some((task_id, Some(run_id), machine_id.clone())),
+        None => match (scope_task_id, scope_run_id) {
+            (Some(task_id), Some(run_id)) => {
+                let bound_task = resolve_managed_binding(&run_id, Some(&task_id))?;
+                Some((bound_task, Some(run_id), machine_id.clone()))
+            }
             // A resident cycle is bound by its run alone: the run names
             // its mandate.
-            (None, Some(run_id)) => resident::resident_cycle_mandate_of_run(rt, &run_id)
-                .ok()
-                .map(|mandate| (mandate, Some(run_id), machine_id.clone())),
-            _ => None,
+            (None, Some(run_id)) => {
+                let mandate = resolve_managed_binding(&run_id, None)?;
+                Some((mandate, Some(run_id), machine_id.clone()))
+            }
+            (Some(_), None) => {
+                return Err(OrbitError::notice_refused(
+                    NoticeRefusalCode::PosterUnidentified,
+                    "a managed agent run requires both a run and task binding",
+                ));
+            }
+            (None, None) => None,
         },
     };
     if let Some((task_id, run_id, machine_id)) = bound {
@@ -306,6 +368,84 @@ pub(super) fn resolve_notice_poster(
         NoticeRefusalCode::PosterUnidentified,
         "only the operator, an orchestrator session or a managed agent run may write notices",
     ))
+}
+
+/// The leaf task the dispatching host attested for `run_id`'s activity.
+///
+/// A non-resident managed run is bound only by that attestation: one that is
+/// missing, names another run, names no single task (an ambiguous bundle) or
+/// disagrees with the call's task scope refuses.
+fn attested_activity_task(
+    activity: Option<&ActivityBinding>,
+    run_id: &str,
+    scope_task_id: Option<&str>,
+) -> Result<String, OrbitError> {
+    let unidentified = |detail: String| {
+        Err(OrbitError::notice_refused(
+            NoticeRefusalCode::PosterUnidentified,
+            detail,
+        ))
+    };
+    let Some(activity) = activity.filter(|binding| binding.job_run_id.trim() == run_id) else {
+        return unidentified(format!(
+            "managed run `{run_id}` has no host-attested activity binding"
+        ));
+    };
+    let Some(task_id) = non_empty(activity.task_id.as_deref()) else {
+        return unidentified(format!(
+            "managed run `{run_id}` has no single attested activity task"
+        ));
+    };
+    if scope_task_id != Some(task_id.as_str()) {
+        return unidentified(format!(
+            "managed run `{run_id}` has no matching active activity task"
+        ));
+    }
+    Ok(task_id)
+}
+
+/// Authenticate that `run` is a managed run for `scope_task_id`, or a resident
+/// cycle run whose single bound mandate is returned.
+fn resolve_managed_run_task_binding(
+    run: &JobRun,
+    run_id: &str,
+    scope_task_id: Option<&str>,
+    resident_mandate: Option<&str>,
+) -> Result<String, OrbitError> {
+    if run.job_id == RESIDENT_CYCLE_JOB {
+        let mandate = resident_mandate.ok_or_else(|| {
+            OrbitError::notice_refused(
+                NoticeRefusalCode::PosterUnidentified,
+                format!("resident run `{run_id}` has no single bound mandate"),
+            )
+        })?;
+        if let Some(task_id) = scope_task_id
+            && task_id != mandate
+        {
+            return Err(OrbitError::notice_refused(
+                NoticeRefusalCode::PosterUnidentified,
+                format!("resident run `{run_id}` is bound to mandate `{mandate}`, not `{task_id}`"),
+            ));
+        }
+        return Ok(mandate.to_string());
+    }
+    let Some(task_id) = scope_task_id else {
+        return Err(OrbitError::notice_refused(
+            NoticeRefusalCode::PosterUnidentified,
+            format!("managed run `{run_id}` has no resolved activity task"),
+        ));
+    };
+    let carries_task = run
+        .input
+        .as_ref()
+        .is_some_and(|input| carried_task_ids(input).contains(task_id));
+    if !carries_task {
+        return Err(OrbitError::notice_refused(
+            NoticeRefusalCode::PosterUnidentified,
+            format!("run `{run_id}` is not a managed run of task `{task_id}`"),
+        ));
+    }
+    Ok(task_id.to_string())
 }
 
 fn non_empty(value: Option<&str>) -> Option<String> {

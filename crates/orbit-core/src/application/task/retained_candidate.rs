@@ -5,11 +5,15 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
 use orbit_common::process::output_capture::OUTPUT_TRUNCATED_MARKER;
 use orbit_common::process::run_bounded_capped;
+use orbit_common::process::supervisor::{
+    CaptureSink, OutputSink, SinkVerdict, Stdin, Stream, SupervisedChild, Supervision, Termination,
+};
 use orbit_engine::review_gate::RESCUE_CANDIDATE_KEY;
 use orbit_engine::run_worktree_paths;
 use orbit_types::task::Task;
@@ -28,6 +32,19 @@ const CANDIDATE_STATUS_LIMIT: usize = 256 * 1024;
 
 /// Largest retained final-recovery patch an operator can adopt.
 const RETAINED_PATCH_LIMIT: usize = 8 * 1024 * 1024;
+
+/// An index entry of a Git link starts with this mode.
+const GIT_LINK_PREFIX: &[u8] = b"160000 ";
+
+/// Longest path kept for the refusal message; the rest of a record is dropped.
+const MAX_REPORTED_RECORD: usize = 8 * 1024;
+
+/// Stderr kept for a failed listing.
+const STDERR_LIMIT: usize = 16 * 1024;
+
+const GIT_TERM_GRACE: StdDuration = StdDuration::from_millis(200);
+
+const GIT_DRAIN_AFTER_EXIT: StdDuration = StdDuration::from_millis(500);
 
 // A test cap smaller than a fixture's porcelain, so truncation does not
 // need a worktree large enough to fill 256 KiB.
@@ -221,6 +238,15 @@ impl OrbitRuntime {
         let Some(worktree) = paths.into_iter().find(|path| path.is_dir()) else {
             return Err(format!("run {}'s worktree no longer exists", run.run_id));
         };
+        // Inspect only the superproject index. Status deliberately ignores nested
+        // checkouts, so even a seemingly clean gitlink cannot be proved unchanged.
+        // The listing covers every tracked path, so it is scanned as it streams
+        // rather than captured under the status limit.
+        if let Some(path) = first_git_link(&worktree)? {
+            return Err(format!(
+                "the retained checkout contains Git link (submodule) {path}; its nested state cannot be verified without entering it, so its edits cannot be adopted exactly. Reconcile the retained checkout manually"
+            ));
+        }
         let (status, truncated) = read_only_git(
             &worktree,
             &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
@@ -307,6 +333,63 @@ impl OrbitRuntime {
     }
 }
 
+/// Scans NUL-terminated `ls-files --stage` records as they arrive, keeping
+/// only the first Git link's record, so memory stays bounded however many
+/// paths the index tracks.
+struct GitLinkScan {
+    record: Vec<u8>,
+    // The current record is not a Git link; skip to its terminator.
+    skipping: bool,
+    found: Arc<Mutex<Option<Vec<u8>>>>,
+}
+
+impl GitLinkScan {
+    fn finish_record(&mut self) {
+        if !self.skipping
+            && self.record.starts_with(GIT_LINK_PREFIX)
+            && let Ok(mut found) = self.found.lock()
+        {
+            found.get_or_insert_with(|| std::mem::take(&mut self.record));
+        }
+        self.record.clear();
+        self.skipping = false;
+    }
+
+    fn take(&mut self, bytes: &[u8]) {
+        if self.skipping {
+            return;
+        }
+        let room = MAX_REPORTED_RECORD.saturating_sub(self.record.len());
+        self.record
+            .extend_from_slice(&bytes[..bytes.len().min(room)]);
+        let prefix = self.record.len().min(GIT_LINK_PREFIX.len());
+        if self.record[..prefix] != GIT_LINK_PREFIX[..prefix] {
+            self.skipping = true;
+            self.record.clear();
+        }
+    }
+}
+
+impl OutputSink for GitLinkScan {
+    fn push(&mut self, bytes: &[u8]) -> SinkVerdict {
+        let mut rest = bytes;
+        while let Some(end) = rest.iter().position(|byte| *byte == 0) {
+            self.take(&rest[..end]);
+            self.finish_record();
+            rest = &rest[end + 1..];
+        }
+        self.take(rest);
+        SinkVerdict::Continue
+    }
+
+    fn finish(mut self: Box<Self>) -> Vec<u8> {
+        if !self.record.is_empty() {
+            self.finish_record();
+        }
+        Vec::new()
+    }
+}
+
 /// Paths `git status` kept, and whether the capture stopped early.
 struct CandidatePathListing {
     paths: Vec<String>,
@@ -321,12 +404,9 @@ fn candidate_status_limit() -> usize {
     CANDIDATE_STATUS_LIMIT
 }
 
-/// Run Git in `worktree` without writing to it: optional locks are off, so
-/// Git neither takes the index lock nor refreshes the index, and no fsmonitor
-/// program runs. Nothing recurses into a gitlink's checkout, whose own config
-/// could run a filter command on the host. Returns stdout without the
-/// truncation marker, and whether the capture stopped at `limit`.
-fn read_only_git(worktree: &Path, args: &[&str], limit: usize) -> Result<(Vec<u8>, bool), String> {
+/// The read-only Git invocation [`read_only_git`] runs, for a caller that
+/// supervises the process itself.
+fn read_only_git_command(worktree: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("git");
     command
         .current_dir(worktree)
@@ -340,6 +420,16 @@ fn read_only_git(worktree: &Path, args: &[&str], limit: usize) -> Result<(Vec<u8
         .args(args)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0");
+    command
+}
+
+/// Run Git in `worktree` without writing to it: optional locks are off, so
+/// Git neither takes the index lock nor refreshes the index, and no fsmonitor
+/// program runs. Nothing recurses into a gitlink's checkout, whose own config
+/// could run a filter command on the host. Returns stdout without the
+/// truncation marker, and whether the capture stopped at `limit`.
+fn read_only_git(worktree: &Path, args: &[&str], limit: usize) -> Result<(Vec<u8>, bool), String> {
+    let mut command = read_only_git_command(worktree, args);
     let mut output = run_bounded_capped(&mut command, CANDIDATE_STATUS_TIMEOUT, limit)
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
@@ -395,4 +485,65 @@ fn changed_paths(worktree: &Path) -> Result<CandidatePathListing, String> {
         paths.push(path.to_string());
     }
     Ok(CandidatePathListing { paths, truncated })
+}
+
+/// The path of the first Git link (mode `160000`) in the checkout's own
+/// index, or `None`. Reads the whole listing, however long, without writing
+/// to the checkout.
+pub(super) fn first_git_link(worktree: &Path) -> Result<Option<String>, String> {
+    let mut command = read_only_git_command(worktree, &["ls-files", "--stage", "-z"]);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Its own process group, so a deadline signals Git and its descendants.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let child = command.spawn().map_err(|error| error.to_string())?;
+    let found = Arc::new(Mutex::new(None));
+    let scan = GitLinkScan {
+        record: Vec::new(),
+        skipping: false,
+        found: Arc::clone(&found),
+    };
+    let outcome = SupervisedChild::adopt(child)
+        .supervise(Supervision {
+            stdin: Stdin::Null,
+            stdout: Stream::Sink(Box::new(scan)),
+            stderr: Stream::Sink(Box::new(CaptureSink::new("stderr", STDERR_LIMIT))),
+            timeout: Some(CANDIDATE_STATUS_TIMEOUT),
+            extendable_deadline: None,
+            clock: None,
+            termination: Termination::Grace(GIT_TERM_GRACE),
+            cancelled: None,
+            intercept_signals: false,
+            drain_budget: GIT_DRAIN_AFTER_EXIT,
+            cap_drain_at_deadline: true,
+            require_eof: false,
+            stopped_descendants: None,
+            on_stopped_descendant: None,
+            on_spawn: None,
+            every: None,
+        })
+        .map_err(|error| error.to_string())?;
+    if outcome.timed_out {
+        return Err("the retained checkout's index listing timed out".into());
+    }
+    if !outcome.status.is_some_and(|status| status.success()) {
+        return Err(format!(
+            "git ls-files exited without success: {}",
+            String::from_utf8_lossy(&outcome.stderr).trim()
+        ));
+    }
+    let record = found
+        .lock()
+        .map_err(|_| "the retained checkout's index scan failed".to_string())?
+        .take();
+    Ok(record.map(|record| {
+        record
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .map(|pos| String::from_utf8_lossy(&record[pos + 1..]).into_owned())
+            .unwrap_or_default()
+    }))
 }

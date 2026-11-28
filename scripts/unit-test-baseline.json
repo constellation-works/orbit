@@ -67,6 +67,7 @@
     },
     "orbit-cmd": {
       "test_function_paths": [
+        "tests/worker_coordination.rs::federated_drain_owner_routes_local_repair_pull_in_process_and_keeps_remote_and_self_ssh_guards",
         "update/tests/source.rs::http_rejects_declared_and_streamed_oversized_bodies",
         "update/tests/source.rs::release_requests_never_leave_https"
       ]
@@ -141,11 +142,13 @@
         "adapter/command/dispatch/claimed/tests/owner/broker.rs::a_source_the_nested_orbit_may_not_read_is_refused_before_the_broker",
         "adapter/command/dispatch/claimed/tests/owner/broker.rs::every_allowlisted_owner_call_reaches_the_owner_through_the_broker_on_the_claim",
         "adapter/command/dispatch/claimed/tests/owner/broker.rs::inside_a_masked_sandbox_no_owner_call_falls_back_to_ssh",
+        "adapter/command/dispatch/claimed/tests/owner/broker.rs::recovery_spawned_tool_inherits_the_claimed_owner_broker",
         "adapter/command/dispatch/claimed/tests/owner/broker.rs::the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner",
         "adapter/command/dispatch/claimed/tests/owner/broker.rs::the_nested_orbit_keeps_other_routes_outside_a_masked_sandbox",
         "adapter/command/dispatch/claimed/tests/owner/broker.rs::the_reviewer_scope_decides_on_and_forwards_the_canonical_path",
         "adapter/command/dispatch/claimed/tests/owner/notices.rs::claimed_follower_posts_shows_and_closes_its_notice_on_the_owner_through_the_broker",
         "adapter/command/dispatch/claimed/tests/owner/pagination.rs::claimed_task_detail_pages_preserve_broker_scope_and_owner_validation",
+        "adapter/command/dispatch/claimed/tests/owner/recovery_retry.rs::claimed_recovery_files_friction_then_admits_retry",
         "adapter/command/dispatch/claimed/tests/owner/workspace_reads.rs::a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refusals",
         "adapter/command/dispatch/claimed/tests/owner/workspace_reads.rs::a_claimed_worker_on_its_owners_machine_reads_and_writes_review_artifacts_only_as_the_running_reviewer",
         "adapter/command/dispatch/claimed/tests/owner/workspace_reads.rs::a_remote_owners_claimed_worker_reads_any_task_of_its_claimed_workspace",
@@ -219,6 +222,7 @@
         "app/doctor/tests/worker_token.rs::clock_file_is_ready_only_when_it_holds_a_credential_the_workspace_admits",
         "app/doctor/tests/worker_token.rs::config_load_failure_is_reported_instead_of_no_routed_claude_crew",
         "app/doctor/tests/worker_token.rs::warns_for_each_place_the_worker_token_can_be_lost_and_is_ok_when_none_is",
+        "app/gc/tests/tmp.rs::preview_skips_entries_removed_after_the_listing",
         "app/host/browser_kit/tests/libraries.rs::fonts_only_no_install_path_names_the_font_gap_and_a_fix",
         "app/host/browser_kit/tests/libraries.rs::resolved_libraries_without_a_font_gap_stay_resolved",
         "app/host/tests/mod.rs::probe_workers_refused_still_return_ordered_results",
@@ -259,7 +263,6 @@
         "application/automation/tests/source.rs::timed_out_source_reaps_its_leader_and_kills_the_grandchild",
         "application/automation/tests/stall.rs::concurrent_reporters_for_one_divergence_persist_one_friction",
         "application/automation/tests/stall.rs::retries_and_sibling_consumers_reuse_one_divergence_record",
-        "application/gc/tests/tmp.rs::preview_skips_entries_removed_after_the_listing",
         "application/job/pipeline/worker/tests/delivery_class.rs::class_is_captured_once_per_delivery_and_survives_tag_edits",
         "application/job/pipeline/worker/tests/delivery_class.rs::work_class_prefers_template_then_no_diff_then_change",
         "application/job/pipeline/worker/tests/delivery_class.rs::worker_without_a_scope_records_nothing_and_logs_nothing",
@@ -347,6 +350,7 @@
         "application/pull_drain/tests/drain.rs::pull_lost_request_and_binding_responses_recover_the_same_leaf",
         "application/review/gate/tests/admit.rs::before_pr_is_captured_at_submission_and_an_in_flight_run_keeps_it",
         "application/review/gate/tests/judgement.rs::system_writes_cannot_borrow_the_operator_for_history",
+        "application/review/tests/scenario_row.rs::unclosed_attribute_at_target_end_does_not_panic_and_earlier_declarations_still_index",
         "application/task/blocked_recovery/tests/backstop.rs::a_human_field_edit_after_the_block_is_never_overridden",
         "application/task/blocked_recovery/tests/backstop.rs::a_legacy_unattributed_field_edit_after_the_block_is_never_overridden",
         "application/task/blocked_recovery/tests/backstop.rs::a_recovery_applies_one_decision_recorded_with_its_run_id",

@@ -1,4 +1,4 @@
-//! The firing protocol (`docs/design/condition-triggers/1_scope.md` §3): load
+//! The firing protocol (`docs/design/condition-triggers/2_design.md` §3): load
 //! the consumer at generation `g`, evaluate, commit `g+1` with each new edge
 //! as an intent, then admit each intent under its action key and commit the
 //! acknowledgement. A losing evaluator writes nothing; a crash between any

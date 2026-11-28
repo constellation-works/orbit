@@ -407,7 +407,7 @@
 /* Compact rail. fitRailSubtabRegion (router.js) adds `rail-compact` only when
    the open destination's views would not otherwise all show: shorter
    destination and view rows without group headings, tighter pickers, a
-   clock row without padding and a host block read on one line. Window heights where everything already fits
+   clock row without padding and a host block in two columns. Window heights where everything already fits
    keep the full-size rail above. */
 @media (min-width: 761px) {
   .rail.rail-compact .tab { height: 26px; }
@@ -419,11 +419,13 @@
   .rail.rail-compact .rail-host .workspace-select,
   .rail.rail-compact .rail-workspace .workspace-select { height: 30px; }
   .rail.rail-compact .rail-foot .clock-zone-btn { padding-block: var(--space-2); }
+  /* Two columns: three cannot hold `mem 100%` beside `disk 100%` in the
+     153px card of the 200px rail, so each reading gets half the card's width
+     and its value stays inside that half. */
   .rail.rail-compact .host-block {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, auto));
-    justify-content: space-between;
-    gap: var(--space-4) var(--space-6);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-4) var(--space-10);
   }
   .rail.rail-compact .host-block-head { grid-column: 1 / -1; }
   .rail.rail-compact .host-block .host-resource,

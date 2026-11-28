@@ -71,7 +71,7 @@ A `JobV2` is a step tree with:
 
 The original grammar landed in [T20260418-2018], with `workflow` / `subroutine` job kinds
 added in [T20260419-0339]. Script targets are job steps, not a restored shell activity
-variant; their current contract is [Script steps](../script-steps/1_scope.md).
+variant; their current contract is [Script steps](../script-steps/2_design.md).
 
 ### 2.3 Load-time normalization is part of the contract
 
@@ -114,7 +114,7 @@ workspace auto run still treats a required child workflow failure as a parent fa
 | v2 job step grammar | `crates/orbit-types/src/workflow/activity_job/job_v2.rs` | [T20260418-2018] |
 | Job kinds (`workflow`, `subroutine`) | `crates/orbit-types/src/workflow/activity_job/job_v2.rs` | [T20260419-0339] |
 | Auto-task schema / parked execution (done) | `crates/orbit-engine/src/activity_job/job_executor/auto_task.rs`, `crates/orbit-core/src/app/auto_task/job_step.rs` | [ORB-20157], [ORB-20237], [ORB-20158] |
-| Granted script steps (done) | `crates/orbit-engine/src/activity_job/job_executor/target.rs`, [Script steps](../script-steps/1_scope.md) | [ORB-19983], [ORB-19985] |
+| Granted script steps (done) | `crates/orbit-engine/src/activity_job/job_executor/target.rs`, [Script steps](../script-steps/2_design.md) | [ORB-19983], [ORB-19985] |
 | Completion contracts / accepted history, historical reuse and condition facts (shipped); release-readiness example (disabled, nonseeded) | [Auto-task step specification](./specs/auto-task-step.md) | [ORB-20165], [ORB-22649], [ORB-20397] (shipped), [ORB-20166] (disabled example) |
 | Target-ref resolution | `crates/orbit-engine/src/activity_job/catalog/resolve.rs` | [T20260418-2019] |
 | v2 job run entrypoint and runtime host boundary, with port-owned dispatch contracts and `DECLARED_FAILURE_EVIDENCE_KEY` | `crates/orbit-core/src/application/job/exec/entry.rs`, `crates/orbit-engine/src/context/hosts/runtime_host/mod.rs`, `crates/orbit-engine/src/context/dispatch_contract.rs`, `crates/orbit-core/src/adapter/engine_host/runtime_host/host/mod.rs` | [T20260418-2143], [T20260418-2210], [ORB-25491], [ORB-26097] |

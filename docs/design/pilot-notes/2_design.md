@@ -2,13 +2,13 @@
 title: Pilot Notes — Design
 owner: claude
 created_date: 2026-11-27
-updated_date: 2026-11-27
-last_validated: 2026-11-27
+updated_date: 2026-11-28
+last_validated: 2026-11-28
 status: Accepted
 feature: pilot-notes
 doc_role: design
 type: design
-summary: "Approved design, not yet built: a config table that maps a note label to an instruction file, the section the pilot's prompt gains, `notes` in the assessment and what apply does with them, and where a note is read"
+summary: "Approved design in build: a config table that maps a note label to an instruction file, the section the pilot's prompt gains, `notes` in the assessment and what apply does with them, and where a note is read"
 tags: [pilot-notes, task-pilot]
 related_features: [task-pilot, plugins, workspace-agent-corpus]
 related_artifacts: [ORB-29567]
@@ -17,9 +17,10 @@ related_artifacts: [ORB-29567]
 # Pilot Notes — Design
 
 Read the [overview](./1_overview.md) first. The operator approved this design on 2026-11-27
-([ORB-29567]); nothing in it is built. It adds to the [task pilot](../task-pilot/1_scope.md),
+([ORB-29567]). [ORB-29586] adds the config table and prompt section. The design extends
+the [task pilot](../task-pilot/1_overview.md),
 whose assessment artifact and readout it reuses, and it borrows the file-reading rules of tag
-instructions (`docs/CONFIG.md`, `[workflow.tag_instructions.<tag>]`).
+instructions ([`workflow.tag_instructions.<tag>`](../../config/workflow-tags.md#workflowtag_instructionstag--extra-instructions-for-tagged-tasks)).
 
 ## 1. Configuration
 
@@ -148,11 +149,12 @@ by what it has installed is out of scope.
 
 ## 7. Phasing
 
-1. **Local notes.** The config table and its validation, the prompt section, the audit event,
-   the `doctor` finding, `notes` in the output schema, the checks in apply, and the readouts in
-   `orbit.task.show`, `orbit.task.list` and `orbit task show`.
-2. **Claimed pilots and the dashboard.** The capture in the claim receipt, and the notes on
-   the task's detail.
+1. **Local notes.** The config table and its validation, the prompt section, the audit event and
+   the `doctor` finding ([ORB-29586]); `notes` in the output schema, the checks in
+   apply, and the readouts in `orbit.task.show`, `orbit.task.list` and `orbit task show`
+   ([ORB-29588], backlog).
+2. **Claimed pilots and the dashboard.** The notes on the task's detail ([ORB-29589], backlog),
+   and the capture in the claim receipt ([ORB-29590], backlog).
 
 ## 8. Acceptance
 
@@ -206,6 +208,9 @@ by what it has installed is out of scope.
 ## Task References
 
 - [ORB-29567] — this design.
-- [ORB-29586] — built `[workflow.pilot_notes.<label>]`, the pilot prompt section, `activity.pilot_notes_applied`, the `doctor` check, and verified §3 plugin tool access in an isolated fixture.
+- [ORB-29586] — adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding, and verifies plugin tool access in an isolated fixture.
+- [ORB-29588] — backlog; adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
+- [ORB-29589] — backlog; shows pilot notes on the dashboard's task detail.
+- [ORB-29590] — backlog; gives a claimed pilot the owner's captured note instructions.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

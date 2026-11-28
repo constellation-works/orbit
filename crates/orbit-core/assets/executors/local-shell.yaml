@@ -12,12 +12,23 @@ spec:
   # baseline, and `timeout_seconds` is the fallback wall-clock budget.
   #
   # No `sandbox` is declared, so shell steps run bare under the process
-  # supervisor and are confined only by the cwd containment check and by
-  # whatever sandbox already contains the Orbit process. Add
-  # `sandbox: macos-sandbox-exec` on macOS or `sandbox: linux-bwrap` on Linux,
-  # plus an activity `fsProfile` to confine them at the kernel. Installed
-  # settings are not translated between platforms; an incompatible backend
-  # fails closed. Each step reports the backend it actually ran under.
+  # supervisor. The cwd containment check validates only the child's initial
+  # working directory. Filesystem access after launch is limited only by an
+  # effective OS sandbox or by restrictions the Orbit process inherited. Add
+  # `sandbox: macos-sandbox-exec` on macOS or `sandbox: linux-bwrap` on Linux
+  # to wrap every activity that uses this executor in that OS backend. The
+  # backend is selected here. An activity's `fsProfile` is optional: it selects
+  # a named policy profile; without one, `unrestricted` applies. macOS Seatbelt
+  # applies read and modify rules. Linux Bubblewrap enforces modify rules but
+  # not profile read rules, including `denyRead`; only fixed credential and
+  # runtime-directory masks and explicit caller masks restrict host reads.
+  # Do not rely on Linux `denyRead` to protect other secrets. A backend that
+  # does not match the host OS fails closed, even with `allow_fallback: true`.
+  # When the matching backend's native primitive is unavailable (bwrap absent
+  # or failing its probe, or sandbox-exec missing), the step fails unless
+  # `allow_fallback: true` permits bare execution without its policy or masks.
+  # Other setup or spawn errors do not trigger fallback. Each step reports the
+  # backend it actually ran under.
   executor_type: local_shell
   args: []
   env: {}

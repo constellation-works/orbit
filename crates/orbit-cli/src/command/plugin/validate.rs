@@ -43,6 +43,12 @@ impl ExecuteCore for PluginValidateArgs {
         for tool in &report.tools {
             text.push_str(&format!("\n    {tool}"));
         }
+        if !report.pages.is_empty() {
+            text.push_str("\n  pages:");
+            for page in &report.pages {
+                text.push_str(&format!("\n    {}  {}", page.id, page.digest));
+            }
+        }
         for warning in &report.warnings {
             text.push_str(&format!("\n  warning: {warning}"));
         }
@@ -92,6 +98,11 @@ impl ExecuteCore for PluginValidateArgs {
             "root": report.root,
             "manifest_digest": report.manifest_digest,
             "tools": report.tools,
+            "pages": report
+                .pages
+                .iter()
+                .map(|page| json!({ "id": page.id, "digest": page.digest }))
+                .collect::<Vec<_>>(),
             "warnings": report.warnings,
         });
         if let Some(rendered) = rendered

@@ -16,6 +16,7 @@ use crate::OrbitRuntime;
 use crate::application::review::admission::{apply_security_state_review, run_review_admission};
 use crate::application::review::gate::context::{
     GateContext, admitted_run_id, completed_task_ids, not_applicable,
+    reconcile_claimed_review_admission,
 };
 
 /// Admit a reviewer for the committed, base-synchronized candidate.
@@ -152,8 +153,16 @@ fn admission_output(
              this run has no captured review layer. Ship it through the owner's PR route"
         ))
     };
-    let Some(mut admission) = run_review_admission(runtime, &run_id)
-        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?
+    let persisted = run_review_admission(runtime, &run_id)
+        .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+    let claimed_leaf = if runtime.role().is_worker() {
+        Some(runtime.current_claimed_leaf().map_err(refused_or_failed)?)
+    } else {
+        None
+    };
+    let Some(mut admission) =
+        reconcile_claimed_review_admission(claimed_leaf.as_ref(), &run_id, persisted)
+            .map_err(refused_or_failed)?
     else {
         if rebase.is_some() {
             return Err(refused(

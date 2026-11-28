@@ -2,7 +2,7 @@
 title: Distributed Drain — Design
 owner: claude
 created_date: 2026-09-18
-updated_date: 2026-11-26
+updated_date: 2026-11-27
 last_validated: 2026-11-16
 status: Draft
 feature: distributed-drain
@@ -178,7 +178,7 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
 - A task filed by a review (tagged `code-review`, `delivery-code-review`, `qa-full-sweep`,
   `qa-sweep` or `security-review`) keeps selectors the finding names as substantive change
   targets. Read-only evidence belongs in the description, not the lock footprint; incidental
-  shared-reference edits such as a line in `docs/CONFIG.md` also stay out, while the implementer
+  shared-reference edits such as a line in the [configuration reference](../../config/README.md) also stay out, while the implementer
   still updates affected docs in the same PR and auto-fix resolves textual merges. Task-pilot
   may drop a selector it verifies needs no substantive change by recording its exact selector
   and inspection reason in `context_evidence_dropped`. Apply accepts those records only for
@@ -361,12 +361,12 @@ no origin or PR credentials.
   the base and the failures, and the owner accepts it only when that base is in the history of the
   base branch it captured at admission and its own run of that required command on the base fails
   every reported test
-  ([CONFIG.md](../../CONFIG.md#a-red-base-is-held-not-blocked), Followers). Any other command that
+  ([configuration reference](../../config/workflow-validation.md#a-red-base-is-held-not-blocked), Followers). Any other command that
   fails the same way on the candidate's base is a typed `baseline_red` failure. The drain releases the claim with
   `ClaimEvidence.baseline_red`, and the owner records a `baseline_red_hold` in the task's history.
   Owner pull admission defers the task until the held command passes on a new
   base tip ([ORB-14258];
-  [CONFIG.md](../../CONFIG.md#a-red-base-is-held-not-blocked)).
+  [configuration reference](../../config/workflow-validation.md#a-red-base-is-held-not-blocked)).
 - `claim_handoff` re-observes the same identity, refuses a worktree that moved or became dirty, and
   records the typed `TaskHandoff` as the claim's durable pending settlement *before* any owner
   call. The leaf's worker delivers it as the run terminalizes; a disconnect leaves one immutable
@@ -610,11 +610,15 @@ first probes with legacy-compatible fields, checks that fingerprint and `protoco
 then declares `caller_fingerprint` on a second probe. A different or missing fingerprint,
 including a legacy owner, refuses with typed `protocol_skew` before any `orbit.task.pull`.
 A protocol identity containing `[REDACTED_ENV]` is a corrupted transport reply,
-not evidence of schema skew. The follower treats it as typed `OwnerNegotiation`,
-records a transient pass error and retries on the next pass. The owner also
-checks redacted drain replies, including nested fingerprints, commit/tree IDs
-and evidence hashes: read-only calls fail negotiation; mutating calls report
-`OutcomeUnknown` so the follower reconciles or replays the same request.
+not evidence of schema skew. The follower reports it as `OwnerNegotiation` and
+records the cause as a pass error. A windowless single-pass drain ends failed
+if its only admission pass encounters a negotiation or routing error before
+admitting work; it keeps the cause and has no later admission pass to retry. An
+active timed drain can retry on a later pass while its window remains open. The
+owner also checks redacted drain replies, including nested fingerprints,
+commit/tree IDs and evidence hashes: read-only calls fail negotiation;
+mutating calls report `OutcomeUnknown` so the follower reconciles or replays the
+same request.
 Credentials remain scrubbed even when they overlap an identity. Known
 `XDG_SESSION_*`, `DBUS_SESSION_BUS_ADDRESS`, `SESSION_MANAGER` and
 `TERM_SESSION_ID` metadata is excluded from session-name matching; credential
@@ -1097,7 +1101,17 @@ and landing branch, execution summary and validation artifact references.
   evidence (disposition `before_landing`) for the head it settled when the contract captured
   before-landing review, or `{ policy: none, disposition: not_required }` otherwise. The owner
   refuses evidence of the other timing or for another head (`review_evidence_missing`,
-  `reviewed_head_mismatch`). Task
+  `reviewed_head_mismatch`), and refuses a required timing lacking a review contract with
+  `review_contract_mismatch`. Every claimed leaf — initial and landing-repair alike — records
+  the owner's captured review timing in `input.review` (`timing_source: "claim"`), including an
+  explicit `none` when the owner disabled review, and `ClaimRepair.owner_review_timing` plus
+  `pull_claim.owner_review_timing` expose that same captured decision. The leaf's review gate
+  cross-checks `input.review` against the durable pull admission: a missing or mismatched
+  required admission fails closed, while a legacy owner-off claim without `input.review`
+  resolves as `timing: none` (`review_before_pr_off` / `review_before_landing_off`) without
+  reading follower settings. Pull-supervisor runs mark their own local snapshot
+  `scope: "supervisor_local"` so run views report the supervisor's local config distinctly from
+  each claimed leaf's owner-captured review policy. Task
   status `review` means a delivery handoff awaiting completion authority, not that a review
   occurred. The claimed-leaf gate and its owner-captured policy are described in
   [the decision](./4_decisions.md#a-claimed-leaf-runs-the-before-pr-review-its-claim-captured).

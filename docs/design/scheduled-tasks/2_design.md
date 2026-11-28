@@ -1,0 +1,179 @@
+---
+title: Scheduled Tasks — Design
+owner: claude
+created_date: 2026-10-27
+updated_date: 2026-11-28
+last_validated: 2026-11-14
+status: Draft
+feature: scheduled-tasks
+doc_role: design
+type: design
+summary: "Design: let a task wait for a date — an optional not_before instant that every dispatcher honours as a self-lifting admission hold, readable by date range so a calendar can show it"
+tags: [tasks, admission, scheduling, calendar, distributed-drain]
+---
+
+# Scheduled Tasks — Design
+
+This doc holds the mechanisms behind [1_overview.md](./1_overview.md), which states the problem and the goal.
+
+## Shape
+
+### The field
+
+`not_before`: an optional RFC 3339 instant on the task, stored in UTC.
+
+- **Absent** means today's behaviour. The field is additive and serialised
+  only when set, so existing records and readers are unchanged.
+- **Set** through `orbit.task.add`, `orbit.task.update` and
+  `orbit task add|update --not-before <time>`, and the dashboard Scheduled editor.
+  On the tool, an empty string clears it; on the CLI, `--clear-not-before`
+  does. An explicit `null` leaves it unchanged: the operation wire reads
+  `null` as an omitted field for every parameter, and MCP clients send
+  `null` for fields they leave unset, so `null` clearing would silently drop
+  a schedule.
+- **Input:** an RFC 3339 instant with an offset. The CLI also accepts a local
+  `YYYY-MM-DDTHH:MM` and converts it with the host's zone. The value is
+  echoed back in UTC and local time, so the target is unambiguous.
+- **Lifecycle:** status transitions never change it. A task can be scheduled
+  in any status. The hold only matters in `backlog`.
+
+### The hold
+
+A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
+
+- A `backlog` task whose `not_before` is later than now is excluded, and
+  `detail` names the time. The hold lifts by itself on the first admission
+  pass after the time. No clock, routine or timer is involved; whichever
+  dispatcher looks next sees that the time has passed.
+- **Every dispatcher honours it:**
+  - the workspace auto drain's backlog listing;
+  - the owner's pull-drain claim admission, so followers inherit it;
+  - explicit `orbit run ship <ids>` / `orbit.workflow` action `ship`
+    ([ORB-23280]). Explicit ids skip the backlog listing, so the hold is
+    checked on this path ([ORB-19214]). A scheduled id is refused with a
+    typed `task_scheduled` error naming the time. An operator's explicit
+    ship (`orbit run ship <ids>` or the dashboard's Ship) starts it anyway,
+    since an operator's ship overrides the drain's readiness gates
+    ([ORB-25082]; `--ignore-schedule` is a hidden no-op kept for
+    compatibility). Once every
+    other ship check passes, and before the run is submitted (its worker
+    starts at once), it records a `schedule_overridden` history event naming
+    the operator and the scheduled time. Every admission route reads that
+    event, so the override holds for that `not_before` value, including
+    if the submission then fails; changing `not_before` reinstates the
+    hold. The MCP/tool surface has no override.
+- **Precision is "at or after", not "at".** The task starts on the next
+  admission pass after `not_before`, which depends on the drain or
+  dispatcher cadence (orbit-office's dispatch pass runs every 30 seconds). A
+  host that is off at that time starts the task when it next dispatches.
+  Surfaces must show the actual start as well as the scheduled time, never
+  imply the two are the same.
+- **Not work in hand:** scheduled tasks are reported as waiting
+  (`orbit run readiness`, `run show`), not runnable: readiness gives
+  `reason: "scheduled"`, the `detail` and `not_before`; a pull drain records
+  the owner's hold under the same `scheduled` code. They don't keep a drain
+  alive. A drain that has nothing else to do ends as it does today.
+- **Forecast:** the [backlog forecast](../backlog-forecast/1_overview.md) places
+  a scheduled task no earlier than its `not_before`.
+
+### Reading by date
+
+- `orbit.task.list` takes `not_before_from` and `not_before_until` (RFC 3339,
+  either or both). It returns tasks whose `not_before` falls in the range,
+  with both boundary instants included. Unscheduled tasks do not match a
+  bounded range. Every default list row carries `not_before` (null when
+  unset); an explicit `fields` projection selects only its requested keys.
+  Malformed bounds are refused naming the input. That is what a calendar
+  needs for a week view.
+- `orbit task list --scheduled` lists tasks with a future `not_before`,
+  soonest first, including `proposed` tasks labelled by status. Other filters
+  still apply, and limiting happens after schedule ordering.
+- `orbit.task.show` and the dashboard task detail show the time, and once
+  the task has started, `started_at`: its first recorded entry into
+  `in-progress`, rather than the requested time. The dashboard Scheduled
+  editor accepts RFC 3339 with an offset; save an empty value to clear it.
+  A backlog card carries a Scheduled chip only while its hold applies,
+  respecting an operator override.
+
+### What stays the same
+
+- No new scheduler. Recurring work stays with routines and auto-tasks.
+- No new statuses. Holds are admission reasons, not lifecycle states.
+- Nothing in the core knows about calendars, meetings or orbit-office.
+  Consumers read the field and the list filter.
+
+## Concerns and honest limitations
+
+- **The explicit-ship path has to be found everywhere.** Ship by id
+  bypasses the backlog-exclusion listing, so the hold lives in the shared
+  workflow-entry check as well. The direct admission routes, as built:
+  - **Honour the hold.** The auto drain's backlog snapshot and the
+    explicit-ids listing
+    (`application/admission/backlog_exclusion/snapshot.rs`, `listing.rs`,
+    `scheduled_exclusion` in `exclusions.rs`). The owner's pull admission,
+    before and inside the claim section
+    (`application/distributed/serve/admission.rs`, `admit_pull_request`). And the
+    workflow-entry check
+    `ensure_task_can_enter_workflow_honouring_schedule`
+    (`application/task/transitions/`), which is shared by explicit ship
+    (`application/job/pipeline/submit/ship.rs`), the gate's dispatch re-check
+    (`application/job/pipeline_actions/gate/admission.rs`) and worktree
+    admission (`admit_task_for_workflow_as_system`, reached from
+    `adapter/engine_host/runtime_host/claims.rs`). So a resumed or
+    replayed gate re-checks it too. Source repair checks the hold before
+    reserving or readmitting a backlog task; a linked replay reconciles its
+    existing run first. An unlinked reservation waits until the hold lifts.
+  - **Cannot start a scheduled task.** Job resume
+    (`reclaim_task_for_resumed_run` in `application/job/resume/plan.rs`)
+    readmits a `backlog` task only for a completion repair of a requeue made
+    by its own lineage's final recovery, that is, a task that had already
+    started. Source repair can also readmit `review`, `in-progress`, `blocked`,
+    or `backlog` tasks. A reserved admission's `in-progress` stage, failed
+    published sources with final-recovery evidence (`blocked` or `backlog`),
+    and acknowledged superseded sources (`in-progress`, `blocked`, or
+    `backlog`) can be eligible outside review. The hold
+    applies to backlog, not blocked tasks. Claim recovery
+    (`recover_claim_as_operator` in `application/review/handoff/console.rs`) and
+    requeue (`application/task/requeue/`) only move a task to `blocked`
+    or `backlog`; the hold applies only to backlog.
+  - **Outside admission.** A human `orbit task update --status in-progress`
+    is a manual transition, not a dispatch, and stays available.
+- **Version skew.** The task envelope refuses unknown fields, so a host
+  running an older binary refuses a bundle that carries `not_before` rather
+  than ignoring it. Records without the field are byte-identical. Pull
+  followers are safe because the owner decides admission. Deploys stay in
+  lockstep (RB-15), and the field must not ship to a subset of owners.
+- **Clock trust.** The hold compares against the owner's clock. A badly
+  skewed owner clock starts tasks early or late, as it already does for
+  routines.
+- **Calendar honesty.** A consumer that shows only the scheduled time will
+  mislead. The started-at time must be shown beside it once known.
+
+## Phasing
+
+1. **Core:** the field, the `Scheduled` exclusion, the ship-by-id refusal
+   with the operator override, and readiness and run-show reporting.
+   (done, [ORB-19214])
+2. **Surfaces:** the `orbit.task.list` range filter and `--scheduled`,
+   the dashboard detail and an editable field, and
+   the forecast placement. (done, [ORB-19215])
+3. **Consumers:** orbit-office's To-dos "Schedule…" picker and calendar
+   blocks (in that repository's own docs; pending in orbit-office).
+
+## Open questions
+
+- Should `orbit task list --scheduled` include `proposed` tasks with a
+  future `not_before`? Decided and built: yes. The calendar shows planned work
+  before it is approved, labelled as not approved.
+- Should the override be recorded as a forced transition or as its own
+  history event? Decided and built: its own event, `schedule_overridden`,
+  naming the operator and the scheduled time.
+
+## Task References
+
+- [ORB-19214] — built the field, the `Scheduled` hold and the ship refusal.
+- [ORB-19215] — built the list filter, `--scheduled`, the dashboard field and the forecast placement.
+- [ORB-23280] — renamed the explicit-ship tool to `orbit.workflow` action `ship`.
+- [ORB-25082] — an operator's explicit ship (CLI or dashboard) overrides the hold, the other drain readiness gates and context-lock waits.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

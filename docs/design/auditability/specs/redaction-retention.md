@@ -1,6 +1,6 @@
 ---
 type: design
-summary: Spec: Redaction and Retention Boundaries
+summary: "Spec: Redaction and Retention Boundaries"
 last_validated: 2026-10-29
 last_updated: 2026-11-14
 ---

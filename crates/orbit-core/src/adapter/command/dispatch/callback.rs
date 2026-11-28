@@ -96,7 +96,7 @@ pub(super) fn enforce_plugin_callback_allowlist_from_root(
 /// `orbit run show <id>` and read whatever the CLI exposes.
 ///
 /// The repair is the rule the design already states
-/// (`docs/design/plugins/1_scope.md` §4.2): a backend reaches Orbit only
+/// (`docs/design/plugins/2_design.md` §4.2): a backend reaches Orbit only
 /// through a tool call, so the CLI refuses it everything else. Scoring each
 /// command against the allowlist instead would need a command-to-tool mapping
 /// that does not exist and would leave every unmapped — and every newly

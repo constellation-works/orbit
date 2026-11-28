@@ -2,8 +2,8 @@
 title: Plugin Pages — Decisions
 owner: claude
 created_date: 2026-11-27
-updated_date: 2026-11-27
-last_validated: 2026-11-27
+updated_date: 2026-11-28
+last_validated: 2026-11-28
 status: Accepted
 feature: plugin-pages
 doc_role: decisions
@@ -11,7 +11,7 @@ type: design
 summary: "Plugin Pages — Decisions: a page gets server-side work only through its plugin's tools, plugin code acts only behind a confirmation drawn outside its frame, and a page is one document whose frame fetches nothing"
 tags: [plugin-pages]
 related_features: [plugins]
-related_artifacts: [ORB-29504, ORB-29573]
+related_artifacts: [ORB-29504, ORB-29573, ORB-29538]
 ---
 
 # Plugin Pages — Decisions
@@ -97,10 +97,45 @@ by a route the frame can call.
   third more bytes, and cannot split its code. Another host's page has to be written by the
   local dashboard from parts, which phase 2 must build.
 
+## Owner exception: public HTTP coverage for pages on other hosts
+
+**Recorded:** 2026-11 · [ORB-29538]
+
+### Context
+
+The repository admits a new test only for an observed, reproduced defect
+([test and QA rules](../../agents/test-and-qa-rules.md#tests)). Phase 2 adds a route and has
+the forwarder write a document from another host's untrusted parts, a security boundary with
+no defect to reproduce yet.
+
+### Decision
+
+Daniel answered “Grant A” on 2026-11-27 (Scribe decision-74). [ORB-29538] may add public HTTP
+integration coverage for exactly this scope, and no other new test:
+
+- the parts route for an existing page, a disabled page and an unknown page, and an inactive
+  page where the route distinguishes it (`plugin_page::the_parts_route_returns_an_active_pages_parts_in_manifest_order`
+  in `crates/orbit-web/tests/http_api/plugin_page.rs`);
+- the forwarded page written from remote parts under the local policy and per-script hashes,
+  ignoring the remote's policy, and each refusal of invalid remote parts returning a diagnostic
+  and no document (`host_forward::a_remote_page_is_written_here_from_its_checked_parts` in
+  `crates/orbit-web/tests/http_api/host_forward.rs`).
+
+The existing forwarder tests, manual two-host QA, the session refusal and normal review
+still apply.
+
+### Consequences
+
+- The boundary that keeps a remote page's bytes from running unhashed on this origin has a
+  regression check from its first change.
+- Cost: two cases join the HTTP suite outside the defect-only rule, so a later change to this
+  boundary keeps them green or retires them with measured evidence.
+
 ## Task References
 
 - [ORB-29504] — designed plugin pages; the operator approved the first two decisions with it.
 - [ORB-29532] — measured the first page contract in Chromium and WebKit.
 - [ORB-29573] — revised the page contract; the operator approved the third decision with it.
+- [ORB-29538] — built pages on other hosts under the owner's test exception above.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -322,7 +322,7 @@ default_crew = "sol"
 | `vision` | Default `true`: the crew may be given images when its executor declares `image_input`. `false` opts a text-only model out. |
 | `description` | Short summary for people. |
 | `tags` | Discovery labels. |
-| `env` | Variables this crew's agents receive on top of `execution.env.pass`, as `NAME` or `NAME=SOURCE`. Global config only. See [Provider credentials](#provider-credentials). |
+| `env` | Variables this crew's agents receive on top of `execution.env.pass`, as `NAME` or `NAME=SOURCE`, except the reserved task-identity names (`ORBIT_TASK_ID`, `ORBIT_ACTIVE_TASK_ID`, `AGENT_TASK`). Global config only. See [Provider credentials](#provider-credentials). |
 | `kind` | `agent` (default) or `human`. See [Human crews](#human-crews). |
 
 Set a field with `orbit config set crews.<name>.<field> <value>`, for example
@@ -662,7 +662,7 @@ and `machine.task_prefix`. `orbit config keys` prints the same list.
 | `commit.body_template` | **Advanced.** string · **Default:** Unset<br>Template for single-task commit bodies, before the trailers. |
 | `branch.name_template` | **Advanced.** string · **Default:** `{{prefix}}/{{task_id}}-{{hash}}`<br>Template for single-task delivery branch names; must contain `{{task_id}}` and `{{hash}}`. |
 | `pr.task_url_template` | **Advanced.** string · **Default:** Unset<br>URL template that links a task ID in pull request descriptions. |
-| `execution.env.pass` | array&lt;string&gt; · **Default:** `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`<br>Environment variables passed to agent subprocesses. Your list replaces the default. macOS also passes `__CF_USER_TEXT_ENCODING` by default. See [Provider credentials](#provider-credentials). |
+| `execution.env.pass` | array&lt;string&gt; · **Default:** `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`<br>Environment variables passed to agent subprocesses. Your list replaces the default. macOS also passes `__CF_USER_TEXT_ENCODING` by default. `ORBIT_TASK_ID`, `ORBIT_ACTIVE_TASK_ID` and `AGENT_TASK` are reserved: an activity bound to one task receives its own ID in all three, and any other activity receives none, whatever `pass`, a crew `env` or the launching process holds. See [Provider credentials](#provider-credentials). |
 | `execution.env.login_auth` | array&lt;string&gt; · **Default:** `[]`<br>Providers (`claude`, `codex`) whose agents sign in through the CLI's own login. Their credential variables in `execution.env.pass` are not reported when unset. Orbit reads no credential; this is your declaration. |
 | `execution.codex.sandbox` | string · **Default:** `workspace-write`<br>Codex sandbox mode: `read-only`, `workspace-write` or `danger-full-access`. |
 | `execution.codex.approval_policy` | **Advanced.** string · **Default:** Unset<br>Codex approval policy: `untrusted`, `on-request` or `never`. |

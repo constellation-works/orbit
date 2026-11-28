@@ -4,17 +4,52 @@
 //! reports what it would reclaim; with it, the command reaps, and only then is
 //! the caller held to the class's `gc <class>` governance row.
 
+mod deployment;
+
+mod scratch;
+
+mod store;
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod test_support {
+    pub use super::store::{gc_audit, gc_runs};
+    pub use super::worktree::{gc_worktrees, reclaimable_worktrees};
+}
+
+mod tmp;
+
+mod worktree;
+
 use orbit_common::OrbitError;
 use orbit_engine::WorktreeGcResult;
 
 use super::exec::{self, App, Operation};
 use crate::Core;
-use crate::application::gc::{
-    AuditGcReport, DeploymentGcResult, JournalGcReport, RunGcReport, TmpGcResult,
-};
+
+use deployment::gc_deployments;
+use store::gc_journal;
+use tmp::gc_tmp;
+use worktree::gc_worktrees;
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
-pub use crate::application::gc::DEFAULT_DEPLOYMENT_KEEP;
+pub use deployment::{
+    DEFAULT_DEPLOYMENT_KEEP, DeploymentGcClass, DeploymentGcEntry, DeploymentGcResult,
+};
+pub use store::{
+    AuditGcReport, BatchReport, BlobSweepReport, JournalGcReport, RESOURCE_MINUTES_RETENTION_DAYS,
+    ResourceMinutesRetentionReport, RetentionTableReport, RunGcReport, StoreRetentionOverview,
+    StoreSpaceReport,
+};
+pub use tmp::{TmpGcReport, TmpGcResult};
+
+pub(crate) use scratch::gc_scratch_by_age;
+pub(crate) use store::{gc_audit, gc_runs, store_retention_overview};
+pub(crate) use worktree::{
+    cleanup_delivered_worktree, list_job_runs_for_worktree_gc, reclaim_run_build_output,
+    reclaim_worktrees_on_admission, reclaimable_worktrees, worktree_gc_live_claim,
+    worktree_gc_settled_claim, worktree_gc_task_lookup, worktree_gc_task_lookup_scope,
+};
 
 /// What the gc app can be asked to do: one variant per garbage class.
 pub enum Command {
@@ -151,29 +186,30 @@ impl App for GcApp {
                 older_than_hours,
                 estimate_bytes,
                 reclaim,
-            } => Outcome::Worktrees(runtime.gc_worktrees(
+            } => Outcome::Worktrees(gc_worktrees(
+                runtime,
                 confirm,
                 run,
                 older_than_hours,
                 estimate_bytes,
                 reclaim,
             )?),
-            Command::Tmp { confirm } => Outcome::Tmp(runtime.gc_tmp(confirm)?),
+            Command::Tmp { confirm } => Outcome::Tmp(gc_tmp(runtime, confirm)?),
             Command::Deployments { confirm, keep } => {
-                Outcome::Deployments(runtime.gc_deployments(confirm, keep)?)
+                Outcome::Deployments(gc_deployments(runtime, confirm, keep)?)
             }
             Command::Audit {
                 confirm,
                 older_than_days,
-            } => Outcome::Audit(runtime.gc_audit(confirm, older_than_days)?),
+            } => Outcome::Audit(gc_audit(runtime, confirm, older_than_days)?),
             Command::Runs {
                 confirm,
                 older_than_days,
-            } => Outcome::Runs(runtime.gc_runs(confirm, older_than_days)?),
+            } => Outcome::Runs(gc_runs(runtime, confirm, older_than_days)?),
             Command::Journal {
                 confirm,
                 older_than_days,
-            } => Outcome::Journal(runtime.gc_journal(confirm, older_than_days)?),
+            } => Outcome::Journal(gc_journal(runtime, confirm, older_than_days)?),
         })
     }
 }
@@ -182,3 +218,6 @@ impl App for GcApp {
 pub fn exec(core: &Core, command: Command) -> Result<Outcome, crate::Error> {
     exec::run::<GcApp>(core, command)
 }
+
+#[cfg(test)]
+mod tests;

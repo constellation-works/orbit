@@ -143,6 +143,11 @@ pub(super) fn claim_json(
         "age_seconds": claim.age_seconds,
         "unresolved_merge_intent": claim.unresolved_merge_intent,
         "landing_invalidated": claim.landing_invalidated,
+        "repair": claim.claim.repair.as_ref().map(|repair| serde_json::json!({
+            "repairs_claim_id": repair.repairs_claim_id,
+            "handoff_id": repair.handoff_id,
+            "owner_review_timing": repair.owner_review_timing,
+        })),
         "handoff": handoff,
     })
 }

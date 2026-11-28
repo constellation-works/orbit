@@ -1,7 +1,7 @@
 //! Which catalog layer answered for each `job:` / `activity:` reference.
 //!
 //! Layering is the part of the plugin standard an operator is most likely to
-//! be surprised by (design `docs/design/plugins/1_scope.md` §8): a workspace
+//! be surprised by (design `docs/design/plugins/2_design.md` §8): a workspace
 //! file silently shadows a plugin's activity of the same name. `orbit run
 //! show` therefore names the layer that resolved every reference in a run's
 //! job, and names the layers it shadowed.

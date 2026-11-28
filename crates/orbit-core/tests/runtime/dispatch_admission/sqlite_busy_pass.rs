@@ -7,6 +7,7 @@
 //! translation, so the pass is deferred like one held out by the task-commit
 //! file lock, not failed.
 
+use orbit_core::app::gc::test_support as gc;
 use std::time::Duration;
 
 use orbit_engine::Dispatch;
@@ -174,7 +175,7 @@ fn store_gc_allows_task_updates_and_dispatch_during_history_selection() {
             Ok(())
         })
         .unwrap();
-    let report = runtime.gc_runs(true, None).unwrap();
+    let report = gc::gc_runs(&runtime, true, None).unwrap();
     assert!(
         report.resource_minutes[0].rows_removed > 0,
         "GC must exercise its deletion path"

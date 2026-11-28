@@ -1,5 +1,5 @@
 //! Host-owned plugin secrets: the values behind a manifest's `spec.secrets`
-//! (design `docs/design/plugins/1_scope.md` §3, "Plugin secrets").
+//! (design `docs/design/plugins/2_design.md` §3, "Plugin secrets").
 //!
 //! One file per plugin, `<global_root>/state/plugin-secrets/<ns>.json`, mode
 //! `0600` in a `0700` directory. The tree is on the plugin sandbox's

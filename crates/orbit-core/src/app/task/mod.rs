@@ -48,7 +48,7 @@ use orbit_common::OrbitError;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::task::TaskVerb;
 use orbit_store::TaskCompletionByComplexity;
-use orbit_tools::ReservationOwnerContext;
+use orbit_tools::{ActivityBinding, ReservationOwnerContext};
 use orbit_types::identity::HumanCrew;
 use orbit_types::task::{
     DecisionRequest, PilotAdmissionOperatorRecord, Task, TaskHistoryEntry, TaskStatus, TaskType,
@@ -69,7 +69,6 @@ use crate::application::task_bundle::migration::{ExportOutcome, ImportOutcome, R
 use crate::application::task_bundle::publication::PublicationRestoreOutcome;
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
-pub use crate::application::backlog_forecast::BacklogForecastHistory;
 pub use crate::application::task::{
     CrewUsagePressure, ExternalMergeSettlement, ExternalMergeSettlementProfile, InfraBlockedTask,
     LockContentionReport, PostDeployOperatorRecord, PostDeployRecordRefusal, ProposedTaskInput,
@@ -85,6 +84,7 @@ pub use crate::application::task_bundle::publication::{
     PublicationPublishOutcome, PublicationPublishStatus, PublicationRecoveryCompleteness,
     PublicationRenderAuthority, ScannerFailureBehavior,
 };
+pub use crate::unit::backlog_forecast::BacklogForecastHistory;
 
 macro_rules! outcome_accessors {
     ($($(#[$doc:meta])* $method:ident => $variant:ident($inner:ty)),* $(,)?) => {
@@ -236,6 +236,8 @@ pub(crate) struct ToolCaller<'a> {
     pub(crate) agent: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) reservation_owner: Option<ReservationOwnerContext>,
+    /// The managed activity the dispatching host attested for this call.
+    pub(crate) activity: Option<&'a ActivityBinding>,
 }
 
 /// A tool call as the generic tool entry admitted it.

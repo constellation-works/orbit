@@ -5,7 +5,7 @@ tags: [operations, health, doctor, dashboard, routines]
 paths: ["crates/orbit-core/src/app/doctor/mod.rs", "crates/orbit-core/src/application/job/run/reconcile.rs"]
 related_features: [orbit-core, activity-job, routines]
 related_artifacts: [ORB-10005, ORB-10070, ORB-10473, ORB-10501, ORB-10558, ORB-10986, ORB-11791, ORB-12109, ORB-12223, ORB-12244, ORB-12968]
-last_validated: 2026-11-23
+last_validated: 2026-11-27
 ---
 
 # Check Orbit Health
@@ -38,6 +38,13 @@ Default database checks read the header and schema ledger without scanning data 
 Use `orbit doctor --deep` after a restore or when corruption is suspected to also run
 SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer on a cold cache.
 
+For machine-readable checks, `orbit doctor --json` and `--format json` keep
+their top-level array of check rows. Count rows with `status: "error"` as
+failures and `status: "warning"` as warnings. `--format ndjson` emits those
+rows followed by a summary record with numeric `failures` and `warnings`
+fields. On a healthy or warning-only run all three structured modes write nothing
+to stderr; when a check fails they write the one-line count to stderr.
+
 | Check | What it reports | Status and next step |
 |---|---|---|
 | `config` | Effective global + workspace configuration | `ok` when valid; `warning` for ignored crew properties or lanes pointing at disabled crews (possibly several rows); `error` for selection/parse failures. Correct the named config field. |
@@ -64,7 +71,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | `env-pass` | Operator-added `execution.env.pass` names that neither the evaluating process's environment nor a non-empty `~/.orbit/clock.env` value supplies (unset or empty); names only, never values. A name `clock.env` supplies counts as held for clock-started runs even when the evaluating process (a service or MCP process for `orbit attention`, which never loads `clock.env`) does not hold it. Crew `[crews.<name>] env` sources get no `clock.env` exception in this row: they are judged against the evaluating process's environment, and the managed-service check counts `clock.env` only for the sweep service. The built-in defaults are not reported, nor are the credential variables of a provider named in `execution.env.login_auth` (a declaration that the provider authenticates through its CLI login; no credential is read) | `warning` naming each still-unset variable, and each crew with its unset source (drains exclude that crew and its activities are refused); otherwise `ok`. Both outcomes name the judged environment (evaluating process, plus `clock.env` for `pass` names). Agents inherit the launching shell's environment, so start drains from a login shell or export the variable in the service's environment, put clock-needed names in `clock.env` (mode 600), or drop the name from `execution.env.pass`. Manual drain and ship starts (CLI, MCP and dashboard) and `run job` judge only their own launching environment and do not read `clock.env`. They report the same warning at start and record it on the run, so a name `clock.env` supplies can be `ok` here and still warn there. Timer-started runs read `clock.env` and do not warn for those names. |
 | `claude-worker-token` | macOS only, when a routed crew uses `claude`: the workspace's effective `execution.env.pass` names `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`), and, with the sweep clock installed, `~/.orbit/clock.env` holds one that the same `pass` names. A `clock.env` holding only a name the `pass` omits warns as a mismatch. A routed Claude crew whose `env` maps its own credential needs neither; the row checks that `clock.env` holds its source instead. Names only, never values | `warning` naming what is missing; `skipped` off macOS or with no routed Claude crew; otherwise `ok`. Without the token `claude` falls back to the Claude Desktop login, which the Desktop revokes mid-run, and Orbit refuses such activities; a drain started without the token excludes the Claude crews from its window rather than claim them. Add the name to `pass` and to `clock.env` (mode 600); see the orbit-setup macOS reference. |
 | `validation-env` | Required-validation PATH source, login-shell probe mode/fallback, `python3`/`git`/`make` locations and shadowing, and any of `python3`/`git`/`make`/`cargo` that implementer and reviewer agent sessions resolve to a different executable | `skipped` when `workflow.required_validation_commands` is empty; `warning` for probe/preflight/fallback, shadowing or agent-session resolution concerns; otherwise `ok`. Correct shell startup or `workflow.validation_env` as advised. A listed missing tool alone does not change the status, and this row does not execute validation commands. |
-| `mid-run-steering` | The resolved `workflow.mid_run_steering.enabled` and `max_rounds` ([mid-run steering](../CONFIG.md#workflowmid_run_steering--operator-comments-after-dispatch)) | Always `ok`; the row reports the values, including the default off. Enable steering with `orbit config set workflow.mid_run_steering.enabled true`. |
+| `mid-run-steering` | The resolved `workflow.mid_run_steering.enabled` and `max_rounds` ([mid-run steering](../config/workflow.md#workflowmid_run_steering--operator-comments-after-dispatch)) | Always `ok`; the row reports the values, including the default off. Enable steering with `orbit config set workflow.mid_run_steering.enabled true`. |
 | `orphan-task-stores` | Host-global task-store partitions and their live, missing, unreachable, or absent checkout claims | `skipped` when the task workspaces directory does not exist; `ok` when it exists but has no partitions or when all partitions are claimed; `warning` for findings or inspection failure. Reindex unowned populated stores, restore unreachable checkouts, or use the confirmed repair for empty and confirmed-absent partitions; see below. |
 | `tracked-orbit-files` | Git-tracked paths under `.orbit/` | `warning` when tracked (`git rm -r --cached .orbit`); `ok` when none; `skipped` outside Git or when Git cannot answer. |
 | `plugin-builds` | Host source-built plugin provenance and build drift | `skipped` when no plugin was built from source; `ok` for healthy or intentional findings; `warning` for actionable drift or inspection failure. Follow the plugin row's step and rerun `orbit plugin doctor`. |
@@ -81,7 +88,7 @@ SQLite `PRAGMA quick_check`; it reads the entire store and can take much longer 
 | `provider:<crew>` | One row per enabled crew selected by default/positive-weight complexity routing: executor definition and CLI lookup | `ok` when the CLI resolves (authentication is **not** checked); `skipped` for an executor without a CLI command, or whose `host_os` excludes this host (`unsupported on this OS`, no install advice); `error` for missing crew/executor/CLI or inspection failure. Restore the named dependency or change routing. Disabled crews are omitted. |
 | `provider-routing` | Fallback when effective routing config or a complexity crew pool cannot be inspected | One `error` replaces the per-crew rows. Repair the named configuration. |
 | `provider-auth:<provider>`, `provider-auth:<provider>/<crew>` | Provider accounts excluded from an active pull drain after an authentication failure; the `/<crew>` form is a crew that sets `env`, its own account | One `warning` per excluded account, with a relogin hint (for a crew account, the variables its `env` passes, by name); an inspection failure produces a generic `provider-auth` warning. No row is emitted when there are no exclusions. |
-| `provider-limits:<provider>` | One row per provider an enabled crew uses, and a `provider-limits:<provider>/<crew>` row per enabled crew that sets `env` and so is its own account: this host's live usage readings of that account against its `workflow.provider_limit_*` threshold | `ok` below the threshold, listing the readings; `ok` and says gating is off when the override is `provider:off`, listing readings that no longer limit crews; `warning` while a reading gates the provider, naming the window, use, reset and skipped crews (admission resumes them after the reset); `info` (`no usage signal; Orbit learns limits from failures`) for a provider that reports no usage windows and has no `workflow.provider_limit_budgets` entry (a budgeted provider lists its ledger reading). See [provider usage limits](../CONFIG.md#provider-usage-limits). |
+| `provider-limits:<provider>` | One row per provider an enabled crew uses, and a `provider-limits:<provider>/<crew>` row per enabled crew that sets `env` and so is its own account: this host's live usage readings of that account against its `workflow.provider_limit_*` threshold | `ok` below the threshold, listing the readings; `ok` and says gating is off when the override is `provider:off`, listing readings that no longer limit crews; `warning` while a reading gates the provider, naming the window, use, reset and skipped crews (admission resumes them after the reset); `info` (`no usage signal; Orbit learns limits from failures`) for a provider that reports no usage windows and has no `workflow.provider_limit_budgets` entry (a budgeted provider lists its ledger reading). See [provider usage limits](../config/crews.md#provider-usage-limits). |
 | `provider-limits:workflow.purpose_crews.review`, `provider-limits:workflow.purpose_crews.pre_landing_review` | That lane's crew uses a provider a reading gates (the pre-landing row only while that pool is set) | `warning` with the reset. This lane is not gated, so its runs may fail until then; wait, or point the setting at a crew on another provider. A single `provider-limits` `warning` replaces every row when the store cannot be read. |
 | `mcp-registration` | Recognized client configuration for this workspace | `ok` when a registration is found (connection is **not** checked); otherwise `warning` naming `orbit mcp init --auto` or `orbit mcp init --client <client>`. |
 | `clock-unit` | Installed launchd/systemd sweep unit's invocation, program path, `--version`, and whether that timer is armed | `skipped` when no unit is installed; `ok` when the unit matches and, on Linux, `orbit-sweep.timer` is enabled and active, or, on macOS, `com.orbit.sweep` is loaded and its sweep log is within the configured tick interval plus the 300-second tick deadline. If the active log is absent, a rotated archive within that same window is accepted; without one (no prior log or a stale archive), it warns. A stale active log also warns. Other warnings cover a different path, stale invocation, unrunnable program, inspection failure, a disabled or inactive timer, or an unloaded agent; `error` means version mismatch. `orbit clock repair` rewrites the unit file. `orbit clock enable` is the fix when the timer is not armed. An operator pause stays `paused` on `orbit clock status` and is still this warning. |
@@ -350,7 +357,7 @@ retires the stale registry rows — as it does for every empty unclaimed partiti
 
 **Recovery ordering for a deleted checkout.** Doctor can already classify the partition as stale
 while the workspace is still in the catalog (the catalog checkout's `repo_root` is the evidence).
-You may then either run the repair immediately, or first deregister the dead workspace:
+When absence is confirmed, you may either run the repair immediately, or first deregister the dead workspace:
 
 ```sh
 ORBIT_OPERATOR=1 orbit workspace remove <workspace-name-or-id-or-absolute-checkout-path>
@@ -358,17 +365,19 @@ ORBIT_OPERATOR=1 orbit workspace remove <workspace-name-or-id-or-absolute-checko
 
 `workspace remove` changes only the catalog; it does not delete `.orbit` or task bundles. It
 **retains** the task-registry workspace binding and copies the catalog checkout into that
-registry so the leftover partition stays stale rather than flipping back to a claimed imported
-archive. A populated leftover is reported with its path, bundle count, and the reclaim command
-below. After removal, `orbit doctor` still warns on that partition; it must not report `ok`.
+registry so the leftover partition remains classifiable rather than flipping back to a claimed
+imported archive. A populated leftover is reported with its path, bundle count, and conditional
+repair guidance. After removal, `orbit doctor` still warns on that partition; it must not report `ok`.
 
 ```sh
 orbit doctor --fix-orphan-task-stores --confirm
 ```
 
-Either order works: repair while the catalog still lists the checkout, or `workspace remove`
-then the same repair. Skipping the repair after `workspace remove` leaves the bundles on disk
-and unreachable through workspace selectors.
+For a confirmed-stale binding, either order works: repair while the catalog still lists the
+checkout, or `workspace remove` then the same repair. If absence cannot be confirmed, including
+when the immediate parent is empty or missing, the partition and binding remain unreachable and
+the repair preserves them. Skipping the repair after `workspace remove` leaves the bundles on
+disk and unreachable through workspace selectors.
 
 Do not use that repair for an unknown or unreachable populated partition; reindex or restore it
 first. Empty and removed mount points are preserved, along with unreadable and dangling parents,

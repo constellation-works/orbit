@@ -6,7 +6,7 @@ use super::introspect::{add_column_if_missing, table_exists};
 
 /// v24 `plugins_and_audit_plugin_provenance` migration: the host-local
 /// installed-plugin record beside `tools`, and the three audit columns that
-/// name the plugin behind a tool call (design `docs/design/plugins/1_scope.md`
+/// name the plugin behind a tool call (design `docs/design/plugins/2_design.md`
 /// §3, §4.4). Additive: an older binary ignores the table and the columns.
 pub(super) fn apply_plugins_and_audit_plugin_provenance(
     conn: &Connection,
@@ -44,7 +44,7 @@ pub(super) fn apply_plugins_and_audit_plugin_provenance(
 /// v27 `plugin_certified_orbit_version` migration: the Orbit version a
 /// plugin's `spec.tests` goldens last passed on, written by `orbit plugin
 /// test` and printed by `orbit plugin show` (design
-/// `docs/design/plugins/1_scope.md` §5). Additive: an older binary ignores
+/// `docs/design/plugins/2_design.md` §5). Additive: an older binary ignores
 /// the column, and a host that has never run a conformance suite reads NULL.
 pub(super) fn apply_plugin_certified_orbit_version(conn: &Connection) -> Result<(), OrbitError> {
     if !table_exists(conn, "plugins")? {
@@ -74,6 +74,17 @@ pub(super) fn apply_plugin_build_record(conn: &Connection) -> Result<(), OrbitEr
         return Ok(());
     }
     add_column_if_missing(conn, "plugins", "build_json", "TEXT")
+}
+
+/// v97 `plugin_page_digests` migration: the digest of each plugin page's
+/// bundle at install time, as a JSON object keyed by page id
+/// (`docs/design/plugin-pages/2_design.md` §1). Additive: an older binary
+/// ignores the column, and every plugin installed without pages reads NULL.
+pub(super) fn apply_plugin_page_digests(conn: &Connection) -> Result<(), OrbitError> {
+    if !table_exists(conn, "plugins")? {
+        return Ok(());
+    }
+    add_column_if_missing(conn, "plugins", "page_digests_json", "TEXT")
 }
 
 // Frozen private copy for v24. Do not share with another migration.

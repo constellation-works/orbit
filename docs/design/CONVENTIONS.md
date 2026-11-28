@@ -1,66 +1,49 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-updated_date: 2026-11-03
-last_validated: 2026-11-03
+updated_date: 2026-11-28
+last_validated: 2026-11-28
 status: Accepted
 ---
 
 # Design Doc Conventions
 
-Recommended conventions that feature leads follow when writing and maintaining design docs under `docs/design/<feature>/`. The goal is a set of feature folders that read as one coherent documentation system regardless of which agent authored them. These are recommendations (not hard rules enforced by tooling; `orbit-design` has been retired in favor of ordinary repository documentation).
+Conventions that feature leads follow when writing and maintaining design docs under `docs/design/<feature>/`. The goal is a set of feature folders that read as one coherent documentation system regardless of which agent authored them. The scaffold and `stage` rules are required by [STD-06@5](../standards/STD-06-design-docs-and-feature-tracking/STD-06.md); §11 says which of them the generator enforces and which are review-only.
 
 This doc is itself the source of truth for the conventions. When a convention changes, update this doc and then update existing feature folders to match — do not silently diverge.
 
 ---
 
-## 1. Folder Layout (per feature, recommended)
+## 1. Folder Layout (per feature)
 
-A feature folder follows one of two tracks. Pick by the size of the idea, not its importance.
-
-**Scope track** — one change to an existing mechanism, readable in one sitting:
+Every feature folder carries the [STD-06@5](../standards/STD-06-design-docs-and-feature-tracking/STD-06.md) §R2 scaffold: an overview, a design and a decisions doc from the start, with an optional vision doc.
 
 ```
 docs/design/<feature>/
-├── 1_scope.md          problem, goal, shape, phasing, acceptance — the whole design
-└── 4_decisions.md      only once an entry clears the admission test (§4a)
-```
-
-**Full track** — a subsystem with its own vocabulary, several mechanisms, or a long life as reference:
-
-```
-docs/design/<feature>/
-├── 1_overview.md       recommended — what and why
-├── 2_design.md         recommended — current implementation
-├── 3_vision.md         recommended — forward-looking
-├── 4_decisions.md      recommended — titled decisions and their reasoning
-├── specs/              recommended folder; may be empty initially
+├── 1_overview.md       required — what and why; the entry doc that carries `stage` and `next`
+├── 2_design.md         required — current mechanisms and contracts
+├── 3_vision.md         optional — forward-looking
+├── 4_decisions.md      required — titled decisions; may hold no entry until one clears the admission test (§4a)
+├── specs/              optional folder
 │   └── <mechanism>.md  one mechanism per file
-└── references/         recommended folder; may be empty initially
-    └── glossary.md     recommended; other lookup-style docs allowed
+└── references/         optional folder
+    └── glossary.md     lookup-style docs
 ```
 
-Choose the **scope track** when the feature adds a rule, a factor or a setting to machinery that already exists, has one configuration surface, and its open questions fit in a short list. [usage-pressure](./usage-pressure/1_scope.md) and [crew-credentials](./crew-credentials/1_scope.md) are examples. Choose the **full track** when it introduces nouns a reader must learn (a glossary), more than one mechanism that needs its own spec, a prior-work survey, or code that people will keep reading the design to understand.
-
-**Graduating.** When a scope doc outgrows one sitting — it grows specs, a glossary or sub-sub-sections, or its Shape has become the reference for code shipped over several phases — split it in the change that makes it outgrow: Problem and Goal become `1_overview.md`, Shape becomes `2_design.md`, Open questions seed `3_vision.md`, and `1_scope.md` is deleted with its inbound links fixed. `4_decisions.md` keeps its name on both tracks for this reason: graduating never renames the file code anchors and decision links point at.
+The four numbered files are the only top-level files. Keep each one filled and current as the feature moves; a small feature keeps them short rather than leaving one out.
 
 - Folder name: lowercase, hyphenated, singular (`host-registry`, `task-artifacts`).
 - No `README.md`, `roadmap.md`, `changelog.md`, `tutorial.md` at this level.
-- No top-level narrative files outside the track's numbered files. Existing folders may vary; new work should prefer a track for coherence.
+- No top-level files outside the numbered files.
 
-**Starting a new feature?** Copy the scaffold for its track, then fill the placeholders:
+**Starting a new feature?** Copy the scaffold, then fill the placeholders:
 
 ```sh
-# scope track
-mkdir docs/design/<feature>
-cp docs/design/_templates/scope/1_scope.md docs/design/<feature>/
-
-# full track
 cp -r docs/design/_templates/full docs/design/<feature>
 mv docs/design/<feature>/specs/_mechanism.md docs/design/<feature>/specs/<mechanism>.md
 ```
 
-A scope-track folder that later needs a decision copies [`_templates/full/4_decisions.md`](./_templates/full/4_decisions.md).
+Delete `3_vision.md`, `specs/` or `references/` when the feature has no use for them.
 
 The [`_templates/`](./_templates/) files carry the required frontmatter and section skeletons. They are the canonical copy source — the sections below describe only the *rules*, and point at the template they instantiate instead of repeating the boilerplate.
 
@@ -75,7 +58,7 @@ Every numbered design doc starts with the YAML frontmatter carried by the [`_tem
 - `created_date` is the document's creation date in `YYYY-MM-DD` form; use its first introducing commit date when known.
 - `updated_date` is the date of the last meaningful content change in `YYYY-MM-DD` form. Trivial reformat commits should not reset it.
 - `status` is `Draft` until the doc is approved by the feature lead, then `Accepted`. It moves back to `Draft` if a structural rewrite is in flight.
-- `stage` (entry doc only: `1_overview.md` or `1_scope.md`) is how far the feature is built, separate from the doc's `status`. One of:
+- `stage` (entry doc only: `1_overview.md`) is how far the feature is built, separate from the doc's `status`. One of:
   - `idea`: problem stated, no agreed design, nothing built.
   - `designing`: design written or under review; nothing implemented and nothing approved to build.
   - `building`: implementation landed or approved, but the design's committed scope (not its vision) is incomplete.
@@ -85,11 +68,11 @@ Every numbered design doc starts with the YAML frontmatter carried by the [`_tem
   The feature lead sets it when the feature moves, in the same change that moves it. Design approval alone does not move a feature to `building`; approved implementation tasks do.
 - `next` (entry doc only) is one line, at most about 100 characters, naming what has to happen next and the task that does it when one exists. A `shipped` feature with nothing pending uses `—`.
 - `feature` is the folder slug (e.g. `host-registry`, `task-artifacts`). It is descriptive metadata; the current generated index groups design rows by directory path.
-- `doc_role` is one of `scope`, `overview`, `design`, `vision`, `decisions` — corresponds 1:1 with the filename (`1_scope.md`, `1_overview.md`, `2_design.md`, `3_vision.md`, `4_decisions.md`).
+- `doc_role` is one of `overview`, `design`, `vision`, `decisions` — corresponds 1:1 with the filename (`1_overview.md`, `2_design.md`, `3_vision.md`, `4_decisions.md`).
 
-The scope template carries a shorter frontmatter (no `paths` or `related_*`); add them only when they help.
+`paths` and the `related_*` fields are optional; add them only when they help.
 
-The generated feature board in [`docs/design/FEATURES.md`](./FEATURES.md) reads `title`, `owner`, `stage` and `next` from each entry document and groups features by `stage`. `scripts/generate-doc-indexes.sh` derives a missing title from the document and defaults a missing owner. It fails on a missing or unknown `stage`; it does not otherwise validate a design-frontmatter schema. Run `make docs-index` and `scripts/generate-doc-indexes.sh --check` after changing board inputs. The other fields are descriptive metadata that the board does not query. When using `related_artifacts`, follow the reference forms below as a writing convention, not an enforced schema. Decisions are addressed by their titles and links, not artifact IDs, so they do not need artifact references.
+The generated feature board in [`docs/design/FEATURES.md`](./FEATURES.md) reads `title`, `owner`, `stage` and `next` from each Git-visible active feature's `1_overview.md` and groups features by `stage`; archived folders keep the entry doc they were archived with. `scripts/generate-doc-indexes.sh` derives a missing title from the document and defaults a missing owner. It fails when a Git-visible active feature folder has no `1_overview.md`, or when a `1_overview.md` that Git sees has a `stage` that is missing or unknown (§11 lists the checks and the Git-visibility rule that scopes them); it does not otherwise validate a design-frontmatter schema. Run `make docs-index` and `scripts/generate-doc-indexes.sh --check` after changing board inputs. The other fields are descriptive metadata that the board does not query. When using `related_artifacts`, follow the reference forms below as a writing convention, not an enforced schema. Decisions are addressed by their titles and links, not artifact IDs, so they do not need artifact references.
 
 ---
 
@@ -97,7 +80,6 @@ The generated feature board in [`docs/design/FEATURES.md`](./FEATURES.md) reads 
 
 | File | Required sections (in order) |
 |------|------------------------------|
-| **1_scope.md** | Status and Bearing lines · Problem · Goal · Shape (mechanism subsections, usually ending with Configuration and Surfaces) · Non-goals · Concerns and honest limitations · Phasing · Open questions · Acceptance (feature level) · Task References |
 | **1_overview.md** | Elevator paragraph · §1 Motivation · §2 Core Concepts · §3 At a Glance (table: concern → file → task) · Task References |
 | **2_design.md** | Scope paragraph · mechanism sections (variable count, numbered) · §N Concerns & Honest Limitations (mandatory last section) · Task References |
 | **3_vision.md** | Scope paragraph · §1 Open Questions (numbered) · §2 Prior Work (subsections by category) · §3 What May Be Distinctive · §4 References (Orbit-internal + External) · Task References |
@@ -225,15 +207,34 @@ A feature that is gone for good (nothing worth keeping as reference) may still b
 | `changelog.md` | Covered by git history + task IDs |
 | `tutorial.md` | Belongs at top-level project README |
 | Task-artifact mirrors in `references/` | Decision entries or design prose should absorb the "why"; rot risk otherwise |
-| Top-level doc outside the track's numbered files | If it's important, it belongs inside one of them |
+| Top-level doc outside the numbered files | If it's important, it belongs inside one of them |
 
 ---
 
 ## 11. Enforcement
 
-These are recommendations, not mechanically enforced by `scripts/generate-doc-indexes.sh`, which renders navigation rows from current documents. Both numbered design folders and free-form docs are acceptable.
+Two kinds of rule apply. The generator gate is mechanical. Everything else is review-only: reviewers check it against this doc and [STD-06@5](../standards/STD-06-design-docs-and-feature-tracking/STD-06.md) when a change touches it.
 
-Five mechanical checks worth adding later (as optional lints, never blocking):
+**Generator gate.** `make ci-guards` runs `scripts/generate-doc-indexes.sh --check`, and `make docs-index` regenerates the same output. Git visibility scopes the gate. Git sees a file when it is tracked, or untracked and not Git-ignored, and sees a folder when at least one file in it is. The generator fails when:
+
+- a folder directly under `docs/design/`, other than `_templates/` and `_archived/`, that Git sees has no `1_overview.md` (STD-06 §R2). This is the discovery rule. A folder Git does not see is local-only and exempt: every file in it is Git-ignored, or it holds no file. The generator skips it, so it needs no overview and never reaches the board. A Git-visible folder whose `1_overview.md` is Git-ignored but present passes this check, and the stage check below skips it.
+- a `1_overview.md` that Git sees (tracked, or untracked and not ignored) has a `stage` that is missing or not one of `idea`, `designing`, `building`, `shipped` or `parked` (STD-06 §R5). This overview stage check is separate from the discovery rule above. It runs only on overviews Git sees, so Git-ignored overviews skip it.
+- an `_archived/` folder has no top-level Markdown file.
+- `docs/design/FEATURES.md` or `docs/INDEX.md` is stale against what the generator renders (STD-06 §R9).
+- `git ls-files` fails under `docs/`, so Git's view of the docs tree is unknown. The generator then exits before it renders or writes either file, in write mode and in `--check` mode alike.
+
+The generator checks nothing else about feature folders. A missing `next` or `owner` renders as `—` on the board, and a missing `2_design.md` or `4_decisions.md` is not reported.
+
+**Review-only rules.** No gate checks these. Reviewers check them when a change touches them:
+
+- the rest of the scaffold: `2_design.md` and `4_decisions.md` in every feature folder, no top-level file beyond the four numbered files, and no `README.md`, roadmap, changelog or tutorial (§1; STD-06 §R2, §R3);
+- frontmatter fields and their values (§2; STD-06 §R4), and `next` (§2; STD-06 §R6);
+- `stage` and `next` changing in the same change that moves the feature, and body text that does not contradict `stage` (§2; STD-06 §R7, §R8);
+- decision entries admitted through exactly one door, with a `Cost:` line and title links that resolve (§4; STD-06 §R10, §R11);
+- the feature tag on each task (STD-06 §R12), and a Task References list in each numbered doc (§3; STD-06 §R13);
+- archiving (§7; STD-06 §R14).
+
+**Lints not yet built.** Five checks would make some review-only rules mechanical. None exists today. Each would be optional and never blocking:
 
 1. Lint: every numbered doc has required frontmatter + Task References section.
 2. Lint: every decision has a Cost line.
@@ -243,7 +244,7 @@ Five mechanical checks worth adding later (as optional lints, never blocking):
 
 Check 4 also gives a maintenance signal worth acting on: a Door 1 entry whose paths no longer exist has stopped explaining live code and is a demotion candidate.
 
-Until those exist: cross-review and author judgment are the quality mechanism. When one agent reviews the other's docs, the reviewer treats this doc as a checklist and gives feedback on deviations; the author decides whether the deviation is justified for that folder.
+Until those exist, cross-review and author judgment are the quality mechanism. When one agent reviews the other's docs, the reviewer treats this doc as a checklist and gives feedback on deviations; the author decides whether the deviation is justified for that folder. A justified departure from an STD-06 rule is recorded as a decision in the feature's design docs, citing `STD-06@5 §Rn`.
 
 ---
 
@@ -281,7 +282,7 @@ Retired features are removed from this table along with their folder.
 | Path Leases | [docs/design/path-leases/](./path-leases/) | claude |
 | Policy & Sandboxing | [docs/design/policy-sandbox/](./policy-sandbox/) | claude |
 | Process Supervision | [docs/design/process-supervision/](./process-supervision/) | claude |
-| Project Learnings | [docs/design/project-learnings/](./project-learnings/) | claude |
+| Project Learnings (archived) | [docs/design/_archived/project-learnings/](./_archived/project-learnings/) | claude |
 | Remote Access | [docs/design/remote-access/](./remote-access/) | codex |
 | Resident Orchestrator | [docs/design/resident-orchestrator/](./resident-orchestrator/) | claude |
 | Review Gate | [docs/design/review-gate/](./review-gate/) | codex |

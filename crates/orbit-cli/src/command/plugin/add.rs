@@ -88,6 +88,7 @@ impl ExecuteCore for PluginAddArgs {
         // schedules, skill links and warnings `--enable` produced here are
         // not only visible on the two-step `add` then `enable` path.
         support::append_agent_tool_consent_text(&mut text, summary);
+        support::append_pages_consent_text(&mut text, summary);
         append_enable_report_text(&mut text, &result.seeded, &result.skills, &result.warnings);
 
         let mut doc = plugin_record(summary);

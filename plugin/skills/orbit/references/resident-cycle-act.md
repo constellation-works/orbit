@@ -117,7 +117,9 @@ assessment free of holds and warnings. The `breaking-change`, `design` and
 `no-drain` tags exclude a proposal. Orbit records the assessment and the
 cycle's grant in a task comment when it approves the proposal.
 
-`orbit.attention` reads the runtime kinds (`run_failed`, `run_stuck`, `claim_stale`) and `host_unhealthy` for the covered workspaces while the cycle's grant is live; any other workspace still reports them as `capability` degraded.
+`orbit.attention` reads the runtime kinds (`run_failed`, `run_stuck`, `claim_stale`,
+`delivery_stale_base`) and `host_unhealthy` for the covered workspaces while the cycle's grant is
+live; any other workspace still reports them as `capability` degraded.
 
 `orbit.workflow` action `auto` with `mode: "status"` reads drain readiness for the covered workspaces while the cycle is live, with or without any granted right, and refuses any other workspace as `resident_scope_refused`. Both are reads only: they grant no write, and drain controls (`start`, `stop`, `resize`) stay operator-only.
 

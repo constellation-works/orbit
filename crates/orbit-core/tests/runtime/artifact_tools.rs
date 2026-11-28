@@ -696,7 +696,7 @@ fn doc_duties_discovery_fetches_only_listed_ledgers() {
             },
         )
         .expect_err("MCP absent ledger must stay refused, not fabricated");
-    for hint in ["orbit.task.show", "field: \"artifacts\""] {
+    for hint in ["orbit_task_show", "field: \"artifacts\""] {
         assert!(mcp_error.to_string().contains(hint), "{mcp_error}");
     }
     let read = runtime

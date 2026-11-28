@@ -4,9 +4,8 @@
 //! assessment correlates with the sweep's source evidence, and settles a
 //! filed task another pilot already prepared as superseded. `sweep_filing`
 //! owns that policy, and it also files tasks, so a direct call from here
-//! would close a cycle. This port is the way in: `sweep_filing` implements
-//! it on [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime
-//! binds it.
+//! would close a cycle. This port is the way in: `unit::sweep_filing`
+//! implements it on its runtime-backed `TaskPort`, bound in `app::port`.
 
 use orbit_engine::DispatchError;
 use orbit_types::task::Task;
@@ -72,7 +71,7 @@ pub(crate) struct CiSweepAdmissionRequest<'a> {
 
 /// The CI-sweep admission policy task-pilot apply calls, implemented by
 /// `sweep_filing`.
-pub(in crate::application) trait TaskSweepFilingPort {
+pub(crate) trait TaskSweepFilingPort {
     /// Admit the task `request.filing` names from its validated
     /// `request.assessment` and `request.selectors`, or refuse it, correlating
     /// both with the sweep's source evidence.

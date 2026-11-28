@@ -7,6 +7,18 @@ use super::*;
 
 const LINT_FIX: &str = "lint.txt";
 
+/// A binary retained edit and a newer integration version of the same path,
+/// admitted as a same-PR repair whose successor worktree is set up but has not
+/// yet resumed the candidate.
+struct BinaryConflict {
+    id: String,
+    setup: Value,
+    successor: PathBuf,
+    integration_bytes: Vec<u8>,
+    retained_bytes: Vec<u8>,
+    dirty: String,
+}
+
 /// The red published head, with final recovery's candidate-specific lint fix
 /// left in the publisher's own checkout: one staged new file and one edit.
 fn incident() -> (Fixture, PathBuf, String) {
@@ -261,10 +273,1026 @@ fn adoption_refuses_a_staged_git_link() {
     assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
 }
 
+fn adoption_refuses_an_unstaged_git_link_move() {
+    let (f, checkout, _) = incident();
+    let nested = checkout.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    git(&nested, &["init", "-q"]);
+    git(&nested, &["config", "user.name", "Fixture"]);
+    git(&nested, &["config", "user.email", "fixture@example.com"]);
+    std::fs::write(nested.join("file"), "first\n").unwrap();
+    git(&nested, &["add", "file"]);
+    git(&nested, &["commit", "-qm", "first"]);
+    let first = git(&nested, &["rev-parse", "HEAD"]);
+    let original_head = git(&checkout, &["rev-parse", "HEAD"]);
+    git(
+        &checkout,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{first},nested"),
+        ],
+    );
+    git(&checkout, &["commit", "-qm", "add git link"]);
+    let tree = git(&checkout, &["rev-parse", "HEAD^{tree}"]);
+    let parent = git(&checkout, &["rev-parse", &format!("{original_head}^")]);
+    let linked_head = git(
+        &checkout,
+        &["commit-tree", &tree, "-p", &parent, "-m", "fixture"],
+    );
+    // Keep the published identity while giving this isolated fixture a HEAD
+    // tree containing the link, as a real published candidate would have.
+    git(&checkout, &["replace", &original_head, &linked_head]);
+    git(&checkout, &["update-ref", "HEAD", &original_head]);
+    std::fs::write(nested.join("file"), "second\n").unwrap();
+    git(&nested, &["commit", "-qam", "second"]);
+    let nested_head = git(&nested, &["rev-parse", "HEAD"]);
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+    assert!(dirty.contains("nested"), "{dirty}");
+    assert!(
+        !git(
+            &checkout,
+            &["-c", "diff.ignoreSubmodules=all", "status", "--porcelain"]
+        )
+        .contains("nested")
+    );
+
+    let mut request = f.request("inspect");
+    request["source_repair"]["adopt_retained_edits"] = json!(true);
+    let error = refused_without_effects(&f, request, "unstaged git link");
+    assert!(
+        error.contains("nested") && error.contains("Git link"),
+        "{error}"
+    );
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+    assert_eq!(git(&nested, &["rev-parse", "HEAD"]), nested_head);
+}
+
+/// Commits enough long-path files into the retained checkout's own history
+/// that `git ls-files --stage -z` exceeds the candidate status capture limit,
+/// while `HEAD` keeps its published identity (the commit is replaced, as the
+/// Git link fixture does) and the checkout stays clean. The retained edits of
+/// `incident` are discarded; callers restore the ones they need.
+fn track_a_large_index(checkout: &std::path::Path) {
+    // Mirrors the 256 KiB status capture limit the runtime reads under.
+    const STATUS_LIMIT: usize = 256 * 1024;
+    git(checkout, &["reset", "-q", "--hard", "HEAD"]);
+    git(checkout, &["clean", "-qfd"]);
+    let original_head = git(checkout, &["rev-parse", "HEAD"]);
+    let mut bulk = PathBuf::from("bulk");
+    for level in 0..7 {
+        bulk.push(format!("{level}{}", "d".repeat(199)));
+    }
+    std::fs::create_dir_all(checkout.join(&bulk)).unwrap();
+    for index in 0..240 {
+        std::fs::write(checkout.join(&bulk).join(format!("file-{index:03}")), "x\n").unwrap();
+    }
+    git(checkout, &["add", "bulk"]);
+    git(checkout, &["commit", "-qm", "track a large index"]);
+    let tree = git(checkout, &["rev-parse", "HEAD^{tree}"]);
+    let parent = git(checkout, &["rev-parse", &format!("{original_head}^")]);
+    let widened = git(
+        checkout,
+        &["commit-tree", &tree, "-p", &parent, "-m", "fixture"],
+    );
+    git(checkout, &["replace", &original_head, &widened]);
+    git(checkout, &["update-ref", "HEAD", &original_head]);
+    assert!(git(checkout, &["status", "--porcelain"]).is_empty());
+    let listing = git(checkout, &["ls-files", "--stage", "-z"]);
+    assert!(
+        listing.len() > STATUS_LIMIT,
+        "index listing is {} bytes",
+        listing.len()
+    );
+}
+
+/// An index listing longer than the status capture limit is not an incomplete
+/// listing: ordinary tracked edits are still adopted, untouched.
+fn adoption_reads_an_index_beyond_the_status_limit() {
+    let (f, checkout, edited) = incident();
+    track_a_large_index(&checkout);
+    std::fs::write(checkout.join(LINT_FIX), "final recovery lint fix\n").unwrap();
+    git(&checkout, &["add", LINT_FIX]);
+    let mut body = std::fs::read_to_string(checkout.join(&edited)).unwrap();
+    body.push_str("final recovery edit\n");
+    std::fs::write(checkout.join(&edited), body).unwrap();
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+
+    let inspection = adopting_inspection(&f).unwrap();
+    let patch = inspection["retained_patch"].as_str().unwrap();
+    assert!(patch.contains(LINT_FIX) && patch.contains("final recovery edit"));
+    assert_eq!(
+        inspection["binding"]["retained_patch"]["paths"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+}
+
+/// A Git link at the end of an index longer than the status capture limit is
+/// still found and refused, leaving the checkout as it was.
+fn adoption_refuses_a_git_link_beyond_the_status_limit() {
+    let (f, checkout, _) = incident();
+    track_a_large_index(&checkout);
+    let head = git(&checkout, &["rev-parse", "HEAD"]);
+    git(
+        &checkout,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{head},zz-nested"),
+        ],
+    );
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+
+    let mut request = f.request("inspect");
+    request["source_repair"]["adopt_retained_edits"] = json!(true);
+    let error = refused_without_effects(&f, request, "git link past the limit");
+    assert!(error.contains("zz-nested"), "{error}");
+    assert!(error.contains("Git link"), "{error}");
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+}
+
+fn before_landing_retained_fixture() -> (Fixture, PathBuf) {
+    let (mut f, checkout, _) = escalated_completion_fixture();
+    let config = f.repo.join(".orbit/config.toml");
+    let policy = std::fs::read_to_string(&config)
+        .unwrap()
+        .replace("before_landing = false", "before_landing = true");
+    std::fs::write(config, policy).unwrap();
+    super::inline_publication::reload(&mut f);
+    let forge = super::escalated_publication::green_forge(&mut f);
+    forge.set(&f.head, &["help-entrypoint"], &[], &[]);
+    orbit_core::test_support::EngineHost::new(&f.runtime)
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    (f, checkout)
+}
+
+fn binary_conflict_before_resume(f: &Fixture, checkout: &std::path::Path) -> BinaryConflict {
+    // Advance the integration branch with a binary file while the retained
+    // checkout independently adds conflicting binary bytes for the same path.
+    let integration_bytes = b"\x00\x01\x02integration-binary\x00".to_vec();
+    let retained_bytes = b"\x00\x01\x02retained-binary\x00".to_vec();
+    git(&f.repo, &["checkout", "-q", "main"]);
+    std::fs::write(f.repo.join("fixture.bin"), &integration_bytes).unwrap();
+    git(&f.repo, &["add", "fixture.bin"]);
+    git(&f.repo, &["commit", "-qm", "advance integration binary"]);
+    git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
+
+    std::fs::write(checkout.join("fixture.bin"), &retained_bytes).unwrap();
+    git(checkout, &["add", "fixture.bin"]);
+    let dirty = git(checkout, &["status", "--porcelain"]);
+
+    let inspection = adopting_inspection(f).unwrap();
+    let patch_text = inspection["retained_patch"].as_str().unwrap();
+    assert!(patch_text.contains("GIT binary patch"), "{inspection}");
+    assert!(inspection.get("retained_patch_base64").is_none());
+    assert_eq!(
+        inspection["binding"]["retained_patch"]["paths"],
+        json!(["fixture.bin"])
+    );
+
+    let mut input = f.submit(inspection["binding"].clone());
+    input["source_repair"]["policy_digest"] = inspection["policy_digest"].clone();
+    input["source_repair"]["unmet_acceptance"] =
+        json!("Required help-entrypoint check failed; retained binary edit must be carried.");
+    let result = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input)
+        .unwrap();
+    let id = result["run_id"].as_str().unwrap().to_string();
+    f.wait(&id);
+    f.start_actions(&id);
+
+    let setup = f.action(
+        "worktree_setup",
+        json!({"run_id":id,"job_run_id":id,"task_ids":[f.task],"base":"main","base_sync":"remote"}),
+    );
+    let successor = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    BinaryConflict {
+        id,
+        setup,
+        successor,
+        integration_bytes,
+        retained_bytes,
+        dirty,
+    }
+}
+
+/// A binary retained edit conflicting with a newer integration version leaves
+/// both versions recoverable in the same-PR successor (without leaving
+/// unmerged index entries that would block `git_commit`), while the original
+/// retained checkout stays intact.
+fn retained_binary_conflict_preserves_both_sides_in_successor() {
+    let (f, checkout) = before_landing_retained_fixture();
+
+    let BinaryConflict {
+        id,
+        setup,
+        successor,
+        integration_bytes,
+        retained_bytes,
+        dirty,
+    } = binary_conflict_before_resume(&f, &checkout);
+    let resumed = f.action(
+        "candidate_resume",
+        json!({
+            "job_run_id": id,
+            "task_ids": [f.task],
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"]
+        }),
+    );
+    assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+    assert_eq!(resumed["repair"]["trigger"], "conflict", "{resumed}");
+    assert_eq!(
+        resumed["repair"]["conflicting_paths"],
+        json!(["fixture.bin"]),
+        "{resumed}"
+    );
+    let sides = resumed["repair"]["retained_conflict_sides"]
+        .as_array()
+        .unwrap();
+    assert_eq!(sides.len(), 1, "{resumed}");
+    assert_eq!(sides[0]["path"], "fixture.bin");
+    let retained_side = sides[0]["retained_path"].as_str().unwrap();
+    let current_side = sides[0]["current_path"].as_str().unwrap();
+    assert!(
+        resumed["repair"]["output"]
+            .as_str()
+            .unwrap()
+            .contains(retained_side),
+        "{resumed}"
+    );
+    assert!(
+        git(&successor, &["diff", "--name-only", "--diff-filter=U"]).is_empty(),
+        "unmerged index entries must be cleared after saving conflict sides"
+    );
+    assert_eq!(
+        std::fs::read(successor.join("fixture.bin")).unwrap(),
+        integration_bytes
+    );
+    assert_eq!(
+        std::fs::read(successor.join(current_side)).unwrap(),
+        integration_bytes
+    );
+    assert_eq!(
+        std::fs::read(successor.join(retained_side)).unwrap(),
+        retained_bytes
+    );
+    assert_eq!(
+        std::fs::read_to_string(successor.join("source.txt")).unwrap(),
+        "complete published candidate 17\n"
+    );
+
+    // Resolve using both versions and confirm the same-PR commit/push succeeds.
+    let mut resolved = std::fs::read(successor.join("fixture.bin")).unwrap();
+    resolved.extend_from_slice(&std::fs::read(successor.join(retained_side)).unwrap());
+    std::fs::write(successor.join("fixture.bin"), &resolved).unwrap();
+
+    f.action(
+        "git_commit",
+        json!({
+            "job_run_id": id,
+            "scope": "all",
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"],
+            "base_ref": setup["base_ref"]
+        }),
+    );
+    let pr_input = json!({
+        "job_run_id": id,
+        "completed_task_ids": [f.task],
+        "workspace_path": successor,
+        "head": f.branch,
+        "branch": f.branch,
+        "base": "main",
+        "base_ref": setup["base_ref"],
+        "base_sha": setup["base_sha"]
+    });
+    let prepared = f.action("pr_prepare", pr_input.clone());
+    let mut rebase_input = pr_input.clone();
+    for (key, value) in prepared.as_object().unwrap() {
+        rebase_input[key] = value.clone();
+    }
+    f.action("git_rebase", rebase_input);
+    let validated = f.action("candidate_validate", pr_input.clone());
+    assert_eq!(validated["decision"], "passed");
+    f.action("git_push", pr_input.clone());
+    let head = git(&successor, &["rev-parse", "HEAD"]);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(head);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    let opened = f.action("pr_open", pr_input);
+    assert_eq!(opened["pr_number"], "17");
+    assert_eq!(opened["pr_reused"], true);
+
+    let committed_bin = crate::git_test_support::command()
+        .current_dir(&f.repo)
+        .args(["show", &format!("{head}:fixture.bin")])
+        .output()
+        .unwrap();
+    assert!(committed_bin.status.success());
+    assert_eq!(committed_bin.stdout, resolved);
+    assert_eq!(
+        git(&f.repo, &["show", &format!("{head}:source.txt")]),
+        "complete published candidate 17"
+    );
+
+    // The original retained checkout stays intact.
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+    assert_eq!(
+        std::fs::read(checkout.join("fixture.bin")).unwrap(),
+        retained_bytes
+    );
+}
+
+/// A conflict side that cannot be saved refuses the successor without
+/// resetting the index: the unmerged entries still hold every unsaved side, the
+/// refusal says so, and the retained checkout stays intact.
+fn retained_conflict_save_failure_keeps_unmerged_sides_and_explains() {
+    let (f, checkout) = before_landing_retained_fixture();
+    let conflict = binary_conflict_before_resume(&f, &checkout);
+    let successor = &conflict.successor;
+
+    // A file where the saved-sides directory belongs makes every write fail.
+    std::fs::create_dir_all(successor.join(".orbit/tmp")).unwrap();
+    std::fs::write(
+        successor.join(".orbit/tmp/retained-patch-conflicts"),
+        b"blocked",
+    )
+    .unwrap();
+
+    let refusal = f.action_error(
+        "candidate_resume",
+        json!({
+            "job_run_id": conflict.id,
+            "task_ids": [f.task],
+            "workspace_path": successor,
+            "base_sha": conflict.setup["base_sha"]
+        }),
+    );
+    assert!(refusal.contains("source repair refused"), "{refusal}");
+    assert!(
+        refusal.contains("a conflict side could not be saved"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("`fixture.bin`"), "{refusal}");
+    assert!(refusal.contains("was not reset"), "{refusal}");
+    assert!(
+        refusal.contains("inspect the source repair again"),
+        "{refusal}"
+    );
+
+    // Both added sides survive as unmerged stages (no common ancestor exists).
+    assert_eq!(
+        git(successor, &["diff", "--name-only", "--diff-filter=U"]),
+        "fixture.bin"
+    );
+    let stages = git(successor, &["ls-files", "--unmerged"]);
+    for stage in [" 2\t", " 3\t"] {
+        assert!(stages.contains(stage), "{stages}");
+    }
+
+    // The original retained checkout stays intact.
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), conflict.dirty);
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+    assert_eq!(
+        std::fs::read(checkout.join("fixture.bin")).unwrap(),
+        conflict.retained_bytes
+    );
+}
+
+/// A retained `-merge` symlink conflict whose integration link targets a
+/// directory preserves both exact symlink target blobs in the same-PR
+/// successor without following the symlink (`EISDIR`), clears unmerged index
+/// entries, and keeps the original retained checkout intact.
+fn retained_symlink_conflict_to_directory_preserves_both_sides_in_successor() {
+    let (f, checkout) = before_landing_retained_fixture();
+
+    let integration_target = "target-integration";
+    let retained_target = "target-retained";
+    git(&f.repo, &["checkout", "-q", "main"]);
+    std::fs::create_dir_all(f.repo.join(integration_target)).unwrap();
+    std::fs::write(f.repo.join(integration_target).join("keep.txt"), "dir\n").unwrap();
+    std::fs::write(f.repo.join(".gitattributes"), "fixture-link -merge\n").unwrap();
+    std::os::unix::fs::symlink(integration_target, f.repo.join("fixture-link")).unwrap();
+    git(
+        &f.repo,
+        &["add", integration_target, ".gitattributes", "fixture-link"],
+    );
+    git(&f.repo, &["commit", "-qm", "advance integration symlink"]);
+    git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
+
+    std::os::unix::fs::symlink(retained_target, checkout.join("fixture-link")).unwrap();
+    git(&checkout, &["add", "fixture-link"]);
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+
+    let inspection = adopting_inspection(&f).unwrap();
+    assert_eq!(
+        inspection["binding"]["retained_patch"]["paths"],
+        json!(["fixture-link"])
+    );
+
+    let mut input = f.submit(inspection["binding"].clone());
+    input["source_repair"]["policy_digest"] = inspection["policy_digest"].clone();
+    input["source_repair"]["unmet_acceptance"] =
+        json!("Required help-entrypoint check failed; retained symlink edit must be carried.");
+    let result = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input)
+        .unwrap();
+    let id = result["run_id"].as_str().unwrap().to_string();
+    f.wait(&id);
+    f.start_actions(&id);
+
+    let setup = f.action(
+        "worktree_setup",
+        json!({"run_id":id,"job_run_id":id,"task_ids":[f.task],"base":"main","base_sync":"remote"}),
+    );
+    let successor = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let resumed = f.action(
+        "candidate_resume",
+        json!({
+            "job_run_id": id,
+            "task_ids": [f.task],
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"]
+        }),
+    );
+    assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+    assert_eq!(resumed["repair"]["trigger"], "conflict", "{resumed}");
+    assert_eq!(
+        resumed["repair"]["conflicting_paths"],
+        json!(["fixture-link"]),
+        "{resumed}"
+    );
+    let sides = resumed["repair"]["retained_conflict_sides"]
+        .as_array()
+        .unwrap();
+    assert_eq!(sides.len(), 1, "{resumed}");
+    assert_eq!(sides[0]["path"], "fixture-link");
+    let retained_side = sides[0]["retained_path"].as_str().unwrap();
+    let current_side = sides[0]["current_path"].as_str().unwrap();
+    assert!(
+        resumed["repair"]["output"]
+            .as_str()
+            .unwrap()
+            .contains(retained_side),
+        "{resumed}"
+    );
+    assert!(
+        git(&successor, &["diff", "--name-only", "--diff-filter=U"]).is_empty(),
+        "unmerged index entries must be cleared after saving conflict sides"
+    );
+    assert!(
+        std::fs::symlink_metadata(successor.join("fixture-link"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_link(successor.join("fixture-link")).unwrap(),
+        PathBuf::from(integration_target)
+    );
+    assert_eq!(
+        std::fs::read(successor.join(current_side)).unwrap(),
+        integration_target.as_bytes()
+    );
+    assert_eq!(
+        std::fs::read(successor.join(retained_side)).unwrap(),
+        retained_target.as_bytes()
+    );
+
+    // Confirm same-PR handoff succeeds when the conflict is resolved.
+    let resolved_note = format!(
+        "resolved from {}",
+        std::fs::read_to_string(successor.join(retained_side)).unwrap()
+    );
+    let mut source_body = std::fs::read_to_string(successor.join("source.txt")).unwrap();
+    source_body.push_str(&resolved_note);
+    source_body.push('\n');
+    std::fs::write(successor.join("source.txt"), source_body).unwrap();
+
+    f.action(
+        "git_commit",
+        json!({
+            "job_run_id": id,
+            "scope": "all",
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"],
+            "base_ref": setup["base_ref"]
+        }),
+    );
+    let pr_input = json!({
+        "job_run_id": id,
+        "completed_task_ids": [f.task],
+        "workspace_path": successor,
+        "head": f.branch,
+        "branch": f.branch,
+        "base": "main",
+        "base_ref": setup["base_ref"],
+        "base_sha": setup["base_sha"]
+    });
+    let prepared = f.action("pr_prepare", pr_input.clone());
+    let mut rebase_input = pr_input.clone();
+    for (key, value) in prepared.as_object().unwrap() {
+        rebase_input[key] = value.clone();
+    }
+    f.action("git_rebase", rebase_input);
+    let validated = f.action("candidate_validate", pr_input.clone());
+    assert_eq!(validated["decision"], "passed");
+    f.action("git_push", pr_input.clone());
+    let head = git(&successor, &["rev-parse", "HEAD"]);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(head);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    let opened = f.action("pr_open", pr_input);
+    assert_eq!(opened["pr_number"], "17");
+    assert_eq!(opened["pr_reused"], true);
+    assert_eq!(
+        git(&f.repo, &["show", &format!("{head}:fixture-link")]),
+        integration_target
+    );
+
+    // The original retained checkout stays intact.
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+    assert_eq!(
+        std::fs::read_link(checkout.join("fixture-link")).unwrap(),
+        PathBuf::from(retained_target)
+    );
+}
+
+/// An unmarked CRLF checkout can contain literal custom-width marker examples.
+/// Preserve its index blobs even though the working bytes differ from stage 2.
+fn retained_crlf_unmarked_conflict_preserves_all_sides() {
+    let (f, checkout) = before_landing_retained_fixture();
+    let path = "base-advance.txt";
+    let base = git(&checkout, &["show", &format!("HEAD:{path}")]);
+    let integration =
+        "<<<<<<<<<<<< example\nintegration\n============\nother example\n>>>>>>>>>>>> example\n";
+    let retained = "retained base\n";
+
+    git(&f.repo, &["checkout", "-q", "main"]);
+    std::fs::write(
+        f.repo.join(".gitattributes"),
+        "base-advance.txt -merge text eol=crlf conflict-marker-size=12\n",
+    )
+    .unwrap();
+    std::fs::write(f.repo.join(path), integration).unwrap();
+    git(&f.repo, &["add", ".gitattributes", path]);
+    git(&f.repo, &["commit", "-qm", "advance integration CRLF"]);
+    git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
+    std::fs::write(checkout.join(path), retained).unwrap();
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+
+    let inspection = adopting_inspection(&f).unwrap();
+    let mut input = f.submit(inspection["binding"].clone());
+    input["source_repair"]["policy_digest"] = inspection["policy_digest"].clone();
+    input["source_repair"]["unmet_acceptance"] = json!("Retained CRLF edit must be carried.");
+    let result = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input)
+        .unwrap();
+    let id = result["run_id"].as_str().unwrap().to_string();
+    f.wait(&id);
+    f.start_actions(&id);
+    let setup = f.action(
+        "worktree_setup",
+        json!({"run_id":id,"job_run_id":id,"task_ids":[f.task],"base":"main","base_sync":"remote"}),
+    );
+    let successor = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let resumed = f.action(
+        "candidate_resume",
+        json!({
+            "job_run_id": id,
+            "task_ids": [f.task],
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"]
+        }),
+    );
+    assert_eq!(resumed["repair"]["trigger"], "conflict", "{resumed}");
+    let sides = resumed["repair"]["retained_conflict_sides"]
+        .as_array()
+        .unwrap();
+    assert_eq!(sides.len(), 1, "{resumed}");
+    assert_eq!(sides[0]["path"], path);
+    for (key, expected) in [
+        ("base_path", format!("{base}\n")),
+        ("current_path", integration.to_string()),
+        ("retained_path", retained.to_string()),
+    ] {
+        let saved = sides[0][key].as_str().unwrap();
+        assert_eq!(
+            std::fs::read(successor.join(saved)).unwrap(),
+            expected.as_bytes(),
+            "{key}"
+        );
+    }
+    let retained_path = sides[0]["retained_path"].as_str().unwrap();
+    assert!(
+        resumed["repair"]["output"]
+            .as_str()
+            .unwrap()
+            .contains(retained_path)
+    );
+    assert_eq!(
+        std::fs::read(successor.join(path)).unwrap(),
+        integration.replace('\n', "\r\n").as_bytes()
+    );
+    assert!(git(&successor, &["diff", "--name-only", "--diff-filter=U"]).is_empty());
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+    assert_eq!(
+        std::fs::read(checkout.join(path)).unwrap(),
+        retained.as_bytes()
+    );
+}
+
+/// A retained text conflict with nondefault `conflict-marker-size` reaches
+/// the same-PR successor as an ordinary marked text conflict rather than being
+/// misclassified as an unmarked conflict whose working file holds only the
+/// integration version, and resolves cleanly through the same-PR pipeline.
+fn retained_custom_width_text_conflict_stays_a_marked_text_conflict() {
+    let (f, checkout) = before_landing_retained_fixture();
+
+    git(&f.repo, &["checkout", "-q", "main"]);
+    std::fs::write(
+        f.repo.join(".gitattributes"),
+        "base-advance.txt conflict-marker-size=12\nnarrow.txt conflict-marker-size=4\n",
+    )
+    .unwrap();
+    std::fs::write(f.repo.join("base-advance.txt"), "integration base\n").unwrap();
+    std::fs::write(f.repo.join("narrow.txt"), "integration narrow\n").unwrap();
+    git(
+        &f.repo,
+        &["add", ".gitattributes", "base-advance.txt", "narrow.txt"],
+    );
+    git(
+        &f.repo,
+        &["commit", "-qm", "advance integration custom marker text"],
+    );
+    git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
+
+    std::fs::write(checkout.join("base-advance.txt"), "retained base\n").unwrap();
+    std::fs::write(checkout.join("narrow.txt"), "retained narrow\n").unwrap();
+    git(&checkout, &["add", "narrow.txt"]);
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+
+    let inspection = adopting_inspection(&f).unwrap();
+    assert_eq!(
+        inspection["binding"]["retained_patch"]["paths"],
+        json!(["base-advance.txt", "narrow.txt"])
+    );
+
+    let mut input = f.submit(inspection["binding"].clone());
+    input["source_repair"]["policy_digest"] = inspection["policy_digest"].clone();
+    input["source_repair"]["unmet_acceptance"] = json!(
+        "Required help-entrypoint check failed; retained custom-width text edits must be carried."
+    );
+    let result = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input)
+        .unwrap();
+    let id = result["run_id"].as_str().unwrap().to_string();
+    f.wait(&id);
+    f.start_actions(&id);
+
+    let setup = f.action(
+        "worktree_setup",
+        json!({
+            "run_id": id,
+            "job_run_id": id,
+            "task_ids": [f.task],
+            "base": "main",
+            "base_sync": "remote"
+        }),
+    );
+    let successor = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let resumed = f.action(
+        "candidate_resume",
+        json!({
+            "job_run_id": id,
+            "task_ids": [f.task],
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"]
+        }),
+    );
+    assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+    assert_eq!(resumed["repair"]["trigger"], "conflict", "{resumed}");
+    assert_eq!(
+        resumed["repair"]["conflicting_paths"],
+        json!(["base-advance.txt", "narrow.txt"]),
+        "{resumed}"
+    );
+    assert!(
+        resumed["repair"].get("retained_conflict_sides").is_none(),
+        "marked custom-width text conflicts must not populate retained_conflict_sides: {resumed}"
+    );
+    let output = resumed["repair"]["output"].as_str().unwrap();
+    assert!(
+        !output.contains("working copy holds the current/integration version"),
+        "{output}"
+    );
+    assert!(!output.contains("retained-patch-conflicts"), "{output}");
+    assert!(
+        !successor
+            .join(".orbit/tmp/retained-patch-conflicts")
+            .exists(),
+        "marked text conflict must not preserve unmarked side blobs"
+    );
+    assert!(
+        git(&successor, &["diff", "--name-only", "--diff-filter=U"]).is_empty(),
+        "unmerged index entries must be cleared"
+    );
+    assert_eq!(
+        std::fs::read_to_string(successor.join("base-advance.txt")).unwrap(),
+        "<<<<<<<<<<<< ours\nintegration base\n============\nretained base\n>>>>>>>>>>>> theirs\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(successor.join("narrow.txt")).unwrap(),
+        "<<<< ours\nintegration narrow\n====\nretained narrow\n>>>> theirs\n"
+    );
+
+    // Resolve the inline markers and confirm same-PR handoff succeeds.
+    std::fs::write(
+        successor.join("base-advance.txt"),
+        "integration base\nretained base\n",
+    )
+    .unwrap();
+    std::fs::write(
+        successor.join("narrow.txt"),
+        "integration narrow\nretained narrow\n",
+    )
+    .unwrap();
+
+    f.action(
+        "git_commit",
+        json!({
+            "job_run_id": id,
+            "scope": "all",
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"],
+            "base_ref": setup["base_ref"]
+        }),
+    );
+    let pr_input = json!({
+        "job_run_id": id,
+        "completed_task_ids": [f.task],
+        "workspace_path": successor,
+        "head": f.branch,
+        "branch": f.branch,
+        "base": "main",
+        "base_ref": setup["base_ref"],
+        "base_sha": setup["base_sha"]
+    });
+    let prepared = f.action("pr_prepare", pr_input.clone());
+    let mut rebase_input = pr_input.clone();
+    for (key, value) in prepared.as_object().unwrap() {
+        rebase_input[key] = value.clone();
+    }
+    f.action("git_rebase", rebase_input);
+    let validated = f.action("candidate_validate", pr_input.clone());
+    assert_eq!(validated["decision"], "passed");
+    f.action("git_push", pr_input.clone());
+    let head = git(&successor, &["rev-parse", "HEAD"]);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(head);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    let opened = f.action("pr_open", pr_input);
+    assert_eq!(opened["pr_number"], "17");
+    assert_eq!(opened["pr_reused"], true);
+    assert_eq!(
+        git(&f.repo, &["show", &format!("{head}:base-advance.txt")]),
+        "integration base\nretained base"
+    );
+    assert_eq!(
+        git(&f.repo, &["show", &format!("{head}:narrow.txt")]),
+        "integration narrow\nretained narrow"
+    );
+
+    // The original retained checkout stays intact.
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+}
+
+/// A retained patch that changes the effective `.gitattributes` rule after Git
+/// has already merged with the pre-apply rule, or triggers an out-of-range
+/// `conflict-marker-size` fallback to width 7, still reports marked text
+/// conflicts and completes the same-PR handoff without integration-only side
+/// guidance.
+fn retained_merge_time_attribute_and_invalid_marker_size_stay_marked_conflicts() {
+    let (f, checkout) = before_landing_retained_fixture();
+
+    git(&f.repo, &["checkout", "-q", "main"]);
+    std::fs::write(
+        f.repo.join(".gitattributes"),
+        "sub/retagged.txt conflict-marker-size=7\nsub/overflow.txt conflict-marker-size=2147483648\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(f.repo.join("sub")).unwrap();
+    std::fs::write(f.repo.join("sub/retagged.txt"), "integration retagged\n").unwrap();
+    std::fs::write(f.repo.join("sub/overflow.txt"), "integration overflow\n").unwrap();
+    git(
+        &f.repo,
+        &[
+            "add",
+            ".gitattributes",
+            "sub/retagged.txt",
+            "sub/overflow.txt",
+        ],
+    );
+    git(
+        &f.repo,
+        &[
+            "commit",
+            "-qm",
+            "advance integration retagged and out-of-range marker attributes",
+        ],
+    );
+    git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
+
+    std::fs::create_dir_all(checkout.join("sub")).unwrap();
+    std::fs::write(
+        checkout.join("sub/.gitattributes"),
+        "retagged.txt conflict-marker-size=4\n",
+    )
+    .unwrap();
+    std::fs::write(checkout.join("sub/retagged.txt"), "retained retagged\n").unwrap();
+    std::fs::write(checkout.join("sub/overflow.txt"), "retained overflow\n").unwrap();
+    git(
+        &checkout,
+        &[
+            "add",
+            "sub/.gitattributes",
+            "sub/retagged.txt",
+            "sub/overflow.txt",
+        ],
+    );
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+
+    let inspection = adopting_inspection(&f).unwrap();
+    assert_eq!(
+        inspection["binding"]["retained_patch"]["paths"],
+        json!(["sub/.gitattributes", "sub/overflow.txt", "sub/retagged.txt"])
+    );
+
+    let mut input = f.submit(inspection["binding"].clone());
+    input["source_repair"]["policy_digest"] = inspection["policy_digest"].clone();
+    input["source_repair"]["unmet_acceptance"] = json!(
+        "Required help-entrypoint check failed; retained merge-time attribute and fallback markers must stay marked."
+    );
+    let result = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input)
+        .unwrap();
+    let id = result["run_id"].as_str().unwrap().to_string();
+    f.wait(&id);
+    f.start_actions(&id);
+
+    let setup = f.action(
+        "worktree_setup",
+        json!({
+            "run_id": id,
+            "job_run_id": id,
+            "task_ids": [f.task],
+            "base": "main",
+            "base_sync": "remote"
+        }),
+    );
+    let successor = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let resumed = f.action(
+        "candidate_resume",
+        json!({
+            "job_run_id": id,
+            "task_ids": [f.task],
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"]
+        }),
+    );
+    assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+    assert_eq!(resumed["repair"]["trigger"], "conflict", "{resumed}");
+    assert_eq!(
+        resumed["repair"]["conflicting_paths"],
+        json!(["sub/overflow.txt", "sub/retagged.txt"]),
+        "{resumed}"
+    );
+    assert!(
+        resumed["repair"].get("retained_conflict_sides").is_none(),
+        "marked text conflicts must not populate retained_conflict_sides: {resumed}"
+    );
+    let output = resumed["repair"]["output"].as_str().unwrap();
+    assert!(
+        !output.contains("working copy holds the current/integration version"),
+        "{output}"
+    );
+    assert!(!output.contains("retained-patch-conflicts"), "{output}");
+    assert!(
+        !successor
+            .join(".orbit/tmp/retained-patch-conflicts")
+            .exists(),
+        "marked text conflict must not preserve unmarked side blobs"
+    );
+    assert!(
+        git(&successor, &["diff", "--name-only", "--diff-filter=U"]).is_empty(),
+        "unmerged index entries must be cleared"
+    );
+    assert_eq!(
+        std::fs::read_to_string(successor.join("sub/retagged.txt")).unwrap(),
+        "<<<<<<< ours\nintegration retagged\n=======\nretained retagged\n>>>>>>> theirs\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(successor.join("sub/overflow.txt")).unwrap(),
+        "<<<<<<< ours\nintegration overflow\n=======\nretained overflow\n>>>>>>> theirs\n"
+    );
+
+    // Resolve the inline markers and confirm same-PR handoff succeeds.
+    std::fs::write(
+        successor.join("sub/retagged.txt"),
+        "integration retagged\nretained retagged\n",
+    )
+    .unwrap();
+    std::fs::write(
+        successor.join("sub/overflow.txt"),
+        "integration overflow\nretained overflow\n",
+    )
+    .unwrap();
+
+    f.action(
+        "git_commit",
+        json!({
+            "job_run_id": id,
+            "scope": "all",
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"],
+            "base_ref": setup["base_ref"]
+        }),
+    );
+    let pr_input = json!({
+        "job_run_id": id,
+        "completed_task_ids": [f.task],
+        "workspace_path": successor,
+        "head": f.branch,
+        "branch": f.branch,
+        "base": "main",
+        "base_ref": setup["base_ref"],
+        "base_sha": setup["base_sha"]
+    });
+    let prepared = f.action("pr_prepare", pr_input.clone());
+    let mut rebase_input = pr_input.clone();
+    for (key, value) in prepared.as_object().unwrap() {
+        rebase_input[key] = value.clone();
+    }
+    f.action("git_rebase", rebase_input);
+    let validated = f.action("candidate_validate", pr_input.clone());
+    assert_eq!(validated["decision"], "passed");
+    f.action("git_push", pr_input.clone());
+    let head = git(&successor, &["rev-parse", "HEAD"]);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(head);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    let opened = f.action("pr_open", pr_input);
+    assert_eq!(opened["pr_number"], "17");
+    assert_eq!(opened["pr_reused"], true);
+    assert_eq!(
+        git(&f.repo, &["show", &format!("{head}:sub/retagged.txt")]),
+        "integration retagged\nretained retagged"
+    );
+    assert_eq!(
+        git(&f.repo, &["show", &format!("{head}:sub/overflow.txt")]),
+        "integration overflow\nretained overflow"
+    );
+
+    // The original retained checkout stays intact.
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+}
+
 crate::scenario_table!(
     retained_edit_scenarios,
     retained_final_recovery_edits_reach_a_fresh_same_pr_repair,
+    retained_binary_conflict_preserves_both_sides_in_successor,
+    retained_conflict_save_failure_keeps_unmerged_sides_and_explains,
+    retained_symlink_conflict_to_directory_preserves_both_sides_in_successor,
+    retained_custom_width_text_conflict_stays_a_marked_text_conflict,
+    retained_crlf_unmarked_conflict_preserves_all_sides,
+    retained_merge_time_attribute_and_invalid_marker_size_stay_marked_conflicts,
     non_utf8_patch_is_reconstructable_from_the_inspection,
     adoption_refuses_a_clean_checkout,
-    adoption_refuses_a_staged_git_link
+    adoption_refuses_a_staged_git_link,
+    adoption_refuses_an_unstaged_git_link_move,
+    adoption_reads_an_index_beyond_the_status_limit,
+    adoption_refuses_a_git_link_beyond_the_status_limit
 );

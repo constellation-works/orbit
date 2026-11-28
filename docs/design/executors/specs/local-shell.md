@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: the local-shell executor and the local_shell deterministic action"
 tags: ["executors", "activity-job"]
-last_validated: 2026-11-08
+last_validated: 2026-11-28
 ---
 
 # Spec: `local-shell`
@@ -108,7 +108,7 @@ does not advance the resume cursor. Successful commands retain their normal
 stdout and stderr for templates alongside the bounded summary.
 
 `orbit run show <RUN_ID> --json` and `orbit.run` action `show` expose that
-summary in each displayed step's `output`, including `success`, `exit_code`,
+summary in each displayed step's `output` ([ORB-18833]), including `success`, `exit_code`,
 `duration_ms`, `timed_out`, `log_tail` and `log_tail_truncated`. The bounded run
 view exposes the same summary under `run.steps`. Its step-level `exit_code`
 also uses the command result when the step record has no status. Other step
@@ -142,21 +142,39 @@ uses, not a second implementation:
 
 ## Filesystem authority
 
-Two independent limits apply.
+The working directory is checked at launch. Filesystem access after launch is
+limited only by an effective OS sandbox, if one applies, or by restrictions the
+Orbit process inherited.
 
 1. **`cwd` containment.** The resolved working directory is canonicalized and
-   must stay under the resolved workspace root. This is enforced regardless of
-   sandboxing, because the shipped definition declares none.
-2. **The activity's `fsProfile`.** It is resolved against the active policy and
-   handed to sandbox compilation exactly as it is for a CLI agent. If the
-   executor definition declares a `sandbox`, the child runs inside it; if the
-   OS primitive is unavailable, the step fails closed unless the definition sets
-   `allow_fallback: true`.
+   must stay under the resolved workspace root. This check validates only the
+   child's initial working directory. It is enforced regardless of sandboxing,
+   because the shipped definition declares none.
+2. **The activity's `fsProfile`.** It is optional. When set, it names a policy
+   profile that is resolved against the active policy and handed to sandbox
+   compilation exactly as it is for a CLI agent. When omitted, the built-in
+   `unrestricted` profile applies. On macOS, Seatbelt applies the profile's
+   read and modify rules, including policy denies. On Linux, Bubblewrap
+   enforces modify rules but does not enforce profile read rules, including
+   `denyRead`: host reads remain available except for fixed credential and
+   runtime-directory masks and any explicit caller-provided masks. Do not rely
+   on `denyRead` to protect other secrets on Linux.
 
-To confine shell steps at the kernel, add the host's sandbox to the definition
-and give the activity a profile. Use `linux-bwrap` on Linux or
-`macos-sandbox-exec` on macOS. Installed settings are not translated between
-platforms; an incompatible backend fails closed:
+   A declared backend that does not match the host OS fails closed, even when
+   the definition sets `allow_fallback: true`: the step fails before anything
+   runs. When the backend matches the host OS but its native primitive is
+   unavailable (`bwrap` absent or failing its probe on Linux, or
+   `/usr/bin/sandbox-exec` missing on macOS), the step fails unless the
+   definition sets `allow_fallback: true`. That permits bare execution without
+   the backend's filesystem policy or masks; inherited restrictions still apply.
+   Other sandbox setup or spawn errors do not trigger this fallback.
+
+To wrap shell steps in the host's OS backend, add it to the definition. Use
+`linux-bwrap` on Linux or `macos-sandbox-exec` on macOS. No activity edit is
+needed to enable it: an activity without an `fsProfile` runs under
+`unrestricted`, subject to the platform limits above. Installed settings are not
+translated between platforms, so a backend for the other OS fails closed even
+with `allow_fallback: true`. Declare the host's own backend, or `sandbox: off`:
 
 ```yaml
 # kind: Executor, metadata.name: local-shell
@@ -206,7 +224,7 @@ Script form:
 
 `local_shell` is the current spelling of the executor family that older
 definitions called `cli_command`. The `cli_command` value is no longer accepted
-for `executor_type`; change it to `local_shell` before loading an older
+for `executor_type` ([ORB-25764]); change it to `local_shell` before loading an older
 definition.
 
 After that change, the definition's fields keep working as step defaults:

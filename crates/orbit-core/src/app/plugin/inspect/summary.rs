@@ -5,7 +5,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_tools::plugin::{
-    LoadedPlugin, PluginProgramStatus, mark_resolution_drift, program_statuses,
+    LoadedPlugin, PluginProgramStatus, mark_resolution_drift, page_digest_diagnostic,
+    program_statuses,
 };
 use orbit_types::plugin::{
     InstalledPlugin, PluginBuildRecord, PluginDisabledLayer, PluginExecutionKind, PluginGrant,
@@ -18,7 +19,7 @@ use crate::app::plugin::panel::{PluginLinkSummary, PluginPanelSummary, web_summa
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin::cache::load_installed_plugin;
-use crate::runtime::plugin::grants::recorded_program_paths;
+use crate::runtime::plugin::grants;
 use crate::runtime::plugin::paths::{plugin_state_dir, read_pin_file};
 
 /// One plugin tool as the CLI reports it.
@@ -33,6 +34,37 @@ pub struct PluginToolSummary {
     pub agent_callable: bool,
     pub mcp_scope: String,
     pub active: bool,
+}
+
+/// One `spec.web.pages[]` entry as `orbit plugin show` and `GET
+/// /api/plugins` report it (plugin-pages design §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginPageSummary {
+    pub id: String,
+    pub title: String,
+    /// Canonical names of the `read_only` tools the page may call.
+    pub tools: Vec<String>,
+    /// The mutating tools the page may ask to run, each behind the
+    /// dashboard's confirmation.
+    pub actions: Vec<PluginPageActionSummary>,
+    /// The bridge version the page was written for, when it names one.
+    pub kit: Option<u32>,
+    /// Whether the page would be served: its plugin is active and its files
+    /// hash to the digest recorded at install.
+    pub active: bool,
+    /// Why the page is not served, when it is not.
+    pub diagnostic: Option<String>,
+}
+
+/// One `spec.web.pages[].actions` entry with whether it would run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginPageActionSummary {
+    /// Canonical name of the mutating tool.
+    pub tool: String,
+    /// Whether the operator's recorded consent at enable lists it for this
+    /// page. An action the manifest added since stays inactive until an
+    /// enabling command records it (STD-05 §R21).
+    pub consented: bool,
 }
 
 /// One grant as `orbit plugin show` reports it: what the manifest asks for
@@ -81,6 +113,10 @@ pub struct PluginSummary {
     pub panels: Vec<PluginPanelSummary>,
     /// `spec.web.links[]`, with `{{config.<key>}}` resolved.
     pub links: Vec<PluginLinkSummary>,
+    /// `spec.web.pages[]` of a plugin whose manifest loads, each with its
+    /// active or inactive state. Listed whatever the plugin's status, so the
+    /// consent shown at `add` and `enable` names them.
+    pub pages: Vec<PluginPageSummary>,
     /// The Orbit version this plugin's conformance goldens last passed on
     /// (§5), when `orbit plugin test` has recorded one.
     pub certified_orbit_version: Option<String>,
@@ -202,6 +238,27 @@ pub fn plugin_summary_json(
             .iter()
             .map(|link| json!({ "title": link.title, "url": link.url }))
             .collect::<Vec<_>>(),
+        "pages": summary
+            .pages
+            .iter()
+            .map(|page| json!({
+                "id": page.id,
+                "title": page.title,
+                "tools": page.tools,
+                "actions": page
+                    .actions
+                    .iter()
+                    .map(|action| json!({
+                        "tool": action.tool,
+                        "consented": action.consented,
+                        "active": page.active && action.consented,
+                    }))
+                    .collect::<Vec<_>>(),
+                "kit": page.kit,
+                "state": if page.active { "active" } else { "inactive" },
+                "diagnostic": page.diagnostic,
+            }))
+            .collect::<Vec<_>>(),
         "tools": summary
             .tools
             .iter()
@@ -262,6 +319,7 @@ pub fn list_plugins(runtime: &OrbitRuntime) -> Result<Vec<PluginSummary>, OrbitE
             tools: Vec::new(),
             panels: Vec::new(),
             links: Vec::new(),
+            pages: Vec::new(),
             certified_orbit_version: None,
             build: None,
             diagnostic: runtime_diagnostic(runtime, &name),
@@ -434,7 +492,7 @@ pub(in crate::app::plugin) fn summary_for_installed(
             .map(|plugin| {
                 let mut programs = program_statuses(
                     &plugin.manifest.spec.requires.programs,
-                    &recorded_program_paths(global_root, &installed.name),
+                    &grants::recorded_program_paths(global_root, &installed.name),
                     global_root,
                     &plugin_state_dir(global_root, &installed.name),
                 );
@@ -446,6 +504,9 @@ pub(in crate::app::plugin) fn summary_for_installed(
         tools,
         panels,
         links,
+        pages: plugin
+            .map(|plugin| page_summaries(installed, plugin, status, global_root))
+            .unwrap_or_default(),
         certified_orbit_version: installed.certified_orbit_version.clone(),
         build: installed.build.clone(),
         diagnostic: None,
@@ -455,6 +516,65 @@ pub(in crate::app::plugin) fn summary_for_installed(
         disabled_by: (status == PluginStatus::Disabled && !installed.enabled)
             .then_some(PluginDisabledLayer::Host),
     }
+}
+
+/// Each page with its state. A page is active only while its plugin is and
+/// its files hash to the digest this host recorded at install; a mismatch
+/// leaves the plugin's tools and panels serving (STD-05 §R21).
+fn page_summaries(
+    installed: &InstalledPlugin,
+    plugin: &LoadedPlugin,
+    status: PluginStatus,
+    global_root: &Path,
+) -> Vec<PluginPageSummary> {
+    let consented = grants::witnessed_page_actions(global_root, installed);
+    plugin
+        .pages
+        .iter()
+        .map(|page| {
+            let diagnostic = page_digest_diagnostic(
+                &installed.name,
+                installed.page_digests.get(&page.id).map(String::as_str),
+                page,
+            )
+            .or_else(|| {
+                (status != PluginStatus::Active).then(|| {
+                    format!(
+                        "page '{}' is not served while plugin '{}' is {}",
+                        page.id,
+                        installed.name,
+                        status.as_str()
+                    )
+                })
+            });
+            PluginPageSummary {
+                id: page.id.clone(),
+                title: page.title.clone(),
+                tools: page
+                    .tools
+                    .iter()
+                    .map(|verb| plugin_tool_name(plugin.namespace(), verb, installed.first_party))
+                    .collect(),
+                actions: page
+                    .actions
+                    .iter()
+                    .map(|verb| PluginPageActionSummary {
+                        tool: plugin_tool_name(plugin.namespace(), verb, installed.first_party),
+                        consented: plugin
+                            .tools
+                            .iter()
+                            .find(|tool| &tool.verb == verb)
+                            .is_some_and(|tool| {
+                                consented.allows_action(installed, plugin, page, tool)
+                            }),
+                    })
+                    .collect(),
+                kit: page.kit,
+                active: diagnostic.is_none(),
+                diagnostic,
+            }
+        })
+        .collect()
 }
 
 fn mcp_scope_label(scope: orbit_types::plugin::PluginMcpScope) -> &'static str {

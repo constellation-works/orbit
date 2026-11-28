@@ -13,7 +13,7 @@
 //! audits it, and renders the `Outcome`. A type or function a surface or
 //! `orbit-cmd` names is re-exported from the app that owns its subject.
 //!
-//! Shared use cases live in `application`, protocol translation in
+//! Shared use cases live in `unit` and `application`, protocol translation in
 //! `adapter`, and the runtime kernel is the `orbit-runtime` crate, which
 //! `runtime` re-exports inside this crate beside the `OrbitRuntime` that owns
 //! it. The kernel never calls an application method: a mechanism that needs
@@ -88,6 +88,13 @@ pub mod runtime;
 #[allow(dead_code, unused_imports)]
 pub(crate) mod runtime;
 
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod unit;
+
+#[cfg(not(feature = "test-support"))]
+pub(crate) mod unit;
+
 /// Hooks for tests in crates that depend on `orbit-core`, behind the
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
@@ -117,12 +124,6 @@ pub mod test_support {
     pub use crate::application::automation::source::SOURCE_ELAPSED_ENV;
     pub use crate::application::automation::source::test_support::with_delivery_source_clock;
     pub use crate::application::automation::with_reset_probe_hook;
-    /// Replace the backlog forecast's wall-time budget for a scenario with
-    /// arrivals, in milliseconds, in an isolated test's server child.
-    pub use crate::application::backlog_forecast::COMPUTE_BUDGET_ENV as BACKLOG_FORECAST_COMPUTE_BUDGET_ENV;
-    /// Replace the backlog forecast's generated-node bound for a scenario
-    /// with arrivals, in an isolated test's server child.
-    pub use crate::application::backlog_forecast::MAX_GENERATED_ENV as BACKLOG_FORECAST_MAX_GENERATED_ENV;
     pub use crate::application::distributed::admission_checkpoint::{
         with_claim_settle_checkpoint, with_pull_admission_checkpoint,
     };
@@ -145,8 +146,6 @@ pub mod test_support {
         pipeline_worker_observer_completed, pipeline_workers_spawned,
     };
     pub use crate::application::job::with_run_root_cause_write_hook;
-    pub use crate::application::landing::with_landing_retry_reservation_hook;
-    pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;
     pub use crate::application::review::fulfilment_test_support::with_review_evidence_completion;
     pub use crate::application::task::candidate_checkpoint::install_candidate_selection_checkpoint;
     pub use crate::application::task::{
@@ -164,6 +163,15 @@ pub mod test_support {
     pub use crate::runtime::{
         with_host_load_sampling_wait, with_owner_read_retry_wait, with_pipeline_poll_wait,
     };
+    /// Replace the backlog forecast's wall-time budget for a scenario with
+    /// arrivals, in milliseconds, or its generated-node bound, in an isolated
+    /// test's server child.
+    pub use crate::unit::backlog_forecast::{
+        COMPUTE_BUDGET_ENV as BACKLOG_FORECAST_COMPUTE_BUDGET_ENV,
+        MAX_GENERATED_ENV as BACKLOG_FORECAST_MAX_GENERATED_ENV,
+    };
+    pub use crate::unit::landing::with_landing_retry_reservation_hook;
+    pub use crate::unit::managed_asset::with_auto_task_manifest_read_hook;
     /// The engine crate, for a fixture that drives an engine mechanism directly.
     pub use orbit_engine as fixture_engine;
     pub use orbit_engine::test_support::with_cli_supervision_clock;
@@ -176,6 +184,11 @@ pub mod test_support {
     pub use orbit_store::contract::{ReviewInvocationRecord, ReviewReserveRequest};
     /// Canonical (artifact-hashing) task-bundle reads on this thread.
     pub use orbit_store::test_support::canonical_bundle_reads;
+    /// Full job-run step hydrations (`read_steps` / `read_steps_for_runs`) on
+    /// this thread.
+    pub use orbit_store::test_support::job_run_full_step_reads;
+    /// `JobRun` rows decoded on this thread.
+    pub use orbit_store::test_support::job_run_rows_hydrated;
     /// Lightweight task-bundle reads on this thread, listing or by id.
     pub use orbit_store::test_support::lightweight_bundle_reads;
     /// Listing-path task-bundle reads on this thread.
@@ -286,7 +299,6 @@ pub use orbit_common::OrbitError as Error;
 pub(crate) use app::routine::RoutineSeedIdentity;
 pub(crate) use app::search::{GlobalSearchKind, SearchRequest, SearchRequestProfile};
 pub(crate) use app::workspace::reconcile_workspace_managed_artifacts;
-pub(crate) use application::backlog_forecast::BacklogForecastHistory;
 pub(crate) use application::contracts::DrainEntryPoint;
 pub(crate) use application::distributed::WorkspacePullRequest;
 pub(crate) use application::job::{
@@ -309,6 +321,7 @@ pub(crate) use orbit_types::telemetry::incident::FailureIncidentReport;
 pub(crate) use orbit_types::workflow::{JobRun, JobRunState, JobRunStep};
 pub(crate) use runtime::OrbitRuntime;
 pub(crate) use runtime::engine::ResolvedCrewProjection;
+pub(crate) use unit::backlog_forecast::BacklogForecastHistory;
 
 use orbit_runtime::paths;
 

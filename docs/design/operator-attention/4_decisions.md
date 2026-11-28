@@ -2,17 +2,17 @@
 title: Operator Attention — Decisions
 owner: claude
 created_date: 2026-11-01
-updated_date: 2026-11-16
-last_validated: 2026-11-16
+updated_date: 2026-11-28
+last_validated: 2026-11-28
 status: Draft
 feature: operator-attention
 doc_role: decisions
 type: design
-summary: "Decisions for orbit attention: derived view not inbox, stateless cursor, fingerprint scope, source-bound read rights, explicit caller polling, fan-out exception, blindness reporting, folding"
+summary: "Decisions for orbit attention: derived view not inbox, stateless cursor, fingerprint scope, source-bound read rights, explicit caller polling, fan-out exception, blindness reporting, folding, a required hold reason, deliberate holds as items"
 tags: [operator-attention]
 paths: ["crates/orbit-core/src/app/attention/**", "crates/orbit-mcp/src/federated/**"]
 related_features: [operator-attention, federated-mcp, human-decision-channel]
-related_artifacts: [ORB-21164, ORB-25277]
+related_artifacts: [ORB-21164, ORB-25277, ORB-29623]
 ---
 
 # Operator Attention — Decisions
@@ -45,7 +45,7 @@ Rejected:
   and to close an item, so any missed close leaves a permanent false positive and any missed
   write a silent gap. It is a second system of record for each condition.
 - **Event-bus subscription** feeding a store. Orbit has no event bus by design
-  ([human-decision-channel](../human-decision-channel/1_scope.md)), and a store fed by one
+  ([human-decision-channel](../human-decision-channel/1_overview.md)), and a store fed by one
   inherits the inbox's drift.
 - **A cached snapshot refreshed on a schedule.** It is an inbox with a delay, and it returns
   resolved items until the next refresh.
@@ -346,10 +346,96 @@ Rejected:
   read and that first read is not reported.
 - Cost: each poll recomputes the derivation (15 seconds apart by default, 5 at the minimum).
 
+## A hold states its reason, and the tag cannot be added without one
+
+**Recorded:** 2026-11 · [ORB-29623]
+
+### Context
+
+`no-drain` keeps a backlog task out of every automatic drain and says nothing about why. A
+session that will run a task itself adds it. So does a session that wants work to wait for
+something Orbit cannot see, and so does a session acting from habit. When the session ends the
+tag stays, and a reader cannot tell a hold that still matters from one nobody remembers. On
+2026-11-27 ready tasks sat idle for hours for that reason.
+
+### Decision
+
+A task tagged `no-drain` carries a hold record: a reason, a release condition in words, the
+writer and the time ([task-hold](./specs/task-hold.md)). A write that adds the tag without
+one is refused, for every writer. The tag stays the switch that admission reads; the record
+only explains it. Tasks tagged before the change keep the tag and read as held with no
+reason recorded.
+
+Rejected:
+
+- **A comment convention.** It needs no build, and it is what failed: nothing asks for the
+  comment, a feed cannot find it among other comments, and an agent in a hurry skips it.
+- **An optional reason.** The writers who caused the problem are the ones who would leave it
+  out. An unexplained hold would stay the common case.
+- **A hold field or status in place of the tag.** Every admission path, drain-window
+  approval, the resident guard and follower admission read the tag, and stored tasks carry
+  it. Replacing it migrates all of them to gain nothing the record does not already give.
+- **A release condition Orbit evaluates.** A date is already `not_before` and a task is
+  already a dependency. What remains is a condition only a person or a session can judge, and
+  a field Orbit pretends to check would be a second, weaker dependency system.
+
+### Consequences
+
+- A leftover tag is visible as one: it has no reason, or a reason whose writer and date show
+  it is stale.
+- Admission is unchanged, so nothing about dispatch can regress with the record.
+- Cost: this breaks every writer of the tag. A call that worked is refused until it passes a
+  `hold`, in the shipped skills, in the dashboard and in each adopter's own skills and
+  scripts.
+- Cost: the tag and the record are two things kept in step by the write path, and a task
+  tagged before the change breaks the pairing until someone states its hold or releases it.
+- Cost: Orbit checks that a reason is present, never that it is true or still current.
+
+## A deliberate hold is an attention item too
+
+**Recorded:** 2026-11 · [ORB-29623]
+
+### Context
+
+Attention lists what waits on an operator. A task held on purpose is not waiting on anyone,
+which argues for listing only the holds with no reason. But a reason can go stale as easily
+as a tag: the session that wrote it closes, or the thing it waited for happens, and nothing
+removes the hold. Orbit cannot tell, because the release condition is text.
+
+### Decision
+
+Every backlog task that only `no-drain` keeps out of a drain is one `held_ready` item once it
+has been in that state for two hours, whether or not its hold states a reason. A stated hold
+is `low` and never rises. A hold with no reason is `medium` and rises with age. Tasks that
+are not ready, and `proposed` tasks, are never items.
+
+Rejected:
+
+- **Only unexplained holds.** A stale reason would hide the task for good, which is today's
+  problem with one more step.
+- **Every tagged task.** A held task that could not run anyway (an unfinished dependency, a
+  future `not_before`) costs nothing by being held, and listing it buries the ones that do.
+- **Raising a stated hold with age.** The point of stating a reason is that the hold is
+  wanted. A hold that climbs to `high` on its own trains its owner to restate it, not to
+  release it.
+- **A configurable bound.** The feed's thresholds are fixed so that two operators' lists mean
+  the same thing ([2_design.md §5](./2_design.md#5-configuration)).
+
+### Consequences
+
+- The set of ready-but-held tasks is always on the list, so no hold is forgotten silently.
+- A reader separates the two cases by severity: `--kind held_ready --severity medium` is the
+  unexplained ones.
+- Cost: a workspace that holds many tasks on purpose carries that many standing `low` items
+  until each is released, and a reader of the unfiltered list has to look past them.
+- Cost: the item judges only the tag. Releasing a hold does not promise the task starts,
+  because a footprint conflict or host routing can still make a drain wait on it.
+
 ## Task References
 
 - [ORB-21164] — recorded the attention design decisions
 - [ORB-21165] — archived session-hook proposal
 - [ORB-25277] — shell wait on an attention delta through a session-minted grant
+- [ORB-29623] — a required hold reason for `no-drain`, and deliberate holds as attention items
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

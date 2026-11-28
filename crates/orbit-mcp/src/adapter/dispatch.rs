@@ -1,3 +1,4 @@
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
@@ -135,16 +136,9 @@ impl OrbitToolServer {
         }
     }
 
-    /// Drop tools hidden by the host or refused by the session's fixed grants.
-    /// Applied after the response cache, which holds the full surface, so a
-    /// toggle flipped mid-session shows on the next `tools/list`. This only
-    /// changes advertisement; direct calls retain their authorization checks.
-    fn without_hidden_tools(
-        &self,
-        mut result: ListToolsResult,
-        definitions: &[McpToolDefinition],
-        name_map: &super::CachedNameMap,
-    ) -> Result<ListToolsResult, McpError> {
+    /// Canonical tool and operation IDs withheld from this session's `tools/list`
+    /// by host plugin toggles or caller capability authorization.
+    fn hidden_canonical_tools(&self) -> BTreeSet<String> {
         let context = self.session_context();
         let caller = CallerCapabilities::resolve(&CallerEnvelope::mcp_session(&context));
         let mut hidden = self.host.hidden_tool_names(&context);
@@ -169,6 +163,59 @@ impl OrbitToolServer {
             .map(|family| family.name.to_string())
             .collect::<Vec<_>>();
         hidden.extend(hidden_families);
+        hidden
+    }
+
+    fn error_surface(&self, names: &HashMap<String, String>) -> orbit_common::McpErrorSurface {
+        let hidden = self.hidden_canonical_tools();
+        let can_call = |advertised: &str, action: Option<&str>| -> bool {
+            let Some(canonical) = names.get(advertised) else {
+                return false;
+            };
+            if hidden.contains(canonical) || !self.host.serves_tool_call(advertised, action) {
+                return false;
+            }
+            if let Some(action_name) = action
+                && let Some(family) = tool_family(canonical)
+            {
+                let Some(entry) = family.action(action_name) else {
+                    return false;
+                };
+                if hidden.contains(entry.operation) {
+                    return false;
+                }
+            }
+            true
+        };
+        orbit_common::McpErrorSurface {
+            run_list: can_call("orbit_run", Some("list")),
+            task_show: can_call("orbit_task_show", None),
+            task_list: can_call("orbit_task_list", None),
+            search: can_call("orbit_search", None),
+            workspace_list: can_call("orbit_workspace_list", None),
+        }
+    }
+
+    fn tool_error_result_for_session(&self, err: &OrbitError) -> CallToolResult {
+        if let Ok(surface) = self.load_tool_surface()
+            && let Ok(name_map) = &surface.name_map
+        {
+            return crate::error::tool_error_result_for_surface(err, self.error_surface(name_map));
+        }
+        tool_error_result(err)
+    }
+
+    /// Drop tools hidden by the host or refused by the session's fixed grants.
+    /// Applied after the response cache, which holds the full surface, so a
+    /// toggle flipped mid-session shows on the next `tools/list`. This only
+    /// changes advertisement; direct calls retain their authorization checks.
+    fn without_hidden_tools(
+        &self,
+        mut result: ListToolsResult,
+        definitions: &[McpToolDefinition],
+        name_map: &super::CachedNameMap,
+    ) -> Result<ListToolsResult, McpError> {
+        let hidden = self.hidden_canonical_tools();
         if presentation::reader(definitions, McpPresentationRead::Task)
             .is_some_and(|reader| hidden.contains(&reader.schema.name))
         {
@@ -264,7 +311,7 @@ impl OrbitToolServer {
             let result = self.dispatch_presentation(request).await;
             return Ok(match result {
                 Ok(value) => mcp_tool_call_result(value),
-                Err(error) => tool_error_result(&error),
+                Err(error) => self.tool_error_result_for_session(&error),
             });
         }
         if let Some(canonical) = crate::internal_drain_name(request.name.as_ref()) {
@@ -278,7 +325,7 @@ impl OrbitToolServer {
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
             return Ok(match result {
                 Ok(value) => mcp_tool_call_result(value),
-                Err(error) => tool_error_result(&error),
+                Err(error) => self.tool_error_result_for_session(&error),
             });
         }
         let mut call_context = self.context_for_tool_call();
@@ -360,8 +407,9 @@ impl OrbitToolServer {
                 "pass `workspace` with a selector copied from `orbit_workspace_list`"
             };
             return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
-                "tool '{canonical}' requires an explicit workspace selector from discovery: \
-                 {trigger}{guidance}"
+                "tool '{}' requires an explicit workspace selector from discovery: \
+                 {trigger}{guidance}",
+                orbit_types::tool::mcp_advertised_tool_name(&canonical)
             ))));
         }
         let host = Arc::clone(&self.host);
@@ -383,7 +431,10 @@ impl OrbitToolServer {
                 }
                 Ok(mcp_tool_call_result(value))
             }
-            Ok(Err(error)) => Ok(tool_error_result(&error)),
+            Ok(Err(error)) => Ok(crate::error::tool_error_result_for_surface(
+                &error,
+                self.error_surface(&name_map),
+            )),
             Err(join_error) => {
                 let error = OrbitError::Execution(format!(
                     "tool '{canonical}' worker panicked or was cancelled: {join_error}"

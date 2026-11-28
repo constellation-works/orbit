@@ -116,7 +116,7 @@ The core cutover is shipped (legacy-backend removal `e9582ebafee9342ec38d663e4d5
 | Home registry: allocator, workspace bindings, generated indexes | [crates/orbit-store/src/repository/task_index/](../../../crates/orbit-store/src/repository/task_index/) | Done: [ORB-10721], [ORB-11205] |
 | V2 runtime wiring (`build_v2_task_backends`) | [crates/orbit-runtime/src/builder.rs](../../../crates/orbit-runtime/src/builder.rs) | — |
 | Local task store and canonical lookup | [2_design.md §6](./2_design.md#6-local-task-store-and-canonical-lookup) | — |
-| Task ID local-only doctrine after graph attribution removal | [docs/POSITIONING.md](../../POSITIONING.md) | [T20260506-11] |
+| Task ID local-only doctrine after graph attribution removal | [docs/principles/positioning.md](../../principles/positioning.md) | [T20260506-11] |
 | V2 task bundle contract | [specs/task-bundle-v2.md](./specs/task-bundle-v2.md) | — |
 | Glossary | [references/glossary.md](./references/glossary.md) | — |
 | ADR log | [4_decisions.md](./4_decisions.md) | — |

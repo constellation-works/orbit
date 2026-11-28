@@ -74,7 +74,7 @@ both absence and presence. Path fields live on `WorkspacePaths` in
 | Path | What it is | Authoritative or regenerable |
 |---|---|---|
 | `config.yaml` | workspace identity (`workspace_id`) | authoritative |
-| `config.toml` | optional workspace runtime config (layers over global per key, with security-sensitive exceptions—see [CONFIG.md](../CONFIG.md)) | authoritative |
+| `config.toml` | optional workspace runtime config (layers over global per key, with security-sensitive exceptions—see [configuration reference](../config/README.md#where-config-lives)) | authoritative |
 | `frictions/` | workspace friction tag taxonomy (`tags.yaml`) plus legacy friction import/rollback records | preserve customized taxonomy; keep legacy records until migration evidence is no longer needed |
 | `resources/` | workspace overrides for activities/jobs/executors/policies | authoritative |
 | `graph/`, `knowledge/graph/` | retired graph state left by older Orbit versions | non-authoritative; remove explicitly with `orbit doctor --remove-graph` |
@@ -132,7 +132,7 @@ seeded `store_gc` routine is disabled by default,
 so cleanup happens only after an operator applies a GC command or enables that routine.
 `orbit doctor` warns when the store file exceeds 1 GiB and that routine is not
 enabled. Freed pages stay in the file until `VACUUM`.
-See [runtime configuration](../CONFIG.md) for the retention settings.
+See [runtime configuration](../config/operations.md#housekeeping) for the retention settings.
 
 The cost of each retention setting:
 

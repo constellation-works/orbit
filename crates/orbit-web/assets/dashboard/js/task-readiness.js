@@ -215,7 +215,10 @@ export function buildPilotWarnings(task, detail, context) {
       list,
     ]));
   } else {
-    content.appendChild(el("p", { class: "task-attention-body", text: "The drain holds this task until an operator approves it. Editing its description, acceptance criteria or context files re-pilots it automatically; a comment does not. An operator can also re-pilot it explicitly." }));
+    content.appendChild(el("p", {
+      class: "task-attention-body",
+      text: "The drain holds this task while these warnings remain. An unenforced prerequisite warning clears automatically when its named task finishes or a dependency edge enforces it. If warnings remain, editing its description, acceptance criteria or context files re-pilots it automatically; a comment does not. An operator can also re-pilot it explicitly.",
+    }));
     content.appendChild(list);
   }
   return el("section", { class: "task-attention warning pilot-warnings", "aria-label": "Pilot warnings" }, [

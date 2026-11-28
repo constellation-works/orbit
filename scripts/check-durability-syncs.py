@@ -2,7 +2,7 @@
 """Every durability sync goes through orbit_common::fs::io.
 
 `sync_file`, `sync_file_data` and `sqlite_synchronous` are the only places a
-test run can relax a sync (docs/DEVELOPMENT.md#fixtures-on-a-loaded-host). A
+test run can relax a sync (docs/development/testing.md#fixtures-on-a-loaded-host). A
 direct `File::sync_all`/`sync_data` or a SQLite `synchronous` pragma with a
 literal level would pay a full flush in every test run again; on macOS that is
 an F_FULLFSYNC of the whole drive. clippy's `disallowed-methods` rejects the

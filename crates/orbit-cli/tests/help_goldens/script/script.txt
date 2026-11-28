@@ -20,10 +20,10 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-A script is a manifest at `.orbit/resources/scripts/<name>.yaml` whose
-`entry` names a program file in the workspace. A job step names it
-as `target: script:<name>`. Grants are host-local consent bound to
-the manifest and entry digests: editing either file makes the grant
-stale until an operator grants again. A granted script step runs on
-Linux under a sandbox, with network and environment variables only
-as its grant allows; other hosts refuse it.
+A script is a manifest at `.orbit/resources/scripts/<name>.yaml` whose `entry` names a program file in the workspace. A job step names it as `target: script:<name>`. Grants are host-local consent bound to the manifest and entry digests: editing either file makes the grant stale until an operator grants again.
+
+Where a granted step runs, and which network and environment variables the grant allows: installed orbit-setup skill `references/automation-scripts.md`.
+
+Examples:
+  orbit script list
+  orbit script grant <name>

@@ -26,7 +26,7 @@ import { AGENT_ROLES, adoptAgentsSpan, agentsSpan } from './agents.js';
 import { countViewsHashSuffix } from './metrics-running.js';
 import { initBackgroundNotifications, setDashboardTitle, startDashboardPolling } from './polling.js';
 import { topicOf } from './config-topics.js';
-import { closeRailOverlay, isRailIconMode, isRailOverlayOpen, isScopeInHeader, onRailModeChange } from './rail-toggle.js';
+import { closeRailOverlay, isRailIconMode, isRailOverlayOpen, isScopeInHeader, onRailModeChange, syncRailTabAttributes } from './rail-toggle.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -104,6 +104,14 @@ function railRoute(ctx, tab) {
   if (tab === "diagnostics") return healthHash(ctx).slice(1);
   if (tab === "analytics") return analyticsSubtabRoute(ctx, ctx.getAnalyticsSubtab());
   if (tab === "jobs") return `jobs/${ctx.getJobsSubtab()}`;
+  if (tab === "plugins") {
+    const page = ctx.getPluginPage?.();
+    if (page?.namespace && page?.page) {
+      const base = `plugins/${encodeURIComponent(page.namespace)}/${encodeURIComponent(page.page)}`;
+      return page.query ? `${base}?${page.query}` : base;
+    }
+    return "plugins";
+  }
   if (tab === "tasks") return ctx.buildTasksFilterHash().slice(1);
   return tab;
 }
@@ -193,7 +201,7 @@ function parseHashRoute(raw) {
   const queryStr = queryIdx >= 0 ? trimmed.slice(queryIdx + 1) : "";
   const segments = path.split("/").filter(Boolean);
   const query = new URLSearchParams(queryStr);
-  return { segments, query };
+  return { segments, query, queryStr };
 }
 
 let _routerCtx = null;
@@ -401,6 +409,15 @@ function setConfigSubtabImpl(ctx, name) {
   }
 }
 
+function setPluginsViewImpl(ctx, pageRoute) {
+  const installed = $("plugins-installed-main");
+  const pageMain = $("plugins-page-main");
+  if (installed) installed.hidden = Boolean(pageRoute);
+  if (pageMain) pageMain.hidden = !pageRoute;
+  ctx.setPluginPageRoute?.(pageRoute);
+  ctx.syncPluginTabs?.(pageRoute);
+}
+
 // Reveal an entry by scrolling only the rail's own scroll containers, never
 // the document: on Automation's document-height layout a native
 // scrollIntoView would also scroll the window to the rail entry.
@@ -457,7 +474,7 @@ function revealActiveRailSelection() {
 // Desktop: the open destination's views show whole, with no inner scrolling,
 // whenever the rail can make room. When the largest destination's views would
 // not all fit the room the rail leaves them, the rail tightens its own spacing
-// (`rail-compact`: shorter rows, no group headings, a one-line host block).
+// (`rail-compact`: shorter rows, no group headings, a two-column host block).
 // The decision follows the largest list, not the open one, so the rail keeps
 // one size as the operator moves between destinations. Only when even the
 // compact rail is too short does the open list shrink to a whole number of
@@ -517,7 +534,7 @@ function syncRailScrollCues() {
 function setActiveTabImpl(ctx, raw, opts = {}) {
   const previousTab = document.querySelector(".tab.active");
   const previousSubtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
-  const { segments, query } = parseHashRoute(raw);
+  const { segments, query, queryStr } = parseHashRoute(raw);
   let head = segments[0] || "tasks";
   let legacyRoute = false;
   let dockView = query.get("dock") || query.get("dockMode") || query.get("panel");
@@ -645,6 +662,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     top = "tasks";
   }
   if (top !== "fleet") ctx.resetFleetView?.();
+  if (top !== "plugins") ctx.leavePluginPageView?.();
   ctx.setTab(top);
   // ORB-10972: the topbar breadcrumb names the active destination, since the
   // rail no longer sits above the content where the tab strip used to.
@@ -671,6 +689,10 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   if (operationsSubtabs) operationsSubtabs.classList.toggle("dimmed", top !== "operations");
   const configSubtabs = $("config-subtabs");
   if (configSubtabs) configSubtabs.classList.toggle("dimmed", top !== "config");
+  const pluginsRailSubtabs = $("plugins-rail-subtabs");
+  if (pluginsRailSubtabs) {
+    pluginsRailSubtabs.classList.toggle("dimmed", top !== "plugins" || !pluginsRailSubtabs.querySelector(".subtab"));
+  }
   if (top !== "analytics") {
     document.body.classList.remove("reliability-active");
     markWorkspaceSelectorScope(false);
@@ -854,6 +876,27 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
         }
       }
     }
+  } else if (top === "plugins") {
+    let pageRoute = null;
+    if (segments.length >= 3) {
+      try {
+        const namespace = decodeURIComponent(segments[1]);
+        const page = decodeURIComponent(segments[2]);
+        if (namespace && page) {
+          pageRoute = { namespace, page, query: queryStr };
+        } else {
+          legacyRoute = true;
+        }
+      } catch {
+        return setActiveTabImpl(ctx, "plugins", { ...opts, repairRoute: true });
+      }
+    } else if (segments.length === 2) {
+      legacyRoute = true;
+    }
+    setPluginsViewImpl(ctx, pageRoute);
+    hash = pageRoute
+      ? `#plugins/${encodeURIComponent(pageRoute.namespace)}/${encodeURIComponent(pageRoute.page)}${pageRoute.query ? `?${pageRoute.query}` : ""}`
+      : "#plugins";
   } else {
     hash = `#${top}`;
   }
@@ -1078,7 +1121,7 @@ function initPhoneNavigation() {
 
   function openRailViewsPopover(tab, { focusFirst = false } = {}) {
     const entry = subtabByTab.get(tab?.dataset?.tab);
-    if (!entry || !popover || !popoverBody || !isRailIconMode()) return false;
+    if (!entry || !popover || !popoverBody || !isRailIconMode() || !entry.subtabs.querySelector(".subtab")) return false;
     if (activePopover && activePopover.tab === tab) {
       closeRailViewsPopover();
       return true;
@@ -1220,7 +1263,8 @@ function initTabsImpl(ctx) {
         return;
       }
       closeViewsPopoverFn();
-      const hasSubtabs = ["diagnostics", "analytics", "operations", "config"].includes(tab.dataset.tab);
+      const hasSubtabs = ["diagnostics", "analytics", "operations", "config"].includes(tab.dataset.tab)
+        || (tab.dataset.tab === "plugins" && Boolean($("plugins-rail-subtabs")?.querySelector(".subtab")));
       if (isRailOverlayOpen() && !hasSubtabs) closeRailOverlay();
       if (tab.dataset.tab === "jobs" && event.target?.closest?.("#rail-count-jobs")) {
         selectRunningRunFilter();
@@ -1316,6 +1360,18 @@ function initTabsImpl(ctx) {
       setActiveTabImpl(ctx, `config/${btn.dataset.subtab}`, { refresh: false });
     });
   }
+  $("plugins-subtabs")?.addEventListener("click", (event) => {
+    const btn = event.target?.closest?.(".subtab");
+    if (!btn || !btn.dataset.route) return;
+    setActiveTabImpl(ctx, btn.dataset.route, { refresh: false });
+  });
+  $("plugins-rail-subtabs")?.addEventListener("click", (event) => {
+    const btn = event.target?.closest?.(".subtab");
+    if (!btn || !btn.dataset.route) return;
+    closeViewsPopoverFn();
+    if (isRailOverlayOpen()) closeRailOverlay();
+    setActiveTabImpl(ctx, btn.dataset.route, { refresh: false });
+  });
   // Back and Forward fire popstate, then hashchange when the fragment differs.
   // An entry made by pushState (a task link that changes workspace) fires no
   // hashchange, so popstate routes too; the address that was just routed is not
@@ -1377,4 +1433,16 @@ export function scopeRouteHash() {
 export function setRunDetailSubtab(name) {
   const ctx = getCtx();
   setRunDetailSubtabImpl(ctx, name);
+}
+
+/// Sync the Plugins rail view list after enabled plugin pages load or clear.
+export function syncPluginsRailState() {
+  const ctx = _routerCtx;
+  const rail = $("plugins-rail-subtabs");
+  const onPlugins = ctx ? ctx.getTab() === "plugins" : false;
+  if (rail) {
+    rail.classList.toggle("dimmed", !onPlugins || !rail.querySelector(".subtab"));
+  }
+  syncRailTabAttributes();
+  if (onPlugins) revealActiveRailSelection();
 }

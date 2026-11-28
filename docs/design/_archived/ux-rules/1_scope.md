@@ -55,9 +55,9 @@ Bearing: the design baseline was the CLI pass [ORB-19681] and UI pass
 
 Both store a findings table as `ux-review.json` and compare it with the previous pass. The
 browser kit pins one Playwright build per Orbit release
-([browser checks](../../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)). Jobs already
+([browser checks](../../../development/browser-checks.md#browser-checks-on-a-prepared-host)). Jobs already
 pair a collecting step with a deterministic filing step (`dependabot_alert_sweep_pipeline`:
-`collect_dependabot_alerts` → `file_dependabot_alert_tasks`). [Script steps](../../script-steps/1_scope.md)
+`collect_dependabot_alerts` → `file_dependabot_alert_tasks`). [Script steps](../../script-steps/1_overview.md)
 (phases 1-2 landed: a granted workspace script runs on Linux with no network) let a job run
 a granted workspace script and read its JSON stdout.
 
@@ -334,7 +334,7 @@ policy: {timeout_minutes: 60, overlap: forbid}
 
 `ux_rules_pipeline`, delivered by [ORB-19976] and extended by [ORB-21111], has
 three steps: `prepare_rule_findings` reads tracked owners, a
-[script step](../../script-steps/1_scope.md) (`script:ux_rules_runner`) runs the
+[script step](../../script-steps/1_overview.md) (`script:ux_rules_runner`) runs the
 runner for each configured surface, and `file_rule_findings` files its output.
 [ORB-20565] supplied the adapter and manifest template; an operator copies the
 template, substitutes host paths and grants the script. It uses script

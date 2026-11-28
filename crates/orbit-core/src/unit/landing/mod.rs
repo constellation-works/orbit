@@ -1,0 +1,61 @@
+//! The owner's landing consumer [ORB-12499]: durable dispatch of authorized
+//! handoffs and the trusted seam the landing activity settles through.
+//!
+//! # Why a job, and why dispatched from the outbox
+//!
+//! Accepting a completion-authorized handoff — or approving a review-only one —
+//! records a durable landing-start request in the owner's coordination store.
+//! This module is what consumes those requests: it reserves one landing attempt
+//! per handoff and submits the owner-local [`LANDING_JOB`] that carries it.
+//! Dispatch happens at the moment authority is recorded and again on demand, so
+//! landing never waits for a drain or any schedule. A request that outlives its
+//! process stays pending and is picked up by the next dispatch pass, which is
+//! the recovery path for a crash between the two.
+//!
+//! # What deduplicates work
+//!
+//! Handoff identity. The attempt row is keyed by handoff, the job's action key
+//! is derived from handoff plus attempt number, and a handoff whose attempt has
+//! already merged is refused rather than dispatched again. A live owner job is
+//! left alone. Dispatch observes its stored state without reconciling process
+//! liveness; opening a successor for an attached dispatched attempt requires
+//! the store to prove that exact owner job is terminal and retain its stop in
+//! attempt history. Missing run evidence never proves stoppage.
+//!
+//! # What this module never does
+//!
+//! It does not merge or decide that a candidate landed. A read-only engine
+//! probe can wake a stopped waiting gate; the landing activity then reads real
+//! external state again, and the coordination store rechecks authorization,
+//! candidate identity and digest-pinned validation inside the transaction.
+
+mod attempt;
+
+mod context;
+
+mod dispatch;
+
+mod retry;
+
+mod review_port;
+
+mod waiting;
+
+#[cfg(feature = "test-support")]
+pub use attempt::{landing_attempt_record, landing_attempts};
+pub(crate) use context::{
+    handoff_landing_context, record_handoff_landing, record_handoff_landing_completion_hold,
+    record_handoff_landing_history, record_handoff_landing_wait,
+};
+pub(crate) use dispatch::dispatch_recorded_authority;
+pub use dispatch::{LandingDispatch, dispatch_landing_requests_at};
+#[cfg(feature = "test-support")]
+pub use dispatch::{dispatch_landing_requests, land_handoff};
+pub(crate) use retry::retry_handoff_as_operator;
+pub(crate) use review_port::ReviewPort;
+
+#[cfg(feature = "test-support")]
+pub use retry::retry_reservation_hook::with_landing_retry_reservation_hook;
+
+/// The owner-local job that lands one authorized handoff.
+pub const LANDING_JOB: &str = "task_landing_pipeline";

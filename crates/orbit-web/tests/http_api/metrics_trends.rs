@@ -3,6 +3,7 @@
 //! workspace.
 
 use chrono::{DateTime, Duration, Utc};
+use orbit_core::app::gc::test_support as gc;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::test_support::fixture_store;
 use orbit_core::test_support::fixture_store::contract::InvocationInsertParams;
@@ -917,7 +918,7 @@ fn succeeded_durations_survive_run_gc_and_upgrade_backfill() {
             let before = read();
             assert_eq!(before["current"]["all"]["n"], 2);
             assert_eq!(before["slowest"].as_array().unwrap().len(), 2);
-            let gc = fixture.runtime.gc_runs(true, Some(60)).unwrap();
+            let gc = gc::gc_runs(&fixture.runtime, true, Some(60)).unwrap();
             assert_eq!(gc.runs_archived, 4);
             // Reopening must not erase outcomes for already-archived runs.
             super::support::upgrade_retention_analytics(&fixture);

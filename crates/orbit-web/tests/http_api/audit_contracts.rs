@@ -421,6 +421,16 @@ fn dashboard_routes_emit_csp() {
         // CSS's inline tuple is the only registration not on its own line.
         routes.push("/static/dashboard.css");
         let expected = server.get("/").headers()[header::CONTENT_SECURITY_POLICY].clone();
+        let policy = expected.to_str().expect("dashboard CSP is visible ASCII");
+        // Structural safety guard: plugin iframe navigation must stay on the
+        // dashboard origin, or a sandboxed plugin page could load an external
+        // document without the frame controller tearing it down.
+        for directive in ["frame-src 'self'", "child-src 'self'"] {
+            assert!(
+                policy.contains(directive),
+                "dashboard CSP must contain `{directive}` so plugin iframe navigation to external origins fails closed"
+            );
+        }
         for route in routes {
             let response = server.get(route);
             assert_eq!(response.status(), StatusCode::OK, "{route}");

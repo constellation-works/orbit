@@ -26,11 +26,11 @@ use crate::OrbitRuntime;
 use crate::application::automation::{
     ConsumerTeardown, consumer_teardown_refusals, tear_down_auto_task_consumer,
 };
-use crate::application::managed_assets::{
-    ManagedAssetLayout, ManagedAssetOptOut, record_managed_asset_opt_out, restore_managed_asset,
-};
 use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
+};
+use crate::unit::managed_asset::{
+    ManagedAssetLayout, ManagedAssetOptOut, record_managed_asset_opt_out, restore_managed_asset,
 };
 
 use super::loader::{auto_tasks_dir, definition_path};

@@ -35,8 +35,14 @@ impl ExecuteCore for WorkspaceRemoveArgs {
             text.push_str(&format!(
                 "\nleft task-store partition {} ({} task bundle(s)); \
                  the task-registry workspace binding is retained as checkout evidence \
-                 so `orbit doctor` can classify it. Reclaim with \
-                 `orbit doctor --fix-orphan-task-stores --confirm`.",
+                 so `orbit doctor` can classify it. If the checkout is absent \
+                 beneath a populated, readable immediate parent with no checkout \
+                 entry, `orbit doctor --fix-orphan-task-stores --confirm` can \
+                 reclaim the partition and delete its task bundles. Restore \
+                 offline volumes first. If the parent is empty, missing or \
+                 unreadable, or absence cannot otherwise be confirmed, doctor \
+                 preserves the partition and binding as unreachable; restore \
+                 access and run doctor again.",
                 partition.path.display(),
                 partition.task_bundles
             ));

@@ -1,5 +1,5 @@
 //! `macos-sandbox-script-v1`: the macOS profile a granted script step runs
-//! under (`docs/design/script-steps/1_scope.md` §3).
+//! under (`docs/design/script-steps/2_design.md` §3).
 //!
 //! It starts from the build profile's deny-default SBPL preamble and allows
 //! the same paths the Linux profile mounts: the host runtime table and the

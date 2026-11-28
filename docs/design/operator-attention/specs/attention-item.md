@@ -44,13 +44,14 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `run_failed` | runtime | the job-run store (`JobRun`, `orbit.run` action `list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside the 48-hour run window, and nothing newer superseded it. On the workspace owner, its referenced task is not terminal and the run is not already an item that names it. A replica keeps a task-naming run visible because it cannot read the owner's task status (see below) | `finished_at` |
 | `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile records the existing `Interrupted` state (an orphaned-run disposition, not a separate state), or it has run past its bound: a run that declares a deadline (a drain's stamped/extended window from its pipeline state, or an explicit `deadline`/`for_seconds`/`timeout_seconds`/`ttl_seconds` in its input) is past that deadline plus the 120-minute grace, or its last progress (pipeline `updated_at` or recorded step activity) has stalled for 120 minutes; a run that declares no bound has run past 120 minutes | `started_at` (or `scheduled_at` when pending) |
 | `claim_stale` | runtime | the claim inspection behind `orbit.drain.claims` (`ClaimInspection`, `crates/orbit-store/src/contract/task/coordination/settlement.rs`) | an unsettled claim has an expired reservation, a host-local bound run that is absent or terminal, an unresolved merge intent or an invalidated landing. These are diagnostics, not proof the worker died, so `reason` says "possibly stale" | the claim's last event time |
+| `delivery_stale_base` | runtime | held delivery setup and current local Git refs | an owner-base setup refusal remains unresolved; one workspace item reports the base, ahead/behind counts and owner-only commits with task markers where present | newest hold |
 | `ci_red` | runtime | provider read of the workspace's base branch (the data `github.run.list` returns for `git_remote` and `base_branch`) | the workflow's deciding run is `failure` or `timed_out`: its newest completed run on the base branch head, or, while its runs on that head are all pending, its newest completed run on the base branch (by `created_at`), so a newer green completion clears it; a workflow with no run on the current head is not decided | that run's `updated_at`, or its `created_at` when no usable update time is supplied; `detail.since_source` names the field used and `since_is_proxy: true` labels it an onset-time proxy; the provider projection supplies no exact completion timestamp |
 | `friction_untriaged` | record | the friction store, filtered to status `open` (`orbit friction list --status open`) | the record's status is still `open` | `created_at` |
 | `host_unhealthy` | runtime | `orbit host list` live probe (reachability, version, pull protocol), the default `orbit doctor` workspace check, and `orbit.drain.probe` refusals on a follower | a registered host does not answer or reports a skewed binary or protocol, or a default doctor check fails or warns | the check's recorded onset when the source has one, else `null` |
 | `notice_open` | record | the notice store's effective-open read (`list_notices` with status open), derived only on the home owner | an effective-open fleet notice is homed in the workspace; expired or closed notices are not items | `opened_at` |
 | `resident_stalled` | task | the resident mandate view and its checkpoint comments (`app/resident/due.rs`, `resident_stall`), derived only on the home owner | an `active` resident mandate (not paused, taken over, handed off or ended) wrote no checkpoint for twice its heartbeat, or its last three checkpoints are all `incomplete`, or its workspace's cycle routine is disabled — no cycle can fire at all then, however recently it checkpointed ([manager-channel](../../resident-orchestrator/specs/manager-channel.md#what-residents-report-through)) | the last checkpoint (task creation when it never checkpointed), or the first of the three incomplete ones |
 | `routine_tripped` | runtime | the host's routine circuit breakers (`routine_breakers` in `~/.orbit/orbit.db`, written by the routine sweep), reported by each checkout for the routines its workspace defines | the routine's breaker is open: its last three fires failed with the same error class, and the sweep stops firing it until a trial fire succeeds or an operator resets it ([routines design](../../routines/2_design.md#41-circuit-breaker)) | `tripped_at` |
-| `drain_paused` | runtime | the workspace's drain intent (`drain_intents`) and its `backlog`/`proposed` tasks, derived only on the owner and only while `workflow.standing_drain.enabled` is set ([standing-drain scope](../../standing-drain/1_scope.md)) | the intent has been `paused` by hand for over 12 hours while work waits | the pause's `updated_at` |
+| `drain_paused` | runtime | the workspace's drain intent (`drain_intents`) and its `backlog`/`proposed` tasks, derived only on the owner and only while `workflow.standing_drain.enabled` is set ([standing-drain](../../standing-drain/2_design.md)) | the intent has been `paused` by hand for over 12 hours while work waits | the pause's `updated_at` |
 | `drain_breaker_open` | runtime | the standing-drain keeper's drains (`workspace_auto_pipeline` runs whose trigger routine is `standing-drain-keeper`), derived only on the owner and only while the keeper is enabled | `max_failed_resubmits` keeper drains ended `failed` or `interrupted` (upgrade interruptions excluded) within one hour of each other since the last hand start; the breaker latches and stays open until a hand start | the newest such failure |
 
 Notes that bind implementations:
@@ -68,8 +69,12 @@ Notes that bind implementations:
   versus an operator verdict), so a task can carry both.
 - **A plain `proposed` task is not an item.** Awaiting approval is a normal state of most
   proposed tasks; listing them would drown the rest. See [3_vision.md §1](../3_vision.md#1-open-questions).
-- **Runtime kinds respect the caller's read rights.** `run_*` and `claim_stale` read sources
-  that require the Operator capability (`orbit.run` action `list`, `orbit.drain.claims`), with
+- **Pilot warning evidence is observational.** Attention reads pilot receipts and prerequisites
+  from settled bundles without recovering pending commits. If a prerequisite needed by the
+  warning classifier cannot be read, the source reports `pilot_warning` as `source_unavailable`.
+- **Runtime kinds respect the caller's read rights.** `run_*`, `claim_stale` and
+  `delivery_stale_base` read sources that require the Operator capability (`orbit.run` action
+  `list`, `orbit.drain.claims`, held delivery setup and current local Git refs), with
   one workspace-scoped `degraded` entry per selected unreadable kind otherwise.
   `host_unhealthy` is not workspace-scoped: it reads host health, which also requires Operator,
   and a session without it gets one host-scoped `degraded` entry (`scope` `host:<name>`, code
@@ -116,6 +121,8 @@ Notes that bind implementations:
   `last_progress_at` when a declared bound was used. Every `run_stuck` item also names the
   latest recorded step in `current_step_id` and `current_step_status` (null when none), so a
   caller without the operator-only run read can tell an active run from an abandoned one.
+
+`delivery_stale_base` observes recorded owner-base refusals and local refs without fetching or modifying the checkout. It reports one item per workspace, with `detail.base`, `ahead`, `behind`, `owner_only_commits` (up to 20 entries with SHA, summary and task marker if known), and `tracked_changes`. The `ahead` count preserves the total number of owner-only commits. It clears when the observed base is admissible or a later setup admits the same base. When the recorded checkout cannot be read, a diverged base (owner-only commits, behind origin) still reports: `tracked_changes` is `null`, `tracked_status` is `unavailable`, and a `source_unavailable` degraded entry names the checkout. A behind-only base whose checkout cannot be read has no ref-proven alert and stays degraded only. Missing or stale remote-tracking refs limit the observation; setup remains authoritative.
 
 ### Runtime liveness and locality
 
@@ -182,6 +189,7 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 | `review_waiting` | merge the pull request and `orbit --workspace '<ws>' task update <id> --approve` for `completion_hold`; for `delivery_hold`, `orbit.run` action `resume` with `orbit --workspace '<ws>' job resume <run>` only for `delivery_forge_observation_unavailable`, otherwise `orbit.run` action `show` with `orbit --workspace '<ws>' run show <run>`, each with `input {id: <run>, workspace: <ws>}`; `orbit --workspace '<ws>' task update <id> --approve` for `approval`; `orbit.task.recover` action `review_reset` (needs `lineage`, `reason`) for `review_budget` |
 | `run_failed` | `orbit.run` action `resume` when the run is resumable, else `orbit.run` action `show`; `also`: run logs. A superseded PR watcher (`detail.superseded`, condition in the `run_failed` and the owner's task note above) instead gets `orbit.task.show` on its task (`input {id, workspace}`); `also`: run logs |
 | `run_stuck` | `orbit.run` action `show`; `also`: `orbit run cancel` |
+| `delivery_stale_base` | inspect owner-only commits and preserve them and tracked changes before reconciling the base with origin, then retry delivery |
 | `claim_stale` | `orbit.task.recover` action `recover_claim` (needs exact tool keys `reason`, `request_key`, `expected_phase`, `status`; CLI flags `--reason`, `--request`, `--phase`, `--status`); `also`: the claim inspection |
 | `ci_red` | the repair task's `orbit.task.show` when one exists, else `github.run.view` on the failing run |
 | `friction_untriaged` | `orbit.friction` action `update` with `status: triaged` (the operator edits tags or body first when needed) |
@@ -230,6 +238,7 @@ and are not waiting on a single task.
 | `run_failed` | medium | high | high when `detail.held_claim` is true (a live claim; a settled claim does not raise severity) |
 | `run_stuck` | medium | high | high when the run holds a claim |
 | `claim_stale` | high | high | none |
+| `delivery_stale_base` | medium | high | none |
 | `ci_red` | high | critical | critical after the age thresholds are both passed |
 | `friction_untriaged` | low | medium | none |
 | `host_unhealthy` | high | critical | critical when the host owns an in-scope workspace and a default `orbit doctor` check on it errors, or when the federated read cannot read it or it is skewed (the owner's unreachable or version-skew item); a doctor result that only warns stays high, whoever owns the workspace, so warnings never outrank work-stopping conditions. Or when its failure is the reason another item is degraded |

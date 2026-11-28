@@ -41,7 +41,7 @@ unit coverage, path existence, first-line `//!` doc comments, and one destinatio
    supplies stores, event bus, audit, claims and reservations.
 5. **PR, review and landing.** The engine owns candidate identity and
    `pr_open`/`pr_complete` rechecks; `crates/orbit-core/src/application/review/` runs the before-PR
-   review gate (admit, settle, certificates); `crates/orbit-core/src/application/landing/` (above
+   review gate (admit, settle, certificates); `crates/orbit-core/src/unit/landing/` (above
    `crates/orbit-core/src/application/distributed/`) consumes the authorized handoff outbox and lands.
 6. **Done.** Task state transitions close linked notices
    (`crates/orbit-core/src/app/notice/` via `task::TaskNoticePort`) and project costs

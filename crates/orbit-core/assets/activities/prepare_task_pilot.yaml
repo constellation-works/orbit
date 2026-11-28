@@ -44,6 +44,10 @@ spec:
     partition's `comment_hygiene_batches`. Missing, unreadable or malformed
     required ledger or footprint evidence emits `status: "hold"` with empty
     selectors and empty ranked candidates rather than provisional picks.
+    When a task's declared `context_files` and specification explicitly
+    establish existing targets as required edits, deletions, updates or
+    regenerations, preparation records them under `required_existing_selectors`
+    on the task snapshot and partition alongside any creation grants.
   input_schema_json:
     type: object
     properties:

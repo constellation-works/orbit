@@ -12,7 +12,10 @@ use orbit_tools::plugin::{LoadedPlugin, load_plugin_dir, resolve_declared_progra
 use orbit_types::plugin::{parse_stored_grants, resolve_grant_selection};
 
 use crate::OrbitRuntime;
-use crate::runtime::plugin::grants::{recorded_program_paths, witnessed_program_paths};
+use crate::app::plugin::install;
+use crate::runtime::plugin::grants::{
+    PageActionConsent, recorded_program_paths, witnessed_program_paths,
+};
 
 use super::super::inspect::PluginSummary;
 use super::super::seed::{PluginSeedOutcome, seed_plugin_definitions};
@@ -85,6 +88,7 @@ fn enable_plugin_checked(
     options: &PluginEnableOptions,
     preserve_consent: bool,
 ) -> Result<PluginEnableResult, OrbitError> {
+    let _namespace_lock = install::lock_plugin_namespace(&runtime.global_root(), name)?;
     // Seeding reads definitions and skills out of the recorded tree, so the
     // row buys nothing until the path it names is this host's install.
     let installed = installed_plugin(runtime, name)?;
@@ -139,6 +143,9 @@ fn enable_plugin_checked(
             )));
         }
     }
+    // Only CLI enable can bind page-action consent to this load. A dashboard
+    // re-enable carries forward the last recorded binding verbatim.
+    let page_actions = (!preserve_consent).then(|| PageActionConsent::from_plugin(&plugin));
     let contributions = apply_enabled_contributions(runtime, &install_path, options.force)?;
     let warn_against: &[String] = record_grants.as_deref().unwrap_or_default();
     let mut warnings = unrequested_grant_warnings(&plugin, warn_against);
@@ -154,6 +161,7 @@ fn enable_plugin_checked(
         true,
         record_grants.as_deref(),
         Some(&programs),
+        page_actions.as_ref(),
     )?;
 
     Ok(PluginEnableResult {

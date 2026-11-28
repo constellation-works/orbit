@@ -5,7 +5,7 @@
 //!
 //! An evaluation that cannot complete (a cross-read ID that no longer exists,
 //! a board count that could not be read) is `unknown`, never `false`
-//! (`docs/design/condition-triggers/1_scope.md` §2).
+//! (`docs/design/condition-triggers/2_design.md` §2).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;

@@ -10,7 +10,7 @@ Options:
           Filter to runs whose input names this task
 
       --state <STATE>
-          Filter to any of these comma-separated run states
+          Filter to comma-separated run states (pending, running, success, failed, timeout, skipped, retrying, cancelled, interrupted, held)
 
       --since <SINCE>
           Only runs created at or after this RFC 3339 time or relative duration (24h, 7d)

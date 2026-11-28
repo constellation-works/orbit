@@ -86,7 +86,15 @@ impl OrbitRuntime {
     /// closure counts it. Once the claim is settled its leaf is fenced;
     /// a foreign binding never reads a same-ID run from this store.
     pub(crate) fn unsettled_run(&self, task: &Task) -> Result<Option<String>, OrbitError> {
-        if let Some(reason) = self.live_task_delivery(task) {
+        self.unsettled_run_with(task, false)
+    }
+
+    pub(crate) fn unsettled_run_with(
+        &self,
+        task: &Task,
+        observational: bool,
+    ) -> Result<Option<String>, OrbitError> {
+        if let Some(reason) = self.live_task_delivery_with(task, observational) {
             return Ok(Some(format!(
                 "{reason}, so a failure handoff may still publish a candidate"
             )));

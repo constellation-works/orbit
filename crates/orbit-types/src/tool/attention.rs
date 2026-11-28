@@ -36,6 +36,8 @@ pub enum AttentionKind {
     RunStuck,
     /// The `claim_stale` source condition.
     ClaimStale,
+    /// Deliveries are held because the local base is stale or diverged.
+    DeliveryStaleBase,
     /// The `ci_red` source condition.
     CiRed,
     /// The `friction_untriaged` source condition.
@@ -71,6 +73,7 @@ impl AttentionKind {
         "run_failed",
         "run_stuck",
         "claim_stale",
+        "delivery_stale_base",
         "ci_red",
         "friction_untriaged",
         "host_unhealthy",
@@ -92,6 +95,7 @@ impl AttentionKind {
         "run_failed",
         "run_stuck",
         "claim_stale",
+        "delivery_stale_base",
         "ci_red",
         "friction_untriaged",
         "host_unhealthy",
@@ -121,6 +125,7 @@ impl AttentionKind {
             Self::RunFailed => "run_failed",
             Self::RunStuck => "run_stuck",
             Self::ClaimStale => "claim_stale",
+            Self::DeliveryStaleBase => "delivery_stale_base",
             Self::CiRed => "ci_red",
             Self::FrictionUntriaged => "friction_untriaged",
             Self::HostUnhealthy => "host_unhealthy",

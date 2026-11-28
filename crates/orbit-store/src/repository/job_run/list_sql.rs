@@ -1,8 +1,9 @@
 //! SQL builders for run listings: the run-row select, its filter, ordering and index pins.
 
+use orbit_common::OrbitError;
 use orbit_types::workflow::JobRunState;
 
-use crate::contract::{JobRunOrder, JobRunQuery};
+use crate::contract::{JobRunOrder, JobRunQuery, JobRunStepTargetQuery};
 
 /// Columns [`row_to_job_run`] reads, in its order.
 ///
@@ -294,4 +295,145 @@ fn job_run_order_sql(order_by: JobRunOrder) -> &'static str {
         JobRunOrder::CreatedAt => "created_at DESC, run_id ASC",
         JobRunOrder::Recency => "COALESCE(finished_at, started_at, created_at) DESC, run_id ASC",
     }
+}
+
+/// Bounded run-and-step `SELECT` for [`JobRunStepTargetQuery`], selecting only
+/// the matching `step_target_id` rows without `agent_response_json` and
+/// skipping `input_json` when `input_keys == Some(&[])`.
+pub(super) fn job_run_step_target_sql(
+    workspace_id: &str,
+    query: &JobRunStepTargetQuery,
+) -> Result<(String, Vec<Box<dyn rusqlite::types::ToSql>>), OrbitError> {
+    let mut conditions = vec!["r.workspace_id = ?1".to_string()];
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(workspace_id.to_string())];
+    if let Some(state) = query.state {
+        conditions.push(format!("r.state = ?{}", params.len() + 1));
+        params.push(Box::new(state.to_string()));
+    }
+    if !query.job_ids.is_empty() {
+        let placeholders = query
+            .job_ids
+            .iter()
+            .map(|job_id| {
+                params.push(Box::new(job_id.clone()));
+                format!("?{}", params.len())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        conditions.push(format!("r.job_id IN ({placeholders})"));
+    }
+    if let Some(recency_since) = query.recency_since {
+        conditions.push(format!(
+            "COALESCE(r.finished_at, r.started_at, r.created_at) >= ?{}",
+            params.len() + 1
+        ));
+        params.push(Box::new(recency_since.to_rfc3339()));
+    }
+    if let Some(target_type) = query.step_target_type {
+        conditions.push(format!("s.target_type = ?{}", params.len() + 1));
+        params.push(Box::new(target_type.to_string()));
+    }
+    conditions.push(format!("s.target_id = ?{}", params.len() + 1));
+    params.push(Box::new(query.step_target_id.clone()));
+    if let Some(step_state) = query.step_state {
+        conditions.push(format!("s.state = ?{}", params.len() + 1));
+        params.push(Box::new(step_state.to_string()));
+    }
+    if let Some(exclude_state) = query.step_exclude_state {
+        conditions.push(format!("s.state <> ?{}", params.len() + 1));
+        params.push(Box::new(exclude_state.to_string()));
+    }
+    if query.step_require_error_message {
+        conditions.push("s.error_message IS NOT NULL".to_string());
+    }
+    for filter in &query.input_text_filters {
+        if filter.key.is_empty()
+            || !filter
+                .key
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(OrbitError::InvalidInput(format!(
+                "invalid job run input filter key '{}'",
+                filter.key
+            )));
+        }
+        let path_param = params.len() + 1;
+        params.push(Box::new(format!("$.{}", filter.key)));
+        let missing_expr = format!(
+            "(r.input_json IS NULL OR json_type(r.input_json, ?{path_param}) IS NULL OR json_type(r.input_json, ?{path_param}) = 'null')"
+        );
+        let predicate = if !filter.values.is_empty() {
+            let placeholders = filter
+                .values
+                .iter()
+                .map(|value| {
+                    params.push(Box::new(value.clone()));
+                    format!("?{}", params.len())
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let extracted = if filter.trim {
+                format!("TRIM(json_extract(r.input_json, ?{path_param}))")
+            } else {
+                format!("json_extract(r.input_json, ?{path_param})")
+            };
+            let text_expr = format!(
+                "(json_type(r.input_json, ?{path_param}) = 'text' AND {extracted} IN ({placeholders}))"
+            );
+            if filter.allow_missing {
+                format!("({missing_expr} OR {text_expr})")
+            } else {
+                text_expr
+            }
+        } else if filter.allow_missing {
+            missing_expr
+        } else {
+            "0 = 1".to_string()
+        };
+        conditions.push(predicate);
+    }
+    if let Some(cursor) = &query.cursor {
+        let recency_expr = "COALESCE(r.finished_at, r.started_at, r.created_at)";
+        let recency_param = params.len() + 1;
+        params.push(Box::new(cursor.recency_raw.clone()));
+        let run_id_param = params.len() + 1;
+        params.push(Box::new(cursor.run_id.clone()));
+        conditions.push(format!(
+            "{recency_expr} <= ?{recency_param} AND ({recency_expr} < ?{recency_param} OR r.run_id > ?{run_id_param})"
+        ));
+    }
+    let indexed_by = if query.state.is_some() {
+        " INDEXED BY idx_job_runs_ws_state_recency"
+    } else if query.recency_since.is_some() || query.cursor.is_some() {
+        " INDEXED BY idx_job_runs_ws_recency"
+    } else {
+        ""
+    };
+    let input_col = if query.input_keys == Some(&[]) {
+        "NULL AS input_json"
+    } else {
+        "r.input_json"
+    };
+    let mut sql = format!(
+        "SELECT r.run_id, r.job_id, r.attempt, r.state, r.scheduled_at, \
+         r.started_at, r.finished_at, r.duration_ms, r.created_at, r.pid, \
+         r.pid_start_time, {input_col}, r.retry_source_run_id, \
+         NULL AS knowledge_metrics_json, r.resolved_crew, r.crew_model, \
+         r.executed_on_json, NULL AS build_json, \
+         s.step_index, s.target_type, s.target_id, s.state, s.started_at, \
+         s.finished_at, s.duration_ms, s.exit_code, s.error_code, \
+         s.error_message, NULL AS agent_response_json, s.lock_wait_ms \
+         FROM job_runs r{indexed_by} \
+         JOIN job_run_steps s \
+           ON s.workspace_id = r.workspace_id AND s.run_id = r.run_id \
+         WHERE {} \
+         ORDER BY COALESCE(r.finished_at, r.started_at, r.created_at) DESC, r.run_id ASC",
+        conditions.join(" AND ")
+    );
+    if let Some(limit) = query.limit {
+        sql.push_str(&format!(" LIMIT ?{}", params.len() + 1));
+        params.push(Box::new(i64::try_from(limit).unwrap_or(i64::MAX)));
+    }
+    Ok((sql, params))
 }

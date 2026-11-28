@@ -414,7 +414,9 @@ def code_tokens(source):
 def use_tree(tokens, index, prefix=(), aliases=None):
     """Expand relative paths, carrying the prefix through nested use groups.
 
-    When `aliases` is a list, each `path as name` rename appends `(path, name)`.
+    When `aliases` is a list, each binding appends `(path, name)`: a `path as name`
+    rename, or an unaliased `path` that binds its last segment (`self` binds the
+    parent's name; a glob binds nothing).
     """
     paths = []
     while index + 1 < len(tokens) and tokens[index + 1][0] == "::":
@@ -438,6 +440,10 @@ def use_tree(tokens, index, prefix=(), aliases=None):
             if aliases is not None and index + 1 < len(tokens):
                 aliases.append((paths[-1], tokens[index + 1][0]))
             index += 2
+        elif aliases is not None:
+            bound = paths[-1][-2:-1] if paths[-1][-1] == "self" else paths[-1][-1:]
+            if bound and bound[0] != "*":
+                aliases.append((paths[-1], bound[0]))
     return paths, index
 
 
@@ -1207,34 +1213,19 @@ for path in paths:
     tokens = list(code_tokens(source))
     if sys.argv[4] == "named-path":
         prefixes = [tuple(name.split("::")) for name in upper]
-        # A `use <path>::landing as l;` rename lets `l::checks` stand for
-        # `landing::checks`: track each alias of a multi-segment prefix's first
-        # segment, including aliases of aliases, and match prefixes through it.
-        renames = []
-        for index, (name, _) in enumerate(tokens):
-            if name == "use":
-                use_tree(tokens, index + 1, (), renames)
-        expanded = []
-        for prefix in prefixes:
-            if len(prefix) < 2:
-                continue
-            heads = {prefix[0]}
-            grown = True
-            while grown:
-                grown = False
-                for segments, alias in renames:
-                    if segments[-1] == "self" and len(segments) > 1:
-                        segments = segments[:-1]
-                    if segments[-1] in heads and alias not in heads and alias != "_":
-                        heads.add(alias)
-                        grown = True
-            expanded.extend((head, *prefix[1:]) for head in heads - {prefix[0]})
-        prefixes = [*prefixes, *expanded]
         module_parts = crate_module_parts(path)
         suffixes = inline_module_suffixes(tokens)
-        # Renaming any parent of a forbidden path can hide the remaining
-        # segments. Expand each matching parent to its alias, including chains
-        # of aliases, without treating an unrelated parent use as an edge.
+        # Imports are visible in their enclosing block and its descendants,
+        # but not in sibling blocks or child modules. Record brace ancestry
+        # at each token; use-tree braces occur after the `use` token itself.
+        scopes = []
+        stack = []
+        for index, (name, _) in enumerate(tokens):
+            if name == "}" and stack:
+                stack.pop()
+            scopes.append(tuple(stack))
+            if name == "{":
+                stack.append(index)
         located_renames = []
         for index, (name, _) in enumerate(tokens):
             if name != "use":
@@ -1245,26 +1236,51 @@ for path in paths:
             for segments, alias in found:
                 if segments[-1] == "self" and len(segments) > 1:
                     segments = segments[:-1]
-                located_renames.append((segments, alias))
+                located_renames.append((segments, alias, scopes[index], suffixes[index]))
                 absolute = resolve_super_chain(segments, here)
                 if absolute is not None:
-                    located_renames.append((absolute, alias))
-        known = set(prefixes)
-        pending = list(known)
-        while pending:
-            prefix = pending.pop()
-            for segments, alias in located_renames:
-                if alias == "_" or prefix[:len(segments)] != segments:
+                    located_renames.append((absolute, alias, scopes[index], suffixes[index]))
+
+        prefix_cache = {}
+
+        def visible_prefixes(at):
+            scope, module_suffix = scopes[at], suffixes[at]
+            key = (scope, module_suffix)
+            if key in prefix_cache:
+                return prefix_cache[key]
+            renames = [(segments, alias) for segments, alias, binding_scope, binding_module
+                       in located_renames if binding_module == module_suffix
+                       and scope[:len(binding_scope)] == binding_scope]
+            known = set(prefixes)
+            # Preserve first-segment aliases for paths such as landing::checks.
+            for prefix in prefixes:
+                if len(prefix) < 2:
                     continue
-                replacement = (alias, *prefix[len(segments):])
-                if replacement not in known:
-                    known.add(replacement)
-                    pending.append(replacement)
-        prefixes = list(known)
+                heads = {prefix[0]}
+                grown = True
+                while grown:
+                    grown = False
+                    for segments, alias in renames:
+                        if segments[-1] in heads and alias not in heads and alias != "_":
+                            heads.add(alias)
+                            grown = True
+                known.update((head, *prefix[1:]) for head in heads - {prefix[0]})
+            pending = list(known)
+            while pending:
+                prefix = pending.pop()
+                for segments, alias in renames:
+                    if alias == "_" or prefix[:len(segments)] != segments:
+                        continue
+                    replacement = (alias, *prefix[len(segments):])
+                    if replacement not in known:
+                        known.add(replacement)
+                        pending.append(replacement)
+            prefix_cache[key] = known
+            return known
 
         def matches(segments, at):
             def hit(candidate):
-                return any(candidate[:len(prefix)] == prefix for prefix in prefixes)
+                return any(candidate[:len(prefix)] == prefix for prefix in visible_prefixes(at))
             if hit(segments):
                 return True
             here = None if module_parts is None else [*module_parts, *suffixes[at]]
@@ -1272,7 +1288,7 @@ for path in paths:
             return absolute is not None and hit(absolute)
 
         for index, (name, start) in enumerate(tokens):
-            starts_prefix = any(name == prefix[0] for prefix in prefixes)
+            starts_prefix = any(name == prefix[0] for prefix in visible_prefixes(index))
             # Only the first `super` of a path. A later `super` has climbed
             # less and would name a deeper module than the chain does.
             starts_super = (name == "super" and (index == 0 or tokens[index - 1][0] != "::")
@@ -1651,13 +1667,24 @@ for layer in application adapter; do
   fi
 done
 
-# Runtime is the lowest core layer. Composition supplies its application port;
-# runtime must not name higher layers or call their inherent runtime methods.
-if ! super_chains_into "$core_src/runtime" "" 'application|adapter|bootstrap|composition' crate-root ||
+# Runtime is the lowest core layer. It must not name higher layers or call
+# their inherent runtime methods.
+if ! super_chains_into "$core_src/runtime" "" 'application|adapter|bootstrap|composition|unit' crate-root ||
+  ! super_chains_into "$core_src/runtime" "" 'crate::app::gc' named-path ||
   ! inherent_calls_into "$core_src/runtime" "" 'application|adapter' '' '' "$core_src"; then
   echo "orbit-core runtime must not name higher layers or call application or adapter inherent OrbitRuntime methods"
   fail=1
 fi
+
+# These moved application subjects still reach adapters or the joiners only
+# through application-owned ports.
+for moved_subject in app/gc unit/landing unit/managed_asset unit/sweep_filing unit/backlog_forecast; do
+  if ! super_chains_into "$core_src" "$moved_subject" 'crate::adapter|crate::bootstrap|crate::composition' named-path ||
+    ! inherent_calls_into "$core_src" "$moved_subject" 'adapter|bootstrap|composition' '' '' "$core_src"; then
+    echo "orbit-core ${moved_subject/\//::} must reach adapters, bootstrap and composition through application-owned ports"
+    fail=1
+  fi
+done
 
 # [ORB-17924], [ORB-17943] `task` reaches the state scheduler and its bounded
 # `Source` Git reader only through `task::TaskAutomationPort` and
@@ -1675,19 +1702,20 @@ fi
 
 # [ORB-17936] `task` is the lowest of the ten modules above contracts. It
 # reaches `job`, `review`, `distributed`, `pull_drain`, `admission`,
-# `sweep_filing` and `workspace_auto` only through the ports it owns
+# `unit::sweep_filing` and `workspace_auto` only through the ports it owns
 # (`TaskJobPort`, `TaskReviewPort`, `TaskDistributedPort`,
 # `TaskSweepFilingPort`, `TaskWorkspaceAutoPort`), which those modules
-# implement on `OrbitRuntime`. A path, a grouped tree, a `super::` chain that
+# implement on `OrbitRuntime` or, for `unit::sweep_filing`, on its
+# `TaskPort` bound in `app::port`. A path, a grouped tree, a `super::` chain that
 # climbs out of `task` into one of them, or a call to an inherent method they
 # define is a reintroduced edge [ORB-17972], [ORB-22003]. The names are
 # derived from their `impl OrbitRuntime` blocks, so port methods use distinct
 # names. `tag_instructions` sits outside the module order but above `task`
 # [ORB-22289]: task reads commit-pinned files through its own
-# `task::base_revision`, never through it. `backlog_forecast` is above
-# `workspace_auto` and task has no port to it [ORB-22287]: only the two
-# re-export lines below name it, a compatibility shim for `lib.rs` and
-# `orbit-web`. `app::codebase` sits above `task` [ORB-22625]: task owns the
+# `task::base_revision`, never through it. `unit::backlog_forecast` is
+# above `workspace_auto` and task has no port to it [ORB-22287]; it is
+# guarded with the other lower modules below. `app::codebase` sits above
+# `task` [ORB-22625]: task owns the
 # pure block classification (`task::classify_block`) and records a done
 # landing's diff stats through `TaskCodebasePort`, which `app::codebase`
 # implements on `TaskPort` and binds in `app::port`; `app::codebase` reads
@@ -1703,7 +1731,7 @@ fi
 # decision rules, task history, tasks and blobs through `task::base_revision`.
 # Task reaches it only through
 # `TaskCorpusPort`, implemented on `app::agent::TaskPort` and bound in `app::port`.
-task_upper_modules='job|review|distributed|pull_drain|admission|backlog_forecast|sweep_filing|workspace_auto|tag_instructions'
+task_upper_modules='job|review|distributed|pull_drain|admission|workspace_auto|tag_instructions'
 # Same-named methods on other types are not upper inherent methods; only
 # these exact lines are allowed: store reads through `stores().jobs()` and
 # `stores().tasks()`.
@@ -1716,7 +1744,7 @@ if { [[ -n "$task_upper_paths" ]] && printf '%s\n' "$task_upper_paths"; } ||
   ! inherent_calls_into "$app_src" task "$task_upper_modules" \
     "$task_upper_store_allowed" '' ||
   ! super_chains_into "$app_src" task "$task_upper_modules"; then
-  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing and workspace_auto through its task ports, and must not name tag_instructions or backlog_forecast"
+  echo "orbit-core task must reach job, review, distributed, pull_drain, admission, sweep_filing and workspace_auto through its task ports, and must not name tag_instructions"
   fail=1
 fi
 
@@ -1785,7 +1813,7 @@ fi
 # installation and claimed-leaf capture validation reach it only through
 # `JobExperimentPort`, and the pool they read is the
 # `contracts::ExperimentCrewPool` value.
-job_upper_modules='admission|automation|backlog_forecast|review|sweep_filing|workspace_auto'
+job_upper_modules='admission|automation|review|workspace_auto'
 if dependency_matches -n "crate::application::(${job_upper_modules})\\b" \
   "$app_src/job" -g '*.rs' -g '!**/tests/**' ||
   dependency_matches -n -U "crate::application::\\{[^}]*\\b(${job_upper_modules})\\b" \
@@ -1798,7 +1826,7 @@ fi
 
 # [ORB-17939] Above `job`, each module names only the modules below it in
 # `automation < review < distributed < pull_drain < admission <
-# workspace_auto < backlog_forecast < sweep_filing`. The cut edges go through ports the lower
+# workspace_auto < unit::backlog_forecast < unit::sweep_filing`. The cut edges go through ports the lower
 # module owns: `automation::AutomationReviewPort` (before-PR coverage and the
 # reviewer pools, implemented by `review`), `review::ReviewDistributedPort`
 # (the owner's ship contract and machine) and `distributed::
@@ -1827,15 +1855,38 @@ guard_upper_layer() {
     fail=1
   fi
 }
-guard_upper_layer automation 'review|distributed|pull_drain|admission|workspace_auto|backlog_forecast|sweep_filing' \
+guard_upper_layer automation 'review|distributed|pull_drain|admission|workspace_auto' \
   'configured_pool_members|review_pool_by_os|select_review_crew|review_crew_candidates|admission_boundary'
-guard_upper_layer review 'distributed|pull_drain|admission|workspace_auto|backlog_forecast|sweep_filing' \
+guard_upper_layer review 'distributed|pull_drain|admission|workspace_auto' \
   'admission_boundary|owner_completion_authority|owner_ship_contract|distributed_owner_machine_id'
-guard_upper_layer distributed 'pull_drain|admission|workspace_auto|backlog_forecast|sweep_filing' 'executor_census'
-guard_upper_layer pull_drain 'admission|workspace_auto|backlog_forecast|sweep_filing' ''
-guard_upper_layer admission 'workspace_auto|backlog_forecast|sweep_filing' 'read_live_leaf_runs'
-guard_upper_layer workspace_auto 'backlog_forecast|sweep_filing' ''
-guard_upper_layer backlog_forecast 'sweep_filing' ''
+guard_upper_layer distributed 'pull_drain|admission|workspace_auto' 'executor_census'
+guard_upper_layer pull_drain 'admission|workspace_auto' ''
+guard_upper_layer admission 'workspace_auto' 'read_live_leaf_runs'
+
+# [ORB-22287] `backlog_forecast` sits above `workspace_auto` and lives at
+# `unit::backlog_forecast`. It has no ports, so no application module below
+# it may name it: a path, a grouped tree or a `super::` chain into it is a
+# reintroduced edge. Its operations are functions, so a call names a path too.
+for lower_module in contracts task job automation review distributed pull_drain admission workspace_auto; do
+  if ! super_chains_into "$app_src" "$lower_module" 'crate::unit::backlog_forecast' named-path; then
+    echo "orbit-core ${lower_module} must not name unit::backlog_forecast"
+    fail=1
+  fi
+done
+
+# `sweep_filing` tops the module order and lives at `unit::sweep_filing`.
+# Every application module below it reaches it only through ports the lower
+# module owns, such as `task::TaskSweepFilingPort` bound in `app::port`.
+for lower_module in contracts task job automation review distributed pull_drain admission workspace_auto; do
+  if ! super_chains_into "$app_src" "$lower_module" 'crate::unit::sweep_filing' named-path; then
+    echo "orbit-core ${lower_module} must not name unit::sweep_filing; reach it through a port the lower module owns"
+    fail=1
+  fi
+done
+if ! super_chains_into "$core_src" unit/backlog_forecast 'crate::unit::sweep_filing' named-path; then
+  echo "orbit-core unit::backlog_forecast must not name unit::sweep_filing"
+  fail=1
+fi
 
 # [ORB-23334] `app::auto_task` sits above `automation`: its scheduler
 # evaluates delivery and conditions through automation, its listing projection
@@ -1881,20 +1932,12 @@ if ! super_chains_into "$core_src/runtime" "" "$experiment_path" named-path; the
   fail=1
 fi
 
-# [ORB-22708] Landing sits above distributed. Task
-# owns the pure handoff-to-claim read; review records authority and reaches
-# dispatch only through its own ReviewLandingDispatchPort. Refuse paths,
-# grouped trees, relative chains and calls into landing's inherent methods.
-# These exact lines read the task store, whose method shares a runtime name.
-landing_store_reads_allowed='^task/external_merge/candidate\.rs:[0-9]+:\s+\.landing_attempts\(\)$|^task/external_merge/rescued\.rs:[0-9]+:\s+if tasks\.landing_attempts\(\)\?\.iter\(\)\.any\(\|attempt\| \{$|^review/handoff/console\.rs:[0-9]+:\s+self\.stores\(\)\.tasks\(\)\.landing_attempts\(\)\?$'
+# [ORB-22708] Landing sits above distributed. Task owns the pure
+# handoff-to-claim read. Review reaches dispatch through its own
+# ReviewLandingDispatchPort, bound in app::port.
 for lower_module in task job review distributed; do
-  if dependency_matches -n 'crate::application::landing\b' \
-    "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
-    dependency_matches -n -U 'crate::application::\{[^}]*\blanding\b' \
-      "$app_src/$lower_module" -g '*.rs' -g '!**/tests/**' ||
-    ! inherent_calls_into "$app_src" "$lower_module" landing "$landing_store_reads_allowed" '' ||
-    ! super_chains_into "$app_src" "$lower_module" landing; then
-    echo "orbit-core ${lower_module} must not name landing or call its inherent methods; task owns handoff claim resolution, and review dispatches through review::ReviewLandingDispatchPort"
+  if ! super_chains_into "$app_src" "$lower_module" 'crate::unit::landing' named-path; then
+    echo "orbit-core ${lower_module} must not name unit::landing; task owns handoff claim resolution, and review dispatches through review::ReviewLandingDispatchPort"
     fail=1
   fi
 done
@@ -1927,16 +1970,6 @@ if ! super_chains_into "$core_src/app" resident 'crate::app::routine' named-path
   fail=1
 fi
 
-# [ORB-22287] The forecast has no ports, so nothing below it may call its
-# inherent methods (names derived); `task` and `job` are covered above, through
-# their upper-module lists.
-for lower_module in automation review distributed pull_drain admission workspace_auto; do
-  if ! inherent_calls_into "$app_src" "$lower_module" backlog_forecast '' ''; then
-    echo "orbit-core ${lower_module} must not call backlog_forecast's inherent methods"
-    fail=1
-  fi
-done
-
 # Selective-review retirement removed review's risk-model freeze and its
 # codebase dependency. Keep that direction closed: review has no
 # `app::codebase` exception, and reads candidate size only through
@@ -1951,10 +1984,10 @@ fi
 # authorized edge into it is `crate::app::codebase::task_riskiness_model(runtime)`
 # in `assembly.rs`, whose returned model answers `forecast_regression_prior`.
 # Any other path into `app::codebase` (an import, a grouped tree, an alias or a
-# `super::` chain), or any path or inherent call from `app::codebase` back into
+# `super::` chain), or any path from `app::codebase` back into
 # the forecast, is a new edge.
 forecast_codebase_allowed='/backlog_forecast/assembly\.rs:[0-9]+:\s+let risk_model = crate::app::codebase::task_riskiness_model\(runtime\)\?;$'
-forecast_codebase_paths="$(super_chains_into "$app_src" backlog_forecast 'crate::app::codebase' named-path)" ||
+forecast_codebase_paths="$(super_chains_into "$core_src" unit/backlog_forecast 'crate::app::codebase' named-path)" ||
   forecast_codebase_status=$?
 forecast_codebase_unallowed="$(printf '%s\n' "$forecast_codebase_paths" | rg -v -- "$forecast_codebase_allowed" | rg -v '^$' || true)"
 # A match prints its line; a nonzero exit with nothing printed is a scan error.
@@ -1968,13 +2001,12 @@ if [[ ! -d "$core_src/app/codebase" ]]; then
   echo "dependency scan path missing: $core_src/app/codebase" >&2
   exit 1
 fi
-if dependency_matches -n 'crate::application::backlog_forecast\b' \
+if dependency_matches -n 'crate::unit::backlog_forecast\b' \
   "$core_src/app/codebase" -g '*.rs' -g '!**/tests/**' ||
-  dependency_matches -n -U 'crate::application::\{[^}]*\bbacklog_forecast\b' \
+  dependency_matches -n -U 'crate::unit::\{[^}]*\bbacklog_forecast\b' \
     "$core_src/app/codebase" -g '*.rs' -g '!**/tests/**' ||
-  ! inherent_calls_into "$core_src/app" codebase backlog_forecast '' '' "$app_src" ||
-  ! super_chains_into "$core_src/app" codebase 'crate::application::backlog_forecast' named-path; then
-  echo "orbit-core app::codebase must not name backlog_forecast or call its inherent methods"
+  ! super_chains_into "$core_src/app" codebase 'crate::unit::backlog_forecast' named-path; then
+  echo "orbit-core app::codebase must not name unit::backlog_forecast"
   fail=1
 fi
 

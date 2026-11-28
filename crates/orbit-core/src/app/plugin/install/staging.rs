@@ -237,7 +237,7 @@ fn remove_install_scratch(path: &Path) {
 }
 
 /// Hold the one lock that serializes every change to `name`'s install family,
-/// `plugins` row and grant witness: `add`, `upgrade` and `remove`.
+/// `plugins` row and grant witness, including host enable and disable.
 ///
 /// Without it, two installs of different versions could each prune the
 /// other's tree, leaving a row that names nothing, and a `remove` could delete
@@ -262,7 +262,7 @@ pub(in crate::app::plugin) fn lock_plugin_namespace(
     tracing::info!(
         target: "orbit.core.plugin",
         plugin = %name,
-        "waiting for another add, upgrade or remove of this plugin to finish",
+        "waiting for another lifecycle operation on this plugin to finish",
     );
     acquire_exclusive_file_lock(&path, LABEL, FileLockOptions::default()).map_err(lock_error)
 }

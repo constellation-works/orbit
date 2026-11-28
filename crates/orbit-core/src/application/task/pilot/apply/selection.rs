@@ -32,7 +32,11 @@ pub(super) fn authority<'a>(
         && selection.tasks.is_empty()
     {
         let task_id = filing.required_task_id(action)?;
-        runtime.ci_sweep_piloted_elsewhere(action, task_id, selection.prepared)?
+        crate::app::port::TaskSweepFiling(runtime).ci_sweep_piloted_elsewhere(
+            action,
+            task_id,
+            selection.prepared,
+        )?
     } else {
         None
     };

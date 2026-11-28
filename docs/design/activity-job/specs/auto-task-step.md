@@ -88,7 +88,7 @@ use `wait_until` instead. A skipped step does not produce accepted prerequisite
 evidence. No new expression is fed to the shipped equality-only `when` parser.
 
 Use the type-checked subset from the
-[condition-trigger design](../../condition-triggers/1_scope.md) ([ORB-19990]), with its size,
+[condition-trigger design](../../condition-triggers/1_overview.md) ([ORB-19990]), with its size,
 cost, literal-read and unknown-value rules. `now` is the owner's pass timestamp.
 The additional wait environment is typed:
 

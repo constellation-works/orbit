@@ -20,11 +20,23 @@ operational and contributor procedures, feature designs, and incident reviews.
 
 | Guide | Purpose |
 | --- | --- |
-| [Orbit Configuration](./CONFIG.md) | Orbit Configuration |
-| [Orbit Data Handling](./DATA_HANDLING.md) | Orbit Data Handling — what stays on your machine, what leaves it, and to whom |
+| [Orbit Configuration](./config/README.md) | Reference for Orbit's runtime configuration and environment variables. |
 | [Development Reference](./DEVELOPMENT.md) | Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS |
-| [Optimistic Merging](./OPTIMISTIC_MERGING.md) | Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining |
-| [Orbit Positioning](./POSITIONING.md) | Orbit Positioning |
+
+### Principles
+
+Stances Orbit holds across features, with the reason and the cost, one page each under
+`docs/principles/`. Admission and page shape: [principle conventions](./principles/CONVENTIONS.md).
+
+| Principle | Summary |
+| --- | --- |
+| [Orbit Data Handling](./principles/data-handling.md) | Orbit Data Handling — what stays on your machine, what leaves it, and to whom |
+| [Declared Footprints](./principles/declared-footprints.md) | Declared footprints normally keep parallel work on non-overlapping files, with operator overrides for local context-lock waits |
+| [Operator Admission](./principles/operator-admission.md) | Operator admission: agents propose work and the operator controls its admission and authority |
+| [Optimistic Merging](./principles/optimistic-merging.md) | Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining |
+| [Pilot Before Promote](./principles/pilot-before-promote.md) | Pilot before promote: a task is checked against the current code before it enters the backlog, and the pilot holds it when the brief contradicts the tree |
+| [Orbit Positioning](./principles/positioning.md) | Orbit Positioning |
+| [Refuse, Not Degrade](./principles/refuse-not-degrade.md) | Refuse, not degrade: when Orbit cannot verify a fact a step depends on, it refuses with a remediation hint and does not substitute a weaker path |
 
 ### Lessons
 

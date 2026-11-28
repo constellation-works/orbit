@@ -35,8 +35,14 @@ discard rules.
 
 For blocks caused by a missing provider launcher or by transient
 infrastructure (a busy lock, a locked task store), `orbit task recheck-blocked`
-reports whether the condition cleared. Its `--confirm` option requeues only
-the cleared blocks, a transient one onto its published candidate once its run
-has stopped; it leaves implementation failures blocked, and a transient block
-a human commented on, or whose publication did not authenticate, for
-`orbit task requeue`.
+reports whether the condition cleared. Without `--confirm` it only reports.
+`--confirm` requeues only the cleared blocks and leaves a task blocked by its
+own failure blocked. A human's comment or write after the block, or a
+publication that did not authenticate, stays for `orbit task requeue`.
+
+The launcher is resolved with dispatch's lookup from that shell's PATH and
+HOME. A transient block is requeued only once its run has stopped, when the
+task store takes a write transaction and the task's own lock is free; the
+probe cannot take the lock that timed out. The next run resumes the candidate
+the failure handoff published. Each published candidate is requeued this way
+at most twice; after that use `orbit task requeue`.

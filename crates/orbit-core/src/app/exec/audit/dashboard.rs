@@ -114,6 +114,7 @@ impl DashboardAudit {
             caller_machine_name: Some(spec.origin.machine_name.clone()),
             process_machine_name: Some(spec.origin.machine_name),
             effective_capabilities: capabilities,
+            session_id: spec.origin.session,
             ..super::unattributed_row(
                 audit_execution_id("dashboard-operations"),
                 "dashboard.operations",

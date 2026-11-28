@@ -623,6 +623,7 @@ if [[ "$static" == false && "$checks" == false ]]; then
     run_exclusive_guard "$repo_root/scripts/test-ci-workspace-cache.py"
     run_exclusive_guard "$repo_root/scripts/test-installer-security.sh"
     run_exclusive_guard "$repo_root/scripts/test-ci-test-affected.py"
+    run_exclusive_guard "$repo_root/scripts/test-ci-lint-affected.py"
     run_exclusive_guard "$repo_root/scripts/test-codeql-rust-local.py"
     run_exclusive_guard "$repo_root/scripts/test-compiler-cache.sh"
     run_exclusive_guard "$repo_root/scripts/test-compiler-cache-namespaces.sh"
@@ -673,6 +674,7 @@ if [[ "$checks" == false ]]; then
   run_guard "$repo_root/scripts/unit-test-inventory.py" --check "$repo_root/scripts/unit-test-baseline.json"
   run_guard "$repo_root/scripts/check-doctest-fences.sh"
   run_guard "$repo_root/scripts/generate-doc-indexes.sh" --check
+  run_guard "$repo_root/scripts/test-generate-doc-indexes.py"
   run_guard "$repo_root/scripts/test-agent-corpus.py"
   run_guard "$repo_root/scripts/check-installer-pubkey.sh"
   run_guard "$repo_root/scripts/check-dependency-direction.sh"

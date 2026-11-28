@@ -339,6 +339,16 @@ fn command_past_its_timeout_is_killed_with_its_process_group() {
         "the call must return near its 500ms bound, took {elapsed:?}"
     );
 
+    let event = command_exec_audit_event(&runtime);
+    assert_eq!(event.status.to_string(), "failure");
+    assert_ne!(event.exit_code, 0, "{event:?}");
+    assert!(event.duration_ms >= 400, "measured duration: {event:?}");
+    let message = event
+        .error_message
+        .as_deref()
+        .expect("timeout has a message");
+    assert!(message.contains("timed out"), "{message}");
+
     let grandchild: i32 = std::fs::read_to_string(&pid_file)
         .expect("the command recorded its background child")
         .trim()
@@ -352,6 +362,67 @@ fn command_past_its_timeout_is_killed_with_its_process_group() {
         !process_is_alive(grandchild),
         "pid {grandchild} survived in the command's process group"
     );
+}
+
+/// The newest `command.exec` audit row.
+fn command_exec_audit_event(runtime: &OrbitRuntime) -> orbit_types::telemetry::AuditEvent {
+    orbit_core::app::audit::list_audit_events(runtime, None, None, None, None, 200)
+        .expect("read audit events")
+        .into_iter()
+        .find(|event| event.command == "command.exec")
+        .expect("command execution is audited")
+}
+
+fn completed_command_audit_records_its_real_exit_code_and_duration() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let token = acquire_claim(&runtime, "claude");
+
+    run_tool_as_operator(
+        &runtime,
+        "orbit.command.exec",
+        json!({
+            "argv": ["sh", "-c", "sleep 0.2; exit 3"],
+            "working_directory": repo_root.display().to_string(),
+            "claim_token": token,
+            "model": "claude",
+        }),
+    )
+    .expect("a non-zero exit is a result");
+
+    let event = command_exec_audit_event(&runtime);
+    assert_eq!(event.status.to_string(), "success");
+    assert_eq!(event.exit_code, 3);
+    assert!(event.duration_ms >= 100, "measured duration: {event:?}");
+    assert!(event.error_message.is_none(), "{event:?}");
+}
+
+fn spawn_failure_audit_records_failure_with_a_message() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let token = acquire_claim(&runtime, "claude");
+
+    run_tool_as_operator(
+        &runtime,
+        "orbit.command.exec",
+        json!({
+            "argv": ["orbit-no-such-program-for-audit"],
+            "working_directory": repo_root.display().to_string(),
+            "claim_token": token,
+            "model": "claude",
+        }),
+    )
+    .expect_err("a missing program fails to spawn");
+
+    let event = command_exec_audit_event(&runtime);
+    assert_eq!(event.status.to_string(), "failure");
+    assert_ne!(event.exit_code, 0, "{event:?}");
+    let message = event
+        .error_message
+        .as_deref()
+        .expect("failure has a message");
+    assert!(message.contains("spawn"), "{message}");
+    assert!(!message.contains('\n'), "{message}");
 }
 
 fn zero_timeout_is_refused_before_the_command_runs() {
@@ -806,6 +877,8 @@ crate::scenario_table!(
     managed_run_environment_denies_command_exec,
     auth_family_env_is_excluded_from_child_and_not_leaked_in_persisted_output,
     secret_argv_reaches_child_but_is_redacted_in_the_audit_record,
+    completed_command_audit_records_its_real_exit_code_and_duration,
+    spawn_failure_audit_records_failure_with_a_message,
     working_directory_in_a_sibling_checkout_is_refused,
     zero_timeout_is_refused_before_the_command_runs,
     invalid_input_refusal_records_redacted_arguments,

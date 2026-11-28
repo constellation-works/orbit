@@ -158,7 +158,7 @@ impl OrbitRuntime {
             tool_context.orbit_host = Some(super::tool_host::build_orbit_tool_host(
                 crate::Core::within_tool_entry(self.clone()),
                 task_id,
-                super::tool_host::ToolHostRun::InProcess(None),
+                super::tool_host::ToolHostRun::InProcess(tool_context.activity_binding.clone()),
                 tool_context.session_context.clone(),
             ));
         }

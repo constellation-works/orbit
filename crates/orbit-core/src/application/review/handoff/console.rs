@@ -471,7 +471,7 @@ impl OrbitRuntime {
 
     /// Resolve a handoff id to the claim that currently owns it.
     ///
-    /// Shares [`Self::land_handoff`]'s rule: handoff identity is a digest of the
+    /// Shares the landing consumer's rule: handoff identity is a digest of the
     /// accepted record, so this is an exact match over the few live claims
     /// rather than a search over task state. The repairing read is deliberate —
     /// an interrupted coordination commit is settled before an operator decides

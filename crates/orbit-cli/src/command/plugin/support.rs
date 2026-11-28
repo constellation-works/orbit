@@ -71,6 +71,41 @@ pub(super) fn declared_agent_tool_names(summary: &PluginSummary) -> String {
         .join(", ")
 }
 
+/// Name the pages a manifest declares, and the tools each may call, in what
+/// `add` and `enable` show the operator.
+pub(super) fn append_pages_consent_text(text: &mut String, summary: &PluginSummary) {
+    if summary.pages.is_empty() {
+        return;
+    }
+    text.push_str("\n\nPages (shown under Plugins in the dashboard):");
+    for page in &summary.pages {
+        let tools = if page.tools.is_empty() {
+            "no tools".to_string()
+        } else {
+            format!("calls {}", page.tools.join(", "))
+        };
+        text.push_str(&format!("\n  {} ({}): {tools}", page.id, page.title));
+        if !page.actions.is_empty() {
+            let actions = page
+                .actions
+                .iter()
+                .map(|action| action.tool.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            text.push_str(&format!(
+                "\n    actions: {actions} (each run asks for your confirmation in the dashboard)"
+            ));
+        }
+        if let Some(diagnostic) = page
+            .diagnostic
+            .as_deref()
+            .filter(|_| summary.status == PluginStatus::Active)
+        {
+            text.push_str(&format!("\n    inactive: {diagnostic}"));
+        }
+    }
+}
+
 /// Show the agent mutation request and the host's recorded answer at enable.
 pub(super) fn append_agent_tool_consent_text(text: &mut String, summary: &PluginSummary) {
     let tools = declared_agent_tool_names(summary);

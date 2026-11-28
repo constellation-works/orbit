@@ -2,7 +2,7 @@
 title: "Scope: bounded decision assistance"
 owner: codex
 created_date: 2026-10-28
-updated_date: 2026-11-08
+updated_date: 2026-11-27
 last_validated: 2026-11-08
 status: Deprecated
 feature: decision-assistance
@@ -296,7 +296,7 @@ off stops new calls; late results cannot mutate workflow state.
 Proposed host-owned configuration selects enabled workspaces, per-use-case mode
 (`off`, `shadow`, `advisory`), adapter/model, credential reference, request/queue
 budgets and retention. Defaults are off. Exact key names and command syntax are
-documented in [the configuration reference](../../../CONFIG.md); this scope
+documented in [the configuration reference](../../../config/README.md); this scope
 document describes the design boundary.
 Shadow mode persists results for comparison without inserting suggestions into
 the normal author or investigator view. Advisory mode displays evaluated results.

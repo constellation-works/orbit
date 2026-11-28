@@ -81,6 +81,20 @@ impl TaskV2Store {
         }
     }
 
+    /// Observational counterpart of [`Self::kept_claim_candidate`] using the
+    /// already-loaded task and history without entering bundle reads.
+    pub fn observe_kept_claim_candidate(
+        &self,
+        task: &orbit_types::task::Task,
+        history: &[orbit_types::task::TaskHistoryEntry],
+        machine_id: &str,
+    ) -> Result<Option<crate::contract::KeptClaimCandidate>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.observe_kept_claim_candidate(task, history, machine_id),
+            None => Ok(None),
+        }
+    }
+
     /// Apply a claim mutation and report whether it committed or replayed.
     pub fn mutate_execution_claim_outcome(
         &self,
@@ -164,6 +178,18 @@ impl TaskV2Store {
     ) -> Result<Vec<crate::contract::ClaimInspection>, OrbitError> {
         self.claim_boundary()?
             .inspect_task_execution_claims(task_id)
+    }
+
+    /// Observe one task's claims without entering or waiting on the commit
+    /// boundary.
+    pub fn observe_task_execution_claims(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<crate::contract::ClaimInspection>, OrbitError> {
+        match self.coordination_boundary() {
+            Some(boundary) => boundary.observe_task_execution_claims(task_id),
+            None => Ok(Vec::new()),
+        }
     }
 
     /// Logical storage diagnostic for admission and mutation receipts.

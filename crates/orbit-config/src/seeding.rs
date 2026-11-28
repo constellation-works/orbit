@@ -1,6 +1,6 @@
 //! `seeding.routines` and `seeding.auto_tasks`: which of Orbit's shipped
 //! default routines and auto-tasks a workspace carries (design
-//! `docs/design/distributions/1_scope.md`).
+//! `docs/design/distributions/2_design.md`).
 //!
 //! Each key takes `"all"` (the default), `"none"`, or a list of shipped
 //! default names. Admission refuses a name this Orbit has never shipped, so a

@@ -119,7 +119,7 @@ Linux, plus a separate Linux advisory check of the committed desktop lockfile. I
 changes. From the repository root, reproduce the advisory check with
 `scripts/cargo-deny.sh --manifest-path desktop/Cargo.toml --locked check advisories`;
 `make audit` covers only the root workspace. The shared
-[supply-chain policy](../docs/DEVELOPMENT.md#supply-chain-cargo-deny) records the exact-ID
+[supply-chain policy](../docs/development/toolchain.md#supply-chain-cargo-deny) records the exact-ID
 desktop maintenance exceptions, upstream constraints and re-review ownership.
 A manual run of that workflow also uploads unsigned bundles for
 testing: a macOS `.dmg`, and the Linux `.deb` and `.AppImage` for x86_64 and arm64 from the

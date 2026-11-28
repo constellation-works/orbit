@@ -14,15 +14,15 @@ Composes the runtime. `OrbitRuntime` owns a `RuntimeKernel` and derefs to it. In
 ## Layering
 
 - `bootstrap` depends on `application` and never the reverse; application and adapter never name `bootstrap` or `composition`. Runtime names no higher layer.
-- Application modules are ordered `contracts < task < job < automation < review < distributed < pull_drain < admission < workspace_auto < backlog_forecast < sweep_filing`. A lower module reaches a higher one only through a port trait the lower module owns. Moved apps implement those traits on runtime-backed adapters bound in `app::port`, including the adapters for `task::TaskNoticePort`, `task::TaskResidentPort`, `job::JobExperimentPort` and `automation::AutomationAutoTaskPort`.
-- Modules outside that chain (`app::routine`, `app::codebase`, `app::auto_task`, `app::experiment`, `landing`, `app::resident`, `notice`, `evolution`, `app::agent`, `tag_instructions`) call downward freely and are reached from below only through such ports, except the one authorized forecast call in the next bullet.
-- `backlog_forecast` has one authorized direct call into `app::codebase`: `crate::app::codebase::task_riskiness_model(runtime)` in `application/backlog_forecast/assembly.rs`, the codebase risk model whose result answers `forecast_regression_prior`. The guard admits exactly `let risk_model = crate::app::codebase::task_riskiness_model(runtime)?;` in that file. It refuses every other forecast-to-codebase path, grouped import, alias or `super::` chain, and every `app::codebase` path or inherent call back into `backlog_forecast`. Its path checks cover production code, not `tests/`.
+- Application modules are ordered `contracts < task < job < automation < review < distributed < pull_drain < admission < workspace_auto < unit::backlog_forecast < unit::sweep_filing`. A lower module reaches a higher one only through a port trait the lower module owns. Moved apps and units implement those traits on runtime-backed adapters bound in `app::port`, including the adapters for `task::TaskNoticePort`, `task::TaskResidentPort`, `task::TaskSweepFilingPort`, `job::JobExperimentPort`, `automation::AutomationAutoTaskPort` and `review::ReviewLandingDispatchPort`.
+- Modules outside that chain (`app::routine`, `app::codebase`, `app::auto_task`, `app::experiment`, `unit::landing`, `app::resident`, `notice`, `evolution`, `app::agent`, `tag_instructions`) call downward freely and are reached from below only through such ports, except the one authorized forecast call in the next bullet.
+- `unit::backlog_forecast` has one authorized direct call into `app::codebase`: `crate::app::codebase::task_riskiness_model(runtime)` in `unit/backlog_forecast/assembly.rs`, the codebase risk model whose result answers `forecast_regression_prior`. The guard admits exactly `let risk_model = crate::app::codebase::task_riskiness_model(runtime)?;` in that file. It refuses every other forecast-to-codebase path, grouped import, alias or `super::` chain, and every `app::codebase` path back into `unit::backlog_forecast`. Its path checks cover production code, not `tests/`.
 - The adapter sits above all of application, which reaches it only through application-owned ports (`contracts::EngineHostPort`, `contracts::ToolInvocationPort`, `pull_drain::drain::PullTransportPort`). `adapter::engine_host::EngineHost` is the sole production implementor of `orbit-engine`'s host traits.
 - `scripts/check-dependency-direction.sh` refuses paths, grouped trees, `super::` chains and calls to higher-module inherent methods that break these rules. Core never depends on `orbit-agent`, `orbit-cmd` or transport crates.
 
 ## Main modules and types
 
-`application` (task, job, review, landing, distributed, pull_drain, admission), `app` (`agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`, `config`, `crew_memory`, `doctor`, `evolution`, `experiment`, `friction`, `gc`, `host`, `lease`, `notice`, `plugin`, `remote_command`, `resident`, `review`, `routine`, `run`, `search`, `skill`, `task`, `tool`, `update`, `workspace`), `adapter`, `composition` (`Core` in `crates/orbit-core/src/composition/core.rs`), `bootstrap`, `runtime` (`OrbitRuntime` in `crates/orbit-core/src/runtime/mod.rs`). See ``crates/orbit-core/src/lib.rs``.
+`application` (task, job, review, distributed, pull_drain, admission), `unit` (backlog_forecast, landing, managed_asset, sweep_filing), `app` (`agent`, `attention`, `audit`, `auto_task`, `automation`, `codebase`, `config`, `crew_memory`, `doctor`, `evolution`, `experiment`, `friction`, `gc`, `host`, `lease`, `notice`, `plugin`, `remote_command`, `resident`, `review`, `routine`, `run`, `search`, `skill`, `task`, `tool`, `update`, `workspace`), `adapter`, `composition` (`Core` in `crates/orbit-core/src/composition/core.rs`), `bootstrap`, `runtime` (`OrbitRuntime` in `crates/orbit-core/src/runtime/mod.rs`). See ``crates/orbit-core/src/lib.rs``.
 
 ## Public face
 
@@ -78,17 +78,20 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 
 ## Ownership by module
 
-- `app`: The apps, one per subject, each with `Command`, `Outcome`, `Error` and one `exec`, and the chokepoint that authorizes and audits every command; imports `application`, `runtime`, `composition` (for `Core` only) and lower workspace crates.
-- `adapter`: Protocol adapters translating tool-host, command, and engine-host requests into Core operations; imports `app`, `application`, `runtime`, and lower workspace crates (never `bootstrap` or `composition`).
+- `app`: The apps, one per subject, each with `Command`, `Outcome`, `Error` and one `exec`, and the chokepoint that authorizes and audits every command; imports `application`, `unit`, `runtime`, `composition` (for `Core` only) and lower workspace crates.
+- `adapter`: Protocol adapters translating tool-host, command, and engine-host requests into Core operations; imports `app`, `application`, `unit`, `runtime`, and lower workspace crates (never `bootstrap` or `composition`).
 - `application`: Directional domain operations exposed on `OrbitRuntime` over one workspace and host; imports `runtime` and lower workspace crates (never `adapter`, `bootstrap`, or `composition`).
-- `bootstrap`: Workspace initialization, managed asset seeding, and forward-only startup migrations; imports `application`, `runtime`, and lower workspace crates (never `composition`).
+- `bootstrap`: Workspace initialization, managed asset seeding, and forward-only startup migrations; imports `application`, `unit`, `runtime`, and lower workspace crates (never `composition`).
 - `composition`: Composition root joining resolved configuration, bootstrap, `RuntimeKernel`, and adapters; imports `application`, `bootstrap`, `runtime`, and lower workspace crates.
 - `metrics`: Source directory `metrics/` for the crate-private Rust module `metric` (declared with `#[path = "metrics/mod.rs"]`); `metric` contains reliability and run metrics computed from persisted job-run data and imports `application`, `runtime`, `orbit-common`, `orbit-runtime`, `orbit-store`, and `orbit-types`. External callers import from `app::run` ([ORB-28962]), and [ORB-28963] moves `metric`'s internals into `app::run`.
 - `runtime`: Crate-private re-export of `orbit-runtime` and the `OrbitRuntime` wrapper over `RuntimeKernel` in shipped builds (public only under `test-support`); imports lower workspace crates only (never `application`, `adapter`, `bootstrap`, or `composition`).
+- `unit`: Shared subsystems with private flows and entry points re-exported from each subsystem's `mod.rs`. `unit::backlog_forecast` forecasts the backlog's drain time and cost, stores canonical forecasts and scores earlier ones. `unit::landing` consumes the owner handoff outbox. `unit::managed_asset` is the leaf that reconciles managed catalogs and their provenance. `unit::sweep_filing` files CI-failure and repository security sweep evidence as tasks and owns CI-sweep admission policy.
 
 ## Application module destinations
 
 Where each entry of `crates/orbit-core/src/application/` goes in the [architecture restructure](../design/architecture-restructure/2_design.md) (§3, §5). These are targets: the sections above still describe the current layout. This table is deleted with `application/` (ORB-28450). `scripts/check-architecture-map.py` fails when an entry has no row.
+
+Completed moves include `gc` to `app::gc` (above task), `landing` to `unit::landing` (above distributed), `managed_assets` to `unit::managed_asset` (leaf), `sweep_filing` to `unit::sweep_filing` (10), and `backlog_forecast` to `unit::backlog_forecast` (9).
 
 `app::<subject>` is the module `app/<subject>` and `unit::<name>` is the module `unit/<name>`, both under `crates/orbit-core/src/`. `migrate` is the module of that name under the same root. Order: the declared chain `task < run < automation < review < distributed < pull_drain < admission < workspace_auto < backlog_forecast < sweep_filing` is numbered 1 to 10. `above task` means outside the chain and unordered, above `task` as today. `leaf` means the unit imports no `application/` entry. `between task and run` is `crew_pool`: it imports `task` and `run` calls it.
 
@@ -97,16 +100,12 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `admission` | `unit::admission` | 7 |
 | `application_authority.rs` | `app::auto_task` | above task |
 | `automation` | `app::automation` | 3 |
-| `backlog_forecast` | `unit::backlog_forecast` | 9 |
 | `change_watch.rs` | `unit::change_watch` | leaf |
 | `contracts` | dissolved: each shape goes to the app that owns it | — |
 | `distributed` | `unit::distributed` | 5 |
 | `executor.rs` | `unit::executor` | leaf |
-| `gc` | `app::gc` | above task |
 | `host_labels.rs` | `unit::host_labels` | leaf |
 | `job` | `app::run`; its `crew_pools` module goes to `unit::crew_pool` (between task and run) | 2 |
-| `landing` | `unit::landing` | above task |
-| `managed_assets` | `unit::managed_assets` | leaf |
 | `operator_input.rs` | `app::review` | 4 |
 | `pilot_note.rs` | `unit::tag_instructions` | above task |
 | `pull_drain` | `unit::pull_drain` | 6 |
@@ -114,7 +113,6 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `seeding_policy.rs` | `unit::seeding_policy` | above task |
 | `statistics.rs` | `unit::statistics` | leaf |
 | `store_opener.rs` | `unit::store_opener` | leaf |
-| `sweep_filing` | `unit::sweep_filing` | 10 |
 | `tag_instructions.rs` | `unit::tag_instructions` | above task |
 | `task` | `app::task` | 1 |
 | `task_bundle` | `app::task` (bundle export, import, publication, reindex); its `migration.rs` → `migrate` | 1 |
@@ -147,7 +145,7 @@ Callers were checked at base `2f18287`, by module path and by inherent-method na
   - `tag_instructions.rs` → `unit::tag_instructions`: used by `experiment`, `agent_corpus` and `distributed`.
   - `vision_probe.rs` → `app::agent`: backs `orbit agents vision-probe`.
   - `workflow.rs` → `app::run`: the ship and auto workflow and drain-window rules; `job` is the only app user, and `distributed` and `workspace_auto` are units above `run` that reach it downward.
-- Kept as units though no app imports them directly: `pull_drain`, `workspace_auto`, `sweep_filing`, `backlog_forecast` and `landing`. Their callers are units, the engine action dispatch, the runtime or the dashboard. `workspace_auto` stays above `admission` and `pull_drain`, which it calls.
+- Kept as units though no app imports them directly: `pull_drain`, `workspace_auto`, `sweep_filing` and `backlog_forecast`. Their callers are units, the engine action dispatch, the runtime or the dashboard. `workspace_auto` stays above `admission` and `pull_drain`, which it calls.
 - Kept as an app: `crew_memory`. Its engine adapter and `experiment` callers are internal, but its run-bound crew memory tools are a user-facing surface.
 - `metrics/` (source directory for `crate::metric`) → `app::run`, checked at `84f63223cd`: the only production caller of its reliability reads is `app::run::Command::fleet_reliability`; `orbit-web` names it in four files, one of which calls `aggregate`; its `cost` is an alias for the runtime's module.
 - CLI-only command placements decided by callers:

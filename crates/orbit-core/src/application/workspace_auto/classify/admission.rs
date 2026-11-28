@@ -8,6 +8,7 @@ use orbit_types::workflow::{
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::app::gc;
 use crate::application::admission::auto_admission::DeferralReason;
 use crate::application::admission::backlog_exclusion::{allowlist_from_input, backlog_snapshot};
 use crate::application::admission::claim_holders::ClaimHolders;
@@ -209,7 +210,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     // every resource is back below its resume mark. Live children are never
     // touched, and unknown telemetry admits. [ORB-14624] CPU pressure alone
     // still admits CPU-light leaves within their reserved budget, below.
-    runtime.reclaim_worktrees_on_admission();
+    gc::reclaim_worktrees_on_admission(runtime);
     let resource = runtime.resource_admission();
 
     // [ORB-12617] Slots are shared with pull-mode admission, so the occupancy

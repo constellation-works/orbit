@@ -26,6 +26,14 @@ impl OrbitRuntime {
         &self,
         run: &JobRun,
     ) -> Result<Option<String>, OrbitError> {
+        self.footprint_held_adopted_source_with(run, false)
+    }
+
+    pub(in crate::application::job::resume::source_repair) fn footprint_held_adopted_source_with(
+        &self,
+        run: &JobRun,
+        observational: bool,
+    ) -> Result<Option<String>, OrbitError> {
         if !footprint_held(run) {
             return Ok(None);
         }
@@ -39,7 +47,7 @@ impl OrbitRuntime {
             return Ok(None);
         }
         Ok(self
-            .read_owner_publication_binding(&run.run_id, false)
+            .read_owner_publication_binding_with(&run.run_id, false, observational, None)
             .ok()
             .flatten()
             .map(|binding| binding.source_run_id))
@@ -100,33 +108,6 @@ impl OrbitRuntime {
         Ok(Some(source.run_id))
     }
 
-    /// `run_id`, when a requeue of `task` would preserve its publication: a
-    /// local, unclaimed owner PR run that pushed or opened its pull request.
-    fn published_owner_requeue_source(
-        &self,
-        task: &Task,
-        run_id: &str,
-    ) -> Result<Option<JobRun>, OrbitError> {
-        if !self.task_run_is_local(task) {
-            return Ok(None);
-        }
-        let Some(source) = self.get_job_run_backend(run_id)? else {
-            return Ok(None);
-        };
-        let Some(state) = self.read_run_state(run_id)? else {
-            return Ok(None);
-        };
-        if source.job_id != workflow::TASK_PR_PIPELINE_JOB
-            || source.input.as_ref().is_some_and(|i| i["claimed"] == true)
-            || !["push", "pr_open"]
-                .iter()
-                .any(|key| state.pipeline.get(key).is_some_and(|v| !v.is_null()))
-        {
-            return Ok(None);
-        }
-        Ok(Some(source))
-    }
-
     /// Why a requeue of `task` must not preserve `run_id`'s publication: the
     /// run published, but is not the exact owner-local single-task execution
     /// the next run's candidate resume authenticates, so a successor would
@@ -151,10 +132,19 @@ impl OrbitRuntime {
         task: &Task,
         run_id: &str,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        self.published_owner_requeue_record_with(task, run_id, false)
+    }
+
+    pub(crate) fn published_owner_requeue_record_with(
+        &self,
+        task: &Task,
+        run_id: &str,
+        observational: bool,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
         let Some(source) = self.published_owner_requeue_source(task, run_id)? else {
             return Ok(None);
         };
-        self.owner_source_identity(&source, task)?;
+        self.owner_source_identity_with(&source, task, observational)?;
         let record = PreservedPublication {
             schema_version: 1,
             source_run_id: run_id.into(),
@@ -257,14 +247,31 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<(String, JobRun, orbit_types::workflow::PipelineState), OrbitError> {
-        let (source_id, source) = self.stopped_failed_requeue_source(
+        self.failure_handoff_local_gate_with(task, None, false)
+    }
+
+    pub(crate) fn failure_handoff_local_gate_with(
+        &self,
+        task: &Task,
+        history: Option<&[TaskHistoryEntry]>,
+        observational: bool,
+    ) -> Result<(String, JobRun, orbit_types::workflow::PipelineState), OrbitError> {
+        let (source_id, source) = self.stopped_failed_requeue_source_with(
             task,
             "the task's failure handoff belongs to another machine",
             "the task has no run whose failure handoff it could resume",
+            observational,
         )?;
-        let entries = self.get_task_history(&task.id)?;
+        let loaded_entries;
+        let entries = match history {
+            Some(history) => history,
+            None => {
+                loaded_entries = self.get_task_history(&task.id)?;
+                &loaded_entries
+            }
+        };
         require_stopped_failed_requeue_source(&source)?;
-        self.require_current_requeue_source(task, &source, &source_id, &entries)?;
+        self.require_current_requeue_source(task, &source, &source_id, entries)?;
         let state = self
             .read_run_state(&source_id)?
             .ok_or_else(|| refuse("source checkpoints missing"))?;
@@ -279,14 +286,23 @@ impl OrbitRuntime {
     /// the next run adopts. Does not write anything; called before admission
     /// takes the task write lock, since authenticating asks the remote and
     /// the forge; nothing is written here.
-    pub(crate) fn failure_handoff_requeue_record(
+    pub(crate) fn failure_handoff_requeue_record_with(
         &self,
         task: &Task,
+        history: Option<&[TaskHistoryEntry]>,
+        observational: bool,
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
-        let (source_id, source, state) = self.failure_handoff_local_gate(task)?;
+        let (source_id, source, state) =
+            self.failure_handoff_local_gate_with(task, history, observational)?;
         let definition = self.source_repair_definition(&source)?;
-        let (_, _, binding) =
-            self.observe_handoff_publication(source, task.clone(), state, definition)?;
+        let (_, _, binding) = self.observe_handoff_publication_with(
+            source,
+            task.clone(),
+            state,
+            definition,
+            history,
+            observational,
+        )?;
         let record = PreservedPublication {
             schema_version: 1,
             source_run_id: source_id,
@@ -304,18 +320,23 @@ impl OrbitRuntime {
     /// refused here before anything is written. Read the whole preservation
     /// history: an identical first record cannot hide a duplicate, malformed
     /// or untrusted record that the next admission would refuse.
-    pub(crate) fn preservation_to_append(
+    pub(crate) fn preservation_to_append_with(
         &self,
         task: &Task,
         entry: TaskHistoryEntry,
+        history: Option<&[TaskHistoryEntry]>,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
         let record = parse_preserved(&entry)?;
+        let loaded_entries;
+        let entries = match history {
+            Some(history) => history,
+            None => {
+                loaded_entries = self.get_task_history(&task.id)?;
+                &loaded_entries
+            }
+        };
         let mut matching = None;
-        for existing in self
-            .get_task_history(&task.id)?
-            .iter()
-            .filter(|e| e.event == PRESERVED)
-        {
+        for existing in entries.iter().filter(|e| e.event == PRESERVED) {
             if existing.by != "system" {
                 return Err(refuse("untrusted publication preservation"));
             }
@@ -346,7 +367,11 @@ impl OrbitRuntime {
     /// would only strand it. A claimed or local-only delivery keeps its own
     /// candidate contract, as that admission does: a claim's kept candidate
     /// republishes through its own pull request.
-    pub(crate) fn unbound_publication_on_record(&self, task: &Task) -> Result<bool, OrbitError> {
+    pub(crate) fn unbound_publication_on_record_with(
+        &self,
+        task: &Task,
+        history: Option<&[TaskHistoryEntry]>,
+    ) -> Result<bool, OrbitError> {
         if !self.task_run_is_local(task) {
             return Ok(false);
         }
@@ -363,19 +388,27 @@ impl OrbitRuntime {
                 return Ok(false);
             }
         }
-        Ok(task.github_pr_number().is_some()
-            || self
-                .get_task_history(&task.id)?
-                .iter()
-                .any(|entry| entry.event == PRESERVED))
+        if task.github_pr_number().is_some() {
+            return Ok(true);
+        }
+        let loaded_entries;
+        let entries = match history {
+            Some(history) => history,
+            None => {
+                loaded_entries = self.get_task_history(&task.id)?;
+                &loaded_entries
+            }
+        };
+        Ok(entries.iter().any(|entry| entry.event == PRESERVED))
     }
 
     /// Resolve `task`'s bound run, using the caller's nonlocal/missing messages.
-    pub(in crate::application::job::resume::source_repair) fn stopped_failed_requeue_source(
+    pub(in crate::application::job::resume::source_repair) fn stopped_failed_requeue_source_with(
         &self,
         task: &Task,
         nonlocal: &'static str,
         missing_binding: &'static str,
+        observational: bool,
     ) -> Result<(String, JobRun), OrbitError> {
         if !self.task_run_is_local(task) {
             return Err(refuse(nonlocal));
@@ -387,7 +420,7 @@ impl OrbitRuntime {
         let source = self
             .get_job_run_backend(source_id)?
             .ok_or_else(|| refuse("the task's run is missing"))?;
-        self.owner_source_identity(&source, task)?;
+        self.owner_source_identity_with(&source, task, observational)?;
         Ok((source_id.to_string(), source))
     }
 
@@ -452,7 +485,16 @@ impl OrbitRuntime {
         source: &JobRun,
         task: &Task,
     ) -> Result<(), OrbitError> {
-        match self.owner_source_identity_refusal(source, task)? {
+        self.owner_source_identity_with(source, task, false)
+    }
+
+    pub(in crate::application::job::resume::source_repair) fn owner_source_identity_with(
+        &self,
+        source: &JobRun,
+        task: &Task,
+        observational: bool,
+    ) -> Result<(), OrbitError> {
+        match self.owner_source_identity_refusal_with(source, task, observational)? {
             None => Ok(()),
             Some(OwnerSourceIdentityRefusal::LocalIdentityMissing) => {
                 Err(refuse("local identity missing"))
@@ -471,6 +513,15 @@ impl OrbitRuntime {
         &self,
         source: &JobRun,
         task: &Task,
+    ) -> Result<Option<OwnerSourceIdentityRefusal>, OrbitError> {
+        self.owner_source_identity_refusal_with(source, task, false)
+    }
+
+    pub(crate) fn owner_source_identity_refusal_with(
+        &self,
+        source: &JobRun,
+        task: &Task,
+        observational: bool,
     ) -> Result<Option<OwnerSourceIdentityRefusal>, OrbitError> {
         let Some(local) = self.automation_machine_identity() else {
             return Ok(Some(OwnerSourceIdentityRefusal::LocalIdentityMissing));
@@ -504,11 +555,46 @@ impl OrbitRuntime {
             .is_some()
         {
             OwnerSourceIdentityRefusal::LocalPull
-        } else if !self.resolve_task_execution_claims(&task.id)?.is_empty() {
-            OwnerSourceIdentityRefusal::ExecutionClaim
         } else {
-            return Ok(None);
+            let claims = if observational && !self.stored().task().held_by_owner() {
+                self.stores()
+                    .tasks()
+                    .observe_task_execution_claims(&task.id)?
+            } else {
+                self.resolve_task_execution_claims(&task.id)?
+            };
+            if claims.is_empty() {
+                return Ok(None);
+            }
+            OwnerSourceIdentityRefusal::ExecutionClaim
         };
         Ok(Some(reason))
+    }
+
+    /// `run_id`, when a requeue of `task` would preserve its publication: a
+    /// local, unclaimed owner PR run that pushed or opened its pull request.
+    fn published_owner_requeue_source(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<Option<JobRun>, OrbitError> {
+        if !self.task_run_is_local(task) {
+            return Ok(None);
+        }
+        let Some(source) = self.get_job_run_backend(run_id)? else {
+            return Ok(None);
+        };
+        let Some(state) = self.read_run_state(run_id)? else {
+            return Ok(None);
+        };
+        if source.job_id != workflow::TASK_PR_PIPELINE_JOB
+            || source.input.as_ref().is_some_and(|i| i["claimed"] == true)
+            || !["push", "pr_open"]
+                .iter()
+                .any(|key| state.pipeline.get(key).is_some_and(|v| !v.is_null()))
+        {
+            return Ok(None);
+        }
+        Ok(Some(source))
     }
 }

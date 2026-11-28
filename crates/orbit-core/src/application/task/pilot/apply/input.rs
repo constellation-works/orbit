@@ -283,6 +283,7 @@ pub(super) struct PreparedTask {
     material_components: Field<Option<Map<String, Value>>>,
     history_len: Field<Option<usize>>,
     context_creation_identity: Field<Option<String>>,
+    required_existing_selectors: Field<Option<Strings>>,
     pilot_mode: Field<Option<String>>,
     pilot_mode_reason: Field<Option<String>>,
     prior_assessment_id: Field<Option<String>>,
@@ -338,6 +339,10 @@ impl PreparedTask {
                 )));
             }
         };
+        let required_existing_selectors = self.required_existing_selectors.strings_or_empty(
+            crate::application::task::pilot::REQUIRED_EXISTING_SELECTORS,
+            action,
+        )?;
         let comment_hygiene_batch = match &self.comment_hygiene_batch {
             Field::Absent | Field::Present(None) => None,
             Field::Present(Some(value)) if value.is_object() => Some(value.clone()),
@@ -365,6 +370,7 @@ impl PreparedTask {
             history_len,
             validation_tool_warnings,
             context_creation_identity,
+            required_existing_selectors,
             pilot_mode: self.pilot_mode(action)?,
             comment_hygiene_batch,
         };

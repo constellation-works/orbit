@@ -555,12 +555,11 @@ fn claimed_leaf(
             "complexity": complexity, "admitted_at": admitted_at,
         });
     }
-    // The leaf's review admission is the claim's captured contract, never
-    // this host's settings [ORB-13908].
-    if let (Some(review), Some(object)) = (
-        claim_review_admission(&record.request, now),
-        input.as_object_mut(),
-    ) {
+    // The leaf's review admission is the claim's captured owner decision,
+    // including an explicit owner-off decision, never this host's settings
+    // [ORB-13908].
+    let review = claim_review_admission(record, now)?;
+    if let Some(object) = input.as_object_mut() {
         object.insert(
             REVIEW_ADMISSION_KEY.into(),
             serde_json::to_value(review).map_err(codec_error)?,
@@ -578,7 +577,10 @@ fn claimed_leaf(
     // A repair claim's leaf restores the candidate its stopped landing
     // preserved rather than implementing afresh [ORB-14261].
     if let (Some(repair), Some(object)) = (&claim.repair, input.as_object_mut()) {
-        object.insert(CLAIM_REPAIR_KEY.into(), claim_repair_input(repair));
+        object.insert(
+            CLAIM_REPAIR_KEY.into(),
+            claim_repair_input(repair, &record.request.ship),
+        );
     }
     let run = JobRun {
         build: Some(orbit_common::process::build::current_orbit_build()),
@@ -785,43 +787,76 @@ fn pipeline(request: &AdmissionRequest) -> Result<&'static str, OrbitError> {
 }
 
 /// The review admission a claimed leaf runs under: the owner's captured
-/// contract and timing, when the ship contract carries one [ORB-13908]
-/// [ORB-14849].
+/// contract and timing, including an explicit `none` timing when the owner
+/// disabled review before landing [ORB-13908] [ORB-14849]. Fails closed when a
+/// required review timing arrives without a review contract.
 fn claim_review_admission(
-    request: &AdmissionRequest,
+    record: &LocalPullAdmission,
     now: chrono::DateTime<Utc>,
-) -> Option<ReviewAdmission> {
-    let review = request.ship.review.as_ref()?;
-    Some(ReviewAdmission {
-        contract_version: review.contract_version,
-        // The claim's contract is resolved by the owner and carries no
-        // operation policy version of its own.
-        policy_version: 0,
-        timing: if request.ship.before_landing {
-            ReviewTiming::BeforeLanding
-        } else if request.ship.before_pr {
-            ReviewTiming::BeforePr
-        } else {
-            ReviewTiming::None
-        },
-        timing_source: CLAIM_SOURCE.into(),
-        crew: review.crew.clone(),
-        crew_source: CLAIM_SOURCE.into(),
-        // The owner resolved its pool to the one crew the contract carries.
-        crew_pool: Vec::new(),
-        budget: review.budget,
-        required_validation_commands: review.required_validation_commands.clone(),
-        baseline_commands: review.baseline_commands.clone(),
-        host_evidence: review.host_evidence.clone(),
-        selective_before_landing: None,
-        captured_at: now,
-    })
+) -> Result<ReviewAdmission, OrbitError> {
+    let ship = &record.request.ship;
+    let timing = ship.review_timing();
+    match (&ship.review, timing) {
+        (Some(review), _) => Ok(ReviewAdmission {
+            contract_version: review.contract_version,
+            // The claim's contract is resolved by the owner and carries no
+            // operation policy version of its own.
+            policy_version: 0,
+            timing,
+            timing_source: CLAIM_SOURCE.into(),
+            crew: review.crew.clone(),
+            crew_source: CLAIM_SOURCE.into(),
+            // The owner resolved its pool to the one crew the contract carries.
+            crew_pool: Vec::new(),
+            budget: review.budget,
+            required_validation_commands: review.required_validation_commands.clone(),
+            baseline_commands: review.baseline_commands.clone(),
+            host_evidence: review.host_evidence.clone(),
+            selective_before_landing: None,
+            captured_at: now,
+        }),
+        (None, ReviewTiming::None) => {
+            let gates = record
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.gates.as_ref());
+            Ok(ReviewAdmission {
+                contract_version: workflow::REVIEW_CONTRACT_VERSION,
+                policy_version: 0,
+                timing: ReviewTiming::None,
+                timing_source: CLAIM_SOURCE.into(),
+                crew: None,
+                crew_source: CLAIM_SOURCE.into(),
+                crew_pool: Vec::new(),
+                budget: workflow::ReviewBudget::default(),
+                required_validation_commands: gates
+                    .map(|gates| gates.required_validation_commands.clone()),
+                baseline_commands: gates
+                    .map(|gates| gates.baseline_commands.clone())
+                    .unwrap_or_default(),
+                host_evidence: Vec::new(),
+                selective_before_landing: None,
+                captured_at: now,
+            })
+        }
+        (None, required) => Err(invalid(&format!(
+            "claimed leaf requires review timing `{}` but the ship contract carries no review \
+             contract",
+            required.as_str()
+        ))),
+    }
 }
 
 /// What a repair claim's leaf needs to restore its preserved candidate: the
-/// published branch and head, the base it was validated on, and why its
-/// landing stopped.
-fn claim_repair_input(repair: &ClaimRepair) -> serde_json::Value {
+/// published branch and head, the base it was validated on, why its landing
+/// stopped, and the owner's captured review timing for the repair claim.
+fn claim_repair_input(
+    repair: &ClaimRepair,
+    ship: &orbit_store::contract::AdmissionShipContract,
+) -> serde_json::Value {
+    let owner_review_timing = repair
+        .owner_review_timing
+        .unwrap_or_else(|| ship.review_timing());
     serde_json::json!({
         "repairs_claim_id": repair.repairs_claim_id,
         "handoff_id": repair.handoff_id,
@@ -829,5 +864,6 @@ fn claim_repair_input(repair: &ClaimRepair) -> serde_json::Value {
         "head_sha": repair.candidate.candidate.commit,
         "base_sha": repair.candidate.base.commit,
         "stop_evidence": repair.stop_evidence,
+        "owner_review_timing": owner_review_timing.as_str(),
     })
 }

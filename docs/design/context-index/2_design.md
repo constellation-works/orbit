@@ -2,7 +2,7 @@
 title: "Context Index — Design"
 owner: claude
 created_date: 2026-11-14
-updated_date: 2026-11-15
+updated_date: 2026-11-27
 last_validated: 2026-11-15
 status: Draft
 feature: context-index
@@ -90,7 +90,7 @@ The label is the diff of the landed commit against its first parent, with rename
 
 Excluded paths never enter a label. `exclude_paths` is a glob list in the plugin's config, seeded for ws_orbit with lockfiles, `CHANGELOG.md`, and generated or mirrored outputs: `docs/INDEX.md`, `plugin/skills/**`, the CLI output goldens, `scripts/unit-test-baseline.json` and `scripts/qa-full-sweep-inventory.json`. *Measured*: these are among the most-touched files of the last 2,000 landed commits (`scripts/unit-test-baseline.json` in 84, `tool_list.json` in 74, `docs/INDEX.md` in 68), and none of them is chosen by a task's wording. The pilot already adds such derived companions by rule; the index leaves that to it.
 
-A genuinely hot hand-written file, such as `docs/CONFIG.md` (*measured*: 145 of 2,000 commits), stays in. Scoring discounts it (§5.1) without hiding it from the tasks that are really about it.
+A genuinely hot hand-written file, such as the former single-page reference `docs/CONFIG.md` (*measured*: 145 of 2,000 commits), stays in. Scoring discounts it (§5.1) without hiding it from the tasks that are really about it.
 
 ### 2.4 Labels: symbols are the unit
 
@@ -500,7 +500,7 @@ Order and size:
 
 The index-seeded condition passes if exploration is lower than Unseeded with the interval excluding zero and the held-out pass rate is not lower than Dispatched beyond the interval. The readout reports every condition with its interval and prints "no difference shown" where that is the case.
 
-What replay does not measure: the pilot (replay starts after it) and collisions between concurrent tasks. The pilot effect is read from shadow mode and the pilot scorecard (§8.1), which is a before-and-after comparison, not a randomised one; the live experiment mechanism cannot randomise pilot inputs today, because it assigns arms at first delivery admission, after the pilot has run ([experiments scope](../experiments/1_scope.md)). The collision effect is estimated offline from the existing footprint-miss and lock-contention rankings of `orbit.codebase` action `analytics`: for each recorded miss, would the predicted footprint have declared the file.
+What replay does not measure: the pilot (replay starts after it) and collisions between concurrent tasks. The pilot effect is read from shadow mode and the pilot scorecard (§8.1), which is a before-and-after comparison, not a randomised one; the live experiment mechanism cannot randomise pilot inputs today, because it assigns arms at first delivery admission, after the pilot has run ([experiments scope](../experiments/1_overview.md)). The collision effect is estimated offline from the existing footprint-miss and lock-contention rankings of `orbit.codebase` action `analytics`: for each recorded miss, would the predicted footprint have declared the file.
 
 ## 12. Concerns & Honest Limitations
 

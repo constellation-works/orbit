@@ -8,6 +8,7 @@ use orbit_engine::{
 
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::runtime_host::{claims, recovery, validation};
+use crate::unit::landing;
 
 use super::EngineHost;
 
@@ -86,14 +87,14 @@ impl ReviewGate for EngineHost<'_> {
         &self,
         handoff_id: &str,
     ) -> Result<orbit_engine::HandoffLandingContext, OrbitError> {
-        OrbitRuntime::handoff_landing_context(self.runtime, handoff_id)
+        landing::handoff_landing_context(self.runtime, handoff_id)
     }
 
     fn record_handoff_landing(
         &self,
         update: &orbit_engine::HandoffLandingUpdate,
     ) -> Result<(), OrbitError> {
-        OrbitRuntime::record_handoff_landing(self.runtime, update)
+        landing::record_handoff_landing(self.runtime, update)
     }
 
     fn record_handoff_landing_wait(
@@ -101,7 +102,7 @@ impl ReviewGate for EngineHost<'_> {
         handoff_id: &str,
         reason: &str,
     ) -> Result<(), OrbitError> {
-        OrbitRuntime::record_handoff_landing_wait(self.runtime, handoff_id, reason)
+        landing::record_handoff_landing_wait(self.runtime, handoff_id, reason)
     }
 
     fn record_handoff_landing_history(
@@ -110,7 +111,7 @@ impl ReviewGate for EngineHost<'_> {
         event: &str,
         note: &str,
     ) -> Result<(), OrbitError> {
-        OrbitRuntime::record_handoff_landing_history(self.runtime, handoff_id, event, note)
+        landing::record_handoff_landing_history(self.runtime, handoff_id, event, note)
     }
 
     fn record_handoff_landing_completion_hold(
@@ -119,12 +120,7 @@ impl ReviewGate for EngineHost<'_> {
         history: &orbit_types::task::TaskHistoryEntry,
         comment: &str,
     ) -> Result<(), OrbitError> {
-        OrbitRuntime::record_handoff_landing_completion_hold(
-            self.runtime,
-            handoff_id,
-            history,
-            comment,
-        )
+        landing::record_handoff_landing_completion_hold(self.runtime, handoff_id, history, comment)
     }
 
     fn local_machine_id(&self) -> Option<String> {

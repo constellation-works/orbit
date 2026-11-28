@@ -4,6 +4,7 @@
    manifest declares. Every panel is drawn by the generic renderer, so the
    styles here describe the four render modes, not any plugin. */
 .plugins-layout { grid-template-columns: minmax(0, 1fr); }
+.plugins-layout[hidden], .plugin-page-layout[hidden] { display: none; }
 .tab-pane[data-tab="plugins"] .panel { min-width: 0; }
 #plugins-panel > .body { padding: var(--space-12); background: var(--bg); display: flex; flex-direction: column; gap: var(--space-12); }
 .plugins-explainer {
@@ -33,7 +34,7 @@
 .plugin-toggle:hover { border-color: var(--accent); }
 .plugin-toggle:disabled { opacity: 0.5; cursor: wait; }
 .plugin-change-error { margin: 0; color: var(--status-open); font-size: var(--text-sm); overflow-wrap: anywhere; }
-.plugin-tools, .plugin-links { display: flex; gap: var(--space-6); flex-wrap: wrap; }
+.plugin-tools, .plugin-links, .plugin-pages { display: flex; gap: var(--space-6); flex-wrap: wrap; }
 .plugin-tool-inventory { display: flex; flex-direction: column; gap: var(--space-6); min-width: 0; }
 .plugin-tools-bar { display: flex; gap: var(--space-6) var(--space-8); align-items: center; flex-wrap: wrap; }
 .plugin-tools-filter {
@@ -51,12 +52,13 @@
 .plugin-tools-toggle:hover { border-color: var(--accent); }
 .plugin-tools-status { color: var(--fg-mute); font-size: var(--text-xs); }
 .plugin-tools-scroll { max-height: 9rem; overflow-y: auto; align-content: flex-start; overscroll-behavior: contain; }
-.plugin-link-tile {
+.plugin-link-tile, .plugin-page-tile {
   display: inline-flex; align-items: center; gap: var(--space-6); padding: var(--space-6) var(--space-10);
   border: 1px solid var(--border); border-radius: var(--radius-2xs); background: var(--bg);
   color: var(--accent); font-size: var(--text-sm); text-decoration: none;
 }
-.plugin-link-tile:hover { border-color: var(--accent); color: var(--accent-hover); }
+.plugin-link-tile:hover, .plugin-page-tile:hover { border-color: var(--accent); color: var(--accent-hover); }
+.plugin-page-tile.is-inactive { color: var(--fg-dim); }
 .plugin-panel-head {
   display: flex; gap: var(--space-8); align-items: baseline; justify-content: space-between;
   padding: var(--space-6) var(--space-10); border-bottom: 1px solid var(--hair);
@@ -78,4 +80,282 @@
 
 @media (max-width: 900px) {
   .plugin-kv { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+}
+
+/* Secondary tabs and sandboxed plugin page view (plugin-pages design §4).
+   The page strip stays one line and does not scroll sideways (STD-07 R39).
+   Tabs keep the width of their titles. Pages that do not fit move under
+   More; the track clips so the page itself does not grow sideways. A title
+   longer than its slot ellipsizes, and the full title is revealed on hover,
+   focus and touch. */
+#plugins-rail-subtabs:empty { display: none; }
+.tab-pane[data-tab="plugins"] > #plugins-subtabs {
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  position: relative;
+}
+.plugin-tab-track {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+#plugins-subtabs .plugin-tab-track > .subtab[data-route] {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+#plugins-subtabs .plugin-tab-track > .subtab[hidden],
+#plugins-subtabs .plugin-tab-more[hidden] {
+  display: none;
+}
+#plugins-subtabs .plugin-tab-more {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: 0 0 auto;
+}
+.plugin-tab-more-count {
+  color: var(--fg-mute);
+  font-variant-numeric: tabular-nums;
+}
+.plugin-tab-label {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#plugins-subtabs .plugin-tab-track > .subtab[data-route] > .plugin-tab-label,
+.plugin-tab-menu > .subtab > .plugin-tab-label {
+  flex: 1 1 auto;
+}
+.plugin-tab-full {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+#plugins-subtabs .subtab.is-truncated:is(:hover, :focus-visible, .is-revealed) > .plugin-tab-full,
+#plugins-rail-subtabs .subtab.is-truncated:is(:hover, :focus-visible, .is-revealed) > .plugin-tab-full {
+  position: fixed;
+  left: var(--plugin-tab-full-left, var(--space-8));
+  top: var(--plugin-tab-full-top, var(--space-8));
+  z-index: 40;
+  width: max-content;
+  max-width: min(20rem, calc(100vw - var(--space-24)));
+  height: auto;
+  margin: 0;
+  padding: var(--space-6) var(--space-10);
+  overflow: visible;
+  clip-path: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  pointer-events: none;
+}
+.plugin-tab-menu {
+  position: fixed;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: min(16rem, calc(100vw - var(--space-24)));
+  max-width: min(24rem, calc(100vw - var(--space-24)));
+  max-height: min(50vh, 20rem);
+  margin: 0;
+  padding: var(--space-4);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.plugin-tab-menu[hidden] { display: none !important; }
+.plugin-tab-menu > .subtab {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  white-space: nowrap;
+}
+#plugins-rail-subtabs .subtab {
+  position: relative;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.main-col > .tab-pane[data-tab="plugins"].active:has(> #plugins-page-main:not([hidden])) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.plugin-page-layout:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 1800px;
+  margin: 0 auto;
+  padding: var(--space-12) var(--space-20) var(--space-20);
+}
+.plugin-page-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.plugin-page-panel > .plugin-page-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-12);
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+  padding: var(--space-8) var(--space-16);
+  border-bottom: 1px solid var(--hair);
+}
+.plugin-page-identity {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-8);
+  min-width: 0;
+  overflow: hidden;
+}
+.plugin-page-name {
+  color: var(--fg);
+  font-size: var(--text-base);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plugin-page-version {
+  color: var(--fg-mute);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.plugin-page-note {
+  color: var(--fg-mute);
+  font-size: var(--text-xs);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plugin-page-reload { flex: 0 0 auto; }
+.plugin-page-panel > .plugin-page-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--space-16);
+  background: var(--bg);
+  overflow-y: auto;
+}
+.plugin-page-panel > .plugin-page-body.is-framed {
+  padding: 0;
+  overflow: hidden;
+}
+.plugin-page-frame {
+  display: block;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 0;
+  background: var(--bg);
+}
+.plugin-page-diagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+.plugin-page-fix {
+  margin: 0;
+  color: var(--fg-soft);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.plugin-page-cmd {
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+.plugin-page-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  flex-wrap: wrap;
+}
+.plugin-page-installed-link {
+  color: var(--accent);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+.plugin-page-installed-link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+.plugin-page-state { padding: var(--space-12) 0; }
+
+@media (max-width: 760px) {
+  .tab-pane[data-tab="plugins"] > #plugins-subtabs {
+    padding: var(--space-8) var(--space-8) 0;
+  }
+  .plugin-page-layout:not([hidden]) {
+    padding: var(--space-8);
+  }
+  .plugin-page-panel > .plugin-page-strip {
+    padding: var(--space-8) var(--space-12);
+  }
+  .plugin-page-panel > .plugin-page-body:not(.is-framed) {
+    padding: var(--space-12);
+  }
+}
+
+/* A page action's confirmation, drawn by the dashboard outside the frame. */
+.plugin-action-dialog { width: min(520px, calc(100vw - var(--space-32))); margin: auto; padding: 0; }
+.plugin-action-facts {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-6) var(--space-12);
+  margin: 0; font-size: var(--text-sm);
+}
+.plugin-action-facts dt { color: var(--fg-dim); }
+.plugin-action-facts dd { margin: 0; color: var(--fg); overflow-wrap: anywhere; }
+.plugin-action-description, .plugin-action-note { margin: 0; color: var(--fg-soft); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.plugin-action-label { margin: 0; color: var(--fg-dim); font-size: var(--text-sm); }
+.plugin-action-input {
+  margin: 0; max-height: 14rem; overflow: auto; padding: var(--space-8) var(--space-10);
+  border: 1px solid var(--border); border-radius: var(--radius-2xs); background: var(--bg);
+  color: var(--fg); font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere;
 }

@@ -34,7 +34,7 @@ pub(crate) type SessionAudit<O> = Box<dyn FnOnce(&Core, &Result<O, Error>)>;
 pub(super) enum Audit<A: App> {
     None,
     Invocation(Box<AuditGuard>),
-    Dashboard(DashboardAudit),
+    Dashboard(Box<DashboardAudit>),
     Session(SessionAudit<A::Outcome>),
 }
 
@@ -62,7 +62,7 @@ pub(super) fn start<A: App>(core: &Core, operation: &Operation, command: &A::Com
         }
         Caller::CommandLine => Audit::None,
         Caller::Session(session) => match &operation.dashboard_row {
-            Some(row) => Audit::Dashboard(DashboardAudit::start(session, row.clone())),
+            Some(row) => Audit::Dashboard(Box::new(DashboardAudit::start(session, row.clone()))),
             None => A::session_audit(command).map_or(Audit::None, Audit::Session),
         },
     }

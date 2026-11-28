@@ -91,10 +91,28 @@ returns.
     and the next due attempt settles it, or `orbit run auto --stop` retries it
     at once.
 - The leaf's agent runs in claimed mode: the sandbox denies `~/.ssh`, so it
-  has no direct route to the owner. The run broker carries only the scoped
-  claimed-task read and other owner calls documented in the runbook; the
-  agent is denied `orbit.task.update` and returns its execution summary as
-  step output. `claim_handoff` carries it to the owner's `execution_summary`.
+  has no direct route to the owner. The run broker carries only a closed list
+  of owner calls, each bound to the claimed task, its workspace or its run:
+  - Reads: `orbit.task.show`, `orbit.task.list`, `orbit.search` and
+    `orbit.task.artifact` `get`. They may name any task in the claimed
+    workspace. `orbit.search` and `orbit.task.list` refuse federated scopes,
+    and an artifact `get` is subject to the cross-task refusal: a `review-*`
+    artifact of another task is refused for every activity.
+  - Writes: `orbit.task.artifact` `put` on the claimed task, `orbit.friction`
+    `add` for the claimed task, and `orbit.task.add` of a task `spawned_from`
+    the claimed task and related to nothing else. A finding filed by eligible
+    claimed review or QA work may also name its culprit as `regression_from`:
+    scheduler-minted review/QA auto-tasks as well as coordinator-filed
+    review/QA area tasks (`no-diff-expected` with `full-code-review` or
+    `qa-full-sweep`). Each culprit must be a task in the claimed workspace,
+    and the `spawned_from` binding to the claimed task is still required.
+  - Notices: `orbit.notice.post`, `orbit.notice.show` and `orbit.notice.close`,
+    bound to the claimed task and run.
+  Any other owner call is refused. The agent is denied `orbit.task.update` and
+  returns its execution summary as step output; `claim_handoff` carries it to
+  the owner's `execution_summary`. The
+  [claimed-mode steps](../task-execution-steps.md#step-5--summarize-and-hand-off)
+  cover the handoff.
   Never loosen the sandbox to give an agent direct owner access.
 - A leaf that fails before handing off settles its claim as a failure: the
   owner's task moves to `blocked` with the leaf run, failed step and error in

@@ -8,7 +8,8 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::OrbitRuntime;
 use orbit_store::contract::{
     AdmissionRunContext, ClaimInspection, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
-    ExecutionLocation, JobRunStepParams, LocalPullAdmission, LocalPullPhase, PullDestination,
+    ExecutionLocation, JobRunOrder, JobRunQuery, JobRunStepParams, LocalPullAdmission,
+    LocalPullPhase, PullDestination,
 };
 use orbit_types::task::TaskStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
@@ -20,6 +21,38 @@ const ATTENTION_HOST: &str = "attention-host";
 
 const CONFIG: &str =
     "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n";
+
+struct SetupRun<'a> {
+    job_id: &'a str,
+    input: Value,
+    run_started_at: chrono::DateTime<Utc>,
+    setup_started_at: chrono::DateTime<Utc>,
+    setup_finished_at: chrono::DateTime<Utc>,
+    run_finished_at: chrono::DateTime<Utc>,
+    state: JobRunState,
+    error: Option<String>,
+}
+
+impl<'a> SetupRun<'a> {
+    fn at(
+        job_id: &'a str,
+        input: Value,
+        at: chrono::DateTime<Utc>,
+        state: JobRunState,
+        error: Option<String>,
+    ) -> Self {
+        Self {
+            job_id,
+            input,
+            run_started_at: at,
+            setup_started_at: at,
+            setup_finished_at: at,
+            run_finished_at: at,
+            state,
+            error,
+        }
+    }
+}
 
 fn session(capability: McpCapability) -> ToolSessionContext {
     ToolSessionContext {
@@ -156,6 +189,131 @@ fn attention_does_not_recover_a_pending_task_commit() {
         "an ordinary metadata read aborts the prepared journal row"
     );
     assert!(runtime.inspect_execution_claims().is_ok());
+}
+
+fn pilot_warning_attention_preserves_a_commit_interrupted_during_traversal() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tracing_subscriber::layer::Context;
+    use tracing_subscriber::prelude::*;
+
+    struct InterruptOnPrerequisiteRead<F> {
+        interrupted: AtomicBool,
+        interrupt: F,
+    }
+
+    impl<S, F> tracing_subscriber::Layer<S> for InterruptOnPrerequisiteRead<F>
+    where
+        S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+        F: Fn() + Send + Sync + 'static,
+    {
+        fn on_enter(&self, id: &tracing::Id, context: Context<'_, S>) {
+            if context
+                .span(id)
+                .is_some_and(|span| span.name() == "task_bundle_canonical_read")
+                && !self.interrupted.swap(true, Ordering::Relaxed)
+            {
+                (self.interrupt)();
+            }
+        }
+    }
+
+    let (_root, runtime) = attention_runtime();
+    let prerequisite = add_named_task(&runtime, "Warning prerequisite", TaskStatus::Backlog);
+    let direct = runtime
+        .add_task(TaskAddParams {
+            title: "Direct prerequisite".into(),
+            status: Some(TaskStatus::Backlog),
+            dependencies: vec![prerequisite.clone()],
+            ..Default::default()
+        })
+        .unwrap();
+    let proposal = runtime
+        .add_task(TaskAddParams {
+            title: "Proposed warning subject".into(),
+            status: Some(TaskStatus::Proposed),
+            dependencies: vec![direct.id],
+            ..Default::default()
+        })
+        .unwrap();
+    runtime
+        .update_task_as_human(
+            &proposal.id,
+            TaskUpdateParams {
+                comment: Some(format!(
+                    "operation_id={}\n{}",
+                    "a".repeat(64),
+                    json!({"assessment": {"blocked_by": ["Confirm the operator workflow"]}}),
+                )),
+                ..Default::default()
+            },
+            "task-pilot".into(),
+        )
+        .unwrap();
+
+    use orbit_core::test_support::fixture_store::maintenance::task_registry::{
+        TaskRegistryStore, task_registry_path,
+    };
+    let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root())).unwrap();
+    let binding = registry.find_task_binding(&prerequisite).unwrap().unwrap();
+    let lease = binding
+        .canonical_path
+        .parent()
+        .unwrap()
+        .join(".task-commit-applying")
+        .join(&prerequisite);
+    std::fs::create_dir_all(lease.parent().unwrap()).unwrap();
+    let workspace_id = runtime.workspace_id().unwrap();
+    let database = runtime.global_root().join("orbit.db");
+    let journal = "attention-pilot-warning";
+    let interrupt = {
+        let lease = lease.clone();
+        let task_id = prerequisite.clone();
+        move || {
+            // The direct prerequisite is already being read. Interrupt the
+            // transitive prerequisite before the walk reaches it.
+            std::fs::File::create(&lease).unwrap();
+            rusqlite::Connection::open(&database)
+                .unwrap()
+                .execute(
+                    "INSERT INTO task_commit_journal \
+                     (journal_id, workspace_id, task_id, state, intent_json, created_at) \
+                     VALUES (?1, ?2, ?3, 'prepared', '{}', ?4)",
+                    rusqlite::params![journal, workspace_id, task_id, Utc::now().to_rfc3339()],
+                )
+                .unwrap();
+        }
+    };
+    let subscriber = tracing_subscriber::registry().with(InterruptOnPrerequisiteRead {
+        interrupted: AtomicBool::new(false),
+        interrupt,
+    });
+    let operator = session(McpCapability::Operator);
+    let query = || call(&runtime, json!({"kind": "pilot_warning"}), &operator);
+    let response = tracing::subscriber::with_default(subscriber, query);
+    assert_eq!(
+        journal_state(&runtime, journal).as_deref(),
+        Some("prepared"),
+        "{response}"
+    );
+    assert!(lease.exists());
+    assert_eq!(response["items"], json!([]));
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert_eq!(degraded[0]["kind"], "pilot_warning");
+    assert_eq!(degraded[0]["code"], "source_unavailable");
+    assert!(
+        degraded[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains(&prerequisite)
+    );
+
+    runtime.get_task(&proposal.id).unwrap();
+    assert_eq!(journal_state(&runtime, journal).as_deref(), Some("aborted"));
+    assert!(!lease.exists());
+    let response = query();
+    assert_eq!(response["degraded"], json!([]));
+    assert_eq!(response["items"][0]["refs"]["task_id"], proposal.id);
 }
 
 fn friction_attention_does_not_recover_a_pending_task_commit() {
@@ -996,6 +1154,7 @@ fn follower_run_failed_settled_local_pull_is_not_a_held_claim() {
 crate::scenario_table!(
     attention_observation,
     attention_does_not_recover_a_pending_task_commit,
+    pilot_warning_attention_preserves_a_commit_interrupted_during_traversal,
     friction_attention_does_not_recover_a_pending_task_commit,
     delivery_hold_attention_next_is_workspace_qualified_with_tool,
     run_stuck_respects_declared_windows_and_progress,
@@ -1006,3 +1165,934 @@ crate::scenario_table!(
     run_failed_settled_claims_are_not_held_and_a_live_claim_is,
     follower_run_failed_settled_local_pull_is_not_a_held_claim,
 );
+
+fn run_git(repo: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+fn setup_diverged_owner_base(repo: &std::path::Path) -> (String, String, String) {
+    run_git(repo, &["init", "-b", "agent-main"]);
+    run_git(repo, &["config", "user.email", "test@example.com"]);
+    run_git(repo, &["config", "user.name", "Test"]);
+    std::fs::write(repo.join("tracked.txt"), "base").unwrap();
+    run_git(repo, &["add", "tracked.txt"]);
+    run_git(repo, &["commit", "-m", "base"]);
+    let base = run_git(repo, &["rev-parse", "HEAD"]);
+    run_git(
+        repo,
+        &["commit", "--allow-empty", "-m", "local delivery [ORB-123]"],
+    );
+    let local = run_git(repo, &["rev-parse", "HEAD"]);
+    run_git(repo, &["checkout", "--detach", &base]);
+    run_git(repo, &["commit", "--allow-empty", "-m", "remote change"]);
+    let remote = run_git(repo, &["rev-parse", "HEAD"]);
+    run_git(
+        repo,
+        &["update-ref", "refs/remotes/origin/agent-main", &remote],
+    );
+    run_git(repo, &["checkout", "agent-main"]);
+    (base, local, remote)
+}
+
+fn record_setup_run(runtime: &OrbitRuntime, spec: SetupRun<'_>) {
+    let jobs = runtime.stores().jobs();
+    let run = jobs
+        .insert_job_run(spec.job_id, 1, spec.run_started_at, Some(spec.input), None)
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, spec.run_started_at, std::process::id())
+        .unwrap();
+    jobs.complete_job_run_step(
+        &run.run_id,
+        &JobRunStepParams {
+            lock_wait_ms: None,
+            step_index: 0,
+            target_type: JobTargetType::Activity,
+            target_id: "worktree_setup".into(),
+            started_at: spec.setup_started_at,
+            finished_at: spec.setup_finished_at,
+            duration_ms: Some(1),
+            exit_code: None,
+            agent_response_json: None,
+            state: spec.state,
+            error_code: spec
+                .error
+                .as_ref()
+                .map(|_| "delivery_stale_branch".to_string()),
+            error_message: spec.error,
+        },
+    )
+    .unwrap();
+    jobs.finalize_job_run(&run.run_id, spec.state, spec.run_finished_at, None)
+        .unwrap();
+}
+
+fn diverged_hold_message(
+    repo: &std::path::Path,
+    branch: &str,
+    local: &str,
+    remote: &str,
+) -> String {
+    format!(
+        "worktree setup refusing stale base: owner checkout '{}' holds '{branch}' at {local}, and origin/{branch} is at {remote}; the checkout has diverged",
+        repo.display()
+    )
+}
+
+#[test]
+fn stale_owner_base_attention_deduplicates_and_clears() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (base, local, remote) = setup_diverged_owner_base(&repo);
+    let now = Utc::now() - Duration::minutes(1);
+    let record = |at, state, error: Option<String>| {
+        record_setup_run(
+            &runtime,
+            SetupRun::at(
+                "task_local_pipeline",
+                json!({"base_branch": "agent-main", "base_sync": "local"}),
+                at,
+                state,
+                error,
+            ),
+        );
+    };
+    let message = diverged_hold_message(&repo, "agent-main", &local, &remote);
+    record(now, JobRunState::Held, Some(message.clone()));
+    record(now + Duration::seconds(1), JobRunState::Held, Some(message));
+    let operator = session(McpCapability::Operator);
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["detail"]["ahead"], 1);
+    assert_eq!(items[0]["detail"]["behind"], 1);
+    assert_eq!(items[0]["detail"]["owner_only_commits"][0]["sha"], local);
+    assert_eq!(
+        items[0]["detail"]["owner_only_commits"][0]["task_id"],
+        "ORB-123"
+    );
+    std::fs::write(repo.join("tracked.txt"), "dirty diverged").unwrap();
+    let diverged_dirty = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert_eq!(
+        diverged_dirty["items"][0]["detail"]["tracked_changes"],
+        true
+    );
+    run_git(&repo, &["reset", "--hard", &local]);
+    let id = items[0]["id"].clone();
+    let again = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert_eq!(again["items"][0]["id"], id);
+    run_git(&repo, &["reset", "--hard", &base]);
+    std::fs::write(repo.join("tracked.txt"), "dirty").unwrap();
+    let dirty = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert_eq!(dirty["items"][0]["detail"]["ahead"], 0, "{dirty}");
+    assert_eq!(dirty["items"][0]["detail"]["tracked_changes"], true);
+    assert!(
+        dirty["items"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("tracked changes")
+    );
+    let command = dirty["items"][0]["next"]["command"].as_str().unwrap();
+    assert!(
+        command.contains("status --short --untracked-files=no"),
+        "{command}"
+    );
+    assert!(command.contains(repo.to_str().unwrap()), "{command}");
+    run_git(&repo, &["reset", "--hard", &base]);
+    let clean = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(clean["items"].as_array().unwrap().is_empty(), "{clean}");
+    run_git(&repo, &["reset", "--hard", &local]);
+    record(now + Duration::seconds(2), JobRunState::Success, None);
+    let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
+}
+
+#[test]
+fn stale_owner_base_attention_keeps_diverged_alert_when_checkout_is_gone() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (base, local, remote) = setup_diverged_owner_base(&repo);
+    let gone = root.path().join("moved-checkout");
+    let record = |message: String| {
+        record_setup_run(
+            &runtime,
+            SetupRun::at(
+                "task_local_pipeline",
+                json!({"base_branch": "agent-main", "base_sync": "local"}),
+                Utc::now() - Duration::minutes(1),
+                JobRunState::Held,
+                Some(message),
+            ),
+        );
+    };
+    record(diverged_hold_message(&gone, "agent-main", &local, &remote));
+    let operator = session(McpCapability::Operator);
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["detail"]["ahead"], 1, "{response}");
+    assert_eq!(items[0]["detail"]["behind"], 1, "{response}");
+    assert!(
+        items[0]["detail"]["tracked_changes"].is_null(),
+        "{response}"
+    );
+    assert_eq!(items[0]["detail"]["tracked_status"], "unavailable");
+    assert!(
+        items[0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("tracked status unavailable"),
+        "{response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert_eq!(degraded[0]["code"], "source_unavailable", "{response}");
+    assert_eq!(degraded[0]["subject"], "agent-main", "{response}");
+    assert!(
+        degraded[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("recorded checkout"),
+        "{response}"
+    );
+
+    // A behind-only hold whose cleanliness cannot be read stays degraded.
+    run_git(&repo, &["reset", "--hard", &base]);
+    let behind_only = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(
+        behind_only["items"].as_array().unwrap().is_empty(),
+        "{behind_only}"
+    );
+    let degraded = behind_only["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{behind_only}");
+    assert_eq!(degraded[0]["code"], "source_unavailable", "{behind_only}");
+}
+
+#[test]
+fn stale_owner_base_attention_bounds_commits_and_reads_trailers() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (_, _, remote) = setup_diverged_owner_base(&repo);
+    for index in 0..21 {
+        run_git(
+            &repo,
+            &[
+                "commit",
+                "--allow-empty",
+                "-m",
+                &format!("delivery {index}"),
+                "-m",
+                "Orbit-Task: ORB-456",
+            ],
+        );
+    }
+    let local = run_git(&repo, &["rev-parse", "HEAD"]);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            Utc::now() - Duration::minutes(1),
+            JobRunState::Held,
+            Some(diverged_hold_message(&repo, "agent-main", &local, &remote)),
+        ),
+    );
+    let response = call(
+        &runtime,
+        json!({"kind": "delivery_stale_base"}),
+        &session(McpCapability::Operator),
+    );
+    let detail = &response["items"][0]["detail"];
+    assert_eq!(detail["ahead"], 22, "{response}");
+    let commits = detail["owner_only_commits"].as_array().unwrap();
+    assert_eq!(commits.len(), 20);
+    assert_eq!(commits[0]["task_id"], "ORB-456");
+}
+
+#[test]
+fn stale_owner_base_attention_continues_after_unavailable_newer_base() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (_, local, remote) = setup_diverged_owner_base(&repo);
+    let now = Utc::now() - Duration::minutes(1);
+    let record = |at, branch: &str| {
+        record_setup_run(
+            &runtime,
+            SetupRun::at(
+                "task_local_pipeline",
+                json!({"base_branch": branch, "base_sync": "local"}),
+                at,
+                JobRunState::Held,
+                Some(diverged_hold_message(&repo, branch, &local, &remote)),
+            ),
+        );
+    };
+    record(now, "agent-main");
+    record(now + Duration::seconds(1), "missing-base");
+
+    let operator = session(McpCapability::Operator);
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["detail"]["base"], "agent-main", "{response}");
+    assert_eq!(items[0]["detail"]["ahead"], 1, "{response}");
+    assert_eq!(items[0]["detail"]["behind"], 1, "{response}");
+
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert_eq!(degraded[0]["kind"], "delivery_stale_base", "{response}");
+    assert_eq!(degraded[0]["code"], "source_unavailable", "{response}");
+    assert_eq!(degraded[0]["subject"], "missing-base", "{response}");
+    let message = degraded[0]["message"].as_str().unwrap();
+    assert!(message.contains("missing-base"), "{response}");
+    assert!(message.contains("refs/heads/missing-base"), "{response}");
+}
+
+#[test]
+fn stale_owner_base_attention_ignores_earlier_admitted_overlapping_run_finishing_later() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (_, local, remote) = setup_diverged_owner_base(&repo);
+    let now = Utc::now() - Duration::minutes(2);
+    let operator = session(McpCapability::Operator);
+    let hold_message = diverged_hold_message(&repo, "agent-main", &local, &remote);
+
+    // Run 1 passed worktree_setup at t0 before the hold at t2, and finished
+    // implementation/validation later at t3 > t2.
+    record_setup_run(
+        &runtime,
+        SetupRun {
+            job_id: "task_local_pipeline",
+            input: json!({"base_branch": "agent-main", "base_sync": "local"}),
+            run_started_at: now,
+            setup_started_at: now,
+            setup_finished_at: now + Duration::seconds(1),
+            run_finished_at: now + Duration::seconds(10),
+            state: JobRunState::Success,
+            error: None,
+        },
+    );
+    // Overlapping setup that started before the hold at t2 and finished after it.
+    record_setup_run(
+        &runtime,
+        SetupRun {
+            job_id: "task_local_pipeline",
+            input: json!({"base_branch": "agent-main", "base_sync": "local"}),
+            run_started_at: now,
+            setup_started_at: now + Duration::seconds(1),
+            setup_finished_at: now + Duration::seconds(6),
+            run_finished_at: now + Duration::seconds(12),
+            state: JobRunState::Success,
+            error: None,
+        },
+    );
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            now + Duration::seconds(5),
+            JobRunState::Held,
+            Some(hold_message),
+        ),
+    );
+
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["detail"]["base"], "agent-main", "{response}");
+
+    // A genuinely newer local-base admission whose worktree_setup started and
+    // succeeded after the hold clears the item.
+    record_setup_run(
+        &runtime,
+        SetupRun {
+            job_id: "task_local_pipeline",
+            input: json!({"base_branch": "agent-main", "base_sync": "local"}),
+            run_started_at: now + Duration::seconds(20),
+            setup_started_at: now + Duration::seconds(20),
+            setup_finished_at: now + Duration::seconds(21),
+            run_finished_at: now + Duration::seconds(25),
+            state: JobRunState::Success,
+            error: None,
+        },
+    );
+    let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
+}
+
+#[test]
+fn stale_owner_base_attention_ignores_later_remote_sync_runs() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (_, local, remote) = setup_diverged_owner_base(&repo);
+    let now = Utc::now() - Duration::minutes(2);
+    let operator = session(McpCapability::Operator);
+    let hold_message = diverged_hold_message(&repo, "agent-main", &local, &remote);
+
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            now,
+            JobRunState::Held,
+            Some(hold_message.clone()),
+        ),
+    );
+
+    for (offset, (job_id, input)) in [
+        (
+            "task_pr_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "remote"}),
+        ),
+        (
+            "task_claimed_pr_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "remote"}),
+        ),
+        (
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "remote"}),
+        ),
+        ("task_local_pipeline", json!({"base_branch": "agent-main"})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let at = now + Duration::seconds((offset + 1) as i64);
+        record_setup_run(
+            &runtime,
+            SetupRun::at(job_id, input, at, JobRunState::Success, None),
+        );
+    }
+
+    let still_held = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = still_held["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{still_held}");
+    assert_eq!(items[0]["detail"]["base"], "agent-main", "{still_held}");
+
+    let local_at = now + Duration::seconds(10);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            local_at,
+            JobRunState::Success,
+            None,
+        ),
+    );
+    let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
+
+    // A claimed local leaf (defaulting base_sync to local) also clears a newer hold.
+    let newer_hold_at = now + Duration::seconds(20);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_claimed_local_pipeline",
+            json!({"base_branch": "agent-main"}),
+            newer_hold_at,
+            JobRunState::Held,
+            Some(hold_message),
+        ),
+    );
+    let reheld = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert_eq!(reheld["items"].as_array().unwrap().len(), 1, "{reheld}");
+
+    let claimed_local_at = now + Duration::seconds(21);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_claimed_local_pipeline",
+            json!({"base_branch": "agent-main"}),
+            claimed_local_at,
+            JobRunState::Success,
+            None,
+        ),
+    );
+    let cleared_by_claimed = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(
+        cleared_by_claimed["items"].as_array().unwrap().is_empty(),
+        "{cleared_by_claimed}"
+    );
+}
+
+#[test]
+fn stale_owner_base_attention_bounds_queries_across_historical_runs() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (_, local, remote) = setup_diverged_owner_base(&repo);
+    let now = Utc::now() - Duration::minutes(10);
+    let operator = session(McpCapability::Operator);
+    let jobs = runtime.stores().jobs();
+
+    // Seed 240 unrelated historical delivery runs across all four leaf jobs
+    // (successes, failures, and non-stale-base holds like baseline_red) with
+    // unprojected input fields and malformed agent_response_json payloads on
+    // both worktree_setup and implement steps.
+    let db = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    let ws_id = runtime.workspace_id().unwrap();
+    let history_at = (now - Duration::hours(2)).to_rfc3339();
+    for index in 0..240 {
+        let job_id = match index % 4 {
+            0 => "task_pr_pipeline",
+            1 => "task_local_pipeline",
+            2 => "task_claimed_pr_pipeline",
+            _ => "task_claimed_local_pipeline",
+        };
+        let state = match index % 6 {
+            0 => "held",
+            1 => "failed",
+            _ => "success",
+        };
+        let run_id = format!("hist-run-{index}");
+        let input = json!({
+            "base_branch": "agent-main",
+            "base_sync": if index % 4 == 1 { "local" } else { "remote" },
+            "task_ids": ["ORB-99999", "ORB-99998"],
+            "huge_unprojected_blob": "x".repeat(512),
+        });
+        db.execute(
+            "INSERT INTO job_runs(
+                run_id, workspace_id, job_id, attempt, state, scheduled_at,
+                started_at, finished_at, duration_ms, created_at, input_json
+             ) VALUES (?1, ?2, ?3, 1, ?4, ?5, ?5, ?5, 1, ?5, ?6)",
+            rusqlite::params![run_id, ws_id, job_id, state, history_at, input.to_string()],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO job_run_steps(
+                workspace_id, run_id, step_index, target_type, target_id, state,
+                started_at, finished_at, duration_ms, agent_response_json
+             ) VALUES (?1, ?2, 0, 'activity', 'worktree_setup', 'success', ?3, ?3, 1, '{malformed')",
+            rusqlite::params![ws_id, run_id, history_at],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO job_run_steps(
+                workspace_id, run_id, step_index, target_type, target_id, state,
+                started_at, finished_at, duration_ms, error_code, error_message, agent_response_json
+             ) VALUES (?1, ?2, 1, 'activity', 'implement', ?3, ?4, ?4, 1, ?5, ?6, '{malformed')",
+            rusqlite::params![
+                ws_id,
+                run_id,
+                state,
+                history_at,
+                if state == "held" {
+                    Some("baseline_red")
+                } else {
+                    None
+                },
+                if state == "held" {
+                    Some("baseline is red")
+                } else {
+                    None
+                },
+            ],
+        )
+        .unwrap();
+    }
+
+    // With no stale-base holds, default attention read does zero full step
+    // hydrations and hydrates zero run rows.
+    let full_steps_before = orbit_core::test_support::job_run_full_step_reads();
+    let rows_before = orbit_core::test_support::job_run_rows_hydrated();
+    let empty = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(empty["items"].as_array().unwrap().is_empty(), "{empty}");
+    assert!(empty["degraded"].as_array().unwrap().is_empty(), "{empty}");
+    assert_eq!(
+        orbit_core::test_support::job_run_full_step_reads() - full_steps_before,
+        0
+    );
+    assert_eq!(
+        orbit_core::test_support::job_run_rows_hydrated() - rows_before,
+        0
+    );
+
+    // Record an active stale-base hold plus an extra implement step with
+    // malformed agent_response_json, then record newer remote-sync runs and
+    // another branch's local run.
+    let hold_message = diverged_hold_message(&repo, "agent-main", &local, &remote);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({
+                "base_branch": "agent-main",
+                "base_sync": "local",
+                "extra_payload": "ignored"
+            }),
+            now,
+            JobRunState::Held,
+            Some(hold_message),
+        ),
+    );
+    let held_run_id = jobs
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some("task_local_pipeline".into()),
+            state: Some(JobRunState::Held),
+            order_by: JobRunOrder::Recency,
+            limit: Some(1),
+            include_steps: false,
+            ..Default::default()
+        })
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .run_id;
+    db.execute(
+        "INSERT INTO job_run_steps(
+            workspace_id, run_id, step_index, target_type, target_id, state,
+            started_at, finished_at, duration_ms, agent_response_json
+         ) VALUES (?1, ?2, 1, 'activity', 'implement', 'failed', ?3, ?3, 1, '{malformed')",
+        rusqlite::params![ws_id, held_run_id, now.to_rfc3339()],
+    )
+    .unwrap();
+
+    for (offset, (job_id, input)) in [
+        (
+            "task_pr_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "remote"}),
+        ),
+        (
+            "task_local_pipeline",
+            json!({"base_branch": "other-branch", "base_sync": "local"}),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        record_setup_run(
+            &runtime,
+            SetupRun::at(
+                job_id,
+                input,
+                now + Duration::seconds((offset + 1) as i64),
+                JobRunState::Success,
+                None,
+            ),
+        );
+    }
+
+    let full_steps_before = orbit_core::test_support::job_run_full_step_reads();
+    let rows_before = orbit_core::test_support::job_run_rows_hydrated();
+    let held = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert_eq!(held["items"].as_array().unwrap().len(), 1, "{held}");
+    assert_eq!(held["items"][0]["detail"]["base"], "agent-main", "{held}");
+    assert_eq!(held["items"][0]["detail"]["ahead"], 1, "{held}");
+    assert_eq!(held["items"][0]["detail"]["behind"], 1, "{held}");
+    assert_eq!(
+        orbit_core::test_support::job_run_full_step_reads() - full_steps_before,
+        0
+    );
+    assert_eq!(
+        orbit_core::test_support::job_run_rows_hydrated() - rows_before,
+        1,
+        "only the matching held run should be hydrated"
+    );
+
+    // Clearing via a later local-sync worktree_setup success (even with a
+    // malformed implement step payload) clears the hold with bounded reads.
+    let clear_at = now + Duration::seconds(10);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({
+                "base_branch": "agent-main",
+                "base_sync": "local",
+                "extra_payload": "ignored"
+            }),
+            clear_at,
+            JobRunState::Success,
+            None,
+        ),
+    );
+    let clear_run_id = jobs
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some("task_local_pipeline".into()),
+            state: Some(JobRunState::Success),
+            order_by: JobRunOrder::Recency,
+            limit: Some(1),
+            include_steps: false,
+            ..Default::default()
+        })
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .run_id;
+    db.execute(
+        "INSERT INTO job_run_steps(
+            workspace_id, run_id, step_index, target_type, target_id, state,
+            started_at, finished_at, duration_ms, agent_response_json
+         ) VALUES (?1, ?2, 1, 'activity', 'implement', 'success', ?3, ?3, 1, '{malformed')",
+        rusqlite::params![ws_id, clear_run_id, clear_at.to_rfc3339()],
+    )
+    .unwrap();
+
+    let full_steps_before = orbit_core::test_support::job_run_full_step_reads();
+    let rows_before = orbit_core::test_support::job_run_rows_hydrated();
+    let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
+    assert_eq!(
+        orbit_core::test_support::job_run_full_step_reads() - full_steps_before,
+        0
+    );
+    assert_eq!(
+        orbit_core::test_support::job_run_rows_hydrated() - rows_before,
+        2,
+        "only the held run and clearing run should be hydrated"
+    );
+}
+
+fn insert_held_setup_runs_batch(
+    runtime: &OrbitRuntime,
+    count: usize,
+    start_at: chrono::DateTime<Utc>,
+    branch: &str,
+    message: &str,
+    prefix: &str,
+) {
+    let mut db = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    let ws_id = runtime.workspace_id().unwrap();
+    let tx = db.transaction().unwrap();
+    let input = json!({"base_branch": branch, "base_sync": "local"}).to_string();
+    for index in 0..count {
+        let run_id = format!("{prefix}-{index:04}");
+        let ts = (start_at + Duration::milliseconds(index as i64)).to_rfc3339();
+        tx.execute(
+            "INSERT INTO job_runs(
+                run_id, workspace_id, job_id, attempt, state, scheduled_at,
+                started_at, finished_at, duration_ms, created_at, input_json
+             ) VALUES (?1, ?2, 'task_local_pipeline', 1, 'held', ?3, ?3, ?3, 1, ?3, ?4)",
+            rusqlite::params![run_id, ws_id, ts, input],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO job_run_steps(
+                workspace_id, run_id, step_index, target_type, target_id, state,
+                started_at, finished_at, duration_ms, error_code, error_message, agent_response_json
+             ) VALUES (?1, ?2, 0, 'activity', 'worktree_setup', 'held', ?3, ?3, 1, 'delivery_stale_branch', ?4, '{malformed')",
+            rusqlite::params![ws_id, run_id, ts, message],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+}
+
+#[test]
+fn stale_owner_base_attention_keeps_older_unresolved_base_when_another_is_crowded() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (base, local, remote) = setup_diverged_owner_base(&repo);
+
+    run_git(&repo, &["checkout", "-b", "release", &base]);
+    run_git(
+        &repo,
+        &["commit", "--allow-empty", "-m", "release local [ORB-298]"],
+    );
+    let release_local = run_git(&repo, &["rev-parse", "HEAD"]);
+    run_git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/release", &remote],
+    );
+    run_git(&repo, &["checkout", "agent-main"]);
+
+    let now = Utc::now() - Duration::minutes(10);
+    // Older unresolved hold on `release`.
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "release", "base_sync": "local"}),
+            now,
+            JobRunState::Held,
+            Some(diverged_hold_message(
+                &repo,
+                "release",
+                &release_local,
+                &remote,
+            )),
+        ),
+    );
+
+    // Crowd `agent-main` beyond the 128-row page limit and resolve it with a
+    // newer local-sync setup admission.
+    let crowded_count = 200;
+    insert_held_setup_runs_batch(
+        &runtime,
+        crowded_count,
+        now + Duration::seconds(1),
+        "agent-main",
+        &diverged_hold_message(&repo, "agent-main", &local, &remote),
+        "crowded-main",
+    );
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            now + Duration::minutes(5),
+            JobRunState::Success,
+            None,
+        ),
+    );
+
+    let operator = session(McpCapability::Operator);
+    let full_steps_before = orbit_core::test_support::job_run_full_step_reads();
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["detail"]["base"], "release", "{response}");
+    assert_eq!(items[0]["detail"]["ahead"], 1, "{response}");
+    assert_eq!(items[0]["detail"]["behind"], 1, "{response}");
+    assert!(
+        response["degraded"].as_array().unwrap().is_empty(),
+        "complete observation within scan budget should not degrade: {response}"
+    );
+    assert_eq!(
+        orbit_core::test_support::job_run_full_step_reads() - full_steps_before,
+        0
+    );
+
+    // Replica behavior stays intact under crowded history.
+    let replica = runtime
+        .clone()
+        .with_coordination_write_owner(Some("hm_owner".into()));
+    let mut aggregator = operator.clone();
+    aggregator.mcp_client_name = Some("orbit-federated-mux".into());
+    let candidate = call(
+        &replica,
+        json!({"kind": "delivery_stale_base", "candidate_read": true}),
+        &aggregator,
+    );
+    assert!(
+        candidate["items"].as_array().unwrap().is_empty(),
+        "{candidate}"
+    );
+    assert!(
+        candidate["degraded"].as_array().unwrap().is_empty(),
+        "{candidate}"
+    );
+    let direct = call(&replica, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(direct["items"].as_array().unwrap().is_empty(), "{direct}");
+    assert_eq!(
+        direct["degraded"][0]["code"], "source_unavailable",
+        "{direct}"
+    );
+
+    // Resolving `release` clears the alert cleanly.
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "release", "base_sync": "local"}),
+            now + Duration::minutes(6),
+            JobRunState::Success,
+            None,
+        ),
+    );
+    let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
+    assert!(
+        cleared["degraded"].as_array().unwrap().is_empty(),
+        "{cleared}"
+    );
+}
+
+#[test]
+fn stale_owner_base_attention_reports_incomplete_coverage_when_scan_budget_exhausted() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (base, local, remote) = setup_diverged_owner_base(&repo);
+
+    run_git(&repo, &["checkout", "-b", "release", &base]);
+    run_git(
+        &repo,
+        &["commit", "--allow-empty", "-m", "release local [ORB-298]"],
+    );
+    let release_local = run_git(&repo, &["rev-parse", "HEAD"]);
+    run_git(
+        &repo,
+        &["update-ref", "refs/remotes/origin/release", &remote],
+    );
+    run_git(&repo, &["checkout", "agent-main"]);
+
+    let now = Utc::now() - Duration::minutes(10);
+    // Older unresolved hold on `release` sits beyond the 1024-row scan budget.
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "release", "base_sync": "local"}),
+            now,
+            JobRunState::Held,
+            Some(diverged_hold_message(
+                &repo,
+                "release",
+                &release_local,
+                &remote,
+            )),
+        ),
+    );
+
+    insert_held_setup_runs_batch(
+        &runtime,
+        1050,
+        now + Duration::seconds(1),
+        "agent-main",
+        &diverged_hold_message(&repo, "agent-main", &local, &remote),
+        "budget-main",
+    );
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "local"}),
+            now + Duration::minutes(5),
+            JobRunState::Success,
+            None,
+        ),
+    );
+
+    let operator = session(McpCapability::Operator);
+    let full_steps_before = orbit_core::test_support::job_run_full_step_reads();
+    let rows_before = orbit_core::test_support::job_run_rows_hydrated();
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "holds past the scan budget are not observed: {response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert!(
+        degraded.iter().any(|entry| {
+            entry["kind"] == "delivery_stale_base"
+                && entry["code"] == "source_unavailable"
+                && entry["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("scan budget"))
+        }),
+        "exhausted scan budget must report incomplete coverage: {response}"
+    );
+    assert_eq!(
+        orbit_core::test_support::job_run_full_step_reads() - full_steps_before,
+        0
+    );
+    let hydrated = orbit_core::test_support::job_run_rows_hydrated() - rows_before;
+    assert!(
+        hydrated <= 1025,
+        "scan must stay bounded at 1024 held rows plus 1 clearing row, got {hydrated}"
+    );
+}

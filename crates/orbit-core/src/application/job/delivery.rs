@@ -1,5 +1,5 @@
 //! Which job delivers a shipped task, and which jobs hold a task's delivery
-//! slot (design `docs/design/plugins/1_scope.md` §4.5).
+//! slot (design `docs/design/plugins/2_design.md` §4.5).
 //!
 //! A job opts in with `spec.task_delivery`. A task opts in with one
 //! `delivery:<job>` tag. Without the tag a shipped task goes through

@@ -2,7 +2,7 @@
 //! condition over live workspace state and say what matches and why, beside
 //! its durable state: arm states and holds, the stall, recent fires with
 //! their upstream chain, and `self`. Nothing is written
-//! (`docs/design/condition-triggers/1_scope.md` §9).
+//! (`docs/design/condition-triggers/2_design.md` §9).
 //!
 //! `job:<name>` explains a job's auto-task steps instead ([`job`]).
 

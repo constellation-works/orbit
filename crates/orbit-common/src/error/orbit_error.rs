@@ -669,43 +669,95 @@ const _: () = assert!(
     "OrbitError exceeds its 128-byte size budget; box multi-field variant payloads"
 );
 
+/// Session-advertised recovery tools used when formatting MCP error remedies.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct McpErrorSurface {
+    /// Session advertises and can execute `orbit_run` with `action: "list"`.
+    pub run_list: bool,
+    /// Session advertises and can execute `orbit_task_show`.
+    pub task_show: bool,
+    /// Session advertises and can execute `orbit_task_list`.
+    pub task_list: bool,
+    /// Session advertises and can execute `orbit_search`.
+    pub search: bool,
+    /// Session advertises and can execute `orbit_workspace_list`.
+    pub workspace_list: bool,
+}
+
 impl OrbitError {
-    /// Render task/run remedies using the advertised MCP tool names and JSON
-    /// arguments. Explicit not-found guidance still takes precedence.
+    /// Render task/run remedies using MCP tool names, falling back to operator
+    /// guidance when no session surface is supplied. Explicit not-found
+    /// guidance still takes precedence.
     pub fn mcp_error_message(&self) -> String {
+        self.mcp_error_message_for_surface(McpErrorSurface::default())
+    }
+
+    /// Render task/run remedies against the tools this MCP session advertises
+    /// and can execute. Explicit not-found guidance still takes precedence.
+    pub fn mcp_error_message_for_surface(&self, surface: McpErrorSurface) -> String {
         match self {
             Self::NotFound {
                 kind: NotFoundKind::Task,
                 id,
                 guidance: None,
-            } => not_found_message(
-                NotFoundKind::Task,
-                id,
-                Some("; see `orbit_task_list {}` for valid task IDs"),
-            ),
+            } => {
+                let guidance = if surface.task_list {
+                    "; see `orbit_task_list {}` for valid task IDs"
+                } else {
+                    "; ask an operator to list valid task IDs"
+                };
+                not_found_message(NotFoundKind::Task, id, Some(guidance))
+            }
             Self::NotFound {
                 kind: NotFoundKind::JobRun,
                 id,
                 guidance: None,
             } => {
-                let default_guidance;
-                let guidance = if orbit_types::task::is_valid_orb_task_id(id) {
-                    let input = serde_json::json!({"id": id, "field": "delivery"});
-                    default_guidance = format!(
-                        "; see `orbit_run {{\"action\":\"list\"}}` for valid run IDs, or use `orbit_task_show {input}` for a task's delivery run"
-                    );
-                    &default_guidance
-                } else {
+                let run_guidance = if surface.run_list {
                     "; see `orbit_run {\"action\":\"list\"}` for valid run IDs"
+                } else {
+                    "; ask an operator to check run history for valid run IDs"
+                };
+                let full_guidance;
+                let guidance = if surface.task_show && orbit_types::task::is_valid_orb_task_id(id) {
+                    let input = serde_json::json!({"id": id, "field": "delivery"});
+                    full_guidance = format!(
+                        "{run_guidance}, or use `orbit_task_show {input}` for a task's delivery run"
+                    );
+                    &full_guidance
+                } else {
+                    run_guidance
                 };
                 not_found_message(NotFoundKind::JobRun, id, Some(guidance))
             }
-            Self::TaskDeliveryUnavailable(task_id) => {
-                let input = serde_json::json!({"id": task_id});
+            Self::UnknownWorkspaceSelector(unknown) => {
+                let replacement = if surface.workspace_list {
+                    "call `orbit_workspace_list {}`"
+                } else {
+                    "ask an operator to list registered workspaces"
+                };
                 format!(
                     "invalid input: {}",
-                    task_delivery_unavailable_message(task_id, &format!("orbit_task_show {input}"))
+                    unknown
+                        .message()
+                        .replace("run `orbit workspace list`", replacement)
                 )
+            }
+            Self::TaskDeliveryUnavailable(task_id) => {
+                if surface.task_show {
+                    let input = serde_json::json!({"id": task_id});
+                    format!(
+                        "invalid input: {}",
+                        task_delivery_unavailable_message(
+                            task_id,
+                            &format!("orbit_task_show {input}")
+                        )
+                    )
+                } else {
+                    format!(
+                        "invalid input: no task delivery run in this workspace was submitted with task '{task_id}'; delivery evidence exists only for tasks submitted by a delivery run in this workspace — ask an operator to inspect the task instead"
+                    )
+                }
             }
             _ => self.to_string(),
         }

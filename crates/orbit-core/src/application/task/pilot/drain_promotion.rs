@@ -888,6 +888,7 @@ fn certified_snapshot(task: &Task) -> PreparedTaskSnapshot {
         history_len: None,
         validation_tool_warnings: Vec::new(),
         context_creation_identity: None,
+        required_existing_selectors: Vec::new(),
         pilot_mode: Default::default(),
         comment_hygiene_batch: None,
     }

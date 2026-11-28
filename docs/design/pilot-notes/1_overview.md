@@ -2,8 +2,8 @@
 title: Pilot Notes — Overview
 owner: claude
 created_date: 2026-11-27
-updated_date: 2026-11-27
-last_validated: 2026-11-27
+updated_date: 2026-11-28
+last_validated: 2026-11-28
 status: Accepted
 stage: building
 next: "Add notes to the pilot assessment schema, apply checks and readouts [ORB-29588]"
@@ -24,8 +24,8 @@ instruction with its own, and returns a note under that label for each task it a
 keeps the note with the assessment and shows it on the task. Orbit never reads a note's
 meaning and never acts on it: a note is for whoever asked the question, usually a plugin. The
 operator approved the design on 2026-11-27 ([ORB-29567]). Slice 1 ([ORB-29586]) adds the config
-table, prompt section, audit event and `doctor` check; assessment output and readouts follow in
-[ORB-29588].
+table, prompt section, audit event and `doctor` check. Assessment output and readouts
+follow in [ORB-29588].
 
 ## 1. Motivation
 
@@ -61,7 +61,7 @@ from the task. Orbit learns nothing about what the question means.
 | Note label | A short name the workspace chooses, such as `review_focus`. It keys the config table and the note |
 | Note instruction | The committed file that tells the pilot what to write under a label |
 | Pilot note | The pilot's text for one task under one label, at most 1 KiB |
-| Assessment | What a pilot returns for a task, stored today as the task artifact `pilot/assessment-<operation-id>.json` ([task pilot](../task-pilot/1_scope.md)) |
+| Assessment | What a pilot returns for a task, stored today as the task artifact `pilot/assessment-<operation-id>.json` ([task pilot](../task-pilot/2_design.md)) |
 
 ## 3. At a Glance
 
@@ -89,15 +89,15 @@ the draft and were approved with the recommendation. Both are recorded in the
 
 | Phase | Task |
 |---|---|
-| 1. Local notes | [ORB-29586] adds the config table, the pilot's prompt section, the audit event and the `doctor` finding; [ORB-29588] adds `notes` to the assessment, the checks in apply and the readouts |
-| 2. Claimed pilots and the dashboard | [ORB-29589] shows notes on a task's detail; [ORB-29590] gives a claimed pilot the owner's captured instructions |
+| 1. Local notes | [ORB-29586] adds the config table, the pilot's prompt section, the audit event and the `doctor` finding; [ORB-29588] (backlog) adds `notes` to the assessment, the checks in apply and the readouts |
+| 2. Claimed pilots and the dashboard | [ORB-29589] (backlog) shows notes on a task's detail; [ORB-29590] (backlog) gives a claimed pilot the owner's captured instructions |
 
 ## Task References
 
 - [ORB-29567] — this design.
 - [ORB-29586] — adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding.
-- [ORB-29588] — adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
-- [ORB-29589] — shows pilot notes on the dashboard's task detail.
-- [ORB-29590] — gives a claimed pilot the owner's captured note instructions.
+- [ORB-29588] — backlog; adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
+- [ORB-29589] — backlog; shows pilot notes on the dashboard's task detail.
+- [ORB-29590] — backlog; gives a claimed pilot the owner's captured note instructions.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

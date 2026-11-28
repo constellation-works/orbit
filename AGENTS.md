@@ -18,7 +18,7 @@ Orbit is a local-first Rust coding-agent runtime. `CLAUDE.md` imports this file;
 - For [breaking changes](RELEASING.md#versioning), the implementer tags the task `breaking-change` and adds one execution-summary line `Breaking: <x removed → use y>`. The reviewer confirms both for release tooling to derive the version bump and changelog bullet.
 - Update affected docs in the code PR. Stale docs block review.
 - Edit `AGENTS.md` only to add, revise or remove an affected rule, command or pointer. Delete or rewrite rules whose subject disappears. Give new features their own docs.
-- Never list `docs/CONFIG.md` in a task's `context_files`: shared reference doc; the implementer updates it in the same PR.
+- Never list `docs/config/` pages in a task's `context_files`: the implementer updates them in the same PR.
 - The `doc-duties` auto-task validates root `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `ARCHITECTURE.md` and `RELEASING.md`; keep their `last_validated` frontmatter.
 - At handoff list commands as passed, failed or not run. Never say "tested" or count unavailable checks as passes.
 
@@ -28,9 +28,9 @@ Reserve `main` for release merges and hotfixes. Target every task PR at the dev 
 
 ## Gates
 
-- Local full-suite checks are optional. Required PR checks (Check/Clippy/Test, Test shards 1–3) cover format, lint, goldens and the full suite. Fix failures in the PR. Don't run `make ci`, `ci-fast`, `ci-lint`, `goldens` or `ci-test-affected` as blanket gates. Run what the change needs: affected tests and `make goldens` when CLI help, MCP text or other golden surfaces change (`UPDATE=1` regenerates; review the diff). See [DEVELOPMENT.md](docs/DEVELOPMENT.md#validation-and-ci).
+- Local full-suite checks are optional. Required PR checks (Check/Clippy/Test, Test shards 1–3) cover format, lint, goldens and the full suite. Fix failures in the PR. Don't run `make ci`, `ci-fast`, `ci-lint`, `goldens` or `ci-test-affected` as blanket gates. Run what the change needs: affected tests and `make goldens` when CLI help, MCP text or other golden surfaces change (`UPDATE=1` regenerates; review the diff). See [dev docs](docs/development/validation-and-ci.md#validation-and-ci).
 - Anchor focused `cargo test -p <crate> …` on `-p orbit-cli` so they share one workspace feature set and reuse the cached build.
-- Pre-handoff checks, the `docs/INDEX.md` rule and `no-diff-expected`: [gate rules, Gates](docs/agents/gate-rules.md#gates). Light-delivery tags: [CONFIG.md](docs/CONFIG.md#light-delivery-skip-review-and-skip-validation).
+- Pre-handoff checks, the `docs/INDEX.md` rule and `no-diff-expected`: [gate rules, Gates](docs/agents/gate-rules.md#gates). Light-delivery tags: [workflow tags](docs/config/workflow-tags.md#light-delivery-skip-review-and-skip-validation).
 - Cargo gates sharing a target directory run sequentially; overlapping ones need separate `CARGO_TARGET_DIR`s; a rebuilt `target/debug/orbit` breaks generation-bound fixtures (F2026-10-118).
 
 ## Code
@@ -64,7 +64,7 @@ This repository adopts these constellation standards, vendored read-only in `doc
 - `STD-03@2` — [docs/standards/STD-03-concurrency-and-process-safety/STD-03.md](docs/standards/STD-03-concurrency-and-process-safety/STD-03.md): Concurrency and process safety — locks, channels, durable writes, state evolution, subprocess lifecycles, destructive…
 - `STD-04@2` — [docs/standards/STD-04-testing-and-verification/STD-04.md](docs/standards/STD-04-testing-and-verification/STD-04.md): Testing and verification — test design, hermetic tests, honest gates, docs as contracts, and evidence-based…
 - `STD-05@1` — [docs/standards/STD-05-security-boundaries/STD-05.md](docs/standards/STD-05-security-boundaries/STD-05.md): Security boundaries — authority, filesystem containment, child environments, redaction, local network surfaces, supply…
-- `STD-06@4` — [docs/standards/STD-06-design-docs-and-feature-tracking/STD-06.md](docs/standards/STD-06-design-docs-and-feature-tracking/STD-06.md): Design docs and feature tracking — one folder per feature, a delivery stage separate from doc approval, a generated…
+- `STD-06@5` — [docs/standards/STD-06-design-docs-and-feature-tracking/STD-06.md](docs/standards/STD-06-design-docs-and-feature-tracking/STD-06.md): Design docs and feature tracking — one folder per feature, a delivery stage separate from doc approval, a generated…
 - `STD-07@20` — [docs/standards/STD-07-ui-ux/STD-07.md](docs/standards/STD-07-ui-ux/STD-07.md): UI and UX — consistent spacing, shared edges, one type scale, minimal words, show each thing once, honest charts…
 - `STD-08@4` — [docs/standards/STD-08-economy/STD-08.md](docs/standards/STD-08-economy/STD-08.md): Economy — bounded agent context, delta-only records, one channel per ask, bookkeeping off the page, one-line errors…
 - `STD-12@4` — [docs/standards/STD-12-source-style/STD-12.md](docs/standards/STD-12-source-style/STD-12.md): Source style — names, vertical spacing, line width and the formatter gate, as a language-neutral core with one profile…

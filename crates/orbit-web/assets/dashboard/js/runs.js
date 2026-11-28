@@ -878,12 +878,18 @@ function applyRunQuery(raw) {
 }
 
 // The Running header: tasks with work in flight and the runs behind them.
+// With a truncated result, only the run total is global; omit the page-local
+// task count so the header doesn't imply it covers every in-flight run.
 function formatInFlightCount(runs, meta) {
-  const tasks = new Set(runs.flatMap(runTaskIds)).size;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   if (!runs.length) return "nothing in flight";
-  const base = `${plural(tasks, "task")}, ${plural(runs.length, "run")} in flight`;
-  return meta && meta.truncated && Number.isFinite(meta.total) ? `${base} · ${meta.total} total, newest shown` : base;
+  if (meta && meta.truncated) {
+    return Number.isFinite(meta.total)
+      ? `${plural(meta.total, "run")} in flight`
+      : "in-flight runs truncated";
+  }
+  const tasks = new Set(runs.flatMap(runTaskIds)).size;
+  return `${plural(tasks, "task")}, ${plural(runs.length, "run")} in flight`;
 }
 
 export function formatRunCount(shown, fetched, meta) {
@@ -934,14 +940,18 @@ function runsEmptyText() {
 function runsScopeText() {
   let lead = "Every job run";
   if (runFilter === "failed") lead = "Failed, timed-out, and interrupted job runs";
-  if (runFilter === "running") lead = "Pending and running job runs";
-  const qualifiers = runFilter === "running" ? ["newest first", "whatever the time window"] : ["newest first", windowPhrase()];
+  const qualifiers = ["newest first", windowPhrase()];
   if (runTaskId) qualifiers.push(`task ${runTaskId}`);
   if (runJobId) qualifiers.push(`job ${runJobId}`);
   return `${lead}, ${qualifiers.join(", ")}.`;
 }
 
 function runsScopeNote() {
+  // The Running filter needs no scope line: the filter itself, the header's
+  // in-flight total and the newest-first sort already state the scope, so a
+  // second line would restate the same fact above the table (STD-07). The
+  // limit line below stays the single count line for that filter.
+  if (runFilter === "running") return null;
   const note = el("div", {
     class: "runs-scope-note",
     text: runsScopeText(),
@@ -954,7 +964,12 @@ function runsScopeNote() {
 
 function runsLimitNote(meta) {
   if (!meta || !meta.truncated) return null;
-  const total = Number.isFinite(meta.total) ? ` of ${meta.total}` : "";
+  // The Running header already states the in-flight total, so its limit line
+  // states only what is shown: each count appears once (STD-07). Other
+  // filters keep the total here because their headers count shown rows.
+  const inFlight = runFilter === "running";
+  const noun = inFlight ? "runs in flight" : "matching runs";
+  const total = !inFlight && Number.isFinite(meta.total) ? ` of ${meta.total}` : "";
   const container = el("div", {
     class: "runs-limit-note",
   });
@@ -965,13 +980,13 @@ function runsLimitNote(meta) {
 
   const textSpan = el("span", {
     class: "runs-limit-text",
-    text: `Showing newest ${meta.limit} matching runs${total}.`,
+    text: `Showing newest ${meta.limit} ${noun}${total}.`,
   });
   container.appendChild(textSpan);
 
   // The server caps one request; past that cap Load more would return the same rows.
   if (capped) {
-    textSpan.textContent = `Showing newest ${meta.limit} matching runs${total}, the most one request returns.`;
+    textSpan.textContent = `Showing newest ${meta.limit} ${noun}${total}, the most one request returns.`;
     return container;
   }
 
@@ -1555,7 +1570,8 @@ export function renderRuns(runs) {
         : formatRunCount(top.length, (runs || []).length, meta);
   }
   frag.appendChild(runsToolbar());
-  frag.appendChild(runsScopeNote());
+  const scopeNote = runsScopeNote();
+  if (scopeNote) frag.appendChild(scopeNote);
   if (cancelNotice) {
     frag.appendChild(buildCancelNotice(cancelNotice, () => {
       cancelNotice = null;

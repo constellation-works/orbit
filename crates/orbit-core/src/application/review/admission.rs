@@ -17,7 +17,9 @@
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_config::{PRE_LANDING_REVIEW_CREW_KEY, REVIEW_CREW_KEY};
-use orbit_types::task::{SECURITY_STATE_REVIEW_TAG, Task, requires_security_state_review};
+use orbit_types::task::{
+    ArtifactManifestFileV2, SECURITY_STATE_REVIEW_TAG, Task, requires_security_state_review,
+};
 use orbit_types::workflow::{
     self, REVIEW_ADMISSION_KEY, REVIEW_CONTRACT_VERSION, REVIEW_REQUEST_KEY,
     REVIEW_RUN_OPTION_SOURCE, ReviewAdmission, ReviewLayer, ReviewTiming,
@@ -27,18 +29,29 @@ use serde_json::Value;
 use super::REVIEW_ADMITTED_JOBS;
 use super::crew::pre_landing_review_crew_unset;
 use crate::OrbitRuntime;
-use crate::application::contracts::review_layer_json;
+use crate::application::contracts::review_layer_json_for_run;
 use crate::application::job::ReviewAdmissionHook;
 use crate::application::task::TaskReviewPort;
 use crate::runtime::run_input::carried_task_ids;
 
 impl OrbitRuntime {
-    /// A run's captured review layer as `{"timing", "source"}`, or null
-    /// when it captured no review admission.
+    /// A run's captured review layer as `{"timing", "source"}` (plus
+    /// `"scope": "supervisor_local"` on pull supervisors), or null when it
+    /// captured no review admission.
     pub fn run_review_layer(&self, run_id: &str) -> Result<Value, OrbitError> {
-        Ok(run_review_admission(self, run_id)?
+        let Some(run) = self.get_job_run_backend(run_id)? else {
+            return Ok(Value::Null);
+        };
+        let admission = run
+            .input
             .as_ref()
-            .map_or(Value::Null, review_layer_json))
+            .map(ReviewAdmission::from_run_input)
+            .transpose()
+            .map_err(OrbitError::from)?
+            .flatten();
+        Ok(admission.as_ref().map_or(Value::Null, |admission| {
+            review_layer_json_for_run(&run.job_id, admission)
+        }))
     }
 
     /// Authenticate the exact-head review for a security-state delivery.
@@ -61,6 +74,159 @@ impl OrbitRuntime {
             }
         }
         Ok(false)
+    }
+}
+
+impl OrbitRuntime {
+    pub(super) fn handoff_landing_review_ready_with(
+        &self,
+        task: &Task,
+        head: Option<&str>,
+        manifest: Option<&[ArtifactManifestFileV2]>,
+        observational: bool,
+    ) -> Result<bool, OrbitError> {
+        use crate::application::job::ReviewAdmissionHook;
+        use orbit_types::task::ArtifactWriter;
+        use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewTiming};
+        // No handoff head means no candidate to cover, whatever the review policy.
+        let Some(head) = head else {
+            return Ok(false);
+        };
+        let captured = task
+            .job_run_id
+            .as_deref()
+            .map(|id| self.captured_review_admission(id))
+            .transpose()?
+            .flatten();
+        let gated = |timing| matches!(timing, ReviewTiming::BeforePr | ReviewTiming::BeforeLanding);
+        let policy = self.operation_policy();
+        let mut security_review = requires_security_state_review(&task.tags);
+        if !security_review && let Some(run_id) = &task.job_run_id {
+            let run_tasks = if observational {
+                self.observe_run_tasks(run_id)?
+            } else {
+                self.list_run_tasks(run_id)?
+            };
+            security_review = run_tasks
+                .iter()
+                .any(|member| requires_security_state_review(&member.tags));
+        }
+        if !security_review
+            && !policy.review_before_pr.value
+            && !policy.review_before_landing.value
+            && !captured.is_some_and(|admission| gated(admission.timing))
+        {
+            return Ok(true);
+        }
+        let use_snapshot = manifest.is_some() && !self.stored().task().held_by_owner();
+        let loaded_manifest;
+        let manifest = match manifest {
+            Some(manifest) => manifest,
+            None => {
+                loaded_manifest = self.get_task_artifact_manifest(&task.id)?;
+                &loaded_manifest
+            }
+        };
+        if !manifest.iter().any(|file| {
+            file.path == REVIEW_GATE_ARTIFACT && file.writer == Some(ArtifactWriter::System)
+        }) {
+            return Ok(false);
+        }
+        let Some(file) = manifest
+            .iter()
+            .find(|file| file.path == REVIEW_GATE_ARTIFACT)
+        else {
+            return Ok(false);
+        };
+        let artifact = if observational {
+            self.observe_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)?
+        } else if use_snapshot {
+            Some(
+                self.stores()
+                    .task_artifacts()
+                    .read_manifest_artifact(&task.id, file)?,
+            )
+        } else {
+            self.get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)?
+        };
+        let Some(artifact) = artifact else {
+            return Ok(false);
+        };
+        let Ok(certificate) = serde_json::from_slice::<ReviewCertificate>(&artifact.content) else {
+            return Ok(false);
+        };
+        if !certificate.verdict.passed()
+            || !certificate.validation_complete
+            || !certificate.task_ids.contains(&task.id)
+            || (security_review
+                && orbit_automation::review::certificate_acceptable(&certificate).is_err())
+        {
+            return Ok(false);
+        }
+        if certificate.final_candidate.commit != head {
+            if security_review {
+                return Ok(false);
+            }
+            let base_branch = self.delivery_target_branch(task);
+            let pr_number = task
+                .external_refs
+                .iter()
+                .rev()
+                .filter(|reference| {
+                    reference.system == orbit_types::task::GITHUB_PR_EXTERNAL_REF_SYSTEM
+                })
+                .find_map(|reference| reference.id.parse::<u64>().ok());
+            if orbit_engine::verify_refreshed_head_from_base(
+                self.env(),
+                &self.paths().repo_root,
+                &certificate.final_candidate.commit,
+                head,
+                &base_branch,
+                None,
+                pr_number,
+            )
+            .is_err()
+            {
+                return Ok(false);
+            }
+        }
+        let meanings = certificate
+            .task_ids
+            .iter()
+            .map(|id| {
+                let loaded_task;
+                let covered_task = if id == &task.id {
+                    task
+                } else {
+                    loaded_task = if observational {
+                        self.observe_task(id)?
+                    } else {
+                        self.get_task(id)?
+                    };
+                    &loaded_task
+                };
+                let digest = orbit_automation::review::task_meaning_digest(covered_task)
+                    .map_err(super::automation_error)?;
+                Ok((id.clone(), digest))
+            })
+            .collect::<Result<Vec<_>, OrbitError>>()?;
+        if orbit_automation::review::combined_task_meaning_digest(&meanings)
+            .map_err(super::automation_error)?
+            != certificate.task_meaning_digest
+        {
+            return Ok(false);
+        }
+        // The immutable owner ledger authenticates the artifact's certificate.
+        Ok(self
+            .sqlite_store()?
+            .read()
+            .and_then(|snapshot| {
+                snapshot
+                    .review()
+                    .certificate(&self.workspace_id()?, &certificate.attempt_id)
+            })?
+            .as_ref()
+            == Some(&certificate))
     }
 }
 

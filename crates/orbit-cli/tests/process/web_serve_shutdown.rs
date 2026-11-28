@@ -474,7 +474,7 @@ fn exercise_stalled_peer(name: &str, sse: bool, prefix: &'static [u8]) {
     );
 }
 
-/// The scripted dashboard QA recipe in `docs/DEVELOPMENT.md` must not abandon
+/// The scripted dashboard QA recipe in `docs/development/qa.md` must not abandon
 /// its server when SIGTERM lands between the spawn, the PID capture and the
 /// token capture (ORB-25593), nor terminate a background job its caller
 /// started when it runs in the documented `( )` subshell and the signal lands
@@ -521,9 +521,9 @@ fn exercise_qa_recipe_boundary(boundary: &str) {
     std::fs::create_dir_all(&qa_repo).expect("create qa repo");
 
     let docs = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/DEVELOPMENT.md"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/development/qa.md"),
     )
-    .expect("read DEVELOPMENT.md");
+    .expect("read qa.md");
     let section = docs
         .find("#### Scripted dashboard QA")
         .expect("scripted QA section");

@@ -2,11 +2,11 @@
 title: Operator Attention — Overview
 owner: claude
 created_date: 2026-11-01
-updated_date: 2026-11-04
-last_validated: 2026-11-04
+updated_date: 2026-11-28
+last_validated: 2026-11-28
 status: Draft
 stage: shipped
-next: "—"
+next: "Add the hold record and the optional `hold` input [ORB-29656]"
 feature: operator-attention
 doc_role: overview
 type: design
@@ -14,7 +14,7 @@ summary: "orbit attention: one read-only, filterable, federated view of everythi
 tags: [operator-attention, operator-ux, decision-channel, federated-mcp]
 paths: ["crates/orbit-core/src/app/attention/**", "crates/orbit-common/src/governance/**", "crates/orbit-cli/src/command/**", "crates/orbit-mcp/src/federated/**"]
 related_features: [human-decision-channel, federated-mcp, host-registry, distributed-drain, mcp-session-context]
-related_artifacts: [ORB-21164, ORB-21165]
+related_artifacts: [ORB-21164, ORB-21165, ORB-29623]
 ---
 
 # Operator Attention — Overview
@@ -40,7 +40,7 @@ pilot warnings that hold promotion, and ORB-20363 also carried a contract-mismat
 finding. None surfaced until Daniel saw them in the UI. [ORB-21164] records his ask: "a
 holistic summary of issues that requires operator attention", available to orchestrators,
 initially injected through a hook, and filterable (for example by workspace). Daniel subsequently dropped the session hook; [ORB-21165] is archived and it is no dependency or deliverable. He chose the name
-`attention`. The existing channel work ([human-decision-channel](../human-decision-channel/1_scope.md))
+`attention`. The existing channel work ([human-decision-channel](../human-decision-channel/1_overview.md))
 solves the last mile for decisions it can email; this feature covers everything else and
 gives the orchestrator one place to look.
 
@@ -50,7 +50,8 @@ gives the orchestrator one place to look.
   concerns, a `since` time, a one-line `reason` quoted from its source, a `next` action and a
   `fingerprint`. Schema: [attention-item](./specs/attention-item.md).
 - **Kind**: the closed enum of reasons (`pilot_warning`, `pilot_hold`, `blocked`,
-  `decision_open`, `run_failed`, `run_stuck`, `claim_stale`, `review_waiting`, `ci_red`,
+  `decision_open`, `review_waiting`, `run_failed`, `run_stuck`, `claim_stale`,
+  `delivery_stale_base`, `ci_red`,
   `friction_untriaged`, `host_unhealthy`, `notice_open`, `resident_stalled`, `routine_tripped`, `drain_paused`,
   `drain_breaker_open`). Each kind has exactly one source of truth that
   already exists.
@@ -77,9 +78,15 @@ gives the orchestrator one place to look.
 | How the pieces fit, code placement, slices | [2_design.md](./2_design.md) | [ORB-21164] |
 | Rejected alternatives and standing rules | [4_decisions.md](./4_decisions.md) | [ORB-21164] |
 | Deferred directions (ack/snooze, dashboard, notifications, plugin kinds) | [3_vision.md](./3_vision.md) | [ORB-21164] |
+| A hold record for `no-drain` tasks and the `held_ready` kind (approved, not built) | [specs/task-hold.md](./specs/task-hold.md) | [ORB-29623] |
 
 All four slices ([ORB-21168], [ORB-21169], [ORB-21170], [ORB-21171]) have landed; [ORB-21215] added `notice_open` and [ORB-21245] added `resident_stalled`;
 [2_design.md §6](./2_design.md#6-slices) orders them.
+
+One slice is approved and not built: a backlog task that only the `no-drain` tag keeps out of
+a drain becomes a `held_ready` item, and the tag carries a stated reason
+([task-hold](./specs/task-hold.md), [ORB-29623]). [ORB-29656] builds the hold record first.
+The kind list above does not include it until it ships.
 
 ## Task References
 
@@ -95,5 +102,7 @@ All four slices ([ORB-21168], [ORB-21169], [ORB-21170], [ORB-21171]) have landed
 - [ORB-21118] — carried a pilot warning in the motivating example
 - [ORB-21127] — carried a pilot warning in the motivating example
 - [ORB-20363] — carried a pilot warning and contract finding in the motivating example
+- [ORB-29623] — designed the hold record and the `held_ready` kind
+- [ORB-29656] — builds the hold record and the optional `hold` input
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

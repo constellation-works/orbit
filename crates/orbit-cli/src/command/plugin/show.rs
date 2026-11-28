@@ -204,6 +204,39 @@ impl ExecuteCore for PluginShowArgs {
             blocks.push(Block::table(dashboard));
         }
 
+        if !plugin.pages.is_empty() {
+            blocks.push(Block::text(bold("Pages:")));
+            let mut pages = crate::output::common::table::build_table(&[
+                "ID", "TITLE", "KIT", "TOOLS", "ACTIONS", "STATE",
+            ])
+            .keep_all_columns();
+            for page in &plugin.pages {
+                pages.add_row(vec![
+                    page.id.clone(),
+                    page.title.clone(),
+                    page.kit
+                        .map_or_else(|| "-".to_string(), |kit| kit.to_string()),
+                    page.tools.join(", "),
+                    page.actions
+                        .iter()
+                        .map(|action| {
+                            if action.consented {
+                                action.tool.clone()
+                            } else {
+                                format!("{} (not consented)", action.tool)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    match &page.diagnostic {
+                        Some(diagnostic) => format!("inactive ({diagnostic})"),
+                        None => "active".to_string(),
+                    },
+                ]);
+            }
+            blocks.push(Block::table(pages));
+        }
+
         if plugin.tools.is_empty() {
             blocks.push(Block::text(format!("{} (none)", bold("Tools:"))));
             return Ok(Payload::blocks(doc, blocks).into());

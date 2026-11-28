@@ -65,7 +65,7 @@ pub(crate) use gate::{
 /// `orbit-store`, so these are the only shapes they need.
 pub use handoff::{DistributedClaimState, ExpectedCandidate, HandoffConsoleRefusal};
 pub(crate) use landing::record_review_landing;
-pub(in crate::application) use landing_dispatch_port::ReviewLandingDispatchPort;
+pub(crate) use landing_dispatch_port::ReviewLandingDispatchPort;
 use orbit_common::OrbitError;
 pub(crate) use projection::task_review_projection;
 pub use switches::{
@@ -192,3 +192,6 @@ pub(crate) fn reset_review(
     // normal tool-dispatch audit additionally records caller/session provenance.
     Ok(serde_json::json!({"id": id, "ledger": ledger, "reset": true}))
 }
+
+#[cfg(test)]
+mod tests;

@@ -80,6 +80,7 @@ pub use crate::app::workspace::workspace_live_run_ids;
 pub use crate::application::change_watch::{RunStateStamp, TaskChangeStamp};
 pub use crate::application::contracts::{
     ClaimedLeafStage, DrainClaimedLeaf, PULL_DRAIN_JOB, PullSettlementEntry, PullSettlementOutcome,
+    SUPERVISOR_LOCAL_REVIEW_SCOPE,
 };
 pub use crate::application::distributed::{
     FollowerRunObserver, LeafHydrationOutcome, LeafHydrationRequest, PULL_START_CONFLICT_ARG_IDS,

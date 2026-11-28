@@ -33,14 +33,14 @@ may be distinctive about it. Nothing here is committed scope.
    cross-mandate conflict, which v1 escalates. A later version could let residents see each other's
    footprints (their dispatched tasks' `context_files`) and sequence without the human.
 4. **Cost policy as data.** "Material cost" is a fixed escalation class with a workspace-defined
-   threshold. Orbit has usage pressure ([usage-pressure](../usage-pressure/1_scope.md)) but no
+   threshold. Orbit has usage pressure ([usage-pressure](../usage-pressure/1_overview.md)) but no
    spend budget per mandate. A budget would let the rubric weigh slot time against question delay
    in the same unit.
 5. **Owner failover.** A resident runs on its workspace's owner. When the owner moves
    ([owner-failover](../owner-failover/1_overview.md)), the mandate's lease and cadence need to move
    with it. The stateless cycle makes this mostly free; the lease handover is not designed.
 6. **Precedent-answered escalations.** A current corpus rule the operator marked auto can answer
-   a decision request that names it ([workspace-agent-corpus](../workspace-agent-corpus/1_scope.md));
+   a decision request that names it ([workspace-agent-corpus](../workspace-agent-corpus/1_overview.md));
    model-answered categories were removed with decision assistance in [ORB-22808]. Whether
    resident escalations may be answered from precedent is a human call, made after the reversal
    metric has data.
@@ -91,9 +91,9 @@ escalation equation. It lives in a separate repository, cited here by name.
 
 ### Orbit-internal
 
-- [routines](../routines/1_overview.md), [condition-triggers](../condition-triggers/1_scope.md),
+- [routines](../routines/1_overview.md), [condition-triggers](../condition-triggers/1_overview.md),
   [activity-job](../activity-job/1_overview.md)
-- [human-decision-channel](../human-decision-channel/1_scope.md),
+- [human-decision-channel](../human-decision-channel/1_overview.md),
   [decision-assistance](../_archived/decision-assistance/1_scope.md) (archived)
 - [operator-attention](../operator-attention/1_overview.md),
   [fleet-notices](../fleet-notices/1_overview.md)

@@ -1,6 +1,10 @@
 //! Changing the sweep cadence. The settings themselves live in
-//! `crate::clock_settings`; these re-exports keep the `routines::clock`
-//! paths for this module's siblings and outer consumers.
+//! `crate::clock_settings`; these re-exports keep stable `crate::settings`
+//! paths for this module's siblings. `orbit-clock` re-exports the settings at
+//! its crate root. In `orbit-core`, normal settings consumers use
+//! `application::contracts`, while clock operations such as
+//! `set_clock_cadence` use `app::routine`. That module re-exports the settings
+//! only for tests with the `test-support` feature.
 
 use std::path::Path;
 

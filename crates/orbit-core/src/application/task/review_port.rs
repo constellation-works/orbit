@@ -17,12 +17,22 @@ use serde_json::Value;
 use super::HandoffPullRequest;
 
 /// The review-evidence operations task code calls, implemented by `review`.
-pub(in crate::application) trait TaskReviewPort {
+pub(crate) trait TaskReviewPort {
     /// The current effective review admission, before any per-run request.
     fn forecast_review_admission(&self) -> Result<ReviewAdmission, OrbitError>;
 
     /// Whether every current or captured pre-landing review covers this exact handoff head.
     fn handoff_landing_review_ready(
+        &self,
+        task: &Task,
+        head: Option<&str>,
+        manifest: Option<&[ArtifactManifestFileV2]>,
+    ) -> Result<bool, OrbitError>;
+
+    /// Observational counterpart of [`Self::handoff_landing_review_ready`]:
+    /// uses the already-loaded manifest and settled bundle reads without
+    /// entering the task-commit boundary.
+    fn observe_handoff_landing_review_ready(
         &self,
         task: &Task,
         head: Option<&str>,

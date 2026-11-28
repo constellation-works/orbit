@@ -36,14 +36,31 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<(String, JobRun), OrbitError> {
-        let (source_id, source) = self.stopped_failed_requeue_source(
+        self.escalated_publication_local_gate_with(task, None, false)
+    }
+
+    pub(crate) fn escalated_publication_local_gate_with(
+        &self,
+        task: &Task,
+        history: Option<&[TaskHistoryEntry]>,
+        observational: bool,
+    ) -> Result<(String, JobRun), OrbitError> {
+        let (source_id, source) = self.stopped_failed_requeue_source_with(
             task,
             "the task's publication belongs to another machine",
             "the task has no run whose publication it could resume",
+            observational,
         )?;
         super::published_owner::require_stopped_published_requeue_source(&source)?;
-        let entries = self.get_task_history(&task.id)?;
-        self.require_current_requeue_source(task, &source, &source_id, &entries)?;
+        let loaded_entries;
+        let entries = match history {
+            Some(history) => history,
+            None => {
+                loaded_entries = self.get_task_history(&task.id)?;
+                &loaded_entries
+            }
+        };
+        self.require_current_requeue_source(task, &source, &source_id, entries)?;
         let state = self
             .read_run_state(&source_id)?
             .ok_or_else(|| refuse("source checkpoints missing"))?;
@@ -62,21 +79,28 @@ impl OrbitRuntime {
             })
         {
             validate_failure_handoff_receipt(receipt, &source_id, task)?;
-        } else if self.get_task(&task.id)?.spec_digest() != task.spec_digest()
-            || entries.iter().any(|entry| {
-                entry.at >= source.created_at
-                    && entry.event == TASK_FIELDS_UPDATED_EVENT
-                    && entry.note.as_deref().is_some_and(|note| {
-                        task_fields_updated_documents(note).into_iter().any(|doc| {
-                            doc == DESCRIPTION_DOCUMENT || doc == ACCEPTANCE_CRITERIA_DOCUMENT
+        } else {
+            let stored = if observational {
+                self.observe_task(&task.id)?
+            } else {
+                self.get_task(&task.id)?
+            };
+            if stored.spec_digest() != task.spec_digest()
+                || entries.iter().any(|entry| {
+                    entry.at >= source.created_at
+                        && entry.event == TASK_FIELDS_UPDATED_EVENT
+                        && entry.note.as_deref().is_some_and(|note| {
+                            task_fields_updated_documents(note).into_iter().any(|doc| {
+                                doc == DESCRIPTION_DOCUMENT || doc == ACCEPTANCE_CRITERIA_DOCUMENT
+                            })
                         })
-                    })
-            })
-        {
-            return Err(refuse(format!(
-                "the task specification changed after run `{source_id}` started, so its \
-                 published pull request no longer implements this task"
-            )));
+                })
+            {
+                return Err(refuse(format!(
+                    "the task specification changed after run `{source_id}` started, so its \
+                     published pull request no longer implements this task"
+                )));
+            }
         }
         Ok((source_id, source))
     }
@@ -85,15 +109,19 @@ impl OrbitRuntime {
     /// pipeline steps, and return the preservation record a requeue appends with
     /// the binding it resumes. Called before the task write lock, since it asks
     /// the remote and the forge; nothing is written here.
-    pub(crate) fn escalated_publication_requeue_record(
+    pub(crate) fn escalated_publication_requeue_record_with(
         &self,
         task: &Task,
+        history: Option<&[TaskHistoryEntry]>,
+        observational: bool,
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
-        let (source_id, source) = self.escalated_publication_local_gate(task)?;
-        let (_, _, binding) = self.observe_escalated_publication(source, task.clone())?;
+        let (source_id, source) =
+            self.escalated_publication_local_gate_with(task, history, observational)?;
+        let (_, _, binding) =
+            self.observe_escalated_publication_with(source, task.clone(), history, observational)?;
         self.require_green_required_checks(&binding)?;
         let entry = self
-            .published_owner_requeue_record(task, &source_id)?
+            .published_owner_requeue_record_with(task, &source_id, observational)?
             .ok_or_else(|| refuse("the run's publication cannot be preserved"))?;
         Ok((entry, binding))
     }

@@ -21,7 +21,7 @@ fn mcp_missing_records_name_a_recovery_tool_or_field() {
             "orbit_task_show",
             json!({"id": task_id, "field": "delivery", "run_id": "missing-run"}),
             "not_found",
-            "`orbit_run {\"action\":\"list\"}`",
+            "ask an operator to check run history",
         ),
         (
             "orbit_decision",
@@ -34,6 +34,132 @@ fn mcp_missing_records_name_a_recovery_tool_or_field() {
         assert_eq!(error["code"], code, "{error}");
         assert!(error["message"].as_str().unwrap().contains(hint), "{error}");
     }
+}
+
+#[test]
+fn default_profile_refusals_use_advertised_remedies() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let task_id = client.add_task("Remedies", "Exercise MCP refusal remedies");
+    let listed = client.tools_list();
+    let tools = listed["result"]["tools"].as_array().expect("tools array");
+    let has_tool = |name: &str| tools.iter().any(|tool| tool["name"] == name);
+    assert!(!has_tool("orbit_run"));
+    for name in ["orbit_task_show", "orbit_workspace_list", "orbit_search"] {
+        assert!(has_tool(name), "missing {name}");
+    }
+    let run = client.call_tool_err(
+        "orbit_task_show",
+        json!({"id": task_id, "field": "delivery", "run_id": "jrun-nope"}),
+    );
+    let message = run["message"].as_str().expect("message");
+    assert!(message.contains("ask an operator"), "{message}");
+    assert!(!message.contains("orbit_run"), "{message}");
+    assert!(!message.contains("orbit_task_show"), "{message}");
+    let task_shaped_run = client.call_tool_err(
+        "orbit_task_show",
+        json!({"id": task_id, "field": "delivery", "run_id": task_id}),
+    );
+    let task_shaped_message = task_shaped_run["message"].as_str().expect("message");
+    let delivery_remedy = format!(
+        "orbit_task_show {}",
+        json!({"id": task_id, "field": "delivery"})
+    );
+    assert!(
+        task_shaped_message.contains("ask an operator to check run history")
+            && task_shaped_message.contains(&delivery_remedy),
+        "{task_shaped_message}"
+    );
+    assert!(
+        !task_shaped_message.contains("orbit_run"),
+        "{task_shaped_message}"
+    );
+    let unknown = client.call_tool_err("orbit_task_list", json!({"workspace": "nope"}));
+    let message = unknown["message"].as_str().expect("message");
+    assert!(message.contains("orbit_workspace_list {}"), "{message}");
+    assert!(!message.contains("orbit workspace list"), "{message}");
+    for input in [
+        json!({"action": "list", "id": task_id}),
+        json!({"action": "get", "id": task_id, "path": "nope.json"}),
+    ] {
+        let error = client.call_tool_err("orbit_task_artifact", input);
+        let message = error["message"].as_str().expect("message");
+        assert!(
+            message.contains("`orbit_task_show`") && message.contains("`field: \"artifacts\"`"),
+            "{message}"
+        );
+    }
+    let friction = client.call_tool_err("orbit_friction", json!({"action": "list"}));
+    assert!(
+        friction["message"]
+            .as_str()
+            .unwrap()
+            .contains("`orbit_search`"),
+        "{friction}"
+    );
+}
+
+#[test]
+fn run_history_remedy_respects_advertised_actions_and_capability() {
+    let workspace = McpWorkspace::init();
+    // A dispatch-only session advertises `orbit_run` (for `resume`) without serving `list`.
+    let mut dispatch_only =
+        workspace.serve_with_args(&["--operator", "--role", "agent", "--toolset", "dispatch"]);
+    let task_id = dispatch_only.add_task("Dispatch-only remedy", "Withheld run list");
+    let listed = dispatch_only.tools_list();
+    let tools = listed["result"]["tools"].as_array().expect("tools array");
+    assert!(tools.iter().any(|tool| tool["name"] == "orbit_run"));
+    assert!(tools.iter().any(|tool| tool["name"] == "orbit_task_show"));
+    let denied_list = dispatch_only.call_tool_err("orbit_run", json!({"action": "list"}));
+    assert_eq!(denied_list["code"], "toolset_not_enabled", "{denied_list}");
+
+    let run_shaped = dispatch_only.call_tool_err(
+        "orbit_task_show",
+        json!({"id": task_id, "field": "delivery", "run_id": "jrun-nope"}),
+    );
+    let message = run_shaped["message"].as_str().expect("message");
+    assert!(
+        message.contains("ask an operator to check run history"),
+        "{message}"
+    );
+    assert!(!message.contains("orbit_run"), "{message}");
+    assert!(!message.contains("orbit_task_show"), "{message}");
+
+    let task_shaped = dispatch_only.call_tool_err(
+        "orbit_task_show",
+        json!({"id": task_id, "field": "delivery", "run_id": task_id}),
+    );
+    let task_message = task_shaped["message"].as_str().expect("message");
+    let delivery_remedy = format!(
+        "orbit_task_show {}",
+        json!({"id": task_id, "field": "delivery"})
+    );
+    assert!(
+        task_message.contains("ask an operator to check run history")
+            && task_message.contains(&delivery_remedy),
+        "{task_message}"
+    );
+    assert!(!task_message.contains("orbit_run"), "{task_message}");
+
+    // Enabling `runs` without `--operator` hides `orbit_run` and denies `list`,
+    // so missing-run errors must still refer to an operator.
+    let mut unprivileged_runs = workspace.serve_with_args(&["--toolset", "runs"]);
+    let listed = unprivileged_runs.tools_list();
+    let tools = listed["result"]["tools"].as_array().expect("tools array");
+    assert!(!tools.iter().any(|tool| tool["name"] == "orbit_run"));
+    let denied = unprivileged_runs.call_tool_err("orbit_run", json!({"action": "list"}));
+    assert_eq!(denied["code"], "capability_denied", "{denied}");
+    let run_err = unprivileged_runs.call_tool_err(
+        "orbit_task_show",
+        json!({"id": task_id, "field": "delivery", "run_id": "jrun-nope"}),
+    );
+    let message = run_err["message"].as_str().expect("message");
+    assert!(
+        message.contains("ask an operator to check run history"),
+        "{message}"
+    );
+    assert!(!message.contains("orbit_run"), "{message}");
+    assert!(!message.contains("orbit_task_show"), "{message}");
 }
 
 #[test]

@@ -218,7 +218,7 @@ Tests that call a supervisor directly are left out.
 | `orbit-common/src/fs/git.rs` (`run_git`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-common/src/process/identity.rs` (`ps -o lstart`) | `run_bounded_capped_typed` | Deadline, prefix cap, spawn error kind; must not itself sample the process table (§4.4) |
 | `crates/orbit-runtime/src/host/exec/command_exec.rs` (`orbit.command.exec`) | `run_bounded_capped_typed` | Deadline (clamped), prefix cap, spawn error kind; timed-out output discarded |
-| `orbit-core/src/application/gc/scratch.rs` (`lsof`) | `run_bounded_capped` | Deadline, prefix cap |
+| `orbit-core/src/app/gc/scratch.rs` (`lsof`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/task/final_recovery/verify.rs` (`git fetch`) | `run_bounded_capped` | Deadline, prefix cap |
 | `orbit-core/src/application/task/retained_candidate.rs` (`git status`, `git rev-parse --verify HEAD`, retained patch `git diff HEAD`) | `run_bounded_capped` via `read_only_git` | Deadline (30 s), prefix cap: 256 KiB status, 256 B HEAD, 8 MiB patch; the retained-patch reads refuse a truncated status or patch |
 | `orbit-core/src/application/job/catalog/loading.rs` (`git check-ref-format`) | `run_bounded_capped` | Deadline, prefix cap |
@@ -238,7 +238,7 @@ Tests that call a supervisor directly are left out.
 | `orbit-runtime/src/task/pr_forge.rs` | `run_process` | Deadline, fail-at-limit capture, signal fan-out |
 | `orbit-core/src/application/review/fulfilment/codeql.rs` | `run_process` (CodeQL evidence sandbox) | Sandbox spawn, deadline, capture, signal fan-out |
 | `orbit-tools/src/external.rs`, `builtin/proc/spawn.rs` (`proc.spawn`) | `run_process` | Stdin payload, deadline, capture, debug echo |
-| `orbit-tools/src/builtin/github/{common,auth,logs}.rs` | `run_process`; `run_process_streaming_stdout` (logs) | Deadline, capture or stdout relay, typed capture-limit stop |
+| `orbit-tools/src/builtin/github/{common,auth,logs}.rs` | `run_process` (`logs/stream.rs` metadata read and `logs/fallback.rs` run view: `run_process_kill_at_once`); `run_process_streaming_stdout` (logs) | Deadline, capture or stdout relay, typed capture-limit stop; budgeted metadata reads are killed at their deadline |
 | `orbit-tools/src/plugin/source.rs` | `run_process`; `run_process_streaming_stdout` | Deadline, stdout relay |
 | `orbit-tools/src/plugin/tool.rs` (exec backend) | `spawn_owned_supervised_cancellable` | Owned transfer, signal guard over spawn and `bind_pid`, stdin payload, cancellation flag |
 | `orbit-engine/src/executor/automation/{dependabot,ci}/query.rs` | `run_process` | Deadline, capture |
@@ -382,7 +382,7 @@ instants; its cached value is refreshed before supervision acts on expiry.
 | Caller group | stdin | sinks | termination | other options |
 |--------------|-------|-------|-------------|---------------|
 | Bounded runner wrappers | Null | keep-prefix (`BoundedOutputCapture`) | Grace(200 ms) | `completion` per mode; drain 500 ms ≤ deadline; no signal interception; no stopped watch |
-| Exec runner wrappers | Payload or Null | fail-at-limit (+ redacting echo in debug) or Relay | Grace(5 s); KillNow for probes | `intercept_signals`; `cancelled`; stopped watch with a stderr note; drain 1 s |
+| Exec runner wrappers | Payload or Null | fail-at-limit (+ redacting echo in debug) or Relay | Grace(5 s); KillNow for probes and budgeted GitHub metadata reads (`run_process_kill_at_once`) | `intercept_signals`; `cancelled`; stopped watch with a stderr note; drain 1 s |
 | Engine provider runner | Payload | engine-owned rolling head/tail sink with line trace events | KillNow + group drain | `on_spawn`; `every` = progress; extendable deadline; stopped watch with callback |
 | Build phase | Null | two `Sink`s sharing one `BuildLog` | Grace(5 s) | wall-clock timeout; `every` = build-directory size every 1 s; post-exit size check; drain 2 s, workers joined |
 | Automation source | Null (preserves preconfigured temp file or null) | none (both `Redirected`) | KillNow | `clock` = source `budget_now`; timeout = min(command budget, remaining source deadline); `every` = stdout file size every 10 ms on wall time; post-exit size check; pipe drain zero, group drain 1 s |
@@ -437,7 +437,7 @@ it moves the most callers with the least new API.
 - **Bounded callers gain threads.** Step 4 has landed, so a bounded call on
   Unix now has two pipe workers, joined before return. Whether the "no capture
   worker survives the probe" guarantee in
-  [`DEVELOPMENT.md`](../../DEVELOPMENT.md#child-processes) holds on this path,
+  [process guidance](../../development/processes.md#child-processes) holds on this path,
   and the sampling overhead of `identity`'s `ps` call, have not been re-measured
   since the change. If sampling regresses, the supervisor may keep a
   single-threaded nonblocking mode for `Null` stdin with capture-only sinks.

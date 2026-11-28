@@ -128,7 +128,7 @@ as `review_gate_blocked`, `review_abandoned`, `review_timeout_incomplete` and
 
 A task filed with `skip-review`, or given it by an operator, gets no review at
 any timing while its candidate stays within `workflow.light_delivery_paths`
-([light delivery](../CONFIG.md#light-delivery-skip-review-and-skip-validation)).
+([light delivery](../config/workflow-tags.md#light-delivery-skip-review-and-skip-validation)).
 Every path the candidate changes since its pinned base must match, and every
 task it delivers must carry the tag. A candidate that includes a
 `security-state-review` task still requires an approval of its exact head.
@@ -653,7 +653,7 @@ selection. A base run that tests another selection, or passes without
 executing a counted test, is not comparable: the claim is neither refuted nor
 confirmed, and the review settles `incomplete` with a
 `baseline_not_comparable` escalation (see the
-[validation summary](../DEVELOPMENT.md#validation-summary-and-base-reruns)).
+[validation summary](../development/validation-and-ci.md#validation-summary-and-base-reruns)).
 When the candidate's failures are all tests, the base replays only those
 (`base_replay: "failing_tests"` in `review-baseline.json`), or a full result
 already cached for that base is read (`cached_failure_set`). Each claim's
@@ -667,7 +667,7 @@ partial failures are never replayed on the base or accepted as known red.
 
 A confirmed claim whose candidate failures are all failed tests the base
 fails too is known red, by the rule required validation applies
-([configuration](../CONFIG.md#a-red-base-is-held-not-blocked)): the candidate
+([configuration](../config/workflow-validation.md#a-red-base-is-held-not-blocked)): the candidate
 run completed without a timeout or supervisor stop, printed no sandbox
 deferral notice and names at least
 one failure. The candidate introduced none of them, so the task is not held.
@@ -715,7 +715,10 @@ package and that exact filter. A leading repository-owned scheduling wrapper
 runs, and other target selectors (`--bins`, `--all-targets`, `--lib --test`)
 stay uncovered. A `--test`
 requirement does not cover a library or package-wide run, and a `--lib`
-requirement does not cover a `--test` run. When a Cargo library deferral pair
+requirement does not cover a `--test` run. A recognized consolidated
+scenario row is the exception: it never enters the library pair, even when a
+package-wide run defers it, and routes to the `unreconciled_scenario_deferral`
+escalation below instead. When a Cargo library deferral pair
 cannot be safely reconciled, the certificate escalation names the unresolved
 record and gives a runnable native command or fresh-review route.
 An opaque required command such as `CI_TEST_BASE=<sha> make ci-test-affected`
@@ -845,7 +848,7 @@ a passing replay is pinned as the gate's evidence, whether the record defers
 one kind or several. Real failures, any other `SKIP:` or `skipping` notice,
 empty gates, notices of a kind whose probe the lane does not refuse, `DEFERRED: ps
 denied:` notices from an owner-run or non-macOS implementer and the other
-required commands are not deferrable ([development guide](../DEVELOPMENT.md#test-process-environment)).
+required commands are not deferrable ([development guide](../development/testing.md#test-process-environment)).
 
 A reviewer whose sandbox cannot run a sandbox-gated test names it as
 `host_sandbox_test` evidence for an OS and reports `incomplete` when that is
@@ -1103,7 +1106,7 @@ handoff output must show acceptance for the same final candidate. For
 
 - [Review gate design](../design/review-gate/2_design.md) — verdicts, the
   two-commit shape, revalidation, budgets, and coverage.
-- [CONFIG.md](../CONFIG.md) — the `[review]` keys, `workflow.purpose_crews.review` and `workflow.purpose_crews.pre_landing_review`.
+- [Review configuration](../config/review.md#review-and-operation--automatic-review) and [purpose crew pools](../config/crews.md#purpose-crew-pools).
 - [Claimed-review artifacts](./claimed-review-artifacts.md) — the follower
   reviewer's coordinator route, its smoke procedure and rollout record.
 - [Recover stuck job runs](./stuck-job-runs.md) — runs that never reached the

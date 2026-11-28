@@ -15,7 +15,7 @@ use orbit_automation::auto_tasks::settings::{load_settings_table, write_settings
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_auto_task_yaml;
 
-use crate::application::managed_assets::{
+use crate::unit::managed_asset::{
     ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetAction, ManagedAssetLayout,
     ManagedAssetOutcome, ManagedAssetReconcileMode, load_managed_asset_manifest,
     resolve_confined_asset_path,

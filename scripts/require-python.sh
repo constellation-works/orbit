@@ -44,6 +44,6 @@ if [[ -z "$major" || -z "$minor" ]] ||
 fi
 
 if [[ "${1:-}" == --yaml ]] && ! "$python_path" -c 'import yaml' >/dev/null 2>&1; then
-  echo "python preflight: PyYAML (import yaml) is required by the selected fixture self-tests, but python3 ${version} at ${python_path} cannot import it; create a virtual environment with \"${python_path}\" -m venv .venv, activate it (source .venv/bin/activate), then run python3 -m pip install PyYAML. See docs/DEVELOPMENT.md for setup; no packages were installed" >&2
+  echo "python preflight: PyYAML (import yaml) is required by the selected fixture self-tests, but python3 ${version} at ${python_path} cannot import it; create a virtual environment with \"${python_path}\" -m venv .venv, activate it (source .venv/bin/activate), then run python3 -m pip install PyYAML. See docs/development/validation-and-ci.md for setup; no packages were installed" >&2
   exit 1
 fi

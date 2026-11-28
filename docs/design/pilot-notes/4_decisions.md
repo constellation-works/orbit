@@ -3,7 +3,7 @@ title: Pilot Notes — Decisions
 owner: claude
 created_date: 2026-11-27
 updated_date: 2026-11-27
-last_validated: 2026-11-27
+last_validated: 2026-11-28
 status: Accepted
 feature: pilot-notes
 doc_role: decisions

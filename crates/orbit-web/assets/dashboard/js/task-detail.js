@@ -700,6 +700,7 @@ export function buildTaskDetail(task, context, drain = null) {
   return detail;
 }
 const DETAIL_TAB_NAMES = ["overview", "context_files", "delivery", "history", "runs", "artifacts", "comments"];
+const DETAIL_TAB_OVERFLOW_ORDER = ["runs", "delivery", "artifacts", "history", "context_files", "comments", "overview"];
 
 // The detail's tab strip and its panels. Every panel is built with the detail
 // and switching only toggles which one shows, so a draft in one tab survives
@@ -708,12 +709,207 @@ const DETAIL_TAB_NAMES = ["overview", "context_files", "delivery", "history", "r
 // the strip until `detail.setTabAvailable` adds it.
 function buildDetailTabs(task, detail, tabs, context) {
   const base = `detail-${task.id}`;
-  const list = el("div", { class: "detail-tabs", role: "tablist", "aria-label": "Task detail sections" });
+  const strip = el("div", { class: "detail-tabs" });
+  const list = el("div", { class: "detail-tablist", role: "tablist", "aria-label": "Task detail sections" });
+  const overflow = el("div", { class: "detail-tabs-overflow" });
+  const more = el("button", {
+    class: "detail-tabs-more",
+    type: "button",
+    text: "More",
+    "aria-label": "More task sections",
+    "aria-controls": `${base}-overflow-menu`,
+    "aria-haspopup": "menu",
+    "aria-expanded": "false",
+  });
+  more.hidden = true;
+  const menu = el("div", {
+    class: "detail-tabs-menu",
+    id: `${base}-overflow-menu`,
+    role: "menu",
+    "aria-label": "More task sections",
+  });
+  menu.hidden = true;
+  overflow.append(more, menu);
+  strip.append(list, overflow);
   const buttons = new Map();
+  const menuItems = new Map();
+  const tabEntries = new Map();
   const panels = new Map();
   const available = new Set(tabs.filter((tab) => tab.available !== false).map((tab) => tab.name));
   const runsNode = tabs.find((tab) => tab.name === "runs")?.content || null;
   let current = null;
+  let tornDown = false;
+  const closeMenu = () => {
+    menu.hidden = true;
+    more.setAttribute("aria-expanded", "false");
+  };
+  const syncTabLayout = () => {
+    if (tornDown || !strip.isConnected || !list.clientWidth) return;
+    for (const [name, button] of buttons) button.hidden = !available.has(name);
+    strip.removeAttribute("data-tight");
+    strip.removeAttribute("data-condensed");
+    more.hidden = true;
+    closeMenu();
+    const fits = () => list.scrollWidth <= list.clientWidth + 1;
+    if (!fits()) strip.setAttribute("data-tight", "");
+    if (!fits()) strip.setAttribute("data-condensed", "");
+    if (!fits()) {
+      more.hidden = false;
+      for (const name of DETAIL_TAB_OVERFLOW_ORDER) {
+        const button = buttons.get(name);
+        if (!button || !available.has(name) || name === current) continue;
+        button.hidden = true;
+        if (fits()) break;
+      }
+    }
+    let hiddenCount = 0;
+    for (const [name, item] of menuItems) {
+      const hidden = available.has(name) && buttons.get(name)?.hidden;
+      item.hidden = !hidden;
+      if (hidden) hiddenCount += 1;
+    }
+    more.hidden = hiddenCount === 0;
+    if (more.hidden) closeMenu();
+  };
+  const queueTabLayout = () => {
+    if (strip.isConnected) syncTabLayout();
+    else if (typeof requestAnimationFrame === "function") requestAnimationFrame(syncTabLayout);
+  };
+  let pointerInsideOverflow = false;
+  let pointerResetTimer = null;
+  const clearPointerInside = () => {
+    clearTimeout(pointerResetTimer);
+    pointerResetTimer = null;
+    pointerInsideOverflow = false;
+  };
+  const schedulePointerReset = () => {
+    clearTimeout(pointerResetTimer);
+    pointerResetTimer = setTimeout(() => {
+      pointerResetTimer = null;
+      pointerInsideOverflow = false;
+      if (!menu.hidden && typeof document !== "undefined" && !overflow.contains(document.activeElement)) {
+        closeMenu();
+      }
+    }, 0);
+  };
+  overflow.addEventListener("pointerdown", () => {
+    clearTimeout(pointerResetTimer);
+    pointerInsideOverflow = true;
+  });
+  overflow.addEventListener("mousedown", (event) => {
+    clearTimeout(pointerResetTimer);
+    pointerInsideOverflow = true;
+    // Keep focus from dropping to null on non-mouse-focusable <button> elements
+    // (WebKit/macOS Firefox) or menu padding before click runs.
+    if (event.button === 0) event.preventDefault();
+  });
+  more.addEventListener("click", (event) => {
+    event.stopPropagation();
+    clearPointerInside();
+    if (menu.hidden) {
+      menu.hidden = false;
+      more.setAttribute("aria-expanded", "true");
+      menu.querySelector(".detail-tabs-menu-item:not([hidden])")?.focus();
+    } else {
+      closeMenu();
+      more.focus();
+    }
+  });
+  overflow.addEventListener("focusout", (event) => {
+    if (pointerInsideOverflow && !event.relatedTarget) return;
+    if (!overflow.contains(event.relatedTarget)) closeMenu();
+  });
+  overflow.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || menu.hidden || event.altKey || event.ctrlKey || event.metaKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeMenu();
+    more.focus();
+  });
+  menu.addEventListener("keydown", (event) => {
+    const items = [...menu.querySelectorAll(".detail-tabs-menu-item:not([hidden])")];
+    if (!items.length) return;
+    const at = items.indexOf(document.activeElement);
+    let next = null;
+    if (event.key === "ArrowDown") next = items[(at + 1 + items.length) % items.length];
+    else if (event.key === "ArrowUp") next = items[(at - 1 + items.length) % items.length];
+    else if (event.key === "Home") next = items[0];
+    else if (event.key === "End") next = items[items.length - 1];
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+  });
+  const onDocumentPointerDown = (event) => {
+    if (!overflow.contains(event.target)) closeMenu();
+  };
+  if (typeof document !== "undefined") {
+    document.addEventListener("pointerdown", onDocumentPointerDown);
+    document.addEventListener("pointerup", schedulePointerReset);
+    document.addEventListener("pointercancel", schedulePointerReset);
+    document.addEventListener("mouseup", schedulePointerReset);
+  }
+  const syncTabLabel = (name) => {
+    const entry = tabEntries.get(name);
+    if (!entry) return false;
+    const countText = entry.countEl.textContent || "";
+    const accessibleLabel = countText ? `${entry.tab.label} ${countText}` : entry.tab.label;
+    let changed = false;
+    if (entry.button.getAttribute("aria-label") !== accessibleLabel) {
+      entry.button.setAttribute("aria-label", accessibleLabel);
+      changed = true;
+    }
+    if (entry.item.textContent !== accessibleLabel) {
+      entry.item.textContent = accessibleLabel;
+      changed = true;
+    }
+    if (entry.item.getAttribute("aria-label") !== accessibleLabel) {
+      entry.item.setAttribute("aria-label", accessibleLabel);
+      changed = true;
+    }
+    return changed;
+  };
+  let layoutObserver = null;
+  if (typeof ResizeObserver !== "undefined") {
+    layoutObserver = new ResizeObserver(syncTabLayout);
+    layoutObserver.observe(strip);
+  } else if (typeof window !== "undefined") {
+    window.addEventListener("resize", syncTabLayout);
+  }
+  let countObserver = null;
+  if (typeof MutationObserver !== "undefined") {
+    countObserver = new MutationObserver((records) => {
+      let changed = false;
+      const seen = new Set();
+      for (const record of records) {
+        const target = record.target?.nodeType === 1 ? record.target : record.target?.parentElement;
+        const name = target?.closest?.(".detail-tab")?.dataset?.tab;
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+        if (syncTabLabel(name)) changed = true;
+      }
+      if (changed) syncTabLayout();
+    });
+  }
+  if (typeof document !== "undefined" && document.fonts?.ready && typeof document.fonts.ready.then === "function") {
+    document.fonts.ready.then(() => {
+      if (!tornDown) syncTabLayout();
+    });
+  }
+  const originalTeardown = detail.teardown;
+  detail.teardown = () => {
+    tornDown = true;
+    clearPointerInside();
+    countObserver?.disconnect();
+    layoutObserver?.disconnect();
+    if (typeof window !== "undefined") window.removeEventListener("resize", syncTabLayout);
+    if (typeof document !== "undefined") {
+      document.removeEventListener("pointerdown", onDocumentPointerDown);
+      document.removeEventListener("pointerup", schedulePointerReset);
+      document.removeEventListener("pointercancel", schedulePointerReset);
+      document.removeEventListener("mouseup", schedulePointerReset);
+    }
+    originalTeardown?.();
+  };
   // A remembered tab that is not in the strip yet (Delivery before its read
   // lands) shows Overview and opens once it appears, unless the operator
   // picks a tab first.
@@ -731,19 +927,24 @@ function buildDetailTabs(task, detail, tabs, context) {
       panels.get(key).hidden = !on;
     }
     for (const footer of detail.querySelectorAll(".task-action-footer")) footer.hidden = footer.dataset.footerTab !== next;
+    syncTabLayout();
     if (focus) buttons.get(next).focus();
     if (next === "runs") loadTaskRuns(task, context, runsNode);
   };
   for (const tab of tabs) {
+    const countText = tab.count != null && (tab.count > 0 || tab.showZeroCount) ? String(tab.count) : "";
+    const accessibleLabel = countText ? `${tab.label} ${countText}` : tab.label;
+    const countEl = el("span", { class: "detail-tab-count", text: countText });
     const button = el("button", {
       class: "detail-tab",
       type: "button",
       role: "tab",
       id: `${base}-tab-${tab.name}`,
       "aria-controls": `${base}-panel-${tab.name}`,
+      "aria-label": accessibleLabel,
     }, [
-      el("span", { class: "detail-tab-label", text: tab.label }),
-      el("span", { class: "detail-tab-count", text: tab.count || tab.showZeroCount ? String(tab.count) : "" }),
+      el("span", { class: "detail-tab-label-full", text: tab.label }),
+      countEl,
     ]);
     button.dataset.tab = tab.name;
     button.addEventListener("click", (event) => {
@@ -752,6 +953,24 @@ function buildDetailTabs(task, detail, tabs, context) {
     });
     buttons.set(tab.name, button);
     if (available.has(tab.name)) list.appendChild(button);
+    const item = el("button", {
+      class: "detail-tabs-menu-item",
+      type: "button",
+      role: "menuitem",
+      text: accessibleLabel,
+      "aria-label": accessibleLabel,
+    });
+    item.hidden = true;
+    item.addEventListener("click", (event) => {
+      event.stopPropagation();
+      clearPointerInside();
+      closeMenu();
+      activate(tab.name, { focus: true });
+    });
+    menuItems.set(tab.name, item);
+    menu.appendChild(item);
+    tabEntries.set(tab.name, { tab, button, countEl, item });
+    countObserver?.observe(countEl, { childList: true, characterData: true, subtree: true });
     const panel = el("div", {
       class: "detail-tabpanel",
       role: "tabpanel",
@@ -775,6 +994,19 @@ function buildDetailTabs(task, detail, tabs, context) {
     activate(next, { focus: true });
   });
   detail.activateTab = (name, opts) => activate(DETAIL_TAB_NAMES.includes(name) ? name : "overview", opts);
+  detail.setTabCount = (name, count) => {
+    const entry = tabEntries.get(name);
+    if (!entry) return;
+    const countText = count == null || count === ""
+      ? ""
+      : typeof count === "string"
+        ? count
+        : (count > 0 || entry.tab.showZeroCount ? String(count) : "");
+    const textChanged = entry.countEl.textContent !== countText;
+    if (textChanged) entry.countEl.textContent = countText;
+    const labelChanged = syncTabLabel(name);
+    if (textChanged || labelChanged) syncTabLayout();
+  };
   detail.setTabAvailable = (name, on) => {
     const button = buttons.get(name);
     if (!button || available.has(name) === Boolean(on)) return;
@@ -783,13 +1015,16 @@ function buildDetailTabs(task, detail, tabs, context) {
       const after = tabs.slice(tabs.findIndex((tab) => tab.name === name) + 1).find((tab) => available.has(tab.name));
       list.insertBefore(button, after ? buttons.get(after.name) : null);
       if (waiting === name) activate(name);
+      else syncTabLayout();
     } else {
       available.delete(name);
       if (button.parentNode) button.parentNode.removeChild(button);
       if (current === name) activate(name);
+      else syncTabLayout();
     }
   };
-  return [list, ...panels.values()];
+  queueTabLayout();
+  return [strip, ...panels.values()];
 }
 // The Runs tab: the runs that carried this task, newest first, from the job
 // store's task filter. Read when the tab shows, at most once per freshness
@@ -862,9 +1097,16 @@ function renderTaskRuns(node, task, context) {
     }
   }
   node.replaceChildren(...children);
-  const count = document.getElementById(`detail-${task.id}-tab-runs`)?.querySelector?.(".detail-tab-count");
-  if (count && document.getElementById(`detail-${task.id}-runs`) === node) {
-    count.textContent = load && load.items ? String(load.total) : "";
+  const tabButton = document.getElementById(`detail-${task.id}-tab-runs`);
+  if (tabButton && document.getElementById(`detail-${task.id}-runs`) === node) {
+    const nextCount = load && load.items ? String(load.total) : "";
+    const detail = tabButton.closest?.(".task-detail");
+    if (detail && typeof detail.setTabCount === "function") {
+      detail.setTabCount("runs", nextCount);
+    } else {
+      const count = tabButton.querySelector?.(".detail-tab-count");
+      if (count) count.textContent = nextCount;
+    }
   }
 }
 

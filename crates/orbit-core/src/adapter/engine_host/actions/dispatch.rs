@@ -1,3 +1,4 @@
+use crate::app::gc;
 use crate::app::resident;
 use std::time::{Duration, Instant};
 
@@ -11,13 +12,10 @@ use crate::OrbitRuntime;
 use crate::application::admission::{backlog_exclusion, scan_unresolved};
 use crate::application::job::{pipeline_actions, script_attach};
 use crate::application::pull_drain;
-use crate::application::sweep_filing::ci_failure::filing as ci_failure_filing;
-use crate::application::sweep_filing::dependabot::{
-    consolidate as dependabot_consolidate, filing as dependabot_filing,
-};
 use crate::application::task::pilot as task_pilot;
 use crate::application::task::{blocked_recovery, escalation_triage_steps};
 use crate::application::workspace_auto;
+use crate::unit::sweep_filing;
 
 use super::pipeline_actions::{invoke_and_wait, invoke_detached};
 
@@ -80,7 +78,7 @@ pub(crate) fn run_deterministic(
     }
     match deterministic_action {
         // The one deterministic action a plugin contributes behaviour through
-        // (design `docs/design/plugins/1_scope.md` §4.5). It reaches a plugin
+        // (design `docs/design/plugins/2_design.md` §4.5). It reaches a plugin
         // tool and nothing else: an ordinary built-in still goes through
         // `orbit_tool_call`, so a plugin activity cannot use this variant to
         // borrow Orbit's own authority under plugin provenance.
@@ -179,11 +177,9 @@ pub(crate) fn run_deterministic(
         // The opt-in daily retention sweep: audit rows and blobs, then old
         // terminal runs' pipeline state, under the configured windows.
         CoreDeterministicAction::StoreGc => {
-            let audit = runtime
-                .gc_audit(true, None)
+            let audit = gc::gc_audit(runtime, true, None)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
-            let runs = runtime
-                .gc_runs(true, None)
+            let runs = gc::gc_runs(runtime, true, None)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
             Ok(serde_json::json!({ "audit": audit, "runs": runs }))
         }
@@ -192,15 +188,15 @@ pub(crate) fn run_deterministic(
         // engine-private `collect_ci_evidence` step; this action only reads
         // that JSON and writes tasks.
         CoreDeterministicAction::FileCiFailureTasks => {
-            ci_failure_filing::file_ci_failure_tasks(runtime, input)
+            sweep_filing::file_ci_failure_tasks(runtime, input)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         CoreDeterministicAction::ConsolidateCodeScanningTasks => {
-            dependabot_consolidate::consolidate_code_scanning_tasks(runtime, input)
+            sweep_filing::consolidate_code_scanning_tasks(runtime, input)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         CoreDeterministicAction::FileDependabotAlertTasks => {
-            dependabot_filing::file_dependabot_alert_tasks(runtime, input)
+            sweep_filing::file_dependabot_alert_tasks(runtime, input)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         // Attach an earlier script step's verified output files to a task,

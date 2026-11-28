@@ -126,6 +126,7 @@ impl OrbitRuntime {
             self,
             query,
             os_readout.as_ref(),
+            false,
             |store, residual, hydration| store.query_task_row_pages(pages, residual, hydration),
         )
     }
@@ -149,6 +150,7 @@ impl OrbitRuntime {
             self,
             query,
             os_readout.as_ref(),
+            true,
             |store, residual, hydration| {
                 store.observe_task_rows(&query.filter, query.limit, residual, hydration)
             },
@@ -184,6 +186,7 @@ impl OrbitRuntime {
             self,
             query,
             os_readout.as_ref(),
+            true,
             |store, residual, hydration| store.observe_task_row_pages(pages, residual, hydration),
         );
         match observed {
@@ -494,9 +497,15 @@ fn query_task_store(
     query: &TaskListQuery,
     os_readout: Option<&super::TaskOsReadout>,
 ) -> Result<TaskPage, OrbitError> {
-    with_task_residual(runtime, query, os_readout, |store, residual, hydration| {
-        store.query_task_rows(&query.filter, query.limit, residual, hydration)
-    })
+    with_task_residual(
+        runtime,
+        query,
+        os_readout,
+        false,
+        |store, residual, hydration| {
+            store.query_task_rows(&query.filter, query.limit, residual, hydration)
+        },
+    )
 }
 
 /// Run `select` with the residual predicate and hydration `query` asks for.
@@ -506,6 +515,7 @@ fn with_task_residual<T>(
     runtime: &OrbitRuntime,
     query: &TaskListQuery,
     os_readout: Option<&super::TaskOsReadout>,
+    observational: bool,
     select: impl FnOnce(
         &TaskV2Store,
         orbit_store::contract::TaskResidualFilter<'_>,
@@ -516,25 +526,30 @@ fn with_task_residual<T>(
     // Only the explicit warning filter scans proposed-task audit sidecars.
     // Resolve membership before pagination so counts and cursors stay accurate.
     let warning_ids = if query.pilot_warnings {
-        let candidates = store.task_candidates(
-            &TaskListFilter {
-                statuses: Some(vec![TaskStatus::Proposed]),
-                ..Default::default()
-            },
-            usize::MAX,
-        )?;
+        let filter = TaskListFilter {
+            statuses: Some(vec![TaskStatus::Proposed]),
+            ..Default::default()
+        };
+        let candidates = if observational {
+            store.observe_task_candidates(&filter, usize::MAX)?
+        } else {
+            store.task_candidates(&filter, usize::MAX)?
+        };
         let mut ids = BTreeSet::new();
         for task in candidates.items {
-            let comments = runtime.get_task_comments(&task.id)?;
             let task_id = task.id.clone();
-            let task = metadata_task(task);
-            let is_done = |id: &str| runtime.warning_prerequisite_is_done(id);
-            // Same readout the list shows: an unresolvable audit is a held
-            // readout for this task, not an error for the whole page.
-            if !runtime
-                .task_pilot_warning_findings(&task, &comments, &is_done)
-                .is_empty()
-            {
+            let warnings = if observational {
+                let Some(row) = store.observe_listed_task_row(&task_id)? else {
+                    continue;
+                };
+                runtime.observe_task_pilot_warning_findings(&row.task, &row.comments)
+            } else {
+                let comments = runtime.get_task_comments(&task_id)?;
+                runtime.task_pilot_warning_findings(&metadata_task(task), &comments, &|id| {
+                    runtime.warning_prerequisite_is_done(id)
+                })
+            };
+            if !warnings.is_empty() {
                 ids.insert(task_id);
             }
         }

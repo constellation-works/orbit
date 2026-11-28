@@ -2,6 +2,7 @@
 //! surfaces report them and the distributed settlement reads them from the
 //! drain's admissions, so neither owns the shape [ORB-17937].
 
+use orbit_types::workflow::ReviewTiming;
 use serde::Serialize;
 
 /// A claimed leaf a pull drain is still carrying: launched, not yet
@@ -26,6 +27,9 @@ pub struct DrainClaimedLeaf {
     /// Whether the leaf is still implementing or has reached its
     /// before-landing review [ORB-15194].
     pub stage: ClaimedLeafStage,
+    /// The owner's captured review timing for this claim (`none`, `before-pr`,
+    /// `before-landing`).
+    pub owner_review_timing: ReviewTiming,
 }
 
 /// What a live claimed leaf is doing with its drain slot [ORB-15194].
@@ -62,11 +66,12 @@ impl DrainClaimedLeaf {
     #[must_use]
     pub fn describe(&self) -> String {
         format!(
-            "{} (leaf {}) {} {} settlement={}",
+            "{} (leaf {}) {} {} owner_review={} settlement={}",
             self.task_id.as_deref().unwrap_or("-"),
             self.leaf_run_id,
             self.leaf_state,
             self.stage.as_str(),
+            self.owner_review_timing.as_str(),
             self.settlement_phase
         )
     }

@@ -1,5 +1,5 @@
 //! Link a plugin's skills into provider discovery, and unlink them again
-//! (design `docs/design/plugins/1_scope.md` §1, §3).
+//! (design `docs/design/plugins/2_design.md` §1, §3).
 //!
 //! A plugin's skills stay in its install directory: Orbit links them into the
 //! same `skill_link_roots` (`~/.agents/skills`, `~/.claude/skills` for the

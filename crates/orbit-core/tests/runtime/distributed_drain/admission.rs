@@ -255,6 +255,46 @@ fn redacted_owner_identity_retries_without_protocol_skew() {
     assert_eq!(recovered["consecutive_pass_failures"], 0);
 }
 
+/// A redacted negotiation error is durable and terminal when a windowless
+/// drain's one admission pass fails before admitting work.
+fn a_single_pass_redacted_owner_identity_fails_with_its_recorded_cause() {
+    let pair = Pair::new(0);
+    let drain = pair.run_drain();
+    *pair.wire.fingerprint.lock().unwrap() = Some(json!(
+        "3531880b5[REDACTED_ENV]5003d9ff82a4666593a2fc93756c67758714a336aadcb0a658"
+    ));
+
+    let failure = orbit_core::test_support::EngineHost::new(&pair.follower)
+        .run_deterministic(
+            "pull_refill",
+            &json!({}),
+            &json!({
+                "run_id": drain,
+                "destination": pair.destination,
+                "for_seconds": 0,
+                "window_expired": true,
+                "max_active_leaf_runs": 1,
+            }),
+            ToolContext::default(),
+        )
+        .expect_err("a failed single admission pass must fail the drain");
+    let failure = failure.to_string();
+    assert!(
+        failure.contains("single-pass pull drain failed without admitting work"),
+        "{failure}"
+    );
+    assert!(failure.contains("redaction artefact"), "{failure}");
+    assert!(!failure.contains("retry next pass"), "{failure}");
+
+    let recorded = recorded_pass(&pair.follower, &drain);
+    let cause = recorded
+        .last_pass_error
+        .expect("recorded negotiation cause");
+    assert!(cause.contains("redaction artefact"), "{cause}");
+    assert!(!cause.contains("retry next pass"), "{cause}");
+    assert_eq!(recorded.consecutive_pass_failures, 1);
+}
+
 /// A scrubbed mutation reply must not imply that admission failed: replaying
 /// its durable request returns the receipt the owner already stored.
 fn redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request() {
@@ -3111,6 +3151,7 @@ crate::scenario_table!(
     pull_admission_preserves_execution_machine_name,
     session_metadata_does_not_corrupt_owner_probe_or_pull_pass,
     redacted_owner_identity_retries_without_protocol_skew,
+    a_single_pass_redacted_owner_identity_fails_with_its_recorded_cause,
     redacted_pull_receipt_reports_unknown_outcome_and_replays_same_request,
     obsolete_persisted_request_skew_does_not_fail_a_matching_drain,
     owner_pull_admits_empty_context_without_locks_and_claims_no_diff_work,

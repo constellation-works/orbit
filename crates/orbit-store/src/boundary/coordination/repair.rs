@@ -204,6 +204,7 @@ impl TaskCommitBoundary {
                 handoff_id: accepted.handoff_id,
                 candidate: accepted.handoff.candidate,
                 stop_evidence,
+                owner_review_timing: Some(request.ship.review_timing()),
             };
             candidates.push(RepairCandidate {
                 state,
@@ -274,6 +275,7 @@ impl TaskCommitBoundary {
                 "request_id": request.request_id,
                 "repairs_claim_id": repair.repairs_claim_id,
                 "repairs_handoff_id": repair.handoff_id,
+                "review_timing": request.ship.review_timing().as_str(),
             }))?),
             reservation: Some(self.admission_reservation_params(
                 orbit_dir,

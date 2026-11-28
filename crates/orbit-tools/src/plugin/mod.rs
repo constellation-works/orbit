@@ -3,7 +3,7 @@
 //! a registry entry backed by the plugin's `exec` or `mcp` backend running
 //! under the granted sandbox profile.
 //!
-//! Design: `docs/design/plugins/1_scope.md`. Lifecycle (install, enable,
+//! Design: `docs/design/plugins/2_design.md`. Lifecycle (install, enable,
 //! grants, pin file) lives in `orbit-core`; this module owns everything that
 //! needs a plugin directory and a tool registry and nothing that needs a
 //! store.
@@ -20,9 +20,6 @@ mod migrate;
 mod schema;
 mod source;
 mod tool;
-
-#[cfg(test)]
-mod tests;
 
 pub use backend::{
     BrokeredCaller, DECISION_CHANNEL_STORE_DIR, DeliveredPluginSecret, DroppedFsRoot,
@@ -53,10 +50,12 @@ pub use envelope::{
 };
 pub use lifecycle::{BrokerCall, BrokerSessions};
 pub use loader::{
-    FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, LoadedPluginTestFile, PluginDefinitionFiles,
-    PluginLoadError, PluginValidationPolicy, ResolvedPluginTool, first_party_source,
-    fs_write_root_covers, load_plugin_dir, load_plugin_dir_without_tests, manifest_digest,
-    manifest_refusal, physical_with_missing_tail, plugin_symlink_refusal,
+    FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, LoadedPluginPage, LoadedPluginTestFile,
+    MAX_PLUGIN_PAGE_BYTES, PluginDefinitionFiles, PluginLoadError, PluginPageBundle,
+    PluginPageError, PluginPageFile, PluginValidationPolicy, ResolvedPluginTool,
+    first_party_source, fs_write_root_covers, load_plugin_dir, load_plugin_dir_without_tests,
+    manifest_digest, manifest_refusal, page_digest, page_digest_diagnostic,
+    physical_with_missing_tail, plugin_pages_unchanged, plugin_symlink_refusal,
     refuse_covering_fs_write_roots, refuse_plugin_tree_symlinks, resolve_plugin_definitions,
     validate_loaded_plugin,
 };
@@ -67,3 +66,6 @@ pub use source::{
     PluginSourceRequest, ResolvedCommit, ResolvedSource, resolve_plugin_root, resolve_plugin_source,
 };
 pub use tool::{PluginBackend, PluginTool, PluginToolBinding};
+
+#[cfg(test)]
+mod tests;

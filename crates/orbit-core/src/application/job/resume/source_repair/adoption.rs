@@ -4,12 +4,13 @@ use super::*;
 use orbit_common::SourceRepairAuthorityRefusal;
 
 impl OrbitRuntime {
-    pub(super) fn source_repair_adopted_binding(
+    pub(super) fn source_repair_adopted_binding_with(
         &self,
         source: &JobRun,
         task: &Task,
         worktree: &Value,
         adopted: &Value,
+        history: Option<&[TaskHistoryEntry]>,
     ) -> Result<SourceRepairBinding, OrbitError> {
         let input = source
             .input
@@ -19,8 +20,15 @@ impl OrbitRuntime {
             serde_json::from_value(input[SOURCE_REPAIR_KEY].clone())
                 .map_err(|error| refuse(format!("unreadable prior repair admission: {error}")))?;
         let binding = &admission.binding;
-        let entries = self.get_task_history(&task.id)?;
-        let reservations = orbit_types::workflow::source_repair_authorizations(&entries)
+        let loaded_entries;
+        let entries = match history {
+            Some(history) => history,
+            None => {
+                loaded_entries = self.get_task_history(&task.id)?;
+                &loaded_entries
+            }
+        };
+        let reservations = orbit_types::workflow::source_repair_authorizations(entries)
             .map_err(|error| refuse(format!("unreadable repair reservation: {error}")))?;
         let matching = reservations
             .iter()
@@ -69,7 +77,7 @@ impl OrbitRuntime {
         if source.state != JobRunState::Success
             && !admitted_task_matches(
                 task,
-                &entries,
+                entries,
                 &source.run_id,
                 admission.authorized_at,
                 &binding.task_digest,

@@ -3,7 +3,8 @@
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contract::TaskDecisionSnapshot;
 use orbit_types::task::{
-    DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskComment, TaskHistoryEntry,
+    ArtifactManifestFileV2, DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskComment,
+    TaskHistoryEntry,
 };
 use serde_json::{Value, json};
 
@@ -135,6 +136,19 @@ impl OrbitRuntime {
         {
             tracing::debug!(%error, "decision snapshots not recorded");
         }
+    }
+
+    /// Observational [`Self::open_decisions_json_in`]: resolves pilot audits
+    /// and block-triage decisions from already-loaded records and settled
+    /// bundles without entering the task-commit boundary.
+    pub(crate) fn observe_open_decisions_json_in(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        comments: &[TaskComment],
+        artifacts: &[ArtifactManifestFileV2],
+    ) -> Result<Value, OrbitError> {
+        self.open_decisions_json_with(task, history, comments, Some(artifacts), true)
     }
 
     fn scan_decision_requests(
@@ -313,8 +327,31 @@ impl OrbitRuntime {
         history: &[TaskHistoryEntry],
         comments: &[TaskComment],
     ) -> Result<Value, OrbitError> {
+        self.open_decisions_json_with(task, history, comments, None, false)
+    }
+
+    fn open_decisions_json_with(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        comments: &[TaskComment],
+        artifacts: Option<&[ArtifactManifestFileV2]>,
+        observational: bool,
+    ) -> Result<Value, OrbitError> {
+        let now = chrono::Utc::now();
+        let requests = if observational {
+            self.observe_task_decision_requests_in(
+                task,
+                history,
+                comments,
+                artifacts.unwrap_or_default(),
+                now,
+            )?
+        } else {
+            self.task_decision_requests_in(task, history, comments, now)?
+        };
         Ok(Value::Array(
-            self.task_decision_requests_in(task, history, comments, chrono::Utc::now())?
+            requests
                 .iter()
                 .filter(|request| request.state == DecisionRequestState::Open)
                 .map(open_decision_json)

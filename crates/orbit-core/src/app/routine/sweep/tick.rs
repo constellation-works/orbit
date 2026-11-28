@@ -1,4 +1,5 @@
 use crate::app::resident;
+use crate::unit::landing;
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -462,7 +463,7 @@ fn run_work_admission(
                 skipped_workspaces.insert(workspace.name.clone());
                 continue;
             }
-            if let Err(error) = runtime.dispatch_landing_requests_at(now_utc) {
+            if let Err(error) = landing::dispatch_landing_requests_at(runtime, now_utc) {
                 tracing::warn!(
                     target: "orbit_core::application::routines::sweep",
                     workspace = %workspace.name,
@@ -770,7 +771,9 @@ fn run_post_scheduling_maintenance(
         deadline,
         skipped,
         Some("sweep.backlog_forecast_failed"),
-        |_, runtime| runtime.record_scheduled_backlog_forecast(now_utc),
+        |_, runtime| {
+            crate::unit::backlog_forecast::record_scheduled_backlog_forecast(runtime, now_utc)
+        },
     );
 
     // [ORB-14739, ORB-14823] Standing baseline-red holds are re-checked

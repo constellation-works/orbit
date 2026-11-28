@@ -394,13 +394,23 @@ spec:
       envelope. It is absent when empty and is not an `orbit.task.show` field.
       When it is present, the pipeline runs each listed command itself,
       outside the agent sandbox, on the final
-      committed candidate. For a diff, do not run a listed command whole or
-      defer it: run focused checks (tests, formatter, linter for what you
+      committed candidate. For a diff, do not run a listed heavy command whole
+      as a blanket gate (`make ci`, `make ci-fast`, `make ci-test-affected`,
+      or another full-workspace suite) and do not defer a listed command:
+      run focused checks (tests, formatter, linter for what you
       changed) that show each criterion, plus every workspace-required check
-      the list does not name, and record each listed command as `not_run`
-      (pipeline final validation), never as passed. A clean no-op or
-      already-landed handoff skips pipeline validation, so there you run and
-      record every required check. Without the field, you own every check.
+      the list does not name. Still run any listed command the workspace guide
+      names as a pre-handoff check for a diff (such as `make ci-guards`) and
+      fix its findings before handoff; the pipeline still runs every listed
+      command on the committed candidate. In the task execution summary, name
+      the pre-handoff phase and record each pre-handoff command with its actual
+      outcome, and name the pipeline final-validation phase and record each
+      listed command as `not_run`. The same command can appear in both phases;
+      a pre-handoff pass does not count as a committed-candidate validation pass,
+      and the pipeline's required receipts stay the record of that validation.
+      A clean no-op or already-landed handoff skips pipeline validation, so there
+      you run and record every required check. Without the field, you own every
+      check.
     - Before handing off a diff, also run the pre-handoff checks the
       workspace guide names for a diff (static guards, formatter, linters
       for what you changed) and fix what they report. They do not replace
@@ -496,8 +506,8 @@ spec:
       `orbit.task.update` (claimed mode: the `execution_summary` output).
       Gates read artifacts and task state, never the summary, so the summary
       is the audit trail. Map criteria to results; list validation commands
-      as passed, failed or not run, with reasons; record the reconciliation
-      (delivery paths, paths outside the task's selectors, cleanup outcome,
+      as passed, failed or not run, with reasons and phase; record the
+      reconciliation (delivery paths, paths outside the task's selectors, cleanup outcome,
       leftovers); disclose risks and deviations. Never claim a skipped check
       passed or incomplete work succeeded.
     - Return a short result `summary`; include `diff` only when cheap and
@@ -565,7 +575,8 @@ spec:
       the diff is partial; complete the task (a compiling subset is not
       done).
     - `conflict`: resolve the markers in `conflicting_paths` against the new
-      base.
+      base; when a binary or unmarked conflict names preserved side paths under
+      `.orbit/tmp/`, inspect those saved versions and write the resolved file.
     - `validation`: fix the `output` of the failing `command`.
     - `review`: address the findings in the review settlement comment or,
       when `interrupted_review` is set, in its `findings`. If

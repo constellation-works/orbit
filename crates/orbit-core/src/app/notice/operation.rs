@@ -38,6 +38,7 @@ pub(super) fn dispatch(
         Ok(NoticeCaller {
             session: session_context.clone(),
             scope_task_id: caller.task_id.clone(),
+            activity: caller.activity.clone(),
             scope_run_id: caller.run_id.clone(),
             orchestrator: input.optional_string("orchestrator")?,
             model: input
@@ -70,6 +71,8 @@ pub(super) fn dispatch(
         NoticeVerb::List => to_json(&read::list_notices(runtime, &list_filter(input)?)?),
         NoticeVerb::Show => {
             let operator = session_context.worker_invocation.is_none()
+                && caller.run_id.is_none()
+                && caller.task_id.is_none()
                 && resolved_caller_capabilities(runtime.env(), session_context)
                     .contains(&McpCapability::Operator);
             to_json(&read::show_notice(

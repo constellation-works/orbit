@@ -30,6 +30,7 @@ const KINDS: &[EnumValue] = &[
     EnumValue::plain("run_failed"),
     EnumValue::plain("run_stuck"),
     EnumValue::plain("claim_stale"),
+    EnumValue::plain("delivery_stale_base"),
     EnumValue::plain("ci_red"),
     EnumValue::plain("friction_untriaged"),
     EnumValue::plain("host_unhealthy"),

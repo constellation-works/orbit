@@ -572,4 +572,52 @@ fn persisted_selective_only_claim_accepts_a_non_light_pr_handoff() {
         refused.contains("invalid_input"),
         "a selective contract without its captured command list is still malformed: {refused}"
     );
+
+    // Legacy `ClaimRepair` rows recorded before `owner_review_timing` existed
+    // deserialize cleanly with `owner_review_timing: None`.
+    let legacy_repair: orbit_store::contract::ClaimRepair =
+        serde_json::from_value(serde_json::json!({
+            "repairs_claim_id": "claim-legacy",
+            "handoff_id": "handoff-legacy",
+            "candidate": delivery.handoff.candidate,
+            "stop_evidence": "conflicts with base",
+        }))
+        .expect("legacy ClaimRepair deserializes without owner_review_timing");
+    assert_eq!(legacy_repair.owner_review_timing, None);
+
+    // A persisted claim whose ship contract requires before-landing review but
+    // lacks `ship.review` fails closed as `review_contract_mismatch` rather
+    // than `review_evidence_unexpected`.
+    let broken_ship = Delivery::admit(before_landing_ship());
+    let broken_store = Store::open(&broken_ship.owner.root().join("state.sqlite")).unwrap();
+    broken_store
+        .with_transaction(|tx| {
+            let (row_id, payload): (String, String) = tx
+                .connection()
+                .query_row(
+                    "SELECT row_id, payload_json FROM task_coordination_rows WHERE kind = 'distributed-admission-receipt-v1'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            let mut value: serde_json::Value = serde_json::from_str(&payload).unwrap();
+            value["receipt"]["request"]["ship"]["review"] = serde_json::Value::Null;
+            tx.connection()
+                .execute(
+                    "UPDATE task_coordination_rows SET payload_json = ?1 WHERE kind = 'distributed-admission-receipt-v1' AND row_id = ?2",
+                    [value.to_string(), row_id],
+                )
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let error = broken_ship
+        .accept(None)
+        .expect_err("required review without contract must refuse")
+        .to_string();
+    assert!(
+        error.contains(HandoffReviewRefusal::ReviewContractMismatch.as_str())
+            && error.contains("without a review contract"),
+        "{error}"
+    );
 }

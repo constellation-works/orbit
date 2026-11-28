@@ -26,6 +26,9 @@ const ORDINARY_WRITES: &[(&str, &str)] = &[
     ("POST", "/workflows/ship"),
     ("POST", "/runs/{id}/cancel"),
     ("POST", "/metrics/invocations"),
+    // A page call runs only a declared read-only tool of its page, the same
+    // read a panel makes for any session.
+    ("POST", "/plugins/{namespace}/pages/{page}/call"),
 ];
 
 #[test]
@@ -177,6 +180,11 @@ fn body(path: &str) -> Value {
         }),
         "/auto-tasks/mint" => json!({"name":"missing","acknowledge_unconditional":true}),
         "/workflows/auto" => json!({"for_duration":"1m","complete":false}),
+        "/plugins/{namespace}/pages/{page}/actions/confirm"
+        | "/plugins/{namespace}/pages/{page}/actions/run"
+        | "/plugins/{namespace}/pages/{page}/actions/cancel" => {
+            json!({"tool":"mutate","input":{"value":1}})
+        }
         _ => json!({
             "title":"guard fixture", "description":"HTTP guard check", "scope":"host",
             "expected_candidate_commit":"a", "expected_base_commit":"b",
@@ -221,6 +229,7 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                     .replace("{name}", "missing")
                     .replace("{namespace}", "missing")
                     .replace("{panel}", "missing")
+                    .replace("{page}", "missing")
                     .replace("{kind}", "routine")
                     .replace("{batch}", "missing")
                     .replace("{*path}", "missing")

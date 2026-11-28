@@ -2,7 +2,7 @@
 title: Visual Review — Design
 owner: claude
 created_date: 2026-10-27
-updated_date: 2026-11-07
+updated_date: 2026-11-27
 last_validated: 2026-11-03
 status: Deprecated
 feature: visual-review
@@ -316,7 +316,7 @@ a new view cannot ship unmeasured. Later entries added `notices` (fixture `fleet
 open notice and none closed in the last 24 hours), `knowledge` and `plugins`; `leases` is
 exempt until a fixture enables path leases.
 
-The dashboard is dark-only ([browser checks](../../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)),
+The dashboard is dark-only ([browser checks](../../../development/browser-checks.md#browser-checks-on-a-prepared-host)),
 so `themes = ["dark"]`, and `color_scheme_invariant = true` turns "both themes" into a check
 that the light colour preference changes nothing (§7). The website gets `themes = ["light",
 "dark"]`.
@@ -737,7 +737,7 @@ it.
 | `codex` | `attach_args`: `codex exec` accepts image attachments on its command line (`--image`). | Shipped declaration; phase 1 Linux probe passed; `view_image` supports the self-check. |
 | `gemini` | `native_read` is expected (the Gemini CLI's file read returns image data). | Not verified; declared only after a probe passes. |
 | `antigravity`, `grok`, `copilot` | Unknown. | No declaration; refused until probed. |
-| `muse` | `attach_args --image {path}`, PNG only ([Muse Code CLI](../../../CONFIG.md#muse-code-cli)). | Shipped declaration; phase 1 Linux probe passed on Muse Code 1.4.14. |
+| `muse` | `attach_args --image {path}`, PNG only ([Muse Code CLI](../../../config/providers.md#muse-code-cli)). | Shipped declaration; phase 1 Linux probe passed on Muse Code 1.4.14. |
 | `ollama` | CLI runtime (`crates/orbit-agent/src/providers/ollama/ollama_runtime.rs`), without a shipped image-input declaration. | Visual use needs an image-input declaration and a passing crew probe. |
 | `openai_compat` | No CLI runtime. | Unsupported, as for every activity. |
 
@@ -757,7 +757,7 @@ envelope must return the code in `canary`. A missing or wrong code on a delivery
 the result as `image_not_seen`, a retryable failure. The probe runs the same check outside
 a delivery and records a miss on that crew's row; the probe run itself still completes, so
 one crew does not fail the batch. A crew that fails the canary twice in a row is held
-for visual review like a [provider failure hold](../../../CONFIG.md#provider-failure-holds).
+for visual review like a [provider failure hold](../../../config/crew-recovery.md#provider-failure-holds).
 
 This is the one place visual review reads agent output as truth, and it is bounded: the
 canary proves delivery, not judgement. Judgement is checked by verification (§11).
@@ -879,7 +879,7 @@ the measure of how well the self-check worked.
 
 ### 12.1 The experiment
 
-One experiment ([experiments](../../experiments/1_scope.md)) in each workspace that runs it:
+One experiment ([experiments](../../experiments/1_overview.md)) in each workspace that runs it:
 
 - **Population:** tasks tagged `verify-mock-ui`, excluding `no-diff-expected`.
 - **Arms:** `control` with `visual_review.reviewer = false` (self-check, capture and checks
@@ -1024,7 +1024,7 @@ with this design unchanged.
 
 **`ui/implement.md` and `ui/review.md`** change only to point at `verify-mock-ui` for tasks
 with mocks. The workspace guide's screenshot rule and
-[browser checks](../../../DEVELOPMENT.md#browser-checks-on-a-prepared-host) changed in phase 6 ([ORB-19982]):
+[browser checks](../../../development/browser-checks.md#browser-checks-on-a-prepared-host) changed in phase 6 ([ORB-19982]):
 the implementer's capture duty is dropped for mocked views of a `verify-mock-ui` task in a
 workspace with visual review `live`, and remains for everything else.
 

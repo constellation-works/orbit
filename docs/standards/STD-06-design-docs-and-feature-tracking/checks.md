@@ -7,7 +7,7 @@ Each gate below is real and can be adopted. "Orbit:" says whether Orbit enforces
 | Rule | Gate |
 |---|---|
 | R1 | review-only. Optionally, a script lists folder slugs with no tracker tag of the same name, and tags with no folder. Orbit: none. |
-| R2 | review-only. A generator can warn when a folder has no `1_overview.md` or `1_scope.md`. Orbit: `scripts/generate-doc-indexes.sh` falls back to the first top-level doc silently. |
+| R2 | review-only. A generator can warn when a folder lacks `1_overview.md`, `2_design.md` or `4_decisions.md`, or holds a top-level numbered file outside those and `3_vision.md`, including any `1_scope.md`. Orbit: `scripts/generate-doc-indexes.sh` falls back to the first top-level doc silently. |
 | R3 | review-only. A CI `find docs/design -maxdepth 2 -iname 'README.md' -o -iname 'roadmap.md' -o -iname 'changelog.md'` that fails on any hit (outside `_archived/` and `_templates/`). Orbit: none. |
 | R4 | review-only. A frontmatter lint over `docs/design/*/[0-9]_*.md`. Orbit: none (CONVENTIONS §11 lists it as a future lint). |
 | R5 | The board generator fails on a missing or unknown `stage`. Orbit: `scripts/generate-doc-indexes.sh`, run by `make ci-guards` with `--check`. |

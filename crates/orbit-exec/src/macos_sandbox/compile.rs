@@ -60,7 +60,7 @@ pub enum MacosLoginKeychainAccess {
 }
 
 /// What a plugin backend may reach over the network on macOS (design
-/// `docs/design/plugins/1_scope.md` §4.3).
+/// `docs/design/plugins/2_design.md` §4.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MacosNetworkAccess {
     /// Every socket operation is refused.

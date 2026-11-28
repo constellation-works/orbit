@@ -6,6 +6,8 @@
 
 mod load;
 mod model;
+
+mod page;
 mod validation;
 
 use std::path::{Path, PathBuf};
@@ -29,4 +31,8 @@ use super::schema::{CompiledSchema, params_from_input_schema};
 
 pub use self::load::*;
 pub use self::model::*;
+pub use self::page::{
+    LoadedPluginPage, MAX_PLUGIN_PAGE_BYTES, PluginPageBundle, PluginPageError, PluginPageFile,
+    page_digest, page_digest_diagnostic, plugin_pages_unchanged,
+};
 pub use self::validation::*;

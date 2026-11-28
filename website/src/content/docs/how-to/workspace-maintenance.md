@@ -358,8 +358,14 @@ orbit workspace remove my-project
 
 Use `remove` to unregister a checkout and keep its task history and
 settings. If task bundles remain, the command prints the path of the
-task-store partition it left. Reclaim it later with
-`orbit doctor --fix-orphan-task-stores --confirm`.
+task-store partition it left and retains its checkout binding as evidence.
+If the checkout is absent beneath a populated, readable immediate parent with
+no checkout entry, `orbit doctor --fix-orphan-task-stores --confirm` can reclaim
+the partition and delete its task bundles. Restore any offline volume first.
+If the parent is empty, missing or unreadable, or absence cannot otherwise be
+confirmed, doctor reports the partition as unreachable and preserves it and its
+binding. Restore access and run doctor again; if the checkout is genuinely gone
+but its parent remains empty or missing, reclaim the partition manually.
 
 ### Delete artifacts with teardown
 

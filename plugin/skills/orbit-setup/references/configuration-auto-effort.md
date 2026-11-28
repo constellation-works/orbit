@@ -173,7 +173,10 @@ A crew can also opt out of image input with `vision = false`; see
 [Executor image input](configuration-image-input.md#executor-image-input-image_input).
 
 A crew can run on its own provider account through `env`, a list of variables
-its agents receive on top of `execution.env.pass` (names only, never values):
+its agents receive on top of `execution.env.pass` (names only, never values;
+`ORBIT_TASK_ID`, `ORBIT_ACTIVE_TASK_ID` and `AGENT_TASK` are reserved and never
+taken from `pass` or `env`: CLI dispatch clears them, then stamps the activity's
+task on a bound activity and leaves them unset otherwise):
 
 ```toml
 # ~/.orbit/config.toml only

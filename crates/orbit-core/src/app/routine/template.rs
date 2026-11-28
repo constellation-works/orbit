@@ -18,7 +18,7 @@ use super::seed::{
     SUPERSEDED_ROUTINE_TEMPLATES,
 };
 use super::status::rewrite_enabled_line;
-use crate::application::managed_assets::{
+use crate::unit::managed_asset::{
     MANAGED_ASSET_MANIFEST_FILE, ManagedAssetAction, ManagedAssetLayout, ManagedAssetOutcome,
     ManagedAssetReconcileMode, ManagedAssetReconciliation, RoutineAssetProvenance,
     RoutineMaterializationBinding, load_managed_asset_manifest,

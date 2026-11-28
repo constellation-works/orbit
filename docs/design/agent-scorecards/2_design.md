@@ -108,7 +108,8 @@ with no median subtracted.
 - The legend's reference key names the chart's basis: **Expected (tier/size)**
   when every axis is expectation-adjusted, **Expected / fleet median** when the
   chart mixes the two kinds, and **Fleet median** when none is. The plot's
-  accessible name says the same.
+  accessible name says the same. When an axis has no data, the legend also
+  shows **No data (no marker)**; a radar with every axis scored has no such key.
 - Roles with fewer than five scored terms add count-valued **Shown, not
   scored** axes, stopping at five. The fixed preference order is unclassified
   rework/regressions, dropped initiative, unknown origin, infrastructure
@@ -138,9 +139,10 @@ with no median subtracted.
   their other observed terms remain available. An explicitly unmeasured
   missed-scope-block source is also a gap. Unsupported rates never enter the
   fleet reference. If no fleet rate is supported, that axis has no comparison.
-  Missing vertices use hollow markers at the outer guide, with the reason in
-  their disclosure; these markers have no radial value. Lines connect only
-  adjacent available vertices and incomplete polygons have no fill.
+  Missing vertices have no marker, on the rim or the centre, so a gap never
+  reads as a best or worst value. Their spoke is dotted, their numbered endpoint
+  is the hover and focus target, and the reason sits in that disclosure. Lines
+  connect only adjacent available vertices and incomplete polygons have no fill.
 - Numbered spokes map to full axis labels beneath the plot at narrow widths.
   Hovering a vertex or its numbered endpoint, focusing or clicking it
   discloses one line for that axis: its term, the agent's rate per 100

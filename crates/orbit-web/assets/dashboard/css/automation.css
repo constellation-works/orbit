@@ -119,6 +119,10 @@ body.operations-active .rail {
 .operation-clock-summary { justify-content: flex-start; flex-wrap: wrap; margin-bottom: var(--space-14); overflow-wrap: anywhere; }
 .operation-cadence { min-width: 0; max-width: 100%; }
 .operation-clock-actions { justify-content: flex-start; flex-wrap: wrap; margin-top: var(--space-14); }
+/* Side by side, the cadence select matches the 30px buttons beside it (its
+   native height is 32px). Stacked phone rows (600px and below) keep the
+   select's own height. */
+@media (min-width: 601px) { .operation-clock-actions .operation-cadence { height: 30px; } }
 
 /* Operations rows. Routines, auto-tasks and jobs share one vocabulary:
    a group with a tone dot, a column header, and rows laid on the same

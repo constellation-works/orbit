@@ -1,6 +1,6 @@
 //! The plugin lifecycle, inspection and tool dispatch entry: install,
 //! enable, disable, remove, inspect, validate, migrate and sync (design
-//! `docs/design/plugins/1_scope.md` §3).
+//! `docs/design/plugins/2_design.md` §3).
 //!
 //! Install is global only: a plugin lives once per host under
 //! `~/.orbit/plugins/<ns>/<version>/` and every workspace on that host shares
@@ -29,6 +29,8 @@ mod lifecycle;
 
 mod mcp_surface;
 
+mod page;
+
 mod panel;
 
 mod runtime;
@@ -46,6 +48,7 @@ mod visibility;
 use std::path::PathBuf;
 
 use orbit_common::OrbitError;
+use orbit_common::governance::authorization::DASHBOARD_PLUGIN_PAGE_ACTION;
 use orbit_tools::ToolContext;
 use serde_json::Value;
 
@@ -110,6 +113,7 @@ pub(crate) use secret::{list_plugin_secrets, remove_plugin_secret, set_plugin_se
 pub use secret::{list_plugin_secrets, remove_plugin_secret, set_plugin_secret};
 
 pub use dashboard::{DashboardScope, DashboardToggle, PanelRead};
+pub use page::{PageAction, PageActionRun, PageCall, PageSource};
 
 // Surface re-exports: what the CLI, dashboard and composition name from this subject.
 pub use crate::adapter::command::{
@@ -207,6 +211,28 @@ pub enum Command<'a> {
         namespace: String,
         panel: String,
     },
+    /// An active page's files, for the dashboard to write into one document.
+    ReadPage {
+        namespace: String,
+        page: String,
+    },
+    /// Check one call a page makes; the dashboard runs the checked call.
+    CallPage {
+        namespace: String,
+        page: String,
+        tool: String,
+        input: Value,
+    },
+    /// Check one action a page asks to run, for the dashboard's
+    /// confirmation. Requires the operator session; nothing runs.
+    CheckPageAction {
+        namespace: String,
+        page: String,
+        tool: String,
+        input: Value,
+    },
+    /// Run one action the operator confirmed. Audited whether refused or run.
+    RunPageAction(Box<PageActionRun>),
     /// A manifest-defined tool reached through the existing tool entry.
     InvokeTool(Box<ToolCall<'a>>),
     /// Check whether a plugin namespace is enabled in the bound workspace.
@@ -257,6 +283,9 @@ pub enum Outcome {
     /// The toggled plugin, or `None` when no plugin has that name.
     DashboardToggled(Option<PluginSummary>),
     Panel(Box<PanelRead>),
+    Page(Box<PageSource>),
+    PageCall(Box<PageCall>),
+    PageAction(Box<PageAction>),
     ToolOutput(Value),
     WorkspaceEnabled(bool),
 }
@@ -302,6 +331,15 @@ impl<'a> App for PluginApp<'a> {
             Command::Sync { .. } => ("sync", None),
             Command::Migrate(request) => ("migrate", Some(request.backend_command.clone())),
             Command::ReadPanel { namespace, .. } => ("panel", Some(namespace.clone())),
+            Command::ReadPage { .. } => {
+                return Operation::dashboard_read("plugin", "page");
+            }
+            Command::CallPage { namespace, .. } => ("page-call", Some(namespace.clone())),
+            Command::CheckPageAction { .. } => {
+                return Operation::dashboard_read("plugin", "page-action-check")
+                    .requires(&DASHBOARD_PLUGIN_PAGE_ACTION);
+            }
+            Command::RunPageAction(run) => return run.operation(),
             Command::InvokeTool(call) => ("tool", Some(call.name.to_string())),
             Command::WorkspaceEnabled(_) => {
                 return Operation::dashboard_read("plugin", "workspace-enabled");
@@ -441,6 +479,26 @@ impl<'a> App for PluginApp<'a> {
             Command::ReadPanel { namespace, panel } => {
                 Outcome::Panel(Box::new(PanelRead::new(core, namespace, panel)?))
             }
+            Command::ReadPage { namespace, page } => {
+                Outcome::Page(Box::new(page::resolve_page(core, &namespace, &page)?))
+            }
+            Command::CallPage {
+                namespace,
+                page,
+                tool,
+                input,
+            } => Outcome::PageCall(Box::new(page::check_page_call(
+                core, &namespace, &page, &tool, input,
+            )?)),
+            Command::CheckPageAction {
+                namespace,
+                page,
+                tool,
+                input,
+            } => Outcome::PageAction(Box::new(page::check_page_action(
+                core, &namespace, &page, &tool, input,
+            )?)),
+            Command::RunPageAction(run) => Outcome::ToolOutput(page::run_page_action(core, *run)?),
             Command::InvokeTool(call) => {
                 if core.caller() != Caller::Tool {
                     return Err(OrbitError::PolicyDenied(

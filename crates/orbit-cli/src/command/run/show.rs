@@ -231,7 +231,12 @@ pub(crate) fn run_show_payload(
             record["rescue_commit"].as_str().unwrap_or_default(),
         ));
     }
-    if let Some(line) = review_layer_line(&doc["run"]["review_layer"]) {
+    if let Some(line) = review_layer_line(
+        &doc["run"]["review_layer"],
+        pull.pull_claim
+            .as_ref()
+            .map(|claim| claim.owner_review_timing),
+    ) {
         header.push('\n');
         header.push_str(&line);
     }
@@ -509,17 +514,35 @@ pub(crate) fn run_show_payload(
 }
 
 /// The `Review:` line: the review layer before landing the run captured and
-/// what decided it [ORB-16572].
-fn review_layer_line(layer: &Value) -> Option<String> {
-    let timing = layer["timing"].as_str()?;
-    let origin = match layer["source"].as_str().unwrap_or("unknown") {
-        orbit_types::workflow::REVIEW_RUN_OPTION_SOURCE => "run option --review".to_string(),
-        "claim" => "the owner's claim".to_string(),
-        source => format!("workspace policy, {source}"),
-    };
+/// what decided it [ORB-16572]. Pull supervisors display their local config
+/// separately because the owner decides each claim's review; legacy claimed
+/// leaves without a persisted `review_layer` fall back to `pull_claim`.
+fn review_layer_line(
+    layer: &Value,
+    claimed_owner_timing: Option<orbit_types::workflow::ReviewTiming>,
+) -> Option<String> {
+    if let Some(timing) = layer["timing"].as_str() {
+        let origin = match layer["source"].as_str().unwrap_or("unknown") {
+            orbit_types::workflow::REVIEW_RUN_OPTION_SOURCE => "run option --review".to_string(),
+            "claim" => "the owner's claim".to_string(),
+            source => format!("workspace policy, {source}"),
+        };
+        if layer["scope"].as_str() == Some(orbit_core::app::run::SUPERVISOR_LOCAL_REVIEW_SCOPE) {
+            return Some(format!(
+                "{} {timing} ({origin}; owner decides per claim)",
+                crate::output::common::color::bold("Local review:")
+            ));
+        }
+        return Some(format!(
+            "{} {timing} ({origin})",
+            crate::output::common::color::bold("Review:")
+        ));
+    }
+    let timing = claimed_owner_timing?;
     Some(format!(
-        "{} {timing} ({origin})",
-        crate::output::common::color::bold("Review:")
+        "{} {} (the owner's claim)",
+        crate::output::common::color::bold("Review:"),
+        timing.as_str()
     ))
 }
 

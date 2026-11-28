@@ -10,7 +10,7 @@ related_artifacts: [ORB-11294, ORB-11295, ORB-11296, ORB-11299, ORB-16577]
 
 # Onboard an Executor
 
-Use this runbook when adding a supported execution lane to Orbit, or when adding a deterministic local command executor. It is a contributor procedure: configuring an already shipped provider is covered by [CONFIG.md](../CONFIG.md).
+Use this runbook when adding a supported execution lane to Orbit, or when adding a deterministic local command executor. It is a contributor procedure: setting up an already shipped provider is covered by the [provider configuration reference](../config/providers.md).
 
 ## Before changing anything
 
@@ -25,11 +25,11 @@ orbit doctor providers --json
 <provider-cli> --version
 ```
 
-Use the provider's published CLI help and a pinned observed version to establish flags, stdin format, terminal output, authentication behavior, and supported model/effort values. Do not copy flags from another provider and do not claim a universal `--json`, sandbox, login, or MCP flag. `docs/CONFIG.md` records the currently verified contracts for shipped lanes; the Antigravity and Muse entries are representative, not templates with interchangeable flags.
+Use the provider's published CLI help and a pinned observed version to establish flags, stdin format, terminal output, authentication behavior, and supported model/effort values. Do not copy flags from another provider and do not claim a universal `--json`, sandbox, login, or MCP flag. `docs/config/providers.md` records the currently verified contracts for shipped lanes; the Antigravity and Muse entries are representative, not templates with interchangeable flags.
 
 Verify the prompt transport specifically, and do not assume a CLI that documents a positional prompt cannot accept stdin. A CLI that documents only a positional prompt may still read piped stdin when stdin is not a TTY; read the upstream argument handling before choosing a transport.
 
-Only when the CLI verifiably cannot take its prompt on stdin, use a private prompt file instead of argv. Muse Code 1.4.10 is the precedent: `muse exec` exits 2 (`missing prompt`) on piped stdin and refuses `--prompt-file /dev/stdin` as not a regular file. Its runtime sets `AgentInvocationSpec::prompt_file_flag` to `--prompt-file`; the v2 runner then writes the prompt bytes to a mode-0600 file in the run's scratch directory, appends `<flag> <path>`, sends nothing on stdin, and deletes the file when the invocation ends. Record the observed refusal in `docs/CONFIG.md`, and prefer stdin again if a later version reads it. [ORB-16577]
+Only when the CLI verifiably cannot take its prompt on stdin, use a private prompt file instead of argv. Muse Code 1.4.10 is the precedent: `muse exec` exits 2 (`missing prompt`) on piped stdin and refuses `--prompt-file /dev/stdin` as not a regular file. Its runtime sets `AgentInvocationSpec::prompt_file_flag` to `--prompt-file`; the v2 runner then writes the prompt bytes to a mode-0600 file in the run's scratch directory, appends `<flag> <path>`, sends nothing on stdin, and deletes the file when the invocation ends. Record the observed refusal in `docs/config/providers.md`, and prefer stdin again if a later version reads it. [ORB-16577]
 
 An authenticated smoke test is optional and needs explicit operator consent. Run it only against an isolated test workspace and test account or disposable credentials. State exactly what it did not prove (for example, no authenticated account, no vendor model access, or no OS sandbox available); passing fixture contract tests remains sufficient for a normal source change when they exercise Orbit's real dispatch seam.
 
@@ -64,14 +64,14 @@ Verify the seams against the current checkout before editing. These are the auth
 
 ## Add a CLI-agent executor
 
-1. Confirm that the provider's local CLI is an agent capable of completing one non-interactive turn. Record its actual version, official help/output contract, login-state directory, prompt transport, terminal response shape, and supported model/effort vocabulary in `docs/CONFIG.md`.
+1. Confirm that the provider's local CLI is an agent capable of completing one non-interactive turn. Record its actual version, official help/output contract, login-state directory, prompt transport, terminal response shape, and supported model/effort vocabulary in `docs/config/providers.md`.
 2. Add the canonical provider identity at the shared identity boundary if it does not already exist. A model such as `claude-sonnet-5` routed through Copilot remains a `copilot` execution lane: its login, state directory, sandbox grant, audit attribution, and unsupported-capability error stay Copilot's. Never infer the Orbit provider from a model string.
 3. Implement the provider runtime under `crates/orbit-agent/src/providers/<provider>/`. Follow the Antigravity or Muse split: a small argv/stdin transport, a runtime factory with only non-secret required environment, and an output normalizer. Pass optional model/effort only when the provider contract supports them; reject unsupported combinations during configuration resolution rather than silently dropping or remapping them.
 4. Add the bundled executor asset in `crates/orbit-core/assets/executors/<provider>.yaml` and register it in `DEFAULT_EXECUTOR_FILES`. Use static headless flags only. Keep the execution envelope and prompt off argv so process listings, audit argv, and spawn errors cannot expose task content or secrets. Pin launcher switches a managed run must never flip (self-update, login prompts) through the runtime's `fixed_env`, as Claude and Muse do, rather than in the asset's `env`.
 5. Wire provider discovery and init seeding through the current configuration/init seams. `orbit init` must add a crew only when the local CLI is detected; it must not replace a user-authored crew, credential, command override, or model pin. Check both a fresh seed and a legacy/customized asset through the migration path.
 6. Choose the sandbox posture deliberately. Shipped CLI agent assets opt in to the OS sandbox marker that becomes macOS `sandbox-exec` or Linux Bubblewrap when supported. The provider's own approval flag cannot grant filesystem access the enclosing sandbox denies. Do not use a provider's native sandbox flag as a substitute for Orbit's boundary. If the CLI's default login lives in the macOS login keychain, add it to `provider_reads_macos_login_keychain` and teach `macos_keychain_auth_diagnostic` that CLI's auth-failure wording; a state-directory write grant does not make the keychain readable.
 7. State MCP and shell-tool reach precisely. If the provider has no MCP client, do not add one by implication: the execution envelope must direct the agent to the `orbit` binary supplied on its `PATH`, and tests must retain whatever provider shell capability this route needs. Tool grants and caller-role gates remain enforced by `orbit tool run`.
-8. Declare `host_os` when the executor cannot run on every Orbit host. It sits on the asset beside `sandbox` and is a non-empty subset of `linux`, `macos` and `windows`. Omit it to leave the executor unrestricted; an empty list or an unknown name is refused at load and the error names the asset. Admission intersects the declaration with the task's `os:` tags and does not change what those tags mean. An explicit crew this host cannot run waits for a host that can; it is not redrawn. Admission draws and `workflow.default_crew` skip a crew this host's OS excludes; creation-time pool draws keep one a host serving the workspace can run (a registered host with a claim in this workspace in the last seven days), as [CONFIG.md](../CONFIG.md) describes. Copy a new shipped declaration onto an installed default only when that install still omits `host_os`. Muse declares no `host_os`: Muse runs on macOS and Linux, so it stays unrestricted and its sandbox marker is translated per host at seed time.
+8. Declare `host_os` when the executor cannot run on every Orbit host. It sits on the asset beside `sandbox` and is a non-empty subset of `linux`, `macos` and `windows`. Omit it to leave the executor unrestricted; an empty list or an unknown name is refused at load and the error names the asset. Admission intersects the declaration with the task's `os:` tags and does not change what those tags mean. An explicit crew this host cannot run waits for a host that can; it is not redrawn. Admission draws and `workflow.default_crew` skip a crew this host's OS excludes; creation-time pool draws keep one a host serving the workspace can run (a registered host with a claim in this workspace in the last seven days), as [configuration reference](../config/README.md) describes. Copy a new shipped declaration onto an installed default only when that install still omits `host_os`. Muse declares no `host_os`: Muse runs on macOS and Linux, so it stays unrestricted and its sandbox marker is translated per host at seed time.
 
 On a nonzero CLI exit, completion diagnostics inspect the retained raw stdout
 protocol before reducing it to assistant text. Known authentication, quota,
@@ -135,7 +135,7 @@ closed rather than falling back to the CLI's ambient model choice.
 
 Use a `local_shell` activity only for a bounded, reproducible command. Its `config` declares `command`/`args` or `shell`/`script`, or neither: when the activity names no program, the selected executor definition's `command` is the fallback program and its `args` are the argv, and for an explicit `command` the definition's static `args` prefix the activity's `args` (`shell` + `script` runs exactly `<shell> -c <script>`). Rendered job input must never become child argv. The shared `local-shell` definition may supply a static command prefix, environment, and fallback timeout, but a shell action gets no agent prompt, model, tool allowlist, or workspace/registry identity variables.
 
-For a new deterministic default, add a `kind: Executor` resource with `executor_type: local_shell`, then test the actual activity through `local_shell`. Preserve the existing behavior that a bare definition runs under the shared supervisor and cwd containment checks; adding an OS sandbox requires both an explicit sandbox declaration and an activity `fsProfile`. Report the effective sandbox in output. Use explicit `/bin/sh` plus `script` only when shell semantics are really required; otherwise use literal argv.
+For a new deterministic default, add a `kind: Executor` resource with `executor_type: local_shell`, then test the actual activity through `local_shell`. Preserve the existing behavior that a bare definition runs under the shared supervisor and cwd containment checks. Adding an OS sandbox takes a `sandbox:` on the executor definition, which wraps every activity that uses it. The activity's `fsProfile` is optional and selects the named policy profile; without one, the step runs under `unrestricted`, so existing activities need no edit. macOS Seatbelt applies the profile's read and modify rules, including policy denies. Linux Bubblewrap enforces modify rules but not profile read rules, including `denyRead`: host reads stay available except for fixed credential and runtime-directory masks and explicit caller masks, so do not rely on Linux `denyRead` to protect secrets. Report the effective sandbox in output. Use explicit `/bin/sh` plus `script` only when shell semantics are really required; otherwise use literal argv.
 
 ## Output, errors, and lifecycle contract
 
@@ -179,7 +179,7 @@ Require a nonempty list; an unknown filter can exit zero with no tests. Add a
 new provider's fixture as a module registered in `tests/provider/main.rs`
 before calling the lane supported. These Cargo filters are not provider CLI
 flags. For a managed change, follow the current
-[validation and CI guidance](../DEVELOPMENT.md#validation-and-ci): run
+[validation and CI guidance](../development/validation-and-ci.md#validation-and-ci): run
 `make ci-guards` as the early static check, then the focused formatting, lint,
 and behavior checks the change needs. The pipeline runs configured
 final-validation commands on the final candidate. `make ci-fast`,
@@ -206,7 +206,7 @@ Stop and seek a scoped design/task decision when the provider requires a new cro
 
 ## Related references
 
-- [Orbit Configuration](../CONFIG.md) — current crews, provider identity, configuration inheritance, and shipped provider contracts.
+- [Orbit Configuration](../config/README.md) — current crews, provider identity, configuration inheritance, and shipped provider contracts.
 - [Local-shell executor reference](../design/executors/specs/local-shell.md) — deterministic activity schema and output shape.
 - [Linux sandbox runbook](linux-sandbox.md) — host prerequisite for Linux CLI-agent dispatch.
 - [Runbook conventions](CONVENTIONS.md) — maintenance and index generation rules.

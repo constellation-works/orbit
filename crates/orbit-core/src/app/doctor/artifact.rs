@@ -36,7 +36,7 @@
 //!   unknown, so diagnosis warns and leaves repair to the operator.
 //!
 //! Provenance judgements are made from the per-kind managed manifest written by
-//! `crate::application::managed_assets::reconcile_managed_assets`. Residual
+//! `crate::unit::managed_asset::reconcile_managed_assets`. Residual
 //! skill directories are the one condition discovered directly from the catalog layout because a deleted
 //! entry point cannot be represented by a successfully loaded skill. That
 //! matters for correctness as well as safety: precedence differs across kinds —
@@ -71,12 +71,12 @@ use crate::app::skill::{
     skill_link_remediation, skill_link_roots,
 };
 use crate::application::job::catalog::DEFAULT_JOB_FILES;
-use crate::application::managed_assets::{
+use crate::application::seeding_policy::SeedingPolicyExclusions;
+use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
+use crate::unit::managed_asset::{
     ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout,
     load_managed_asset_manifest, preserve_modified_retired_asset, resolve_confined_asset_path,
 };
-use crate::application::seeding_policy::SeedingPolicyExclusions;
-use crate::runtime::assets::DEFAULT_ACTIVITY_FILES;
 use orbit_common::security::release::sha256_hex;
 
 /// The five definition-artifact kinds Orbit ships defaults for.
@@ -636,7 +636,7 @@ fn retire_catalog(catalog: &ManagedCatalog) -> Result<usize, OrbitError> {
         for name in &settled {
             next.assets.remove(name);
         }
-        crate::application::managed_assets::write_managed_asset_manifest(&manifest_path, &next)?;
+        crate::unit::managed_asset::write_managed_asset_manifest(&manifest_path, &next)?;
     }
     Ok(retired)
 }

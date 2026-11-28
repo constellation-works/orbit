@@ -9,7 +9,7 @@ links: [ORB-18438, ORB-20007]
 
 ## Signature
 
-At the time of these incidents, `command -v podman` and `command -v docker` found nothing (ORB-18438), or `orbit config get assistance --json` reported no policies and an unfunded budget with zero ceilings (ORB-20007). The `assistance` setting is now ignored for compatibility and will become unknown after 2026-12-08; do not treat the historical output as evidence of a currently available policy. See the [configuration reference](../../../CONFIG.md).
+At the time of these incidents, `command -v podman` and `command -v docker` found nothing (ORB-18438), or `orbit config get assistance --json` reported no policies and an unfunded budget with zero ceilings (ORB-20007). The `assistance` setting is now ignored for compatibility and will become unknown after 2026-12-08; do not treat the historical output as evidence of a currently available policy. See the [configuration reference](../../../config/README.md).
 
 ## Mechanism
 

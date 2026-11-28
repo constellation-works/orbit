@@ -11,7 +11,22 @@ use crate::command::{CommandOut, ExecuteCore, Payload};
 /// launcher or by transient infrastructure, and requeue the cleared ones.
 #[derive(Args)]
 #[command(
-    after_help = "Only blocks caused by a missing provider launcher or by transient infrastructure (a busy lock, a locked task store) are re-checked; a task blocked by its own failure stays blocked.\nThe launcher is resolved with dispatch's lookup from this shell's PATH and HOME. A transient block is requeued once its run has stopped, when the task store takes a write transaction and the task's own lock is free (the probe cannot take the lock that timed out); its next run resumes the candidate its failure handoff published. A human's comment or write after the block, or a publication that did not authenticate, leaves it for `orbit task requeue`. Each published candidate is requeued this way at most twice; after that use `orbit task requeue`.\n\nExamples:\n  orbit task recheck-blocked            # list infra-blocked tasks and whether each still reproduces\n  orbit task recheck-blocked --confirm  # return the cleared ones to backlog, with a history note"
+    after_help = "Only blocks caused by a missing provider launcher or by transient \
+                  infrastructure are re-checked; a task blocked by its own failure stays \
+                  blocked. Without --confirm this only reports.\n\n\
+                  Examples:\n  \
+                  orbit task recheck-blocked            # list infra-blocked tasks and whether each still reproduces\n  \
+                  orbit task recheck-blocked --confirm  # return the cleared ones to backlog, with a history note",
+    after_long_help = "Only blocks caused by a missing provider launcher or by transient \
+                       infrastructure (a busy lock, a locked task store) are re-checked; a task \
+                       blocked by its own failure stays blocked. Without --confirm this only \
+                       reports. A human's comment or write after the block, or a publication \
+                       that did not authenticate, leaves the task for `orbit task requeue`.\n\n\
+                       When a cleared block is requeued, and how many times: installed \
+                       orbit-orchestrate skill `references/orchestration-failed-runs.md`.\n\n\
+                       Examples:\n  \
+                       orbit task recheck-blocked            # list infra-blocked tasks and whether each still reproduces\n  \
+                       orbit task recheck-blocked --confirm  # return the cleared ones to backlog, with a history note"
 )]
 pub struct TaskRecheckBlockedArgs {
     /// Return the cleared tasks to backlog. Without it, only report.

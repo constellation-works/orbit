@@ -6,6 +6,14 @@
 orbit run cancel <run_id> --confirm
 ```
 
+The command stops a pending or running run, releases its task reservations and
+marks it `cancelled`. Without `--confirm` it changes nothing. A finished run
+reports `already_terminal`. A cancelled task leaf returns its task to the
+backlog unless `--block`. A pull drain cancels gracefully and waits for
+launched leaves unless `--force`; `--force` also stops a local drain's child
+runs and returns a pull drain's claims to the owner's backlog. The command
+exits 1 when a stop cannot be confirmed.
+
 For a run that is stuck rather than merely slow, diagnose before killing:
 [run-debugging-live-processes.md](run-debugging-live-processes.md) covers matching a run id to its process
 group and the safe termination order.

@@ -7,6 +7,14 @@ use orbit_types::task::{
 
 use crate::OrbitRuntime;
 
+/// Where a decision read takes artifact manifests from: the manifest it has
+/// already loaded, if any, and whether it observes those artifacts.
+#[derive(Clone, Copy)]
+struct ArtifactReads<'a> {
+    manifest: Option<&'a [ArtifactManifestFileV2]>,
+    observational: bool,
+}
+
 impl OrbitRuntime {
     /// Read effective human-decision requests, rechecking the current task,
     /// block episode and pilot admission hold without changing task records.
@@ -68,7 +76,10 @@ impl OrbitRuntime {
                 &row.history,
                 &row.comments,
                 observed_at,
-                Some(&row.artifacts),
+                ArtifactReads {
+                    manifest: Some(&row.artifacts),
+                    observational: false,
+                },
                 &|receipt| {
                     self.task_pilot_audit_with_reader(id, receipt, &|path| match row
                         .artifacts
@@ -98,9 +109,42 @@ impl OrbitRuntime {
         comments: &[TaskComment],
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<DecisionRequest>, OrbitError> {
-        self.task_decision_requests_with_audit(task, history, comments, now, None, &|receipt| {
-            self.task_pilot_audit(&task.id, receipt)
-        })
+        self.task_decision_requests_with_audit(
+            task,
+            history,
+            comments,
+            now,
+            ArtifactReads {
+                manifest: None,
+                observational: false,
+            },
+            &|receipt| self.task_pilot_audit(&task.id, receipt),
+        )
+    }
+
+    /// Observational [`Self::task_decision_requests_in`]: resolves any
+    /// artifact-backed pilot receipt and block-triage candidate/review reads
+    /// from the already-loaded records and settled bundles without entering
+    /// the task-commit boundary.
+    pub(crate) fn observe_task_decision_requests_in(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        comments: &[TaskComment],
+        artifacts: &[ArtifactManifestFileV2],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<DecisionRequest>, OrbitError> {
+        self.task_decision_requests_with_audit(
+            task,
+            history,
+            comments,
+            now,
+            ArtifactReads {
+                manifest: Some(artifacts),
+                observational: true,
+            },
+            &|receipt| self.observe_task_pilot_audit(&task.id, receipt),
+        )
     }
 
     fn task_decision_requests_with_audit(
@@ -109,11 +153,15 @@ impl OrbitRuntime {
         history: &[TaskHistoryEntry],
         comments: &[TaskComment],
         now: chrono::DateTime<chrono::Utc>,
-        manifest: Option<&[ArtifactManifestFileV2]>,
+        reads: ArtifactReads<'_>,
         audit: &dyn Fn(
             orbit_types::task::CommentReceipt<'_>,
         ) -> Result<serde_json::Value, OrbitError>,
     ) -> Result<Vec<DecisionRequest>, OrbitError> {
+        let ArtifactReads {
+            manifest,
+            observational,
+        } = reads;
         let pilot_operation = if task.status == TaskStatus::Backlog
             && self
                 .pilot_admission_hold_with_audit(task, comments, &|| Ok(history.to_vec()), audit)?
@@ -125,8 +173,15 @@ impl OrbitRuntime {
         };
         let mut requests =
             orbit_types::task::decision_requests_from_history(task, history, pilot_operation, now);
-        self.add_handoff_landing_answers(task, &mut requests, manifest)?;
-        self.add_candidate_disposition_answers(task, &mut requests)?;
+        self.add_handoff_landing_answers_with(task, &mut requests, manifest, observational)?;
+        self.add_candidate_disposition_answers_with(
+            task,
+            history,
+            comments,
+            manifest,
+            &mut requests,
+            observational,
+        )?;
         Ok(requests)
     }
 }

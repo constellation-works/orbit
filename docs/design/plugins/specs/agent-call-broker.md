@@ -30,7 +30,7 @@ owner calls [ORB-14260], including a before-PR reviewer's review-artifact reads 
 claim's remote owner, so SSH runs outside the sandbox that masks `~/.ssh` (§3, "Claimed-owner
 calls").
 Every sandboxed agent run masks plugin state and secrets (§6, "As implemented").
-Builds on [1_scope.md](../1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
+Builds on [2_design.md](../2_design.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
 sandbox described in [policy-sandbox 2_design.md §7](../../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
 
 A plugin backend holds credentials for the service it wraps, either in its own
@@ -210,6 +210,8 @@ task lives on its owner, another machine reached over SSH, and every agent sandb
 `~/.ssh` (policy-sandbox [2_design.md](../../policy-sandbox/2_design.md) §7.1), so the worker's own
 SSH route can only fail host-key verification. With `ORBIT_PLUGIN_BROKER` set, the nested
 `orbit` of a worker whose claim names a remote owner sends exactly these calls to the broker.
+The agent subprocess environment carries the broker locator into nested `proc.spawn` commands;
+the listener still authenticates the sandbox peer and applies the run's tool policy.
 The broker carries them only for the run bound to the claim, whose task is the claimed task,
 and takes the task, claim and owner from those records, never from the request. Each call is
 scoped to the claim. Search, task listing, task show and artifact get read the claimed
@@ -219,11 +221,12 @@ activity-dependent scopes below. The binding, not the request, supplies the
 owner's workspace, so the owner answers only from that workspace, and a task show or ordinary
 artifact get naming a task the owner does not hold there is refused as `claimed_owner_bridge_refused`
 after a task-only check on the owner. An artifact put names the claimed task. A new task must name the
-claimed task as `spawned_from`, and may relate to nothing else, except that a claimed review
-task's finding may also name the task that introduced it as `regression_from` ([ORB-14792]); a
-friction may name only the claimed task as the one it was found during. A notice is
-stored only on the owner and attributed to the claim's task and run; its request's
-`orchestrator` attribution never crosses the broker. Internal
+claimed task as `spawned_from` while the claim is active, and may relate to nothing else, except that
+a claimed review or QA task's finding may also name the task that introduced it as `regression_from`
+([ORB-14792]), when the claimed task carries a finding-filing provenance tag or the area-task tags
+(the `regression_from` rule below lists them); a friction may name only the claimed task as the one it
+was found during. A notice is stored only on the owner and attributed to the claim's task and run; its
+request's `orchestrator` attribution never crosses the broker. Internal
 (`_`-prefixed) fields are refused; task show and artifact calls also use closed field
 allowlists. The activity's own tool policy still applies.
 For `orbit.task.show`, supplying `limit`, `comments_offset`, `history_offset` or
@@ -480,7 +483,7 @@ broker requires to lie within the run's worktree, and an optional workspace sele
 resolves against the run's own registry, except that `orbit.task.resume_delivery` takes its target from its input (§4.4). Everything that decides authority comes from the
 broker's own dispatch record and is never read from the request or the client's environment:
 run ID, task ID, the activity's allowlist, the filesystem profile and the tool ceiling.
-Consequently `context.task_id` and `context.job_run_id` (1_scope.md §4.2 "Call identity")
+Consequently `context.task_id` and `context.job_run_id` (2_design.md §4.2 "Call identity")
 are authenticated for brokered calls; ordinary host calls remain host-attested.
 
 `secret_updates` never leave the host. The broker applies them with the store's compare-and-swap
@@ -601,7 +604,8 @@ service side regardless.
   the one audit row (brokered, peer PID, the run's task and activity); the owner's row names the
   follower as caller over `ssh-mcp`. On the owner, a claimed worker's `orbit.task.add` is taken
   only while its claim is active and only `spawned_from` the claimed task, plus, for a claimed
-  review task, `regression_from` a task in the owner's workspace.
+  review or QA task that files regression findings (the tags in the `regression_from` rule in §3),
+  `regression_from` a task in the owner's workspace.
 - `crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs` drives a reviewer inside the
   real agent sandbox (Bubblewrap on Linux, `sandbox-exec` on macOS) through both the CLI and
   MCP against a real owner home reached by an `ssh` stand-in that needs `~/.ssh/known_hosts`,
@@ -790,7 +794,7 @@ anything:
   tightened here.
 - `state/plugin-callbacks/` stays readable to agents, and that is not incidental. A nested
   `orbit` that cannot list it concludes it is inside a plugin sandbox and refuses itself
-  (1_scope.md §4.2, "A confined child with no credential is refused"). Code reading suggests
+  (2_design.md §4.2, "A confined child with no credential is refused"). Code reading suggests
   that an agent could open a live callback record and present it on descriptor 3 as a
   backend's credential. That has not been tested. It is a separate question from state and
   secret confidentiality, and this design does not change it.
@@ -807,7 +811,7 @@ anything:
 | Peer authentication fails | The connection is closed with no reply. The client reports `plugin_broker_unavailable` and the host logs the refusal. |
 | The client disconnects mid-call | The backend's process group is killed. A reported rotation is still applied. |
 | A claimed reviewer's artifact call arrives after its reviewer finished, or outside the reviewer activity | `plugin_broker_refused` with `review_attempt_stale` or `claimed_review_bridge_refused`; nothing reaches the owner. The reviewer reports `incomplete`, and the next run admits a fresh attempt. |
-| A claimed worker's ordinary owner call writes to another task, names an unsupported relation or field, or reads a task outside the claimed workspace | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner, except the read whose not-found tells the broker the task is outside the claimed workspace. A `regression_from` relation reaches the owner, which refuses it with `PolicyDenied` unless the claimed task is a review task and the target is a task in its workspace. |
+| A claimed worker's ordinary owner call writes to another task, names an unsupported relation or field, or reads a task outside the claimed workspace | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner, except the read whose not-found tells the broker the task is outside the claimed workspace. A `regression_from` relation reaches the owner, which refuses it with `PolicyDenied` unless the claimed task is a finding-filing review or QA task (the `regression_from` rule in §3) and the target is a task in its workspace. |
 | A claimed worker remotely reads another task's `review-*` artifact | `plugin_broker_refused` with `claimed_owner_bridge_refused` before any activity-dependent scope in §3; nothing reaches the owner. The claimed-task check runs first for every activity, so an ordinary `agent_implement` read of another task's `review-report.json` or `review-manifest.json` never reaches the reviewer activity check. Same-task reads keep the §3 scopes: an ordinary `agent_implement` read of its own task's `review-report.json` or `review-manifest.json` fails the reviewer activity check with `claimed_review_bridge_refused`, while an admitted reviewer, a live final recovery and the findings-read route serve their own named artifacts. |
 | A claimed final recovery writes a `review-*` artifact, reads one outside the gate's named evidence, or reads after its recovery decided or its claim began settling; or any claimed worker asks for another run's delivery of its claimed task | `plugin_broker_refused` with `review_write_refused`, `review_read_refused`, `final_recovery_stale`, `claim_not_live` or `delivery_run_refused`; nothing reaches the owner. The final-recovery prompt treats a refused read as a gap in its evidence, not a reason to stop. |
 | A claimed worker's owner call cannot reach the broker | `owner_route_unavailable`, `retryable: false`, naming this run's coordinator as stopped (or `ORBIT_PLUGIN_BROKER` as unset). The agent ends its step on that code and must not route around the sandbox. The run skips step and final recovery, and a pull drain preserves release evidence, the owner holds the task for an operator decision, and the drain suppresses its host for the window. |
@@ -818,7 +822,7 @@ implemented"): `plugin_broker_invalid_request`, `plugin_broker_refused`,
 `plugin_broker_invalid_input` or `plugin_broker_call_failed`, none retryable, or with the
 backend's own structured error.
 
-Every refusal reaches the agent as an ordinary structured plugin error (1_scope.md §4.2), and
+Every refusal reaches the agent as an ordinary structured plugin error (2_design.md §4.2), and
 `orbit tool run` exits non-zero with the JSON on stderr, as it does for any other plugin error.
 
 ## 8. Rollout and follow-up tasks
@@ -838,7 +842,7 @@ The mask landed last, after every call it would break had a broker to go to:
    `orbit mcp serve` forward plugin calls when `ORBIT_PLUGIN_BROKER` is set. The broker runs
    them through the audited dispatch with the authoritative run context and the §5 profile.
    This slice also adds `brokered` audit fields and the §7 error codes, and updates
-   1_scope.md §4.2 "Call identity". The archived umbrella [ORB-13238] was replaced
+   2_design.md §4.2 "Call identity". The archived umbrella [ORB-13238] was replaced
    by three landed slices:
    - 3a. Broker-side execution: the audited dispatch, run-record authority, the `brokered`
      audit fields and the broker's error codes. Landed; see §4.4 "As implemented". [ORB-13358] delivered this slice.
@@ -849,7 +853,7 @@ The mask landed last, after every call it would break had a broker to go to:
 4. **Agent sandbox mask.** The §6 mask on Linux and macOS, applied to every sandboxed agent
    whether or not its broker bound, plus the §6.3 nested behaviour: the sentinel, no in-process fallback, the secret
    store refusing a masked directory, and operator commands degrading. This slice also updates
-   1_scope.md §3 and §4.3 to remove the "agent sandboxes can still read it" gap. Implemented;
+   2_design.md §3 and §4.3 to remove the "agent sandboxes can still read it" gap. Implemented;
    see §6.2 "As implemented". [ORB-13239]
 
 The former explorer sibling-worker route introduced by [ORB-20566] was removed

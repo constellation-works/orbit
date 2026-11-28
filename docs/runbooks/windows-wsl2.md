@@ -38,7 +38,7 @@ not supported.
   and `<repo>/.orbit/`) lives **inside one distribution, as one Linux user**.
   Windows only hosts that distribution and, optionally, launches Orbit's MCP
   server through `wsl.exe`.
-- Orbit's sandbox fails closed. If the Bubblewrap probe fails inside WSL,
+- Orbit's sandbox refuses rather than degrades ([principle](../principles/refuse-not-degrade.md)). If the Bubblewrap probe fails inside WSL,
   agent dispatch stays blocked. Do not set an executor's `spec.sandbox: off`,
   enable `allow_fallback`, install a setuid `bwrap`, or loosen the
   distribution's user-namespace policy to get past it; report the probe detail
@@ -105,7 +105,7 @@ systemctl --user status | head -n 3   # your user manager must answer for the cl
 Microsoft notes that on Debian/Ubuntu/Kali the `systemd` and `systemd-sysv`
 packages must be installed. Without a working user manager, workers run in the
 caller's cgroup with one warning (`machine.worker_containment`; refused when
-it is `strict` — see [CONFIG.md](../CONFIG.md)) and
+it is `strict` — see [configuration reference](../config/machine.md#worker-containment)) and
 `orbit routine init --install-clock` cannot install the timer.
 
 ## 4. Install the toolchain, Orbit and provider CLIs inside the distribution
@@ -426,6 +426,6 @@ They do not establish the unexercised manual checks above.
 ## Related references
 
 - [Linux sandbox onboarding and diagnostics](linux-sandbox.md)
-- [Configuration reference](../CONFIG.md) — `machine.worker_containment`
+- [Configuration reference](../config/machine.md#worker-containment) — `machine.worker_containment`
 - [Setup skill: Windows through WSL2](../../crates/orbit-core/assets/skills/orbit-setup/references/windows-wsl2.md)
-- [Windows support](../DEVELOPMENT.md#windows)
+- [Windows support](../development/toolchain.md#windows)

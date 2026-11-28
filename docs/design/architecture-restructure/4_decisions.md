@@ -66,6 +66,7 @@ An operation is a function in `orbit-core/src/app/<subject>/`, reached through t
 
 - Module privacy holds the boundary between subjects.
 - Cost: until the last subject is converted a reader meets two idioms, `runtime.add_task(…)` and `app::task::add(rt, …)`.
+- The managed asset reconciliation unit moves to `unit::managed_asset` to comply with `STD-12@4 §R1`. The names in persisted manifests and on command and tool surfaces stay the same.
 
 ## The runtime is four layers, and the role is resolved once
 

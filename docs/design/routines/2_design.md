@@ -224,7 +224,7 @@ first) and `failure_streak` (`count`, `since`, `truncated`).
 
 A routine is one YAML file under the registered checkout's gitignored
 `.orbit/routines/`. Choose exactly one of `trigger.cron`,
-`trigger.deliveries_landed`, `trigger.state` or `trigger.condition`. A `condition` fires once per subject edge on the workspace owner and submits one run with the subject and fire in its input; `cron`, `state` and `deliveries_landed` take an optional `when` guard ([condition triggers](../condition-triggers/1_scope.md)). Routines use `schemaVersion: 1`;
+`trigger.deliveries_landed`, `trigger.state` or `trigger.condition`. A `condition` fires once per subject edge on the workspace owner and submits one run with the subject and fire in its input; `cron`, `state` and `deliveries_landed` take an optional `when` guard ([condition triggers](../condition-triggers/1_overview.md)). Routines use `schemaVersion: 1`;
 interval (`every_minutes`) scheduling belongs to auto-tasks, not routines.
 The cron form is:
 
@@ -774,7 +774,7 @@ owner's prefix uses the owner route from the claim or registered workspace.
 An unregistered foreign prefix is retained as
 `skipped:task_prefix_unroutable` without a remote call. These lookups write
 nothing to the remote task store. The implementation is
-`crates/orbit-core/src/application/gc/worktrees.rs::worktree_gc_task_lookup`.
+`crates/orbit-core/src/app/gc/worktree.rs::worktree_gc_task_lookup`.
 
 `job:store_gc_pipeline` prunes this host's own store [ORB-16354]. The activity
 opens the local sqlite store and this workspace's audit directory. It deletes

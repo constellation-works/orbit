@@ -47,10 +47,10 @@ Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the crate layout and layering 
    managed Orbit deliveries, the pipeline runs the commands in
    `task.final_validation_commands`, configured through
    `workflow.required_validation_commands`. See
-   [Validation and CI](docs/DEVELOPMENT.md#validation-and-ci) for details.
+   [Validation and CI](docs/development/validation-and-ci.md#validation-and-ci) for details.
 6. **Write a clear commit message** with a type prefix: `feat:`, `fix:`, `docs:`, `refactor:`, or `chore:`.
 
-Tests that mutate Orbit state, spawn pipeline runs, or depend on the sandbox have specific isolation rules. Read [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) before writing one. The same file covers coverage targets, MSRV bumps, dependency and license policy, and vendored dashboard JS.
+Tests that mutate Orbit state, spawn pipeline runs, or depend on the sandbox have specific isolation rules. Read [development reference](docs/development/README.md) before writing one. The reference also covers coverage targets, MSRV bumps, dependency and license policy, and vendored dashboard JS.
 
 ### CLI help goldens
 
@@ -104,7 +104,7 @@ gate, review, lock and analytics definitions still apply.
 
 ## Using coding agents
 
-Agent-assisted PRs are welcome. [AGENTS.md](AGENTS.md) and its `CLAUDE.md` import load automatically in most agent CLIs. You are responsible for the diff, so review it, run focused local checks relevant to the changes, and say in the PR description what you verified. Required PR checks and managed-delivery final validation are described in [Validation and CI](docs/DEVELOPMENT.md#validation-and-ci).
+Agent-assisted PRs are welcome. [AGENTS.md](AGENTS.md) and its `CLAUDE.md` import load automatically in most agent CLIs. You are responsible for the diff, so review it, run focused local checks relevant to the changes, and say in the PR description what you verified. Required PR checks and managed-delivery final validation are described in [Validation and CI](docs/development/validation-and-ci.md#validation-and-ci).
 
 ## Community
 

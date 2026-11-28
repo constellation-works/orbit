@@ -157,7 +157,7 @@ pub enum Command {
         operator: bool,
     },
     /// One write from an authenticated dashboard session.
-    Dashboard(DashboardOrigin, DashboardWrite),
+    Dashboard(DashboardOrigin, Box<DashboardWrite>),
 }
 
 /// One resident write the dashboard sends.
@@ -280,7 +280,7 @@ impl App for ResidentApp {
             Command::Card { task_id, operator } => {
                 Outcome::Value(dashboard::card(core, task_id, operator)?)
             }
-            Command::Dashboard(_, write) => Outcome::Dashboard(dashboard::write(core, write)?),
+            Command::Dashboard(_, write) => Outcome::Dashboard(dashboard::write(core, *write)?),
         })
     }
 

@@ -208,11 +208,15 @@ first probes with legacy-compatible fields, checks that fingerprint and `protoco
 then declares `caller_fingerprint` on a second probe. A different or missing fingerprint,
 including a legacy owner, refuses with typed `protocol_skew` before any `orbit.task.pull`.
 A protocol identity containing `[REDACTED_ENV]` is a corrupted transport reply,
-not evidence of schema skew. The follower treats it as typed `OwnerNegotiation`,
-records a transient pass error and retries on the next pass. The owner also
-checks redacted drain replies, including nested fingerprints, commit/tree IDs
-and evidence hashes: read-only calls fail negotiation; mutating calls report
-`OutcomeUnknown` so the follower reconciles or replays the same request.
+not evidence of schema skew. The follower reports it as `OwnerNegotiation` and
+records the cause as a pass error. A windowless single-pass drain ends failed
+if its only admission pass encounters a negotiation or routing error before
+admitting work; it keeps the cause and has no later admission pass to retry. An
+active timed drain can retry on a later pass while its window remains open. The
+owner also checks redacted drain replies, including nested fingerprints,
+commit/tree IDs and evidence hashes: read-only calls fail negotiation;
+mutating calls report `OutcomeUnknown` so the follower reconciles or replays the
+same request.
 Credentials remain scrubbed even when they overlap an identity. Known
 `XDG_SESSION_*`, `DBUS_SESSION_BUS_ADDRESS`, `SESSION_MANAGER` and
 `TERM_SESSION_ID` metadata is excluded from session-name matching; credential
@@ -761,7 +765,7 @@ Handoff identity keys one durable landing attempt and the dispatch key: a merged
 re-dispatch, a live owner job is not dispatched twice, and a pending request whose job was never submitted
 or whose exact owner job is durably terminal is recovered as the next attempt by an explicit dispatch pass.
 A pending request whose dispatch fails stays pending and does not stop the other pending requests of that pass.
-`OrbitRuntime::dispatch_landing_requests`, `land_handoff` and `landing_attempts` are internal
+`unit::landing::dispatch_landing_requests`, `land_handoff` and `landing_attempts` are internal
 owner-domain seams alongside the handoff ones; landing a named handoff is how a stopped attempt is
 retried and an uncertain one reconciled.
 
@@ -843,7 +847,7 @@ differs from the captured one as `review_contract_mismatch`. A missing field rea
 commands, so an older contract or certificate means what it meant when it was written; a leaf
 that does not carry the list cannot deliver a before-PR claim from an owner that lists any.
 
-Candidate validation can also carry `flaky` evidence on an exit-zero handoff log: the initial required-command failure, a comparable passing base, and one passing isolated candidate replay of at most three failed tests. The report pins the command, run, base and tested head; its `failing_tests` selection must match the named failures and its executed count must cover all of them. Acceptance refuses mismatched evidence, records `flaky_validation` in owner task history, and files each command/test signature once as a friction before dispatching landing. Pre-publication validation passes the same record to PR rendering and pinning. See [candidate-only flakes](../../../CONFIG.md#a-red-base-is-held-not-blocked).
+Candidate validation can also carry `flaky` evidence on an exit-zero handoff log: the initial required-command failure, a comparable passing base, and one passing isolated candidate replay of at most three failed tests. The report pins the command, run, base and tested head; its `failing_tests` selection must match the named failures and its executed count must cover all of them. Acceptance refuses mismatched evidence, records `flaky_validation` in owner task history, and files each command/test signature once as a friction before dispatching landing. Pre-publication validation passes the same record to PR rendering and pinning. See [candidate-only flakes](../../../config/workflow-validation.md#a-red-base-is-held-not-blocked).
 
 The separate deterministic candidate validation runs the owner's required commands captured
 at claim admission, and the owner verifies its exact-run, exact-head logs against its current

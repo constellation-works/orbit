@@ -1538,6 +1538,9 @@ export function reviewLayerText(layer) {
   const origin = source === "run-option" ? "run option --review"
     : source === "claim" ? "the owner's claim"
     : `${source} policy`;
+  if (layer.scope === "supervisor_local") {
+    return `${layer.timing} (${origin}; owner decides per claim)`;
+  }
   return `${layer.timing} (${origin})`;
 }
 

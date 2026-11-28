@@ -31,8 +31,10 @@ writes nothing on the remote, so registering A on B does not register B on A.
 `host list` shows this machine first, then each registered host with its
 reachability, Orbit version, pull protocol and workspaces. **SKEW** marks a
 host whose version or protocol differs from this machine's. `host show` adds
-the replica checkouts and running pull drains on this machine that use the
-host.
+the replica checkouts on this machine that use the host, and the pull drains
+recorded as pending or running that target it. Those drain records are the
+stored state. `host show` does not check whether their process is still alive,
+so a stale pending or running drain can appear.
 
 ```bash
 orbit host list --no-probe    # stored fields only; contacts no host
@@ -127,9 +129,11 @@ orbit host remove build-box
 ```
 
 Rename changes only the local name. Remove refuses with `host_in_use` while a
-replica checkout or a running pull drain on this machine depends on the host.
-`orbit host show` lists those dependents. `--force` removes the entry anyway
-and leaves them without a route.
+replica checkout on this machine depends on the host, or while a pull drain
+recorded as pending or running targets it. Remove reads those drain records as
+stored, without checking whether their process is alive, so a stale record can
+block removal. `orbit host show` lists those dependents. `--force` removes the
+entry anyway and leaves them without a route.
 
 This machine is always listed and cannot be removed. Rename it with
 `orbit config set --global machine.name <value>`. You can also manage hosts
@@ -163,6 +167,6 @@ replica's owner.
 | `task_prefix_conflict` | Two machines claim one prefix. Verify which machine each entry reaches. A prefix is fixed at initialization, so renaming a host does not resolve this. |
 | `host_is_local` | The target is this machine, which is already listed. |
 | `host_identity_mismatch` | SSH now reaches a different installation. Check the target; if the host was replaced, remove and add it again. |
-| `host_in_use` | Run `orbit host show <host>`, then move the listed replica checkouts or stop their pull drains. |
+| `host_in_use` | Run `orbit host show <host>`, then move the listed replica checkouts or stop their pull drains. A listed drain may be a stale record with no live process, because `host show` does not check liveness. |
 | `stale_route` / `unknown_selector` | The host lists no such workspace, or the name matches more than one. Use the exact `ws_*` ID from its live list. |
 | `host_file_conflict` | Follow the [retired destinations file recovery](/reference/config/#legacy-migration). |

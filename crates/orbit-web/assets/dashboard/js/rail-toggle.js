@@ -22,6 +22,7 @@ let currentState = {
   scopeInHeader: false,
 };
 let closeOverlayImpl = () => {};
+let syncTabAttributesImpl = () => {};
 
 function loadRailCollapsedPref() {
   try {
@@ -59,6 +60,11 @@ export function closeRailOverlay(options) {
   closeOverlayImpl(options);
 }
 
+/// Re-sync icon-rail `aria-haspopup` / `aria-expanded` after dynamic subtabs change.
+export function syncRailTabAttributes() {
+  syncTabAttributesImpl(currentState.iconMode);
+}
+
 /// Subscribe to rail mode, overlay or scope-placement changes.
 export function onRailModeChange(listener) {
   modeListeners.add(listener);
@@ -84,7 +90,8 @@ export function initRailToggle() {
 
   function syncTabAttributes(iconMode) {
     for (const tab of rail.querySelectorAll(".rail-group > .tab")) {
-      const hasViews = VIEWS_TABS.has(tab.dataset.tab);
+      const hasViews = VIEWS_TABS.has(tab.dataset.tab)
+        || (tab.dataset.tab === "plugins" && Boolean(document.getElementById("plugins-rail-subtabs")?.querySelector(".subtab")));
       if (tab.id !== "rail-drain") {
         if (iconMode) {
           const label = tab.querySelector(".rail-label")?.textContent?.trim();
@@ -93,17 +100,16 @@ export function initRailToggle() {
           tab.removeAttribute("title");
         }
       }
-      if (hasViews) {
-        if (iconMode) {
-          tab.setAttribute("aria-haspopup", "true");
-          if (!tab.hasAttribute("aria-expanded")) tab.setAttribute("aria-expanded", "false");
-        } else {
-          tab.removeAttribute("aria-haspopup");
-          tab.removeAttribute("aria-expanded");
-        }
+      if (hasViews && iconMode) {
+        tab.setAttribute("aria-haspopup", "true");
+        if (!tab.hasAttribute("aria-expanded")) tab.setAttribute("aria-expanded", "false");
+      } else {
+        tab.removeAttribute("aria-haspopup");
+        tab.removeAttribute("aria-expanded");
       }
     }
   }
+  syncTabAttributesImpl = syncTabAttributes;
 
   function applyRailState() {
     const isPhone = phone.matches;

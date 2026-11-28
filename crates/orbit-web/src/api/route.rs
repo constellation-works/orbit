@@ -375,6 +375,40 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/plugins/{namespace}/panels/{panel}",
             get(plugins::read_panel),
         )
+        // A plugin page as one document under its frame policy, and the
+        // declared read-only tool calls it makes [plugin-pages §2–§3]. No
+        // route serves a single page file or the kit.
+        .route(
+            "/plugins/{namespace}/pages/{page}/",
+            get(plugins::read_page),
+        )
+        // The same page's parts as data, so another host's dashboard can
+        // write the document under its own policy [plugin-pages §5].
+        .route(
+            "/plugins/{namespace}/pages/{page}/parts",
+            get(plugins::read_page_parts),
+        )
+        .route(
+            "/plugins/{namespace}/pages/{page}/call",
+            post(plugins::call_page),
+        )
+        // An action: a mutating tool the page names under `actions`. The
+        // dashboard obtains a one-time confirmation, draws its own dialog
+        // outside the frame and runs the action only on the operator's
+        // confirm [plugin-pages §3]. Both need the operator session.
+        .route(
+            "/plugins/{namespace}/pages/{page}/actions/confirm",
+            post(plugins::confirm_page_action),
+        )
+        .route(
+            "/plugins/{namespace}/pages/{page}/actions/run",
+            post(plugins::run_page_action),
+        )
+        // The dashboard releases a confirmation its operator did not use.
+        .route(
+            "/plugins/{namespace}/pages/{page}/actions/cancel",
+            post(plugins::cancel_page_action),
+        )
         .layer(middleware::map_response(json_client_error))
         .layer(middleware::from_fn_with_state(
             remote_access,

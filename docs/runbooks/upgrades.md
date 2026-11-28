@@ -301,7 +301,7 @@ home with their own workspace, or install this build first with
   npm or `cargo install` host, or in a disposable QA home), nothing is refused and this guard logs
   no compatibility warning because there is no executable to query.
 - Run QA builds against their own home and workspace
-  ([Manual QA from a managed lane](../DEVELOPMENT.md#manual-qa-from-a-managed-lane)), or
+  ([Manual QA from a managed lane](../development/qa.md#manual-qa-from-a-managed-lane)), or
   deploy the build ([Deploy a locally built candidate](#deploy-a-locally-built-candidate-pinned-to-a-source-commit)),
   after which the installed binary applies the migration.
 
@@ -1456,7 +1456,7 @@ tens of thousands of runs.
 
 Store schema v40 adds the `provider_limit_observations` table, where a run
 records the usage limit its provider reported: one row per provider, model and
-window (see [Provider failure holds](../CONFIG.md#provider-failure-holds)). The
+window (see [Provider failure holds](../config/crew-recovery.md#provider-failure-holds)). The
 migration is additive: it creates an empty table and rewrites nothing, so
 older binaries keep reading and writing and it waits for nothing.
 

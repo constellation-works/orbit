@@ -17,6 +17,118 @@ impl OrbitRuntime {
             .map_err(hold_operator_source_repair_refusal)
     }
 
+    /// Publication authority is the successful host adoption, never a caller's input.
+    pub(crate) fn owner_publication_binding(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<SourceRepairBinding>, OrbitError> {
+        self.read_owner_publication_binding(run_id, true)
+    }
+
+    pub(crate) fn read_owner_publication_binding(
+        &self,
+        run_id: &str,
+        active: bool,
+    ) -> Result<Option<SourceRepairBinding>, OrbitError> {
+        self.read_owner_publication_binding_with(run_id, active, false, None)
+    }
+
+    pub(crate) fn read_owner_publication_binding_with(
+        &self,
+        run_id: &str,
+        active: bool,
+        observational: bool,
+        history: Option<&[TaskHistoryEntry]>,
+    ) -> Result<Option<SourceRepairBinding>, OrbitError> {
+        let Some(run) = self.get_job_run_backend(run_id)? else {
+            return Ok(None);
+        };
+        let Some(state) = self.read_run_state(run_id)? else {
+            return Ok(None);
+        };
+        let Some(output) = state.pipeline.get("resume_candidate") else {
+            return Ok(None);
+        };
+        let Some(raw) = output.get("published_binding") else {
+            return Ok(None);
+        };
+        let binding: SourceRepairBinding =
+            serde_json::from_value(raw.clone()).map_err(|e| refuse(e.to_string()))?;
+        let task = if observational {
+            self.observe_task(&binding.task_id)?
+        } else {
+            self.get_task(&binding.task_id)?
+        };
+        self.owner_source_identity_with(&run, &task, observational)?;
+        let job = self.source_repair_definition(&run)?;
+        let index = job
+            .steps
+            .iter()
+            .position(|s| s.id == "resume_candidate")
+            .ok_or_else(|| refuse("adoption step absent"))?;
+        let authenticated = matches!(&job.steps[index].body, JobV2StepBody::Target(t) if t.activity_name.as_deref() == Some("candidate_resume") && matches!(&t.spec, ActivityV2Spec::Deterministic(s) if s.action == "candidate_resume"));
+        if !authenticated
+            || state.run_id != run_id
+            || state.job_id != run.job_id
+            || state.step_states.get(&(index as u32)) != Some(&JobRunState::Success)
+            || state.step_output(index as u32) != Some(output)
+            || (active
+                && (!matches!(run.state, JobRunState::Pending | JobRunState::Running)
+                    || task.job_run_id.as_deref() != Some(run_id)
+                    || !matches!(task.status, TaskStatus::InProgress | TaskStatus::Review)))
+            || binding.schema_version != 1
+            || binding.source_run_id == run_id
+            // This run's commit may widen the task's selectors to files the
+            // adopted candidate changed (an auto-fix repair the task did not
+            // declare); only those system widenings are set aside.
+            || (active && {
+                let loaded_entries;
+                let entries = match history {
+                    Some(history) => history,
+                    None => {
+                        loaded_entries = self.get_task_history(&task.id)?;
+                        &loaded_entries
+                    }
+                };
+                !crate::application::job::resume::source_repair::adoption::admitted_task_matches(
+                    &task,
+                    entries,
+                    run_id,
+                    run.created_at,
+                    &binding.task_digest,
+                )?
+            })
+            || output["phase"] != "candidate_resume"
+            || !matches!(
+                output["outcome"].as_str(),
+                Some("resumed_carried" | "resumed_repaired")
+            )
+            || output["source_branch"] != binding.branch
+            || output["source_sha"] != binding.candidate_head()
+            || output["base_sha"] != state.pipeline["worktree"]["base_sha"]
+            || output["prior_pull_request_head"] != binding.branch
+            || output["reused_branch"] != binding.branch
+            || output["reused_head_sha"] != binding.head_sha
+            || output["prior_pull_request"] != binding.pull_request
+            || output["source_run_id"] != binding.source_run_id
+        {
+            return Err(refuse("published adoption authority changed"));
+        }
+        let source = self
+            .get_job_run_backend(&binding.source_run_id)?
+            .ok_or_else(|| refuse("source disappeared"))?;
+        let source_state = self
+            .read_run_state(&binding.source_run_id)?
+            .ok_or_else(|| refuse("source checkpoints disappeared"))?;
+        let definition = self.source_repair_definition(&source)?;
+        if binding.workspace_id != self.workspace_id()?
+            || run_evidence_digest(&source, &source_state, &definition)? != binding.source_digest
+        {
+            return Err(refuse("immutable published source changed"));
+        }
+        Ok(Some(binding))
+    }
+
     fn resolve_owner_published_candidate(
         &self,
         task_id: &str,
@@ -379,94 +491,5 @@ impl OrbitRuntime {
             && resumed["reused_branch"].is_null()
             && resumed["prior_pull_request"].is_null();
         Ok(fresh.then(|| resumed.clone()))
-    }
-
-    /// Publication authority is the successful host adoption, never a caller's input.
-    pub(crate) fn owner_publication_binding(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<SourceRepairBinding>, OrbitError> {
-        self.read_owner_publication_binding(run_id, true)
-    }
-
-    pub(crate) fn read_owner_publication_binding(
-        &self,
-        run_id: &str,
-        active: bool,
-    ) -> Result<Option<SourceRepairBinding>, OrbitError> {
-        let Some(run) = self.get_job_run_backend(run_id)? else {
-            return Ok(None);
-        };
-        let Some(state) = self.read_run_state(run_id)? else {
-            return Ok(None);
-        };
-        let Some(output) = state.pipeline.get("resume_candidate") else {
-            return Ok(None);
-        };
-        let Some(raw) = output.get("published_binding") else {
-            return Ok(None);
-        };
-        let binding: SourceRepairBinding =
-            serde_json::from_value(raw.clone()).map_err(|e| refuse(e.to_string()))?;
-        let task = self.get_task(&binding.task_id)?;
-        self.owner_source_identity(&run, &task)?;
-        let job = self.source_repair_definition(&run)?;
-        let index = job
-            .steps
-            .iter()
-            .position(|s| s.id == "resume_candidate")
-            .ok_or_else(|| refuse("adoption step absent"))?;
-        let authenticated = matches!(&job.steps[index].body, JobV2StepBody::Target(t) if t.activity_name.as_deref() == Some("candidate_resume") && matches!(&t.spec, ActivityV2Spec::Deterministic(s) if s.action == "candidate_resume"));
-        if !authenticated
-            || state.run_id != run_id
-            || state.job_id != run.job_id
-            || state.step_states.get(&(index as u32)) != Some(&JobRunState::Success)
-            || state.step_output(index as u32) != Some(output)
-            || (active
-                && (!matches!(run.state, JobRunState::Pending | JobRunState::Running)
-                    || task.job_run_id.as_deref() != Some(run_id)
-                    || !matches!(task.status, TaskStatus::InProgress | TaskStatus::Review)))
-            || binding.schema_version != 1
-            || binding.source_run_id == run_id
-            // This run's commit may widen the task's selectors to files the
-            // adopted candidate changed (an auto-fix repair the task did not
-            // declare); only those system widenings are set aside.
-            || (active
-                && !super::super::adoption::admitted_task_matches(
-                    &task,
-                    &self.get_task_history(&task.id)?,
-                    run_id,
-                    run.created_at,
-                    &binding.task_digest,
-                )?)
-            || output["phase"] != "candidate_resume"
-            || !matches!(
-                output["outcome"].as_str(),
-                Some("resumed_carried" | "resumed_repaired")
-            )
-            || output["source_branch"] != binding.branch
-            || output["source_sha"] != binding.candidate_head()
-            || output["base_sha"] != state.pipeline["worktree"]["base_sha"]
-            || output["prior_pull_request_head"] != binding.branch
-            || output["reused_branch"] != binding.branch
-            || output["reused_head_sha"] != binding.head_sha
-            || output["prior_pull_request"] != binding.pull_request
-            || output["source_run_id"] != binding.source_run_id
-        {
-            return Err(refuse("published adoption authority changed"));
-        }
-        let source = self
-            .get_job_run_backend(&binding.source_run_id)?
-            .ok_or_else(|| refuse("source disappeared"))?;
-        let source_state = self
-            .read_run_state(&binding.source_run_id)?
-            .ok_or_else(|| refuse("source checkpoints disappeared"))?;
-        let definition = self.source_repair_definition(&source)?;
-        if binding.workspace_id != self.workspace_id()?
-            || run_evidence_digest(&source, &source_state, &definition)? != binding.source_digest
-        {
-            return Err(refuse("immutable published source changed"));
-        }
-        Ok(Some(binding))
     }
 }

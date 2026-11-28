@@ -55,11 +55,11 @@ client as protocol image blocks, bounded at 1 MiB each
 [ORB-11365]). `pr_open` publishes `screenshots/` artifacts into an optional PR section through
 the task's evidence ref ([ORB-18351]). `orbit browser-kit` builds and verifies a pinned
 headless Chromium per host, and `ui` tasks are admitted only on hosts whose kit is verified
-([browser checks](../../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)). Review findings
+([browser checks](../../../development/browser-checks.md#browser-checks-on-a-prepared-host)). Review findings
 are verified by a second crew ([finding verification](../finding-verification/2_design.md)),
 and the shared severity scale `critical | high | medium | low | nit` with weights 8, 4, 2, 1
 and 0.25 was added by [ORB-19304]. Experiments assign tasks to arms and read outcomes out
-per arm ([experiments](../../experiments/1_scope.md)).
+per arm ([experiments](../../experiments/1_overview.md)).
 
 ## Problem
 

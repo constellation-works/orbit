@@ -76,7 +76,7 @@ Review and commit the checkout files listed by `workspace init`, including MCP c
 | Open the dashboard | `orbit web serve` (remote: `orbit web connect <host>`) |
 | Open the dashboard in a desktop window | Build the app in [`desktop/`](desktop/README.md) |
 | Pick the default crew (provider and model) | `orbit config set workflow.default_crew <crew>` |
-| Route tasks to crews by complexity | `orbit config set --global workflow.hard_complexity_crews '["opus"]'` ([automatic crew pools by complexity](docs/CONFIG.md#automatic-crew-pools-by-complexity)) |
+| Route tasks to crews by complexity | `orbit config set --global workflow.hard_complexity_crews '["opus"]'` ([automatic crew pools by complexity](docs/config/crews.md#automatic-crew-pools-by-complexity)) |
 | Upgrade | `npm install -g @orbit-tools/cli@latest` (`orbit update --check` shows what's new) |
 
 ## Features
@@ -89,12 +89,12 @@ Review and commit the checkout files listed by `workspace init`, including MCP c
 ## Learn more
 
 - **[orbit-cli.com](https://orbit-cli.com):** guides, concepts, and the full CLI and config reference
-- **[docs/CONFIG.md](docs/CONFIG.md):** crews, pools, base branch, sandbox
-- **[docs/POSITIONING.md](docs/POSITIONING.md):** what Orbit is for, and what it deliberately isn't
-- **[docs/OPTIMISTIC_MERGING.md](docs/OPTIMISTIC_MERGING.md):** the preferred delivery mode: merge fast, review after landing, keep the queue draining
+- **[configuration reference](docs/config/README.md):** crews, pools, base branch, sandbox
+- **[docs/principles/positioning.md](docs/principles/positioning.md):** what Orbit is for, and what it deliberately isn't
+- **[docs/principles/optimistic-merging.md](docs/principles/optimistic-merging.md):** the preferred delivery mode: merge fast, review after landing, keep the queue draining
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** and **[design docs](docs/INDEX.md#designs)**
 - **[CHANGELOG.md](CHANGELOG.md):** breaking changes ship in minor releases
-- Crews name a provider, model, and effort level; complexity pools choose one for a task without an explicit crew. See [crew definitions](docs/CONFIG.md#crewsname--which-provider-model-runs-the-task), [init's seeded pools](docs/CONFIG.md#what-orbit-init-seeds), and [complexity routing, weighting, and overrides](docs/CONFIG.md#automatic-crew-pools-by-complexity).
+- Crews name a provider, model, and effort level; complexity pools choose one for a task without an explicit crew. See [crew definitions](docs/config/crews.md#crewsname--which-provider-model-runs-the-task), [init's seeded pools](docs/config/workflow.md#what-orbit-init-seeds), and [complexity routing, weighting, and overrides](docs/config/crews.md#automatic-crew-pools-by-complexity).
 - [Connect your agent](https://orbit-cli.com/how-to/mcp-integration/#connect) explains operator and agent-only authority; [federated MCP](https://orbit-cli.com/how-to/mcp-integration/#register-the-federated-mux) connects multiple machines.
 - [Scoping rules](https://orbit-cli.com/reference/scoping/#where-state-lives) explain machine and workspace state. See the [runbooks](docs/INDEX.md#runbooks) for backups, recovery, and upgrades.
 

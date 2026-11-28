@@ -2,6 +2,7 @@
 
 use super::*;
 use chrono::TimeDelta;
+use orbit_core::unit::landing;
 use orbit_types::workflow::handoff::LandingWaitGate;
 
 struct WaitingOwner {
@@ -78,7 +79,7 @@ impl WaitingOwner {
         pair.wire.accept(delivered.clone()).unwrap();
         let runtime = &pair.wire.owner;
         let accepted = runtime.accepted_task_handoff(&delivered.claim_id).unwrap();
-        if runtime.landing_attempts().unwrap().is_empty() {
+        if landing::landing_attempts(runtime).unwrap().is_empty() {
             let context = ClaimInvocation::trusted_operator(
                 delivered.task_id.clone(),
                 delivered.claim_id.clone(),
@@ -103,7 +104,7 @@ impl WaitingOwner {
                     },
                 )
                 .unwrap();
-            runtime.dispatch_landing_requests().unwrap();
+            landing::dispatch_landing_requests(runtime).unwrap();
         }
         pair.follower_jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
@@ -126,11 +127,7 @@ impl WaitingOwner {
     }
 
     fn attempt(&self) -> LandingAttempt {
-        self.owner
-            .pair
-            .wire
-            .owner
-            .landing_attempts()
+        landing::landing_attempts(&self.owner.pair.wire.owner)
             .unwrap()
             .remove(0)
     }
@@ -177,13 +174,8 @@ impl WaitingOwner {
     fn dispatch(
         &self,
         now: chrono::DateTime<Utc>,
-    ) -> Vec<orbit_core::application::landing::LandingDispatch> {
-        self.owner
-            .pair
-            .wire
-            .owner
-            .dispatch_landing_requests_at(now)
-            .unwrap()
+    ) -> Vec<orbit_core::unit::landing::LandingDispatch> {
+        landing::dispatch_landing_requests_at(&self.owner.pair.wire.owner, now).unwrap()
     }
 }
 
@@ -288,12 +280,7 @@ fn waiting_gates_resume_and_land_the_same_handoff() {
             "the owner requested the merge"
         );
         assert_eq!(
-            fixture
-                .owner
-                .pair
-                .wire
-                .owner
-                .landing_attempt_record(&fixture.handoff, 1)
+            landing::landing_attempt_record(&fixture.owner.pair.wire.owner, &fixture.handoff, 1)
                 .unwrap(),
             Some(stopped)
         );
@@ -551,7 +538,7 @@ fn two_approved_landings() -> (OwnerLocal, Vec<(String, String)>) {
         approved.push((delivered.claim_id.clone(), accepted.handoff_id.clone()));
     }
     // Dispatch as the authorized-handoff path does, opening each landing job.
-    pair.wire.owner.dispatch_landing_requests().unwrap();
+    landing::dispatch_landing_requests(&pair.wire.owner).unwrap();
     pair.follower_jobs = orbit_core::runtime::JobRuns::shared(
         pair.wire.owner.sqlite_store().unwrap(),
         pair.wire.owner.workspace_id().unwrap(),
@@ -603,7 +590,7 @@ fn an_invalidated_pending_landing_does_not_starve_later_landings() {
     // The fixture's dispatch opened one landing job per handoff. Ending both
     // jobs leaves each handoff open without a live job, so the next pass
     // reaches the landing path for both.
-    let attempts = runtime.landing_attempts().unwrap();
+    let attempts = landing::landing_attempts(runtime).unwrap();
     assert_eq!(
         attempts.len(),
         2,
@@ -621,8 +608,7 @@ fn an_invalidated_pending_landing_does_not_starve_later_landings() {
     let (failing_claim, _) = &approved[0];
     let (_, valid) = &approved[1];
     invalidate_landing_context(runtime, failing_claim);
-    let dispatched = runtime
-        .dispatch_landing_requests_at(Utc::now())
+    let dispatched = landing::dispatch_landing_requests_at(runtime, Utc::now())
         .expect("one failing landing request does not fail the owner pass");
     let handoffs: Vec<&str> = dispatched.iter().map(|d| d.handoff_id.as_str()).collect();
     assert_eq!(handoffs, vec![valid.as_str()], "{dispatched:?}");

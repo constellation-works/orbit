@@ -40,6 +40,9 @@ pub(in super::super) struct PreparedTaskSnapshot {
     /// Identity of the durable context creation grant the task held at
     /// preparation, `None` for none (or a payload prepared before grants).
     pub(in super::super) context_creation_identity: Option<String>,
+    /// Existing selectors trusted preparation explicitly established as
+    /// required changes alongside any creation grants.
+    pub(in crate::application::task::pilot) required_existing_selectors: Vec<String>,
     /// The pilot mode preparation chose for the task.
     pub(in super::super) pilot_mode: PilotModeSnapshot,
     /// Host-verified deterministic `comment-hygiene` batch preparation, when

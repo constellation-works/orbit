@@ -65,6 +65,7 @@ pub use pull_run_detail::{OwnerBusyBackoff, PullCrewWindow, PullLeafClaim, Refus
 pub(in crate::application) use pull_settlement::SETTLEMENT_REFUSAL_REMEDY;
 pub use pull_settlement::{PullSettlementEntry, PullSettlementOutcome};
 pub(crate) use retry_key::RetryKey;
-pub(crate) use review_layer::review_layer_json;
+pub use review_layer::SUPERVISOR_LOCAL_REVIEW_SCOPE;
+pub(crate) use review_layer::{review_layer_json, review_layer_json_for_run};
 pub use schedule_display::ScheduleDisplayState;
 pub(crate) use tool_invocation::ToolInvocationPort;

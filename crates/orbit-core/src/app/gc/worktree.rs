@@ -1,0 +1,503 @@
+//! Worktree GC: which runs' worktrees are delivered, and the owner lookups it needs.
+
+use chrono::{DateTime, Duration, Utc};
+use orbit_common::RemoteToolCode;
+use orbit_engine::{
+    WORKTREE_IDENTITY_INPUT_KEYS, WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup,
+    collect_worktrees, run_worktree_has_reclaim_output,
+};
+use orbit_store::contract::{ClaimMutation, JobRunQuery, LocalPullPhase};
+use orbit_types::task::{TaskHistoryEntry, TaskStatus, task_id_prefix};
+use orbit_types::workflow::JobRun;
+use serde_json::{Value, json};
+
+use crate::application::contracts::EngineHostPort;
+use crate::{OrbitError, OrbitRuntime};
+
+/// Inspect declared reclaimable paths without reconciling or writing state.
+/// Used by doctor; every terminal/worker/path gate also applies to estimates.
+/// Only the input keys worktree identity reads are hydrated: every run is
+/// still indexed, without materializing each one's whole input.
+pub fn reclaimable_worktrees(rt: &OrbitRuntime) -> Result<WorktreeGcResult, OrbitError> {
+    let runs = rt.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+        include_steps: false,
+        input_keys: Some(WORKTREE_IDENTITY_INPUT_KEYS),
+        ..JobRunQuery::default()
+    })?;
+    collect_worktrees(
+        &rt.paths().repo_root,
+        &runs,
+        &rt.engine_host(),
+        &WorktreeGcOptions {
+            target_only: true,
+            reclaim_patterns: Some(rt.settings().worktree_reclaim().to_vec()),
+            ..WorktreeGcOptions::default()
+        },
+    )
+}
+
+/// Best-effort space recovery at admission; active workers are protected
+/// by the collector, including runs sharing a terminal run's path.
+pub(crate) fn reclaim_worktrees_on_admission(rt: &OrbitRuntime) {
+    let Some(threshold) = rt.settings().worktree_reclaim_below_free_mib() else {
+        return;
+    };
+    let state = &rt.paths().state_dir;
+    let free = || fs2::available_space(state).map(|bytes| bytes / (1024 * 1024));
+    if !free().is_ok_and(|mib| mib < threshold) {
+        return;
+    }
+    let runs = match rt.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+        include_steps: false,
+        input_keys: Some(WORKTREE_IDENTITY_INPUT_KEYS),
+        ..JobRunQuery::default()
+    }) {
+        Ok(runs) => runs,
+        Err(error) => {
+            tracing::warn!(%error, "admission could not inventory reclaimable worktrees");
+            return;
+        }
+    };
+    // Skip empty history before sorting or paying for a full collection's
+    // Git queries. Keep all runs in `runs` to protect shared active paths.
+    let patterns = rt.settings().worktree_reclaim();
+    let repo_root = &rt.paths().repo_root;
+    let mut oldest = runs
+        .iter()
+        .filter(|run| run.state.is_terminal())
+        .filter(|run| run_worktree_has_reclaim_output(rt.env(), repo_root, run, patterns))
+        .collect::<Vec<_>>();
+    oldest.sort_by_key(|run| (run.finished_at.unwrap_or(run.created_at), &run.run_id));
+    for run in oldest {
+        if !free().is_ok_and(|mib| mib < threshold) {
+            break;
+        }
+        match reclaim_run_build_output(rt, &runs, &run.run_id) {
+            Ok(result) => {
+                tracing::info!(run_id = %run.run_id, bytes = result.bytes_reclaimed,
+                    reports = ?result.reports, "admission reclaimed oldest kept worktree output");
+                if result.bytes_reclaimed > 0
+                    && let Err(error) = rt.record_pipeline_audit(
+                        "worktree.reclaim",
+                        Some(&run.run_id),
+                        None,
+                        orbit_types::telemetry::AuditEventStatus::Success,
+                        json!({"run_id": run.run_id, "reclaim": result}),
+                        None,
+                    )
+                {
+                    tracing::warn!(%error, "could not record admission reclamation");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, run_id = %run.run_id, "admission reclaim failed; continuing")
+            }
+        }
+    }
+}
+
+/// Every recorded run, without step rows. Worktree GC classifies live
+/// worktrees from non-terminal runs and never reads `agent_response_json`.
+pub(crate) fn list_job_runs_for_worktree_gc(rt: &OrbitRuntime) -> Result<Vec<JobRun>, OrbitError> {
+    rt.reconcile_stale_job_runs(None)?;
+    rt.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+        include_steps: false,
+        input_keys: Some(WORKTREE_IDENTITY_INPUT_KEYS),
+        ..JobRunQuery::default()
+    })
+}
+
+/// Delivery jobs own their run worktree until the run is terminal. Reuse
+/// the collector here so delivery and the scheduled GC have identical
+/// task, run, registration, and clean-tree gates.
+pub(crate) fn cleanup_delivered_worktree(
+    rt: &OrbitRuntime,
+    run_id: &str,
+) -> Result<Option<WorktreeGcResult>, OrbitError> {
+    let run = rt.show_job_run(run_id)?;
+    if !rt
+        .load_v2_job_asset_by_name(&run.job_id)?
+        .1
+        .owns_task_worktree
+    {
+        return Ok(None);
+    }
+
+    collect_worktrees(
+        &rt.paths().repo_root,
+        // Scope collection to this delivery, but retain every run in the
+        // path index so another run sharing its token or fallback protects it.
+        &list_job_runs_for_worktree_gc(rt)?,
+        &rt.engine_host(),
+        &WorktreeGcOptions {
+            delete: true,
+            run_id: Some(run_id.to_string()),
+            older_than: None,
+            estimate_bytes: false,
+            target_only: false,
+            reclaim_patterns: Some(rt.settings().worktree_reclaim().to_vec()),
+            reclaim_kept: false,
+            rescue_dirty: false,
+            parked_older_than: None,
+        },
+    )
+    .map(Some)
+}
+
+/// A task's settlement state for worktree GC [ORB-13658].
+///
+/// An owner checkout reads its own store. A replica looks each id up on
+/// the host its prefix names [ORB-14449]: this machine's prefix reads the
+/// local store; the owner's goes to the owner through the route the claim
+/// names (its admission's destination) or else this checkout's registered
+/// workspace on the owner; another registered host's goes to that host by
+/// id. A prefix no registered host claims is skipped without a remote
+/// call. Only a transport failure is reported as the holder being
+/// unreachable [ORB-13920]: a host not answering says nothing about
+/// whether the task exists, and a route this replica does not have is a
+/// configuration gap, not an outage.
+pub(crate) fn worktree_gc_task_lookup(
+    rt: &OrbitRuntime,
+    run_id: &str,
+    task_id: &str,
+) -> WorktreeGcTaskLookup {
+    let Some(owner_machine) = rt.role().replica_owner() else {
+        return worktree_gc_local_task_lookup(rt, task_id);
+    };
+    // Uninitialized legacy runtimes allocate under ORB. Registered runtime
+    // composition keeps the allocator and machine identity in agreement.
+    let local_prefix = rt.settings().machine_task_prefix();
+    let Some(prefix) = task_id_prefix(task_id) else {
+        return WorktreeGcTaskLookup::TaskPrefixUnroutable;
+    };
+    if prefix == local_prefix {
+        return worktree_gc_local_task_lookup(rt, task_id);
+    }
+    let Some(transport) = rt.drain_owner_transport() else {
+        return WorktreeGcTaskLookup::NoOwnerRoute(
+            "this runtime has no federated owner route; register the owner with \
+             `orbit host add <ssh-target>`"
+                .into(),
+        );
+    };
+    // The prefix names the task's only writer [ORB-14449]: the owner's
+    // ids go to the owner over the claim route, another registered host's
+    // ids go to that host, and an id no host claims is never asked about.
+    let holder = match transport.task_prefix_host(prefix) {
+        Ok(Some(holder)) => holder,
+        Ok(None) => return WorktreeGcTaskLookup::TaskPrefixUnroutable,
+        Err(error) => {
+            tracing::warn!(%error, "worktree GC could not read the host file's task prefixes");
+            return WorktreeGcTaskLookup::Unresolved;
+        }
+    };
+    let fields = json!({
+        "id": task_id,
+        "fields": ["status", "pr_status", "updated_at"],
+    });
+    let (route, answer) = if holder == owner_machine {
+        let Some(selector) = worktree_gc_owner_selector(rt, owner_machine, run_id) else {
+            return WorktreeGcTaskLookup::NoOwnerRoute(
+                "this replica checkout is not a registered workspace and the run holds no \
+                 claim naming its owner; register it with `orbit workspace init --role \
+                 replica`"
+                    .into(),
+            );
+        };
+        let answer = transport.show_task(&selector, fields);
+        (
+            selector.clone(),
+            answer.map(|answer| (answer, Some(selector))),
+        )
+    } else {
+        (
+            holder,
+            transport
+                .show_task_by_id(fields)
+                .map(|answer| (answer, None)),
+        )
+    };
+    // Only a parked task's age matters, so only it pays for its history.
+    let history = |selector: Option<&str>| {
+        let input = json!({ "id": task_id, "fields": ["history"] });
+        match selector {
+            Some(selector) => transport.show_task(selector, input),
+            None => transport.show_task_by_id(input),
+        }
+    };
+    match answer {
+        Ok((fields, selector)) => {
+            let mut lookup = owner_task_fields(task_id, &fields);
+            if let WorktreeGcTaskLookup::Found {
+                status: status @ TaskStatus::Someday,
+                status_since,
+                ..
+            } = &mut lookup
+            {
+                let updated_at = fields
+                    .get("updated_at")
+                    .cloned()
+                    .and_then(|at| serde_json::from_value::<DateTime<Utc>>(at).ok());
+                let entered = match history(selector.as_deref()) {
+                    Ok(answer) => answer
+                        .get("history")
+                        .cloned()
+                        .and_then(|history| {
+                            serde_json::from_value::<Vec<TaskHistoryEntry>>(history).ok()
+                        })
+                        .and_then(|history| status_entered_at(&history, *status)),
+                    Err(error) => {
+                        tracing::info!(%task_id, %error,
+                            "worktree GC could not read a parked task's history from its holder");
+                        None
+                    }
+                };
+                *status_since = entered.or(updated_at);
+            }
+            lookup
+        }
+        Err(OrbitError::NotFound { .. }) => WorktreeGcTaskLookup::Unresolved,
+        Err(OrbitError::RemoteTool {
+            code: RemoteToolCode::NotFound,
+            ..
+        }) => WorktreeGcTaskLookup::Unresolved,
+        Err(error @ (OrbitError::UnknownSelector(_) | OrbitError::AmbiguousDestination(_))) => {
+            WorktreeGcTaskLookup::NoOwnerRoute(format!("{route}: {error}"))
+        }
+        Err(error) if is_worktree_gc_transport_failure(&error) => {
+            WorktreeGcTaskLookup::OwnerUnreachable(format!("{route}: {error}"))
+        }
+        Err(error) => WorktreeGcTaskLookup::OwnerLookupFailed(format!("{route}: {error}")),
+    }
+}
+
+fn worktree_gc_local_task_lookup(rt: &OrbitRuntime, task_id: &str) -> WorktreeGcTaskLookup {
+    // Read the store directly: get_task can route through a managed
+    // worker's coordinator, which is not the authority for local ids.
+    match rt.stores().tasks().get_task(task_id) {
+        Ok(Some(task)) => {
+            // Only a parked task's age matters, so only it reads history.
+            let status_since = (task.status == TaskStatus::Someday).then(|| {
+                rt.stores()
+                    .task_history()
+                    .get_task_history(task_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|history| status_entered_at(&history, task.status))
+                    .unwrap_or(task.updated_at)
+            });
+            WorktreeGcTaskLookup::Found {
+                status: task.status,
+                pr_status: task.pr_status,
+                status_since,
+            }
+        }
+        _ => WorktreeGcTaskLookup::Unresolved,
+    }
+}
+
+/// Scope for memoizing owner lookups during one worktree GC sweep.
+/// Different claimed leaves can belong to different owner destinations.
+pub(crate) fn worktree_gc_task_lookup_scope(rt: &OrbitRuntime, run_id: &str) -> Option<String> {
+    let Some(owner_machine) = rt.role().replica_owner() else {
+        return Some("local".to_string());
+    };
+    worktree_gc_owner_selector(rt, owner_machine, run_id)
+}
+
+fn worktree_gc_owner_selector(
+    rt: &OrbitRuntime,
+    owner_machine: &str,
+    run_id: &str,
+) -> Option<String> {
+    let claim_selector = match rt.stores().jobs().local_pull_for_run(run_id) {
+        Ok(record) => record.map(|record| record.destination.selector),
+        Err(error) => {
+            tracing::warn!(
+                run_id,
+                %error,
+                "worktree GC could not read the run's claim admission; asking through the \
+                 workspace route"
+            );
+            None
+        }
+    };
+    claim_selector.or_else(|| {
+        rt.workspace_runtime_binding()
+            .map(|binding| format!("{owner_machine}/{}", binding.logical_workspace_id))
+    })
+}
+
+/// A claimed leaf's claim that is not settled with its owner yet
+/// [ORB-16385]. The follower may still owe the owner the leaf's delivery,
+/// so a parked task's age does not license removing its worktree. A
+/// claim admission that cannot be read counts as live.
+pub(crate) fn worktree_gc_live_claim(rt: &OrbitRuntime, run_id: &str) -> Option<String> {
+    match rt.stores().jobs().local_pull_for_run(run_id) {
+        Ok(Some(record))
+            if !matches!(
+                record.phase,
+                LocalPullPhase::Settled | LocalPullPhase::Idle | LocalPullPhase::Refused
+            ) =>
+        {
+            Some(format!(
+                "claim from {} is {:?}, not settled",
+                record.destination.selector, record.phase
+            ))
+        }
+        Ok(_) => None,
+        Err(error) => Some(format!("cannot read the run's claim admission: {error}")),
+    }
+}
+
+/// The settled claim behind a claimed leaf's worktree, if it has one
+/// [ORB-13920].
+///
+/// Only a settled, accepted handoff proves the owner holds the leaf's
+/// delivery. A release returns unfinished work to the backlog, and an
+/// obsolete settlement was never accepted; both still need the owner's
+/// task status to decide eligibility. Read without creating the pull
+/// schema, so a workspace that never pulled reads nothing.
+pub(crate) fn worktree_gc_settled_claim(rt: &OrbitRuntime, run_id: &str) -> Option<String> {
+    let record = match rt.stores().jobs().local_pull_for_run(run_id) {
+        Ok(record) => record?,
+        Err(error) => {
+            tracing::warn!(run_id, %error, "worktree GC could not read the run's claim admission");
+            return None;
+        }
+    };
+    if record.phase != LocalPullPhase::Settled
+        || !matches!(record.settlement, Some(ClaimMutation::AcceptHandoff(_)))
+        || record.refusal.is_some()
+    {
+        return None;
+    }
+    let owner = &record.destination.selector;
+    Some(format!("claim settled with its owner {owner}"))
+}
+
+/// Reclaim declared output of one terminal run, keeping its checkout.
+/// Registration, worker, confinement and Git content gates apply.
+pub(crate) fn reclaim_run_build_output(
+    rt: &OrbitRuntime,
+    runs: &[JobRun],
+    run_id: &str,
+) -> Result<WorktreeGcResult, OrbitError> {
+    collect_worktrees(
+        &rt.paths().repo_root,
+        runs,
+        &rt.engine_host(),
+        &WorktreeGcOptions {
+            delete: true,
+            run_id: Some(run_id.to_string()),
+            older_than: None,
+            estimate_bytes: false,
+            target_only: true,
+            reclaim_patterns: Some(rt.settings().worktree_reclaim().to_vec()),
+            reclaim_kept: false,
+            rescue_dirty: false,
+            parked_older_than: None,
+        },
+    )
+}
+
+pub fn gc_worktrees(
+    rt: &OrbitRuntime,
+    delete: bool,
+    run_id: Option<String>,
+    older_than_hours: Option<u64>,
+    estimate_bytes: bool,
+    target_only: bool,
+) -> Result<WorktreeGcResult, OrbitError> {
+    let older_than = older_than_hours
+        .map(|hours| {
+            let hours = i64::try_from(hours).map_err(|_| {
+                OrbitError::InvalidInput("--older-than-hours is too large".to_string())
+            })?;
+            let duration = Duration::try_hours(hours).ok_or_else(|| {
+                OrbitError::InvalidInput("--older-than-hours is too large".to_string())
+            })?;
+            Utc::now().checked_sub_signed(duration).ok_or_else(|| {
+                OrbitError::InvalidInput("--older-than-hours is too large".to_string())
+            })
+        })
+        .transpose()?;
+    let parked_older_than =
+        worktree_parked_cutoff(rt.settings().worktree_parked_reclaim_after_hours());
+    let runs = list_job_runs_for_worktree_gc(rt)?;
+    collect_worktrees(
+        &rt.paths().repo_root,
+        &runs,
+        &rt.engine_host(),
+        &WorktreeGcOptions {
+            delete,
+            run_id,
+            older_than,
+            estimate_bytes,
+            target_only,
+            reclaim_patterns: Some(rt.settings().worktree_reclaim().to_vec()),
+            reclaim_kept: false,
+            rescue_dirty: false,
+            parked_older_than,
+        },
+    )
+}
+
+/// Only an unreachable destination, a lost result, or a fenced unavailable
+/// owner is evidence that the owner could not be reached. Stale local routes,
+/// unhealthy checkout probes, and structured tool errors leave the owner
+/// reachable or unverified, so they do not mean `owner_unreachable`. A
+/// preserved JSON-RPC answer keeps the classification it had as an unreachable
+/// destination, so an owner that answers with a protocol error stays pinned.
+fn is_worktree_gc_transport_failure(error: &OrbitError) -> bool {
+    matches!(
+        error,
+        OrbitError::UnreachableDestination(_)
+            | OrbitError::OutcomeUnknown { .. }
+            | OrbitError::OwnerUnavailable(_)
+    ) || error.is_json_rpc_refusal()
+        || error.host_registry_code() == Some(orbit_common::HostRegistryCode::OwnerUnreachable)
+}
+
+/// Now less the parked-reclaim window; `None` when it cannot be represented,
+/// which keeps every parked worktree.
+fn worktree_parked_cutoff(hours: u64) -> Option<DateTime<Utc>> {
+    i64::try_from(hours)
+        .ok()
+        .and_then(Duration::try_hours)
+        .and_then(|age| Utc::now().checked_sub_signed(age))
+}
+
+/// When the task last moved into `status`, from its history.
+fn status_entered_at(history: &[TaskHistoryEntry], status: TaskStatus) -> Option<DateTime<Utc>> {
+    history
+        .iter()
+        .filter(|entry| entry.to_status == Some(status) && entry.from_status != Some(status))
+        .map(|entry| entry.at)
+        .max()
+}
+
+/// The owner's `status`/`pr_status` projection. An answer GC cannot read is
+/// an answer, not an outage, so it retains the worktree as unresolved.
+fn owner_task_fields(task_id: &str, fields: &Value) -> WorktreeGcTaskLookup {
+    let status = fields
+        .get("status")
+        .cloned()
+        .and_then(|status| serde_json::from_value::<TaskStatus>(status).ok());
+    let Some(status) = status else {
+        tracing::warn!(
+            %task_id,
+            answer = %fields,
+            "the workspace owner's task answer carried no readable status; retaining the worktree"
+        );
+        return WorktreeGcTaskLookup::Unresolved;
+    };
+    WorktreeGcTaskLookup::Found {
+        status,
+        pr_status: fields
+            .get("pr_status")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        status_since: None,
+    }
+}

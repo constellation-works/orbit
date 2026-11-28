@@ -1,0 +1,269 @@
+//! Archive and rejection holds, checked against the retained cause rather
+//! than treating a historical broad job/step key as proof of equivalence.
+
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Duration, Utc};
+use orbit_common::OrbitError;
+use orbit_types::identity::is_automation_actor;
+use orbit_types::task::{TaskRelationType, TaskStatus, is_valid_orb_task_id};
+use serde_json::{Value, json};
+
+use super::cluster::FailureCluster;
+use super::filing::CI_FAILURE_KEY_TAG_PREFIX;
+use super::identity::CiTaskIdentities;
+use crate::OrbitRuntime;
+use crate::application::automation::source::Source;
+use crate::application::contracts::CI_FAILURE_TAG;
+use crate::unit::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
+use crate::unit::sweep_filing::{full_revision, landed_task_commit};
+
+/// Hours an archived or rejected CI sweep task suppresses re-filing.
+///
+/// The former `ci_failure.operator_suppression_hours` default, fixed when the key was removed [ORB-22808].
+pub(crate) const OPERATOR_SUPPRESSION_HOURS: i64 = 6;
+
+pub(super) struct OperatorAssessment {
+    pub(super) withheld: Option<Value>,
+    pub(super) failed_covers: Vec<Value>,
+}
+
+/// An owner's latest transition into its current status: `(actor, at)`,
+/// with the whole decision absent when no such transition is recorded.
+type StatusDecision = Option<(Option<String>, DateTime<Utc>)>;
+
+enum CoverState {
+    Open,
+    Landed(String),
+    Closed,
+    Unavailable,
+}
+
+pub(super) struct OperatorCovers<'a> {
+    runtime: &'a OrbitRuntime,
+    source: Source<'a>,
+    now: DateTime<Utc>,
+    suppression: Duration,
+    covers: BTreeMap<String, CoverState>,
+    /// The status decision `(actor, at)` per assessed owner, read at most
+    /// once however many clusters name the same owner.
+    decisions: BTreeMap<String, StatusDecision>,
+}
+
+impl<'a> OperatorCovers<'a> {
+    pub(super) fn new(runtime: &'a OrbitRuntime) -> Result<Self, OrbitError> {
+        Ok(Self {
+            runtime,
+            source: Source::new(
+                &runtime.paths().repo_root,
+                runtime.execution_env_policy().process_env(),
+            ),
+            now: runtime.ci_failure_time().unwrap_or_else(Utc::now),
+            suppression: Duration::hours(OPERATOR_SUPPRESSION_HOURS),
+            covers: BTreeMap::new(),
+            decisions: BTreeMap::new(),
+        })
+    }
+
+    /// The owner's latest transition into its current status, as
+    /// `(actor, at)` with an empty actor already filtered out.
+    fn decision(
+        &mut self,
+        owner_id: &str,
+        status: TaskStatus,
+    ) -> Result<StatusDecision, OrbitError> {
+        if let Some(decision) = self.decisions.get(owner_id) {
+            return Ok(decision.clone());
+        }
+        let history = self.runtime.get_task_history(owner_id)?;
+        let decision = history
+            .iter()
+            .rev()
+            .find(|event| event.to_status == Some(status))
+            .map(|event| {
+                (
+                    Some(event.by.clone()).filter(|actor| !actor.trim().is_empty()),
+                    event.at,
+                )
+            });
+        self.decisions
+            .insert(owner_id.to_string(), decision.clone());
+        Ok(decision)
+    }
+
+    pub(super) fn assess<L: DuplicateTaskLookup + ?Sized>(
+        &mut self,
+        cluster: &FailureCluster,
+        lookup: &L,
+        identities: &CiTaskIdentities<'_>,
+    ) -> Result<OperatorAssessment, OrbitError> {
+        let mut owners = BTreeMap::new();
+        for key in std::iter::once(&cluster.failure_key).chain(&cluster.legacy_keys) {
+            for task in lookup.list_tasks_by_tags(&[format!("{CI_FAILURE_KEY_TAG_PREFIX}{key}")])? {
+                if matches!(task.status, TaskStatus::Archived | TaskStatus::Rejected)
+                    && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+                {
+                    if cluster.compiler_cause.is_none()
+                        && !cluster.signature_is_step_fallback
+                        && identities.for_task(&task)?.is_some_and(|record| {
+                            record
+                                .archive_signature
+                                .as_ref()
+                                .is_some_and(|signature| signature != &cluster.signature)
+                        })
+                    {
+                        continue;
+                    }
+                    // Old compiler keys can collide on chatter. Retain the
+                    // same supplying-evidence requirement as open-owner lookup.
+                    if cluster.compiler_cause.is_some()
+                        && key != &cluster.failure_key
+                        && !identities.for_task(&task)?.is_some_and(|record| {
+                            cluster
+                                .sources
+                                .iter()
+                                .any(|source| record.matches_source(source))
+                        })
+                    {
+                        continue;
+                    }
+                    owners.insert(task.id.clone(), task);
+                }
+            }
+        }
+        // A compiler failure key embeds the observed checkout, so a hold taken
+        // at one commit is invisible to the exact-key lookup at the next. Match
+        // closed CI-sweep owners on the same location-free diagnostic set the
+        // open-owner lookup uses; the exact key stays the reported evidence.
+        if let Some(identity) = cluster.open_compiler_identity() {
+            for task in lookup.list_tasks()?.iter() {
+                if matches!(task.status, TaskStatus::Archived | TaskStatus::Rejected)
+                    && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+                    && identities.for_task(task)?.is_some_and(|record| {
+                        record.identity.open_compiler_set.as_ref() == Some(&identity)
+                    })
+                {
+                    owners
+                        .entry(task.id.clone())
+                        .or_insert_with(|| task.clone());
+                }
+            }
+        }
+        let mut assessment = OperatorAssessment {
+            withheld: None,
+            failed_covers: Vec::new(),
+        };
+        for owner in owners.values() {
+            // Later metadata edits must neither change provenance nor restart
+            // the window taken from the status decision.
+            let decision = self.decision(&owner.id, owner.status)?;
+            let actor = decision.as_ref().and_then(|(actor, _)| actor.as_deref());
+            let cause_known = cluster.compiler_cause.is_some()
+                || (!cluster.signature_is_step_fallback
+                    && identities.for_task(owner)?.is_some_and(|record| {
+                        record.archive_signature.as_ref() == Some(&cluster.signature)
+                    }));
+            let covers = owner
+                .relations
+                .iter()
+                .filter(|relation| relation.relation_type == TaskRelationType::CoveredBy)
+                .collect::<Vec<_>>();
+            if covers.is_empty() || !cause_known {
+                let archived_at = decision
+                    .as_ref()
+                    .map(|(_, at)| *at)
+                    .unwrap_or(owner.updated_at);
+                let reason = if !cause_known {
+                    "archive_identity_unavailable"
+                } else {
+                    match actor {
+                        Some(actor) if is_automation_actor(actor) => "automation_archived",
+                        Some(_) => "operator_archived",
+                        None => "archive_provenance_unavailable",
+                    }
+                };
+                if self.now < archived_at + self.suppression || !covers.is_empty() {
+                    assessment.withheld = Some(json!({
+                        "outcome": "withheld", "reason": reason, "archive_actor": actor,
+                        "task_id": owner.id, "owner": cause_known.then_some(&owner.id),
+                        "candidate_owner": (!cause_known).then_some(&owner.id),
+                        "failure_key": cluster.failure_key, "cluster_key": cluster.cluster_key,
+                        "status": owner.status, "until": covers.is_empty().then_some(archived_at + self.suppression),
+                    }));
+                    return Ok(assessment);
+                }
+                continue;
+            }
+            for relation in covers {
+                let target = &relation.target;
+                if !self.covers.contains_key(target) {
+                    // Bound forge and delivery reads, failing closed per key.
+                    let state = if self.covers.len() >= 16 {
+                        CoverState::Unavailable
+                    } else {
+                        self.read_cover(target, lookup)
+                    };
+                    self.covers.insert(target.clone(), state);
+                }
+                let (reason, landed) = match &self.covers[target] {
+                    CoverState::Closed => continue,
+                    CoverState::Open => ("operator_cover_open", None),
+                    CoverState::Unavailable => ("operator_cover_unavailable", None),
+                    CoverState::Landed(commit) => {
+                        if matches!(
+                            self.source.is_ancestor(commit, &cluster.tested_commit),
+                            Ok(true)
+                        ) {
+                            assessment.failed_covers.push(json!({
+                                "task_id": owner.id, "cover": target, "landed_commit": commit,
+                                "reason": "cover_did_not_hold", "failure_key": cluster.failure_key,
+                            }));
+                            continue;
+                        }
+                        ("awaiting_cover_commit", Some(commit))
+                    }
+                };
+                assessment.withheld = Some(json!({
+                    "outcome": "covered", "reason": reason,
+                    "archive_actor": actor,
+                    "task_id": owner.id, "owner": owner.id, "cover": target,
+                    "landed_commit": landed,
+                    "failure_key": cluster.failure_key, "cluster_key": cluster.cluster_key,
+                }));
+                return Ok(assessment);
+            }
+        }
+        Ok(assessment)
+    }
+
+    fn read_cover<L: DuplicateTaskLookup + ?Sized>(&self, target: &str, lookup: &L) -> CoverState {
+        if is_valid_orb_task_id(target) {
+            let Ok(task) = lookup.get_task(target) else {
+                return CoverState::Unavailable;
+            };
+            return match task.status {
+                TaskStatus::Done => landed_task_commit(self.runtime, target)
+                    .map(CoverState::Landed)
+                    .unwrap_or(CoverState::Unavailable),
+                TaskStatus::Archived | TaskStatus::Rejected => CoverState::Closed,
+                _ => CoverState::Open,
+            };
+        }
+        let Some(reference) = target.strip_prefix("github-pr:") else {
+            return CoverState::Unavailable;
+        };
+        let Ok(pr) = self.source.ci_cover_pull_request(reference) else {
+            return CoverState::Unavailable;
+        };
+        match pr["state"].as_str() {
+            Some("OPEN") => CoverState::Open,
+            Some("CLOSED") => CoverState::Closed,
+            Some("MERGED") => pr["mergeCommit"]["oid"]
+                .as_str()
+                .filter(|commit| full_revision(commit))
+                .map(|commit| CoverState::Landed(commit.into()))
+                .unwrap_or(CoverState::Unavailable),
+            _ => CoverState::Unavailable,
+        }
+    }
+}

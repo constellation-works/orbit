@@ -334,14 +334,17 @@ pub fn job_run_to_json(run: &JobRun, state: Option<&PipelineState>) -> Value {
         });
     }
     // [ORB-16572] The captured review layer and what decided it: workspace
-    // policy, or the run's `--review` option.
+    // policy, the run's `--review` option, or the owner's claim. Pull
+    // supervisors tag their snapshot as `supervisor_local` because it never
+    // governs the claims they pull.
     if let Some(admission) = run
         .input
         .as_ref()
         .and_then(|input| orbit_types::workflow::ReviewAdmission::from_run_input(input).ok())
         .flatten()
     {
-        value["review_layer"] = crate::application::contracts::review_layer_json(&admission);
+        value["review_layer"] =
+            crate::application::contracts::review_layer_json_for_run(&run.job_id, &admission);
     }
     value["task_ids"] = json!((!task_ids.is_empty()).then_some(task_ids));
     value["drain_window_extension"] = drain_window_extension;

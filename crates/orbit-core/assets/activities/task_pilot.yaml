@@ -107,6 +107,17 @@ spec:
               type: array
               items:
                 type: string
+          required_existing_selectors:
+            description: >
+              Maps each task in the partition whose preparation explicitly
+              established required existing change targets from its scope and
+              specification to those canonical selectors. Absent when none were
+              established.
+            type: object
+            additionalProperties:
+              type: array
+              items:
+                type: string
           rechecks:
             type: object
             additionalProperties:
@@ -780,6 +791,25 @@ spec:
       absent or omits this task (or omits a path), no current grant covers it:
       report any other expected missing path as an evidence gap, and never
       predict a new filename.
+    - Creation grants and existing targets are two separate selections:
+      keeping every selector in `partition.context_creation_selectors` is
+      additive to, never a substitute for, selecting the existing files the
+      change edits, deletes, moves or rewrites. A migration with exact new
+      destinations that also removes or rewrites existing sources (for
+      example, deleting the old scope documents after moving their content)
+      returns both sets: the granted creation selectors exactly as
+      recorded plus a selector for each existing source you verified the
+      change must modify or delete. When preparation established required
+      existing change targets in `partition.required_existing_selectors`,
+      apply refuses an assessment that omits any of them (you may narrow a
+      required `file:` target to `symbol:` selectors in that same file).
+      Otherwise a grant says nothing about existing files, so any existing
+      target you omit leaves the lock footprint. Before returning, compare
+      `context_files_after` with `partition.required_existing_selectors` and
+      with the sources your rationale says are deleted or edited, and add any
+      that are missing. Existing paths that are only read for evidence or need
+      an incidental line update may still be omitted. An ungranted missing
+      path stays an evidence gap.
     - Review-filed tasks (tagged `code-review`, `delivery-code-review`,
       `qa-full-sweep`, `qa-sweep` or `security-review`): keep the selectors the
       finding names as change targets and add targets it lacks. Drop a current

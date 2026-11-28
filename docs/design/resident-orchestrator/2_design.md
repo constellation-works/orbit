@@ -109,7 +109,7 @@ not the prompt.
   refused. Friction updates and delivery recovery may also write in another covered workspace on
   the same host; every other write stays in the mandate's own workspace.
 - **Enforcement.** The cycle's tool grant is computed from the authority at cycle start and frozen
-  for the cycle, like a dispatched attempt's [granted tools](../granted-tools/1_scope.md). A right the
+  for the cycle, like a dispatched attempt's [granted tools](../granted-tools/1_overview.md). A right the
   mandate lacks is a tool the cycle cannot call; a workspace outside scope fails the call in core.
   Exercising a resident right on an operator-only operation requires the run's authenticated
   resident broker [ORB-26169]. Core also refuses `resident.*` writes whose cycle id is not the mandate's live cycle.
@@ -220,7 +220,7 @@ revision.
 Waiting costs one store read per mandate per tick and starts no agent. That is what "waiting is a
 cheap no-op" means here.
 
-Why a typed kind and not a [condition trigger](../condition-triggers/1_scope.md)? A condition fires
+Why a typed kind and not a [condition trigger](../condition-triggers/1_overview.md)? A condition fires
 once per subject edge of a predicate. A resident needs "anything in this set changed since my last
 checkpoint", with the checkpoint as the cursor, plus a heartbeat and a floor. That is one
 observation rule, not an expression. Workspaces may still add condition-triggered routines that call
@@ -625,7 +625,7 @@ and `spend` always escalate, and `routine` and `reversible` go through the rubri
 For a decision outside those classes the resident estimates, in its checkpoint:
 
 - **P(wrong)**, as a bucket (low, medium, high), raised one step when there is no precedent (no
-  matching decision in the workspace decision corpus, [workspace-agent-corpus](../workspace-agent-corpus/1_scope.md))
+  matching decision in the workspace decision corpus, [workspace-agent-corpus](../workspace-agent-corpus/1_overview.md))
   and when this category has a recorded reversal in the window ([§9](#9-metrics-that-gate-widening)).
 - **Remaining rework**: how much work follows the choice before anyone would notice it was wrong,
   counted as the leaf tasks it would dispatch or block (from relations) times their complexity

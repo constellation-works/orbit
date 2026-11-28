@@ -68,7 +68,7 @@ is why notices make expiry mandatory.
 
 - [Path-lease notices](../path-leases/2_design.md#5-notices): an event stream on one lease, with a
   cursor. Fleet notices are records, not events; the names are kept apart in the glossary.
-- [Decision requests](../human-decision-channel/1_scope.md): owner-held records with expiry derived
+- [Decision requests](../human-decision-channel/1_overview.md): owner-held records with expiry derived
   on read; the precedent for effective state.
 - [Mid-run steering](../mid-run-steering/1_overview.md): delivery into prompts at safe points with a
   delivery record; the precedent for brief delivery.

@@ -116,14 +116,53 @@ markdown_escape() {
   printf '%s' "$value"
 }
 
+# Escape a Git path so it is one record in the newline-delimited snapshot.
+# Double a backslash first, then encode a real newline as backslash + n, so
+# the two stay distinct and a newline inside a path cannot split the record.
+escape_visible_path() {
+  local value="$1"
+
+  value="${value//\\/\\\\}"
+  value="${value//$'\n'/$'\\n'}"
+  printf '%s' "$value"
+}
+
+# Both helpers test the snapshot read in the main flow below, so no Git call runs inside
+# a conditional where a failed query would look like "not visible". The queried path is
+# escaped the same way as the snapshot, so the match is one whole Git path.
 is_versioned() {
   local file="$1"
   local relative="${file#"$repo_root/"}"
 
-  git -C "$repo_root" ls-files --cached --others --exclude-standard --error-unmatch -- "$relative" >/dev/null 2>&1
+  relative="$(escape_visible_path "$relative")"
+  [[ "$git_visible_lines" == *$'\n'"$relative"$'\n'* ]]
 }
 
+# A directory counts as a feature candidate only when Git sees at least one
+# file inside it (tracked, or untracked but not ignored). Local-only
+# directories such as Git-ignored notes never reach the strict entry-doc rule.
+# The prefix is matched at the start of a record, not inside another path.
+dir_is_versioned() {
+  local directory="$1"
+  local relative="${directory#"$repo_root/"}"
+
+  relative="$(escape_visible_path "$relative")"
+  [[ "$git_visible_lines" == *$'\n'"$relative/"* ]]
+}
+
+# An active feature's entry doc is its 1_overview.md (STD-06 §R2); there is no fallback.
 design_entry_doc() {
+  local directory="$1"
+
+  if [[ ! -f "$directory/1_overview.md" ]]; then
+    echo "error: $directory has no 1_overview.md entry document" >&2
+    return 1
+  fi
+  printf '%s\n' "$directory/1_overview.md"
+}
+
+# Archived folders keep whatever entry doc they were archived with, including a 1_scope.md.
+archived_entry_doc() {
   local directory="$1"
   local candidate
 
@@ -134,7 +173,7 @@ design_entry_doc() {
     fi
   done
 
-  candidate="$(find "$directory" -maxdepth 1 -type f -name '*.md' ! -name 'CONVENTIONS.md' | sort | sed -n '1p')"
+  candidate="$(find "$directory" -maxdepth 1 -type f -name '*.md' | sort | sed -n '1p')"
   if [[ -z "$candidate" ]]; then
     echo "error: no top-level Markdown entry document in $directory" >&2
     return 1
@@ -142,31 +181,64 @@ design_entry_doc() {
   printf '%s\n' "$candidate"
 }
 
-render_guide_rows() {
-  local directory="$1"
-  local file
+render_guide_row() {
+  local file="$1"
   local title
   local summary
   local relative
 
+  if ! is_versioned "$file"; then
+    return
+  fi
+
+  title="$(first_h1 "$file")"
+  title="${title:-$(basename "$file" .md)}"
+  summary="$(frontmatter_value "$file" summary)"
+  if [[ -z "$summary" ]]; then
+    summary="$(first_body_paragraph "$file")"
+  fi
+
+  relative="${file#"$docs_dir/"}"
+  printf '| [%s](./%s) | %s |\n' \
+    "$(markdown_escape "$title")" \
+    "$relative" \
+    "$(markdown_escape "$summary")"
+}
+
+render_guide_rows() {
+  local directory="$1"
+  local excluded="${2:-}"
+  local file
+
   while IFS= read -r file; do
-    if ! is_versioned "$file"; then
-      continue
-    fi
+    render_guide_row "$file"
+  done < <(find "$directory" -maxdepth 1 -type f -name '*.md' ! -path "$docs_dir/INDEX.md" ! -name "${excluded:-.}" | sort)
+}
 
-    title="$(first_h1 "$file")"
-    title="${title:-$(basename "$file" .md)}"
-    summary="$(frontmatter_value "$file" summary)"
-    if [[ -z "$summary" ]]; then
-      summary="$(first_body_paragraph "$file")"
-    fi
+# The root of docs/ holds the index and the two maps of old headings; every other page
+# belongs in a folder that answers one question. See docs/design/doc-layout/2_design.md.
+check_docs_root() {
+  local file
+  local name
+  local allowed
+  local ok
+  local failed=0
 
-    relative="${file#"$docs_dir/"}"
-    printf '| [%s](./%s) | %s |\n' \
-      "$(markdown_escape "$title")" \
-      "$relative" \
-      "$(markdown_escape "$summary")"
-  done < <(find "$directory" -maxdepth 1 -type f -name '*.md' ! -path "$docs_dir/INDEX.md" | sort)
+  while IFS= read -r file; do
+    name="$(basename "$file")"
+    ok=0
+    for allowed in INDEX.md CONFIG.md DEVELOPMENT.md; do
+      if [[ "$name" == "$allowed" ]]; then
+        ok=1
+      fi
+    done
+    if [[ "$ok" -eq 0 ]]; then
+      echo "error: docs/$name sits at the docs root; the root holds only INDEX.md, CONFIG.md and DEVELOPMENT.md, so move it into a folder" >&2
+      failed=1
+    fi
+  done < <(find "$docs_dir" -maxdepth 1 -type f -name '*.md' | sort)
+
+  return "$failed"
 }
 
 # Audience mapping and the default for new runbooks are documented in
@@ -253,7 +325,7 @@ design_feature_title() {
   local entry="$2"
   local title
 
-  # A scope doc's H1 is a sentence ("Scope: …"); the Feature column wants the folder's name.
+  # An archived scope doc's H1 is a sentence ("Scope: …"); the Feature column wants the folder's name.
   if [[ "$(basename "$entry")" == "1_scope.md" ]]; then
     title="$(titleize_slug "$(basename "$directory")")"
   else
@@ -288,7 +360,10 @@ render_feature_board() {
   local -a entries=()
 
   while IFS= read -r directory; do
-    entry="$(design_entry_doc "$directory")"
+    if ! dir_is_versioned "$directory"; then
+      continue
+    fi
+    entry="$(design_entry_doc "$directory")" || return 1
     if ! is_versioned "$entry"; then
       continue
     fi
@@ -359,7 +434,14 @@ render_index() {
     printf '### Guides\n\n'
     printf '| Guide | Purpose |\n'
     printf '| --- | --- |\n'
-    render_guide_rows "$docs_dir"
+    render_guide_row "$docs_dir/config/README.md"
+    render_guide_rows "$docs_dir" CONFIG.md
+    printf '\n### Principles\n\n'
+    printf 'Stances Orbit holds across features, with the reason and the cost, one page each under\n'
+    printf '`docs/principles/`. Admission and page shape: [principle conventions](./principles/CONVENTIONS.md).\n\n'
+    printf '| Principle | Summary |\n'
+    printf '| --- | --- |\n'
+    render_guide_rows "$docs_dir/principles" CONVENTIONS.md
     printf '\n### Lessons\n\n'
     printf 'Lessons learned while building Orbit, one file each under `docs/lessons/`. They may not\n'
     printf 'apply to everyone or in every case, but they shaped some of the decisions we made.\n\n'
@@ -423,7 +505,7 @@ render_features() {
       printf '\n### Archived\n\n'
       printf '| Feature |\n| --- |\n'
       while IFS= read -r directory; do
-        entry="$(design_entry_doc "$directory")"
+        entry="$(archived_entry_doc "$directory")" || return 1
         if ! is_versioned "$entry"; then
           continue
         fi
@@ -456,6 +538,31 @@ write_or_check() {
   cp "$generated" "$target"
   echo "updated $display"
 }
+
+check_docs_root || exit 1
+
+# Git's view of docs/: tracked files, plus untracked files Git does not ignore. It is read
+# here, outside any conditional, so a failed query stops the run before anything renders
+# or is written. Inside an `if !` test Bash ignores errexit, so a query there would read
+# as "not visible" and drop rows without a word. Names are NUL-separated so Git does not
+# quote non-ASCII or special characters. A shell variable cannot hold NUL, and a path may
+# itself contain a newline, so each record is escaped onto its own line before the matches
+# above. The listing is a file, not a pipe, so the status here is git's own.
+git_visible_file="$(mktemp "${TMPDIR:-/tmp}/orbit-doc-indexes-visible.XXXXXX")"
+git -C "$repo_root" ls-files -z --cached --others --exclude-standard -- docs >"$git_visible_file" || {
+  rm -f "$git_visible_file"
+  echo "error: git ls-files failed under $repo_root, so the doc indexes cannot tell which files Git sees" >&2
+  exit 1
+}
+git_visible_lines=""
+while IFS= read -r -d '' visible_path || [[ -n "$visible_path" ]]; do
+  if [[ -z "$visible_path" ]]; then
+    continue
+  fi
+  git_visible_lines+="$(escape_visible_path "$visible_path")"$'\n'
+done <"$git_visible_file"
+rm -f "$git_visible_file"
+git_visible_lines=$'\n'"$git_visible_lines"
 
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/orbit-doc-indexes.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT

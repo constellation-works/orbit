@@ -62,13 +62,13 @@ Nothing is implemented. The table maps each concern to where the design settles 
 | Symbols as the unit, the remainder, file roll-up | [2_design.md §2.4](./2_design.md#24-labels-symbols-are-the-unit) | The per-side symbol byte spans and changed lines in the orbit-graph history index. Its schema extension and backfill add symbol line spans, file line counts and `named_symbol_covered_lines` from the union of all named symbol ranges, so rebuilds can derive the remainder length without re-extraction ([2_design.md §2.4](./2_design.md#24-labels-symbols-are-the-unit), [§13](./2_design.md#13-build-order)) |
 | Added and modified symbols | [2_design.md §2.5](./2_design.md#25-added-and-modified-symbols) and [§5.5](./2_design.md#55-option-added-versus-modified) | — |
 | Tokeniser and stopwords | [2_design.md §3](./2_design.md#3-tokeniser) | — |
-| Posting and id-table format, storage | [2_design.md §4](./2_design.md#4-format-and-storage) | The plugin standard's state rules ([plugins scope](../plugins/1_scope.md)) |
+| Posting and id-table format, storage | [2_design.md §4](./2_design.md#4-format-and-storage) | The plugin standard's state rules ([plugins design](../plugins/2_design.md)) |
 | Scoring, symbol boost, file roll-up | [2_design.md §5](./2_design.md#5-scoring) | — |
 | Posting weights and how each enters the score | [2_design.md §5.4](./2_design.md#54-option-posting-weight) | — |
 | Window and its routine | [2_design.md §6](./2_design.md#6-window-and-routine) | [routines design](../routines/2_design.md), the `plugin.tool_call` action |
 | Query surface and the check against HEAD | [2_design.md §7](./2_design.md#7-query-surface) | orbit-graph `recommend` and its path lineage |
-| Where the output is used | [2_design.md §8](./2_design.md#8-where-the-output-is-used) | [task pilot](../task-pilot/1_scope.md), [pilot scorecard](../agent-scorecards/2_design.md), [locks/index.rs](../../../crates/orbit-runtime/src/stored/locks/index.rs) |
-| Core and plugin split; orbit-graph as the home | [2_design.md §1](./2_design.md#1-placement-a-plugin-with-three-generic-core-seams) | [plugins scope](../plugins/1_scope.md); Daniel's decision, [§14.1](./2_design.md#141-decided-by-daniel-2026-11-14) |
+| Where the output is used | [2_design.md §8](./2_design.md#8-where-the-output-is-used) | [task pilot](../task-pilot/1_overview.md), [pilot scorecard](../agent-scorecards/2_design.md), [locks/index.rs](../../../crates/orbit-runtime/src/stored/locks/index.rs) |
+| Core and plugin split; orbit-graph as the home | [2_design.md §1](./2_design.md#1-placement-a-plugin-with-three-generic-core-seams) | [plugins overview](../plugins/1_overview.md); Daniel's decision, [§14.1](./2_design.md#141-decided-by-daniel-2026-11-14) |
 | The eight recommendations | [2_design.md §9](./2_design.md#9-positions-on-the-eight-recommendations) | — |
 | Offline evaluation, with the option comparison | [2_design.md §10](./2_design.md#10-offline-evaluation) | orbit-graph `recommend` and `evaluate`, [pilots.rs](../../../crates/orbit-core/src/app/agent/role/pilots.rs), the audit task-scope blob |
 | Downstream evaluation | [2_design.md §11](./2_design.md#11-downstream-evaluation) | The eval-harness replay design of [ORB-24839], [first_edit.rs](../../../crates/orbit-runtime/src/run/engine/first_edit.rs) |

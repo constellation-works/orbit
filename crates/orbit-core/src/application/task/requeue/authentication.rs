@@ -22,23 +22,32 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        self.authenticate_published_backlog_return_with(task, None, false)
+    }
+
+    pub(crate) fn authenticate_published_backlog_return_with(
+        &self,
+        task: &Task,
+        history: Option<&[TaskHistoryEntry]>,
+        observational: bool,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
         // No bound publishing run: there is no publication this move could
         // resume or strand (a bare pull-request record on a task that was
         // blocked by hand is the PR-closure path's concern, not a stopped
         // run's candidate).
         if task.job_run_id.is_none() {
-            self.kept_claim_requeue(task)?;
+            self.kept_claim_requeue_with(task, history, observational)?;
             return Ok(None);
         }
         let receipt = self.handoff_receipt(task)?;
         if let Some((preserved, _binding)) =
-            self.authenticate_operator_requeue(task, receipt.as_ref())?
+            self.authenticate_operator_requeue_with(task, receipt.as_ref(), history, observational)?
         {
             return Ok(preserved);
         }
         // A kept claim candidate the specification has outgrown is refused
         // the same way, as a requeue refuses it.
-        self.kept_claim_requeue(task)?;
+        self.kept_claim_requeue_with(task, history, observational)?;
         Ok(None)
     }
 
@@ -117,6 +126,16 @@ impl OrbitRuntime {
         task: &Task,
         receipt: Option<&HandoffReceipt>,
     ) -> Result<Option<(Option<TaskHistoryEntry>, SourceRepairBinding)>, OrbitError> {
+        self.authenticate_operator_requeue_with(task, receipt, None, false)
+    }
+
+    pub(super) fn authenticate_operator_requeue_with(
+        &self,
+        task: &Task,
+        receipt: Option<&HandoffReceipt>,
+        history: Option<&[TaskHistoryEntry]>,
+        observational: bool,
+    ) -> Result<Option<(Option<TaskHistoryEntry>, SourceRepairBinding)>, OrbitError> {
         let discard_hint = operator_discard_hint(&task.id, task.status);
         if let Some(receipt) = receipt {
             if !task.spec_digest_matches(&receipt.task_spec_digest) {
@@ -129,9 +148,21 @@ impl OrbitRuntime {
             }
             // Every authentication refusal (an interrupted or timed-out
             // run, a newer execution, a foreign source, ...) has the same exit.
-            let authenticated = self
-                .failure_handoff_preservation(task)
-                .and_then(|(entry, binding)| Ok((self.preservation_append(task, entry)?, binding)));
+            let authenticated = match history.filter(|_| observational) {
+                Some(history) => self
+                    .observe_failure_handoff_preservation(task, history)
+                    .and_then(|(entry, binding)| {
+                        Ok((
+                            self.observe_preservation_append(task, entry, history)?,
+                            binding,
+                        ))
+                    }),
+                None => self
+                    .failure_handoff_preservation(task)
+                    .and_then(|(entry, binding)| {
+                        Ok((self.preservation_append(task, entry)?, binding))
+                    }),
+            };
             return authenticated
                 .map(Some)
                 .map_err(|error| match error.job_validation_message() {
@@ -151,9 +182,20 @@ impl OrbitRuntime {
         // resumes that pull request, as a final-recovery requeue would, once it
         // is still open at the recorded head with every required check passed.
         if self.run_published_through_pipeline(task)? {
-            let authenticated = self
-                .escalated_publication_preservation(task)
-                .and_then(|(entry, binding)| Ok((self.preservation_append(task, entry)?, binding)));
+            let authenticated =
+                match history.filter(|_| observational) {
+                    Some(history) => self
+                        .observe_escalated_publication_preservation(task, history)
+                        .and_then(|(entry, binding)| {
+                            Ok((
+                                self.observe_preservation_append(task, entry, history)?,
+                                binding,
+                            ))
+                        }),
+                    None => self.escalated_publication_preservation(task).and_then(
+                        |(entry, binding)| Ok((self.preservation_append(task, entry)?, binding)),
+                    ),
+                };
             let error = match authenticated {
                 Ok(pair) => return Ok(Some(pair)),
                 Err(error) => error,
@@ -200,7 +242,11 @@ impl OrbitRuntime {
                 None => error,
             });
         }
-        if self.unbound_publication(task)? {
+        let unbound = match history {
+            Some(history) => self.observe_unbound_publication(task, history)?,
+            None => self.unbound_publication(task)?,
+        };
+        if unbound {
             return Err(OrbitError::InvalidInput(format!(
                 "the task has a pull request or preserved candidate on record that its stopped \
                  run's handoff does not bind, so its next run would refuse to start. Nothing \

@@ -171,7 +171,7 @@ fn execute_local_shell<H: HostEnvironment + Dispatch + RuntimeHostProcessEnviron
         .map_err(|error| OrbitError::Execution(error.to_string()))?;
 
     let process_env = host.process_env();
-    let spawned = spawn_child_with_optional_sandbox(
+    let mut spawned = spawn_child_with_optional_sandbox(
         &process_env,
         &program,
         &args,
@@ -181,6 +181,7 @@ fn execute_local_shell<H: HostEnvironment + Dispatch + RuntimeHostProcessEnviron
         &config.executor,
     )
     .map_err(|error| OrbitError::Execution(error.to_string()))?;
+    let guard = spawned.take_linux_post_run_guard();
 
     // An empty stdin payload closes the pipe immediately. A shell step is
     // non-interactive, and a child left reading an open-but-silent stdin would
@@ -192,6 +193,11 @@ fn execute_local_shell<H: HostEnvironment + Dispatch + RuntimeHostProcessEnviron
         Some(Vec::new()),
         None,
     )?;
+    if let Some(guard) = guard {
+        // A local_shell step is given no scratch directory, so any new
+        // denyModify match fails it even when `allow_nonzero_exit` is set.
+        guard.verify(None)?;
+    }
     let result = outcome.result;
     let (log_tail, log_tail_truncated) = command_log_tail(&result.stdout, &result.stderr);
 

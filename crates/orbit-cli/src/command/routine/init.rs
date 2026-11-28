@@ -8,12 +8,21 @@ use serde_json::json;
 
 #[derive(Args)]
 #[command(
-    after_help = "Reads the [machine] identity from the selected Orbit root's config.toml\n\
-                        (created by `orbit init`) and, with --install-clock, installs the\n\
-                        per-user OS clock unit that invokes `orbit clock tick` on the clock\n\
-                        cadence, every minute by default (launchd on macOS, a systemd user\n\
-                        timer on Linux). It never creates or rewrites machine identity —\n\
-                        run `orbit init` for that. `orbit clock` controls the installed unit."
+    after_help = "With --install-clock, installs the per-user OS clock unit. It never creates \
+                  or rewrites machine identity; run `orbit init` for that.\n\n\
+                  Examples:\n  \
+                  orbit routine init\n  \
+                  orbit routine init --install-clock",
+    after_long_help = "Reads the machine identity from the selected Orbit root (created by \
+                       `orbit init`) and, with --install-clock, installs the per-user OS clock \
+                       unit that invokes `orbit clock tick`. It never creates or rewrites \
+                       machine identity; run `orbit init` for that. `orbit clock` controls the \
+                       installed unit.\n\n\
+                       The default cadence and which unit each platform installs: installed \
+                       orbit-setup skill `references/automation-scheduler.md`.\n\n\
+                       Examples:\n  \
+                       orbit routine init\n  \
+                       orbit routine init --install-clock"
 )]
 pub struct RoutineInitArgs {
     /// Also install and activate the OS clock unit driving `orbit clock tick`.

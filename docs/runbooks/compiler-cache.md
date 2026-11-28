@@ -583,7 +583,7 @@ hand off. `make ci-fast` is a required command, so the owner's
 `candidate_validate`, or the claim host's `claim_validate` for a claimed leaf,
 runs it again outside any agent sandbox before delivery, where Bubblewrap
 creates the namespaces and this regression runs in full
-([deferred sandbox validation](../DEVELOPMENT.md#test-process-environment)).
+([deferred sandbox validation](../development/testing.md#test-process-environment)).
 The script identifies the lane by `ORBIT_SCRATCH_DIR`: Orbit's CLI runner sets
 it to an existing directory for every agent it dispatches into a worktree, and
 nothing else in Orbit sets it. The validation steps run required commands
@@ -623,7 +623,7 @@ pass = ["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "ORBIT_COMPILER_CACHE", 
 The `pass` list **replaces** the defaults. Preserve all names in your existing
 list; the example repeats the Linux defaults. On macOS also retain
 `__CF_USER_TEXT_ENCODING`. This is a workspace security setting; see
-[execution.env](../CONFIG.md#executionenv--the-agent-subprocess-environment).
+[execution.env](../config/execution.md#executionenv--the-agent-subprocess-environment).
 
 Set the values in the process that launches Orbit workers (or its service
 environment), then launch new runs from that environment:
@@ -721,7 +721,7 @@ its incremental cache would be write-only. When a binding is configured, Orbit
 sets `CARGO_INCREMENTAL=0` on the validation child — required validation, host
 evidence, baseline reruns and recovery alike — replacing any inherited value.
 That is applied where the command is spawned
-([incremental compilation](../CONFIG.md#incremental-compilation)),
+([incremental compilation](../config/workflow-validation.md#incremental-compilation)),
 not by this repository's Makefile, and has no opt-out: keeping incremental off
 lets sccache cache the rustc invocations this checkout's wrapper forwards. An incremental directory already
 in a target is not deleted. Baseline results are keyed by schema version,
@@ -1040,4 +1040,4 @@ directory writable and leaves `/tmp` private.
 
 - [Prepare a Linux Host for Sandboxed Dispatch](./linux-sandbox.md)
 - [Policy & Sandboxing — Design](../design/policy-sandbox/2_design.md)
-- [Configuration](../CONFIG.md) (`[execution.env].pass`)
+- [Configuration](../config/execution.md#executionenv--the-agent-subprocess-environment) (`[execution.env].pass`)

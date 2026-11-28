@@ -2,7 +2,7 @@
 title: "Eval Harness — Design"
 owner: claude
 created_date: 2026-11-14
-updated_date: 2026-11-27
+updated_date: 2026-11-28
 last_validated: 2026-11-15
 status: Draft
 feature: eval-harness
@@ -101,7 +101,7 @@ What that buys, with no core change:
 - **Leakage control by configuration.** The workspace's own `config.toml` turns off mid-run steering (`workflow.mid_run_steering.enabled`) and experiments (which also keeps crew memory off, since it runs only under a memory-arm experiment), and holds no workspace notices.
 - **A capacity cap.** The workspace's drain has its own concurrency (§9).
 
-What it costs: a second clone with cold build caches; a `config.toml` that has to mirror the live workspace's validation commands, tag instructions and crews by hand (`config.toml` is read-only to a plugin: [plugins 1_scope.md §4.3](../plugins/1_scope.md)); and no priority relation between the two workspaces' drains.
+What it costs: a second clone with cold build caches; a `config.toml` that has to mirror the live workspace's validation commands, tag instructions and crews by hand (`config.toml` is read-only to a plugin: [plugins 2_design.md §4.3](../plugins/2_design.md)); and no priority relation between the two workspaces' drains.
 
 The alternative, running replay candidates in the live workspace at `low` priority, gets priority below delivery for free but needs a lock exemption for candidates, an analytics exclusion on every surface, and leaves the original task one `orbit.search` away from the candidate. §14 Q1 asks Daniel to confirm the choice.
 
@@ -111,7 +111,7 @@ The alternative, running replay candidates in the live workspace at `low` priori
 
 ### 3.1 Inputs
 
-`eval.replay-start` takes an eval set (or a list of closed task ids, which it turns into an unnamed set first), a list of arms, a repeat count and a spend cap. An arm is a crew name defined in the evaluation workspace's config, optionally with an effort using the shipped crew-reference syntax (`<crew>@<effort>`, as described in the Crew references section of [CONFIG.md](../../CONFIG.md)). A bare model is not accepted: a crew is the only way a run resolves a provider, model and effort, and `orbit config set` cannot create one ([CONFIG.md](../../CONFIG.md)). Defining crews stays an operator edit.
+`eval.replay-start` takes an eval set (or a list of closed task ids, which it turns into an unnamed set first), a list of arms, a repeat count and a spend cap. An arm is a crew name defined in the evaluation workspace's config, optionally with an effort using the shipped crew-reference syntax (`<crew>@<effort>`, as described in the crew references in [the configuration reference](../../config/crews.md#crewsname--which-provider-model-runs-the-task)). A bare model is not accepted: a crew is the only way a run resolves a provider, model and effort, and `orbit config set` cannot create one ([configuration reference](../../config/README.md#inspecting-and-editing)). Defining crews stays an operator edit.
 
 **Source eligibility.** A set and a list of closed task ids meet the same two checks. Each source needs a recoverable snapshot (§3.3) and must pass the OS rule (§1.3), so a task that needs macOS is never a source. A source that fails either check is refused with its reason in `refused[]` of the set build (§11); `eval.replay-start` returns that list when it started from ids. Nothing is dropped silently.
 
@@ -157,7 +157,7 @@ What reaches an implementer besides the task, and what replay does about each:
 | Tag selection | Live tags | Tags copied from the snapshot, under the OS rule (§1.3) |
 | Crew memory | Newest revision at dispatch | Off in the evaluation workspace |
 | Mid-run steering, workspace notices, experiments | Live | Off or empty in the evaluation workspace |
-| Project learnings | Retired; `.orbit/learnings/` is no longer read ([project-learnings](../project-learnings/4_decisions.md)) | Nothing to do |
+| Project learnings | Retired; `.orbit/learnings/` is no longer read ([project-learnings](../_archived/project-learnings/4_decisions.md)) | Nothing to do |
 | Skills and the `agent_implement` instruction | Embedded in the installed binary (`crates/orbit-runtime/src/host/exec/assets.rs`) | **Not pinned.** Every arm runs under today's harness |
 | User-level provider files (`~/.claude`) | Live host files | Not pinned; same for every arm |
 
@@ -177,7 +177,7 @@ For the first two, the first version detects and does not prevent. Each invocati
 
 ### 5.1 The job
 
-Each candidate task carries a `delivery:eval_replay_candidate` tag, which routes it to the plugin's delivery job through the same gate as the shipped pipelines ([plugins 1_scope.md §4.5](../plugins/1_scope.md)). The job declares `task_delivery: { modes: [local] }` and `owns_task_worktree: true`. Its step sequence and the candidate task's lifecycle status at each step:
+Each candidate task carries a `delivery:eval_replay_candidate` tag, which routes it to the plugin's delivery job through the same gate as the shipped pipelines ([plugins 2_design.md §4.5](../plugins/2_design.md)). The job declares `task_delivery: { modes: [local] }` and `owns_task_worktree: true`. Its step sequence and the candidate task's lifecycle status at each step:
 
 1. `worktree_setup` at the entry's base commit (§1.4). Admission moves the candidate from `backlog` to `in-progress` and binds the run ID (`setup.rs:195-204`).
 2. `agent_implement`, the shipped activity, unchanged (`in-progress`).
@@ -346,7 +346,7 @@ Losing candidates are not a regression record and not an escaped defect. They ar
 
 ## 9. Capacity and spend
 
-**Hosts.** Every candidate task carries exactly one `os:` tag, `os:linux` (§1.3). Admission reads `os:` tags as any-of and intersects them with the crew executor's `host_os`, on local and pull drains alike ([CONFIG.md](../../CONFIG.md)). A candidate's any-of set is therefore exactly `{linux}`, and no candidate is ever admitted on the Mac: the OS rule refuses every source that carries another `os:` tag, so no source can widen the set. The evaluation workspace exists only on a box.
+**Hosts.** Every candidate task carries exactly one `os:` tag, `os:linux` (§1.3). Admission reads `os:` tags as any-of and intersects them with the crew executor's `host_os`, on local and pull drains alike ([configuration reference](../../config/providers.md#executor-host_os)). A candidate's any-of set is therefore exactly `{linux}`, and no candidate is ever admitted on the Mac: the OS rule refuses every source that carries another `os:` tag, so no source can widen the set. The evaluation workspace exists only on a box.
 
 **Admission.** Candidates are ordinary tasks, so they run only when a drain admits them: there is no separate launcher and no synthetic load.
 
@@ -356,7 +356,7 @@ Losing candidates are not a regression record and not an escaped defect. They ar
 **Priority below delivery.** Within one workspace a `low` task sorts last (`automatic_dispatch_cmp_with_affinity`, `crates/orbit-types/src/task/model/task.rs:848-912`), but no slots are reserved and nothing relates two workspaces' drains. Orbit has no job class or lane below delivery. So for replay, "below delivery" is achieved by three existing limits, and one honest gap:
 
 - the evaluation drain's concurrency is small (default 2) and it runs in an operator-chosen window (`--for`), by default at night;
-- the host resource throttle zeroes free slots under CPU, memory, disk or I/O pressure for every drain on the host ([CONFIG.md](../../CONFIG.md));
+- the host resource throttle zeroes free slots under CPU, memory, disk or I/O pressure for every drain on the host ([configuration reference](../../config/workflow.md#workflowresource_throttle--host-pressure));
 - builds from both workspaces queue in the one host-wide build budget, which also runs them at low CPU and I/O priority ([build-budget runbook](../../runbooks/build-budget.md));
 - **gap:** when both drains want capacity at once, neither yields. If measurement shows replay slowing delivery, the generic fix is a drain option that admits only while the host's other drains have free slots; §14 Q5.
 
@@ -404,9 +404,9 @@ Two earlier mechanisms covered nearby ground and were removed. This design shoul
 
 ## 11. Plugin shape
 
-**Location.** Its own repository, `constellation-works/orbit-eval`, checked out under `codebases/` like other components. Plugin trees are never vendored into a workspace repository and a `source:` inside it is refused ([plugins 1_scope.md §3](../plugins/1_scope.md)). Namespace `eval`; tools are `eval.<verb>`, CLI `orbit eval <verb>`. Installed once per host with `orbit plugin add`, pinned per workspace in `.orbit/plugins.yaml`.
+**Location.** Its own repository, `constellation-works/orbit-eval`, checked out under `codebases/` like other components. Plugin trees are never vendored into a workspace repository and a `source:` inside it is refused ([plugins 2_design.md §3](../plugins/2_design.md)). Namespace `eval`; tools are `eval.<verb>`, CLI `orbit eval <verb>`. Installed once per host with `orbit plugin add`, pinned per workspace in `.orbit/plugins.yaml`.
 
-**Backend.** `exec`, Python, one process per call. A plugin tool call is capped at 300 seconds (`PLUGIN_TIMEOUT_CEILING_MS`, `crates/orbit-tools/src/plugin/backend/model.rs:4`), so no tool builds or tests anything itself. Long work (the implementer, validation, held-out tests) runs as job steps; tools only file tasks, capture artifacts and compute readouts. The held-out test step is a [script step](../script-steps/1_scope.md) or the shipped validation activity with the entry's command; task 3 of §13 picks one.
+**Backend.** `exec`, Python, one process per call. A plugin tool call is capped at 300 seconds (`PLUGIN_TIMEOUT_CEILING_MS`, `crates/orbit-tools/src/plugin/backend/model.rs:4`), so no tool builds or tests anything itself. Long work (the implementer, validation, held-out tests) runs as job steps; tools only file tasks, capture artifacts and compute readouts. The held-out test step is a [script step](../script-steps/2_design.md) or the shipped validation activity with the entry's command; task 3 of §13 picks one.
 
 **Which workspaces enable it.**
 
@@ -432,7 +432,7 @@ Two earlier mechanisms covered nearby ground and were removed. This design shoul
 | `eval.set-build` | mut | `name`, `source_workspace`, `query?` {`type`, `landed_after`, `min_lines`, `max_lines`}, `task_ids?`, `quota`, `seed?`, `from_bakeoffs?` | `set` {`name`, `revision`, `digest`}, `admitted[]` {`task_id`, `base`, `reference`, `held_out_command`}, `refused[]` {`task_id`, `reason`} |
 | `eval.set-show` | ro | `name`, `revision?` | the set file, without snapshots unless `full` |
 | `eval.set-export` / `eval.set-import` | ro / mut | `name`, `revision?`, `path` | `path`, `digest` |
-| `eval.replay-start` | mut | `set` (`<name>/<revision>`, matching `sets/<name>/<revision>/`; unlike `eval.set-show`, which takes `name` and optional `revision` separately), `arms[]` (crew or `<crew>@<effort>` per the Crew references section of [CONFIG.md](../../CONFIG.md)), `repeats`, `max_usd`, `signals[]`, `for_task?` | `replay_id`, `planned_runs`, `first_wave[]` (candidate task ids), `refused[]` {`task_id`, `reason`} (sources refused by the OS rule or the snapshot checks, §3.1) |
+| `eval.replay-start` | mut | `set` (`<name>/<revision>`, matching `sets/<name>/<revision>/`; unlike `eval.set-show`, which takes `name` and optional `revision` separately), `arms[]` (crew or `<crew>@<effort>` per the crew references in [the configuration reference](../../config/crews.md#crewsname--which-provider-model-runs-the-task)), `repeats`, `max_usd`, `signals[]`, `for_task?` | `replay_id`, `planned_runs`, `first_wave[]` (candidate task ids), `refused[]` {`task_id`, `reason`} (sources refused by the OS rule or the snapshot checks, §3.1) |
 | `eval.replay-advance` | mut | `replay_id` | `filed[]`, `state` (`running`, `capped`, `complete`), `spent_usd` |
 | `eval.replay-status` | ro | `replay_id?` | per-arm progress, `spent_usd`, `state` |
 | `eval.replay-readout` | ro | `replay_id`, `format?` | the readout (§7) |

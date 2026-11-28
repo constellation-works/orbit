@@ -94,7 +94,9 @@ impl OrbitRuntime {
         task: &Task,
         named: &BTreeSet<String>,
     ) -> Result<PilotDependencyGraph, OrbitError> {
-        let graph = self.walk_pilot_dependency_graph(task, named, None)?;
+        let graph = walk_pilot_dependency_graph(task, named, None, |id| {
+            self.stores().tasks().get_task(id)
+        })?;
         graph.ok_or_else(|| OrbitError::Execution("pilot graph discovery stopped".to_string()))
     }
 
@@ -104,6 +106,20 @@ impl OrbitRuntime {
         Ok(self
             .discover_pilot_dependency_graph(task, &BTreeSet::new())?
             .dependencies(task))
+    }
+
+    /// The same local dependency closure for an advisory read. No traversal
+    /// step may enter the task commit boundary or settle a pending commit.
+    pub(super) fn observe_pilot_dependency_closure(
+        &self,
+        task: &Task,
+    ) -> Result<Vec<String>, OrbitError> {
+        let graph = walk_pilot_dependency_graph(task, &BTreeSet::new(), None, |id| {
+            self.stores().tasks().observe_task(id)
+        })?;
+        graph
+            .map(|graph| graph.dependencies(task))
+            .ok_or_else(|| OrbitError::Execution("pilot graph discovery stopped".to_string()))
     }
 
     /// Read the graph again while holding the locks of `locked`, reading only
@@ -116,48 +132,9 @@ impl OrbitRuntime {
         named: &BTreeSet<String>,
         locked: &PilotDependencyGraph,
     ) -> Result<Option<PilotDependencyGraph>, OrbitError> {
-        self.walk_pilot_dependency_graph(task, named, Some(locked))
-    }
-
-    fn walk_pilot_dependency_graph(
-        &self,
-        task: &Task,
-        named: &BTreeSet<String>,
-        locked: Option<&PilotDependencyGraph>,
-    ) -> Result<Option<PilotDependencyGraph>, OrbitError> {
-        let mut graph = PilotDependencyGraph {
-            tasks: BTreeMap::new(),
-            absent: BTreeSet::new(),
-        };
-        let mut pending = task.dependencies();
-        pending.extend(named.iter().cloned());
-        while let Some(id) = pending.pop() {
-            if !is_valid_orb_task_id(&id)
-                || graph.tasks.contains_key(&id)
-                || graph.absent.contains(&id)
-            {
-                continue;
-            }
-            if let Some(locked) = locked {
-                if locked.absent.contains(&id) {
-                    graph.absent.insert(id);
-                    continue;
-                }
-                if !locked.tasks.contains_key(&id) {
-                    return Ok(None);
-                }
-            }
-            match self.stores().tasks().get_task(&id)? {
-                Some(found) => {
-                    pending.extend(found.dependencies());
-                    graph.tasks.insert(id, found);
-                }
-                None => {
-                    graph.absent.insert(id);
-                }
-            }
-        }
-        Ok(Some(graph))
+        walk_pilot_dependency_graph(task, named, Some(locked), |id| {
+            self.stores().tasks().get_task(id)
+        })
     }
 
     /// Blocker prose in the latest applied pilot receipt, for operator
@@ -188,6 +165,45 @@ impl OrbitRuntime {
         }
         Ok(Vec::new())
     }
+}
+
+fn walk_pilot_dependency_graph(
+    task: &Task,
+    named: &BTreeSet<String>,
+    locked: Option<&PilotDependencyGraph>,
+    read: impl Fn(&str) -> Result<Option<Task>, OrbitError>,
+) -> Result<Option<PilotDependencyGraph>, OrbitError> {
+    let mut graph = PilotDependencyGraph {
+        tasks: BTreeMap::new(),
+        absent: BTreeSet::new(),
+    };
+    let mut pending = task.dependencies();
+    pending.extend(named.iter().cloned());
+    while let Some(id) = pending.pop() {
+        if !is_valid_orb_task_id(&id) || graph.tasks.contains_key(&id) || graph.absent.contains(&id)
+        {
+            continue;
+        }
+        if let Some(locked) = locked {
+            if locked.absent.contains(&id) {
+                graph.absent.insert(id);
+                continue;
+            }
+            if !locked.tasks.contains_key(&id) {
+                return Ok(None);
+            }
+        }
+        match read(&id)? {
+            Some(found) => {
+                pending.extend(found.dependencies());
+                graph.tasks.insert(id, found);
+            }
+            None => {
+                graph.absent.insert(id);
+            }
+        }
+    }
+    Ok(Some(graph))
 }
 
 fn task_id_character(character: char) -> bool {
