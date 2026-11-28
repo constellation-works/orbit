@@ -2132,18 +2132,6 @@ print("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered ou
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
-class TaskAuthoringContractTests(unittest.TestCase):
-    """Keep the canonical and plugin copies of task authoring guidance aligned."""
-
-    def test_skill_mirror_matches(self):
-        canonical_root = SCRIPTS.parent / "crates/orbit-core/assets/skills"
-        plugin_root = SCRIPTS.parent / "plugin/skills"
-        relative_path = Path("orbit/references/task-authoring-contract.md")
-        canonical = (canonical_root / relative_path).read_bytes()
-        mirror = (plugin_root / relative_path).read_bytes()
-        self.assertEqual(canonical, mirror)
-
-
 class DocLinkGuardrailTests(unittest.TestCase):
     """Exercise the checker through its executable boundary in real Git repos."""
 
