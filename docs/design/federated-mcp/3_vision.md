@@ -2,13 +2,13 @@
 title: Federated MCP — Vision
 owner: grok
 created_date: 2026-08-23
-updated_date: 2026-11-17
+updated_date: 2026-11-27
 last_validated: 2026-11-17
 status: Draft
 feature: federated-mcp
 doc_role: vision
 type: design
-summary: Open questions for the proposed federated MCP mux: selector expiry, health freshness, and cloud coordination-store details. Transport authentication is resolved.
+summary: "Open questions for the proposed federated MCP mux: selector expiry, health freshness, and cloud coordination-store details. Transport authentication is resolved."
 tags: [federated-mcp, mcp, host-registry, multi-host]
 paths: ["crates/orbit-mcp/**", "crates/orbit-registry/**", "crates/orbit-core/**"]
 related_features: [federated-mcp, host-registry, mcp-bridge, remote-access, mcp-session-context]
