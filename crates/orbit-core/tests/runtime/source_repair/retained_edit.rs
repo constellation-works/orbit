@@ -7,6 +7,18 @@ use super::*;
 
 const LINT_FIX: &str = "lint.txt";
 
+/// A binary retained edit and a newer integration version of the same path,
+/// admitted as a same-PR repair whose successor worktree is set up but has not
+/// yet resumed the candidate.
+struct BinaryConflict {
+    id: String,
+    setup: Value,
+    successor: PathBuf,
+    integration_bytes: Vec<u8>,
+    retained_bytes: Vec<u8>,
+    dirty: String,
+}
+
 /// The red published head, with final recovery's candidate-specific lint fix
 /// left in the publisher's own checkout: one staged new file and one edit.
 fn incident() -> (Fixture, PathBuf, String) {
@@ -425,18 +437,6 @@ fn before_landing_retained_fixture() -> (Fixture, PathBuf) {
         )
         .unwrap();
     (f, checkout)
-}
-
-/// A binary retained edit and a newer integration version of the same path,
-/// admitted as a same-PR repair whose successor worktree is set up but has not
-/// yet resumed the candidate.
-struct BinaryConflict {
-    id: String,
-    setup: Value,
-    successor: PathBuf,
-    integration_bytes: Vec<u8>,
-    retained_bytes: Vec<u8>,
-    dirty: String,
 }
 
 fn binary_conflict_before_resume(f: &Fixture, checkout: &std::path::Path) -> BinaryConflict {
