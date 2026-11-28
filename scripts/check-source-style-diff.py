@@ -21,9 +21,10 @@ new gets a second look against the base findings no head finding matched:
 
 - a source directory the change moved to a new parent keeps its R1 finding when its
   own name is unchanged; the move is read from the file renames beneath it;
-- an R1 finding on a `mod` declaration matches a base finding on the same declaration
-  text in any other file, which covers declarations moved into a `mod.rs` that the
-  base already held.
+- an R1 finding on an external `mod name;` declaration matches a base finding on
+  the same declaration text in another file, covering declarations moved into an
+  existing `mod.rs`. Inline modules cannot be matched this way: the declaration
+  line alone does not identify their body.
 
 Each base finding is spent once, so a finding with no base counterpart, an edited
 declaration, a duplicate of a moved finding or a new name that breaks R1 stays new.
@@ -296,7 +297,9 @@ def new_findings(base, head):
         if other is not None and spare[other] > 0:
             spare[other] -= 1
             continue
-        if is_module_finding(rule, message):
+        if is_module_finding(rule, message) and re.match(
+            r"(?:pub(?:\([^)]*\))?\s+)?mod\s+(?:r#)?\w+\s*;", text
+        ):
             twin = next(
                 (key for key, left in spare.items() if left > 0 and key[1:] == identity[1:]), None
             )
