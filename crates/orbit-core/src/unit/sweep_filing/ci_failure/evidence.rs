@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 
 use super::fields::{run_order, value_string};
 use super::log_signature::error_signature;
-use crate::application::sweep_filing::bounded_error;
+use crate::unit::sweep_filing::bounded_error;
 
 /// The run a snapshot entry — a retryable error or a current failure — is
 /// about, as a comparable key. Collection emits a numeric `run_id`; the

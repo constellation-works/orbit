@@ -6,8 +6,8 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 use crate::application::task::TaskAddParams;
+use crate::unit::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 
 use super::super::branch_observation::{note_branch_retention, retain_branch_observations};
 use super::OUTCOME_DEFERRED;

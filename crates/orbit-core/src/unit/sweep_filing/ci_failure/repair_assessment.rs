@@ -16,8 +16,8 @@ use super::fields::value_string;
 use super::filing::CI_FAILURE_KEY_TAG_PREFIX;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
-use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
-use crate::application::sweep_filing::full_revision;
+use crate::unit::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
+use crate::unit::sweep_filing::full_revision;
 
 const MAX_OWNERS: usize = 8;
 const MAX_ASSESSMENTS: usize = 32;

@@ -19,12 +19,12 @@ use super::log_signature::{
 };
 use super::runner_os::{RunnerOsEvidence, RunnerOsSource};
 use crate::application::contracts::CI_FAILURE_TAG;
-use crate::application::sweep_filing::duplicate_tasks::{
+use crate::application::task::{CiSweepFilingEvidence, CiSweepFilingSource};
+use crate::unit::sweep_filing::duplicate_tasks::{
     CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateMatchKind,
     DuplicateTaskLookup, DuplicateTaskMatch, find_covering_task,
 };
-use crate::application::sweep_filing::{digest, display, is_open_ci_owner_status, truncate_chars};
-use crate::application::task::{CiSweepFilingEvidence, CiSweepFilingSource};
+use crate::unit::sweep_filing::{digest, display, is_open_ci_owner_status, truncate_chars};
 
 /// Legacy description labels shared only by rendering and the legacy reader.
 pub(super) const COMPILER_CAUSE_LINE: &str = "- Compiler cause identity: `";

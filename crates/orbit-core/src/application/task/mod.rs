@@ -93,7 +93,7 @@ pub use crate::runtime::base::path::declared_context::{
     DeclaredContextFiles, declared_context_files,
 };
 pub use artifact_export::TaskArtifactRead;
-pub(in crate::application) use automation_port::{SourceGit, TaskAutomationPort};
+pub(crate) use automation_port::{SourceGit, TaskAutomationPort};
 pub(crate) use baseline_hold::refresh_baseline_holds_step;
 pub use baseline_hold::{BASELINE_HOLD_REFRESH_JOB, BaselineHoldRefresh};
 pub(crate) use block_cause::{
@@ -194,7 +194,7 @@ pub(crate) use resident_port::{DisabledCycleRoutine, ResidentMandateAttachment, 
 pub(in crate::application) use review_port::TaskReviewPort;
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskUpdateIdentity, TaskWriteScreen};
 pub(crate) use selector_match::task_selectors_contain_path;
-pub(in crate::application) use sweep_filing_port::TaskSweepFilingPort;
+pub(crate) use sweep_filing_port::TaskSweepFilingPort;
 pub(crate) use sweep_filing_port::{
     AdmissionClosure, CiSweepAdmission, CiSweepAdmissionDecision, CiSweepAdmissionRequest,
     CiSweepFilingEvidence, CiSweepFilingSource, PromotionDecision,

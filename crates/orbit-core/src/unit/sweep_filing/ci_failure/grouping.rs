@@ -14,7 +14,7 @@ use super::log_signature::{
     classify_log_lines, compiler_cause, error_signature, is_libtest_stdout_header,
     legacy_signature, signature_payload,
 };
-use crate::application::sweep_filing::digest;
+use crate::unit::sweep_filing::digest;
 
 /// Group current failures by root cause.
 ///

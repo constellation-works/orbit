@@ -6,8 +6,7 @@
 //!
 //! - Tasks, jobs, and delivery: `task`, `task_bundle`, `job`, `workflow`,
 //!   `review`, `operator_input`.
-//! - Automation: `automation`, `workspace_auto`,
-//!   `sweep_filing`, `seeding_policy`.
+//! - Automation: `automation`, `workspace_auto`, `seeding_policy`.
 //! - Agents and runs: `executor`, `vision_probe`, `statistics`.
 //! - Tool names: `tool_name_migration`.
 //! - Workspace and host: `distributed`, `pull_drain`,
@@ -32,7 +31,6 @@ pub mod review;
 pub mod seeding_policy;
 pub(crate) mod statistics;
 pub mod store_opener;
-pub(crate) mod sweep_filing;
 pub(crate) mod tag_instructions;
 pub mod task;
 pub mod task_bundle;

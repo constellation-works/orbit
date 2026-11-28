@@ -34,7 +34,7 @@ use super::code_groups::{
 };
 use super::filing::{CODE_KEY_PREFIX, field};
 use crate::application::contracts::CODE_SCANNING_TAG;
-use crate::application::sweep_filing::bounded_u64;
+use crate::unit::sweep_filing::bounded_u64;
 
 const DEFAULT_MAX_GROUPS: u64 = 10;
 const MAX_GROUPS: u64 = 50;

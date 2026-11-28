@@ -7,8 +7,8 @@ use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::sweep_filing::bounded_error;
-use crate::application::sweep_filing::duplicate_tasks::{
+use crate::unit::sweep_filing::bounded_error;
+use crate::unit::sweep_filing::duplicate_tasks::{
     DuplicateMatchKind, DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
 };
 

@@ -61,8 +61,7 @@ fn admit(
                     ));
                 }
             }
-            context
-                .runtime
+            crate::app::port::TaskSweepFiling(context.runtime)
                 .ci_sweep_admission(CiSweepAdmissionRequest {
                     action: context.action,
                     task_id,

@@ -30,8 +30,8 @@ use serde_json::Value;
 
 use super::filing::field;
 use crate::OrbitRuntime;
-use crate::application::sweep_filing::{digest, display};
 use crate::application::task::TaskAddParams;
+use crate::unit::sweep_filing::{digest, display};
 
 /// Tag every bundle prerequisite carries.
 pub(super) const CODEQL_PREREQUISITE_TAG: &str = "codeql-bundle-prerequisite";

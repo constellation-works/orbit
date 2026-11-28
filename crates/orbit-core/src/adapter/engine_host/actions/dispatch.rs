@@ -12,13 +12,10 @@ use crate::OrbitRuntime;
 use crate::application::admission::{backlog_exclusion, scan_unresolved};
 use crate::application::job::{pipeline_actions, script_attach};
 use crate::application::pull_drain;
-use crate::application::sweep_filing::ci_failure::filing as ci_failure_filing;
-use crate::application::sweep_filing::dependabot::{
-    consolidate as dependabot_consolidate, filing as dependabot_filing,
-};
 use crate::application::task::pilot as task_pilot;
 use crate::application::task::{blocked_recovery, escalation_triage_steps};
 use crate::application::workspace_auto;
+use crate::unit::sweep_filing;
 
 use super::pipeline_actions::{invoke_and_wait, invoke_detached};
 
@@ -191,15 +188,15 @@ pub(crate) fn run_deterministic(
         // engine-private `collect_ci_evidence` step; this action only reads
         // that JSON and writes tasks.
         CoreDeterministicAction::FileCiFailureTasks => {
-            ci_failure_filing::file_ci_failure_tasks(runtime, input)
+            sweep_filing::file_ci_failure_tasks(runtime, input)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         CoreDeterministicAction::ConsolidateCodeScanningTasks => {
-            dependabot_consolidate::consolidate_code_scanning_tasks(runtime, input)
+            sweep_filing::consolidate_code_scanning_tasks(runtime, input)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         CoreDeterministicAction::FileDependabotAlertTasks => {
-            dependabot_filing::file_dependabot_alert_tasks(runtime, input)
+            sweep_filing::file_dependabot_alert_tasks(runtime, input)
                 .map_err(|error| DispatchError::action_failed(action, error.to_string()))
         }
         // Attach an earlier script step's verified output files to a task,

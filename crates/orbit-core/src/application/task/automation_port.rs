@@ -22,7 +22,7 @@ use crate::application::contracts::{PilotFingerprints, PilotTaskReservation};
 
 /// One bounded Git reader pass whose commands share a single time and output
 /// budget, implemented by `automation`'s `Source`.
-pub(in crate::application) trait SourceGit {
+pub(crate) trait SourceGit {
     /// Run `git` with `args` under the pass's shared budget, trimming stdout.
     fn git(&self, args: &[&str]) -> Result<String, AutomationError>;
 
@@ -36,7 +36,7 @@ pub(in crate::application) trait SourceGit {
 
 /// The state-scheduler operations task steps call, implemented by
 /// `automation`.
-pub(in crate::application) trait TaskAutomationPort {
+pub(crate) trait TaskAutomationPort {
     /// Open one bounded Git reader on the workspace repository root whose
     /// commands share a single deadline.
     fn bounded_source(&self) -> Box<dyn SourceGit + '_>;

@@ -12,11 +12,11 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
-use crate::application::sweep_filing::duplicate_tasks::{
+use crate::application::task::EXTERNAL_MERGE_SETTLED_EVENT;
+use crate::unit::sweep_filing::duplicate_tasks::{
     CoverageAnchor, CoverageFingerprint, DuplicateCandidate, DuplicateTaskLookup,
 };
-use crate::application::sweep_filing::{bounded_error, full_revision};
-use crate::application::task::EXTERNAL_MERGE_SETTLED_EVENT;
+use crate::unit::sweep_filing::{bounded_error, full_revision};
 
 use super::code_groups::alert_key;
 use super::filing::{

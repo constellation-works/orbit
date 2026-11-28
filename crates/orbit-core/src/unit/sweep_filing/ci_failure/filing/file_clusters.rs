@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::CI_FAILURE_TAG;
-use crate::application::sweep_filing::duplicate_tasks::{DuplicateMatchKind, DuplicateTaskMatch};
-use crate::application::sweep_filing::{bounded_error, digest, display};
 use crate::application::task::{CiSweepFilingEvidence, TaskAddParams};
+use crate::unit::sweep_filing::duplicate_tasks::{DuplicateMatchKind, DuplicateTaskMatch};
+use crate::unit::sweep_filing::{bounded_error, digest, display};
 
 use super::super::cluster::FailureCluster;
 use super::super::dependency_fold;

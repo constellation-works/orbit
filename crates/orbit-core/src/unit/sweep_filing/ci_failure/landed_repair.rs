@@ -17,8 +17,8 @@ use super::identity::CiTaskIdentities;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
 use crate::application::contracts::CI_FAILURE_TAG;
-use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
-use crate::application::sweep_filing::{digest, display, full_revision, landed_task_commit};
+use crate::unit::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
+use crate::unit::sweep_filing::{digest, display, full_revision, landed_task_commit};
 
 /// Why a cluster was deferred rather than filed.
 pub(super) const DESCENDANT_LANDING_REASON: &str = "repaired_by_descendant_landing";
