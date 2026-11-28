@@ -197,10 +197,51 @@ fn apply_bound_retained_patch<
         RetainedApplied::Clean => {
             repair["output"] = json!(format!("{}\n\n{note}", admission.diagnosis));
         }
-        RetainedApplied::Conflict { paths, output } => {
+        RetainedApplied::Conflict {
+            paths,
+            output,
+            preserved_sides,
+        } => {
             repair["trigger"] = json!("conflict");
             repair["conflicting_paths"] = json!(paths);
-            repair["output"] = json!(format!("{}\n\n{note}\n\n{output}", admission.diagnosis));
+            if preserved_sides.is_empty() {
+                repair["output"] = json!(format!("{}\n\n{note}\n\n{output}", admission.diagnosis));
+            } else {
+                let side_notes = preserved_sides
+                    .iter()
+                    .map(|side| {
+                        let mut detail = format!(
+                            "- `{}`: working copy holds the current/integration version{}; retained edit is saved at `{}`",
+                            side.path,
+                            side.current_path
+                                .as_deref()
+                                .map(|path| format!(" (also saved at `{path}`)"))
+                                .unwrap_or_default(),
+                            side.retained_path,
+                        );
+                        if let Some(base) = &side.base_path {
+                            detail.push_str(&format!("; common ancestor is saved at `{base}`"));
+                        }
+                        detail
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                repair["retained_conflict_sides"] = json!(
+                    preserved_sides
+                        .iter()
+                        .map(|side| json!({
+                            "path": side.path,
+                            "retained_path": side.retained_path,
+                            "current_path": side.current_path,
+                            "base_path": side.base_path,
+                        }))
+                        .collect::<Vec<_>>()
+                );
+                repair["output"] = json!(format!(
+                    "{}\n\n{note}\n\nConflicting binary or unmarked sides preserved under `.orbit/tmp/`:\n{side_notes}\n\n{output}",
+                    admission.diagnosis
+                ));
+            }
         }
     }
     repair["retained_patch"] = json!({
