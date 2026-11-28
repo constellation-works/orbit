@@ -70,8 +70,6 @@ mod result;
 mod runner;
 mod sandbox;
 mod supervision;
-#[cfg(test)]
-mod tests;
 mod validation_env;
 
 pub use build_sandbox::{
@@ -134,3 +132,6 @@ pub use validation_env::{
     VALIDATION_LOGIN_SHELL, VALIDATION_PATH_MODE, ValidationEnvPolicy, ValidationEnvSource,
     ValidationEnvironment, ValidationPathMode, program_on_path,
 };
+
+#[cfg(test)]
+mod tests;
