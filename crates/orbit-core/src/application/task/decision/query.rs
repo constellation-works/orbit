@@ -69,6 +69,7 @@ impl OrbitRuntime {
                 &row.comments,
                 observed_at,
                 Some(&row.artifacts),
+                false,
                 &|receipt| {
                     self.task_pilot_audit_with_reader(id, receipt, &|path| match row
                         .artifacts
@@ -98,26 +99,41 @@ impl OrbitRuntime {
         comments: &[TaskComment],
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<DecisionRequest>, OrbitError> {
-        self.task_decision_requests_with_audit(task, history, comments, now, None, &|receipt| {
-            self.task_pilot_audit(&task.id, receipt)
-        })
+        self.task_decision_requests_with_audit(
+            task,
+            history,
+            comments,
+            now,
+            None,
+            false,
+            &|receipt| self.task_pilot_audit(&task.id, receipt),
+        )
     }
 
     /// Observational [`Self::task_decision_requests_in`]: resolves any
-    /// artifact-backed pilot receipt from the settled bundle without entering
+    /// artifact-backed pilot receipt and block-triage candidate/review reads
+    /// from the already-loaded records and settled bundles without entering
     /// the task-commit boundary.
     pub(crate) fn observe_task_decision_requests_in(
         &self,
         task: &Task,
         history: &[TaskHistoryEntry],
         comments: &[TaskComment],
+        artifacts: &[ArtifactManifestFileV2],
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<DecisionRequest>, OrbitError> {
-        self.task_decision_requests_with_audit(task, history, comments, now, None, &|receipt| {
-            self.observe_task_pilot_audit(&task.id, receipt)
-        })
+        self.task_decision_requests_with_audit(
+            task,
+            history,
+            comments,
+            now,
+            Some(artifacts),
+            true,
+            &|receipt| self.observe_task_pilot_audit(&task.id, receipt),
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn task_decision_requests_with_audit(
         &self,
         task: &Task,
@@ -125,6 +141,7 @@ impl OrbitRuntime {
         comments: &[TaskComment],
         now: chrono::DateTime<chrono::Utc>,
         manifest: Option<&[ArtifactManifestFileV2]>,
+        observational: bool,
         audit: &dyn Fn(
             orbit_types::task::CommentReceipt<'_>,
         ) -> Result<serde_json::Value, OrbitError>,
@@ -140,8 +157,15 @@ impl OrbitRuntime {
         };
         let mut requests =
             orbit_types::task::decision_requests_from_history(task, history, pilot_operation, now);
-        self.add_handoff_landing_answers(task, &mut requests, manifest)?;
-        self.add_candidate_disposition_answers(task, &mut requests)?;
+        self.add_handoff_landing_answers_with(task, &mut requests, manifest, observational)?;
+        self.add_candidate_disposition_answers_with(
+            task,
+            history,
+            comments,
+            manifest,
+            &mut requests,
+            observational,
+        )?;
         Ok(requests)
     }
 }

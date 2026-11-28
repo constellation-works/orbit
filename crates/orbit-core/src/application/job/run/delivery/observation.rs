@@ -109,13 +109,23 @@ impl OrbitRuntime {
         run_id: &str,
         task_id: &str,
     ) -> Result<RunDeliveryObservation, OrbitError> {
-        let run_id = bounded_id(run_id, "run_id")?;
         let task_id = bounded_id(task_id, "task_id")?;
-        let run = self.show_job_run_observed(run_id)?;
         let task = self.get_task(task_id)?;
+        self.observe_run_delivery_for_task(run_id, &task)
+    }
+
+    /// [`Self::observe_run_delivery`] when the caller already holds `task`.
+    pub(crate) fn observe_run_delivery_for_task(
+        &self,
+        run_id: &str,
+        task: &orbit_types::task::Task,
+    ) -> Result<RunDeliveryObservation, OrbitError> {
+        let run_id = bounded_id(run_id, "run_id")?;
+        let run = self.show_job_run_observed(run_id)?;
         if !run_task_ids(&run).contains(&task.id.as_str()) {
             return Err(OrbitError::InvalidInput(format!(
-                "run '{run_id}' did not deliver task '{task_id}' in this workspace"
+                "run '{run_id}' did not deliver task '{}' in this workspace",
+                task.id
             )));
         }
         self.project_stored_delivery(

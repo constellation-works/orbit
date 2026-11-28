@@ -312,11 +312,20 @@ impl OrbitRuntime {
     /// `job_run_id` only onto the checkpoint batch id, which already matches
     /// the terminal source, so the retry stays invisible to that binding.
     pub(crate) fn live_task_delivery(&self, task: &Task) -> Option<String> {
-        self.live_task_run(task)
-            .or_else(|| match self.unsettled_task_claim(task) {
+        self.live_task_delivery_with(task, false)
+    }
+
+    pub(crate) fn live_task_delivery_with(
+        &self,
+        task: &Task,
+        observational: bool,
+    ) -> Option<String> {
+        self.live_task_run(task).or_else(|| {
+            match self.unsettled_task_claim_with(task, observational) {
                 Ok(claim) => claim.as_ref().map(unsettled_claim_reason),
                 Err(unreadable) => Some(unreadable),
-            })
+            }
+        })
     }
 
     /// Why a run of `task` may still be delivering one of its pull requests,
@@ -362,15 +371,21 @@ impl OrbitRuntime {
 
     /// The task's unsettled execution claim, if it has one, or why its claims
     /// cannot be read.
-    pub(super) fn unsettled_task_claim(
+    pub(super) fn unsettled_task_claim_with(
         &self,
         task: &Task,
+        observational: bool,
     ) -> Result<Option<ClaimInspection>, String> {
-        match self
-            .stores()
-            .tasks()
-            .inspect_task_execution_claims(&task.id)
-        {
+        let claims = if observational && !self.stored().task().held_by_owner() {
+            self.stores()
+                .tasks()
+                .observe_task_execution_claims(&task.id)
+        } else {
+            self.stores()
+                .tasks()
+                .inspect_task_execution_claims(&task.id)
+        };
+        match claims {
             Ok(claims) => Self::unsettled_task_claim_with_claims(task, Some(&claims)),
             Err(_) => Self::unsettled_task_claim_with_claims(task, None),
         }

@@ -173,6 +173,13 @@ pub(crate) trait TaskJobPort {
     /// binds, so the next admission would refuse it.
     fn unbound_publication(&self, task: &Task) -> Result<bool, OrbitError>;
 
+    /// Observational counterpart of [`Self::unbound_publication`] over `history`.
+    fn observe_unbound_publication(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+    ) -> Result<bool, OrbitError>;
+
     /// Local precondition check for requeuing `task` onto the `[BLOCKED]`
     /// failure-handoff PR its stopped run published. Contacts neither remotes
     /// nor the forge; `Err` carries the refusal a requeue reports.
@@ -260,12 +267,26 @@ pub(crate) trait TaskJobPort {
         task: &Task,
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError>;
 
+    /// Observational counterpart of [`Self::failure_handoff_preservation`] over `history`.
+    fn observe_failure_handoff_preservation(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+    ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError>;
+
     /// The authenticated preservation record for the pull request `task`'s
     /// escalated run published through its own pipeline steps and its
     /// failure handoff kept, and the binding its next run resumes.
     fn escalated_publication_preservation(
         &self,
         task: &Task,
+    ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError>;
+
+    /// Observational counterpart of [`Self::escalated_publication_preservation`] over `history`.
+    fn observe_escalated_publication_preservation(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError>;
 
     /// How explicit source repair can resolve a conflicting pipeline
@@ -281,6 +302,14 @@ pub(crate) trait TaskJobPort {
         &self,
         task: &Task,
         entry: TaskHistoryEntry,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError>;
+
+    /// Observational counterpart of [`Self::preservation_append`] over `history`.
+    fn observe_preservation_append(
+        &self,
+        task: &Task,
+        entry: TaskHistoryEntry,
+        history: &[TaskHistoryEntry],
     ) -> Result<Option<TaskHistoryEntry>, OrbitError>;
 
     /// The default crew for an inspection-requiring activity at `tier` when

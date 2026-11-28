@@ -188,7 +188,15 @@ impl TaskJobPort for OrbitRuntime {
     }
 
     fn unbound_publication(&self, task: &Task) -> Result<bool, OrbitError> {
-        self.unbound_publication_on_record(task)
+        self.unbound_publication_on_record_with(task, None)
+    }
+
+    fn observe_unbound_publication(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+    ) -> Result<bool, OrbitError> {
+        self.unbound_publication_on_record_with(task, Some(history))
     }
 
     fn check_failure_handoff_requeue(&self, task: &Task) -> Result<(), OrbitError> {
@@ -269,14 +277,30 @@ impl TaskJobPort for OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
-        self.failure_handoff_requeue_record(task)
+        self.failure_handoff_requeue_record_with(task, None, false)
+    }
+
+    fn observe_failure_handoff_preservation(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+    ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
+        self.failure_handoff_requeue_record_with(task, Some(history), true)
     }
 
     fn escalated_publication_preservation(
         &self,
         task: &Task,
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
-        self.escalated_publication_requeue_record(task)
+        self.escalated_publication_requeue_record_with(task, None, false)
+    }
+
+    fn observe_escalated_publication_preservation(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+    ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
+        self.escalated_publication_requeue_record_with(task, Some(history), true)
     }
 
     fn conflict_source_repair_route(
@@ -291,7 +315,16 @@ impl TaskJobPort for OrbitRuntime {
         task: &Task,
         entry: TaskHistoryEntry,
     ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
-        self.preservation_to_append(task, entry)
+        self.preservation_to_append_with(task, entry, None)
+    }
+
+    fn observe_preservation_append(
+        &self,
+        task: &Task,
+        entry: TaskHistoryEntry,
+        history: &[TaskHistoryEntry],
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        self.preservation_to_append_with(task, entry, Some(history))
     }
 
     fn inspection_default_crew(&self, tier: TaskComplexity) -> Result<Crew, OrbitError> {

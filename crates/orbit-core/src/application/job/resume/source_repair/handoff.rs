@@ -12,6 +12,18 @@ impl OrbitRuntime {
         state: PipelineState,
         definition: JobV2,
     ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
+        self.observe_handoff_publication_with(source, task, state, definition, None, false)
+    }
+
+    pub(super) fn observe_handoff_publication_with(
+        &self,
+        source: JobRun,
+        task: Task,
+        state: PipelineState,
+        definition: JobV2,
+        history: Option<&[TaskHistoryEntry]>,
+        observational: bool,
+    ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
         let checkpoint = state
             .failure_activity_checkpoint
             .as_ref()
@@ -126,7 +138,7 @@ impl OrbitRuntime {
             .as_ref()
             .is_some_and(|i| i.get(SOURCE_REPAIR_KEY).is_some())
         {
-            Some(self.source_repair_adopted_binding(
+            Some(self.source_repair_adopted_binding_with(
                 owner,
                 &task,
                 worktree,
@@ -136,9 +148,10 @@ impl OrbitRuntime {
                     "resume_candidate",
                     "candidate_resume",
                 )?,
+                history,
             )?)
         } else {
-            self.read_owner_publication_binding(&owner.run_id, false)?
+            self.read_owner_publication_binding_with(&owner.run_id, false, observational, history)?
         };
         if branch
             != prior
@@ -215,9 +228,12 @@ impl OrbitRuntime {
         if state.pipeline.get("commit").is_some_and(|v| !v.is_null()) {
             authenticated_checkpoint(definition, state, "commit", "git_commit")?;
         }
-        let commit = self
-            .observe_task_delivery(&task.id, Some(&owner.run_id))?
-            .commit;
+        let commit = if observational {
+            self.observe_run_delivery_for_task(&owner.run_id, &task)?
+        } else {
+            self.observe_task_delivery(&task.id, Some(&owner.run_id))?
+        }
+        .commit;
         let mut allowed = vec![field(worktree, "base_sha")?.to_string()];
         if matches!(
             commit.status,
@@ -317,7 +333,7 @@ impl OrbitRuntime {
             .as_ref()
             .map(|resumed| resumed.binding())
             .transpose()?;
-        let mut result = self.bind_source_publication(
+        let mut result = self.bind_source_publication_with(
             source.clone(),
             task.clone(),
             source_state.clone(),
@@ -332,6 +348,7 @@ impl OrbitRuntime {
                 certified_tip: None,
                 preserved_review_tip: None,
             },
+            observational,
         )?;
         if field(output, "pr_url")? != result.2.pull_request_url
             || prior.as_ref().is_some_and(|b| {

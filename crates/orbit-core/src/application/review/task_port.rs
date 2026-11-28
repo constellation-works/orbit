@@ -21,6 +21,48 @@ impl TaskReviewPort for OrbitRuntime {
         head: Option<&str>,
         manifest: Option<&[ArtifactManifestFileV2]>,
     ) -> Result<bool, OrbitError> {
+        self.handoff_landing_review_ready_with(task, head, manifest, false)
+    }
+
+    fn observe_handoff_landing_review_ready(
+        &self,
+        task: &Task,
+        head: Option<&str>,
+        manifest: Option<&[ArtifactManifestFileV2]>,
+    ) -> Result<bool, OrbitError> {
+        self.handoff_landing_review_ready_with(task, head, manifest, true)
+    }
+
+    fn task_review_evidence(
+        &self,
+        task: &Task,
+        artifacts: &[ArtifactManifestFileV2],
+    ) -> Result<Option<Value>, OrbitError> {
+        task_review_projection(self, task, artifacts)
+    }
+
+    fn resume_review_evidence(&self, task_id: &str) -> Result<(), OrbitError> {
+        evidence::resume_evidence_hold(self, task_id)
+    }
+
+    fn merged_head_reconciliation_refusal(
+        &self,
+        task: &Task,
+        accepted: &AcceptedHandoff,
+        pull_request: &HandoffPullRequest,
+    ) -> Result<Option<String>, OrbitError> {
+        reconciliation::merged_head_completion_refusal(self, task, accepted, pull_request)
+    }
+}
+
+impl OrbitRuntime {
+    fn handoff_landing_review_ready_with(
+        &self,
+        task: &Task,
+        head: Option<&str>,
+        manifest: Option<&[ArtifactManifestFileV2]>,
+        observational: bool,
+    ) -> Result<bool, OrbitError> {
         use crate::application::job::ReviewAdmissionHook;
         use orbit_types::task::ArtifactWriter;
         use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewTiming};
@@ -38,8 +80,12 @@ impl TaskReviewPort for OrbitRuntime {
         let policy = self.operation_policy();
         let mut security_review = requires_security_state_review(&task.tags);
         if !security_review && let Some(run_id) = &task.job_run_id {
-            security_review = self
-                .list_run_tasks(run_id)?
+            let run_tasks = if observational {
+                self.observe_run_tasks(run_id)?
+            } else {
+                self.list_run_tasks(run_id)?
+            };
+            security_review = run_tasks
                 .iter()
                 .any(|member| requires_security_state_review(&member.tags));
         }
@@ -70,7 +116,9 @@ impl TaskReviewPort for OrbitRuntime {
         else {
             return Ok(false);
         };
-        let artifact = if use_snapshot {
+        let artifact = if observational {
+            self.observe_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)?
+        } else if use_snapshot {
             Some(
                 self.stores()
                     .task_artifacts()
@@ -128,7 +176,11 @@ impl TaskReviewPort for OrbitRuntime {
                 let covered_task = if id == &task.id {
                     task
                 } else {
-                    loaded_task = self.get_task(id)?;
+                    loaded_task = if observational {
+                        self.observe_task(id)?
+                    } else {
+                        self.get_task(id)?
+                    };
                     &loaded_task
                 };
                 let digest = orbit_automation::review::task_meaning_digest(covered_task)
@@ -153,26 +205,5 @@ impl TaskReviewPort for OrbitRuntime {
             })?
             .as_ref()
             == Some(&certificate))
-    }
-
-    fn task_review_evidence(
-        &self,
-        task: &Task,
-        artifacts: &[ArtifactManifestFileV2],
-    ) -> Result<Option<Value>, OrbitError> {
-        task_review_projection(self, task, artifacts)
-    }
-
-    fn resume_review_evidence(&self, task_id: &str) -> Result<(), OrbitError> {
-        evidence::resume_evidence_hold(self, task_id)
-    }
-
-    fn merged_head_reconciliation_refusal(
-        &self,
-        task: &Task,
-        accepted: &AcceptedHandoff,
-        pull_request: &HandoffPullRequest,
-    ) -> Result<Option<String>, OrbitError> {
-        reconciliation::merged_head_completion_refusal(self, task, accepted, pull_request)
     }
 }

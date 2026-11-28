@@ -938,6 +938,295 @@ fn backlog_open_decisions_are_observational_in_task_detail() {
 }
 
 #[test]
+fn blocked_open_decisions_are_observational_in_task_detail() {
+    isolated(
+        "task_contracts::blocked_open_decisions_are_observational_in_task_detail",
+        || {
+            use orbit_core::test_support::fixture_engine::{RunLifecycle, TaskAutomationUpdate};
+            use orbit_types::task::{
+                ACCEPT_FINDINGS_ANSWER_ID, DecisionAction, DecisionBinding, DecisionGate,
+                DecisionOptionInput, DecisionRequest, DecisionRewrite, ExecutionLocation,
+                decision_option_answers,
+            };
+            use orbit_types::workflow::{
+                FindingDisposition, REVIEW_CONTRACT_VERSION, REVIEW_REPORT_ARTIFACT, ReviewFinding,
+                ReviewReport, ReviewVerdict,
+            };
+
+            let fixture = Fixture::new();
+            let runtime = &fixture.runtime;
+            let task = seed_backlog_task(runtime, "Blocked task with candidate decision");
+            let report = ReviewReport {
+                external_evidence: Vec::new(),
+                schema_version: REVIEW_CONTRACT_VERSION,
+                attempt_id: "attempt-blocked-open-decisions".into(),
+                verdict: ReviewVerdict::Reject,
+                summary: "One low finding remains open".into(),
+                findings: vec![ReviewFinding {
+                    id: "low-1".into(),
+                    severity: "low".into(),
+                    summary: "one low finding remains open".into(),
+                    paths: Vec::new(),
+                    disposition: FindingDisposition::Open,
+                    change: None,
+                }],
+                validation: Vec::new(),
+                retired_validation: Vec::new(),
+                escalation: None,
+            };
+            let blocked = runtime
+                .update_task_as_human(
+                    &task.id,
+                    TaskUpdateParams {
+                        upsert_artifacts: vec![TaskArtifact {
+                            path: REVIEW_REPORT_ARTIFACT.into(),
+                            media_type: "application/json".into(),
+                            content: serde_json::to_vec(&report).unwrap(),
+                            created_by: None,
+                        }],
+                        ..Default::default()
+                    },
+                    "codex".into(),
+                )
+                .unwrap();
+
+            let now = chrono::Utc::now();
+            let answers = decision_option_answers(
+                &[
+                    DecisionOptionInput {
+                        summary: "Narrow the task".into(),
+                        consequence: "Narrow the task lands.".into(),
+                        rewrite: Some(DecisionRewrite {
+                            description: Some("Repair only the remaining error.".into()),
+                            acceptance_criteria: None,
+                        }),
+                        action: None,
+                    },
+                    DecisionOptionInput {
+                        summary: "Resume the candidate as it is".into(),
+                        consequence: "Resume the candidate lands.".into(),
+                        rewrite: None,
+                        action: Some(DecisionAction::Requeue),
+                    },
+                ],
+                1,
+            )
+            .unwrap();
+            orbit_core::test_support::EngineHost::new(runtime)
+                .apply_task_automation_update(
+                    &blocked.id,
+                    TaskAutomationUpdate {
+                        status: Some(TaskStatus::Blocked),
+                        status_note: Some("blocked with open findings".into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let blocked_at = runtime
+                .get_task_history(&blocked.id)
+                .unwrap()
+                .into_iter()
+                .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
+                .expect("blocked status history entry")
+                .at;
+            let decision = DecisionRequest::new(
+                blocked.id.clone(),
+                DecisionGate::BlockTriage,
+                answers,
+                DecisionBinding::BlockEpisode {
+                    episode: blocked_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+                },
+                "block_triage".into(),
+                now,
+            );
+            let request_id = decision.id.clone();
+            orbit_core::test_support::EngineHost::new(runtime)
+                .apply_task_automation_update(
+                    &blocked.id,
+                    TaskAutomationUpdate {
+                        append_history: vec![decision.history_entry("system")],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let blocked = runtime.get_task(&blocked.id).unwrap();
+
+            let machine_id = fixture.machine_id();
+            let claim = fixture_store::contract::ExecutionClaim {
+                claim_id: "claim-blocked-open-decisions".into(),
+                task_id: blocked.id.clone(),
+                request_id: "req-blocked-open-decisions".into(),
+                executed_on: ExecutionLocation {
+                    machine_id: machine_id.clone(),
+                    machine_name: Some("http-fixture".into()),
+                },
+                run_context: fixture_store::contract::AdmissionRunContext {
+                    run_id: "jrun-leaf-1".into(),
+                    job_name: "task_claimed_pr_pipeline".into(),
+                    machine_name: Some("http-fixture".into()),
+                },
+                footprint: Vec::new(),
+                reservation_id: "res-blocked-open-decisions".into(),
+                reservation_expires_at: now.to_rfc3339(),
+                phase: fixture_store::contract::ExecutionClaimPhase::Failed,
+                repair: None,
+            };
+            let lifecycle = fixture_store::contract::ClaimInspection {
+                claim: claim.clone(),
+                bound_run: None,
+                created_at: now.to_rfc3339(),
+                updated_at: now.to_rfc3339(),
+                last_event: "failed".into(),
+                age_seconds: Some(1),
+                unresolved_merge_intent: None,
+                landing_invalidated: false,
+                release: None,
+                preserved_candidate: Some(fixture_store::contract::PreservedClaimCandidate {
+                    candidate: fixture_store::contract::ClaimCandidateRef {
+                        branch: format!("orbit/{}-kept", blocked.id),
+                        head_sha: "a".repeat(40),
+                        pull_request: None,
+                        pull_request_head: None,
+                        source_run_id: Some("jrun-leaf-1".into()),
+                        failed_step_id: Some("review".into()),
+                        published: false,
+                        durable_ref: Some(format!(
+                            "refs/orbit/candidates/{}/jrun-leaf-1",
+                            blocked.id
+                        )),
+                        carry_failure: None,
+                        interrupted_review: None,
+                        landing_stop: None,
+                    },
+                    task_spec_digest: blocked.spec_digest(),
+                    recorded_at: now.to_rfc3339(),
+                }),
+                settlement: None,
+                steering: None,
+                leaf_run_evidence: None,
+                late_leaf_effort: None,
+                late_leaf_model: None,
+            };
+
+            let server = fixture.server(true);
+            // Warm the riskiness model before holding the partition's commit lock.
+            assert_eq!(
+                request(&server, "/tasks?status=blocked").status(),
+                StatusCode::OK
+            );
+            let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+                &fixture_store::maintenance::task_registry::task_registry_path(&fixture.global),
+            )
+            .unwrap();
+            let binding = registry.find_task_binding(&blocked.id).unwrap().unwrap();
+            let partition = binding.canonical_path.parent().unwrap();
+            let connection = rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
+            let workspace_id = runtime.workspace_id().unwrap();
+            for (kind, payload) in [
+                (
+                    "distributed-execution-claim-v1",
+                    serde_json::to_string(&claim).unwrap(),
+                ),
+                (
+                    "distributed-claim-lifecycle-v1",
+                    serde_json::to_string(&lifecycle).unwrap(),
+                ),
+            ] {
+                connection
+                    .execute(
+                        "INSERT INTO task_coordination_rows \
+                         (workspace_id, kind, row_id, payload_json, journal_id, created_at) \
+                         VALUES (?1, ?2, ?3, ?4, 'sql-only', ?5)",
+                        rusqlite::params![
+                            workspace_id,
+                            kind,
+                            claim.claim_id,
+                            payload,
+                            now.to_rfc3339()
+                        ],
+                    )
+                    .unwrap();
+            }
+            connection
+                .execute(
+                    "INSERT INTO task_commit_journal \
+                     (journal_id, workspace_id, task_id, state, intent_json, created_at) \
+                     VALUES ('blocked-open-decisions', ?1, ?2, 'prepared', '{}', ?3)",
+                    rusqlite::params![workspace_id, blocked.id, now.to_rfc3339()],
+                )
+                .unwrap();
+
+            let client = reqwest::blocking::Client::builder()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(2))
+                .build()
+                .unwrap();
+            orbit_common::fs::io::with_exclusive_file_lock::<_, orbit_common::OrbitError, _>(
+                &partition.join("task-commit"),
+                "HTTP blocked open_decisions observation",
+                || {
+                    let response = client
+                        .get(format!(
+                            "{}/api/tasks/{}?workspace=ws_http_fixture",
+                            server.origin, blocked.id
+                        ))
+                        .send()
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "GET /api/tasks/{} waited on the task writer: {error}",
+                                blocked.id
+                            )
+                        });
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let detail = body_json(response);
+                    assert_eq!(detail["id"], blocked.id);
+                    assert_eq!(detail["open_decisions"][0]["id"], request_id, "{detail}");
+                    assert_eq!(
+                        detail["open_decisions"][0]["gate"], "block_triage",
+                        "{detail}"
+                    );
+                    let answers = detail["open_decisions"][0]["answers"]
+                        .as_array()
+                        .expect("answers array");
+                    assert!(
+                        answers
+                            .iter()
+                            .any(|answer| answer == ACCEPT_FINDINGS_ANSWER_ID),
+                        "accept_findings offered from observational review report: {detail}"
+                    );
+                    let rewrite_option = detail["open_decisions"][0]["options"]
+                        .as_array()
+                        .expect("options array")
+                        .iter()
+                        .find(|option| option["id"] == "1")
+                        .expect("rewrite option");
+                    assert!(
+                        rewrite_option["label"]
+                            .as_str()
+                            .is_some_and(|label| label.contains("candidate is discarded")),
+                        "rewrite option discloses candidate discard: {rewrite_option}"
+                    );
+                    Ok(())
+                },
+            )
+            .unwrap();
+            let state = || {
+                connection
+                    .query_row(
+                        "SELECT state FROM task_commit_journal WHERE journal_id = 'blocked-open-decisions'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap()
+            };
+            assert_eq!(state(), "prepared");
+            runtime.get_task(&blocked.id).unwrap();
+            assert_eq!(state(), "aborted");
+        },
+    );
+}
+
+#[test]
 fn delivery_attention_survives_unrelated_run_history() {
     isolated(
         "task_contracts::delivery_attention_survives_unrelated_run_history",
@@ -1170,8 +1459,9 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
                 base - chrono::Duration::hours(4),
             );
             {
-                use orbit_core::test_support::fixture_engine::RunLifecycle;
-                use orbit_core::test_support::fixture_engine::TaskAutomationUpdate;
+                use orbit_core::test_support::fixture_engine::{
+                    RunLifecycle, TaskAutomationUpdate,
+                };
                 use orbit_types::task::TaskHistoryEntry;
                 let entry = |at: chrono::DateTime<chrono::Utc>, event: &str, note: Value| {
                     TaskHistoryEntry {

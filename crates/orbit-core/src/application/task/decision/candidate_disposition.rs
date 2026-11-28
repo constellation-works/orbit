@@ -6,8 +6,9 @@
 
 use orbit_common::OrbitError;
 use orbit_types::task::{
-    ACCEPT_FINDINGS_ANSWER_ID, DecisionAction, DecisionAnswer, DecisionGate, DecisionOption,
-    DecisionRequest, DecisionRequestState, DecisionRiskTier, Task,
+    ACCEPT_FINDINGS_ANSWER_ID, ArtifactManifestFileV2, DecisionAction, DecisionAnswer,
+    DecisionGate, DecisionOption, DecisionRequest, DecisionRequestState, DecisionRiskTier, Task,
+    TaskComment, TaskHistoryEntry,
 };
 use orbit_types::workflow::{FindingDisposition, REVIEW_REPORT_ARTIFACT, ReviewReport};
 
@@ -19,10 +20,14 @@ const CANDIDATE_DISCARDED_PHRASE: &str = "candidate is discarded";
 impl OrbitRuntime {
     /// Offer acceptance of open findings, and say when a rewrite discards the
     /// preserved candidate. Stored requests are unchanged.
-    pub(in crate::application::task) fn add_candidate_disposition_answers(
+    pub(in crate::application::task) fn add_candidate_disposition_answers_with(
         &self,
         task: &Task,
+        history: &[TaskHistoryEntry],
+        comments: &[TaskComment],
+        manifest: Option<&[ArtifactManifestFileV2]>,
         requests: &mut [DecisionRequest],
+        observational: bool,
     ) -> Result<(), OrbitError> {
         for request in requests {
             if request.gate != DecisionGate::BlockTriage
@@ -38,10 +43,12 @@ impl OrbitRuntime {
                 else {
                     continue;
                 };
-                if self.rewrite_strands_candidate(
+                if self.rewrite_strands_candidate_with(
                     task,
+                    Some(history),
                     rewrite.description.as_deref(),
                     rewrite.acceptance_criteria.as_deref(),
+                    observational,
                 )? {
                     disclose_discard(answer);
                 }
@@ -53,7 +60,13 @@ impl OrbitRuntime {
             {
                 continue;
             }
-            if !self.accept_findings_resumable(task)? {
+            if !self.accept_findings_resumable_with(
+                task,
+                history,
+                comments,
+                manifest,
+                observational,
+            )? {
                 continue;
             }
             request.answers.push(accept_findings_answer());
@@ -69,7 +82,18 @@ impl OrbitRuntime {
     ) -> Result<Vec<String>, OrbitError> {
         let history = self.get_task_history(&task.id)?;
         let comments = self.get_task_comments(&task.id)?;
-        let settlements = orbit_types::task::recorded_review_settlements(&history, &comments);
+        self.open_review_finding_lines_with(task, &history, &comments, None, false)
+    }
+
+    fn open_review_finding_lines_with(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        comments: &[TaskComment],
+        manifest: Option<&[ArtifactManifestFileV2]>,
+        observational: bool,
+    ) -> Result<Vec<String>, OrbitError> {
+        let settlements = orbit_types::task::recorded_review_settlements(history, comments);
         if let Some((_, latest)) = settlements.last()
             && !latest.findings.is_empty()
         {
@@ -80,27 +104,54 @@ impl OrbitRuntime {
                 .map(|finding| finding.line.clone())
                 .collect());
         }
-        self.review_report_open_lines(&task.id)
+        self.review_report_open_lines_with(&task.id, manifest, observational)
     }
 
     /// Whether accepting the open findings can resume `task`'s candidate.
     /// A refusal to resume hides the offer; it does not fail the decision read.
-    fn accept_findings_resumable(&self, task: &Task) -> Result<bool, OrbitError> {
-        if self.unsettled_run(task)?.is_some() || !self.preserved_candidate_bound(task)? {
+    fn accept_findings_resumable_with(
+        &self,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        comments: &[TaskComment],
+        manifest: Option<&[ArtifactManifestFileV2]>,
+        observational: bool,
+    ) -> Result<bool, OrbitError> {
+        if self.unsettled_run_with(task, observational)?.is_some()
+            || !self.preserved_candidate_bound_with(task, Some(history), observational)?
+        {
             return Ok(false);
         }
-        if self.open_review_finding_lines(task)?.is_empty() {
+        if self
+            .open_review_finding_lines_with(task, history, comments, manifest, observational)?
+            .is_empty()
+        {
             return Ok(false);
         }
-        match self.authenticate_published_backlog_return(task) {
+        match self.authenticate_published_backlog_return_with(task, Some(history), observational) {
             Ok(_) => Ok(true),
             Err(OrbitError::InvalidInput(_)) => Ok(false),
             Err(error) => Err(error),
         }
     }
 
-    fn review_report_open_lines(&self, task_id: &str) -> Result<Vec<String>, OrbitError> {
-        let Some(artifact) = self.get_task_artifact(task_id, REVIEW_REPORT_ARTIFACT)? else {
+    fn review_report_open_lines_with(
+        &self,
+        task_id: &str,
+        manifest: Option<&[ArtifactManifestFileV2]>,
+        observational: bool,
+    ) -> Result<Vec<String>, OrbitError> {
+        if manifest
+            .is_some_and(|files| !files.iter().any(|file| file.path == REVIEW_REPORT_ARTIFACT))
+        {
+            return Ok(Vec::new());
+        }
+        let artifact = if observational {
+            self.observe_task_artifact(task_id, REVIEW_REPORT_ARTIFACT)?
+        } else {
+            self.get_task_artifact(task_id, REVIEW_REPORT_ARTIFACT)?
+        };
+        let Some(artifact) = artifact else {
             return Ok(Vec::new());
         };
         let Ok(report) = ReviewReport::parse(&artifact.content) else {

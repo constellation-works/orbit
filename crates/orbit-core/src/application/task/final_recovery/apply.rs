@@ -404,8 +404,24 @@ impl OrbitRuntime {
         task_id: &str,
         run_id: &str,
     ) -> Result<Option<FinalRecoveryOutcome>, OrbitError> {
-        let history = self.get_task_history(task_id)?;
-        Ok(helpers::authoritative_recovery_outcome(&history, run_id)
+        self.recorded_final_recovery_with(task_id, run_id, None)
+    }
+
+    pub(crate) fn recorded_final_recovery_with(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        history: Option<&[TaskHistoryEntry]>,
+    ) -> Result<Option<FinalRecoveryOutcome>, OrbitError> {
+        let loaded;
+        let history = match history {
+            Some(history) => history,
+            None => {
+                loaded = self.get_task_history(task_id)?;
+                &loaded
+            }
+        };
+        Ok(helpers::authoritative_recovery_outcome(history, run_id)
             .map(|outcome| FinalRecoveryOutcome::from(outcome.clone())))
     }
 

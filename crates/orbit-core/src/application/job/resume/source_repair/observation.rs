@@ -29,12 +29,22 @@ impl OrbitRuntime {
     /// authenticates the run's completion-failure receipt first and records
     /// the `requeued` decision that supersedes the escalation, so the next
     /// run's adoption passes the guard this skips.
-    pub(super) fn observe_escalated_publication(
+    pub(super) fn observe_escalated_publication_with(
         &self,
         source: JobRun,
         task: Task,
+        history: Option<&[TaskHistoryEntry]>,
+        observational: bool,
     ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
-        self.observe_publication_checkpoints(source, task, false, true, None)
+        self.observe_publication_checkpoints_with(
+            source,
+            task,
+            false,
+            true,
+            None,
+            history,
+            observational,
+        )
     }
 
     /// The stopped owner-local completion-retry chain `[owner, ..., source]`
@@ -186,6 +196,28 @@ impl OrbitRuntime {
         escalation_requeue: bool,
         held_retry_lineage: Option<&[String]>,
     ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
+        self.observe_publication_checkpoints_with(
+            source,
+            task,
+            explicit,
+            escalation_requeue,
+            held_retry_lineage,
+            None,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn observe_publication_checkpoints_with(
+        &self,
+        source: JobRun,
+        task: Task,
+        explicit: bool,
+        escalation_requeue: bool,
+        held_retry_lineage: Option<&[String]>,
+        history: Option<&[TaskHistoryEntry]>,
+        observational: bool,
+    ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
         let source_id = source.run_id.as_str();
         let task_id = task.id.as_str();
         let state = self
@@ -206,14 +238,21 @@ impl OrbitRuntime {
             if inline {
                 inline_publication::authenticate_kept_inline_receipt(&source, &task, &state, job)?;
             } else {
-                return self.observe_handoff_publication(source, task, state, definition);
+                return self.observe_handoff_publication_with(
+                    source,
+                    task,
+                    state,
+                    definition,
+                    history,
+                    observational,
+                );
             }
         }
         if !escalation_requeue
             && !inline
             && source.state == JobRunState::Failed
             && matches!(
-                self.recorded_final_recovery(task_id, source_id)?,
+                self.recorded_final_recovery_with(task_id, source_id, history)?,
                 Some(crate::application::task::FinalRecoveryOutcome::Escalated { .. })
             )
             && source
@@ -225,15 +264,17 @@ impl OrbitRuntime {
                 "stopped escalated publication requires original operator admission or authenticated failure-handoff evidence",
             ));
         }
-        let proof = self.authenticate_publication_chain(
+        let proof = self.authenticate_publication_chain_with(
             &source,
             &task,
             &state,
             job,
             explicit,
             held_retry_lineage,
+            history,
+            observational,
         )?;
-        let binding = self.bind_source_publication(
+        let binding = self.bind_source_publication_with(
             source.clone(),
             task.clone(),
             state.clone(),
@@ -248,6 +289,7 @@ impl OrbitRuntime {
                 certified_tip: proof.certified_tip.as_ref(),
                 preserved_review_tip: proof.preserved_review_tip.as_ref(),
             },
+            observational,
         )?;
         if proof
             .url

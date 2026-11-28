@@ -198,12 +198,53 @@ impl TaskCommitBoundary {
         task: &orbit_types::task::Task,
         machine_id: &str,
     ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
+        let rows = self.lifecycle_rows_for_claim_task(&task.id)?;
+        self.candidate_offer_with(task, machine_id, &rows, &|recorded| {
+            Ok(self
+                .bundle_store
+                .read_bundle_lightweight(&task.id)?
+                .events
+                .iter()
+                .any(|event| {
+                    event.event_type == orbit_types::task::CANDIDATE_DISCARDED_EVENT
+                        && event.at >= recorded
+                }))
+        })
+    }
+
+    /// Observational counterpart of [`Self::kept_claim_candidate`] using the
+    /// task and history already loaded by the caller without entering the
+    /// task-commit boundary or reopening bundles.
+    pub fn observe_kept_claim_candidate(
+        &self,
+        task: &orbit_types::task::Task,
+        history: &[orbit_types::task::TaskHistoryEntry],
+        machine_id: &str,
+    ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
+        let rows = self
+            .store
+            .lifecycle_rows_for_claim_task(&self.workspace_id, &task.id)?;
+        self.candidate_offer_with(task, machine_id, &rows, &|recorded| {
+            Ok(history.iter().any(|entry| {
+                entry.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT
+                    && entry.at >= recorded.with_timezone(&chrono::Utc)
+            }))
+        })
+    }
+
+    fn candidate_offer_with(
+        &self,
+        task: &orbit_types::task::Task,
+        machine_id: &str,
+        rows: &[crate::contract::TaskCoordinationRow],
+        discarded_since: &dyn Fn(chrono::DateTime<chrono::FixedOffset>) -> Result<bool, OrbitError>,
+    ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
         let mut latest: Option<(
             chrono::DateTime<chrono::FixedOffset>,
             PreservedClaimCandidate,
             ExecutionClaim,
         )> = None;
-        for row in self.lifecycle_rows_for_claim_task(&task.id)? {
+        for row in rows {
             let state = decode_state(&row.payload_json)?;
             if state.claim.task_id != task.id {
                 continue;
@@ -222,15 +263,7 @@ impl TaskCommitBoundary {
         };
         let source_machine = claim.executed_on.machine_id;
         let candidate = preserved.candidate;
-        let fresh = if self
-            .bundle_store
-            .read_bundle_lightweight(&task.id)?
-            .events
-            .iter()
-            .any(|event| {
-                event.event_type == orbit_types::task::CANDIDATE_DISCARDED_EVENT
-                    && event.at >= recorded
-            }) {
+        let fresh = if discarded_since(recorded)? {
             Some((
                 CandidateFreshReason::Discarded,
                 "an operator discarded it since it was kept".into(),

@@ -202,6 +202,30 @@ impl OrbitRuntime {
         explicit: bool,
         held_retry_lineage: Option<&[String]>,
     ) -> Result<NativePublicationProof, OrbitError> {
+        self.authenticate_publication_chain_with(
+            source,
+            task,
+            state,
+            job,
+            explicit,
+            held_retry_lineage,
+            None,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn authenticate_publication_chain_with(
+        &self,
+        source: &JobRun,
+        task: &Task,
+        state: &PipelineState,
+        job: &JobV2,
+        explicit: bool,
+        held_retry_lineage: Option<&[String]>,
+        history: Option<&[TaskHistoryEntry]>,
+        observational: bool,
+    ) -> Result<NativePublicationProof, OrbitError> {
         let source_id = source.run_id.as_str();
         let owner_id = held_retry_lineage
             .and_then(|lineage| lineage.first())
@@ -244,14 +268,15 @@ impl OrbitRuntime {
             .as_ref()
             .is_some_and(|input| input.get(SOURCE_REPAIR_KEY).is_some())
         {
-            Some(self.source_repair_adopted_binding(
+            Some(self.source_repair_adopted_binding_with(
                 source,
                 task,
                 worktree,
                 checkpoint("resume_candidate", "candidate_resume")?,
+                history,
             )?)
         } else {
-            self.read_owner_publication_binding(owner_id, false)?
+            self.read_owner_publication_binding_with(owner_id, false, observational, history)?
         };
         // Setup precedes adoption and keeps its per-run branch. Only the
         // authenticated operator continuation may replace that branch identity.
@@ -285,8 +310,15 @@ impl OrbitRuntime {
         // recorded; any other move of the branch is still refused below.
         let single_source = [source_id.to_string()];
         let push_lineage = held_retry_lineage.unwrap_or(&single_source);
-        let advanced =
-            auto_fix_advanced_head(&self.get_task_history(task_id)?, push_lineage, number, head);
+        let loaded_history;
+        let history = match history {
+            Some(history) => history,
+            None => {
+                loaded_history = self.get_task_history(task_id)?;
+                &loaded_history
+            }
+        };
+        let advanced = auto_fix_advanced_head(history, push_lineage, number, head);
         let head = advanced.as_str();
         // An incomplete before-landing review's failure handoff may have
         // pushed the reviewer's commit onto that head [ORB-25671]. Follow

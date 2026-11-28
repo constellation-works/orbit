@@ -394,6 +394,16 @@ impl OrbitRuntime {
         run_id: &str,
         active: bool,
     ) -> Result<Option<SourceRepairBinding>, OrbitError> {
+        self.read_owner_publication_binding_with(run_id, active, false, None)
+    }
+
+    pub(crate) fn read_owner_publication_binding_with(
+        &self,
+        run_id: &str,
+        active: bool,
+        observational: bool,
+        history: Option<&[TaskHistoryEntry]>,
+    ) -> Result<Option<SourceRepairBinding>, OrbitError> {
         let Some(run) = self.get_job_run_backend(run_id)? else {
             return Ok(None);
         };
@@ -408,8 +418,12 @@ impl OrbitRuntime {
         };
         let binding: SourceRepairBinding =
             serde_json::from_value(raw.clone()).map_err(|e| refuse(e.to_string()))?;
-        let task = self.get_task(&binding.task_id)?;
-        self.owner_source_identity(&run, &task)?;
+        let task = if observational {
+            self.observe_task(&binding.task_id)?
+        } else {
+            self.get_task(&binding.task_id)?
+        };
+        self.owner_source_identity_with(&run, &task, observational)?;
         let job = self.source_repair_definition(&run)?;
         let index = job
             .steps
@@ -431,14 +445,23 @@ impl OrbitRuntime {
             // This run's commit may widen the task's selectors to files the
             // adopted candidate changed (an auto-fix repair the task did not
             // declare); only those system widenings are set aside.
-            || (active
-                && !super::super::adoption::admitted_task_matches(
+            || (active && {
+                let loaded_entries;
+                let entries = match history {
+                    Some(history) => history,
+                    None => {
+                        loaded_entries = self.get_task_history(&task.id)?;
+                        &loaded_entries
+                    }
+                };
+                !super::super::adoption::admitted_task_matches(
                     &task,
-                    &self.get_task_history(&task.id)?,
+                    entries,
                     run_id,
                     run.created_at,
                     &binding.task_digest,
-                )?)
+                )?
+            })
             || output["phase"] != "candidate_resume"
             || !matches!(
                 output["outcome"].as_str(),

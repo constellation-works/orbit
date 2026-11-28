@@ -16,13 +16,14 @@ pub(super) struct PublicationIdentity<'a> {
 }
 
 impl OrbitRuntime {
-    pub(super) fn bind_source_publication(
+    pub(super) fn bind_source_publication_with(
         &self,
         source: JobRun,
         task: Task,
         state: PipelineState,
         definition: JobV2,
         identity: PublicationIdentity<'_>,
+        observational: bool,
     ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
         let PublicationIdentity {
             branch,
@@ -50,7 +51,7 @@ impl OrbitRuntime {
             .filter(|tip| tip != head)
             .filter(|tip| same_tree(repo, tip, head))
             .is_some_and(|tip| {
-                self.held_commit_explains_tip(&task.id, &source.run_id, &tip)
+                self.held_commit_explains_tip_with(&task.id, &source.run_id, &tip, observational)
                     .unwrap_or(false)
             });
         // [ORB-24993] A footprint-held resume recommits the published patch on
@@ -177,11 +178,12 @@ impl OrbitRuntime {
     /// patch, so the retained branch names a different commit with the same
     /// content. Anything else (an empty or divergent manual commit, another
     /// run's work) answers `false` and keeps the ordinary refusal.
-    fn held_commit_explains_tip(
+    fn held_commit_explains_tip_with(
         &self,
         task_id: &str,
         source_id: &str,
         tip: &str,
+        observational: bool,
     ) -> Result<bool, OrbitError> {
         let runs =
             self.stores()
@@ -202,7 +204,11 @@ impl OrbitRuntime {
             if !super::published_owner::footprint_held(&run) {
                 continue;
             }
-            if self.footprint_held_adopted_source(&run)?.as_deref() != Some(source_id) {
+            if self
+                .footprint_held_adopted_source_with(&run, observational)?
+                .as_deref()
+                != Some(source_id)
+            {
                 continue;
             }
             let Ok(Some(state)) = self.read_run_state(&run.run_id) else {
