@@ -1243,9 +1243,9 @@ function radarNode(row) {
   for (const level of [0.25, 0.5, 0.75, 1]) {
     plot.append(svg("polygon", { points: axes.map((_, axisIndex) => point(axisIndex, level).join(",")).join(" "), class: "agents-radar-grid" }));
   }
-  values.forEach(({ axis }, axisIndex) => {
+  values.forEach(({ axis, own }, axisIndex) => {
     const [spokeX, spokeY] = point(axisIndex, 1);
-    plot.append(svg("line", { x1: 150, y1: 130, x2: spokeX, y2: spokeY, class: `agents-radar-spoke${axis.unscored ? " is-unscored" : ""}` }));
+    plot.append(svg("line", { x1: 150, y1: 130, x2: spokeX, y2: spokeY, class: `agents-radar-spoke${axis.unscored ? " is-unscored" : ""}${own == null ? " is-gap" : ""}` }));
   });
   for (const series of ["fleet", "own"]) {
     const points = values.map((value, axisIndex) => value[series] == null ? null : point(axisIndex, value[series]));
@@ -1283,11 +1283,15 @@ function radarNode(row) {
       : `${number(count(axis, row))} raw; ${number(units(axis, row))} ${termUnit(axis)}`;
     const contribLabel = usesExpected ? "contribution" : "contribution vs fleet median";
     const info = `${label}: agent ${ownText}; ${refBasis} ${refRateText}; weight ${weightText}; ${contribLabel} ${contributionText}; ${evidence}${reason ? `; gap: ${reason}` : ""}.`;
-    const [vertexX, vertexY] = point(axisIndex, own ?? 1);
-    const vertex = svg("g", { tabindex: 0, role: "button", "aria-label": info, "aria-describedby": "agents-radar-tooltip", class: `agents-radar-vertex${reason ? " is-gap" : ""}` });
+    // A gap has no value, so it gets no marker on the scale: not the rim, where
+    // a best score sits, nor the centre, where a worst one does. Its hover and
+    // focus target is the numbered endpoint instead.
+    const hasValue = own != null;
+    const [anchorX, anchorY] = point(axisIndex, hasValue ? own : 1.16);
+    const vertex = svg("g", { tabindex: 0, role: "button", "aria-label": info, "aria-describedby": "agents-radar-tooltip", class: `agents-radar-vertex${hasValue ? "" : " is-gap"}` });
     vertex.dataset.term = axis.key;
-    vertex.append(svg("circle", { cx: vertexX, cy: vertexY, r: 12, class: "agents-radar-hit" }));
-    vertex.append(svg("circle", { cx: vertexX, cy: vertexY, r: 4, class: "agents-radar-marker" }));
+    vertex.append(svg("circle", { cx: anchorX, cy: anchorY, r: 12, class: "agents-radar-hit" }));
+    if (hasValue) vertex.append(svg("circle", { cx: anchorX, cy: anchorY, r: 4, class: "agents-radar-marker" }));
     // At the centre, several genuine zero-radius values can coincide. The
     // numbered endpoint is another hover target for each of those vertices.
     const [lx, ly] = point(axisIndex, 1.16);
@@ -1323,17 +1327,21 @@ function radarNode(row) {
     tableBody,
   ]);
   const hintText = allExpected
-    ? "Outward is better. Each axis ranks the row's expectation-adjusted excess (weight × (rate − expected rate)) in the ranked fleet; meeting expectation (0) sits on the dashed middle ring. Weight and contribution match the score breakdown. Hover a vertex or its number, or focus it, for actual rates, expected rates and evidence. Hollow outer markers are gaps, not values."
+    ? "Outward is better. Each axis ranks the row's expectation-adjusted excess (weight × (rate − expected rate)) in the ranked fleet; meeting expectation (0) sits on the dashed middle ring. Weight and contribution match the score breakdown. Hover a vertex or its number, or focus it, for actual rates, expected rates and evidence. Axes with no data have a dotted spoke and no marker."
     : anyExpected
-      ? "Outward is better. Expectation-adjusted axes rank weight × (rate − expected rate) in the ranked fleet with meeting expectation (0) on the dashed middle ring; other axes show fleet-median percentiles. Hover a vertex or its number, or focus it, for rates and evidence. Hollow outer markers are gaps, not values."
-      : "Outward is better. Each axis is the row's percentile in the ranked fleet; the dashed fleet median always sits on the middle ring. Weight and contribution vs the median explain each axis. Hover a vertex or its number, or focus it, for rates and evidence. Hollow outer markers are gaps, not values.";
+      ? "Outward is better. Expectation-adjusted axes rank weight × (rate − expected rate) in the ranked fleet with meeting expectation (0) on the dashed middle ring; other axes show fleet-median percentiles. Hover a vertex or its number, or focus it, for rates and evidence. Axes with no data have a dotted spoke and no marker."
+      : "Outward is better. Each axis is the row's percentile in the ranked fleet; the dashed fleet median always sits on the middle ring. Weight and contribution vs the median explain each axis. Hover a vertex or its number, or focus it, for rates and evidence. Axes with no data have a dotted spoke and no marker.";
   const fleetKeyText = allExpected ? "Expected (tier/size)" : anyExpected ? "Expected / fleet median" : "Fleet median";
   const profile = el("div", { class: "visually-hidden" }, [table]);
   return el("section", { class: `agents-radar${below(row) ? " is-muted" : ""}`, "aria-label": "Agent profile" }, [
     el("h4", {}, ["Agent profile", common.pinnedInfoHint(hintText)]),
     ...(below(row) ? [el("p", { class: "agents-radar-note", text: row.unjudged ? "Nothing to compare: no unit of this row is judged yet." : "Too little evidence to compare: below minimum support." })] : []),
     plot,
-    el("p", { class: "agents-radar-legend" }, [el("span", { class: "agents-radar-own-key", text: "Selected agent" }), el("span", { class: "agents-radar-fleet-key", text: fleetKeyText })]),
+    el("p", { class: "agents-radar-legend" }, [
+      el("span", { class: "agents-radar-own-key", text: "Selected agent" }),
+      el("span", { class: "agents-radar-fleet-key", text: fleetKeyText }),
+      ...(values.some(({ own }) => own == null) ? [el("span", { class: "agents-radar-gap-key", text: "No data (no marker)" })] : []),
+    ]),
     labels, tooltip, profile,
   ]);
 }

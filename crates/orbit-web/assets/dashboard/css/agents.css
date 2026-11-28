@@ -221,13 +221,13 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-radar-grid { fill: none; stroke: var(--border); stroke-width: 1; }
 .agents-radar-spoke { stroke: var(--border); stroke-width: 1; }
 .agents-radar .is-unscored { stroke-dasharray: 3 3; color: var(--fg-mute); font-style: italic; }
+.agents-radar-spoke.is-gap { stroke: var(--fg-mute); stroke-dasharray: 2 3; }
 .agents-radar-label { fill: var(--fg-dim); font-size: var(--text-sm); font-family: var(--font-mono); }
 .agents-radar-own { fill: var(--accent); fill-opacity: 0.2; stroke: var(--accent); stroke-width: 2; }
 .agents-radar-fleet { fill: var(--status-review); fill-opacity: 0.1; stroke: var(--status-review); stroke-width: 2; stroke-dasharray: 5 3; }
 .agents-radar-hit { fill: transparent; }
 .agents-radar-marker { fill: var(--accent); stroke: var(--bg-elev); stroke-width: 1.5; }
 .agents-radar-vertex { cursor: help; }
-.agents-radar-vertex.is-gap .agents-radar-marker { fill: var(--bg-elev); stroke: var(--fg-mute); }
 .agents-radar-vertex:focus { outline: none; }
 .agents-radar-vertex:focus .agents-radar-hit,
 .agents-radar-vertex:hover .agents-radar-hit { stroke: var(--fg); stroke-width: 1.5; }
@@ -237,6 +237,7 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-radar-legend span::before { content: ""; display: inline-block; width: 16px; margin-right: var(--space-6); vertical-align: middle; }
 .agents-radar-own-key::before { border-top: 2px solid var(--accent); }
 .agents-radar-fleet-key::before { border-top: 2px dashed var(--status-review); }
+.agents-radar-gap-key::before { border-top: 2px dotted var(--fg-mute); }
 .agents-radar-axes { margin: 0; padding-left: var(--space-20); display: grid; gap: var(--space-4); font-size: var(--text-xs); line-height: 1.4; color: var(--fg-dim); }
 .agents-radar-tooltip { min-height: 5em; margin: var(--space-8) 0 0; padding: var(--space-8); border: 1px solid var(--hair); color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
 
