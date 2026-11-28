@@ -3,15 +3,26 @@
 use super::source::{
     AttentionCandidates, AttentionSourceContext, attention_reason, workspace_degraded,
 };
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::governance::attention::cursor;
+use orbit_engine::BaseSyncMode;
 use orbit_store::contract::JobRunQuery;
 use orbit_types::tool::{AttentionItem, AttentionKind, AttentionNext, AttentionSeverity};
-use orbit_types::workflow::{DELIVERY_LEAF_JOBS, JobRun, JobRunState};
+use orbit_types::workflow::{
+    DELIVERY_LEAF_JOBS, JobRun, JobRunState, JobRunStep, TASK_CLAIMED_LOCAL_PIPELINE_JOB,
+    WORKTREE_SETUP_STEP_ID,
+};
 use serde_json::json;
 use std::time::Instant;
 
 const KIND: AttentionKind = AttentionKind::DeliveryStaleBase;
+
+struct Hold<'a> {
+    branch: &'a str,
+    checkout: Option<&'a str>,
+    at: DateTime<Utc>,
+}
 
 struct ObservationFailure {
     branch: String,
@@ -52,12 +63,59 @@ fn task_from_message(message: &str) -> Option<&str> {
         })
 }
 
-fn hold(run: &JobRun) -> Option<(&str, Option<&str>)> {
-    let step = run
-        .steps
+fn step_at(step: &JobRunStep) -> Option<DateTime<Utc>> {
+    step.finished_at.or(step.started_at)
+}
+
+fn hold(run: &JobRun) -> Option<Hold<'_>> {
+    run.steps
         .iter()
-        .find(|step| step.target_id == "worktree_setup")?;
-    refusal(step.error_message.as_deref()?)
+        .rev()
+        .filter(|step| step.target_id == WORKTREE_SETUP_STEP_ID)
+        .find_map(|step| {
+            let (branch, checkout) = refusal(step.error_message.as_deref()?)?;
+            Some(Hold {
+                branch,
+                checkout,
+                at: step_at(step).unwrap_or_else(|| run.recency_at()),
+            })
+        })
+}
+
+fn uses_local_base_sync(run: &JobRun) -> bool {
+    let explicit = run
+        .input
+        .as_ref()
+        .and_then(|input| input.get("base_sync"))
+        .and_then(serde_json::Value::as_str);
+    match explicit {
+        Some(value) => value.parse::<BaseSyncMode>().ok() == Some(BaseSyncMode::Local),
+        None => run.job_id == TASK_CLAIMED_LOCAL_PIPELINE_JOB,
+    }
+}
+
+fn setup_admitted_after_hold(later: &JobRun, hold: &Hold<'_>) -> bool {
+    if !uses_local_base_sync(later) {
+        return false;
+    }
+    let same_branch = later
+        .input
+        .as_ref()
+        .and_then(|input| input["base_branch"].as_str())
+        .is_some_and(|base| base.strip_prefix("origin/").unwrap_or(base) == hold.branch);
+    if !same_branch {
+        return false;
+    }
+    later.steps.iter().any(|step| {
+        if step.target_id != WORKTREE_SETUP_STEP_ID || step.state != JobRunState::Success {
+            return false;
+        }
+        let Some(finished_at) = step_at(step) else {
+            return false;
+        };
+        let started_at = step.started_at.unwrap_or(finished_at);
+        started_at >= hold.at && finished_at > hold.at
+    })
 }
 
 fn observe(
@@ -260,32 +318,22 @@ pub(super) fn read(
             let mut seen = std::collections::BTreeSet::new();
             let mut observation_failures = Vec::new();
             for run in &runs {
-                let Some((branch, checkout)) = hold(run) else {
+                let Some(hold) = hold(run) else {
                     continue;
                 };
-                if !seen.insert(branch) {
+                if !seen.insert(hold.branch) {
                     continue;
                 }
-                let admitted = runs.iter().any(|later| {
-                    later.recency_at() > run.recency_at()
-                        && later
-                            .input
-                            .as_ref()
-                            .and_then(|input| input["base_branch"].as_str())
-                            .is_some_and(|base| {
-                                base.strip_prefix("origin/").unwrap_or(base) == branch
-                            })
-                        && later.steps.iter().any(|step| {
-                            step.target_id == "worktree_setup" && step.state == JobRunState::Success
-                        })
-                });
+                let admitted = runs
+                    .iter()
+                    .any(|later| setup_admitted_after_hold(later, &hold));
                 if !admitted {
-                    match observe(context, run, branch, checkout) {
+                    match observe(context, run, hold.branch, hold.checkout) {
                         Ok(Some(item)) => return Ok((Some(item), observation_failures)),
                         Ok(None) => {}
                         Err(error) => observation_failures.push(ObservationFailure {
-                            branch: branch.to_owned(),
-                            checkout: checkout.map(str::to_owned),
+                            branch: hold.branch.to_owned(),
+                            checkout: hold.checkout.map(str::to_owned),
                             message: error.to_string(),
                         }),
                     }
