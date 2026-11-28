@@ -36,7 +36,7 @@ pub struct ActivityBinding {
 ///
 /// It decides one thing today: what bounds the programs a plugin backend
 /// declares it spawns (`requires.programs`, design
-/// `docs/design/plugins/1_scope.md` §4.3). Tool input never sets it.
+/// `docs/design/plugins/2_design.md` §4.3). Tool input never sets it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ToolCaller {
     /// An agent, an interactive client, or any context no host attested

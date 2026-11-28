@@ -45,7 +45,7 @@ Rejected:
   and to close an item, so any missed close leaves a permanent false positive and any missed
   write a silent gap. It is a second system of record for each condition.
 - **Event-bus subscription** feeding a store. Orbit has no event bus by design
-  ([human-decision-channel](../human-decision-channel/1_scope.md)), and a store fed by one
+  ([human-decision-channel](../human-decision-channel/1_overview.md)), and a store fed by one
   inherits the inbox's drift.
 - **A cached snapshot refreshed on a schedule.** It is an inbox with a delay, and it returns
   resolved items until the next refresh.

@@ -20,7 +20,7 @@ So Orbit asks for the cost up front, as a list the pilot and the operator can re
 
 ## In practice
 
-- **Declaration.** The footprint is the task's `context_files`. The task pilot settles it against the current tree before the task is promoted, and holds a task whose footprint it cannot resolve ([task pilot](../design/task-pilot/1_scope.md), [pilot admission holds](../runbooks/distributed-drain.md)).
+- **Declaration.** The footprint is the task's `context_files`. The task pilot settles it against the current tree before the task is promoted, and holds a task whose footprint it cannot resolve ([task pilot](../design/task-pilot/1_overview.md), [pilot admission holds](../runbooks/distributed-drain.md)).
 - **Overlap defers admission.** A task in `in-progress` or `review` holds its footprint, and admission defers a candidate that overlaps it, naming the holder as `context_lock_conflict` ([distributed-drain footprints](../design/distributed-drain/2_design.md#2-the-ready-queue-and-orbittaskpull)). The same check covers local drain waves, owner pull admission, claims and manual reservations. A remote claim in `claimed`, `running`, `handed_off` or `repair_pending` holds the frozen footprint through review, and the hold ends when the claim lands ([attempt ownership](../design/distributed-drain/2_design.md#31-attempt-ownership-and-recovery)).
 - **Held through review, released at landing.** A before-landing review keeps the footprint held while it runs. After-landing review releases it at merge ([optimistic merging](./optimistic-merging.md)).
 - **Widening is checked, not free.** An agent may change files outside its declaration where the work needs them, and the owner validates the widening at handoff. Footprint expansion while a claim executes is refused.

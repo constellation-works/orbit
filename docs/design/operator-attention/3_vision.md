@@ -29,13 +29,13 @@ started. The implemented attention scope is in [2_design.md](./2_design.md).
    (ORB-27754) remains in `someday`, so the new acknowledgement records and `orbit ack`
    behavior have not been implemented. The scope leaves resident write authority and the
    30-day expiry cap as open questions:
-   [signal-acknowledgement](../signal-acknowledgement/1_scope.md).
+   [signal-acknowledgement](../signal-acknowledgement/1_overview.md).
 2. **Dashboard reading the same feed.** The derivation is a pure function of a runtime and a
    filter ([2_design.md §3](./2_design.md#3-placement-in-the-code)), so a dashboard endpoint
    can call it. Open: whether the dashboard wants severity-grouped views or live updates, and
    whether it needs the resolved feed (question 4).
 3. **Notifications.** Pushing an item to a person (email, chat, desktop) is the decision
-   channel's job for decisions ([human-decision-channel](../human-decision-channel/1_scope.md))
+   channel's job for decisions ([human-decision-channel](../human-decision-channel/1_overview.md))
    and could consume the delta feed for the rest. Open: whether a notifier polls the
    cursor like any other consumer (the likely answer) without adding a session hook.
 4. **A resolved feed.** The cursor cannot name resolved items. A consumer that wants "this
@@ -48,7 +48,7 @@ started. The implemented attention scope is in [2_design.md](./2_design.md).
    and required to supply its own fingerprint state. The wire `kind` is already a string with
    a documented closed set, so allowing namespaced values is additive. **Deferred, not in
    v1**: it needs the plugin standard's callback model to carry a read-only source and a
-   timeout budget first ([plugins](../plugins/1_scope.md)).
+   timeout budget first ([plugins](../plugins/1_overview.md)).
 6. **Plain proposed approvals.** Proposed tasks awaiting approval are the normal state of
    most backlog intake, so v1 omits them. If the decision channel's digest ([ORB-21091] family)
    becomes the standard approval path, an `approval_waiting` kind sourced from raised
@@ -94,9 +94,9 @@ shared store.
 
 ## 4. References
 
-- Orbit-internal: [human-decision-channel](../human-decision-channel/1_scope.md),
+- Orbit-internal: [human-decision-channel](../human-decision-channel/1_overview.md),
   [federated-mcp](../federated-mcp/2_design.md), [host-registry](../host-registry/specs/host-routing.md),
-  [plugins](../plugins/1_scope.md).
+  [plugins](../plugins/1_overview.md).
 - External: none.
 
 [ORB-21164] recorded these deferred directions.

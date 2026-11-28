@@ -16,7 +16,7 @@
 //! The marker carries no authority; it keeps a detached unsandboxed child
 //! from becoming an ordinary caller merely by dropping its descriptor. A
 //! confined backend is also denied the session directory (design
-//! `docs/design/plugins/1_scope.md` §4.3), so an unreadable directory refuses
+//! `docs/design/plugins/2_design.md` §4.3), so an unreadable directory refuses
 //! a missing credential even after the child clears its environment.
 //!
 //! The two callbacks that read the decision-channel key store, which no

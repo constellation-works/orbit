@@ -1,5 +1,5 @@
 //! The `orbit <ns> <verb>` command groups an installed plugin contributes
-//! (design `docs/design/plugins/1_scope.md` §4.6).
+//! (design `docs/design/plugins/2_design.md` §4.6).
 //!
 //! These commands are not in the `Commands` enum: their names and flags come
 //! from the manifests this host has enabled, so the clap tree is finished at

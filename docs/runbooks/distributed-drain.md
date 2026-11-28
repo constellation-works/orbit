@@ -2688,7 +2688,7 @@ and is listed `owner-only`.
 ## Drain intent (standing drain phase 1)
 
 Each workspace records one drain intent in its store, beside its drain runs
-([scope](../design/standing-drain/1_scope.md)):
+([design](../design/standing-drain/2_design.md)):
 
 - `off`: the default. No drain has been started or stopped by hand since the
   intent existed.

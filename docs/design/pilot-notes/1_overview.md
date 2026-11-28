@@ -59,7 +59,7 @@ from the task. Orbit learns nothing about what the question means.
 | Note label | A short name the workspace chooses, such as `review_focus`. It keys the config table and the note |
 | Note instruction | The committed file that tells the pilot what to write under a label |
 | Pilot note | The pilot's text for one task under one label, at most 1 KiB |
-| Assessment | What a pilot returns for a task, stored today as the task artifact `pilot/assessment-<operation-id>.json` ([task pilot](../task-pilot/1_scope.md)) |
+| Assessment | What a pilot returns for a task, stored today as the task artifact `pilot/assessment-<operation-id>.json` ([task pilot](../task-pilot/2_design.md)) |
 
 ## 3. At a Glance
 

@@ -1,57 +1,20 @@
 ---
-title: "Scope: Orbit plugin standard"
+title: Plugins — Design
 owner: claude
-status: Implemented
-feature: plugins
-doc_role: scope
-type: design
-summary: "Implemented plugin manifest, lifecycle, grants, brokered agent calls, consented builds and declarative extensions."
-tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
 created_date: 2026-09-20
-updated_date: 2026-11-27
+updated_date: 2026-11-28
 last_validated: 2026-11-27
-stage: shipped
-next: "—"
+status: Accepted
+feature: plugins
+doc_role: design
+type: design
+summary: "Design: implemented plugin manifest, lifecycle, grants, brokered agent calls, consented builds and declarative extensions."
+tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
 ---
 
-# Scope: Orbit plugin standard
+# Plugins — Design
 
-Status: phases 1–4 shipped; provider plugins (phase 5) remain deferred vision.
-Bearing: [Operations as data, not inherent methods](../orbit-core/4_decisions.md).
-Precedents: `*.orbit-tool.yaml` sidecar manifests (orbit-graph still ships three; its migration
-to `plugin.yaml` is pending), and orbit-research's version/capability allowlist against the
-Orbit binary.
-
-## Problem
-
-Before this standard a "plugin" was three unrelated things: an **external tool** (executable
-plus sidecar, registered by `orbit tool add`, unsandboxed, absent from MCP —
-`crates/orbit-tools/src/external.rs`); the **Claude Code plugin mirror** under `plugin/`; and a
-**separate product** (orbit-research, orbit-graph) shelling out to `orbit tool run`. Nothing
-let one artifact declare tools, CLI, schedules, panels and skills together, or record what it
-is *allowed* to do; a first-party surface cost up to nine hand edits [ORB-12724].
-
-## Goal
-
-One manifest (`plugin.yaml`, `schemaVersion: 2`, superseding the v1 tool sidecar) declaring
-every contribution (tools, CLI, dashboard panels, routines, auto-tasks, activities, jobs,
-skills, config); one lifecycle (`orbit plugin …`); one execution protocol; one set of
-invariants enforced at load, enable and call time. A plugin is **data plus one backend
-executable**: no Rust, no dashboard JavaScript. The committed standard shipped in
-[ORB-12735]–[ORB-12738]; the host-side broker and consented install-time builds
-are also implemented (see their delivery sections below).
-
-### Non-goals for v1
-
-- New Rust **deterministic activity actions** (`DeterministicAction` stays closed); plugins
-  expose a tool and call it through the generic `plugin.tool_call` action (§4.5).
-- New **agent providers / executor types**; opening `ProviderRegistry` is Phase 5.
-- **Dashboard code with the dashboard's authority, top-level destinations or built-in
-  feature toggles.** Plugins get declarative panels and links, and
-  [pages](../plugin-pages/1_overview.md): sub-tabs under Plugins that run in a sandboxed
-  frame and reach data only through the plugin's own `read_only` tools. A plugin adds no
-  destination to the rail.
-- Marketplace/discovery. Sources are a path, a git URL or an archive.
+This doc holds the specification and contracts behind [1_overview.md](./1_overview.md), which states the problem and the goal.
 
 ## 1. Contribution model
 
@@ -1443,7 +1406,6 @@ after these four phases. Neither is pending phase-5 provider work.
 
 ## Task References
 
-- [ORB-12724] — measured the first-party surface cost this standard removes.
 - [ORB-12735] — phase 1: built the `plugin.yaml` v2 manifest, the
   `orbit plugin` lifecycle, and plugin tools reaching MCP `tools/list`.
 - [ORB-12736] — phase 2: built grant enforcement and the sandboxed exec
@@ -1487,5 +1449,6 @@ after these four phases. Neither is pending phase-5 provider work.
   a final symlink whose checked target stays inside the worktree.
 - [ORB-29534] — added `spec.web.pages`, its validation, the page bundle digest and the
   page listings.
+- [ORB-25955] — denied plugin children read access to the broker's GitHub run-log cache (`state/github-run-logs/`).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

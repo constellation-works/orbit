@@ -1,5 +1,5 @@
 //! What a plugin's `spec.definitions` contribute, and the rules they obey
-//! (design `docs/design/plugins/1_scope.md` §4.5).
+//! (design `docs/design/plugins/2_design.md` §4.5).
 //!
 //! Activities and jobs become the `plugin:<ns>` catalog layer, resolved below
 //! the workspace so a workspace file of the same name shadows the plugin's.

@@ -114,7 +114,7 @@ pub struct PluginProvenance {
 }
 
 /// What the host did with one entry of a backend's `secret_updates`
-/// (design `docs/design/plugins/1_scope.md` §3, "Plugin secrets"): the whole
+/// (design `docs/design/plugins/2_design.md` §3, "Plugin secrets"): the whole
 /// record an audit row keeps about a rotation, beside the secret's name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -1737,7 +1737,7 @@ A gate's 14400-second wait on its delivery child expired while the child was sti
 
 ### Context
 
-ORB-00374 removed the v2 `shell` activity because it spawned workspace-named programs with no sandbox, no cwd confinement and an allowlist the same YAML supplied. It recorded the alternative, retrofitting a sandbox and policy, and the cost: the `Ok(success = false)` audit-message path lost its only coverage. [Scope: Script steps](../script-steps/1_scope.md) designs that alternative for routine chores. Phase 1 ([ORB-19983]) added manifests, `target: script:` parsing and host-local grants bound to a content digest, with dispatch refusing every script step.
+ORB-00374 removed the v2 `shell` activity because it spawned workspace-named programs with no sandbox, no cwd confinement and an allowlist the same YAML supplied. It recorded the alternative, retrofitting a sandbox and policy, and the cost: the `Ok(success = false)` audit-message path lost its only coverage. [Script Steps](../script-steps/1_overview.md) designs that alternative for routine chores. Phase 1 ([ORB-19983]) added manifests, `target: script:` parsing and host-local grants bound to a content digest, with dispatch refusing every script step.
 
 ### Decision
 
@@ -1745,7 +1745,7 @@ ORB-00374 removed the v2 `shell` activity because it spawned workspace-named pro
 2. The snapshot runs under `linux-bwrap-script-v1`: a Bubblewrap constructed root with every namespace unshared (no network beyond the namespace's own loopback), the build profile's runtime table, the cwd (a run worktree read-write, the workspace root read-only), its Git metadata read-only, granted roots, and a scratch directory at `/orbit-script`. `.orbit/`, the global root and the credential paths are never mounted. A nested-sandbox start refuses with `script_sandbox_unavailable`. The script gets its own `orbit-script-*` systemd scope where one can be created; `strict` worker containment refuses without it.
 3. Stdin is the input validated against `input_schema_json`. Exit 0 must answer with one JSON document within 1 MiB matching `output_schema_json`, or the step fails without retry (`script_output_invalid`). A nonzero exit, a signal, a timeout (`SIGTERM`, 10 s, `SIGKILL`) or a scratch breach is `Ok(success = false)` with `{exit_code, signal, timed_out}` as output, retried per the step's `retry`.
 4. Every attempt, refusals included, writes one `script.execution` audit event with the script name, digests, grant, redacted argv, cwd mode, profile, exit, duration and the capped, redacted log blob. `orbit run show` lists them and `orbit script history <name>` reads them across runs.
-5. `network: https|any`, `env_pass` and `files.inputs` are refused with `script_sandbox_unavailable` until their phases ship. macOS refuses every script step. (Later: `files.inputs` shipped on Linux in [ORB-21297], and macOS runs script steps under `macos-sandbox-script-v1` with no network in [ORB-21298]; see [Scope: Script steps](../script-steps/1_scope.md) §3 and §4 Files in.)
+5. `network: https|any`, `env_pass` and `files.inputs` are refused with `script_sandbox_unavailable` until their phases ship. macOS refuses every script step. (Later: `files.inputs` shipped on Linux in [ORB-21297], and macOS runs script steps under `macos-sandbox-script-v1` with no network in [ORB-21298]; see [Script Steps](../script-steps/2_design.md) §3 and §4 Files in.)
 
 ### Rejected alternatives
 

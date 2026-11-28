@@ -33,7 +33,7 @@ may be distinctive about it. Nothing here is committed scope.
    cross-mandate conflict, which v1 escalates. A later version could let residents see each other's
    footprints (their dispatched tasks' `context_files`) and sequence without the human.
 4. **Cost policy as data.** "Material cost" is a fixed escalation class with a workspace-defined
-   threshold. Orbit has usage pressure ([usage-pressure](../usage-pressure/1_scope.md)) but no
+   threshold. Orbit has usage pressure ([usage-pressure](../usage-pressure/1_overview.md)) but no
    spend budget per mandate. A budget would let the rubric weigh slot time against question delay
    in the same unit.
 5. **Owner failover.** A resident runs on its workspace's owner. When the owner moves
@@ -93,7 +93,7 @@ escalation equation. It lives in a separate repository, cited here by name.
 
 - [routines](../routines/1_overview.md), [condition-triggers](../condition-triggers/1_overview.md),
   [activity-job](../activity-job/1_overview.md)
-- [human-decision-channel](../human-decision-channel/1_scope.md),
+- [human-decision-channel](../human-decision-channel/1_overview.md),
   [decision-assistance](../_archived/decision-assistance/1_scope.md) (archived)
 - [operator-attention](../operator-attention/1_overview.md),
   [fleet-notices](../fleet-notices/1_overview.md)

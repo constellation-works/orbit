@@ -30,7 +30,7 @@ owner calls [ORB-14260], including a before-PR reviewer's review-artifact reads 
 claim's remote owner, so SSH runs outside the sandbox that masks `~/.ssh` (§3, "Claimed-owner
 calls").
 Every sandboxed agent run masks plugin state and secrets (§6, "As implemented").
-Builds on [1_scope.md](../1_scope.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
+Builds on [2_design.md](../2_design.md) §3 ("Plugin secrets") and §4.2–§4.3, and on the agent
 sandbox described in [policy-sandbox 2_design.md §7](../../policy-sandbox/2_design.md#7-sandbox--exec-primitives).
 
 A plugin backend holds credentials for the service it wraps, either in its own
@@ -483,7 +483,7 @@ broker requires to lie within the run's worktree, and an optional workspace sele
 resolves against the run's own registry, except that `orbit.task.resume_delivery` takes its target from its input (§4.4). Everything that decides authority comes from the
 broker's own dispatch record and is never read from the request or the client's environment:
 run ID, task ID, the activity's allowlist, the filesystem profile and the tool ceiling.
-Consequently `context.task_id` and `context.job_run_id` (1_scope.md §4.2 "Call identity")
+Consequently `context.task_id` and `context.job_run_id` (2_design.md §4.2 "Call identity")
 are authenticated for brokered calls; ordinary host calls remain host-attested.
 
 `secret_updates` never leave the host. The broker applies them with the store's compare-and-swap
@@ -794,7 +794,7 @@ anything:
   tightened here.
 - `state/plugin-callbacks/` stays readable to agents, and that is not incidental. A nested
   `orbit` that cannot list it concludes it is inside a plugin sandbox and refuses itself
-  (1_scope.md §4.2, "A confined child with no credential is refused"). Code reading suggests
+  (2_design.md §4.2, "A confined child with no credential is refused"). Code reading suggests
   that an agent could open a live callback record and present it on descriptor 3 as a
   backend's credential. That has not been tested. It is a separate question from state and
   secret confidentiality, and this design does not change it.
@@ -822,7 +822,7 @@ implemented"): `plugin_broker_invalid_request`, `plugin_broker_refused`,
 `plugin_broker_invalid_input` or `plugin_broker_call_failed`, none retryable, or with the
 backend's own structured error.
 
-Every refusal reaches the agent as an ordinary structured plugin error (1_scope.md §4.2), and
+Every refusal reaches the agent as an ordinary structured plugin error (2_design.md §4.2), and
 `orbit tool run` exits non-zero with the JSON on stderr, as it does for any other plugin error.
 
 ## 8. Rollout and follow-up tasks
@@ -842,7 +842,7 @@ The mask landed last, after every call it would break had a broker to go to:
    `orbit mcp serve` forward plugin calls when `ORBIT_PLUGIN_BROKER` is set. The broker runs
    them through the audited dispatch with the authoritative run context and the §5 profile.
    This slice also adds `brokered` audit fields and the §7 error codes, and updates
-   1_scope.md §4.2 "Call identity". The archived umbrella [ORB-13238] was replaced
+   2_design.md §4.2 "Call identity". The archived umbrella [ORB-13238] was replaced
    by three landed slices:
    - 3a. Broker-side execution: the audited dispatch, run-record authority, the `brokered`
      audit fields and the broker's error codes. Landed; see §4.4 "As implemented". [ORB-13358] delivered this slice.
@@ -853,7 +853,7 @@ The mask landed last, after every call it would break had a broker to go to:
 4. **Agent sandbox mask.** The §6 mask on Linux and macOS, applied to every sandboxed agent
    whether or not its broker bound, plus the §6.3 nested behaviour: the sentinel, no in-process fallback, the secret
    store refusing a masked directory, and operator commands degrading. This slice also updates
-   1_scope.md §3 and §4.3 to remove the "agent sandboxes can still read it" gap. Implemented;
+   2_design.md §3 and §4.3 to remove the "agent sandboxes can still read it" gap. Implemented;
    see §6.2 "As implemented". [ORB-13239]
 
 The former explorer sibling-worker route introduced by [ORB-20566] was removed

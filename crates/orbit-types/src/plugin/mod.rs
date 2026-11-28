@@ -2,7 +2,7 @@
 //! `.orbit/plugins.yaml` pin file, the host-local installed-plugin record,
 //! and the namespace rules every surface applies to plugin tool names.
 //!
-//! Design: `docs/design/plugins/1_scope.md`. This module holds data and pure
+//! Design: `docs/design/plugins/2_design.md`. This module holds data and pure
 //! validation only; reading a plugin directory, resolving `$ref` targets, and
 //! computing digests belong to `orbit-tools`.
 

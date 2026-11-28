@@ -407,7 +407,7 @@ prevents repeatedly edited work from starving other tasks.
 Pilot audits live in task artifacts `pilot/assessment-<operation-id>.json`.
 The single-line receipt comment carries the summary, artifact path and digest;
 readers resolve that reference and retain the legacy inline-JSON fallback.
-See [Task pilot — assessment persistence](../task-pilot/1_scope.md) for write
+See [Task pilot — assessment persistence](../task-pilot/2_design.md) for write
 ordering, evidence integrity and the mixed-version follower bridge.
 
 The prepare/apply domain boundary recomputes fingerprints and eligibility under

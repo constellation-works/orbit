@@ -2,7 +2,7 @@
 title: Plugins — Decisions
 owner: claude
 created_date: 2026-11-15
-updated_date: 2026-11-15
+updated_date: 2026-11-28
 last_validated: 2026-11-15
 status: Draft
 feature: plugins
@@ -39,7 +39,7 @@ STD-05 §R9 governs state Orbit loads. The granted workspace file is repository 
 ### Consequences
 
 - The grant is decided on the physical target that the checked identity names, which keeps the check and the grant on one resolution.
-- Alternative refused: refusing every link would honour `STD-05 §R7` literally but would refuse Orbit's own `AGENTS.md` layout, which is the case the grant exists for. A `{{workspace}}` directory grant minus `.git` and `.orbit` was also rejected; see [1_scope.md](./1_scope.md) (*Workspace root files*).
+- Alternative refused: refusing every link would honour `STD-05 §R7` literally but would refuse Orbit's own `AGENTS.md` layout, which is the case the grant exists for. A `{{workspace}}` directory grant minus `.git` and `.orbit` was also rejected; see [2_design.md](./2_design.md) (*Workspace root files*).
 - Cost: the granted file follows whatever the worktree's link names at each admission. A checkout that retargets `AGENTS.md` changes which file is granted, and the manifest digest binds the spelled path, not the link's target in a given worktree.
 
 ## Task References

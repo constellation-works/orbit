@@ -3,7 +3,7 @@
 //! a registry entry backed by the plugin's `exec` or `mcp` backend running
 //! under the granted sandbox profile.
 //!
-//! Design: `docs/design/plugins/1_scope.md`. Lifecycle (install, enable,
+//! Design: `docs/design/plugins/2_design.md`. Lifecycle (install, enable,
 //! grants, pin file) lives in `orbit-core`; this module owns everything that
 //! needs a plugin directory and a tool registry and nothing that needs a
 //! store.

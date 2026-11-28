@@ -32,7 +32,7 @@ delegated within boundaries they choose.
 - Forced lifecycle transitions belong to the operator; the agent tool surface has no force
   override. See the [lifecycle configuration](../config/crews.md#human-crews) for the distinct
   human-crew path and its limits.
-- The [granted-tools design](../design/granted-tools/1_scope.md) reserves grants to the
+- The [granted-tools design](../design/granted-tools/2_design.md) reserves grants to the
   operator. A grant does not confer operator capability; current mutating grants use reviewed
   proposals rather than live calls. Operators can also put grants in auto-task definitions.
 - The operator chooses review layers: [review configuration](../config/review.md#review-and-operation--automatic-review)

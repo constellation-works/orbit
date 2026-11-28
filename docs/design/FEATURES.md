@@ -21,8 +21,8 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Operations as Data](./operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Plugin Pages](./plugin-pages/1_overview.md) | Show another host's pages through the forwarder [ORB-29538] | claude |
 | [Resident Orchestrator](./resident-orchestrator/1_overview.md) | Re-file slice 10 pilot (ORB-21251 archived) once mandate, authority grant & manager are ready | claude |
-| [Script Steps](./script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
-| [Standing Drain](./standing-drain/1_scope.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
+| [Script Steps](./script-steps/1_overview.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
+| [Standing Drain](./standing-drain/1_overview.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
 
 ### Designing (8)
 
@@ -33,9 +33,9 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Eval Harness](./eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
 | [Owner Failover](./owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
 | [Pilot Notes](./pilot-notes/1_overview.md) | Add the config table and the pilot's prompt section [ORB-29586] | claude |
-| [Signal Acknowledgement](./signal-acknowledgement/1_scope.md) | Daniel promotes ORB-27754 from someday to start phase 1; phases 2 and 3 are unfiled | claude |
-| [Symbol Risk Index](./symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
-| [Task Risk](./task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
+| [Signal Acknowledgement](./signal-acknowledgement/1_overview.md) | Daniel promotes ORB-27754 from someday to start phase 1; phases 2 and 3 are unfiled | claude |
+| [Symbol Risk Index](./symbol-risk-index/1_overview.md) | Daniel reviews this overview and 2_design.md; implementation tasks are filed after acceptance | claude |
+| [Task Risk](./task-risk/1_overview.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 
 ### Shipped (38)
 
@@ -54,29 +54,29 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Executors](./executors/4_decisions.md) | — | claude |
 | [Federated MCP](./federated-mcp/1_overview.md) | — | grok |
 | [Fleet Notices](./fleet-notices/1_overview.md) | — | claude |
-| [Granted Tools](./granted-tools/1_scope.md) | — | claude |
+| [Granted Tools](./granted-tools/1_overview.md) | — | claude |
 | [Host Registry](./host-registry/1_overview.md) | — | codex |
-| [Human Decision Channel](./human-decision-channel/1_scope.md) | File the plugin-raised request slices (2_design.md §12, designed in ORB-22824); none filed | claude |
+| [Human Decision Channel](./human-decision-channel/1_overview.md) | File the plugin-raised request slices (2_design.md §12, designed in ORB-22824); none filed | claude |
 | [Orbit MCP](./mcp-bridge/1_overview.md) | — | codex |
 | [MCP Session Context](./mcp-session-context/1_overview.md) | — | codex |
 | [Mid-Run Operator Steering](./mid-run-steering/1_overview.md) | — | codex |
 | [Operator Attention](./operator-attention/1_overview.md) | Add the hold record and the optional `hold` input [ORB-29656] | claude |
 | [Orbit Core](./orbit-core/1_overview.md) | — | codex |
 | [Task Search](./orbit-search/1_overview.md) | — | codex |
-| [Plugins](./plugins/1_scope.md) | — | claude |
+| [Plugins](./plugins/1_overview.md) | — | claude |
 | [Policy & Sandboxing](./policy-sandbox/1_overview.md) | — | claude |
 | [Process Supervision](./process-supervision/1_overview.md) | — | claude |
 | [Remote Access](./remote-access/1_overview.md) | — | codex |
 | [Review Gate](./review-gate/1_overview.md) | Remove the legacy selective fields after 2026-12-08 | codex |
 | [Routines](./routines/1_overview.md) | — | claude |
-| [Scheduled Tasks](./scheduled-tasks/1_scope.md) | Consumer calendar and Schedule picker in orbit-office | claude |
+| [Scheduled Tasks](./scheduled-tasks/1_overview.md) | Consumer calendar and Schedule picker in orbit-office | claude |
 | [State Compatibility](./state-compatibility/1_overview.md) | — | claude |
 | [Task Artifacts](./task-artifacts/1_overview.md) | — | codex |
 | [Task Migration](./task-migration/1_overview.md) | — | claude |
-| [Task Pilot](./task-pilot/1_scope.md) | — | orbit |
+| [Task Pilot](./task-pilot/1_overview.md) | — | orbit |
 | [Task Publication](./task-publication/1_overview.md) | — | codex |
 | [Terminal Interface](./terminal-interface/1_overview.md) | — | claude |
-| [Usage Pressure](./usage-pressure/1_scope.md) | — | claude |
+| [Usage Pressure](./usage-pressure/1_overview.md) | — | claude |
 | [User Interface](./user-interface/1_overview.md) | Build compact viewports phase 1, the small shell [ORB-29233] | gemini |
 | [Workspace Agent Corpus](./workspace-agent-corpus/1_scope.md) | — | Orbit |
 

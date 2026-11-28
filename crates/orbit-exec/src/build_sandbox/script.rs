@@ -1,5 +1,5 @@
 //! `linux-bwrap-script-v1`: the profile a granted script step runs under
-//! (`docs/design/script-steps/1_scope.md` §3).
+//! (`docs/design/script-steps/2_design.md` §3).
 //!
 //! It is the build profile's constructed root with a different set of
 //! binds: the host runtime table and the grant's recorded interpreters and

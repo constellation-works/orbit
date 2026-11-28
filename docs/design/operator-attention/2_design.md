@@ -25,7 +25,7 @@ The task-level feed, local scopes, filters, cursor and shared configuration are 
 [attention-federation](./specs/attention-federation.md). Later sources added
 `notice_open`, `resident_stalled`, `routine_tripped`, `drain_paused` and
 `drain_breaker_open`; §3 maps their modules. Acknowledge and snooze now have an
-accepted follow-up scope in [signal-acknowledgement](../signal-acknowledgement/1_scope.md),
+accepted follow-up scope in [signal-acknowledgement](../signal-acknowledgement/1_overview.md),
 but its implementation is parked in `someday`; the dashboard reading the same
 feed, notifications and plugin-contributed kinds remain in [3_vision.md](./3_vision.md).
 

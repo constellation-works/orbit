@@ -47,7 +47,7 @@ Every strategy reaches the child through the same `Sandbox::spawn` seam, so supe
 | Strategy | Used by | What it confines |
 |---|---|---|
 | `NoSandbox` | direct `run_process` callers, activity-scoped `proc.spawn`, registered v1 external tools | Nothing beyond what already confines the parent. A managed CLI child inherits Bubblewrap on Linux or `sandbox-exec` on macOS. |
-| `PluginSandboxProfile` (`orbit-tools`) | plugin `exec` and `mcp` backends | The granted plugin profile: read roots, write roots, and `network: none`, via Landlock on Linux and `sandbox-exec` on macOS. A host that can enforce neither refuses the spawn; `backend.sandbox: none` with the `unsandboxed` grant is the only opt-out. See [plugins §4.3](../../plugins/1_scope.md#43-sandboxing). [ORB-12736] |
+| `PluginSandboxProfile` (`orbit-tools`) | plugin `exec` and `mcp` backends | The granted plugin profile: read roots, write roots, and `network: none`, via Landlock on Linux and `sandbox-exec` on macOS. A host that can enforce neither refuses the spawn; `backend.sandbox: none` with the `unsandboxed` grant is the only opt-out. See [plugins §4.3](../../plugins/2_design.md#43-sandboxing). [ORB-12736] |
 
 A strategy that confines the process overrides `Sandbox::spawn`; returning `Ok` from `validate` alone never establishes a boundary (see Migration Rules).
 

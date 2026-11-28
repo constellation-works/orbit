@@ -1,6 +1,6 @@
 //! The plugin lifecycle, inspection and tool dispatch entry: install,
 //! enable, disable, remove, inspect, validate, migrate and sync (design
-//! `docs/design/plugins/1_scope.md` §3).
+//! `docs/design/plugins/2_design.md` §3).
 //!
 //! Install is global only: a plugin lives once per host under
 //! `~/.orbit/plugins/<ns>/<version>/` and every workspace on that host shares

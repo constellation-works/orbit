@@ -40,7 +40,7 @@ docs/design/<feature>/
     └── glossary.md     recommended; other lookup-style docs allowed
 ```
 
-Choose the **scope track** when the feature adds a rule, a factor or a setting to machinery that already exists, has one configuration surface, and its open questions fit in a short list. [usage-pressure](./usage-pressure/1_scope.md) is an example. Choose the **full track** when it introduces nouns a reader must learn (a glossary), more than one mechanism that needs its own spec, a prior-work survey, or code that people will keep reading the design to understand.
+Choose the **scope track** when the feature adds a rule, a factor or a setting to machinery that already exists, has one configuration surface, and its open questions fit in a short list. [workspace-agent-corpus](./workspace-agent-corpus/1_scope.md) is an example. Choose the **full track** when it introduces nouns a reader must learn (a glossary), more than one mechanism that needs its own spec, a prior-work survey, or code that people will keep reading the design to understand.
 
 **Graduating.** When a scope doc outgrows one sitting — it grows specs, a glossary or sub-sub-sections, or its Shape has become the reference for code shipped over several phases — split it in the change that makes it outgrow: Problem and Goal become `1_overview.md`, Shape becomes `2_design.md`, Open questions seed `3_vision.md`, and `1_scope.md` is deleted with its inbound links fixed. `4_decisions.md` keeps its name on both tracks for this reason: graduating never renames the file code anchors and decision links point at.
 

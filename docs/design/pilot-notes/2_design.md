@@ -17,7 +17,7 @@ related_artifacts: [ORB-29567]
 # Pilot Notes — Design
 
 Read the [overview](./1_overview.md) first. The operator approved this design on 2026-11-27
-([ORB-29567]); nothing in it is built. It adds to the [task pilot](../task-pilot/1_scope.md),
+([ORB-29567]); nothing in it is built. It adds to the [task pilot](../task-pilot/1_overview.md),
 whose assessment artifact and readout it reuses, and it borrows the file-reading rules of tag
 instructions ([`workflow.tag_instructions.<tag>`](../../config/workflow-tags.md#workflowtag_instructionstag--extra-instructions-for-tagged-tasks)).
 

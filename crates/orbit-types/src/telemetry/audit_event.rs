@@ -139,19 +139,19 @@ pub struct AuditEvent {
     pub self_reported_actor: Option<String>,
     /// The plugin that backed this tool call, when one did: name, version and
     /// manifest digest, written together by plugin dispatch [design
-    /// `docs/design/plugins/1_scope.md` §4.4]. Absent for built-in tools and
+    /// `docs/design/plugins/2_design.md` §4.4]. Absent for built-in tools and
     /// for every row written before the plugin standard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<PluginProvenance>,
     /// The names of the declared secrets this plugin call's request carried
-    /// (design `docs/design/plugins/1_scope.md` §3, "Plugin secrets"). Names
+    /// (design `docs/design/plugins/2_design.md` §3, "Plugin secrets"). Names
     /// only — a value is never written to an audit row. Empty for every
     /// other call and for rows written before secret delivery.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugin_secrets: Vec<String>,
     /// Each secret the plugin's backend asked to rotate through
     /// `secret_updates`, by name, and whether the update was applied or
-    /// refused (design `docs/design/plugins/1_scope.md` §3, "Plugin
+    /// refused (design `docs/design/plugins/2_design.md` §3, "Plugin
     /// secrets"). Names and outcomes only — never a value. Empty for every
     /// call that rotated nothing and for rows written before rotation.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

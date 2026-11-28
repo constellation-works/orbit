@@ -40,7 +40,7 @@ pilot warnings that hold promotion, and ORB-20363 also carried a contract-mismat
 finding. None surfaced until Daniel saw them in the UI. [ORB-21164] records his ask: "a
 holistic summary of issues that requires operator attention", available to orchestrators,
 initially injected through a hook, and filterable (for example by workspace). Daniel subsequently dropped the session hook; [ORB-21165] is archived and it is no dependency or deliverable. He chose the name
-`attention`. The existing channel work ([human-decision-channel](../human-decision-channel/1_scope.md))
+`attention`. The existing channel work ([human-decision-channel](../human-decision-channel/1_overview.md))
 solves the last mile for decisions it can email; this feature covers everything else and
 gives the orchestrator one place to look.
 

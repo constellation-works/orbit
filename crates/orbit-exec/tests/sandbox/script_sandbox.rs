@@ -1,5 +1,5 @@
 //! Script steps phase 3 at the exported script-sandbox boundary
-//! (`docs/design/script-steps/1_scope.md` §3, §7, §9 item 5):
+//! (`docs/design/script-steps/2_design.md` §3, §7, §9 item 5):
 //!
 //! - a script runs under `RLIMIT_CPU` and `RLIMIT_NOFILE` on Linux and macOS,
 //!   and cannot open a descriptor past the open-file limit or raise it;

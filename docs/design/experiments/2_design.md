@@ -280,7 +280,7 @@ weights, a config value into config. Orbit never rewrites its own configuration 
 as a side effect of a decision.
 
 When an experiment reaches its horizon, Orbit should raise it for decision through the
-[human decision channel](../human-decision-channel/1_scope.md) instead of waiting to be
+[human decision channel](../human-decision-channel/1_overview.md) instead of waiting to be
 noticed. Decision requests are task-bound today (`orbit_types::task::DecisionRequest` carries
 a `task_id`; `DecisionGate::AgentRequest` is the agent-raised human question), so this
 needs either a subject that is not a task or a tracking task per

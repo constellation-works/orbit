@@ -573,7 +573,7 @@ impl OrbitRuntime {
             .execution_kind(name)
             .unwrap_or(ToolExecutionKind::Mutating);
         // A plugin-backed entry stamps its identity on the audit row (design
-        // `docs/design/plugins/1_scope.md` §4.4). The registry is the only
+        // `docs/design/plugins/2_design.md` §4.4). The registry is the only
         // source: tool input never names a plugin.
         let plugin = self
             .tool_registry()

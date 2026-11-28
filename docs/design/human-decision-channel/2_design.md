@@ -2,7 +2,7 @@
 title: "Human decision channel — Design"
 owner: claude
 created_date: 2026-10-24
-updated_date: 2026-11-07
+updated_date: 2026-11-28
 last_validated: 2026-11-07
 status: Draft
 feature: human-decision-channel
@@ -17,7 +17,7 @@ related_artifacts: [ORB-17979, ORB-21089, ORB-22824]
 
 # Human decision channel — Design
 
-[ORB-17979] authored this design. This doc specifies the mechanisms behind [1_scope.md](./1_scope.md): the
+[ORB-17979] authored this design. This doc specifies the mechanisms behind [1_overview.md](./1_overview.md): the
 decision-request record, the delegated-human channel that lets a transport submit a
 human's answer without becoming the human, reply authentication, the stale guard,
 the reply grammar, triggers, the digest, noise control, and compatibility. §10
@@ -30,6 +30,159 @@ with its own concerns, slices and compatibility notes. Code anchors were re-chec
 symbol were dropped. §9 (Concerns &
 Honest Limitations) precedes §10 only because the slice list must close the doc;
 CONVENTIONS.md §3 otherwise puts Concerns last.
+
+## Shape
+
+### Decision requests (core)
+
+Core gains one record, `DecisionRequest`: the task, the gate kind
+(`block_triage`, `pilot_admission`, `proposed_approval`, `review_approval`), the
+allowed answers as stable ids taken from the source of truth that raised the hold
+(decision option ids, `PilotAdmissionVerdict` spellings, `approve`/`reject`), a
+stale-guard binding (block episode key, pilot `operation_id`, or task revision), an
+expiry, and a state (`open`, `answered`, `superseded`, `expired`). Requests are
+stored beside the task's own history rather than in a new store, listed through new
+read tools, and rendered by the dashboard so the email is never the only place a
+hold is visible. §2 specifies fields, states, storage,
+and listing.
+
+### Delegated-human channel (core)
+
+The operator registers a named channel once (`email → daniel`). A channel may answer
+an *open* request with one of its *allowed* answers and nothing else: no arbitrary
+task edits, no status changes outside what the answer itself means, no `--force`.
+The apply step runs in core and writes through the existing human path, so the
+recorded writer is the human (`is_automation_actor` stays false) while the history
+entry and audit row carry the channel provenance (`via email`, request id, token
+fingerprint). The plugin never writes the task; it submits a *decision submission*
+to one governed core tool, and core either applies it as the human or refuses it.
+§3 shows the fit with `CallerProvenance`
+(`crates/orbit-common/src/governance/authorization/caller.rs`) and
+`GOVERNED_OPERATIONS` (`crates/orbit-common/src/governance/authorization/catalog/operation.rs`).
+
+### Email transport (plugin)
+
+A plugin (working name `decision-mail`) sends over SMTP and polls a dedicated
+mailbox over IMAP from a cron routine; credentials and the token-signing key are
+plugin secrets. Each outbound mail carries a per-request, single-use, expiring HMAC
+token bound to the request id; a reply counts only from an allowlisted sender with
+DKIM/SPF `pass` in `Authentication-Results` and a live token. The reply grammar is
+deliberately tiny (`1`, `approve`, `reject 2,5`, plus free text kept as the note).
+§4–§6 specify authentication, the stale guard with its
+refusal table, and the grammar.
+
+### Triggers and digest
+
+A new state-trigger kind fires when a triage records a human decision, so the mail
+goes out once per block episode instead of whenever a poll next notices a marker;
+pilot holds ride the same kind. A cron routine sends the proposed-task digest and
+reminds about still-open requests. §7 gives the choice
+and its reasons, and §8 the noise controls (once per episode, batching, quiet hours,
+confirmation mail, transport-down behaviour).
+
+### Configuration
+
+| Key | Default | Meaning |
+|---|---|---|
+| `[decision_channel] enabled` | `false` | Master opt-in, per workspace; nothing is raised or sent while off |
+| `[decision_channel] channel` | unset | Registered channel name → human identity mapping (operator-set, host config) |
+| `[decision_channel] request_ttl_hours` | `72` | Request (and token) expiry |
+| `[decision_channel] digest` | `daily` | Digest cadence for proposed tasks and open-request reminders |
+| `[decision_channel] quiet_hours` | unset | Local-time window in which non-urgent mail waits |
+| `[plugins.decision-mail] …` | — | SMTP/IMAP endpoints, mailbox, sender allowlist (plugin config schema; secrets via `orbit plugin secret set`) |
+
+### Surfaces
+
+- **CLI/MCP (core):** `orbit decision list|show`, `orbit decision answer` (the local
+  equivalent of replying), `orbit decision channel register|revoke`; tools
+  `orbit.decision` action `list`, `orbit.decision` action `show`, and the governed
+  `orbit.decision.submit` the plugin calls. `orbit.task.show` gains the task's open
+  requests.
+- **Dashboard:** an open-requests list with the same answer buttons the email offers,
+  so email is an accelerator, never the only path.
+- **Email:** one message per decision request (or one digest), a confirmation after
+  apply, and a refusal reply naming why a decision was not applied.
+
+## Concerns and honest limitations
+
+- **Email authentication is probabilistic at the edges.** DKIM/SPF plus a token is a
+  strong combination, but a compromised operator mailbox is a compromised channel;
+  the design bounds the blast radius (closed answers, single-use tokens, expiry,
+  stale guard) rather than eliminating it. Revoking the channel registration is the
+  kill switch and must be one command.
+- **Latency is poll-bound.** IMAP polling on a cron routine means decisions apply on
+  the poll interval, not instantly. That is acceptable for holds measured in hours
+  and is the price of no listener.
+- **The `evaluated` pilot verdict does not fit a bare reply.** It needs attached
+  evidence; v1 either excludes it from email or treats the reply body as the
+  evidence note (§6 decides: body-as-note, artifact
+  reference excluded).
+- **A new persisted record is a compatibility surface.** The request store rides the
+  task history to avoid a new database schema, but the new `StateTriggerKind`
+  variant is persisted member state and must follow the enum's
+  retain-don't-remove rule ([state-compatibility](../state-compatibility/)).
+- **Plugin callback provenance is only partly traced.** At the surveyed revision the
+  callback session carries no human writer label, which is what forces the
+  core-side apply step; if implementation finds an existing labelled path, slice 2
+  shrinks but the governed submit tool stays.
+
+## Phasing
+
+Phases mirror the slice list in §10. Each phase below
+is done; the channel stays default-off.
+
+1. **Decision requests in core — done** ([ORB-18175], [ORB-18176]). Record, raising
+   from block triage and pilot holds, CLI/MCP/dashboard listing and local answering.
+2. **Delegated-human channel — done** ([ORB-18177]). Registration, the governed
+   submission tool, and the core apply step with provenance — exercisable from the
+   CLI with a test channel.
+3. **Trigger and digest plumbing — done** ([ORB-18178], core digest [ORB-18305]).
+   The `DecisionRequested` state-trigger kind and the digest query.
+4. **Email plugin — done** ([ORB-18304]). SMTP out, IMAP poll in, token
+   authentication, reply grammar, confirmation and refusal mail, in the
+   `orbit-decision-mail` plugin.
+5. **Approvals by email — done** ([ORB-18305], [ORB-18307]). Proposed-task digest
+   answers (pilot-gated) and review approve join the allowed scope; the plugin
+   sends the digest and accepts batched replies.
+
+Slice 7 hardening is done in core ([ORB-18308]) and in the plugin ([ORB-18309]).
+Later extensions of the same record, also done: final-recovery `decide`
+([ORB-20629]) and agent-raised questions on human-crew tasks ([ORB-20736]).
+
+Retired: model-answered decisions ([ORB-21089]) were removed with decision assistance in
+[ORB-22808] (which removed the model service, model answers and `orbit decision assist`). Requests keep the per-answer risk tier and stored category that work
+added; nothing records `answered_by: model` or consults a model before notifying any more,
+and model answers already in task history still read. §11
+holds the channel changes; the archived
+[consumer spec](../_archived/decision-assistance/specs/precedent-decisions.md) holds the
+rest.
+
+Designed and approved at review, not implemented and no slice filed: plugin-raised decision requests ([ORB-22824]), with scribe's
+consistency proposals as the first consumer. A plugin raises a closed question on a task and names an apply tool from its own manifest; a
+human answers and core runs that tool once with the answer, never through precedent or
+the model, and only on the host that owns the task. §12
+holds the contract, slices and compatibility notes;
+[4_decisions.md](./4_decisions.md) records the standing rules.
+
+Resident orchestrators use this channel as their human path
+([resident-orchestrator](../resident-orchestrator/2_design.md#3-authority)). A new
+`resident_authority` gate carries a manager-relayed authority grant, quoted verbatim, and the
+grant applies only when the human answers it. Resident escalations compose the existing
+agent-raised requests on human-crew tasks. Slice [ORB-21242] is done.
+
+## Open questions
+
+1. **Token placement: subject, body, or reply-to address?** A `Reply-To` of
+   `orbit+<token>@` survives most clients untouched but needs plus-addressing on the
+   mailbox; a first-line body token is visible and quotable. [2_design.md](./2_design.md)
+   §4 recommends reply-to with a body fallback; the plugin slice confirms against the
+   real mailbox provider.
+2. **One mailbox for every workspace on dk-server-2, or one per workspace?** One
+   mailbox with the workspace named in the token payload is simpler to operate; the
+   request id already disambiguates. Per-workspace mailboxes isolate a leak.
+3. **Should a digest `approve` batch dozens of proposed tasks at once?** The grammar
+   allows `approve 1,3,7`; whether an unqualified `approve` means "all listed" is a
+   foot-gun the digest slice must decide explicitly (design says: never).
 
 ## 1. Settled decisions, kept
 
@@ -44,7 +197,7 @@ the mechanisms below are built inside them.
    webhook; the Orbit server stays loopback-only. Inbound work happens in a cron
    routine the plugin seeds (`job:` → deterministic `plugin.tool_call`), the same
    execution shape every plugin routine already uses
-   ([plugins](../plugins/1_scope.md) §1).
+   ([plugins](../plugins/2_design.md) §1).
 3. **Closed decision scope.** Blocked `propose`/`report` choices, pilot-hold
    verdicts, proposed approve/reject (digest), review approve. A proposed approval
    from a decision request is screened by the task-pilot preparation and
@@ -292,7 +445,7 @@ persisted writer label: `operator_resolution` drops a resolution whose writer
 `is_automation_actor` (`crates/orbit-types/src/identity/actor.rs:308` — `system`,
 `task-pilot`, machine ids, agent families). A plugin backend's callbacks are
 confined to `permissions.orbit_tools` ∩ grant
-([plugins](../plugins/1_scope.md) §4) and, at the surveyed revision, the callback
+([plugins](../plugins/2_design.md) §4) and, at the surveyed revision, the callback
 session (`crates/orbit-tools/src/plugin/callback/session.rs`) asserts no human
 writer label — a plugin calling `orbit.task.update` writes as automation and its
 "decision" is correctly ignored. The design therefore does **not** teach the plugin
@@ -323,7 +476,7 @@ carries its channel's token key (§4). The directory is therefore a host secret
 like the plugin secret store: every plugin child is denied reading it, whatever it
 was granted (`orbit_tools` grants read access to the global root), and every
 sandboxed agent launch masks it for reads and writes, created before launch so a
-later registration stays hidden ([plugins](../plugins/1_scope.md) §4.3,
+later registration stays hidden ([plugins](../plugins/2_design.md) §4.3,
 [policy sandbox](../policy-sandbox/2_design.md)). Core refuses a hidden store as
 not visible rather than reading it as "no channel registered". On Unix an
 existing store is also validated before any key is parsed: a linked or non-directory
@@ -391,7 +544,7 @@ credential, in layers; every layer must pass.
    channel registration and held as a plugin secret
    (`orbit plugin secret set decision-mail channel_key`, delivered per call in
    `context.secrets`, never in argv, env, logs, or the manifest —
-   [plugins](../plugins/1_scope.md) §3) *and* mirrored to core's channel store at
+   [plugins](../plugins/2_design.md) §3) *and* mirrored to core's channel store at
    registration, because core verifies (§3.3 step 4) and must not take the
    plugin's word for it. The bound plugin's only copy is `context.secrets`; the
    store is denied to every plugin child and masked from agents (§3.2), so the
@@ -1035,7 +1188,7 @@ changed. scribe's `Store::settle` is one locked write that refuses before writin
 The apply call runs with the authority the operator has when running the same tool from
 the CLI. The callback session the host mints for it carries the operator's ceiling
 ∩ `permissions.orbit_tools` ∩ the plugin's grant
-([plugins](../plugins/1_scope.md) §4). The plugin's own writes, whether to its store or
+([plugins](../plugins/2_design.md) §4). The plugin's own writes, whether to its store or
 through callbacks, keep their plugin provenance. They are never written under the
 human's label
 ([4_decisions.md](./4_decisions.md#a-plugins-effect-is-never-written-under-the-humans-label)).
@@ -1341,5 +1494,8 @@ Ordered. Each is shippable alone and inert until a plugin raises a request.
 - [ORB-18176] — lists and answers decision requests from CLI, MCP and the dashboard.
 - [ORB-18175] — records decision requests and raises them from holds.
 - [ORB-17979] — designed the email channel for human decisions on held Orbit work (this folder).
+
+- [ORB-22808] — removed decision assistance, and with it model-answered decisions, in a config-surface reduction.
+- [ORB-21242] — resident-orchestrator slice 1: implements the `resident_authority` decision gate
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

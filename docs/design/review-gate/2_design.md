@@ -805,7 +805,7 @@ only and preserves active obligations and historical evidence.
 
 Symbol-based triggers, percentages of changes in regression-prone symbols,
 new symbol-risk models and their predictive validation remain future work
-under [symbol-risk-index](../symbol-risk-index/1_scope.md#ship-gates). This
+under [symbol-risk-index](../symbol-risk-index/2_design.md#ship-gates). This
 implementation must neither expose a dormant symbol-trigger key nor depend
 on the unshipped symbol-history gates.
 

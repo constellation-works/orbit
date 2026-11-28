@@ -92,7 +92,7 @@ Sweep enumerates `~/.orbit/workspaces.json` and collects `.orbit/routines/*.yaml
 
 **Recorded:** 2026-07-04 21:14:40.329169Z · [ORB-10021]
 **Paths:** `docs/design/routines/**`, `crates/orbit-core/src/app/routine/**`
-**Reopened by:** [Scope: Script steps](../script-steps/1_scope.md) ([ORB-19294]) keeps routine targets catalog-only (`job:<name>`) and lets a targeted job contain operator-granted `target: script:<name>` steps. A routine `target: script:` stays rejected with guidance to wrap the script in a one-step job.
+**Reopened by:** [Script Steps](../script-steps/1_overview.md) ([ORB-19294]) keeps routine targets catalog-only (`job:<name>`) and lets a targeted job contain operator-granted `target: script:<name>` steps. A routine `target: script:` stays rejected with guidance to wrap the script in a one-step job.
 
 ### Context
 

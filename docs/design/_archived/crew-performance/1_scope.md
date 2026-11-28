@@ -19,7 +19,7 @@ Status: deprecated. Crew-performance weighting, its snapshot, refresh routine an
 History: phases 1–4 shipped — type list and cell report [ORB-17814], hourly snapshot [ORB-17816], weighted draws [ORB-17817], and the shadow share report [ORB-17818].
 Bearing: complexity and purpose pools (`workflow.<complexity>_complexity_crews`,
 `workflow.purpose_crews.*`) decide which crews may run a task, and their weights express the
-operator's preference among them. [Usage pressure](../../usage-pressure/1_scope.md) scales those
+operator's preference among them. [Usage pressure](../../usage-pressure/1_overview.md) scales those
 weights by how much provider capacity is about to expire. The implementer scorecard
 ([agent scorecards §5.2](../../agent-scorecards/2_design.md#52-implementers), [ORB-17779]) already
 scores every crew against the fleet's rates for the same complexity tier. This scope adds a
