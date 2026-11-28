@@ -2162,8 +2162,10 @@ checkpoint, a discarded candidate or an unexplained head change refuses
 repair. If a validation retry advanced the synchronized head, Orbit verifies
 the repair commit's parent and its task, run, step and activity trailers, the
 validate checkpoint that binds the repaired head, the host's failed validation
-at the parent, and successful validation receipts for the exact repair commit. Any later reviewer correction still needs its own settlement
-and validation. Inspection leaves open decisions in place.
+at the parent, and successful validation receipts for the exact repair commit.
+The same validation-repair verification applies to blocked-PR failure handoffs.
+Any later reviewer correction still needs its own settlement and validation.
+Inspection leaves open decisions in place.
 
 The new attempt adopts the PR branch and reapplies the authenticated
 candidate to the current base for fresh implementation, validation and

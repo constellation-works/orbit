@@ -275,18 +275,42 @@ impl OrbitRuntime {
                 }
                 let synchronized = field(sync, "head_sha")?;
                 allowed.push(synchronized.into());
-                // A before-PR reviewer may advance the synchronized candidate.
-                // Reuse normal publication's settlement and exact-head host
-                // validation contract; the hook's push alone certifies no work.
+                // A host validation retry or before-PR reviewer may advance the
+                // synchronized candidate. Reuse normal publication's
+                // validation-repair, settlement and exact-head host validation
+                // contract; the hook's push alone certifies no work.
                 let checkpoint = |id: &str, action: &str| {
                     authenticated_checkpoint(definition, state, id, action)
                 };
+                let implementation = if state.pipeline.get("validate").is_some_and(|v| !v.is_null())
+                {
+                    let tested =
+                        field(checkpoint("validate", "candidate_validate")?, "tested_head")?;
+                    super::publication::ValidationEvidence {
+                        runtime: self,
+                        run_id: &owner.run_id,
+                        task_id: &task.id,
+                        base: base_sha,
+                        branch,
+                    }
+                    .implementation_head(
+                        definition,
+                        state,
+                        &checkpoint,
+                        (synchronized, tested),
+                    )?
+                } else {
+                    synchronized
+                };
+                if implementation != synchronized {
+                    allowed.push(implementation.into());
+                }
                 let reviewed = super::publication::reviewed_head(
                     definition,
                     state,
                     &checkpoint,
                     false,
-                    synchronized,
+                    implementation,
                     (branch, base_sha),
                     repo,
                 )?;
