@@ -141,10 +141,14 @@ filed instead of writing a free-text human task: a question, two to four options
 (one-line label and consequence, exactly one `recommended`), and a `topic` when
 a corpus rule should be able to match the request exactly.
 
-The operator answers,
-or a current corpus rule the operator marked `auto` answers an exact topic or
-rule id and records that answer as precedent. Either way the answer is in the
-task's history, completes the task and unblocks its `blocked_by` dependents.
+The operator can answer directly. Precedent can answer an eligible newly
+raised request only when its topic matches the exact qualified rule
+(`topic/rule`) or a unique bare rule ID, the rule is current and
+operator-approved for auto-answer (`auto`), and its answer chooses one of the
+request's offered options.
+Re-raising an identical open question returns the existing request unchanged.
+A manual operator answer or precedent answer is recorded in task history,
+completes the task and unblocks its `blocked_by` dependents.
 Free text stays for open-ended asks. Raw decision history is not authority.
 
 Only a merged `current` rule may be cited, and only while its review date has
