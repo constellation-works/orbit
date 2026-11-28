@@ -4,7 +4,7 @@ use super::super::throttle::{check_read_result, throttle_of};
 use super::{read::*, selection::*, stream::*};
 use orbit_common::security::redaction::redact_all;
 use orbit_common::{OrbitError, ProviderReadThrottle};
-use orbit_exec::{ExecRequest, NoSandbox, run_process};
+use orbit_exec::{ExecRequest, NoSandbox, run_process_kill_at_once};
 use serde_json::{Value, json};
 
 /// One job whose own log may stand in for an empty run-scoped read.
@@ -235,7 +235,8 @@ fn fallback_jobs(
             })?;
             let deadline =
                 crate::github_quota::gh_request_deadline(&request, std::time::Instant::now());
-            let result = run_process(env, &request, &NoSandbox)
+            // Budgeted: the child is killed at its deadline, even under SIGTERM.
+            let result = run_process_kill_at_once(env, &request, &NoSandbox)
                 .map_err(|error| format!("gh run view could not run: {error}"))?;
             crate::github_quota::observe_gh_result_by_deadline(env, &request, &result, deadline);
             check_read_result(&result, "gh run view").map_err(|error| FallbackGap {

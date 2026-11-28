@@ -238,7 +238,7 @@ Tests that call a supervisor directly are left out.
 | `orbit-runtime/src/task/pr_forge.rs` | `run_process` | Deadline, fail-at-limit capture, signal fan-out |
 | `orbit-core/src/application/review/fulfilment/codeql.rs` | `run_process` (CodeQL evidence sandbox) | Sandbox spawn, deadline, capture, signal fan-out |
 | `orbit-tools/src/external.rs`, `builtin/proc/spawn.rs` (`proc.spawn`) | `run_process` | Stdin payload, deadline, capture, debug echo |
-| `orbit-tools/src/builtin/github/{common,auth,logs}.rs` | `run_process`; `run_process_streaming_stdout` (logs) | Deadline, capture or stdout relay, typed capture-limit stop |
+| `orbit-tools/src/builtin/github/{common,auth,logs}.rs` | `run_process` (`logs/stream.rs` metadata read and `logs/fallback.rs` run view: `run_process_kill_at_once`); `run_process_streaming_stdout` (logs) | Deadline, capture or stdout relay, typed capture-limit stop; budgeted metadata reads are killed at their deadline |
 | `orbit-tools/src/plugin/source.rs` | `run_process`; `run_process_streaming_stdout` | Deadline, stdout relay |
 | `orbit-tools/src/plugin/tool.rs` (exec backend) | `spawn_owned_supervised_cancellable` | Owned transfer, signal guard over spawn and `bind_pid`, stdin payload, cancellation flag |
 | `orbit-engine/src/executor/automation/{dependabot,ci}/query.rs` | `run_process` | Deadline, capture |
@@ -382,7 +382,7 @@ instants; its cached value is refreshed before supervision acts on expiry.
 | Caller group | stdin | sinks | termination | other options |
 |--------------|-------|-------|-------------|---------------|
 | Bounded runner wrappers | Null | keep-prefix (`BoundedOutputCapture`) | Grace(200 ms) | `completion` per mode; drain 500 ms ≤ deadline; no signal interception; no stopped watch |
-| Exec runner wrappers | Payload or Null | fail-at-limit (+ redacting echo in debug) or Relay | Grace(5 s); KillNow for probes | `intercept_signals`; `cancelled`; stopped watch with a stderr note; drain 1 s |
+| Exec runner wrappers | Payload or Null | fail-at-limit (+ redacting echo in debug) or Relay | Grace(5 s); KillNow for probes and budgeted GitHub metadata reads (`run_process_kill_at_once`) | `intercept_signals`; `cancelled`; stopped watch with a stderr note; drain 1 s |
 | Engine provider runner | Payload | engine-owned rolling head/tail sink with line trace events | KillNow + group drain | `on_spawn`; `every` = progress; extendable deadline; stopped watch with callback |
 | Build phase | Null | two `Sink`s sharing one `BuildLog` | Grace(5 s) | wall-clock timeout; `every` = build-directory size every 1 s; post-exit size check; drain 2 s, workers joined |
 | Automation source | Null (preserves preconfigured temp file or null) | none (both `Redirected`) | KillNow | `clock` = source `budget_now`; timeout = min(command budget, remaining source deadline); `every` = stdout file size every 10 ms on wall time; post-exit size check; pipe drain zero, group drain 1 s |
