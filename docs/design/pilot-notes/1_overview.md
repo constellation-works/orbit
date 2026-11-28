@@ -88,14 +88,14 @@ the draft and were approved with the recommendation. Both are recorded in the
 
 | Phase | Task |
 |---|---|
-| 1. Local notes | [ORB-29586] adds the config table, the pilot's prompt section, the audit event and the `doctor` finding; [ORB-29588] (backlog) adds `notes` to the assessment, the checks in apply and the readouts |
+| 1. Local notes | [ORB-29586] adds the config table, the pilot's prompt section, the audit event and the `doctor` finding; [ORB-29588] adds `notes` to the assessment, the checks in apply and the readouts |
 | 2. Claimed pilots and the dashboard | [ORB-29589] (backlog) shows notes on a task's detail; [ORB-29590] (backlog) gives a claimed pilot the owner's captured instructions |
 
 ## Task References
 
 - [ORB-29567] — this design.
 - [ORB-29586] — adds `[workflow.pilot_notes.<label>]`, the prompt section, the audit event and the `doctor` finding.
-- [ORB-29588] — backlog; adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
+- [ORB-29588] — adds `notes` to the assessment, the checks in apply and the `pilot_notes` readout.
 - [ORB-29589] — backlog; shows pilot notes on the dashboard's task detail.
 - [ORB-29590] — backlog; gives a claimed pilot the owner's captured note instructions.
 

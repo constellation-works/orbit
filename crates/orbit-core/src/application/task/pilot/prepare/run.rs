@@ -156,7 +156,7 @@ pub(crate) fn prepare(
             .map(|task| (task.id.as_str(), task))
             .collect::<BTreeMap<_, _>>();
         let mut seen = BTreeSet::new();
-        let mut excluded = ExcludedEvidence::default();
+        let mut excluded = ExcludedEvidence::explicit();
         let selected = explicit_task_ids
             .iter()
             .map(|task_id| {
@@ -174,24 +174,6 @@ pub(crate) fn prepare(
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        // Check every named task before exclusions or reservations. An invalid
-        // sibling must not spend agent budget, even when another pilot holds
-        // it or a routine's frozen source would supersede it. Apply still owns
-        // status changes after valid preparation and their audited outcomes.
-        let unsupported = selected
-            .iter()
-            .filter(|task| !super::super::pilot_assessable_status(task.status))
-            .map(|task| format!("{} (status {})", task.id, task.status))
-            .collect::<Vec<_>>();
-        if !unsupported.is_empty() {
-            return Err(DispatchError::action_failed(
-                action,
-                format!(
-                    "explicit task-pilot selection refuses {}; only proposed and backlog tasks may be assessed",
-                    unsupported.join(", ")
-                ),
-            ));
-        }
         // A child pilot is named like an explicit request, but its host
         // trigger says otherwise. An assessment an explicit or routine pilot
         // already certified is reused, not assessed again. Operator explicit
@@ -203,6 +185,15 @@ pub(crate) fn prepare(
             .into_iter()
             .filter(|task| !superseded.contains_key(&task.id))
         {
+            if !crate::application::task::pilot::pilot_assessable_status(task.status) {
+                excluded.record_with_status(
+                    &task.id,
+                    "status_not_eligible",
+                    task.status,
+                    &active_preparations,
+                );
+                continue;
+            }
             let reason = if runtime.is_human_crew(task.crew.as_deref()) {
                 // Operator work: no pilot assessment, warning or hold.
                 Some(HUMAN_CREW_EXCLUSION)

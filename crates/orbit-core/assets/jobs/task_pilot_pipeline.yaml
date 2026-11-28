@@ -13,12 +13,13 @@
 # proposed/backlog tasks, including non-empty selectors. A child pilot, such
 # as one an approve-proposed drain dispatched, is not that request: when an
 # explicit or routine pilot already certified an assessment, the child does
-# not call the provider for that task again. Any unsupported
-# explicit status refuses the whole selection before agent work or task
-# reservation; the refusal names every unsupported task and its current status.
-# The CLI preflights before submission; prepare checks again for direct callers
-# and intervening status moves. Status races after valid preparation retain
-# the apply/supersession behavior below.
+# not call the provider for that task again. Any non-assessable explicit status
+# (such as `in-progress`) is skipped before agent work or task reservation as a
+# `status_not_eligible` exclusion, and apply settles it as `superseded` unless
+# a caller requiring an assessment (such as a CI sweep) received zero prepared
+# tasks. The CLI preflights explicit commands before submission; prepare skips
+# non-assessable tasks for direct callers and intervening status moves. Status
+# races after valid preparation retain the apply/supersession behavior below.
 # Preparation never promotes or dispatches a task. In a Git workspace it
 # fetches the landing branch and pins one source revision without changing
 # primary HEAD, index, or working files. An unfetchable remote fails before

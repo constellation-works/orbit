@@ -151,17 +151,20 @@ of an active pilot run and reports the owning run ID, so a later discovery run
 can inspect new work without repeating the expensive assessment.
 
 Explicit
-`task_ids` audits exactly the named tasks, including ones that already have
-selectors, while excluding tasks held by another active run as
+`task_ids` audits exactly the named `proposed` and `backlog` tasks, including
+ones that already have selectors, while excluding non-assessable statuses as
+`status_not_eligible` (with `status`) and tasks held by another active run as
 `already_preparing` with `prepared_by_run_ids`. A child pilot, such as one an
 approve-proposed drain dispatched, is not this operator request: it reuses an
 assessment an explicit or routine pilot already certified instead of calling
 the provider again. Preparation continues for the
-free named tasks.
+free eligible named tasks.
 
-Apply settles each held task as `superseded` with reason
-`piloted_elsewhere`; if every named task is held, the run succeeds without
-agent work. Inspect or resume the owning run for that task's assessment.
+Apply settles each held task as `superseded` with reason `piloted_elsewhere`,
+and each non-assessable skip as `superseded` with reason `status_not_eligible`
+unless a CI-sweep caller required an assessment; if every named task is held
+or non-assessable, the run succeeds without
+agent work. Inspect or resume the owning run for a held task's assessment.
 
 The dashboard's **Run pilot** action on a `proposed` or `backlog` task in the
 task details panel makes this same single-task submission (`POST /api/tasks/<id>/pilot`,
