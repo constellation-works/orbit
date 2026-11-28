@@ -145,7 +145,9 @@ function repoRootFromDashboard(dashboardDir) {
 }
 
 function checkoutApiRoutes(dashboardDir) {
-  const root = path.join(repoRootFromDashboard(dashboardDir), 'crates/orbit-web/src');
+  // The server nests api::router at /api; sibling routers are mounted at
+  // the root and their relative routes must not become API candidates.
+  const root = path.join(repoRootFromDashboard(dashboardDir), 'crates/orbit-web/src/api');
   if (!fs.existsSync(root)) return [];
   const routes = [];
   const walk = (dir) => {
@@ -263,6 +265,16 @@ export function candidateApiPaths(dashboardDir) {
   const templates = [];
   const literals = new Set();
   const sources = firstPartyDashboardFiles(dashboardDir).map((file) => fs.readFileSync(file, 'utf8'));
+  const composedBases = new Map();
+  for (const source of sources) {
+    // The plugin action base is composed with its operation at each call.
+    // Probe those complete paths, not the intermediate base, which has no route.
+    const base = source.match(/const base = (`\/api\/plugins\/[^`]+\/actions`);/);
+    if (!base) continue;
+    const prefix = normalizeApiPath(extractLiterals(base[1])[0]);
+    const suffixes = [...source.matchAll(/`\$\{base\}(\/[A-Za-z0-9._~/-]+)`/g)].map((match) => match[1]);
+    if (prefix && suffixes.length) composedBases.set(prefix, suffixes);
+  }
   for (const source of sources) {
     for (const literal of extractLiterals(source)) {
       if (/^[A-Za-z0-9._~-]+$/.test(literal)) literals.add(literal);
@@ -279,9 +291,13 @@ export function candidateApiPaths(dashboardDir) {
   templates.push(...taskMutationTemplates(sources));
   const routes = checkoutApiRoutes(dashboardDir);
   for (const template of templates) {
-    const concrete = instantiateTemplate(template, routes, literals);
-    if (concrete.length === 0) found.add(template);
-    else for (const path of concrete) found.add(path);
+    const paths = composedBases.has(template)
+      ? composedBases.get(template).map((suffix) => template + suffix) : [template];
+    for (const candidate of paths) {
+      const concrete = instantiateTemplate(candidate, routes, literals);
+      if (concrete.length === 0) found.add(candidate);
+      else for (const path of concrete) found.add(path);
+    }
   }
   return [...found].sort();
 }

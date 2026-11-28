@@ -547,6 +547,8 @@ class VisualFixtureServerTest(unittest.TestCase):
             "/requeue", "/settle-merged", "/auto-fix", "/pilot-admission", "/post-deploy",
             f"/artifacts/{probe}",
         )]
+        paths += [f"/api/plugins/{probe}/pages/{probe}/actions/{action}"
+                  for action in ("run", "confirm", "cancel")]
         unused = f"/api/tasks/{probe}/backend-only"
         paths.append(unused)
         for missing in paths:
@@ -573,6 +575,43 @@ class VisualFixtureServerTest(unittest.TestCase):
                     self.assertIn("source/API compatibility not established", diagnostics)
                     self.assertIn(missing + " (404)", diagnostics)
                     self.assertIn("OPTIONS " + missing + "\n", record.read_text())
+                finally:
+                    self._stop(server)
+
+    def test_checkout_compatibility_excludes_root_routes(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            wrapper, record = self._stale_backend(Path(tmp), "present", fixture_cli=True)
+            server, output, diagnostics = self._start(
+                SCRIPT, ["experiments:empty"], ROOT,
+                self._fixture_env(tmp, wrapper, record, "present"))
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=", output, diagnostics)
+                provenance = json.loads(Path(self._protocol(output)["ORBIT_VISUAL_PROVENANCE"]).read_text())
+                self.assertTrue(provenance["api_compatibility"]["established"])
+                probes = record.read_text().splitlines()
+                self.assertFalse(any(line.startswith(("OPTIONS /api/t/", "OPTIONS /api/r/")) for line in probes))
+            finally:
+                self._stop(server)
+
+    def test_unmatched_template_and_unestablished_status_refuse_readiness(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        missing = "/api/unmatched/orbit-fixture-probe"
+        for mode, expected in (("absent:" + missing, missing + " (404)"),
+                               ("error:/api/tasks", "/api/tasks (503)")):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                repo = self._mini_checkout(Path(tmp) / "repo")
+                with (repo / "crates/orbit-web/assets/dashboard/app.js").open("a") as app:
+                    app.write('fetch(`/api/unmatched/${id}`);\n')
+                wrapper, record = self._stale_backend(Path(tmp), mode, fixture_cli=True)
+                server, output, diagnostics = self._start(
+                    repo / "scripts/visual-fixture-server.sh", ["experiments:empty"], repo,
+                    self._fixture_env(tmp, wrapper, record, mode))
+                try:
+                    self.assertNotIn("ORBIT_VISUAL_URL=", output)
+                    self.assertIn(expected, diagnostics)
+                    self.assertIn("OPTIONS " + (missing if mode.startswith("absent:") else "/api/tasks") + "\n",
+                                  record.read_text())
                 finally:
                     self._stop(server)
 
@@ -931,6 +970,9 @@ class VisualFixtureServerTest(unittest.TestCase):
         sources = {
             "request-paths.js": 'fetch(`/api/runs/${encodeURIComponent(run.id)}`);\n'
                                 'fetch(`/api/on/${encodeURIComponent(host)}/tasks`);\n',
+            "plugin-page.js": 'const base = `/api/plugins/${namespace}/pages/${page}/actions`;\n'
+                              'requestJson(`${base}/run`); requestJson(`${base}/confirm`);\n'
+                              'requestJson(`${base}/cancel`);\n',
             "task-shared.js": 'export function taskMutationPath(task, suffix = "") {\n'
                               '  return taskWorkspacePath(task, `/api/tasks/${encodeURIComponent(task.id)}${suffix}`);\n}\n',
             "task-actions.js": 'taskMutationPath(task, "/comments"); taskMutationPath(task, "/archive");\n'
@@ -953,10 +995,13 @@ class VisualFixtureServerTest(unittest.TestCase):
                          "/requeue", "/settle-merged", "/auto-fix", "/pilot-admission", "/post-deploy",
                          "/artifacts/{*path}")
         routes = ["/tasks", "/runs/{id}", "/on/{host}/{*path}", "/workflows/ship"]
+        routes += ["/plugins/{namespace}/pages/{page}/actions/" + action
+                   for action in ("run", "confirm", "cancel")]
         routes += ["/tasks/{id}" + suffix for suffix in task_suffixes]
         # A backend-only route is deliberately not a candidate request.
         routes.append("/tasks/{id}/backend-only")
-        (repo / "crates/orbit-web/src/routes.rs").write_text(
+        (repo / "crates/orbit-web/src/api").mkdir()
+        (repo / "crates/orbit-web/src/api/routes.rs").write_text(
             "\n".join(f'.route("{route}", handler)' for route in routes))
         shutil.copy(REMOTE_SEED, fixture_dir / "remote-host-workspaces.json")
         (fixture_dir / "experiments.json").write_text(json.dumps({
@@ -991,7 +1036,7 @@ class VisualFixtureServerTest(unittest.TestCase):
             "    res.writeHead(200, {'content-type':'text/event-stream'}); res.flushHeaders(); return;\n"
             "  }\n"
             "  if (req.method === 'OPTIONS') {\n"
-            "    const status = mode === 'absent' || mode === 'absent:' + req.url ? 404 : 405;\n"
+            "    const status = mode === 'absent' || mode === 'absent:' + req.url ? 404 : mode === 'error:' + req.url ? 503 : 405;\n"
             "    res.writeHead(status, {'content-type': 'text/plain', 'allow': 'GET'});\n"
             "    res.end(status === 404 ? 'missing' : 'method');\n"
             "    return;\n"
