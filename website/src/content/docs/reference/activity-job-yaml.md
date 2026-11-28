@@ -241,9 +241,43 @@ config:
 
 Step input can choose the checkout with `workspace_path`, but it never reaches the argument list.
 
-The step's output is `{ success, exit_code, stdout, stderr, log_tail, log_tail_truncated, duration_ms, timed_out, timeout_ms, argv, cwd, sandbox }`. The shipped `local-shell` executor declares no OS sandbox. To wrap shell steps in the host's OS backend, set `sandbox` on the executor definition; it applies to every activity that uses that executor. An activity's `fsProfile` is optional; when omitted, the `unrestricted` profile applies. On macOS, Seatbelt permits reads broadly by default; positive profile `read` entries do not restrict reads. It enforces `denyRead` and negated (`!`) exclusions in the profile's `read` list, along with default credential denies and any configured agent-sandbox masks. Providers may re-allow credential paths they need. Linux Bubblewrap enforces modify rules but does not enforce profile read rules, including `denyRead`. It replaces host `/tmp`, `/dev` and `/proc` with sandbox views and may selectively mount host paths into the sandbox at their planned destinations (such as paths named by modify rules and Git metadata). It masks fixed credential and runtime directories and any explicit caller-provided masks. Host files under `/tmp` stay hidden unless a mount restores them; other host paths remain readable. Do not rely on `denyRead` to protect secrets on Linux.
+A step that returns command output has `{ success, exit_code, stdout, stderr,
+log_tail, log_tail_truncated, duration_ms, timed_out, timeout_ms, argv, cwd,
+sandbox }`. `sandbox` names the backend the step ran under, or `none` when the
+executor declares no sandbox. When a command failure fails the step, Orbit
+keeps only a bounded diagnostic, `{ success, exit_code, duration_ms,
+timed_out, log_tail, log_tail_truncated }`. It has no `stdout`, `stderr`,
+`argv`, `cwd`, `timeout_ms` or `sandbox`. With `allow_nonzero_exit: true`, a
+nonzero exit returns the full command output, including `success: false`.
+The shipped `local-shell` executor declares no OS sandbox. To wrap shell steps
+in the host's OS backend, set `sandbox` on the executor definition; it applies
+to every activity that uses that executor. An activity's `fsProfile` is
+optional; when omitted, the `unrestricted` profile applies. On macOS, Seatbelt
+permits reads broadly by default; positive profile `read` entries do not
+restrict reads. It enforces `denyRead` and negated (`!`) exclusions in the
+profile's `read` list, along with default credential denies and any configured
+agent-sandbox masks. Providers may re-allow credential paths they need. Linux
+Bubblewrap enforces modify rules but does not enforce profile read rules,
+including `denyRead`. It replaces host `/tmp`, `/dev` and `/proc` with sandbox
+views and may selectively mount host paths into the sandbox at their planned
+destinations (such as paths named by modify rules and Git metadata). It masks
+fixed credential and runtime directories and any explicit caller-provided
+masks. Host files under `/tmp` stay hidden unless a mount restores them; other
+host paths remain readable. Do not rely on `denyRead` to protect secrets on
+Linux.
 
-A backend that does not match the host OS fails closed, even with `allow_fallback: true`. When the matching backend's native primitive is unavailable (`bwrap` absent or failing its probe on Linux, `/usr/bin/sandbox-exec` missing on macOS), the step fails unless the executor sets `allow_fallback: true`. That permits bare execution without the backend's filesystem policy or masks, subject to inherited restrictions. Other sandbox setup or spawn errors do not trigger fallback. The output reports `bare-fallback` when this happens.
+A backend that does not match the host OS fails closed, even with
+`allow_fallback: true`. When the matching backend's native primitive is
+unavailable (`bwrap` absent or failing its probe on Linux,
+`/usr/bin/sandbox-exec` missing on macOS), the step fails unless the executor
+sets `allow_fallback: true`. That permits bare execution without the backend's
+filesystem policy or masks, subject to inherited restrictions. Other sandbox
+setup or spawn errors do not trigger fallback. A step that continues after a
+permitted bare fallback reports `sandbox: bare-fallback` in its command
+output. A nonzero exit with `allow_nonzero_exit: true` still returns that full
+output, including the fallback name. When a command failure fails the step,
+the bounded diagnostic does not name the backend. Orbit logs a warning when it
+falls back.
 
 ## Job envelope
 

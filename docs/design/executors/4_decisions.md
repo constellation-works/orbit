@@ -80,7 +80,8 @@ shell step an injection surface.
   resolve under the workspace root and is applied as the child's initial working
   directory. That check does not confine later filesystem access, which is
   limited only by an effective OS sandbox or by restrictions the Orbit process
-  inherited. Each step reports the backend it actually ran under. Operators who
+  inherited. A succeeding step reports the backend it actually ran under; a
+  failed step's bounded diagnostic does not. Operators who
   want kernel confinement add a `sandbox:` to the definition and an `fsProfile`
   to the activity. The current filesystem authority contract is in
   [specs/local-shell.md](./specs/local-shell.md#filesystem-authority).
