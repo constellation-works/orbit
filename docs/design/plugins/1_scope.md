@@ -691,9 +691,18 @@ unmanaged `orbit mcp serve` session, the dashboard. `task_id` is also `null` for
 that serves no task. Orbit takes them from the dispatch, never from tool input:
 
 - A job step that calls a plugin tool (`plugin.tool_call`) gets the run the dispatcher is
-  executing, and the task its run input names (`task_id`, `task.id`, else the first of
-  `task_ids`) — the value a CLI agent step exports as `ORBIT_TASK_ID`. The step's `input` for
-  the tool does not contribute.
+  executing and the task its run input names: the first non-empty of `task_id`, `task.id`, or
+  the entry of a `task_ids` list that has exactly one entry. A `task_ids` list with two or more
+  entries names no task. Orbit never picks an entry by position, so the call's `task_id` is
+  `null`. A CLI agent step uses the same selection for the `ORBIT_TASK_ID` it exports; for a
+  multi-task list it exports none and strips any inherited value, so its nested calls have no
+  task. The step's `input` for the tool does not contribute.
+- A mutating `plugin.tool_call` in a `spec.task_delivery` job, or any `plugin.tool_call` that
+  supplies `workspace_path`, is a separate path. It binds to the run's authenticated
+  `worktree_setup` checkout and must name exactly one task (§4.5, "Worktree binding for
+  deterministic delivery calls"); a multi-task input fails closed before the plugin starts.
+  When it binds, the worktree, run and task of that binding replace the ordinary values above
+  for that call. Calls outside that path keep the ordinary identity.
 - A CLI agent's nested `orbit tool run` or `orbit mcp serve` gets `ORBIT_RUN_ID` and
   `ORBIT_TASK_ID` from the run envelope Orbit stamped into the agent's environment, honored
   only with `ORBIT_MANAGED_RUN_CONTEXT` set — the boundary that already scopes reservation
