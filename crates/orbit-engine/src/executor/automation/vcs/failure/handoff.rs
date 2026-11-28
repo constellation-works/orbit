@@ -56,7 +56,8 @@ fn review_repair_after_merge_handoff<H: RunLifecycle + ?Sized>(
     error_message: &str,
     run_id: &str,
 ) -> Result<Option<Value>, OrbitError> {
-    let Some(start) = error_message.find("review_repair_after_merge:") else {
+    let Some(start) = error_message.find(orbit_types::workflow::REVIEW_REPAIR_AFTER_MERGE_MARKER)
+    else {
         return Ok(None);
     };
     let recipe = &error_message[start..];
@@ -65,7 +66,7 @@ fn review_repair_after_merge_handoff<H: RunLifecycle + ?Sized>(
     let (operation_id, legacy_prefix) = review_repair_comment_key(recipe).unwrap_or_else(|| {
         (
             "review-repair-after-merge:".to_string(),
-            "review_repair_after_merge:".to_string(),
+            orbit_types::workflow::REVIEW_REPAIR_AFTER_MERGE_MARKER.to_string(),
         )
     });
     let already = comment_already_recorded(

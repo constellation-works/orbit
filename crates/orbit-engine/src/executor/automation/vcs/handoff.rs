@@ -340,7 +340,7 @@ pub(super) fn record_failed_handoff<H: RunLifecycle + RuntimeHostProcessEnvironm
 /// The operator recipe inside `error`, starting at its typed marker.
 /// `None` for every other handoff failure.
 fn review_repair_body(error: &str) -> Option<String> {
-    let start = error.find("review_repair_after_merge:")?;
+    let start = error.find(orbit_types::workflow::REVIEW_REPAIR_AFTER_MERGE_MARKER)?;
     Some(error[start..].to_string())
 }
 

@@ -14,6 +14,7 @@ use super::state::{
 use crate::workflow::{
     IMAGE_NOT_SEEN_MARKER, PR_AUTO_FIX_CHECK_REPAIR_MARKER, PR_CANDIDATE_WORKFLOW_FAILURE_MARKER,
     REVIEW_ABANDONED_MARKER, REVIEW_LANDING_DECISION_PENDING, REVIEW_PR_MERGED_OUTSIDE_ORBIT,
+    REVIEW_REPAIR_AFTER_MERGE_MARKER,
 };
 
 /// Separates a generic CLI exit failure from its untrusted stderr context.
@@ -54,6 +55,7 @@ const CONTROL_PLANE_MARKER_SPLITS: &[(&str, usize)] = &[
     (REVIEW_LANDING_DECISION_PENDING, 16),
     (REVIEW_ABANDONED_MARKER, 7),
     (REVIEW_PR_MERGED_OUTSIDE_ORBIT, 16),
+    (REVIEW_REPAIR_AFTER_MERGE_MARKER, 6),
 ];
 
 /// Neutralize Orbit control-plane markers inside untrusted child output so

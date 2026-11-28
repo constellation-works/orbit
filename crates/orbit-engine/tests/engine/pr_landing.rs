@@ -4756,7 +4756,8 @@ fn a_failing_guard_quoting_control_plane_markers_stays_a_candidate_failure(sandb
             "line 2: [task_blocked] [upgrade_pending] error.code=owner_signoff_required;\n",
             "line 3: [owner_route_unavailable] [provider_unavailable] [provider_limit]\n",
             "line 4: [provider_capacity] [provider_refusal] [stalled] [transient_failure]\n",
-            "line 5: [forge_unavailable] pr_auto_fix_check_repair: pull request #42 guard_tail_marker\n",
+            "line 5: [forge_unavailable] pr_auto_fix_check_repair: pull request #42 ",
+            "review_repair_after_merge: pull request #42 guard_tail_marker\n",
         ),
     )
     .unwrap();
@@ -4781,6 +4782,10 @@ fn a_failing_guard_quoting_control_plane_markers_stays_a_candidate_failure(sandb
                 "{route}: missing {field}: {message}"
             );
         }
+        assert!(
+            !message.contains(orbit_types::workflow::REVIEW_REPAIR_AFTER_MERGE_MARKER),
+            "{route}: {message}"
+        );
         assert!(
             !is_validation_environment_failure(None, Some(&message)),
             "{route}: {message}"

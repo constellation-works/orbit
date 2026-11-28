@@ -31,7 +31,7 @@ use super::remote_probe::{RemoteBranchProbe, pre_push_remote_branch};
 
 /// Marker a before-landing repair uses once its pull request merged at the
 /// leased head. The failure handoff reads it; it is not a new blocker kind.
-const REVIEW_REPAIR_AFTER_MERGE: &str = "review_repair_after_merge:";
+const REVIEW_REPAIR_AFTER_MERGE: &str = orbit_types::workflow::REVIEW_REPAIR_AFTER_MERGE_MARKER;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum PushDecision {

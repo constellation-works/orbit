@@ -318,7 +318,10 @@ impl RequiredCommandRun {
         &self,
         candidate: &str,
     ) -> Option<OrbitError> {
+        // The notice is the command's own output: neutralize it so a quoted
+        // control-plane marker cannot classify this refusal.
         let notice = self.deferred_notice.as_ref().filter(|_| self.passed)?;
+        let notice = orbit_types::workflow::neutralize_control_plane_markers(notice);
         Some(OrbitError::Execution(format!(
             "{VALIDATION_ENVIRONMENT_MARKER} required validation '{}' exited zero on candidate \
              {candidate} but deferred a sandbox-confined path, so it never ran before delivery \
