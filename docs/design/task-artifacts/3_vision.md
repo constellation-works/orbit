@@ -148,7 +148,7 @@ Orbit tasks should feel local and inspectable without forcing every user into a 
 - [docs/design/CONVENTIONS.md](../CONVENTIONS.md) - design folder layout and ADR rules.
 - [docs/design/task-publication/](../task-publication/1_overview.md) - accepted one-way publication design using a dedicated private repository while preserving one task authority.
 - [docs/design/orbit-search/](../orbit-search/) - per-field indexing of task text.
-- [docs/POSITIONING.md](../../POSITIONING.md) - product doctrine that currently treats task IDs as local search keys.
+- [docs/principles/positioning.md](../../principles/positioning.md) - product doctrine that currently treats task IDs as local search keys.
 
 ### 4.2 External
 

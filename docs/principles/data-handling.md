@@ -33,7 +33,7 @@ be ruled in or out for locally installed software in general.
 ## What Orbit stores, and where
 
 The full inventory, with backup and restore guidance, is in
-[state-and-backup](./runbooks/state-and-backup.md). The parts that matter for a
+[state-and-backup](../runbooks/state-and-backup.md). The parts that matter for a
 data-handling review:
 
 | Data | Location | Notes |
@@ -41,7 +41,7 @@ data-handling review:
 | Task bundles (titles, descriptions, plans, review threads, status) | `~/.orbit/tasks/workspaces/<ws-id>/<task-id>/` | Authoritative. Plain files on disk; may contain whatever you or an agent wrote into a task. |
 | Audit events, job runs, step checkpoints, routine state | `~/.orbit/orbit.db` (SQLite) | Authoritative history of what each agent invocation did. |
 | Redacted agent output blobs | `<repo>/.orbit/state/audit/blobs/` | Content-addressed; secrets are redacted at write time (see below). |
-| Process logs | `~/.orbit/state/logs/orbit.jsonl`, `orbit-agent.jsonl` beside it | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](./runbooks/logging.md). |
+| Process logs | `~/.orbit/state/logs/orbit.jsonl`, `orbit-agent.jsonl` beside it | JSONL, rotated locally; secret-looking values are redacted before reaching the sink. See [logging](../runbooks/logging.md). |
 | Lexical task index | `<repo>/.orbit/state/semantic.db` | Local SQLite FTS5 index; regenerable with `orbit search reindex`. No model or network request. |
 | Lease tokens (lease listener user only) | `~orbit-lease/.orbit/lease-tokens.db` (SQLite) | Exists only where root provisioned it for the listener user. Holds each token's SHA-256, never the secret, with its scope and an audit of mints, revocations, refused verifications and other lease listener refusals; listener rows carry the client address and request method and path. |
 | Worktrees | `<repo>/.orbit/state/worktrees/` | Active and failed runs can retain uncommitted candidates; preserve them until the worktree GC safety checks permit removal. |
@@ -51,7 +51,7 @@ data-handling review:
 
 Nothing in this table is synchronised anywhere by default. If you want task
 history to leave the machine, you opt in explicitly through
-[task publication](./runbooks/task-publication.md) to a Git repository you
+[task publication](../runbooks/task-publication.md) to a Git repository you
 choose, or through federated MCP over SSH to hosts you configure.
 
 ## What leaves the machine
@@ -77,7 +77,7 @@ command you ran or a crew you configured.
 
 Most Orbit work is done by agent CLIs — for example Claude Code, Codex, Gemini,
 Copilot, Grok, Antigravity, and Muse (the Cursor, Pi, and OpenCode lanes were
-[retired](CONFIG.md#retired-providers)) — running as
+[retired](../CONFIG.md#retired-providers)) — running as
 subprocesses. Those processes talk to their own
 providers with their own credentials under their own terms of service. Orbit
 does not proxy, log, or inspect that traffic beyond the stdout/stderr it
@@ -99,7 +99,7 @@ One specific worth knowing:
 
 | Surface | Default | Notes |
 | --- | --- | --- |
-| Dashboard (`orbit web serve`) | Binds `127.0.0.1` | Reach a remote workspace with `orbit web connect`, which tunnels over SSH, or front it with Tailscale Serve: a `Host` in `machine.web.trusted_hosts` (no port or `:443`) is admitted only with exactly one `Tailscale-User-Login` listed in `machine.web.trusted_logins`. Safe requests, including shell navigation and API reads, may omit `Origin`; when present it must match the `Host` (`https://<host>`). API writes (`POST`, `PUT`, `PATCH` or `DELETE`) require that matching `Origin` ([CONFIG.md](CONFIG.md#dashboard-over-tailscale-serve)). |
+| Dashboard (`orbit web serve`) | Binds `127.0.0.1` | Reach a remote workspace with `orbit web connect`, which tunnels over SSH, or front it with Tailscale Serve: a `Host` in `machine.web.trusted_hosts` (no port or `:443`) is admitted only with exactly one `Tailscale-User-Login` listed in `machine.web.trusted_logins`. Safe requests, including shell navigation and API reads, may omit `Origin`; when present it must match the `Host` (`https://<host>`). API writes (`POST`, `PUT`, `PATCH` or `DELETE`) require that matching `Origin` ([CONFIG.md](../CONFIG.md#dashboard-over-tailscale-serve)). |
 | MCP server (`orbit mcp serve`) | Local stdio | Remote access (`--mode remote`) is a byte-transparent SSH stdio proxy; authorization is by the SSH identity you configure. |
 | MCP TCP listener (`orbit mcp listen`) | Loopback-bound TCP socket | A wider bind must be requested explicitly with `--allow-non-loopback`. A connection is accepted only when the peer's user id is the server's; a different user, or a remote TCP client with no local user id, is refused before any message is read. |
 | Lease listener | Off, not configurable | Path leases are not configurable [ORB-22808]: no command starts the listener and Orbit Web serves no lease intake socket. The retained code would run as a dedicated listener user, serve only the lease routes and `/healthz`, each lease request authenticated by a bearer lease token, and forward operations to Orbit Web over a local Unix socket, refusing `0.0.0.0` or `::` without TLS or a declared proxy. |
@@ -120,7 +120,7 @@ One specific worth knowing:
   provider runtime declares it needs, or an `env` entry of the crew that agent
   runs as. A benignly named credential such as `DATABASE_URL` does not reach an
   agent by accident. See
-  [CONFIG.md — `[execution.env]`](./CONFIG.md#executionenv--the-agent-subprocess-environment).
+  [CONFIG.md — `[execution.env]`](../CONFIG.md#executionenv--the-agent-subprocess-environment).
 - **Audit three grant surfaces, not one.** The shared `[execution.env].pass`
   list is one. The others are the global crew `env` entries and the provider's
   own credential store. A crew `env` entry reaches only that crew's agents and can
@@ -154,7 +154,7 @@ One specific worth knowing:
 
 Nothing, unless you send it. The project has no telemetry endpoint. The only
 ways information reaches the maintainers are a GitHub issue, discussion, pull
-request, or a private vulnerability report under [SECURITY.md](../SECURITY.md).
+request, or a private vulnerability report under [SECURITY.md](../../SECURITY.md).
 Redact anything sensitive before attaching logs or run bundles to an issue.
 
 ## Where the compliance boundary sits
@@ -169,7 +169,7 @@ If a questionnaire asks for a SOC 2 report or DPA from "the vendor," explain
 that Orbit is locally installed and has no Orbit-operated hosted service or
 automatic project telemetry, then assess the other configured services in the
 data flow separately. This page describes Orbit's current behavior; it is not
-a legal or compliance determination. See [SECURITY.md](../SECURITY.md) for
+a legal or compliance determination. See [SECURITY.md](../../SECURITY.md) for
 project security reporting.
 
 ## Practical guidance for regulated environments
@@ -184,9 +184,9 @@ project security reporting.
   out-of-scope directories away from agents.
 - **Treat `~/.orbit/` as sensitive storage.** Back it up and encrypt it under
   the same policy as the repositories it references. The
-  [state-and-backup](./runbooks/state-and-backup.md) runbook covers WAL-safe
+  [state-and-backup](../runbooks/state-and-backup.md) runbook covers WAL-safe
   backups and what is regenerable.
-- **Retention is yours.** Logs rotate locally ([logging](./runbooks/logging.md));
+- **Retention is yours.** Logs rotate locally ([logging](../runbooks/logging.md));
   audit history in `orbit.db` can be removed by `orbit gc audit --confirm` or the
   opt-in `store-gc` routine according to `retention.audit_days` (60 days by
   default). Nothing ages out to a remote.
@@ -196,11 +196,11 @@ project security reporting.
 
 ## Related
 
-- [SECURITY.md](../SECURITY.md) — reporting vulnerabilities; what is in scope.
-- [CONFIG.md](./CONFIG.md) — provider credentials, the subprocess environment
+- [SECURITY.md](../../SECURITY.md) — reporting vulnerabilities; what is in scope.
+- [CONFIG.md](../CONFIG.md) — provider credentials, the subprocess environment
   allowlist, sandbox profiles.
-- [state-and-backup](./runbooks/state-and-backup.md) — the complete state
+- [state-and-backup](../runbooks/state-and-backup.md) — the complete state
   inventory.
-- [logging](./runbooks/logging.md) — log locations, rotation, and redaction.
-- [auditability design](./design/auditability/1_overview.md) — what the audit
+- [logging](../runbooks/logging.md) — log locations, rotation, and redaction.
+- [auditability design](../design/auditability/1_overview.md) — what the audit
   trail records and why.

@@ -90,8 +90,8 @@ Review and commit the checkout files listed by `workspace init`, including MCP c
 
 - **[orbit-cli.com](https://orbit-cli.com):** guides, concepts, and the full CLI and config reference
 - **[docs/CONFIG.md](docs/CONFIG.md):** crews, pools, base branch, sandbox
-- **[docs/POSITIONING.md](docs/POSITIONING.md):** what Orbit is for, and what it deliberately isn't
-- **[docs/OPTIMISTIC_MERGING.md](docs/OPTIMISTIC_MERGING.md):** the preferred delivery mode: merge fast, review after landing, keep the queue draining
+- **[docs/principles/positioning.md](docs/principles/positioning.md):** what Orbit is for, and what it deliberately isn't
+- **[docs/principles/optimistic-merging.md](docs/principles/optimistic-merging.md):** the preferred delivery mode: merge fast, review after landing, keep the queue draining
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** and **[design docs](docs/INDEX.md#designs)**
 - **[CHANGELOG.md](CHANGELOG.md):** breaking changes ship in minor releases
 - Crews name a provider, model, and effort level; complexity pools choose one for a task without an explicit crew. See [crew definitions](docs/CONFIG.md#crewsname--which-provider-model-runs-the-task), [init's seeded pools](docs/CONFIG.md#what-orbit-init-seeds), and [complexity routing, weighting, and overrides](docs/CONFIG.md#automatic-crew-pools-by-complexity).
