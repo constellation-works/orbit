@@ -16,6 +16,10 @@ See [Run build provenance](development/README.md#run-build-provenance).
 
 See [Validation and CI](development/validation-and-ci.md#validation-and-ci).
 
+On macOS agent lanes, record a warnings-denied rustdoc `EPERM` for an output
+matching `**/*.env.*` (for example, orbit-common's `Env` page) as `not_run`;
+hosted Linux CI documentation is the evidence. See the [validation route](development/validation-and-ci.md#validation-and-ci).
+
 ### Affected-test selection
 
 See [Affected-test selection](development/validation-and-ci.md#affected-test-selection).
