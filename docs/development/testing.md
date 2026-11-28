@@ -183,4 +183,3 @@ not change. Explicit refresh and change-stream recovery use fresh direct
 reads. Older forwarded hosts without the endpoint fall back to direct reads;
 the ten-read budget applies to hosts serving the combined endpoint. Host
 resource and fleet timers remain independent.
-

@@ -506,4 +506,3 @@ additional test runner waiting for capacity. None of these fields subtracts
 queue time from the 400 s Check budget. Attach raw records, the replay log
 and gaps to the operator's measurement record. A p90 over 400 s requires a
 follow-up repair; it must not be recorded as restored.
-
