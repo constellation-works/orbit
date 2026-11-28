@@ -6,8 +6,9 @@
 //! plugin load hashed, with nothing in a page file parsed, escaped or
 //! rewritten: the load already refused a file that would end its element
 //! early or markup that holds its own `script` or `link` element. The policy
-//! admits exactly the scripts written here, each by the SHA-256 of the
-//! content written, so nothing else the page smuggles in can run.
+//! admits exactly the scripts written here, each by the SHA-256 of its UTF-8
+//! text after HTML input preprocessing, so nothing else the page smuggles in
+//! can run.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -239,9 +240,11 @@ pub(crate) fn write_document(source: &PageSource) -> PageDocument {
     }
 }
 
-/// `'sha256-<base64>'` of one script element's content.
+/// `'sha256-<base64>'` of one script element's HTML-preprocessed UTF-8 text.
 pub(crate) fn script_hash(content: &[u8]) -> String {
-    let digest = Sha256::digest(content);
+    let text = String::from_utf8_lossy(content);
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let digest = Sha256::digest(normalized.as_bytes());
     format!(
         "'sha256-{}'",
         base64::engine::general_purpose::STANDARD.encode(digest)
