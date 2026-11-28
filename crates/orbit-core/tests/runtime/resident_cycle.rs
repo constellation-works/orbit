@@ -32,7 +32,9 @@ use orbit_core::application::automation::evaluate_routine;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::JobRuns;
 use orbit_core::runtime::OrbitRuntime;
+use orbit_engine::HostEnvironment as _;
 use orbit_store::contract::KeyedJobRunAdmission;
+use orbit_tools::{ActivityBinding, ToolContext};
 use orbit_types::task::{TaskArtifact, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::{
@@ -69,6 +71,9 @@ struct Fixture {
     repo: PathBuf,
     runtime: OrbitRuntime,
     jobs: Arc<JobRuns>,
+    /// The cycle run `as_cycle_agent` is serving, whose notice writes carry
+    /// its activity binding.
+    cycle_run: std::cell::RefCell<Option<String>>,
 }
 
 fn fixture() -> Fixture {
@@ -123,6 +128,7 @@ fn fixture_at(repo_dir: &str) -> Fixture {
         repo,
         runtime,
         jobs,
+        cycle_run: Default::default(),
     }
 }
 
@@ -217,9 +223,14 @@ pub(super) fn resident_test_broker(
 }
 
 impl Fixture {
-    /// Declare the client's run for routing, without an authenticated broker.
+    /// Run `body` as `run_id`'s cycle agent in process, without a broker. Its
+    /// notice writes carry the run's activity binding, as the dispatching host
+    /// supplies it.
     fn as_cycle_agent<T>(&self, run_id: &str, body: impl FnOnce() -> T) -> T {
-        self.with_cycle_environment(run_id, None, body)
+        let outer = self.cycle_run.replace(Some(run_id.to_string()));
+        let result = self.with_cycle_environment(run_id, None, body);
+        self.cycle_run.replace(outer);
+        result
     }
 
     #[cfg(unix)]
@@ -370,7 +381,26 @@ impl Fixture {
     }
 
     fn agent_call(&self, tool: &str, input: Value) -> Result<Value, String> {
-        call(&self.runtime, tool, input, McpCapability::Agent)
+        let cycle = self.cycle_run.borrow().clone();
+        match cycle {
+            Some(run_id) if tool == "orbit.notice.post" => {
+                orbit_core::test_support::EngineHost::new(&self.runtime)
+                    .run_tool_with_context(
+                        tool,
+                        input,
+                        ToolContext {
+                            session_context: session(McpCapability::Agent),
+                            activity_binding: Some(ActivityBinding {
+                                job_run_id: run_id,
+                                task_id: None,
+                            }),
+                            ..ToolContext::default()
+                        },
+                    )
+                    .map_err(|error| error.to_string())
+            }
+            _ => call(&self.runtime, tool, input, McpCapability::Agent),
+        }
     }
 
     fn seed_action_row(&self, mandate: &str, row: ResidentActionRow) {

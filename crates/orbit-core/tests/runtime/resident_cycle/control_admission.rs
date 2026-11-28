@@ -84,12 +84,10 @@ fn control_fences_admission_but_allows_an_admitted_cycle_to_finish() {
         let post_status = |at, title: &str| {
             orbit_core::test_support::with_notice_post_time(at, || {
                 fx.as_cycle_agent(&run, || {
-                    call(
-                        &fx.runtime,
+                    fx.agent_call(
                         "orbit.notice.post",
                         json!({"kind": "info", "title": title, "body": "Cycle status",
                                "dedupe_key": orbit_types::record::resident_status_notice_key(&mandate)}),
-                        McpCapability::Agent,
                     )
                     .unwrap()
                 })
