@@ -71,10 +71,11 @@ bullet was rechecked at `d10fae79b`).
   prefix the `args` of a `command` activity. Neither source is step input: templated input
   never supplies the program or argv. The executor defaults to `local-shell` when
   `config.executor` is absent, and its shipped
-  definition declares no `sandbox`, so a step runs bare under the process supervisor and
-  is confined only by a `cwd` check: the
-  directory must resolve inside the workspace root. Kernel confinement is opt-in, through
-  a `sandbox:` on the executor definition and an `fsProfile` on the activity
+  definition declares no `sandbox`, so a step runs bare under the process supervisor. Its
+  `cwd` check validates only the child's initial working directory: the directory must
+  resolve inside the workspace root. Filesystem access after launch is limited only by an
+  effective OS sandbox or by restrictions the Orbit process inherited. Kernel confinement is
+  opt-in, through a `sandbox:` on the executor definition and an `fsProfile` on the activity
   (`crates/orbit-core/assets/executors/local-shell.yaml`). A nonzero exit fails the step
   (`LocalShellFailed`) unless `allow_nonzero_exit` is set.
 - **The non-success outcome survives.** `StepOutcome { success, output, message }`
@@ -150,8 +151,10 @@ ORB-00374 removed `type: shell` for three reasons, and all three still bind:
    would have reopened the surface unattended.
 
 The same three risks apply to `local_shell`, which restored the inline form under
-[ORB-11294]. Its shipped definition declares no sandbox, so its `cwd` check is the only
-confinement by default. Its program is named in the workspace YAML with no allowlist.
+[ORB-11294]. Its shipped definition declares no sandbox, so its `cwd` check validates only
+the child's initial working directory. Filesystem access after launch is limited only by an
+effective OS sandbox or by restrictions the Orbit process inherited. Its program is named
+in the workspace YAML with no allowlist.
 A routine can run a job that holds a `local_shell` step. This design leaves
 `local_shell` as it is (see [Relation to `local_shell`](./2_design.md#relation-to-local_shell)).
 

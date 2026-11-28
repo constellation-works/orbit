@@ -142,11 +142,14 @@ uses, not a second implementation:
 
 ## Filesystem authority
 
-Two independent limits apply.
+The working directory is checked at launch. Filesystem access after launch is
+limited only by an effective OS sandbox, if one applies, or by restrictions the
+Orbit process inherited.
 
 1. **`cwd` containment.** The resolved working directory is canonicalized and
-   must stay under the resolved workspace root. This is enforced regardless of
-   sandboxing, because the shipped definition declares none.
+   must stay under the resolved workspace root. This check validates only the
+   child's initial working directory. It is enforced regardless of sandboxing,
+   because the shipped definition declares none.
 2. **The activity's `fsProfile`.** It is resolved against the active policy and
    handed to sandbox compilation exactly as it is for a CLI agent. If the
    executor definition declares a `sandbox`, the child runs inside it; if the

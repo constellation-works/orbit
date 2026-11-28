@@ -12,8 +12,9 @@ spec:
   # baseline, and `timeout_seconds` is the fallback wall-clock budget.
   #
   # No `sandbox` is declared, so shell steps run bare under the process
-  # supervisor and are confined only by the cwd containment check and by
-  # whatever sandbox already contains the Orbit process. Add
+  # supervisor. The cwd containment check validates only the child's initial
+  # working directory. Filesystem access after launch is limited only by an
+  # effective OS sandbox or by restrictions the Orbit process inherited. Add
   # `sandbox: macos-sandbox-exec` on macOS or `sandbox: linux-bwrap` on Linux,
   # plus an activity `fsProfile` to confine them at the kernel. Installed
   # settings are not translated between platforms; an incompatible backend
