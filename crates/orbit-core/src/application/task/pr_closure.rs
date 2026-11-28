@@ -391,7 +391,7 @@ impl OrbitRuntime {
         None
     }
 
-    /// [`Self::unsettled_task_claim`] over an already-read claim ledger:
+    /// [`Self::unsettled_task_claim_with`] over an already-read claim ledger:
     /// `None` means the ledger could not be read.
     pub(super) fn unsettled_task_claim_with_claims(
         task: &Task,
