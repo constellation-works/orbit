@@ -52,7 +52,7 @@ compares the two routes for one script.
 | Program | `command` + `args`, or `shell` + inline `script`, in the activity config; or the selected executor definition's `command` when the activity names none | A manifest and an entry file, with no inline text (§1) |
 | Authority | The activity YAML, or the executor definition it selects, that names the program; no digest and no operator check | An operator grant, host-local, bound to the manifest and entry digest (§2) |
 | Content change | Not checked. Neither the YAML nor the file it runs is digested | Voids the grant; the next run refuses with `grant_stale` (§2) |
-| Sandbox | None by default. A `sandbox:` on the executor definition and an `fsProfile` on the activity opt in | The script profile, default-deny, with no unsandboxed fallback (§3) |
+| Sandbox | None by default. A `sandbox:` on the executor definition opts in, for every activity on it; the activity's optional `fsProfile` selects the policy profile, and `unrestricted` applies when it is omitted | The script profile, default-deny, with no unsandboxed fallback (§3) |
 | Network | The host's, by default | `none` by default; a grant can widen it (§3) |
 | Files and cwd | `cwd` must resolve inside the workspace root | Worktree or read-only root, with `.orbit/` masked; declared inputs and outputs (§3, §4) |
 | Environment | An allowlisted baseline, plus the executor's and the activity's `env` | Cleared; fixed values plus the grant's `env_pass` names (§3) |

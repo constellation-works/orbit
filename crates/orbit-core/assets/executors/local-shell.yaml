@@ -15,10 +15,13 @@ spec:
   # supervisor. The cwd containment check validates only the child's initial
   # working directory. Filesystem access after launch is limited only by an
   # effective OS sandbox or by restrictions the Orbit process inherited. Add
-  # `sandbox: macos-sandbox-exec` on macOS or `sandbox: linux-bwrap` on Linux,
-  # plus an activity `fsProfile` to confine them at the kernel. Installed
-  # settings are not translated between platforms; an incompatible backend
-  # fails closed. Each step reports the backend it actually ran under.
+  # `sandbox: macos-sandbox-exec` on macOS or `sandbox: linux-bwrap` on Linux
+  # to wrap every activity that uses this executor in that OS backend. The
+  # backend is selected here. An activity's `fsProfile` is optional: it selects
+  # the named policy profile the wrapper enforces. Without one, the built-in
+  # `unrestricted` profile applies, and the policy's deny rules still apply.
+  # Installed settings are not translated between platforms; an incompatible
+  # backend fails closed. Each step reports the backend it actually ran under.
   executor_type: local_shell
   args: []
   env: {}
