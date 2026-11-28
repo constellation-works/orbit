@@ -10,17 +10,13 @@ use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_types::task::Task;
 use orbit_types::workflow::ResourceThrottle;
 
-use crate::application::admission::auto_admission::{
-    AdmissionHolders, AdmissionSelection, SelectionContext, select_admissions,
-};
-use crate::application::admission::backlog_exclusion::BacklogSnapshot;
-use crate::application::admission::cpu_light::{CPU_LIGHT_LEAVES, LightBudget, ResourceGate};
-use crate::application::admission::gap_fit::GapFit;
-use crate::application::admission::unknown_footprint::{
-    FootprintGuard, FootprintWait, whole_tree_holder,
-};
 use crate::application::job::PublishedResume;
 use crate::runtime::stored::locks::UnlockedContextPaths;
+use crate::unit::admission::{
+    AdmissionHolders, AdmissionSelection, BacklogSnapshot, CPU_LIGHT_LEAVES, FootprintGuard,
+    FootprintWait, GapFit, LightBudget, ResourceGate, SelectionContext, select_admissions,
+    whole_tree_holder,
+};
 
 /// Light budget, gate and free slots before a caller reserves any for repair.
 ///

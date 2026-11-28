@@ -5,8 +5,8 @@ use serde_json::json;
 
 use super::drains::workspace_drains;
 use crate::OrbitRuntime;
-use crate::application::admission::backlog_exclusion::backlog_snapshot_observed;
 use crate::application::automation::AutomationBoardPort;
+use crate::unit::admission::backlog_snapshot_observed;
 
 /// Adapter binding [`AutomationBoardPort`] to workspace auto's board reads.
 pub(crate) struct AutomationPort<'a>(pub(crate) &'a OrbitRuntime);

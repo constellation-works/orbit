@@ -5,10 +5,8 @@ use serde_json::Value;
 
 use super::super::drains::drain_run_id;
 use crate::OrbitRuntime;
-use crate::application::admission::auto_admission::AdmissionSelection;
-use crate::application::admission::gap_fit::{GapFit, GapFitMode, HeadWait};
-use crate::application::admission::pass_error::PassError;
 use crate::runtime::host_resource::forecast::{ForecastDecision, ForecastPoints};
+use crate::unit::admission::{AdmissionSelection, GapFit, GapFitMode, HeadWait, PassError};
 
 /// The waiting reason of a candidate `enforce` gap fit kept out of a pass.
 pub(super) const GAP_FIT_REASON: &str = "gap_fit";

@@ -233,7 +233,7 @@ impl OrbitRuntime {
     /// Why `task` waits out a provider failure hold at this admission:
     /// `Some` when the hold excludes every crew it could run as, `None` when
     /// no hold stands or another crew may take it.
-    pub(in crate::application) fn provider_backoff_deferral(
+    pub(crate) fn provider_backoff_deferral(
         &self,
         task: &Task,
         pools: &CrewPools,

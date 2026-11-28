@@ -7,8 +7,8 @@ use super::model::{self, Draw, FORECAST_SEED, ITERATIONS, Item, Resolved, Script
 use super::outcomes::{Episode, MAX_ATTEMPTS};
 use super::rework::{self, ForecastArrivalStream, GenerationLimit, RegressionRework};
 use super::schedule::{self, DrainStop, HORIZON_HOURS, Scenario, ScheduleState};
-use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
 use crate::application::statistics::SplitMix64;
+use crate::unit::admission::{ForecastAdmission, ForecastWait};
 use orbit_common::Env;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

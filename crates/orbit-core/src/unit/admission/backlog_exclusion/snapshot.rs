@@ -13,7 +13,6 @@ use orbit_types::task::{
 use orbit_types::workflow::activity_job::Provider;
 use orbit_types::workflow::{REVIEW_RUN_OPTION_SOURCE, ReviewAdmission, ReviewLayer, ShipMode};
 
-use super::super::claim_holders::{self, ClaimHolders};
 use super::super::pass_error::PassError;
 use super::super::surface_reservation::{
     MAX_SURFACE_RESERVATIONS, SurfaceLockContext, reserves_surface, reserving_detail,
@@ -42,6 +41,8 @@ use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::stored::locks::{
     active_task_lock_holders, lock_holder_index, task_lock_overlaps,
 };
+use crate::unit::admission::claim_holder::{self, ClaimHolders};
+use crate::unit::admission::executor_order::owner_dispatch_order;
 
 /// Observation keeps the live launcher's recorded missing-source names;
 /// without a live run, readiness judges the observing environment.
@@ -223,7 +224,7 @@ pub(super) fn backlog_snapshot_in_mode(
     // [ORB-17304] Within a band, work only the owner can run among the live
     // executors leads; without a census row of its own the order is
     // canonical.
-    let dispatch_order = runtime.owner_dispatch_order(&executor_host_os);
+    let dispatch_order = owner_dispatch_order(runtime, &executor_host_os);
     sort_tasks_for_automatic_dispatch(&mut backlog, &expiring_batches, &dispatch_order);
     let mut excluded = Vec::new();
     // Operator work is never admitted, whatever else holds it, so a human
@@ -685,7 +686,7 @@ pub(super) fn backlog_snapshot_in_mode(
                 })
                 .collect(),
             crew: None,
-            detail: Some(claim_holders::claim_detail(claim)),
+            detail: Some(claim_holder::claim_detail(claim)),
         });
         false
     });
@@ -789,7 +790,7 @@ pub(super) fn backlog_snapshot_in_mode(
             crew: None,
             // Another task's claim is named from `blocked_by` where the wait
             // is reported; a claim on this task itself is named here.
-            detail: (claim.task_id == task.id).then(|| claim_holders::claim_detail(claim)),
+            detail: (claim.task_id == task.id).then(|| claim_holder::claim_detail(claim)),
         });
         false
     });
@@ -827,7 +828,7 @@ pub(super) fn backlog_snapshot_in_mode(
 }
 
 /// The backlog tasks whose frozen batch nears its deadline [ORB-14624].
-pub(in crate::application::admission) fn expiring_backlog_batches(
+pub(in crate::unit::admission) fn expiring_backlog_batches(
     runtime: &OrbitRuntime,
     backlog: &[&Task],
 ) -> BTreeMap<String, DateTime<Utc>> {

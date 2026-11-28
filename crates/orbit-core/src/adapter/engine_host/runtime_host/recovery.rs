@@ -120,14 +120,14 @@ pub(super) fn acquire_deferred_footprint(
     // reason on an immediate retry, so the refusal is not retried. The
     // wait-expired refusal keeps its typed variant so the run ends held;
     // every other refusal (including the run-stopped one) stays permanent.
-    OrbitRuntime::acquire_deferred_footprint(runtime, run_id, activity_name).map_err(|error| {
-        match error {
+    crate::unit::admission::acquire_deferred_footprint(runtime, run_id, activity_name).map_err(
+        |error| match error {
             OrbitError::FootprintUnavailable(message) => {
                 orbit_engine::DispatchError::FootprintUnavailable(message)
             }
             other => orbit_engine::DispatchError::CliInvocationPermanent(other.to_string()),
-        }
-    })
+        },
+    )
 }
 
 pub(super) fn admit_final_recovery(

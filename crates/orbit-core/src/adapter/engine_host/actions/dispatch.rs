@@ -9,11 +9,11 @@ use orbit_types::workflow::{CoreDeterministicAction, DeterministicAction};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
-use crate::application::admission::{backlog_exclusion, scan_unresolved};
 use crate::application::job::{pipeline_actions, script_attach};
 use crate::application::pull_drain;
 use crate::application::task::pilot as task_pilot;
 use crate::application::task::{blocked_recovery, escalation_triage_steps};
+use crate::unit::admission::{list_backlog_tasks, scan_unresolved_work, workspace_ship_mode};
 use crate::unit::{sweep_filing, workspace_auto};
 
 use super::pipeline_actions::{invoke_and_wait, invoke_detached};
@@ -248,16 +248,12 @@ pub(crate) fn run_deterministic(
         // already held by `in-progress`/`review` tasks. Sorts critical →
         // high → medium → low then by `created_at` ascending so older
         // high-priority work ships first. Caps at `max_tasks` (default 50).
-        CoreDeterministicAction::ListBacklogTasks => {
-            backlog_exclusion::list_backlog_tasks(runtime, action, input)
-        }
+        CoreDeterministicAction::ListBacklogTasks => list_backlog_tasks(runtime, action, input),
         // Workspace drain scan [ORB-10779]: proposed/backlog/blocked
         // tasks, failed/timeout job-runs, and unresolved check_later notes.
         // Read-only; empty is success. Optional `fail_if_nonempty` fails
         // closed for a workspace-wide leftover set.
-        CoreDeterministicAction::ScanUnresolvedWork => {
-            scan_unresolved::scan_unresolved_work(runtime, action, input)
-        }
+        CoreDeterministicAction::ScanUnresolvedWork => scan_unresolved_work(runtime, action, input),
         // Materialize a workspace-scoped task-pilot working set and partition
         // it into bounded groups without promoting or dispatching any task.
         CoreDeterministicAction::PrepareTaskPilot => task_pilot::prepare(runtime, action, input),
@@ -518,7 +514,7 @@ fn resolve_workspace_ship_input(
     runtime: &OrbitRuntime,
     action: &str,
 ) -> Result<Value, DispatchError> {
-    let mode = backlog_exclusion::workspace_ship_mode(runtime);
+    let mode = workspace_ship_mode(runtime);
     let mut input = crate::application::workflow::build_ship_input(
         mode,
         runtime.workspace_base_branch(),

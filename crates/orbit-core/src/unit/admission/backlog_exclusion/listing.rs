@@ -8,7 +8,6 @@ use orbit_types::task::{
 use orbit_types::workflow::ShipMode;
 use serde_json::Value;
 
-use super::super::claim_holders::{ClaimHolders, claim_detail};
 use super::super::pass_error::PassError;
 use super::super::unknown_footprint::{FootprintGuard, FootprintWave, whole_tree_holder};
 use super::exclusions::{
@@ -22,10 +21,11 @@ use super::{
 };
 use crate::OrbitRuntime;
 use crate::app::gc;
-use crate::application::admission::auto_admission::PERF_LANE_SELECTOR;
 use crate::application::task::TaskWorkspaceAutoPort;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::stored::locks::lock_context_files_for_task;
+use crate::unit::admission::auto_admission::PERF_LANE_SELECTOR;
+use crate::unit::admission::claim_holder::{ClaimHolders, claim_detail};
 
 /// The claims currently protecting tasks and their frozen surfaces.
 fn live_execution_claims(

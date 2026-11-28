@@ -275,8 +275,8 @@ impl OrbitRuntime {
             )?;
             if operator_override {
                 let hold = self.schedule_hold(&task)?;
-                let gates =
-                    JobAdmissionPort::operator_overridden_gates(self, &task, hold.is_some());
+                let gates = crate::app::port::JobAdmission(self)
+                    .operator_overridden_gates(&task, hold.is_some());
                 if !gates.is_empty() {
                     overridden.push((task.id.clone(), hold.map(|hold| hold.not_before), gates));
                 }
@@ -340,7 +340,7 @@ impl OrbitRuntime {
         // wave. A mixed request still reaches the worker with all IDs so its
         // audit records every omission.
         if !task_ids.is_empty() {
-            let preview = JobAdmissionPort::preview_named_ship(self, &input)?;
+            let preview = crate::app::port::JobAdmission(self).preview_named_ship(&input)?;
             if preview["task_ids"].as_array().is_some_and(Vec::is_empty) {
                 return Err(OrbitError::PolicyDenied(format!(
                     "named ship has no dispatchable tasks: {}; resolve the listed holds and retry",
@@ -355,7 +355,8 @@ impl OrbitRuntime {
             if let Some(not_before) = not_before {
                 self.record_schedule_override(task_id, *not_before, &overrider)?;
             }
-            JobAdmissionPort::record_readiness_override(self, task_id, gates, &overrider)?;
+            crate::app::port::JobAdmission(self)
+                .record_readiness_override(task_id, gates, &overrider)?;
         }
         self.submit_pipeline_run_with_trigger(workflow_job_id, input, None, actor, trigger)
     }

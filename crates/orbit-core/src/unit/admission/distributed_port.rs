@@ -8,7 +8,10 @@ use orbit_types::task::TaskStatus;
 use crate::OrbitRuntime;
 use crate::application::distributed::DistributedAdmissionPort;
 
-impl DistributedAdmissionPort for OrbitRuntime {
+/// Adapter binding the distributed admission port to the admission unit.
+pub(crate) struct DistributedPort<'a>(pub(crate) &'a OrbitRuntime);
+
+impl DistributedAdmissionPort for DistributedPort<'_> {
     fn reconcile_pull_recovery_context(&self) -> Result<(), OrbitError> {
         let open = TaskListFilter {
             statuses: Some(
@@ -20,6 +23,7 @@ impl DistributedAdmissionPort for OrbitRuntime {
             ..Default::default()
         };
         let mut tasks = self
+            .0
             .stores()
             .tasks()
             .task_candidates(&open, usize::MAX)?
@@ -27,7 +31,7 @@ impl DistributedAdmissionPort for OrbitRuntime {
             .into_iter()
             .map(|task| (task.id.clone(), metadata_task(task)))
             .collect();
-        super::recovery_context::reconcile_recovery_context(self, &mut tasks);
+        super::recovery_context::reconcile_recovery_context(self.0, &mut tasks);
         Ok(())
     }
 
@@ -36,6 +40,6 @@ impl DistributedAdmissionPort for OrbitRuntime {
         requester: &str,
         capability: ExecutorCapability,
     ) -> Option<ExecutorCensus> {
-        self.executor_census(requester, capability)
+        super::executor_order::executor_census(self.0, requester, capability)
     }
 }

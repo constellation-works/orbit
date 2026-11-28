@@ -4,7 +4,7 @@
 //! sweep filing, task-pilot, blocked-task recovery, backlog admission,
 //! workspace auto-drain, pull drain and pipeline actions call
 //! `unit::sweep_filing`, `application::task::pilot`,
-//! `application::task::blocked_recovery::steps`, `application::admission`,
+//! `application::task::blocked_recovery::steps`, `unit::admission`,
 //! `unit::workspace_auto`, `application::pull_drain` and
 //! `application::job::pipeline_actions`. What stays here is engine transport:
 //! `pipeline_actions` dispatches child Jobs and waits on them through

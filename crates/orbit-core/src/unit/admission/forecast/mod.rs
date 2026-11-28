@@ -20,7 +20,7 @@
 //! 4. Under `enforce` auto-concurrency, gap fit then judges each candidate
 //!    against the simulated host load (`resource_fit.rs`) [ORB-18689].
 //!
-//! Nothing here reads a store after [`crate::OrbitRuntime::forecast_admission`]
+//! Nothing here reads a store after [`forecast_admission`]
 //! returns.
 
 mod generated;
@@ -35,4 +35,5 @@ pub(crate) use model::ForecastPassScratch;
 pub(crate) use model::ForecastWait;
 pub(crate) use pass::ForecastDrain;
 pub(crate) use resource_fit::{ForecastHostEvidence, RESOURCE_RECHECK_HOURS};
+pub(crate) use snapshot::forecast_admission;
 pub(crate) use task_set::ForecastTaskSet;

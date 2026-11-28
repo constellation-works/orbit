@@ -109,7 +109,7 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
   workflow-entry check as well. The direct admission routes, as built:
   - **Honour the hold.** The auto drain's backlog snapshot and the
     explicit-ids listing
-    (`application/admission/backlog_exclusion/snapshot.rs`, `listing.rs`,
+    (`unit/admission/backlog_exclusion/snapshot.rs`, `listing.rs`,
     `scheduled_exclusion` in `exclusions.rs`). The owner's pull admission,
     before and inside the claim section
     (`application/distributed/serve/admission.rs`, `admit_pull_request`). And the

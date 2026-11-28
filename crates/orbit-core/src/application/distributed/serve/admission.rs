@@ -44,7 +44,7 @@ impl OrbitRuntime {
     ) -> Result<AdmissionLookup, OrbitError> {
         // Do this before the admission section: reconciliation writes task
         // declarations, which that section deliberately fences.
-        self.reconcile_pull_recovery_context()?;
+        crate::app::port::DistributedAdmission(self).reconcile_pull_recovery_context()?;
         let live_runs = self.live_local_delivery_runs()?;
         let owner_local_carriers = live_runs.keys().cloned().collect::<BTreeSet<_>>();
         let mut admission_holds = live_runs
@@ -194,7 +194,7 @@ impl OrbitRuntime {
         // census, the requester declaring itself by this request.
         let census = (!repairs_only)
             .then(|| {
-                self.pull_requester_census(
+                crate::app::port::DistributedAdmission(self).pull_requester_census(
                     &identity.location().machine_id,
                     ExecutorCapability::of_request(request),
                 )

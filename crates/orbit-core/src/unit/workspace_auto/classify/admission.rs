@@ -9,15 +9,12 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::app::gc;
-use crate::application::admission::auto_admission::DeferralReason;
-use crate::application::admission::backlog_exclusion::{allowlist_from_input, backlog_snapshot};
-use crate::application::admission::claim_holders::ClaimHolders;
-use crate::application::admission::cpu_light::ResourceGate;
-use crate::application::admission::gap_fit::{GapFit, GapFitMode};
-use crate::application::admission::pass_error::PassError;
-use crate::application::admission::stuck_head::report_stuck_head;
 use crate::application::distributed::OwnerRepairDrain;
 use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
+use crate::unit::admission::{
+    ClaimHolders, DeferralReason, GapFit, GapFitMode, PassError, ResourceGate,
+    allowlist_from_input, backlog_snapshot, record_owner_census, report_stuck_head,
+};
 
 use super::super::drains::{
     DEFAULT_MAX_ACTIVE_LEAF_RUNS, drain_run_id, live_admissions_stop, live_leaf_runs,
@@ -248,7 +245,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     // [ORB-17304] The owner declares its census row on each pass of its
     // local drain, before the snapshot orders against it.
     if let Some(run_id) = drain_run_id(input) {
-        runtime.record_owner_census(run_id);
+        record_owner_census(runtime, run_id);
     }
     let mut snapshot = backlog_snapshot(
         runtime,
