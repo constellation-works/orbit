@@ -4743,6 +4743,7 @@ fn a_failing_guard_without_a_test_identity_names_the_output_tail_in_the_step_err
         assert!(message.contains("Base verdict:"), "{route}: {message}");
     }
 }
+
 fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs(sandbox: &Path) {
     let (fx, host) = fx_host(sandbox);
     let output_path = sandbox.join("validation-output");
