@@ -11,6 +11,7 @@ Contents:
 - [Stalled residents](#stalled-residents)
 - [Tripped routines](#tripped-routines)
 - [Standing-drain keeper](#standing-drain-keeper)
+- [Stale owner base](#stale-owner-base)
 
 ## Review waits
 

@@ -36,7 +36,7 @@ is authoritative for, from its catalog role for each workspace
 
 | Checkout role on the answering host | Kinds derived |
 |---|---|
-| **Owner** (`owner_machine_id` is this machine) | all task-level kinds, `claim_stale`, `ci_red`, `friction_untriaged`, its own `run_failed` / `run_stuck`, its own `host_unhealthy` |
+| **Owner** (`owner_machine_id` is this machine) | all task-level kinds, `delivery_stale_base`, `claim_stale`, `ci_red`, `friction_untriaged`, its own `run_failed` / `run_stuck`, its own `host_unhealthy` |
 | **Replica** | its own `run_failed` / `run_stuck` and its own `host_unhealthy` only |
 
 Task, decision, review, claim and friction records on a replica are not authoritative, so a

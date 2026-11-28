@@ -2,7 +2,11 @@
 
 ## What attention lists
 
-`orbit attention` / `orbit.attention` is a read-only derived view. It lists `pilot_warning`, `pilot_hold`, `blocked`, `decision_open`, `review_waiting`, `run_failed`, `run_stuck`, `claim_stale`, `ci_red`, `friction_untriaged`, `host_unhealthy`, `notice_open`, `resident_stalled`, `routine_tripped`, `drain_paused` and `drain_breaker_open`.
+`orbit attention` / `orbit.attention` is a read-only derived view. It lists
+`pilot_warning`, `pilot_hold`, `blocked`, `decision_open`, `review_waiting`, `run_failed`,
+`run_stuck`, `claim_stale`, `delivery_stale_base`, `ci_red`, `friction_untriaged`,
+`host_unhealthy`, `notice_open`, `resident_stalled`, `routine_tripped`, `drain_paused` and
+`drain_breaker_open`.
 
 Reading it never dispatches or approves work. Open decisions fold into the hold, block or review they decide. `next` suggests a command and, when available, its exact tool/input; `needs` names arguments the operator must supply.
 
@@ -18,7 +22,11 @@ A host that does not answer, answers under another machine id, or lacks the tool
 
 An active `orbit host offline` mark lists the host once under `acknowledged`, with the operator's reason and any deadline. Attention skips probing that host. Treat the entry as planned downtime until the deadline or until the operator runs `orbit host online`.
 
-Agents can read task-level kinds; `run_failed`, `run_stuck`, `claim_stale` and `host_unhealthy` need the Operator capability and otherwise report `degraded` code `capability`. A live resident cycle also reads them, read-only, for the workspaces its mandate covers and no others (host health is withheld while any selected workspace is outside the mandate); this gives it no write capability.
+Agents can read task-level kinds; `run_failed`, `run_stuck`, `claim_stale`,
+`delivery_stale_base` and `host_unhealthy` need the Operator capability and otherwise report
+`degraded` code `capability`. A live resident cycle also reads them, read-only, for the workspaces
+its mandate covers and no others (host health is withheld while any selected workspace is outside
+the mandate); this gives it no write capability.
 
 While its home workspace has a pending task commit, the cycle cannot verify its scope and these runtime kinds report `capability` degradation until an ordinary task read recovers the commit. Attention leaves the pending commit untouched. Replica records are never substituted for their owner.
 
