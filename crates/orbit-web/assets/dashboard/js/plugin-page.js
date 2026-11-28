@@ -46,10 +46,13 @@ const ACTION_ARM_MS = 800;
 // The open action dialog's settle function, or null.
 let openActionDialog = null;
 
-// True from the moment an action is accepted until the operator has answered
-// it, server check included. One action waits at a time: a page asking again
+// Token for the action currently awaiting the operator (server check through
+// operator answer), or null. One action waits at a time: a page asking again
 // meanwhile is answered `busy` before it can take server confirmation state.
-let actionAwaitingOperator = false;
+// Unmounting the frame clears this so a new frame is never blocked by an
+// abandoned in-flight check, while the old check's finally still releases any
+// confirmation it receives without touching a newer action's token.
+let activeActionToken = null;
 
 // Remembered route while Plugins is open or revisited in the same workspace:
 // `{ namespace, page, query }` or null when Installed is selected.
@@ -187,6 +190,7 @@ export function reloadActivePluginPage() {
 function unmountFrame() {
   // The frame that asked is gone; its action is cancelled, never run.
   if (openActionDialog) openActionDialog(false);
+  activeActionToken = null;
   if (activeFrame) {
     activeFrame.remove();
     activeFrame = null;
@@ -655,7 +659,7 @@ function replyError(frame, id, code, message) {
 }
 
 async function relayAction(frame, meta, id, tool, input) {
-  if (actionAwaitingOperator) {
+  if (activeActionToken) {
     replyError(frame, id, "busy", "another action is waiting for the operator");
     return;
   }
@@ -675,6 +679,9 @@ async function relayAction(frame, meta, id, tool, input) {
     if (typeof payload?.diagnostic === "string") reply.diagnostic = payload.diagnostic;
     replyToFrame(frame, reply);
   } catch (error) {
+    if (error?.code === "stale_workspace_visit") {
+      await releaseConfirmation(base, body, confirmation, meta.visit);
+    }
     replyError(frame, id, error?.code || "call_failed", error?.message || "the action failed");
   }
 }
@@ -685,7 +692,8 @@ async function relayAction(frame, meta, id, tool, input) {
 // away. A confirmation issued but not returned is released on the server, so
 // an abandoned action never holds one of its few slots until expiry.
 async function awaitOperator(frame, meta, id, base, body) {
-  actionAwaitingOperator = true;
+  const token = {};
+  activeActionToken = token;
   let issued = null;
   let confirmed = false;
   try {
@@ -697,25 +705,38 @@ async function awaitOperator(frame, meta, id, base, body) {
       return null;
     }
     issued = checked.confirmation;
-    if (frame !== activeFrame || !frame.isConnected) return null;
+    if (frame !== activeFrame || !frame.isConnected || !meta.visit.isCurrent()) return null;
     if (!(await confirmPageAction(checked))) {
       replyError(frame, id, "cancelled", "the operator cancelled the action");
       return null;
     }
-    if (frame !== activeFrame || !frame.isConnected) return null;
+    if (frame !== activeFrame || !frame.isConnected || !meta.visit.isCurrent()) return null;
     confirmed = true;
     return issued;
   } finally {
-    actionAwaitingOperator = false;
+    if (activeActionToken === token) activeActionToken = null;
     // The run spends a confirmed one; every other is given back.
     if (issued && !confirmed) await releaseConfirmation(base, body, issued, meta.visit);
   }
 }
 
 // Best effort: a release that fails leaves the confirmation to expire.
+// Send directly through `visit.path(...)` rather than `requestJson`: a
+// workspace or host switch retires `visit` before this cleanup runs, and
+// `requestJson` rejects stale visits and checks the newly selected host's
+// write refusal instead of the host that issued the confirmation.
 async function releaseConfirmation(base, body, confirmation, visit) {
   try {
-    await requestJson(`${base}/cancel`, "POST", { ...body, confirmation }, visit);
+    const target = visit.path(`${base}/cancel`);
+    const res = await fetch(target, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ ...body, confirmation }),
+    });
+    await res.text().catch(() => {});
   } catch {
     // The server drops it at its own expiry.
   }
