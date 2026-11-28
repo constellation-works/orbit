@@ -61,6 +61,38 @@ def fixture_git_env():
 
 
 class VisualFixtureServerTest(unittest.TestCase):
+    def test_all_visual_fixtures_are_seed_documents(self):
+        fixtures = sorted((ROOT / "crates/orbit-web/visual/fixtures").iterdir())
+        self.assertTrue(fixtures)
+        for path in fixtures:
+            with self.subTest(path=path.name):
+                self.assertTrue(path.is_file())
+                self.assertEqual(path.suffix, ".json")
+                seed = json.loads(path.read_text())
+                self.assertIsInstance(seed, dict)
+                self.assertEqual(seed.get("fixture"), path.stem)
+                self.assertIsInstance(seed.get("frozen_instant"), str)
+                self.assertTrue(seed["frozen_instant"].strip())
+                self.assertIsInstance(seed.get("tasks"), list)
+                for task in seed["tasks"]:
+                    self.assertIsInstance(task, dict)
+                    for field, default in (("title", None), ("complexity", "low"), ("status", "proposed")):
+                        value = task.get(field, default)
+                        self.assertIsInstance(value, str)
+                        self.assertTrue(value.strip())
+                        self.assertFalse(any(c in value for c in "\t\r\n"))
+
+    def test_partial_forecast_response_has_no_full_totals(self):
+        path = ROOT / "crates/orbit-web/visual/responses/backlog-forecast-v24-bounded-gaps.json"
+        response = json.loads(path.read_text())
+        self.assertEqual(response["model_version"], 24)
+        forecast = response["forecast"]
+        self.assertIsInstance(forecast["schedulable_subset"], dict)
+        for metric in ("time_to_drain_hours", "usd", "tokens"):
+            self.assertEqual(forecast[metric], {"p50": None, "p90": None})
+            self.assertIsNotNone(forecast["schedulable_subset"][metric]["p50"])
+            self.assertIsNotNone(forecast["schedulable_subset"][metric]["p90"])
+
     def test_readiness_timeout_reaps_silent_and_partial_processes(self):
         for output in ("", "partial"):
             with self.subTest(output=output):

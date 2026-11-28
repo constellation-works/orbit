@@ -20,10 +20,10 @@
   },
   "forecast": {
     "tasks": 29,
-    "time_to_drain_hours": { "p50": 20, "p90": 36 },
+    "time_to_drain_hours": { "p50": null, "p90": null },
     "effective_parallelism": { "p50": 4, "p90": 6 },
-    "usd": { "p50": 120, "p90": 220 },
-    "tokens": { "p50": 2000000, "p90": 3500000 },
+    "usd": { "p50": null, "p90": null },
+    "tokens": { "p50": null, "p90": null },
     "schedulable_subset": {
       "tasks": 21,
       "of": 29,
