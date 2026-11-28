@@ -584,6 +584,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/plugins.js"),
     ),
     (
+        "/static/js/plugin-page.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/plugin-page.js"),
+    ),
+    (
         "/static/js/leases.js",
         JS,
         include_bytes!("../assets/dashboard/js/leases.js"),

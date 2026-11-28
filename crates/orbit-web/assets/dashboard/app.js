@@ -24,7 +24,7 @@ import {
   fetchAndRenderExperiments, placeholdExperimentsAggregate, setExperimentId, experimentsRoute, onExperimentTabPick,
 } from './js/experiments.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
-import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, recordRoutedHref, returnFromRunDetail, runDetailBackLabel, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
+import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, recordRoutedHref, returnFromRunDetail, runDetailBackLabel, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, syncPluginsRailState, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekJobFailures, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
@@ -38,7 +38,8 @@ import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } fr
 import { applyPushedHostResources, fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
 import { changeStreamLive, onChange, onChangeStreamLive, startChangeStream } from './js/change-stream.js';
 import { refreshDashboardNow, reschedulePolling, setStreamCoverage } from './js/polling.js';
-import { fetchAndRenderPlugins } from './js/plugins.js';
+import { fetchAndRenderPlugins, initPlugins, syncPluginTabs } from './js/plugins.js';
+import { getActivePluginPage, initPluginPage, leavePluginPageView, setPluginPageRoute } from './js/plugin-page.js';
 import { fetchAndRenderLeaseLandings, fetchAndRenderLeases, syncLeasesRailItem } from './js/leases.js';
 import { fetchAndRenderNoticeBanner, fetchAndRenderNotices } from './js/notices.js';
 import { fetchAndRenderResidents, setResidentDetailId } from './js/operations-residents.js';
@@ -340,6 +341,10 @@ function routerContext() {
     // decide which endpoint a refresh reads; the router only routes to it.
     getConfigSubtab,
     setConfigSubtab,
+    getPluginPage: getActivePluginPage,
+    setPluginPageRoute,
+    leavePluginPageView,
+    syncPluginTabs,
     getRunId: getActiveRunId,
     setRunId: setActiveRunId,
     getRunSubtab: getActiveRunSubtab,
@@ -2173,6 +2178,11 @@ function selectFleetScope(host, workspace) {
 initOperations({ getTab: () => activeTab, selectFleetScope, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
 initConfig();
 initFleetView({ selectScope: selectFleetScope });
+initPluginPage({
+  onRefresh: () => fetchAndRenderPlugins().catch((e) => console.error("Failed to fetch plugins", e)),
+  onQueryReplaced: recordRoutedHref,
+});
+initPlugins({ onTabsChange: syncPluginsRailState });
 
 initRuns(runsContext());
 initRunDetail(runDetailContext());

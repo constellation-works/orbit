@@ -4,6 +4,7 @@
    manifest declares. Every panel is drawn by the generic renderer, so the
    styles here describe the four render modes, not any plugin. */
 .plugins-layout { grid-template-columns: minmax(0, 1fr); }
+.plugins-layout[hidden], .plugin-page-layout[hidden] { display: none; }
 .tab-pane[data-tab="plugins"] .panel { min-width: 0; }
 #plugins-panel > .body { padding: var(--space-12); background: var(--bg); display: flex; flex-direction: column; gap: var(--space-12); }
 .plugins-explainer {
@@ -33,7 +34,7 @@
 .plugin-toggle:hover { border-color: var(--accent); }
 .plugin-toggle:disabled { opacity: 0.5; cursor: wait; }
 .plugin-change-error { margin: 0; color: var(--status-open); font-size: var(--text-sm); overflow-wrap: anywhere; }
-.plugin-tools, .plugin-links { display: flex; gap: var(--space-6); flex-wrap: wrap; }
+.plugin-tools, .plugin-links, .plugin-pages { display: flex; gap: var(--space-6); flex-wrap: wrap; }
 .plugin-tool-inventory { display: flex; flex-direction: column; gap: var(--space-6); min-width: 0; }
 .plugin-tools-bar { display: flex; gap: var(--space-6) var(--space-8); align-items: center; flex-wrap: wrap; }
 .plugin-tools-filter {
@@ -51,12 +52,13 @@
 .plugin-tools-toggle:hover { border-color: var(--accent); }
 .plugin-tools-status { color: var(--fg-mute); font-size: var(--text-xs); }
 .plugin-tools-scroll { max-height: 9rem; overflow-y: auto; align-content: flex-start; overscroll-behavior: contain; }
-.plugin-link-tile {
+.plugin-link-tile, .plugin-page-tile {
   display: inline-flex; align-items: center; gap: var(--space-6); padding: var(--space-6) var(--space-10);
   border: 1px solid var(--border); border-radius: var(--radius-2xs); background: var(--bg);
   color: var(--accent); font-size: var(--text-sm); text-decoration: none;
 }
-.plugin-link-tile:hover { border-color: var(--accent); color: var(--accent-hover); }
+.plugin-link-tile:hover, .plugin-page-tile:hover { border-color: var(--accent); color: var(--accent-hover); }
+.plugin-page-tile.is-inactive { color: var(--fg-dim); }
 .plugin-panel-head {
   display: flex; gap: var(--space-8); align-items: baseline; justify-content: space-between;
   padding: var(--space-6) var(--space-10); border-bottom: 1px solid var(--hair);
@@ -78,4 +80,144 @@
 
 @media (max-width: 900px) {
   .plugin-kv { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+}
+
+/* Secondary tabs and sandboxed plugin page view (plugin-pages design §4). */
+#plugins-rail-subtabs:empty { display: none; }
+.tab-pane[data-tab="plugins"] > #plugins-subtabs {
+  flex: 0 0 auto;
+  width: 100%;
+  flex-wrap: nowrap;
+  align-items: center;
+  overflow: hidden;
+}
+#plugins-subtabs .subtab {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#plugins-subtabs .subtab:first-child { flex: 0 0 auto; }
+
+.main-col > .tab-pane[data-tab="plugins"].active:has(> #plugins-page-main:not([hidden])) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.plugin-page-layout:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 1800px;
+  margin: 0 auto;
+  padding: var(--space-12) var(--space-20) var(--space-20);
+}
+.plugin-page-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.plugin-page-panel > .plugin-page-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-12);
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+  padding: var(--space-8) var(--space-16);
+  border-bottom: 1px solid var(--hair);
+}
+.plugin-page-identity {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-8);
+  min-width: 0;
+  overflow: hidden;
+}
+.plugin-page-name {
+  color: var(--fg);
+  font-size: var(--text-base);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plugin-page-version {
+  color: var(--fg-mute);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.plugin-page-reload { flex: 0 0 auto; }
+.plugin-page-panel > .plugin-page-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--space-16);
+  background: var(--bg);
+  overflow-y: auto;
+}
+.plugin-page-panel > .plugin-page-body.is-framed {
+  padding: 0;
+  overflow: hidden;
+}
+.plugin-page-frame {
+  display: block;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 0;
+  background: var(--bg);
+}
+.plugin-page-diagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-10);
+}
+.plugin-page-fix {
+  margin: 0;
+  color: var(--fg-soft);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+.plugin-page-cmd {
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+.plugin-page-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-10);
+  flex-wrap: wrap;
+}
+.plugin-page-installed-link {
+  color: var(--accent);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+.plugin-page-installed-link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+.plugin-page-state { padding: var(--space-12) 0; }
+
+@media (max-width: 760px) {
+  .tab-pane[data-tab="plugins"] > #plugins-subtabs {
+    padding: var(--space-8) var(--space-8) 0;
+  }
+  .plugin-page-layout:not([hidden]) {
+    padding: var(--space-8);
+  }
+  .plugin-page-panel > .plugin-page-strip {
+    padding: var(--space-8) var(--space-12);
+  }
+  .plugin-page-panel > .plugin-page-body:not(.is-framed) {
+    padding: var(--space-12);
+  }
 }

@@ -123,6 +123,7 @@
             </nav>
           <button class="tab" data-tab="knowledge" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5a2 2 0 0 1 2 2v10a2 2 0 0 0-2-2H4z"/><path d="M16 4h-5a2 2 0 0 0-2 2v10a2 2 0 0 1 2-2h5z"/></svg><span class="rail-label">Knowledge</span><span class="rail-count" id="rail-count-knowledge"></span></button>
           <button class="tab" data-tab="plugins" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v3M13 3v3"/><rect x="4" y="6" width="12" height="7" rx="1.5"/><path d="M10 13v4"/></svg><span class="rail-label">Plugins</span><span class="rail-count" id="rail-count-plugins"></span></button>
+            <nav class="subtabs rail-subtabs dimmed" id="plugins-rail-subtabs" aria-label="Plugins views"></nav>
           <button class="tab" data-tab="config" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/><circle cx="8" cy="6" r="1.6"/><circle cx="13" cy="10" r="1.6"/><circle cx="7" cy="14" r="1.6"/></svg><span class="rail-label">Settings</span><span class="rail-count" id="rail-count-config"></span></button>
             <nav class="subtabs rail-subtabs" id="config-subtabs" aria-label="Settings views">
               <button class="subtab active" data-subtab="workflow" type="button"><span class="rail-label">Workflow</span></button>
@@ -886,17 +887,20 @@
       </main>
     </section>
     <section class="tab-pane" data-tab="plugins" tabindex="0" role="region" aria-labelledby="topbar-crumb">
-      <!-- One generic surface for every installed plugin: its state, the
-           panels its manifest declares, and its link tiles. No plugin ships
-           markup or script, so a new plugin needs no dashboard edit. -->
-      <main class="plugins-layout">
+      <!-- Secondary tabs: Installed (default) plus one tab per page of each
+           plugin enabled in the selected workspace. Hidden when no enabled
+           plugin declares a page and Installed is open. -->
+      <nav class="subtabs view-tabs" id="plugins-subtabs" aria-label="Plugins views" hidden></nav>
+      <!-- Installed list: each plugin's state, declared panels, declared pages,
+           and link tiles. -->
+      <main class="plugins-layout" id="plugins-installed-main">
         <section class="panel" id="plugins-panel">
           <header>
             <span>Plugins</span>
             <span class="count" id="plugins-count">-</span>
           </header>
           <p class="plugins-explainer">
-            Installed on this machine, with the panels each plugin's manifest declares.
+            Installed on this machine, with the panels and pages each plugin's manifest declares.
             Operator sessions can enable or disable a plugin for this host or workspace. Installing, upgrading and editing grants stay on the CLI (<span class="mono">orbit plugin</span>).
           </p>
           <div class="body" id="plugins-body">
@@ -905,6 +909,14 @@
               <div class="skeleton skeleton-row" style="width: 80%"></div>
             </div>
           </div>
+        </section>
+      </main>
+      <!-- Sandboxed plugin page frame under the dashboard's identity and
+           reload strip (plugin-pages design §3–§4). -->
+      <main class="plugin-page-layout" id="plugins-page-main" hidden>
+        <section class="panel plugin-page-panel" id="plugin-page-panel">
+          <header class="plugin-page-strip" id="plugin-page-strip"></header>
+          <div class="body plugin-page-body" id="plugin-page-body"></div>
         </section>
       </main>
     </section>
