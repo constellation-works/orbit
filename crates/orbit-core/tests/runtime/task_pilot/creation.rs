@@ -77,7 +77,37 @@ impl Workspace {
         after: &[&str],
         disposition: &str,
     ) -> Value {
+        self.apply_with(prepared, before, after, disposition, json!({}))
+    }
+
+    /// [`Self::apply_disposition`] with `extra` assessment fields merged in. A
+    /// non-`selectors` disposition carries the evidence the schema requires.
+    fn apply_with(
+        &self,
+        prepared: &Value,
+        before: &[String],
+        after: &[&str],
+        disposition: &str,
+        extra: Value,
+    ) -> Value {
         let task_id = prepared["task_ids"][0].clone();
+        let mut assessment = json!({
+            "task_id": task_id,
+            "context_files_before": before, "context_files_after": after,
+            "disposition": disposition, "recommended_crew": "fixture",
+            "recommended_complexity": "low", "confidence": "high",
+            "assessment_rationale": "README.md contains the affected material.",
+            "validation_approach": "Inspect the persisted scope.",
+            "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
+            "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
+            "duplicate_of": null, "already_landed": null,
+        });
+        if disposition != "selectors" {
+            assessment["evidence"] = json!("The deliverable needs no repository change.");
+        }
+        for (key, value) in extra.as_object().into_iter().flatten() {
+            assessment[key] = value.clone();
+        }
         self.action(
             "apply_task_pilot_results",
             json!({
@@ -85,17 +115,7 @@ impl Workspace {
                 "prepared": prepared,
                 "results": [{
                     "partition_index": 0, "task_ids": [task_id],
-                    "tasks": [{
-                        "task_id": task_id,
-                        "context_files_before": before, "context_files_after": after,
-                        "disposition": disposition, "recommended_crew": "fixture",
-                        "recommended_complexity": "low", "confidence": "high",
-                        "assessment_rationale": "README.md contains the affected material.",
-                        "validation_approach": "Inspect the persisted scope.",
-                        "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
-                        "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
-                        "duplicate_of": null, "already_landed": null,
-                    }],
+                    "tasks": [assessment],
                 }],
             }),
         )
@@ -1122,6 +1142,101 @@ For each listed feature, migrate 1_scope.md into its overview and design. Delete
     );
 }
 
+/// A task that names its existing `README.md` with a change verb and holds no
+/// creation grant. Preparation records it as a required existing target.
+fn required_existing_task(workspace: &Workspace, title: &str) -> (Task, Value) {
+    let task = workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: title.into(),
+            description: format!("Update {EXISTING} to cover {title}."),
+            acceptance_criteria: vec!["The README documents the change.".into()],
+            plan: "Inspect README.md.".into(),
+            status: Some(TaskStatus::Proposed),
+            context_files: owned(&[EXISTING]),
+            ..Default::default()
+        })
+        .unwrap();
+    let prepared = workspace.prepare(&[&task.id]);
+    assert_eq!(
+        prepared["tasks"][0]["required_existing_selectors"],
+        json!([EXISTING]),
+        "{prepared}"
+    );
+    (task, prepared)
+}
+
+/// Without a creation grant, a required existing target does not stop an
+/// assessment from settling as `verified_no_diff` (a no-diff deliverable or
+/// already-landed work) or `host_operational`; a `selectors` assessment that
+/// omits the target stays refused.
+fn required_existing_target_allows_no_diff_and_host_operational_dispositions() {
+    // A no-diff deliverable settles and is tagged `no-diff-expected`.
+    let workspace = Workspace::new();
+    let (task, prepared) = required_existing_task(&workspace, "deliverable");
+    let applied =
+        workspace.apply_disposition(&prepared, &task.context_files, &[], "verified_no_diff");
+    assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+    let stored = workspace.runtime.get_task(&task.id).unwrap();
+    assert!(stored.context_files.is_empty(), "{stored:?}");
+    assert!(
+        stored.tags.iter().any(|tag| tag == "no-diff-expected"),
+        "{stored:?}"
+    );
+
+    // An already-landed finding settles too, leaving no selectors behind.
+    let workspace = Workspace::new();
+    let (task, prepared) = required_existing_task(&workspace, "landed");
+    let landed = json!({"already_landed": {
+        "evidence": "The README already documents the change at the pinned source.",
+    }});
+    let applied = workspace.apply_with(
+        &prepared,
+        &task.context_files,
+        &[],
+        "verified_no_diff",
+        landed,
+    );
+    assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+    assert_eq!(applied["tasks"][0]["disposition"], "verified_no_diff");
+    let stored = workspace.runtime.get_task(&task.id).unwrap();
+    assert!(stored.context_files.is_empty(), "{stored:?}");
+
+    // A host-operational task settles without keeping the target.
+    let workspace = Workspace::new();
+    let (task, prepared) = required_existing_task(&workspace, "operational");
+    let applied =
+        workspace.apply_disposition(&prepared, &task.context_files, &[], "host_operational");
+    assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+    assert_eq!(applied["tasks"][0]["disposition"], "host_operational");
+
+    // Omitting the required target from a `selectors` assessment is refused.
+    let workspace = Workspace::new();
+    workspace.commit("docs/extra.md", "# extra\n");
+    let extra = "file:docs/extra.md";
+    let task = workspace
+        .runtime
+        .add_task(TaskAddParams {
+            title: "two targets".into(),
+            description: format!("Update {EXISTING} and edit {extra}."),
+            acceptance_criteria: vec!["Both documents change.".into()],
+            plan: "Inspect both.".into(),
+            status: Some(TaskStatus::Proposed),
+            context_files: owned(&[EXISTING, extra]),
+            ..Default::default()
+        })
+        .unwrap();
+    let prepared = workspace.prepare(&[&task.id]);
+    let omitted = workspace.apply_one(&prepared, &task.context_files, &[EXISTING]);
+    assert_eq!(outcome(&omitted)["outcome"], "invalid", "{omitted}");
+    let error = outcome(&omitted)["error"].as_str().unwrap();
+    assert!(
+        error.contains(extra) && !error.contains(EXISTING),
+        "{error}"
+    );
+    assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     declared_creation_targets_survive_prepare_apply_restart_and_replay_scenarios,
@@ -1135,5 +1250,6 @@ crate::scenario_table!(
     benign_comment_and_artifact_writes_preserve_preparation,
     newer_creation_grant_reaches_partition_and_ungranted_missing_path_stays_gap,
     migration_footprint_keeps_existing_targets_beside_granted_creations,
-    migration_contract_preserves_narrowing_read_only_omissions_and_creation_only_work
+    migration_contract_preserves_narrowing_read_only_omissions_and_creation_only_work,
+    required_existing_target_allows_no_diff_and_host_operational_dispositions
 );

@@ -15,8 +15,11 @@ spec:
     idempotency receipt commits atomically. When preparation recorded
     `required_existing_selectors` for a task, apply verifies that every
     required existing target (or a narrowed `symbol:` selector on its file) is
-    retained alongside any granted creation selectors, refusing omissions as
-    `invalid` with an actionable error. Every other task
+    retained alongside any granted creation selectors in a `selectors`
+    assessment, refusing omissions as `invalid` with an actionable error. A
+    `verified_no_diff` or `host_operational` assessment settles without them;
+    a task holding creation grants still refuses any non-`selectors`
+    disposition. Every other task
     field, lifecycle state, dispatch state, and recommendation remains unchanged
     unless explicit promotion authority arrives with one authority record:
     a CI sweep's exact filing record (`ci_sweep_filing`) or an

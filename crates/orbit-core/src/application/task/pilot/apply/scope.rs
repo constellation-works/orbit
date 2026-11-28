@@ -120,29 +120,6 @@ pub(super) fn scope_with(
             )),
         ));
     }
-    let allows_finding_invalid = assessment
-        .get(crate::application::task::pilot::FINDING_INVALID)
-        .is_some_and(|value| !value.is_null())
-        && context.source.is_some()
-        && current
-            .as_ref()
-            .is_some_and(crate::application::task::is_review_finding);
-    if !snapshot.required_existing_selectors.is_empty()
-        && disposition != "selectors"
-        && !allows_finding_invalid
-    {
-        return Err(task_outcome(
-            task_id,
-            "invalid",
-            Some(format!(
-                "task {task_id} has required existing change target(s) {} established by \
-                 preparation; a {disposition} assessment cannot drop them. Keep them (or narrowed \
-                 symbol: selectors on the same files) alongside any granted creation selectors in \
-                 context_files_after",
-                snapshot.required_existing_selectors.join(", ")
-            )),
-        ));
-    }
     // The pilot cannot revoke operator intent by omission: every granted
     // target it left out is kept, and reported.
     let mut after = selectors.values;
