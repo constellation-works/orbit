@@ -23,7 +23,9 @@ instead and is provisional. A model needs at least 30 implemented tasks \
 and at least one assessed tier with at least 5 tasks to be \
 ranked, and the board needs three such models. A ranked model spanning \
 exactly one assessed tier is flagged 'single tier: <tier>'. Models \
-whose scores are not distinguishable share a band, cheapest first.
+whose scores are not distinguishable share a band. Within each band, models \
+are ordered by descending score; exact score ties are ordered by lowest \
+tier-adjusted cost, then model name.
 
 Use 'orbit agents rank calibrate' to freeze a new season's noise scales in the \
 workspace's state; until then the scales are estimated from the ranked window.";
