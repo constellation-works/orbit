@@ -339,9 +339,10 @@ impl PreparedTask {
                 )));
             }
         };
-        let required_existing_selectors = self
-            .required_existing_selectors
-            .strings_or_empty(super::super::REQUIRED_EXISTING_SELECTORS, action)?;
+        let required_existing_selectors = self.required_existing_selectors.strings_or_empty(
+            crate::application::task::pilot::REQUIRED_EXISTING_SELECTORS,
+            action,
+        )?;
         let comment_hygiene_batch = match &self.comment_hygiene_batch {
             Field::Absent | Field::Present(None) => None,
             Field::Present(Some(value)) if value.is_object() => Some(value.clone()),

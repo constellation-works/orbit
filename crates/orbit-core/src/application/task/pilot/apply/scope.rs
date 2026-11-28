@@ -121,7 +121,7 @@ pub(super) fn scope_with(
         ));
     }
     let allows_finding_invalid = assessment
-        .get(super::super::FINDING_INVALID)
+        .get(crate::application::task::pilot::FINDING_INVALID)
         .is_some_and(|value| !value.is_null())
         && context.source.is_some()
         && current

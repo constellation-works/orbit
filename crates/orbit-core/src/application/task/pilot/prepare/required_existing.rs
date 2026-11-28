@@ -10,9 +10,9 @@ use orbit_common::fs::selector::{
 use orbit_engine::DispatchError;
 use orbit_types::task::Task;
 
-use super::super::assessment::validate_selector_target_kind;
-use super::super::source::{GitPathKind, SourceSnapshot};
 use super::run::NO_DIFF_TAGS;
+use crate::application::task::pilot::assessment::validate_selector_target_kind;
+use crate::application::task::pilot::source::{GitPathKind, SourceSnapshot};
 
 /// Cues that mark a clause as read-only, optional, negated, or historical
 /// rather than a required change target of this task.
