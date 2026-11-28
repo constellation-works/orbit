@@ -836,6 +836,91 @@ fn retained_symlink_conflict_to_directory_preserves_both_sides_in_successor() {
     );
 }
 
+/// An unmarked CRLF checkout can contain literal custom-width marker examples.
+/// Preserve its index blobs even though the working bytes differ from stage 2.
+fn retained_crlf_unmarked_conflict_preserves_all_sides() {
+    let (f, checkout) = before_landing_retained_fixture();
+    let path = "base-advance.txt";
+    let base = git(&checkout, &["show", &format!("HEAD:{path}")]);
+    let integration =
+        "<<<<<<<<<<<< example\nintegration\n============\nother example\n>>>>>>>>>>>> example\n";
+    let retained = "retained base\n";
+
+    git(&f.repo, &["checkout", "-q", "main"]);
+    std::fs::write(
+        f.repo.join(".gitattributes"),
+        "base-advance.txt -merge text eol=crlf conflict-marker-size=12\n",
+    )
+    .unwrap();
+    std::fs::write(f.repo.join(path), integration).unwrap();
+    git(&f.repo, &["add", ".gitattributes", path]);
+    git(&f.repo, &["commit", "-qm", "advance integration CRLF"]);
+    git(&f.repo, &["push", "-q", "origin", "HEAD:main"]);
+    std::fs::write(checkout.join(path), retained).unwrap();
+    let dirty = git(&checkout, &["status", "--porcelain"]);
+
+    let inspection = adopting_inspection(&f).unwrap();
+    let mut input = f.submit(inspection["binding"].clone());
+    input["source_repair"]["policy_digest"] = inspection["policy_digest"].clone();
+    input["source_repair"]["unmet_acceptance"] = json!("Retained CRLF edit must be carried.");
+    let result = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", input)
+        .unwrap();
+    let id = result["run_id"].as_str().unwrap().to_string();
+    f.wait(&id);
+    f.start_actions(&id);
+    let setup = f.action(
+        "worktree_setup",
+        json!({"run_id":id,"job_run_id":id,"task_ids":[f.task],"base":"main","base_sync":"remote"}),
+    );
+    let successor = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let resumed = f.action(
+        "candidate_resume",
+        json!({
+            "job_run_id": id,
+            "task_ids": [f.task],
+            "workspace_path": successor,
+            "base_sha": setup["base_sha"]
+        }),
+    );
+    assert_eq!(resumed["repair"]["trigger"], "conflict", "{resumed}");
+    let sides = resumed["repair"]["retained_conflict_sides"]
+        .as_array()
+        .unwrap();
+    assert_eq!(sides.len(), 1, "{resumed}");
+    assert_eq!(sides[0]["path"], path);
+    for (key, expected) in [
+        ("base_path", format!("{base}\n")),
+        ("current_path", integration.to_string()),
+        ("retained_path", retained.to_string()),
+    ] {
+        let saved = sides[0][key].as_str().unwrap();
+        assert_eq!(
+            std::fs::read(successor.join(saved)).unwrap(),
+            expected.as_bytes(),
+            "{key}"
+        );
+    }
+    let retained_path = sides[0]["retained_path"].as_str().unwrap();
+    assert!(
+        resumed["repair"]["output"]
+            .as_str()
+            .unwrap()
+            .contains(retained_path)
+    );
+    assert_eq!(
+        std::fs::read(successor.join(path)).unwrap(),
+        integration.replace('\n', "\r\n").as_bytes()
+    );
+    assert!(git(&successor, &["diff", "--name-only", "--diff-filter=U"]).is_empty());
+    assert_eq!(git(&checkout, &["status", "--porcelain"]), dirty);
+    assert_eq!(
+        std::fs::read(checkout.join(path)).unwrap(),
+        retained.as_bytes()
+    );
+}
+
 /// A retained text conflict with nondefault `conflict-marker-size` reaches
 /// the same-PR successor as an ordinary marked text conflict rather than being
 /// misclassified as an unmarked conflict whose working file holds only the
@@ -1010,6 +1095,7 @@ crate::scenario_table!(
     retained_conflict_save_failure_keeps_unmerged_sides_and_explains,
     retained_symlink_conflict_to_directory_preserves_both_sides_in_successor,
     retained_custom_width_text_conflict_stays_a_marked_text_conflict,
+    retained_crlf_unmarked_conflict_preserves_all_sides,
     non_utf8_patch_is_reconstructable_from_the_inspection,
     adoption_refuses_a_clean_checkout,
     adoption_refuses_a_staged_git_link,

@@ -297,9 +297,21 @@ fn preserve_path(
     let blob = |oid: &str| git_output_bytes(process_env, workspace, &["cat-file", "blob", oid]);
     let current_bytes = stage2.as_deref().map(blob).transpose()?;
     let working_bytes = read_optional_file(workspace, path)?;
-    let working_matches_current = current_bytes
+    let mut working_matches_current = current_bytes
         .as_ref()
         .is_some_and(|ours| working_bytes.as_ref() == Some(ours));
+    if !working_matches_current
+        && let (Some(oid), Some(working)) = (stage2.as_deref(), working_bytes.as_ref())
+    {
+        // Compare in checkout form as well: attributes can convert the stage
+        // blob (for example LF to CRLF) without changing its content.
+        let checkout = git_output_bytes(
+            process_env,
+            workspace,
+            &["cat-file", "--filters", "--path", path, oid],
+        )?;
+        working_matches_current = *working == checkout;
+    }
     let lacks_markers = match working_bytes.as_deref() {
         Some(bytes) if !working_matches_current => {
             let configured_width = configured_conflict_marker_size(process_env, workspace, path);
