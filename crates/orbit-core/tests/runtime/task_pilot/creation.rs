@@ -977,7 +977,8 @@ fn migration_footprint_keeps_existing_targets_beside_granted_creations() {
     assert!(!partial_error.contains(old_scope), "{partial_error}");
     assert_eq!(workspace.runtime.get_task(&task.id).unwrap(), task);
 
-    // A non-selectors disposition cannot drop required existing changes either.
+    // An unproven verified_no_diff is refused for the creation grants by
+    // landed_creation_scope, before any required existing target is checked.
     let dropped_disposition =
         workspace.apply_disposition(&prepared, &task.context_files, &[], "verified_no_diff");
     assert_eq!(

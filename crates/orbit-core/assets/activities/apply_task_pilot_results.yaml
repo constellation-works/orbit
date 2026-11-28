@@ -17,9 +17,13 @@ spec:
     required existing target (or a narrowed `symbol:` selector on its file) is
     retained alongside any granted creation selectors in a `selectors`
     assessment, refusing omissions as `invalid` with an actionable error. A
-    `verified_no_diff` or `host_operational` assessment settles without them;
-    a task holding creation grants still refuses any non-`selectors`
-    disposition. Every other task
+    `verified_no_diff` or `host_operational` assessment on a task without
+    creation grants settles without them. A task holding creation grants
+    refuses any non-`selectors` disposition except a proven already-landed
+    `verified_no_diff`: when every retained target, grants included, exists at
+    the pinned source revision and covering commits on the base branch prove
+    it landed, apply keeps those selectors and records
+    `already_landed.operator_reconciliation_required`. Every other task
     field, lifecycle state, dispatch state, and recommendation remains unchanged
     unless explicit promotion authority arrives with one authority record:
     a CI sweep's exact filing record (`ci_sweep_filing`) or an
