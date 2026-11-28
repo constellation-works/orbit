@@ -69,7 +69,7 @@ use orbit_exec::{
     run_process_supervised,
 };
 use orbit_types::workflow::{
-    BaselineRedFailures, HOST_TEST_DEFERRED_PREFIX, HostEvidenceRefusal, HostSandboxCommand,
+    HOST_TEST_DEFERRED_PREFIX, HostEvidenceRefusal, HostSandboxCommand,
     RequiredValidationFailureKind, SEATBELT_DEFERRAL_PREFIX, VALIDATION_ENVIRONMENT_MARKER,
     judge_host_test_output,
 };
@@ -80,9 +80,9 @@ use serde_json::{Value, json};
 use crate::context::{HostEnvironment, RuntimeHostProcessEnvironment, default_python_cache_prefix};
 
 use super::super::base::claim::{failure_identities, normalize_output};
-use super::super::baseline::diagnostic;
 use super::super::build_output::bind_host_output;
 pub(in crate::executor::automation::vcs) use super::capture::capture;
+use crate::executor::automation::vcs::baseline::{diagnostic, hold_failures};
 
 /// A selection, as a candidate run's summary reported it, that the command
 /// must test instead of choosing its own.
@@ -259,7 +259,7 @@ impl RequiredCommandRun {
         baseline: &str,
         logs: &str,
     ) -> String {
-        let failures = BaselineRedFailures::new(self.failures.iter().cloned(), "")
+        let failures = hold_failures(self.failures.iter().cloned(), &self.output)
             .describe()
             .unwrap_or_else(|| "no failing test named".to_string());
         format!(

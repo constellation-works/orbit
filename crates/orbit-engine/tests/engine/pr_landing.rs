@@ -4696,6 +4696,53 @@ sys.exit(3)
         fs::write(path, serde_json::to_vec_pretty(&measurements).unwrap()).unwrap();
     }
 }
+
+/// A failed static guard names no test, so the step error shows the tail of
+/// the captured output, not the `PATH` line Orbit appends. A run naming a test
+/// keeps `failing: ...`, and both routes keep the log paths and base verdict.
+fn a_failing_guard_without_a_test_identity_names_the_output_tail_in_the_step_error(sandbox: &Path) {
+    let (fx, host) = fx_host(sandbox);
+    let guard = "check-source-style-diff.py: crates/x/src/lib.rs STD-12 R13 line is too wide";
+    let command = format!(
+        "test ! -e src/feature.txt || {{ echo 'checking' >&2; echo '{guard}' >&2; exit 2; }}"
+    );
+    host.require_commands(&[&command]);
+    for (route, input) in validation_routes(&fx) {
+        let message = action_err(&host, route, &input).to_string();
+        let tail = format!("no failing test named; the output ends `checking` / `{guard}`");
+        for field in [tail.as_str(), "exit 2", "Base verdict:"] {
+            assert!(
+                message.contains(field),
+                "{route}: missing {field}: {message}"
+            );
+        }
+        assert!(
+            message.contains("validation/"),
+            "{route}: the log paths stay: {message}"
+        );
+        assert!(
+            !message.contains("Required validation PATH="),
+            "{route}: the host PATH line is not a failure: {message}"
+        );
+    }
+    let fail_line = "        FAIL [   0.1s] (1/1) orbit-core::runtime suite::broken";
+    let command = format!(
+        "test ! -e src/feature.txt || {{ echo '{fail_line}'; echo 'trailing line'; exit 100; }}"
+    );
+    host.require_commands(&[&command]);
+    for (route, input) in validation_routes(&fx) {
+        let message = action_err(&host, route, &input).to_string();
+        assert!(
+            message.contains("failing: `orbit-core::runtime suite::broken`"),
+            "{route}: {message}"
+        );
+        assert!(
+            !message.contains("no failing test named") && !message.contains("the output ends"),
+            "{route}: {message}"
+        );
+        assert!(message.contains("Base verdict:"), "{route}: {message}");
+    }
+}
 fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs(sandbox: &Path) {
     let (fx, host) = fx_host(sandbox);
     let output_path = sandbox.join("validation-output");
@@ -7874,6 +7921,11 @@ fn validation_repairs_and_logs() {
                 (
                     "required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs",
                     required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs
+                        as fn(&Path),
+                ),
+                (
+                    "a_failing_guard_without_a_test_identity_names_the_output_tail_in_the_step_error",
+                    a_failing_guard_without_a_test_identity_names_the_output_tail_in_the_step_error
                         as fn(&Path),
                 ),
                 (
