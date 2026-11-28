@@ -54,10 +54,12 @@ applies to every future gate, plugin, distribution and channel.
   partition delays a decision and never splits it.
 - Distributions and Orbit-plane plugins align naturally with this rule: their
   workspace, plugin install, secrets, channel and data live on the same owner host.
-- Cost: a host without a registered channel has no email reach; requests raised on that
-  host are answerable via its dashboard, CLI and federated `orbit attention` reads until
-  that host registers its own channel. One mailbox does not forward answers across
-  different owner hosts.
+- Cost: a host without a registered channel has no email reach. Federated `orbit
+  attention` reads can discover an open request and display a command for each answer,
+  but the read itself does not record an answer. The answer must be submitted on the
+  owner host through its dashboard or CLI; if that host registers its own channel,
+  `decision-mail` is another owner-host answer surface. One mailbox does not forward
+  answers across different owner hosts.
 
 ## A plugin's effect is never written under the human's label
 
