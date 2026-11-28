@@ -21,7 +21,7 @@ fn mcp_missing_records_name_a_recovery_tool_or_field() {
             "orbit_task_show",
             json!({"id": task_id, "field": "delivery", "run_id": "missing-run"}),
             "not_found",
-            "`orbit_run {\"action\":\"list\"}`",
+            "ask an operator to check run history",
         ),
         (
             "orbit_decision",
@@ -34,6 +34,50 @@ fn mcp_missing_records_name_a_recovery_tool_or_field() {
         assert_eq!(error["code"], code, "{error}");
         assert!(error["message"].as_str().unwrap().contains(hint), "{error}");
     }
+}
+
+#[test]
+fn default_profile_refusals_use_advertised_remedies() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let task_id = client.add_task("Remedies", "Exercise MCP refusal remedies");
+    let listed = client.tools_list();
+    let tools = listed["result"]["tools"].as_array().expect("tools array");
+    let has_tool = |name: &str| tools.iter().any(|tool| tool["name"] == name);
+    assert!(!has_tool("orbit_run"));
+    for name in ["orbit_task_show", "orbit_workspace_list", "orbit_search"] {
+        assert!(has_tool(name), "missing {name}");
+    }
+    let run = client.call_tool_err(
+        "orbit_task_show",
+        json!({"id": task_id, "field": "delivery", "run_id": "jrun-nope"}),
+    );
+    let message = run["message"].as_str().expect("message");
+    assert!(message.contains("ask an operator"), "{message}");
+    assert!(!message.contains("orbit_run"), "{message}");
+    let unknown = client.call_tool_err("orbit_task_list", json!({"workspace": "nope"}));
+    let message = unknown["message"].as_str().expect("message");
+    assert!(message.contains("orbit_workspace_list {}"), "{message}");
+    assert!(!message.contains("orbit workspace list"), "{message}");
+    for input in [
+        json!({"action": "list", "id": task_id}),
+        json!({"action": "get", "id": task_id, "path": "nope.json"}),
+    ] {
+        let error = client.call_tool_err("orbit_task_artifact", input);
+        let message = error["message"].as_str().expect("message");
+        assert!(
+            message.contains("`orbit_task_show`") && message.contains("`field: \"artifacts\"`"),
+            "{message}"
+        );
+    }
+    let friction = client.call_tool_err("orbit_friction", json!({"action": "list"}));
+    assert!(
+        friction["message"]
+            .as_str()
+            .unwrap()
+            .contains("`orbit_search`"),
+        "{friction}"
+    );
 }
 
 #[test]

@@ -10,7 +10,7 @@ use orbit_types::tool::ToolSessionContext;
 
 /// List-before-read remedy in MCP tool-call syntax.
 pub const ARTIFACT_LISTING_HINT_MCP: &str =
-    "list available artifacts with orbit.task.show and field: \"artifacts\"";
+    "list available artifacts with `orbit_task_show` and `field: \"artifacts\"`";
 
 /// List-before-read remedy in CLI syntax, matching
 /// `orbit task artifact get --help`.
