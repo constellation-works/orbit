@@ -1389,3 +1389,9 @@ crate::scenario_table!(
     managed_pipeline_run_posts_and_closes_notices_as_agent,
     managed_run_notice_authority_preserves_fail_closed_rejections,
 );
+
+#[cfg(unix)]
+#[test]
+fn bundled_activity_notice_uses_selected_task_and_refuses_ambiguity() {
+    managed_run::bundled_activity_notice_uses_selected_task_and_refuses_ambiguity();
+}

@@ -29,6 +29,8 @@ pub struct NoticeCaller {
     /// The task a run-stamped tool context names (`orbit tool run` inside a
     /// managed run).
     pub scope_task_id: Option<String>,
+    /// Task attested by the dispatching activity.
+    pub active_task_id: Option<String>,
     /// The run a run-stamped tool context names.
     pub scope_run_id: Option<String>,
     /// Orchestrator attribution: the session's crew or a per-call name.
@@ -255,6 +257,15 @@ pub(super) fn resolve_notice_poster(
         } else {
             None
         };
+        if resident_mandate.is_none() {
+            let active = non_empty(caller.active_task_id.as_deref());
+            if active.as_deref() != scope_task_id || active.is_none() {
+                return Err(OrbitError::notice_refused(
+                    NoticeRefusalCode::PosterUnidentified,
+                    format!("managed run `{run_id}` has no matching active activity task"),
+                ));
+            }
+        }
         resolve_managed_run_task_binding(&run, run_id, scope_task_id, resident_mandate.as_deref())
     };
     let bound = match &caller.session.worker_invocation {
@@ -379,7 +390,7 @@ fn resolve_managed_run_task_binding(
     let Some(task_id) = scope_task_id else {
         return Err(OrbitError::notice_refused(
             NoticeRefusalCode::PosterUnidentified,
-            "only the operator, an orchestrator session or a managed agent run may write notices",
+            format!("managed run `{run_id}` has no resolved activity task"),
         ));
     };
     let carries_task = run

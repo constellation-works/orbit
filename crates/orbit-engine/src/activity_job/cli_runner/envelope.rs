@@ -207,11 +207,13 @@ pub(in crate::activity_job) fn task_id_from_input(input: &Value) -> Option<&str>
                 .and_then(non_empty)
         })
         .or_else(|| {
-            input
-                .get("task_ids")
-                .and_then(Value::as_array)
-                .and_then(|items| items.iter().find_map(Value::as_str))
-                .and_then(non_empty)
+            // A bundle does not identify the activity's owner by order.
+            let items = input.get("task_ids")?.as_array()?;
+            if items.len() == 1 {
+                items.first()?.as_str().and_then(non_empty)
+            } else {
+                None
+            }
         })
 }
 
@@ -256,4 +258,24 @@ pub(in crate::activity_job) fn task_ids_from_input(input: &Value) -> Vec<String>
         .filter(|task_id| seen.insert((*task_id).to_string()))
         .map(str::to_string)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::task_id_from_input;
+    use serde_json::json;
+
+    #[test]
+    fn activity_task_requires_an_unambiguous_binding() {
+        assert_eq!(task_id_from_input(&json!({"task_ids": ["A", "B"]})), None);
+        assert_eq!(task_id_from_input(&json!({"task_ids": ["A"]})), Some("A"));
+        assert_eq!(
+            task_id_from_input(&json!({"task_ids": ["A", "B"], "task_id": "B"})),
+            Some("B")
+        );
+        assert_eq!(
+            task_id_from_input(&json!({"task_ids": ["A", "B"], "task": {"id": "B"}})),
+            Some("B")
+        );
+    }
 }
