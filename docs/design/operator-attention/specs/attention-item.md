@@ -233,7 +233,7 @@ and are not waiting on a single task.
 | `pilot_warning` | medium | high | high when a finding is a contract conflict |
 | `pilot_hold` | medium | high | high when another task lists this one in `blocked_by` |
 | `blocked` | high | high | none |
-| `decision_open` | medium | high | request `risk_tier` `irreversible`, `authority` or `spend`; and one level when `expires_at` is within 6 hours |
+| `decision_open` | medium; low for gate `plugin_request` | high | request `risk_tier` `irreversible`, `authority` or `spend`, except for gate `plugin_request` (see below); and one level when `expires_at` is within 6 hours |
 | `review_waiting` | low for `approval` and `completion_hold`; medium for `delivery_hold` and `review_budget` | high | `review_budget` and `delivery_hold` start at medium |
 | `run_failed` | medium | high | high when `detail.held_claim` is true (a live claim; a settled claim does not raise severity) |
 | `run_stuck` | medium | high | high when the run holds a claim |
@@ -247,6 +247,18 @@ and are not waiting on a single task.
 | `drain_paused` | medium | medium | none; fingerprint state is the pause's `since` |
 | `drain_breaker_open` | high | high | none; fingerprint state is the newest failure's `since` |
 | `notice_open` | `warn` and `incident` high, `maintenance` medium, `info` low (residents' status lines excluded) | critical | one step higher when the linked task is terminal but not `done`, or when the notice expires within 2 hours. This kind's severity is the notice rule in [notice-delivery](../../fleet-notices/specs/notice-delivery.md#attention-kind), not the age-bump ladder; its fingerprint state is `revision`, effective `status` and severity, with `refs` carrying `notice_id` and the linked `task_id`, `reason` the notice title, and `since` its `opened_at` |
+
+**`plugin_request` precedence.** Core fixes every `plugin_request` at `authority` tier by
+construction ([human-decision-channel §12.6](../../human-decision-channel/2_design.md#126-auto-answer-policy-human-only-authority-tier)),
+so the tier carries no urgency signal and the `authority` raise does not apply to an
+unfolded `plugin_request` `decision_open` item. Precedence, in order: base `low`; age raises
+one level at 24 and 72 hours; an `expires_at` within 6 hours raises one further level; the
+`high` ceiling caps the result. Observable severity: a fresh request with distant expiry is
+`low`; at 24 hours `medium`; at 72 hours `high`; a fresh request expiring within 6 hours
+`medium`, and `high` once it is also 24 hours old. An ordinary `authority` request of any other gate
+(for example `resident_authority` or `script_grant`) keeps the table rule: `high` at age
+zero with distant expiry. A `plugin_request` folded into a subject item changes neither that
+item's severity nor its kind.
 
 The thresholds, the 48-hour run window, the 120-minute stuck bound, the 60-second CI cache, the
 10-second source timeout and the 200-item workspace cap are fixed; the `[attention]` table that
