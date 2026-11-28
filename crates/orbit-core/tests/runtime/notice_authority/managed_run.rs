@@ -700,3 +700,217 @@ pub(super) fn managed_notice_mutations_follow_the_host_attested_activity() {
     assert_eq!(closed["notice"]["closed"]["by"]["task_id"], selected);
     assert_eq!(closed["notice"]["closed"]["by"]["run_id"], run);
 }
+
+/// A nested CLI or MCP notice write takes its activity from the run's broker,
+/// which authenticates the peer, and never from environment claims alone. A
+/// claim naming a sibling task leaves the host-attested selected task as the
+/// poster and editor, and a resident cycle's warning is attributed to its
+/// bound mandate.
+#[cfg(unix)]
+pub(super) fn managed_notice_writes_use_the_brokers_activity_task() {
+    use orbit_core::app::audit::list_audit_events;
+    use orbit_core::test_support::start_test_run_broker;
+    use orbit_engine::PluginBrokerHandle;
+
+    // The broker refuses a socket path longer than `sun_path`, so keep the root short.
+    let root = tempfile::Builder::new()
+        .prefix("obk")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let runtime = runtime_at(root.path());
+    let cwd = std::env::current_dir().unwrap();
+    let sibling = add_task(&runtime, "Sibling task");
+    let selected = add_task(&runtime, "Selected task");
+    let run = insert_run(
+        &runtime,
+        "task_pr_pipeline",
+        Some(json!({"task_ids": [sibling, selected]})),
+    );
+    let broker = start_test_run_broker(
+        &runtime,
+        broker_run(
+            &run,
+            &selected,
+            "agent_implement",
+            ["orbit.notice.post", "orbit.notice.close"]
+                .iter()
+                .map(|tool| orbit_types::tool::tool_call_name(tool).into_owned())
+                .collect(),
+            &cwd,
+        ),
+    )
+    .unwrap();
+    let socket = broker.socket_path().to_str().unwrap().to_string();
+    let env = Env::from_vars([
+        ("ORBIT_PLUGIN_BROKER", socket.as_str()),
+        ("ORBIT_MANAGED_RUN_CONTEXT", "1"),
+        ("ORBIT_RUN_ID", run.as_str()),
+        ("ORBIT_TASK_ID", sibling.as_str()),
+        ("ORBIT_ACTIVE_TASK_ID", sibling.as_str()),
+    ]);
+    let posted = call_with_env(
+        &runtime,
+        &env,
+        "orbit.notice.post",
+        json!({"kind": "info", "title": "Fixture issue", "linked_task": selected}),
+        ToolEntryPoint::Cli,
+        ToolSessionContext::default(),
+    )
+    .expect("CLI post through the broker");
+    let notice = &posted["notice"];
+    assert_eq!(notice["author"]["class"], "agent");
+    assert_eq!(notice["author"]["task_id"], selected);
+    assert_eq!(notice["author"]["run_id"], run);
+    let closed = call_with_env(
+        &runtime,
+        &env,
+        "orbit.notice.close",
+        json!({"id": notice["id"], "reason": "cleared"}),
+        ToolEntryPoint::Mcp,
+        ToolSessionContext::default(),
+    )
+    .expect("MCP close through the broker");
+    assert_eq!(closed["notice"]["closed"]["by"]["task_id"], selected);
+    for tool in ["orbit.notice.post", "orbit.notice.close"] {
+        let rows = list_audit_events(&runtime, None, Some(tool.to_string()), None, None, 10)
+            .expect("audit events");
+        let mut invocations = rows
+            .iter()
+            .filter(|row| row.target_type.as_deref() == Some("tool"));
+        assert!(invocations.next().expect("invocation audit").brokered);
+        assert!(invocations.next().is_none(), "{tool}: {rows:?}");
+    }
+    drop(broker);
+
+    let mandate = runtime
+        .add_task(TaskAddParams {
+            title: "[orchestration]: broker - sol".into(),
+            tags: vec!["resident".into()],
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+    let workspace = runtime.workspace_id().unwrap();
+    let mandate_body = json!({
+        "schema": "resident.mandate/v1",
+        "goal": "Ship the leaf",
+        "exit_criteria": ["The leaf is done"],
+        "workspaces": [workspace],
+        "watch": {"tasks": [], "tags": []},
+        "crew": "sol",
+        "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+    });
+    runtime
+        .update_task_as_human(
+            &mandate,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text(
+                    "resident/mandate.json",
+                    mandate_body.to_string(),
+                )],
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.resident.grant",
+            json!({"task_id": mandate, "add": ["dispatch"], "workspaces": [workspace]}),
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            ToolSessionContext {
+                effective_capabilities: [McpCapability::Operator].into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let cycle = insert_run(
+        &runtime,
+        "resident_cycle_pipeline",
+        Some(json!({"task_ids": [mandate]})),
+    );
+    resident::begin_resident_cycle(&runtime, &cycle, Utc::now()).unwrap();
+    let resident_broker = start_test_run_broker(
+        &runtime,
+        broker_run(
+            &cycle,
+            &mandate,
+            "resident_cycle",
+            vec!["orbit.notice.post".into()],
+            &cwd,
+        ),
+    )
+    .unwrap();
+    let posted = broker_call(
+        resident_broker.socket_path(),
+        json!({
+            "schema_version": 1,
+            "tool": "orbit.notice.post",
+            "input": {"kind": "warn", "title": "Resident cycle needs attention"},
+            "cwd": cwd,
+            "workspace": null,
+            "entry_point": "cli",
+            "dry_run": false,
+        }),
+    );
+    assert_eq!(posted["ok"], true, "{posted}");
+    assert_eq!(posted["output"]["notice"]["author"]["task_id"], mandate);
+}
+
+/// The record the step runner builds for a brokered run of `activity`.
+#[cfg(unix)]
+fn broker_run(
+    run_id: &str,
+    task_id: &str,
+    activity: &str,
+    allowed_tools: Vec<String>,
+    cwd: &Path,
+) -> orbit_engine::PluginBrokerRun {
+    orbit_engine::PluginBrokerRun {
+        run_id: run_id.into(),
+        job_run_id: Some(run_id.into()),
+        task_id: Some(task_id.into()),
+        activity_name: activity.into(),
+        agent_name: Some("codex".into()),
+        model_name: None,
+        workspace: None,
+        allowed_tools,
+        tool_deny_policy: None,
+        caller: orbit_tools::plugin::BrokeredCaller {
+            worktree: cwd.to_path_buf(),
+            fs_profile: orbit_types::policy::ResolvedFsProfile {
+                name: "broker-e2e".into(),
+                read: vec!["/**".into()],
+                modify: vec![format!("{}/**", cwd.display())],
+            },
+            proc_allowed_programs: Vec::new(),
+            proc_disallowed_programs: None,
+        },
+    }
+}
+
+/// Sends one framed request to a served run's broker and returns its reply.
+#[cfg(unix)]
+fn broker_call(socket: &Path, request: Value) -> Value {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    let mut stream = UnixStream::connect(socket).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .expect("read timeout");
+    let body = request.to_string().into_bytes();
+    stream
+        .write_all(&u32::try_from(body.len()).expect("length").to_be_bytes())
+        .expect("send length");
+    stream.write_all(&body).expect("send body");
+    let mut header = [0u8; 4];
+    stream.read_exact(&mut header).expect("response length");
+    let mut response = vec![0u8; u32::from_be_bytes(header) as usize];
+    stream.read_exact(&mut response).expect("response body");
+    serde_json::from_slice(&response).expect("response is JSON")
+}

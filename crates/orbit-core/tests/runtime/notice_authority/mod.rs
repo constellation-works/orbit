@@ -10,6 +10,8 @@ use std::path::Path;
 
 #[cfg(unix)]
 use managed_run::ambiguous_bundle_dispatch_drops_inherited_task_identity;
+#[cfg(unix)]
+use managed_run::managed_notice_writes_use_the_brokers_activity_task;
 use managed_run::{
     managed_notice_mutations_follow_the_host_attested_activity,
     managed_run_notice_authority_preserves_fail_closed_rejections,
@@ -1398,4 +1400,11 @@ crate::scenario_table!(
 crate::scenario_table!(
     ambiguous_bundle_dispatch,
     ambiguous_bundle_dispatch_drops_inherited_task_identity,
+);
+
+// Serves a real broker socket, so it runs in this table's re-executed child too.
+#[cfg(unix)]
+crate::scenario_table!(
+    broker_activity_writes,
+    managed_notice_writes_use_the_brokers_activity_task,
 );
