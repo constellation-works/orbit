@@ -360,8 +360,9 @@ impl OrbitToolServer {
                 "pass `workspace` with a selector copied from `orbit_workspace_list`"
             };
             return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
-                "tool '{canonical}' requires an explicit workspace selector from discovery: \
-                 {trigger}{guidance}"
+                "tool '{}' requires an explicit workspace selector from discovery: \
+                 {trigger}{guidance}",
+                orbit_types::tool::mcp_advertised_tool_name(&canonical)
             ))));
         }
         let host = Arc::clone(&self.host);
@@ -383,7 +384,9 @@ impl OrbitToolServer {
                 }
                 Ok(mcp_tool_call_result(value))
             }
-            Ok(Err(error)) => Ok(tool_error_result(&error)),
+            Ok(Err(error)) => Ok(crate::error::tool_error_result_for_surface(
+                &error, &name_map,
+            )),
             Err(join_error) => {
                 let error = OrbitError::Execution(format!(
                     "tool '{canonical}' worker panicked or was cancelled: {join_error}"
