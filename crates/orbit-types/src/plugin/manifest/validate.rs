@@ -4,10 +4,10 @@ use super::super::namespace::{SEGMENT_RULE, is_valid_namespace, is_valid_verb};
 use super::super::template::validate_template;
 use super::super::version::{SemverRange, Version};
 use super::{
-    LINK_URL_SCHEMES, MANIFEST_KIND, MANIFEST_SCHEMA_VERSION, MAX_PANEL_REFRESH_MS,
-    MAX_SECRET_NAME_LEN, MIN_PANEL_REFRESH_MS, PluginExecutionKind, PluginManifest,
-    PluginManifestError, PluginOrigin, is_valid_secret_name, validate_plugin_cli_flags,
-    validate_plugin_cli_positionals,
+    KNOWN_PAGE_KITS, LINK_URL_SCHEMES, MANIFEST_KIND, MANIFEST_SCHEMA_VERSION,
+    MAX_PANEL_REFRESH_MS, MAX_SECRET_NAME_LEN, MIN_PANEL_REFRESH_MS, PAGE_SCRIPT_EXTENSIONS,
+    PAGE_STYLE_EXTENSION, PluginExecutionKind, PluginManifest, PluginManifestError, PluginOrigin,
+    is_valid_secret_name, validate_plugin_cli_flags, validate_plugin_cli_positionals,
 };
 
 impl PluginManifest {
@@ -325,6 +325,109 @@ impl PluginManifest {
                 ));
             }
             validate_template(&link.url, &format!("{field}.url"))?;
+        }
+        self.validate_pages(&web.pages)
+    }
+
+    /// `spec.web.pages` (plugin-pages design §1): the parts of a page that
+    /// need no filesystem. The loader checks the files themselves. Every
+    /// refusal names the page.
+    fn validate_pages(&self, pages: &[super::PluginWebPage]) -> Result<(), PluginManifestError> {
+        let mut seen = std::collections::BTreeSet::new();
+        for (index, page) in pages.iter().enumerate() {
+            let field = format!("spec.web.pages[{index}]");
+            if !is_valid_verb(&page.id) {
+                return Err(PluginManifestError::new(
+                    format!("{field}.id"),
+                    format!("'{}' is not a valid page id: {SEGMENT_RULE}", page.id),
+                ));
+            }
+            let id = page.id.as_str();
+            if !seen.insert(id) {
+                return Err(PluginManifestError::new(
+                    format!("{field}.id"),
+                    format!("page '{id}' is declared more than once"),
+                ));
+            }
+            validate_plugin_relative_path(&page.root, &format!("{field}.root")).map_err(
+                |error| {
+                    PluginManifestError::new(error.field, format!("page '{id}': {}", error.message))
+                },
+            )?;
+            let mut listed = std::collections::BTreeSet::new();
+            for (key, files) in [("scripts", &page.scripts), ("styles", &page.styles)] {
+                for (file_index, file) in files.iter().enumerate() {
+                    let file_field = format!("{field}.{key}[{file_index}]");
+                    validate_plugin_relative_path(file, &file_field).map_err(|error| {
+                        PluginManifestError::new(
+                            error.field,
+                            format!("page '{id}': {}", error.message),
+                        )
+                    })?;
+                    let name = file.trim();
+                    let allowed = if key == "scripts" {
+                        PAGE_SCRIPT_EXTENSIONS
+                            .iter()
+                            .any(|extension| name.ends_with(extension))
+                    } else {
+                        name.ends_with(PAGE_STYLE_EXTENSION)
+                    };
+                    if !allowed {
+                        let expected = if key == "scripts" {
+                            "a script name must end in `.js` or `.mjs`"
+                        } else {
+                            "a style name must end in `.css`"
+                        };
+                        return Err(PluginManifestError::new(
+                            file_field,
+                            format!("page '{id}' lists '{name}'; {expected}"),
+                        ));
+                    }
+                    if !listed.insert(name.trim_start_matches("./")) {
+                        return Err(PluginManifestError::new(
+                            file_field,
+                            format!("page '{id}' lists '{name}' more than once"),
+                        ));
+                    }
+                }
+            }
+            if let Some(kit) = page.kit
+                && !KNOWN_PAGE_KITS.contains(&kit)
+            {
+                let known = KNOWN_PAGE_KITS
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(PluginManifestError::new(
+                    format!("{field}.kit"),
+                    format!(
+                        "page '{id}' names kit version {kit}, which this Orbit does not know; \
+                         known versions: {known}"
+                    ),
+                ));
+            }
+            for (tool_index, verb) in page.tools.iter().enumerate() {
+                let tool_field = format!("{field}.tools[{tool_index}]");
+                let Some(tool) = self.spec.tools.iter().find(|tool| tool.name == *verb) else {
+                    return Err(PluginManifestError::new(
+                        tool_field,
+                        format!(
+                            "page '{id}' names tool '{verb}', which this plugin does not \
+                             declare; a page may call only its own plugin's tools"
+                        ),
+                    ));
+                };
+                if tool.execution_kind != PluginExecutionKind::ReadOnly {
+                    return Err(PluginManifestError::new(
+                        tool_field,
+                        format!(
+                            "page '{id}' names tool '{verb}', which is `execution_kind: \
+                             mutating`; a page may only call `read_only` tools"
+                        ),
+                    ));
+                }
+            }
         }
         Ok(())
     }

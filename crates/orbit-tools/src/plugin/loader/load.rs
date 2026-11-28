@@ -18,7 +18,9 @@ pub fn load_plugin_dir(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
 /// empty: no golden pattern is resolved and no golden file is opened.
 /// Serving an installed plugin never reads `tests`, so the host load
 /// path uses this variant and does not pay the conformance-suite parse
-/// on every process start.
+/// on every process start. A page whose files fail their checks is kept
+/// with the failure as its bundle instead of refusing the plugin, so the
+/// rest of an installed plugin keeps serving.
 pub fn load_plugin_dir_without_tests(root: &Path) -> Result<LoadedPlugin, PluginLoadError> {
     load_plugin_dir_impl(root, false)
 }
@@ -30,7 +32,15 @@ fn load_plugin_dir_impl(root: &Path, include_tests: bool) -> Result<LoadedPlugin
             error.kind(),
         )
     })?;
-    refuse_plugin_tree_symlinks(&root)?;
+    if let Some((entry, target)) = find_plugin_tree_symlink(&root)? {
+        let message = plugin_symlink_refusal(&entry, target.as_deref());
+        return Err(PluginLoadError::SymlinkRefused(
+            match super::page::page_owning_entry(&root, &entry) {
+                Some((index, id)) => format!("spec.web.pages[{index}]: page '{id}': {message}"),
+                None => message,
+            },
+        ));
+    }
     let manifest_path = root.join(MANIFEST_FILE_NAME);
     let bytes = std::fs::read(&manifest_path).map_err(|error| {
         PluginLoadError::io(
@@ -114,6 +124,9 @@ fn load_plugin_dir_impl(root: &Path, include_tests: bool) -> Result<LoadedPlugin
     } else {
         Vec::new()
     };
+    // The full loader certifies a tree, so a page that cannot be written out
+    // refuses it. Serving keeps the failure on that page alone.
+    let pages = super::page::resolve_pages(&root, &manifest, include_tests)?;
 
     Ok(LoadedPlugin {
         root,
@@ -126,6 +139,7 @@ fn load_plugin_dir_impl(root: &Path, include_tests: bool) -> Result<LoadedPlugin
         config_schema,
         config_defaults,
         tests,
+        pages,
     })
 }
 

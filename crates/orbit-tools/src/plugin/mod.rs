@@ -21,9 +21,6 @@ mod schema;
 mod source;
 mod tool;
 
-#[cfg(test)]
-mod tests;
-
 pub use backend::{
     BrokeredCaller, DECISION_CHANNEL_STORE_DIR, DeliveredPluginSecret, DroppedFsRoot,
     ORBIT_PRODUCT_MARKER, PLUGIN_GRANT_WITNESS_DIR, PLUGIN_SECRET_STORE_DIR,
@@ -53,10 +50,12 @@ pub use envelope::{
 };
 pub use lifecycle::{BrokerCall, BrokerSessions};
 pub use loader::{
-    FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, LoadedPluginTestFile, PluginDefinitionFiles,
-    PluginLoadError, PluginValidationPolicy, ResolvedPluginTool, first_party_source,
-    fs_write_root_covers, load_plugin_dir, load_plugin_dir_without_tests, manifest_digest,
-    manifest_refusal, physical_with_missing_tail, plugin_symlink_refusal,
+    FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, LoadedPluginPage, LoadedPluginTestFile,
+    MAX_PLUGIN_PAGE_BYTES, PluginDefinitionFiles, PluginLoadError, PluginPageBundle,
+    PluginPageError, PluginPageFile, PluginValidationPolicy, ResolvedPluginTool,
+    first_party_source, fs_write_root_covers, load_plugin_dir, load_plugin_dir_without_tests,
+    manifest_digest, manifest_refusal, page_digest, page_digest_diagnostic,
+    physical_with_missing_tail, plugin_pages_unchanged, plugin_symlink_refusal,
     refuse_covering_fs_write_roots, refuse_plugin_tree_symlinks, resolve_plugin_definitions,
     validate_loaded_plugin,
 };
@@ -67,3 +66,6 @@ pub use source::{
     PluginSourceRequest, ResolvedCommit, ResolvedSource, resolve_plugin_root, resolve_plugin_source,
 };
 pub use tool::{PluginBackend, PluginTool, PluginToolBinding};
+
+#[cfg(test)]
+mod tests;

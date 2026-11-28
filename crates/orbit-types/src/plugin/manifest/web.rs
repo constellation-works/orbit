@@ -1,4 +1,4 @@
-//! `spec.web`: dashboard panels and links (§4.7).
+//! `spec.web`: dashboard panels, links and pages (§4.7).
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,19 @@ pub const MAX_PANEL_REFRESH_MS: u64 = 3_600_000;
 /// The schemes a `spec.web.links[].url` may use (§4.7).
 pub const LINK_URL_SCHEMES: &[&str] = &["http://", "https://"];
 
+/// The markup file every page root holds.
+pub const PAGE_INDEX_FILE: &str = "index.html";
+
+/// The page bridge versions this Orbit knows (`spec.web.pages[].kit`).
+pub const KNOWN_PAGE_KITS: &[u32] = &[1];
+
+/// The file name endings a page script may have. `.mjs` is written as a
+/// module script, any other as a classic one.
+pub const PAGE_SCRIPT_EXTENSIONS: &[&str] = &[".js", ".mjs"];
+
+/// The file name ending a page style must have.
+pub const PAGE_STYLE_EXTENSION: &str = ".css";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginWebSection {
@@ -24,6 +37,8 @@ pub struct PluginWebSection {
     pub panels: Vec<PluginWebPanel>,
     #[serde(default)]
     pub links: Vec<PluginWebLink>,
+    #[serde(default)]
+    pub pages: Vec<PluginWebPage>,
 }
 
 /// One dashboard panel (§4.7): the output of a `read_only` tool, drawn by
@@ -109,4 +124,42 @@ impl PluginPanelGroup {
 pub struct PluginWebLink {
     pub title: String,
     pub url: String,
+}
+
+/// A screen a plugin ships and the dashboard shows under Plugins (design
+/// `docs/design/plugin-pages/2_design.md` §1): `index.html` for the markup,
+/// plus the scripts and styles listed here, all under `root`. Files in
+/// `root` that are not listed are never loaded, hashed or served.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginWebPage {
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    /// A directory in the plugin root holding `index.html`.
+    pub root: String,
+    /// Files under `root`, written into the page in this order.
+    #[serde(default)]
+    pub scripts: Vec<String>,
+    /// Files under `root`, written into the page in this order.
+    #[serde(default)]
+    pub styles: Vec<String>,
+    /// The bridge version the page was written for; one of
+    /// [`KNOWN_PAGE_KITS`]. Omitted: the page uses no kit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kit: Option<u32>,
+    /// Verbs of this plugin's `read_only` tools the page may call.
+    #[serde(default)]
+    pub tools: Vec<String>,
+}
+
+impl PluginWebPage {
+    /// The sub-tab label: `title`, or the id when the title is blank.
+    pub fn label(&self) -> &str {
+        if self.title.trim().is_empty() {
+            &self.id
+        } else {
+            &self.title
+        }
+    }
 }

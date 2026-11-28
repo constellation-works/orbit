@@ -21,6 +21,7 @@ fn record(name: &str, enabled: bool, grants: &[&str]) -> InstalledPlugin {
         first_party: false,
         certified_orbit_version: None,
         build: None,
+        page_digests: Default::default(),
         installed_at: String::new(),
         updated_at: String::new(),
     }

@@ -329,6 +329,13 @@ fn install_plugin_inner(
         build,
         enabled,
         grants,
+        // The strict load above refused any page it could not read, so every
+        // page has a digest of the source files the copy just published.
+        page_digests: plugin
+            .pages
+            .iter()
+            .filter_map(|page| Some((page.id.clone(), page.digest()?.to_string())))
+            .collect(),
         first_party,
         certified_orbit_version,
         // The store keeps the original `installed_at`; these are the values a

@@ -19,7 +19,7 @@ use crate::store::{Snapshot, Tx};
 
 const PLUGIN_COLUMNS: &str = "name, version, source, install_path, manifest_digest, enabled, \
      grants_json, first_party, installed_at, updated_at, certified_orbit_version, archive_digest, \
-     build_json";
+     build_json, page_digests_json";
 
 /// Concrete plugin repository scoped to a [`Snapshot`] (read-only) or a [`Tx`]
 /// (read-write).
@@ -88,13 +88,21 @@ impl<'a, 'tx> PluginRepository<'a, Tx<'tx>> {
             .map_err(|error| {
                 OrbitError::Store(format!("serialize plugin build record: {error}"))
             })?;
+        // NULL, not `{}`, for a plugin without pages: the row then reads the
+        // same as one written before the column existed.
+        let page_digests_json = (!plugin.page_digests.is_empty())
+            .then(|| serde_json::to_string(&plugin.page_digests))
+            .transpose()
+            .map_err(|error| {
+                OrbitError::Store(format!("serialize plugin page digests: {error}"))
+            })?;
         let now = now_string();
         self.conn
             .execute(
                 "INSERT INTO plugins(name, version, source, install_path, manifest_digest, enabled, \
                  grants_json, first_party, installed_at, updated_at, certified_orbit_version, \
-                 archive_digest, build_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12) \
+                 archive_digest, build_json, page_digests_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11, ?12, ?13) \
                  ON CONFLICT(name) DO UPDATE SET version = excluded.version, \
                  source = excluded.source, install_path = excluded.install_path, \
                  manifest_digest = excluded.manifest_digest, enabled = excluded.enabled, \
@@ -102,7 +110,8 @@ impl<'a, 'tx> PluginRepository<'a, Tx<'tx>> {
                  updated_at = excluded.updated_at, \
                  certified_orbit_version = excluded.certified_orbit_version, \
                  archive_digest = excluded.archive_digest, \
-                 build_json = excluded.build_json",
+                 build_json = excluded.build_json, \
+                 page_digests_json = excluded.page_digests_json",
                 params![
                     plugin.name,
                     plugin.version,
@@ -116,6 +125,7 @@ impl<'a, 'tx> PluginRepository<'a, Tx<'tx>> {
                     plugin.certified_orbit_version,
                     plugin.archive_digest,
                     build_json,
+                    page_digests_json,
                 ],
             )
             .map_err(sqlite_store_error)?;
@@ -189,6 +199,7 @@ fn plugin_from_row(row: &Row<'_>) -> rusqlite::Result<InstalledPlugin> {
         certified_orbit_version: row.get(10)?,
         archive_digest: row.get(11)?,
         build: build_record_from_column(row.get(12)?)?,
+        page_digests: page_digests_from_column(row.get(13)?)?,
     })
 }
 
@@ -206,4 +217,22 @@ fn build_record_from_column(raw: Option<String>) -> rusqlite::Result<Option<Plug
         })
     })
     .transpose()
+}
+
+/// A stored page-digest map that no longer parses is a conversion failure:
+/// reading it as empty would leave no digest for a page to be checked against.
+fn page_digests_from_column(
+    raw: Option<String>,
+) -> rusqlite::Result<std::collections::BTreeMap<String, String>> {
+    raw.map(|raw| {
+        serde_json::from_str(&raw).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                13,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })
+    })
+    .transpose()
+    .map(Option::unwrap_or_default)
 }
