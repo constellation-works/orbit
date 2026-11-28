@@ -565,6 +565,146 @@ fn mixed_pilot_selection_applies_free_tasks_and_skips_held_tasks() {
     );
 }
 
+fn mixed_in_progress_and_proposed_explicit_selection_assesses_proposed_and_records_skip() {
+    use orbit_core::application::task::TaskUpdateParams;
+
+    let workspace = Workspace::new();
+    let in_progress = workspace.task("already in progress");
+    let in_progress = workspace
+        .runtime
+        .force_update_task_with_identity(
+            &in_progress.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    let proposed = workspace.task("ready to assess");
+
+    let prepared = workspace.prepare(&[&in_progress.id, &proposed.id]);
+    assert_eq!(prepared["task_ids"], json!([proposed.id]), "{prepared}");
+    assert_eq!(
+        prepared["partitions"],
+        json!([{"partition_index": 0, "task_ids": [proposed.id]}]),
+        "{prepared}"
+    );
+    let skips = json!([
+        {
+            "task_id": in_progress.id,
+            "reason": "status_not_eligible",
+            "status": TaskStatus::InProgress,
+        }
+    ]);
+    assert_eq!(prepared["excluded"], skips, "{prepared}");
+    assert_eq!(
+        prepared["excluded_by_reason"]["status_not_eligible"], 1,
+        "{prepared}"
+    );
+
+    let applied = workspace.action(
+        "apply_task_pilot_results",
+        json!({
+            "workspace_path": workspace.repo,
+            "prepared": prepared,
+            "results": [{
+                "partition_index": 0,
+                "task_ids": [proposed.id],
+                "tasks": [{
+                    "task_id": proposed.id,
+                    "context_files_before": [], "context_files_after": ["file:README.md"],
+                    "disposition": "selectors", "recommended_crew": "fixture",
+                    "recommended_complexity": "low", "confidence": "high",
+                    "assessment_rationale": "README.md contains the affected material.",
+                    "validation_approach": "Inspect the persisted scope.",
+                    "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [],
+                    "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
+                    "duplicate_of": null, "already_landed": null,
+                }],
+            }],
+        }),
+    );
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    assert_eq!(applied["outcome"], "superseded", "{applied}");
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    assert_eq!(applied["superseded_count"], 1, "{applied}");
+    assert_eq!(applied["unresolved_count"], 0, "{applied}");
+    assert_eq!(applied["discovery"]["excluded"], skips, "{applied}");
+    assert_eq!(
+        workspace.runtime.get_task(&in_progress.id).unwrap(),
+        in_progress
+    );
+    assert_eq!(
+        workspace
+            .runtime
+            .get_task(&proposed.id)
+            .unwrap()
+            .context_files,
+        ["file:README.md"]
+    );
+}
+
+fn all_in_progress_explicit_selection_succeeds_without_assessment() {
+    use orbit_core::application::task::TaskUpdateParams;
+
+    let workspace = Workspace::new();
+    let active = workspace.task("active task");
+    let active = workspace
+        .runtime
+        .force_update_task_with_identity(
+            &active.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+
+    let job = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/jobs/task_pilot_pipeline.yaml");
+    let run = workspace
+        .runtime
+        .run_job_v2_from_yaml(
+            &job,
+            json!({
+                "task_ids": [active.id],
+                "workspace_path": workspace.repo,
+                "base_branch": "main",
+            }),
+        )
+        .expect("all-in-progress selection should not fail prepare_task_pilot");
+    assert!(run.success, "all-in-progress selections skip: {run:?}");
+    assert_eq!(
+        workspace.runtime.show_job_run(&run.run_id).unwrap().state,
+        JobRunState::Success
+    );
+    let prepared = &run.pipeline["prepare"];
+    assert_eq!(prepared["task_count"], 0, "{prepared}");
+    assert_eq!(prepared["task_ids"], json!([]), "{prepared}");
+    assert_eq!(prepared["partitions"], json!([]), "{prepared}");
+    let expected = json!([
+        {
+            "task_id": active.id,
+            "reason": "status_not_eligible",
+            "status": TaskStatus::InProgress,
+        }
+    ]);
+    assert_eq!(prepared["excluded"], expected, "{prepared}");
+    assert_eq!(
+        prepared["excluded_by_reason"]["status_not_eligible"], 1,
+        "{prepared}"
+    );
+    assert_eq!(run.pipeline["apply"]["status"], "succeeded");
+    assert_eq!(run.pipeline["apply"]["outcome"], "superseded");
+    assert_eq!(run.pipeline["apply"]["applied_count"], 0);
+    assert_eq!(run.pipeline["apply"]["superseded_count"], 1);
+    assert_eq!(run.pipeline["apply"]["discovery"]["excluded"], expected);
+    assert_eq!(workspace.runtime.get_task(&active.id).unwrap(), active);
+}
+
 fn runtime_at(global: &Path, orbit_dir: &Path) -> OrbitRuntime {
     OrbitRuntime::from_roots(global, orbit_dir)
         .unwrap()
@@ -1352,6 +1492,8 @@ crate::scenario_table!(
     all_held_pilot_run_succeeds_and_retains_every_holder_skip_scenarios,
     all_held_pilot_run_succeeds_and_retains_every_holder_skip,
     mixed_pilot_selection_applies_free_tasks_and_skips_held_tasks,
+    mixed_in_progress_and_proposed_explicit_selection_assesses_proposed_and_records_skip,
+    all_in_progress_explicit_selection_succeeds_without_assessment,
     preparation_routine_withholds_active_pilot_tasks_until_the_hold_ends,
     no_pilot_excludes_automatic_preparation_and_explains_the_tag,
     preparation_routine_admission_withholds_a_held_member_off_the_scan_page,

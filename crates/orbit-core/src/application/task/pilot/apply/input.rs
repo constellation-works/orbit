@@ -474,6 +474,7 @@ impl<'de> Deserialize<'de> for Excluded {
 pub(super) struct ExcludedTask {
     pub(super) task_id: Field<String>,
     pub(super) reason: Field<String>,
+    pub(super) status: Field<TaskStatus>,
     pub(super) prepared_by_run_ids: Field<Vec<Value>>,
 }
 

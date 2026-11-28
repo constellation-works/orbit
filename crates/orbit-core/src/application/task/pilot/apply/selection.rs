@@ -19,7 +19,8 @@ pub(super) struct PreparedSelection<'a> {
 
 /// Who, if anyone, authorized this apply to promote. A CI sweep whose one
 /// filed task another pilot holds, and each task of an explicit selection
-/// another pilot holds, settle superseded among the carried outcomes.
+/// another pilot holds or skipped as non-assessable, settle superseded among
+/// the carried outcomes.
 pub(super) fn authority<'a>(
     runtime: &OrbitRuntime,
     action: &str,
@@ -43,7 +44,7 @@ pub(super) fn authority<'a>(
     if let Some(outcome) = &piloted_elsewhere {
         carried_task_outcomes.push(outcome.clone());
     } else if ci_sweep_filing.is_none() && selection.mode == "explicit" {
-        carried_task_outcomes.extend(held_elsewhere(selection.excluded));
+        carried_task_outcomes.extend(excluded_superseded(selection.excluded));
     }
     let promotion_authorized = input.promotion_authorized(action)?;
     // Reservation acquisition refused before any assessment or reservation
@@ -151,29 +152,44 @@ pub(super) fn partitions(
     Ok(partitions)
 }
 
-/// An explicit selection names tasks its caller wants assessed. Each one
-/// another live pilot holds settles superseded, naming the holder that
-/// applies it, so the caller's run neither fails nor leaves a claimed member
+/// An explicit selection names tasks its caller wants assessed. Tasks held by
+/// another live pilot and tasks no longer in an assessable status settle
+/// superseded so the caller's run neither fails nor leaves a claimed member
 /// without an outcome.
-fn held_elsewhere(excluded: &[ExcludedTask]) -> Vec<Value> {
+fn excluded_superseded(excluded: &[ExcludedTask]) -> Vec<Value> {
     excluded
         .iter()
-        .filter(|entry| {
-            entry
-                .reason
-                .get()
-                .is_some_and(|reason| reason == "already_preparing")
-        })
         .filter_map(|entry| {
-            let run_ids = entry.prepared_by_run_ids.get()?;
-            Some(json!({
-                "task_id": entry.task_id.get()?,
-                "outcome": "superseded",
-                "reason": "piloted_elsewhere",
-                "run_id": run_ids.first()?,
-                "run_ids": run_ids,
-                "detail": "another active task-pilot run already prepared this task",
-            }))
+            let task_id = entry.task_id.get()?;
+            match entry.reason.get()?.as_str() {
+                "already_preparing" => {
+                    let run_ids = entry.prepared_by_run_ids.get()?;
+                    Some(json!({
+                        "task_id": task_id,
+                        "outcome": "superseded",
+                        "reason": "piloted_elsewhere",
+                        "run_id": run_ids.first()?,
+                        "run_ids": run_ids,
+                        "detail": "another active task-pilot run already prepared this task",
+                    }))
+                }
+                "status_not_eligible" => {
+                    let mut outcome = json!({
+                        "task_id": task_id,
+                        "outcome": "superseded",
+                        "reason": "status_not_eligible",
+                        "detail": "explicit selection skipped task because only proposed and \
+                                   backlog tasks may be assessed",
+                    });
+                    if let Some(status) = entry.status.get()
+                        && let Value::Object(fields) = &mut outcome
+                    {
+                        fields.insert("status".to_string(), json!(status));
+                    }
+                    Some(outcome)
+                }
+                _ => None,
+            }
         })
         .collect()
 }

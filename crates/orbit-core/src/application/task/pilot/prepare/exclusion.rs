@@ -6,29 +6,66 @@ use super::run::{MAX_EXCLUDED_SAMPLE, NO_DIFF_TAGS};
 
 /// Bounded evidence for routine (non-explicit) discovery exclusions: every
 /// excluded task is counted by reason, but only a capped sample is itemized
-/// so response size stops scaling with terminal workspace history.
+/// so response size stops scaling with terminal workspace history. Explicit
+/// selections report every excluded task.
 #[derive(Default)]
 pub(super) struct ExcludedEvidence {
+    pub(super) explicit: bool,
     pub(super) sample: Vec<Value>,
     pub(super) total: usize,
     pub(super) by_reason: BTreeMap<&'static str, usize>,
 }
 
 impl ExcludedEvidence {
+    pub(super) fn explicit() -> Self {
+        Self {
+            explicit: true,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn record(
         &mut self,
         task_id: &str,
         reason: &'static str,
         active_preparations: &BTreeMap<String, BTreeSet<String>>,
     ) {
+        self.record_entry(task_id, reason, None, active_preparations);
+    }
+
+    pub(super) fn record_with_status(
+        &mut self,
+        task_id: &str,
+        reason: &'static str,
+        status: TaskStatus,
+        active_preparations: &BTreeMap<String, BTreeSet<String>>,
+    ) {
+        self.record_entry(task_id, reason, Some(status), active_preparations);
+    }
+
+    fn record_entry(
+        &mut self,
+        task_id: &str,
+        reason: &'static str,
+        status: Option<TaskStatus>,
+        active_preparations: &BTreeMap<String, BTreeSet<String>>,
+    ) {
         self.total += 1;
         *self.by_reason.entry(reason).or_default() += 1;
-        // Explicit selections report every held task; only automatic discovery
+        // Explicit selections report every skipped task; only automatic discovery
         // samples exclusions from potentially unbounded workspace history.
-        if reason != "already_preparing" && self.sample.len() >= MAX_EXCLUDED_SAMPLE {
+        if !self.explicit
+            && reason != "already_preparing"
+            && self.sample.len() >= MAX_EXCLUDED_SAMPLE
+        {
             return;
         }
         let mut entry = json!({ "task_id": task_id, "reason": reason });
+        if let Some(status) = status
+            && let Value::Object(fields) = &mut entry
+        {
+            fields.insert("status".to_string(), json!(status));
+        }
         if matches!(reason, "active_pilot_prepared" | "already_preparing")
             && let Some(run_ids) = active_preparations.get(task_id)
             && let Value::Object(fields) = &mut entry
