@@ -19,6 +19,7 @@ use orbit_engine::execute_deterministic_action;
 use orbit_types::task::{
     ExternalRef, Task, TaskArtifact, TaskComment, TaskPriority, TaskStatus, TaskType,
 };
+use orbit_types::workflow::handoff::already_landed_scope;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -657,6 +658,80 @@ fn commit_verifier_refuses_already_landed_with_escaping_anchor_symlink() {
         err.to_string()
             .contains("scope anchor is outside the tested workspace"),
         "expected outside workspace refusal, got: {err}"
+    );
+}
+
+/// A task selector whose anchor a later commit moved fails closed at the
+/// anchor, naming the selector, its anchor and the reconcile instruction. The
+/// corrected selector settles on the same covering history, and that history
+/// still refuses a later edit to the covered file [ORB-29217].
+fn commit_verifier_names_a_moved_selector_anchor_and_settles_the_corrected_one() {
+    let temp = tempdir().expect("create tempdir");
+    let repo = temp.path();
+    init_git_repo(repo);
+    let git = |args: &[&str]| git_output(repo, args);
+    fs::create_dir_all(repo.join("src/old")).expect("create old directory");
+    fs::write(repo.join("src/old/probe.rs"), "pub fn probe() {}\n").expect("write probe");
+    git(&["add", "src/old/probe.rs"]);
+    git(&["commit", "-m", "add probe [T1]"]);
+    // The covering commit moves the file; the tested HEAD adds an unrelated edit.
+    fs::create_dir_all(repo.join("src/new")).expect("create new directory");
+    git(&["mv", "src/old/probe.rs", "src/new/probe.rs"]);
+    git(&["commit", "-m", "move probe [T1]"]);
+    let covering = git_head(repo);
+    fs::write(repo.join("README.md"), "later\n").expect("write README");
+    git(&["commit", "-am", "later README edit"]);
+    let head = git_head(repo);
+
+    let stale = "symbol:src/old/probe.rs#probe:function";
+    let corrected = "symbol:src/new/probe.rs#probe:function";
+    // Evidence whose scope matches `selector`, verified at `tested_head`.
+    let verify = |selector: &str, tested_head: &str| {
+        let mut task = fixture_task();
+        task.context_files = vec![selector.to_string()];
+        let scope = already_landed_scope(&task, &[]);
+        let host = VerifierHost::new(repo, task);
+        let mut report = evidence_fixture::verifier_already_landed_report(tested_head);
+        report["covering_commit"] = json!(covering);
+        report["scope"] = scope;
+        host.set_artifacts(
+            TASK_ID,
+            evidence_artifacts("already-landed.json", report, tested_head, "make test"),
+        );
+        action(&host, &commit_input(repo, tested_head))
+    };
+
+    let message = verify(stale, &head)
+        .expect_err("a selector whose anchor the covering commit moved must fail closed")
+        .to_string();
+    assert!(
+        message.contains("already_landed_unverified")
+            && message.contains(stale)
+            && message.contains("\"src/old/probe.rs\"")
+            && message.contains("reconcile the task selectors"),
+        "the refusal must name the unavailable selector and its anchor, got: {message}"
+    );
+
+    let result = verify(corrected, &head)
+        .expect("the corrected selector settles on the same covering history");
+    assert_eq!(result["decision"], "verified_already_landed");
+    assert_eq!(result["committed"], false);
+
+    fs::write(
+        repo.join("src/new/probe.rs"),
+        "pub fn probe() { /* edited */ }\n",
+    )
+    .expect("edit probe");
+    git(&["commit", "-am", "edit probe after landing"]);
+    let edited = git_head(repo);
+    let message = verify(corrected, &edited)
+        .expect_err("a covered file edited after landing must still refuse")
+        .to_string();
+    assert!(
+        message.contains("already_landed_unverified")
+            && message.contains("src/new/probe.rs")
+            && message.contains("the file changed after landing"),
+        "the covered-diff refusal must stay intact, got: {message}"
     );
 }
 
@@ -1317,6 +1392,7 @@ commit_contracts!(commit_evidence_contracts_2:
     #[cfg(unix)]
     commit_verifier_refuses_already_landed_with_escaping_anchor_symlink,
     commit_verifier_refusal_names_already_landed_field_contract,
+    commit_verifier_names_a_moved_selector_anchor_and_settles_the_corrected_one,
 );
 
 commit_contracts!(commit_evidence_contracts_3:
