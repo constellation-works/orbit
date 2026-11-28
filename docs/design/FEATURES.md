@@ -6,7 +6,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (12)
+### Building (13)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -24,7 +24,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 | [Standing Drain](./standing-drain/1_scope.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
 
-### Designing (9)
+### Designing (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
