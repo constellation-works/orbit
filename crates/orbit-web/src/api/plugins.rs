@@ -378,20 +378,28 @@ pub(super) async fn call_page(
     }
 }
 
-/// The tool and input a page action request names.
-fn action_request(body: &Value) -> Result<(String, Value), Box<Response>> {
-    let Some(tool) = body.get("tool").and_then(Value::as_str).map(str::to_string) else {
-        return Err(Box::new(page_refusal(
-            StatusCode::BAD_REQUEST,
-            "input_invalid",
-            "a page action names its `tool`".to_string(),
-        )));
-    };
+/// The tool and input a page action request names, when `tool` is a string.
+fn parse_action_request(body: &Value) -> Option<(String, Value)> {
+    let tool = body
+        .get("tool")
+        .and_then(Value::as_str)
+        .map(str::to_string)?;
     let input = match body.get("input") {
         None | Some(Value::Null) => Value::Object(Default::default()),
         Some(input) => input.clone(),
     };
-    Ok((tool, input))
+    Some((tool, input))
+}
+
+/// The tool and input a page action request names.
+fn action_request(body: &Value) -> Result<(String, Value), Box<Response>> {
+    parse_action_request(body).ok_or_else(|| {
+        Box::new(page_refusal(
+            StatusCode::BAD_REQUEST,
+            "input_invalid",
+            "a page action names its `tool`".to_string(),
+        ))
+    })
 }
 
 pub(super) async fn confirm_page_action(
@@ -521,21 +529,24 @@ pub(super) async fn run_page_action(
             return super::bad_request(format!("{label} {message}"));
         }
     }
-    let (tool, input) = match action_request(&body) {
-        Ok(request) => request,
-        Err(response) => return *response,
+    let (tool, input, binding) = match parse_action_request(&body) {
+        Some((tool, input)) => {
+            let binding = ActionBinding {
+                runtime: workspace.runtime_identity(),
+                namespace: namespace.clone(),
+                page: page.clone(),
+                tool: tool.clone(),
+                input: input.clone(),
+            };
+            (Some(tool), input, Some(binding))
+        }
+        None => (None, Value::Null, None),
     };
     // Spent before anything else, so a confirmation is good for one request
     // whatever that request turns out to be.
     let confirmation = state.plugin_pages().redeem_confirmation(
         body.get("confirmation").and_then(Value::as_str),
-        &ActionBinding {
-            runtime: workspace.runtime_identity(),
-            namespace: namespace.clone(),
-            page: page.clone(),
-            tool: tool.clone(),
-            input: input.clone(),
-        },
+        binding.as_ref(),
     );
     let confirmed = confirmation.is_ok();
     let run = PageActionRun {

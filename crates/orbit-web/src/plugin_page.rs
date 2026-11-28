@@ -283,11 +283,12 @@ impl PageServing {
 
     /// Spend `token` for `binding`. The token is gone after this call
     /// whatever it answers, so it is never good twice. `Err` names why it
-    /// does not confirm this request.
+    /// does not confirm this request; `binding` is `None` when the request
+    /// did not name a valid action body.
     pub(crate) fn redeem_confirmation(
         &self,
         token: Option<&str>,
-        binding: &ActionBinding,
+        binding: Option<&ActionBinding>,
     ) -> Result<(), String> {
         let Some(token) = token.filter(|token| !token.is_empty()) else {
             return Err(
@@ -306,7 +307,8 @@ impl PageServing {
             Some(held) if held.issued.elapsed() >= ACTION_CONFIRMATION_TTL => {
                 Err("the action's confirmation expired; confirm the action again".to_string())
             }
-            Some(held) if held.binding != *binding => Err(
+            Some(_) if binding.is_none() => Err("a page action names its `tool`".to_string()),
+            Some(held) if binding != Some(&held.binding) => Err(
                 "the action's confirmation was issued for another plugin, page, tool or input"
                     .to_string(),
             ),

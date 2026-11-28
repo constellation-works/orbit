@@ -520,3 +520,99 @@ fn an_action_added_since_consent_is_inactive_until_consent_is_given_again() {
         },
     );
 }
+
+#[test]
+fn an_invalid_action_run_body_spends_its_confirmation_and_is_audited() {
+    isolated(
+        "plugin_page_action::an_invalid_action_run_body_spends_its_confirmation_and_is_audited",
+        || {
+            let fixture = Fixture::new();
+            let control = install(&fixture);
+            let server = fixture.server(true);
+
+            // Missing `tool` with a valid confirmation spends the token and
+            // blocks any later retry with it.
+            let missing_tool_token = confirmation(&server, json!({"value": 1}));
+            refused(
+                run(
+                    &server,
+                    json!({"input": {"value": 1}, "confirmation": missing_tool_token}),
+                ),
+                403,
+                "confirmation_refused",
+                "missing tool with valid confirmation",
+            );
+            refused(
+                run(
+                    &server,
+                    json!({"tool": "mutate", "input": {"value": 1}, "confirmation": missing_tool_token}),
+                ),
+                403,
+                "confirmation_refused",
+                "retry after missing-tool refusal spent the confirmation",
+            );
+
+            // Non-string `tool` with a valid confirmation spends the token too.
+            let non_string_tool_token = confirmation(&server, json!({"value": 1}));
+            refused(
+                run(
+                    &server,
+                    json!({"tool": 123, "input": {"value": 1}, "confirmation": non_string_tool_token}),
+                ),
+                403,
+                "confirmation_refused",
+                "non-string tool with valid confirmation",
+            );
+            refused(
+                run(
+                    &server,
+                    json!({"tool": "mutate", "input": {"value": 1}, "confirmation": non_string_tool_token}),
+                ),
+                403,
+                "confirmation_refused",
+                "retry after non-string-tool refusal spent the confirmation",
+            );
+
+            // A non-object JSON body is also refused and audited.
+            refused(
+                run(&server, json!(["not", "an", "object"])),
+                403,
+                "confirmation_refused",
+                "non-object body",
+            );
+            assert_eq!(
+                run_count(&control),
+                0,
+                "no invalid request or retry ran the tool"
+            );
+
+            // Every refused attempt left an audit row with session, plugin,
+            // and available action metadata (page, plus tool on retries).
+            let rows = action_rows(&fixture);
+            assert_eq!(rows.len(), 5, "{rows:#?}");
+            for (index, row) in rows.iter().enumerate() {
+                assert_eq!(row.status, AuditEventStatus::Failure, "{row:?}");
+                let session = row.session_id.as_deref().unwrap_or_default();
+                assert!(session.starts_with("web-operator-"), "{row:?}");
+                assert_eq!(row.target_id.as_deref(), Some(NS), "{row:?}");
+                let arguments: Value =
+                    serde_json::from_str(row.arguments_json.as_deref().unwrap_or("null")).unwrap();
+                assert_eq!(arguments["page"], "overview", "{row:?}");
+                // Newest first: indices 1 and 3 are the two retry rows.
+                if matches!(index, 1 | 3) {
+                    assert_eq!(arguments["tool"], "mutate", "{row:?}");
+                } else {
+                    assert!(arguments.get("tool").is_none(), "{row:?}");
+                }
+            }
+
+            // A fresh valid confirmation still executes once.
+            let fresh = confirmation(&server, json!({"value": 2}));
+            json_ok(run(
+                &server,
+                json!({"tool": "mutate", "input": {"value": 2}, "confirmation": fresh}),
+            ));
+            assert_eq!(run_count(&control), 1);
+        },
+    );
+}
