@@ -799,8 +799,8 @@ pub fn admit_settable_config_key(key: &str) -> Result<(), OrbitError> {
 /// `plugins.<ns>.<key>` keys owned by an installed plugin succeed. A
 /// removed key fails with its migration note. A TOML-only table
 /// (`workflow.agent_corpus`, `workflow.tag_instructions`,
-/// `workflow.review_skip_tags`, `crews`) fails with a pointer to the layered
-/// `config.toml` files. Unknown registry keys fail
+/// `workflow.pilot_notes`, `workflow.review_skip_tags`, `crews`) fails with a
+/// pointer to the layered `config.toml` files. Unknown registry keys fail
 /// with nearby-key suggestions when available; misspelled crew fields fail
 /// with valid-field suggestions. All before any document mutation.
 pub fn admit_config_key(key: &str) -> Result<(), OrbitError> {
@@ -843,6 +843,7 @@ fn toml_only_table(key: &str) -> bool {
         key,
         "workflow.agent_corpus"
             | "workflow.tag_instructions"
+            | "workflow.pilot_notes"
             | "workflow.review_skip_tags"
             | "crews"
     )

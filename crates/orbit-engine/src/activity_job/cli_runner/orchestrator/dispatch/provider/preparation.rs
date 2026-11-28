@@ -13,7 +13,7 @@ use orbit_types::workflow::ExecutorSandboxKind;
 use orbit_types::workflow::activity_job::AgentLoopSpec;
 use orbit_types::workflow::{AGENT_IMPLEMENT_ACTIVITY, PR_CONFLICT_RECOVERY_ACTIVITY};
 use orbit_types::workflow::{
-    CREW_MEMORY_PRECEDENCE_SENTENCE, V2AuditEventKind, render_tag_instructions,
+    CREW_MEMORY_PRECEDENCE_SENTENCE, V2AuditEventKind, render_pilot_notes, render_tag_instructions,
 };
 use serde_json::Value;
 
@@ -159,6 +159,20 @@ pub(super) fn prepare_provider_envelope<'a>(
                 .iter()
                 .map(|instruction| instruction.record())
                 .collect(),
+        });
+    }
+    // Workspace-configured pilot notes apply only to `task_pilot`; an unusable
+    // file switches off its own label without refusing the pilot.
+    if let Some(pilot_notes) = host.pilot_notes_for_activity(run_id, activity_name, input) {
+        let rendered = render_pilot_notes(&pilot_notes.applied);
+        if !rendered.is_empty() {
+            envelope_spec.instruction.push_str("\n\n");
+            envelope_spec.instruction.push_str(&rendered);
+        }
+        audit.emit_lossy(V2AuditEventKind::PilotNotesApplied {
+            step_id: step_id.to_string(),
+            activity_name: activity_name.to_string(),
+            notes: pilot_notes.records,
         });
     }
     // A memory arm's `crew_memory` field is data; this fixed sentence, after

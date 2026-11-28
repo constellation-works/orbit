@@ -81,6 +81,9 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::one("mid-run-steering", |probe| {
         doctor_check_mid_run_steering(probe.runtime)
     }),
+    DoctorProbe::one("pilot-notes", |probe| {
+        doctor_check_pilot_notes(probe.runtime)
+    }),
     DoctorProbe::one("orphan-task-stores", |probe| {
         doctor_check_orphan_task_stores(probe.runtime, probe.host)
     }),

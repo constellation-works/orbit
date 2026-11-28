@@ -67,6 +67,7 @@ pub const V2_AUDIT_BODY_KIND_EVENT_TYPES: &[(&str, &str)] = &[
         "tag_instructions_applied",
         "activity.tag_instructions_applied",
     ),
+    ("pilot_notes_applied", "activity.pilot_notes_applied"),
     ("agent_corpus_applied", "activity.agent_corpus_applied"),
     ("explore_brief_applied", "activity.explore_brief_applied"),
     ("notices_delivered", "activity.notices_delivered"),
@@ -351,6 +352,14 @@ pub enum V2AuditEventKind {
         task_id: String,
         instructions: Vec<crate::workflow::TagInstructionRecord>,
     },
+    /// Mapped pilot-note instructions evaluated for one `task_pilot` dispatch.
+    /// Carries metadata or the switch-off reason per label, never the text.
+    PilotNotesApplied {
+        /// The pipeline step that dispatched the activity.
+        step_id: String,
+        activity_name: String,
+        notes: Vec<crate::workflow::PilotNoteAuditRecord>,
+    },
     /// What an implement dispatch did with the task's explore brief. No
     /// longer emitted: the explore brief was removed [ORB-22805], and the
     /// variant stays so earlier audit rows still parse.
@@ -616,6 +625,7 @@ impl V2AuditEventKind {
             }
             V2AuditEventKind::AgentCorpusApplied { .. } => "activity.agent_corpus_applied",
             V2AuditEventKind::TagInstructionsApplied { .. } => "activity.tag_instructions_applied",
+            V2AuditEventKind::PilotNotesApplied { .. } => "activity.pilot_notes_applied",
             V2AuditEventKind::ExploreBriefApplied { .. } => "activity.explore_brief_applied",
             V2AuditEventKind::NoticesDelivered { .. } => "activity.notices_delivered",
             V2AuditEventKind::ImageCanaryChecked { .. } => "activity.image_canary_checked",

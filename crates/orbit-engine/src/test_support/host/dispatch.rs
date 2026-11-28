@@ -105,6 +105,15 @@ macro_rules! __orbit_test_host_dispatch {
                 Ok(Vec::new())
             }
 
+            fn pilot_notes_for_activity(
+                &self,
+                _run_id: &str,
+                _activity_name: &str,
+                _input: &fixture::Value,
+            ) -> Option<fixture::orbit_types::workflow::PilotNotesResolution> {
+                None
+            }
+
             fn agent_corpus_for_activity(
                 &self,
                 _run_id: &str,

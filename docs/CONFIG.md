@@ -1205,6 +1205,30 @@ Orbit ships defaults for three tags. `no-diff-expected` gives implementers the r
 
 **Seeing what applied.** Each dispatch that received tag instructions records an `activity.tag_instructions_applied` audit event naming its step, activity, task, and each instruction's tag, role, source (`default`, or `workspace` with path and revision), SHA-256 and size, but not the text. `orbit run show` prints a `Tag instructions:` header line per dispatch, and its JSON (and the `orbit.run` action `show` tool) carries them under `tag_instructions` (`state`: `observed`, `none` or `unavailable`).
 
+### `[workflow.pilot_notes.<label>]` — per-task notes for the task pilot
+
+```toml
+[workflow.pilot_notes.review_focus]
+instruction = "docs/agents/pilot-review-focus.md"
+
+[workflow.pilot_notes.global_note]
+instruction = false            # switch off a note defined in global config.toml
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.pilot_notes.<label>.instruction` | unset | Repository-relative file path whose text `task_pilot` receives under `<label>`, or `false` in a workspace config to switch off a global note of the same label. |
+
+Each label must start with a lower-case ASCII letter (`a-z`), use only lower-case ASCII letters, digits, `_` and `-`, and be at most 32 characters long. At most four active notes may be mapped per workspace. Each path is relative to the repository root (`/` separators, no `..`, no absolute path). The tables layer like `[workflow.tag_instructions]`: a workspace table replaces the global one for the same label, and `instruction = false` removes a global note. A bad label, a fifth active note, or a bad path is a config error naming the offender. Unset by default: a workspace with no table gets today's `task_pilot` prompt byte for byte. Edit `config.toml` directly; `orbit config get` and `orbit config set` do not read or write this table.
+
+**Where the text comes from.** When a `task_pilot` dispatch is prepared, Orbit reads each mapped file from the source revision the pilot is prepared against, never from a worktree. A file may be at most 4 KiB, must be valid UTF-8, and must not be blank.
+
+**What `task_pilot` receives.** After the activity's built-in instruction, `task_pilot`'s prompt gains one `Pilot notes` section stating that notes add to the assessment and cannot change any other part of it, that each note is at most 1 KiB of plain text, and that a label with nothing to say is left out, followed by each usable instruction under its label in sorted order. No other activity receives it.
+
+**Unusable files switch off only their own label.** A mapped file that is missing at the pilot's source revision, not UTF-8, empty, or over 4 KiB switches off only that label for the run; other mapped labels still apply and the pilot is never refused over a note. `orbit doctor` (`pilot-notes` check) reports any unusable mapped file at the workspace base branch's head, naming the label, file path, and reason.
+
+**Seeing what applied.** Each `task_pilot` dispatch in a workspace that maps notes records an `activity.pilot_notes_applied` audit event naming each label, its path, the revision, the SHA-256 and byte size, or the switch-off reason, and never the text. `orbit run show` prints a `Pilot notes:` header line per dispatch, and its JSON (and `orbit.run` action `show`) carries them under `tag_instructions.pilot_notes`.
+
 ### `[workflow.validation_env]` — the toolchain required validation runs with
 
 ```toml

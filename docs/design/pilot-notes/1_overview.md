@@ -5,8 +5,8 @@ created_date: 2026-11-27
 updated_date: 2026-11-27
 last_validated: 2026-11-27
 status: Accepted
-stage: designing
-next: "Add the config table and the pilot's prompt section [ORB-29586]"
+stage: building
+next: "Add notes to the pilot assessment schema, apply checks and readouts [ORB-29588]"
 feature: pilot-notes
 doc_role: overview
 type: design
@@ -23,7 +23,9 @@ workspace asked. The workspace maps a label to an instruction file. The pilot re
 instruction with its own, and returns a note under that label for each task it assesses. Orbit
 keeps the note with the assessment and shows it on the task. Orbit never reads a note's
 meaning and never acts on it: a note is for whoever asked the question, usually a plugin. The
-operator approved the design on 2026-11-27 ([ORB-29567]). Nothing in it is built.
+operator approved the design on 2026-11-27 ([ORB-29567]). Slice 1 ([ORB-29586]) adds the config
+table, prompt section, audit event and `doctor` check; assessment output and readouts follow in
+[ORB-29588].
 
 ## 1. Motivation
 

@@ -12,7 +12,8 @@ use orbit_engine::{
 };
 use orbit_tools::ToolContext;
 use orbit_types::workflow::{
-    CommentLogMark, DeferralProbe, ExperimentActivityOverlay, NamespaceProbe, TagInstruction,
+    CommentLogMark, DeferralProbe, ExperimentActivityOverlay, NamespaceProbe, PilotNotesResolution,
+    TagInstruction,
 };
 use serde_json::Value;
 
@@ -122,6 +123,15 @@ impl Dispatch for EngineHost<'_> {
         input: &Value,
     ) -> Result<Vec<TagInstruction>, DispatchError> {
         agent::tag_instructions_for_activity(self.runtime, run_id, activity_name, input)
+    }
+
+    fn pilot_notes_for_activity(
+        &self,
+        _run_id: &str,
+        activity_name: &str,
+        input: &Value,
+    ) -> Option<PilotNotesResolution> {
+        agent::pilot_notes_for_activity(self.runtime, activity_name, input)
     }
 
     fn notices_for_agent_input(

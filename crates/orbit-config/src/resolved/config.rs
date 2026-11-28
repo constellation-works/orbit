@@ -115,6 +115,9 @@ pub struct ResolvedConfig {
     /// Trusted file mappings: `[workflow.tag_instructions.<tag>]` for tag
     /// instructions and `[workflow.agent_corpus]` for activity index rows.
     pub tag_instructions: crate::TagInstructionSettings,
+    /// `[workflow.pilot_notes.<label>]`: repository instruction files mapped
+    /// for the `task_pilot` prompt.
+    pub pilot_notes: crate::PilotNoteSettings,
     /// `[workflow.review_skip_tags.<tag>]`: path allow-list and optional
     /// guard under which a candidate carrying `<tag>` skips agent review.
     pub review_skip_tags: crate::ReviewSkipSettings,
@@ -206,6 +209,7 @@ impl ResolvedConfig {
             plugins: BTreeMap::new(),
             plugin_enablement: BTreeMap::new(),
             tag_instructions: crate::TagInstructionSettings::default(),
+            pilot_notes: crate::PilotNoteSettings::default(),
             review_skip_tags: crate::ReviewSkipSettings::default(),
         }
     }
@@ -398,6 +402,7 @@ impl ResolvedConfig {
             crate::plugin_enablement::plugin_enablement_from_document(&document, config_path)?;
         let tag_instructions =
             crate::tag_instructions::tag_instructions_from_document(&document, config_path)?;
+        let pilot_notes = crate::pilot_note::pilot_notes_from_document(&document, config_path)?;
         let review_skip_tags =
             crate::review_skip_tags::review_skip_tags_from_document(&document, config_path)?;
 
@@ -432,6 +437,7 @@ impl ResolvedConfig {
             plugins,
             plugin_enablement,
             tag_instructions,
+            pilot_notes,
             review_skip_tags,
         })
     }

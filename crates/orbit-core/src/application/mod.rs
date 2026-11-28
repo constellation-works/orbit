@@ -13,7 +13,7 @@
 //! - Workspace and host: `distributed`, `pull_drain`,
 //!   `host_labels`, `gc`, `change_watch`, `managed_assets`.
 //! - Policy: `application_authority`, `contracts`, `admission`,
-//!   `backlog_forecast`, `tag_instructions`.
+//!   `backlog_forecast`, `pilot_note`, `tag_instructions`.
 //! - `test_support` is compiled only for tests.
 
 pub(crate) mod admission;
@@ -30,6 +30,9 @@ pub mod job;
 pub mod landing;
 pub(crate) mod managed_assets;
 pub mod operator_input;
+
+pub(crate) mod pilot_note;
+
 pub(crate) mod pull_drain;
 pub mod review;
 pub mod seeding_policy;

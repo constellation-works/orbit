@@ -186,8 +186,17 @@ by what it has installed is out of scope.
 - **Re-check runs are not settled.** A re-check re-examines earlier holding findings and does
   not assess afresh. Whether it carries the earlier notes forward or returns its own is to be
   fixed in the first build task, from how the re-check assessment is stored.
-- **That a plugin's read-only tool reaches the pilot is read from the code, not run.** The
-  first build task proves it with a test before anything relies on it.
+- **Plugin tool access from the pilot is verified in an isolated fixture ([ORB-29586]).** A real
+  `task_pilot_pipeline` run in a disposable workspace with an enabled fixture plugin (`qaplugin@0.1.0`
+  exposing `qaplugin.probe` as `read_only` and `qaplugin.mutate` as `mutating`, not
+  `agent_callable`) proved both properties through the pilot's `orbit tool run` path: `qaplugin.probe`
+  succeeded (exit 0) and invoked the backend once, while `qaplugin.mutate` was refused before the
+  backend ran (`capability_denied`: `plugin.tool.mutating` requires `operator` or `runner`, while the
+  pilot resolved as `agent-envelope` holding `[agent]`). Because `task_pilot` uses a deny list,
+  registered non-disallowed plugin tools still appear in the envelope's `tools` list and enforcement
+  for ordinary mutating plugin tools happens at the capability chokepoint; a plugin tool explicitly
+  marked `agent_callable: true` with operator `agent_tools` consent would be reachable unless added
+  to `tool_disallow_list`.
 - **The claimed path is read from tests, not traced end to end.** Apply accepts pilot results
   under a claim; where the leaf's pilot prompt is prepared, and so where the capture has to be
   applied, is for the phase 2 task to establish.
@@ -197,5 +206,6 @@ by what it has installed is out of scope.
 ## Task References
 
 - [ORB-29567] — this design.
+- [ORB-29586] — built `[workflow.pilot_notes.<label>]`, the pilot prompt section, `activity.pilot_notes_applied`, the `doctor` check, and verified §3 plugin tool access in an isolated fixture.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

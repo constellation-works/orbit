@@ -241,6 +241,11 @@ impl RuntimeKernel {
         self.base().settings().tag_instructions()
     }
 
+    /// `[workflow.pilot_notes]` as admitted.
+    pub fn pilot_note_settings(&self) -> &orbit_config::PilotNoteSettings {
+        self.base().settings().pilot_notes()
+    }
+
     /// Additional host capability requirements keyed by normalized task tag.
     pub fn tag_label_requirements(&self) -> &orbit_types::task::TagLabelRequirements {
         self.base().settings().tag_label_requirements()
