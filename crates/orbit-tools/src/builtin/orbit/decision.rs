@@ -24,7 +24,12 @@ impl GuardedModes for DecisionVerb {
 
     fn preempt(self, _ctx: &ToolContext, _input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
-            Self::List | Self::Show | Self::Raise | Self::Submit | Self::Digest | Self::PluginRaise => None,
+            Self::List
+            | Self::Show
+            | Self::Raise
+            | Self::Submit
+            | Self::Digest
+            | Self::PluginRaise => None,
             Self::Answer => Some(Err(OrbitError::PolicyDenied(
                 "answering a decision request is the operator's: use `orbit decision answer` or the dashboard".into(),
             ))),

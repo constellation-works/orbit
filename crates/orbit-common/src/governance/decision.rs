@@ -421,7 +421,10 @@ const PLUGIN_RAISE: OperationSpec<DecisionVerb> = OperationSpec {
     verb: DecisionVerb::PluginRaise,
     cli_path: &[],
     tool_name: PLUGIN_RAISE_TOOL,
-    tool_description: "Raise or withdraw a human decision request for a plugin object. Requires an authenticated callback from the owning plugin.",
+    tool_description: concat!(
+        "Raise or withdraw a human decision request for a plugin object. ",
+        "Requires an authenticated callback from the owning plugin."
+    ),
     cli_about: "",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

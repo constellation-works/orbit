@@ -411,7 +411,10 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         id: crate::governance::decision::PLUGIN_RAISE_TOOL,
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
-        rationale: "only an authenticated plugin callback can raise or withdraw a decision for an object that the plugin owns",
+        rationale: concat!(
+            "only an authenticated plugin callback can raise or withdraw a decision ",
+            "for an object that the plugin owns"
+        ),
     },
     // Experiments: every write is the operator's; agents may show and list.
     GovernedOperation {

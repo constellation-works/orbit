@@ -12,6 +12,7 @@ use super::options::{DecisionAction, DecisionAnswer, DecisionRiskTier};
 
 /// History event that raises a [`DecisionRequest`].
 pub const DECISION_REQUESTED_EVENT: &str = "decision_requested";
+
 /// History event with the id of a plugin request the raiser withdrew.
 pub const DECISION_WITHDRAWN_EVENT: &str = "decision_withdrawn";
 /// History event that records an applied answer to a [`DecisionRequest`].

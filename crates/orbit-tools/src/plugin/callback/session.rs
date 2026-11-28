@@ -143,6 +143,18 @@ pub(super) struct SessionRecord {
 }
 
 impl PluginCallbackSession {
+    /// The host-provided writer label, or a canonical agent identity.
+    pub(crate) fn spawning_writer(ctx: &crate::ToolContext) -> Option<String> {
+        ctx.trusted_actor_label.clone().or_else(|| {
+            orbit_types::identity::require_canonical_agent_family(
+                ctx.agent_name.as_deref(),
+                ctx.model_name.as_deref(),
+            )
+            .ok()
+            .flatten()
+        })
+    }
+
     /// Bind the spawning caller and the sandbox workspace before opening the host route.
     pub(crate) fn bind_spawn_context(
         &mut self,
@@ -158,18 +170,6 @@ impl PluginCallbackSession {
             }));
         }
         self.bind_workspace_root(ctx.workspace_root.as_deref(), unconfined)
-    }
-
-    /// The host-provided writer label, or a canonical agent identity.
-    pub(crate) fn spawning_writer(ctx: &crate::ToolContext) -> Option<String> {
-        ctx.trusted_actor_label.clone().or_else(|| {
-            orbit_types::identity::require_canonical_agent_family(
-                ctx.agent_name.as_deref(),
-                ctx.model_name.as_deref(),
-            )
-            .ok()
-            .flatten()
-        })
     }
 
     /// Record the workspace used to render this backend's sandbox before spawn.
