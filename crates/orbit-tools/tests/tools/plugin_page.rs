@@ -324,7 +324,8 @@ fn the_serving_loader_keeps_a_failed_page_on_the_page() {
     let error = served.pages[0]
         .bundle
         .as_ref()
-        .expect_err("the page failed");
+        .expect_err("the page failed")
+        .to_string();
     assert!(error.contains("page 'overview'"), "{error}");
     let diagnostic = page_digest_diagnostic("graph", Some("recorded"), &served.pages[0])
         .expect("the page is inactive");

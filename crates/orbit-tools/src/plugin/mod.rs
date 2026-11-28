@@ -52,11 +52,12 @@ pub use lifecycle::{BrokerCall, BrokerSessions};
 pub use loader::{
     FIRST_PARTY_MANIFEST_DIGESTS, LoadedPlugin, LoadedPluginPage, LoadedPluginTestFile,
     MAX_PLUGIN_PAGE_BYTES, PluginDefinitionFiles, PluginLoadError, PluginPageBundle,
-    PluginPageFile, PluginValidationPolicy, ResolvedPluginTool, first_party_source,
-    fs_write_root_covers, load_plugin_dir, load_plugin_dir_without_tests, manifest_digest,
-    manifest_refusal, page_digest, page_digest_diagnostic, physical_with_missing_tail,
-    plugin_pages_unchanged, plugin_symlink_refusal, refuse_covering_fs_write_roots,
-    refuse_plugin_tree_symlinks, resolve_plugin_definitions, validate_loaded_plugin,
+    PluginPageError, PluginPageFile, PluginValidationPolicy, ResolvedPluginTool,
+    first_party_source, fs_write_root_covers, load_plugin_dir, load_plugin_dir_without_tests,
+    manifest_digest, manifest_refusal, page_digest, page_digest_diagnostic,
+    physical_with_missing_tail, plugin_pages_unchanged, plugin_symlink_refusal,
+    refuse_covering_fs_write_roots, refuse_plugin_tree_symlinks, resolve_plugin_definitions,
+    validate_loaded_plugin,
 };
 pub use mcp::{McpBackend, McpExpectedTool};
 pub use migrate::{SidecarManifest, load_sidecar_manifest, migrate_sidecars};

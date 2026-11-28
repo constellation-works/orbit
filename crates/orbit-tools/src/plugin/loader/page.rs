@@ -16,6 +16,89 @@ use super::*;
 /// and style, as read from disk (2 MiB).
 pub const MAX_PLUGIN_PAGE_BYTES: u64 = 2 * 1024 * 1024;
 
+/// Why one page cannot be written out. Every message names the page; the
+/// strict loader reports it as the refusal of the plugin, and the serving
+/// loader keeps it on that page.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PluginPageError {
+    #[error(
+        "page '{page}': root '{root}' is a symbolic link; a page root must be a directory \
+         inside the plugin root"
+    )]
+    RootSymlink { page: String, root: String },
+    #[error("page '{page}': root '{root}' is not a directory")]
+    RootNotDirectory { page: String, root: String },
+    #[error("page '{page}': root '{root}' cannot be read: {reason}")]
+    RootUnreadable {
+        page: String,
+        root: String,
+        reason: String,
+    },
+    #[error(
+        "page '{page}': root '{root}' resolves to {resolved} outside the plugin root {plugin_root}"
+    )]
+    RootOutsidePluginRoot {
+        page: String,
+        root: String,
+        resolved: String,
+        plugin_root: String,
+    },
+    #[error("page '{page}': '{file}' is missing from '{root}'")]
+    FileMissing {
+        page: String,
+        root: String,
+        file: String,
+    },
+    #[error("page '{page}': '{file}' cannot be read: {reason}")]
+    FileUnreadable {
+        page: String,
+        file: String,
+        reason: String,
+    },
+    #[error("page '{page}': '{file}' is a symbolic link; a page file must be a regular file")]
+    FileSymlink { page: String, file: String },
+    #[error("page '{page}': '{file}' is not a regular file")]
+    FileNotRegular { page: String, file: String },
+    #[error("page '{page}': '{file}' resolves to {resolved} outside the plugin root {plugin_root}")]
+    FileOutsidePluginRoot {
+        page: String,
+        file: String,
+        resolved: String,
+        plugin_root: String,
+    },
+    #[error("page '{page}' lists '{file}' more than once")]
+    FileListedTwice { page: String, file: String },
+    #[error(
+        "page '{page}': index.html holds a `{element}` element; Orbit writes the page's \
+         scripts and styles itself, so list them under `scripts` and `styles`"
+    )]
+    MarkupElement { page: String, element: String },
+    #[error(
+        "page '{page}': script '{file}' contains `{found}`, which would end its `script` \
+         element early"
+    )]
+    ScriptEndsEarly {
+        page: String,
+        file: String,
+        found: String,
+    },
+    #[error(
+        "page '{page}': style '{file}' contains `{found}`, which would end its `style` \
+         element early"
+    )]
+    StyleEndsEarly {
+        page: String,
+        file: String,
+        found: String,
+    },
+    #[error(
+        "page '{page}' holds at least {total} bytes; a page may hold at most {} bytes (2 MiB) \
+         across index.html and its listed files",
+        MAX_PLUGIN_PAGE_BYTES
+    )]
+    TooLarge { page: String, total: u64 },
+}
+
 /// One `spec.web.pages[]` entry as this load found it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedPluginPage {
@@ -29,7 +112,7 @@ pub struct LoadedPluginPage {
     /// The page's files and digest, or why they could not be read. The
     /// strict loader refuses the plugin for an `Err`; the serving loader
     /// keeps it, so one page that fails leaves the rest of the plugin up.
-    pub bundle: Result<PluginPageBundle, String>,
+    pub bundle: Result<PluginPageBundle, PluginPageError>,
 }
 
 impl LoadedPluginPage {
@@ -77,10 +160,12 @@ pub(super) fn resolve_pages(
     let mut pages = Vec::with_capacity(web.pages.len());
     for (index, page) in web.pages.iter().enumerate() {
         let bundle = load_page_bundle(root, page);
-        if strict && let Err(message) = &bundle {
-            return Err(
-                PluginManifestError::new(format!("spec.web.pages[{index}]"), message).into(),
-            );
+        if strict && let Err(error) = &bundle {
+            return Err(PluginManifestError::new(
+                format!("spec.web.pages[{index}]"),
+                error.to_string(),
+            )
+            .into());
         }
         pages.push(LoadedPluginPage {
             id: page.id.clone(),
@@ -107,9 +192,9 @@ pub fn page_digest_diagnostic(
     let id = &page.id;
     let found = match &page.bundle {
         Ok(bundle) => bundle.digest.as_str(),
-        Err(message) => {
+        Err(error) => {
             return Some(format!(
-                "{message}; reinstall plugin '{namespace}' with `orbit plugin add --force`"
+                "{error}; reinstall plugin '{namespace}' with `orbit plugin add --force`"
             ));
         }
     };
@@ -162,37 +247,43 @@ pub fn page_digest(bundle_parts: &[(&str, &str, &[u8])]) -> String {
     lower_hex(hasher.finalize())
 }
 
-fn load_page_bundle(root: &Path, page: &PluginWebPage) -> Result<PluginPageBundle, String> {
+fn load_page_bundle(
+    root: &Path,
+    page: &PluginWebPage,
+) -> Result<PluginPageBundle, PluginPageError> {
     let id = &page.id;
     let declared_root = page.root.trim();
     let page_root = root.join(declared_root);
+    let root_unreadable = |reason: String| PluginPageError::RootUnreadable {
+        page: id.clone(),
+        root: declared_root.to_string(),
+        reason,
+    };
     match std::fs::symlink_metadata(&page_root) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(format!(
-                "page '{id}': root '{declared_root}' is a symbolic link; a page root must be a \
-                 directory inside the plugin root"
-            ));
+            return Err(PluginPageError::RootSymlink {
+                page: id.clone(),
+                root: declared_root.to_string(),
+            });
         }
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => {
-            return Err(format!(
-                "page '{id}': root '{declared_root}' is not a directory"
-            ));
+            return Err(PluginPageError::RootNotDirectory {
+                page: id.clone(),
+                root: declared_root.to_string(),
+            });
         }
-        Err(error) => {
-            return Err(format!(
-                "page '{id}': root '{declared_root}' cannot be read: {error}"
-            ));
-        }
+        Err(error) => return Err(root_unreadable(error.to_string())),
     }
-    let page_root = std::fs::canonicalize(&page_root)
-        .map_err(|error| format!("page '{id}': root '{declared_root}' cannot be read: {error}"))?;
+    let page_root =
+        std::fs::canonicalize(&page_root).map_err(|error| root_unreadable(error.to_string()))?;
     if !page_root.starts_with(root) {
-        return Err(format!(
-            "page '{id}': root '{declared_root}' resolves to {} outside the plugin root {}",
-            page_root.display(),
-            root.display()
-        ));
+        return Err(PluginPageError::RootOutsidePluginRoot {
+            page: id.clone(),
+            root: declared_root.to_string(),
+            resolved: page_root.display().to_string(),
+            plugin_root: root.display().to_string(),
+        });
     }
 
     let mut seen = std::collections::BTreeSet::new();
@@ -206,20 +297,21 @@ fn load_page_bundle(root: &Path, page: &PluginWebPage) -> Result<PluginPageBundl
         &mut total,
     )?;
     if let Some(element) = find_any_ascii_ci(&markup, &["<script", "<link"]) {
-        return Err(format!(
-            "page '{id}': {PAGE_INDEX_FILE} holds a `{element}` element; Orbit writes the \
-             page's scripts and styles itself, so list them under `scripts` and `styles`"
-        ));
+        return Err(PluginPageError::MarkupElement {
+            page: id.clone(),
+            element: element.to_string(),
+        });
     }
     let mut scripts = Vec::with_capacity(page.scripts.len());
     for name in &page.scripts {
         let name = name.trim();
         let bytes = read_page_file(root, &page_root, page, name, &mut seen, &mut total)?;
         if let Some(found) = find_any_ascii_ci(&bytes, &["</script", "<!--"]) {
-            return Err(format!(
-                "page '{id}': script '{name}' contains `{found}`, which would end its `script` \
-                 element early"
-            ));
+            return Err(PluginPageError::ScriptEndsEarly {
+                page: id.clone(),
+                file: name.to_string(),
+                found: found.to_string(),
+            });
         }
         scripts.push(PluginPageFile {
             name: name.to_string(),
@@ -231,10 +323,11 @@ fn load_page_bundle(root: &Path, page: &PluginWebPage) -> Result<PluginPageBundl
         let name = name.trim();
         let bytes = read_page_file(root, &page_root, page, name, &mut seen, &mut total)?;
         if let Some(found) = find_any_ascii_ci(&bytes, &["</style"]) {
-            return Err(format!(
-                "page '{id}': style '{name}' contains `{found}`, which would end its `style` \
-                 element early"
-            ));
+            return Err(PluginPageError::StyleEndsEarly {
+                page: id.clone(),
+                file: name.to_string(),
+                found: found.to_string(),
+            });
         }
         styles.push(PluginPageFile {
             name: name.to_string(),
@@ -272,58 +365,73 @@ fn read_page_file(
     name: &str,
     seen: &mut std::collections::BTreeSet<PathBuf>,
     total: &mut u64,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, PluginPageError> {
     let id = &page.id;
     let declared_root = page.root.trim();
     let path = page_root.join(name);
-    let metadata = std::fs::symlink_metadata(&path).map_err(|error| match error.kind() {
-        std::io::ErrorKind::NotFound => {
-            format!("page '{id}': '{name}' is missing from '{declared_root}'")
+    let file_unreadable = |error: std::io::Error| PluginPageError::FileUnreadable {
+        page: id.clone(),
+        file: name.to_string(),
+        reason: error.to_string(),
+    };
+    let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            PluginPageError::FileMissing {
+                page: id.clone(),
+                root: declared_root.to_string(),
+                file: name.to_string(),
+            }
+        } else {
+            file_unreadable(error)
         }
-        _ => format!("page '{id}': '{name}' cannot be read: {error}"),
     })?;
     if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "page '{id}': '{name}' is a symbolic link; a page file must be a regular file"
-        ));
+        return Err(PluginPageError::FileSymlink {
+            page: id.clone(),
+            file: name.to_string(),
+        });
     }
     if !metadata.is_file() {
-        return Err(format!("page '{id}': '{name}' is not a regular file"));
+        return Err(PluginPageError::FileNotRegular {
+            page: id.clone(),
+            file: name.to_string(),
+        });
     }
-    let resolved = std::fs::canonicalize(&path)
-        .map_err(|error| format!("page '{id}': '{name}' cannot be read: {error}"))?;
+    let resolved = std::fs::canonicalize(&path).map_err(file_unreadable)?;
     if !resolved.starts_with(root) {
-        return Err(format!(
-            "page '{id}': '{name}' resolves to {} outside the plugin root {}",
-            resolved.display(),
-            root.display()
-        ));
+        return Err(PluginPageError::FileOutsidePluginRoot {
+            page: id.clone(),
+            file: name.to_string(),
+            resolved: resolved.display().to_string(),
+            plugin_root: root.display().to_string(),
+        });
     }
     if !seen.insert(resolved) {
-        return Err(format!("page '{id}' lists '{name}' more than once"));
+        return Err(PluginPageError::FileListedTwice {
+            page: id.clone(),
+            file: name.to_string(),
+        });
     }
     *total = total.saturating_add(metadata.len());
     if *total > MAX_PLUGIN_PAGE_BYTES {
-        return Err(page_size_refusal(id, *total));
+        return Err(PluginPageError::TooLarge {
+            page: id.clone(),
+            total: *total,
+        });
     }
-    let bytes = std::fs::read(&path)
-        .map_err(|error| format!("page '{id}': '{name}' cannot be read: {error}"))?;
+    let bytes = std::fs::read(&path).map_err(file_unreadable)?;
     // The length is counted again from the bytes read, so a file that grew
     // between the stat and the read cannot carry the page past the bound.
     *total = total
         .saturating_sub(metadata.len())
         .saturating_add(bytes.len() as u64);
     if *total > MAX_PLUGIN_PAGE_BYTES {
-        return Err(page_size_refusal(id, *total));
+        return Err(PluginPageError::TooLarge {
+            page: id.clone(),
+            total: *total,
+        });
     }
     Ok(bytes)
-}
-
-fn page_size_refusal(id: &str, total: u64) -> String {
-    format!(
-        "page '{id}' holds at least {total} bytes; a page may hold at most \
-         {MAX_PLUGIN_PAGE_BYTES} bytes (2 MiB) across {PAGE_INDEX_FILE} and its listed files"
-    )
 }
 
 /// The first needle found in `haystack`, compared without ASCII case.
