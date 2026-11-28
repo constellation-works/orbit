@@ -317,7 +317,8 @@ impl OrbitRuntime {
     }
 
     /// Propose corpus edits for human answers on or after `since` (`YYYY-MM-DD`).
-    /// `since` omitted includes every human answer. The result is proposal
+    /// `since` is an inclusive UTC date matched against each answer's UTC answer
+    /// date; `since` omitted includes every human answer. The result is proposal
     /// text. This writes no corpus file.
     pub fn consolidate_decision_precedent(&self, since: Option<&str>) -> Result<Value, OrbitError> {
         let since = since
