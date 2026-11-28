@@ -38,6 +38,17 @@ pub(super) fn dispatch(
         Ok(NoticeCaller {
             session: session_context.clone(),
             scope_task_id: caller.task_id.clone(),
+            active_task_id: if crate::runtime::run_input::managed_run_context_from_env(
+                runtime.env(),
+            ) {
+                runtime
+                    .env()
+                    .var("ORBIT_ACTIVE_TASK_ID")
+                    .and_then(|id| id.to_str())
+                    .map(str::to_owned)
+            } else {
+                caller.task_id.clone()
+            },
             scope_run_id: caller.run_id.clone(),
             orchestrator: input.optional_string("orchestrator")?,
             model: input
