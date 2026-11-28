@@ -151,10 +151,27 @@ fn enabling_a_plugin_whose_page_names_actions_lists_them_and_records_consent() {
     std::fs::write(&manifest, raw).expect("write manifest");
     write_page(&source.join(".orbit-plugin"));
 
-    let added = fixture
+    // The documented preview: a plain `add` lists the actions and `show`
+    // reads them, with no consent recorded yet.
+    let previewed = fixture
         .command(["plugin", "add"])
         .arg(&source)
-        .arg("--enable")
+        .success_output();
+    let previewed = String::from_utf8_lossy(&previewed.stdout);
+    assert!(
+        previewed.contains("actions: pages.settle"),
+        "the preview lists the page's actions: {previewed}"
+    );
+    let shown = fixture.json(["plugin", "show", "pages"]);
+    assert_eq!(
+        only_page(&shown)["actions"],
+        serde_json::json!([{"tool": "pages.settle", "consented": false, "active": false}]),
+        "the preview leaves the action witness unchanged: {shown}"
+    );
+
+    // `enable` reports the consent it has just recorded.
+    let added = fixture
+        .command(["plugin", "enable", "pages"])
         .success_output();
     let added = String::from_utf8_lossy(&added.stdout);
     assert!(

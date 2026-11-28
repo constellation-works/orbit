@@ -78,11 +78,18 @@ spec:
   that page inactive with a diagnostic naming both digests, as a changed manifest does today
   (STD-05 §R21); so does a page whose files now fail a check above. The rest of the plugin
   keeps loading, and the recovery is the forced reinstall a changed manifest needs.
-- **The operator sees pages before consenting.** `orbit plugin add` and `enable` name each
-  page, the tools it may call and its actions, and `orbit plugin show` and `GET
-  /api/plugins` list `pages[]` with id, title, tools, `actions[]` (each with `tool`,
-  `consented` and `active`), kit version and the active or inactive state with its
-  diagnostic.
+- **The operator sees pages before consenting.** The preview is `orbit plugin add <source>`
+  without `--enable`, then `orbit plugin show <name>` (or `GET /api/plugins`). `add` installs
+  the plugin disabled and names each page, the tools it may call and its actions; it records
+  no grant witness, so every action reads `consented: false` and `active: false`. `show` and
+  the API list `pages[]` with id, title, tools, `actions[]` (each with `tool`, `consented`
+  and `active`), kit version and the active or inactive state with its diagnostic, and
+  change nothing. Only then does the operator run `orbit plugin enable <name>`.
+- **`enable` and `add --enable` report consent; they do not preview it.** Each runs the
+  mutating command first, so its page and action listing reports the list the command has
+  just recorded in the grant witness, and the actions are already consented. There is no dry
+  run. An operator who wants to inspect the actions before consenting stops at the preview
+  above.
 
 ## 2. Serving
 
@@ -272,7 +279,8 @@ link tile it has today.
 ## 7. Configuration
 
 No new key. A page shows when its plugin is enabled for the workspace, and enabling a plugin
-whose manifest has pages lists them in the consent prompt.
+whose manifest has pages lists them in the report of the consent it records; the
+[preview](#1-the-manifest) before consenting is `plugin add` without `--enable`, then `plugin show`.
 
 ## 8. Phasing
 
@@ -287,7 +295,7 @@ whose manifest has pages lists them in the consent prompt.
 3. **Actions** (built, [ORB-29539]). A page may name mutating tools under a separate
    `actions` list. Each call needs the operator session and a confirmation the dashboard
    draws outside the frame, naming the plugin, the tool and the input, and is audited with
-   the web session. Enabling such a plugin asks consent for the list.
+   the web session. Enabling such a plugin records consent for the list.
 4. **First pages.** A Formation page and a Scribe page, each from its own repository, once
    their plugins exist.
 
