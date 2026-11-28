@@ -61,6 +61,7 @@ Precedence, first match wins:
 
 - `json` for a list command emits a single array or its documented envelope; for a detail command, a single object. For example, `orbit run history --json` retains `{"runs":[...]}` (including with `--incidents`), and `--failures --json` uses `{"failures":[...]}`. `--format json` is pretty-printed only when `is_tty`; `--json` keeps its historical pretty form (see Migration). Commands with no table or plain view preserve pretty JSON in those human modes.
 - `ndjson` emits one complete JSON value per line and flushes per record. List commands emit their rows in listing order without a document envelope; an empty list emits no records. This includes ordinary, incident and failure rows from `orbit run history`. List commands assemble their record payload before rendering, so records flush incrementally only after collection. Command-specific stream payloads such as `orbit log tail` emit as data arrives using their selected line format.
+- Workspace `orbit doctor` keeps its JSON list as a bare array, where `status: "error"` and `status: "warning"` rows give the failure and warning counts. Its NDJSON output appends one summary record after the check rows: `{"summary":{"failures":N,"warnings":N,"text":"..."}}`.
 - `table` and `json` for the same invocation describe the same records. The table may omit fields and reformat values; it may not contain a value absent from the payload, and it may not omit a record the payload includes.
 
 ## 4. Payload Rules

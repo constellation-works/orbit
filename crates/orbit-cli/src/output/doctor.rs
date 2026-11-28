@@ -164,7 +164,8 @@ pub(crate) fn push_repaired(
 }
 
 /// Render the checks as `orbit doctor` reports them: a table sorted by
-/// severity, the JSON rows, and a nonzero exit when any check failed.
+/// severity, JSON check rows, an NDJSON summary trailer, and a nonzero exit
+/// when any check failed.
 pub(crate) fn report_output(
     mut results: Vec<WorkspaceDoctorResult>,
     filter: DoctorReportFilter,
@@ -206,11 +207,19 @@ pub(crate) fn report_output(
         .filter(|row| row.status == WorkspaceDoctorStatus::Warning)
         .count();
 
-    let values = results.iter().map(doctor_row_json).collect::<Vec<_>>();
-
     let summary = format!("{failures} failure(s), {warnings} warning(s).");
-    eprintln!("{summary}");
-    let mut blocks = Vec::new();
+    let summary_record = json!({"summary": {
+        "failures": failures,
+        "warnings": warnings,
+        "text": summary,
+    }});
+    let values = results.iter().map(doctor_row_json).collect::<Vec<_>>();
+    let mut records = values.clone();
+    records.push(summary_record);
+    let summary_notice = summary.clone();
+    let mut blocks = vec![Block::custom(move |sink| {
+        eprintln!("{}", sink.wrap_prose(&summary_notice));
+    })];
 
     results.sort_by_key(|row| match row.status {
         WorkspaceDoctorStatus::Error => 0,
@@ -251,17 +260,19 @@ pub(crate) fn report_output(
         blocks.push(findings_block(results.clone()));
 
         if failures == 0 && warnings == 0 {
-            blocks.push(Block::notice(format!(
-                "\n{}",
-                crate::output::common::color::text("Workspace healthy.", Role::Ok)
-            )));
+            let healthy_notice = crate::output::common::color::text("Workspace healthy.", Role::Ok);
+            blocks.push(Block::custom(move |sink| {
+                eprintln!("{}", sink.wrap_prose(&healthy_notice));
+            }));
         }
     }
 
     // Unlike `skill doctor` / `tool doctor`, a failed check exits nonzero
     // so unattended callers (cron, CI, systemd) can alert on it.
     let exit_code = i32::from(failures > 0);
-    let mut payload = Payload::blocks(Value::Array(values), blocks).with_exit_code(exit_code);
+    let mut payload = Payload::blocks(Value::Array(values), blocks)
+        .with_records(records)
+        .with_exit_code(exit_code);
     if failures > 0 {
         payload = payload.with_audit_message(findings_audit_message(&results, warnings));
     }
