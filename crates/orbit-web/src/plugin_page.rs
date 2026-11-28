@@ -71,9 +71,19 @@ struct CallKey {
 /// The shared outcome of one execution; every caller sharing it reads it.
 type CallResult = Result<Arc<Value>, Arc<OrbitError>>;
 
+/// Bundle digest and kit version a cached document was written from.
+/// Either one changing rebuilds it: the digest covers the page files, and
+/// the kit version selects the stylesheet, script and policy hashes Orbit
+/// writes beside them.
+#[derive(PartialEq, Eq)]
+struct DocumentStamp {
+    digest: String,
+    kit: Option<u32>,
+}
+
 /// The last document written for each `(namespace, page)`, with the bundle
-/// digest it was written from.
-type Documents = HashMap<(String, String), (String, Arc<PageDocument>)>;
+/// digest and kit version it was written from.
+type Documents = HashMap<(String, String), (DocumentStamp, Arc<PageDocument>)>;
 
 /// Why a page call did not get an execution.
 pub(crate) enum CallRefused {
@@ -117,8 +127,9 @@ pub(crate) enum ConfirmationRefused {
 #[derive(Default)]
 pub(crate) struct PageServing {
     /// The last document written for each `(namespace, page)`, with the
-    /// bundle digest it was written from. A new digest replaces it, so this
-    /// holds at most one document per declared page.
+    /// bundle digest and kit version it was written from. Either one
+    /// changing replaces it, so this holds at most one document per
+    /// declared page.
     documents: Mutex<Documents>,
     calls: Mutex<Calls>,
     /// Unused one-time action confirmations, by their random token.
@@ -126,21 +137,26 @@ pub(crate) struct PageServing {
 }
 
 impl PageServing {
-    /// The document for `source`, written once per bundle digest and served
-    /// from memory after that.
+    /// The document for `source`, written once per bundle digest and kit
+    /// version and served from memory after that. A change to either input
+    /// replaces the cached document.
     pub(crate) fn document(&self, source: &PageSource) -> Arc<PageDocument> {
         let key = (source.namespace().to_string(), source.id().to_string());
+        let stamp = DocumentStamp {
+            digest: source.digest().to_string(),
+            kit: source.kit(),
+        };
         let mut documents = self
             .documents
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        if let Some((digest, document)) = documents.get(&key)
-            && digest == source.digest()
+        if let Some((cached, document)) = documents.get(&key)
+            && cached == &stamp
         {
             return Arc::clone(document);
         }
         let document = Arc::new(write_document(source));
-        documents.insert(key, (source.digest().to_string(), Arc::clone(&document)));
+        documents.insert(key, (stamp, Arc::clone(&document)));
         document
     }
 

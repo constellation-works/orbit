@@ -137,10 +137,12 @@ plus `no-store` and `Content-Security-Policy: sandbox; default-src 'none'`.
 HTML-preprocessed UTF-8 text: the bytes are decoded lossily as UTF-8, with CRLF and lone
 CR normalized to LF. The document still writes each script's original raw bytes unchanged.
 The policy is therefore fixed by the bundle and the kit version. The document is written
-once per bundle digest from the bytes the plugin load hashed and served from memory, as
-`text/html; charset=utf-8` with `nosniff` and `no-store`. An unknown page, a page whose
-files fail their checks or digest, and a plugin that is inactive or disabled for the
-workspace each answer 404 with the reason.
+once for that pair, the bundle digest and the kit version, from the bytes the plugin
+load hashed and served from memory, as `text/html; charset=utf-8` with `nosniff` and
+`no-store`. A change to either input replaces the cached document. That includes a kit
+change on a running server whose page files, and therefore the bundle digest, stay the
+same. An unknown page, a page whose files fail their checks or digest, and a plugin
+that is inactive or disabled for the workspace each answer 404 with the reason.
 
 What that gives:
 
