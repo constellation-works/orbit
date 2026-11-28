@@ -64,6 +64,8 @@ impl FakeGh {
                slow-throttle) sleep 1; printf 'throttled\\n' >> \"$dir/throttled\"; echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2; exit 1 ;;\n\
                empty-then-slow-throttle) case \"$*\" in *--log*) exit 0 ;; esac; sleep 1; printf 'throttled\\n' >> \"$dir/throttled\"; echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2; exit 1 ;;\n\
                empty-then-throttle) case \"$*\" in *--log*) exit 0 ;; esac; echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2; exit 1 ;;\n\
+               empty-then-ignore-term) case \"$*\" in *--log*) exit 0 ;; esac; trap '' TERM; sleep 30; exit 0 ;;\n\
+               log-then-ignore-term) case \"$*\" in *--log*) echo 'log line'; exit 0 ;; esac; trap '' TERM; sleep 30; exit 0 ;;\n\
              esac\n\
              echo '{{}}'\n",
             dir.path().display()
@@ -1680,4 +1682,77 @@ fn run_log_readers_bound_post_child_throttle_recording_by_remaining_deadline() {
             }
         }
     }
+}
+
+/// A `RunLogRequests` whose every `gh` call runs the fake `gh`, each budgeted at
+/// `budget_ms`.
+fn budgeted_run_requests(gh: &FakeGh, input: serde_json::Value, budget_ms: u64) -> RunLogRequests {
+    let probe = gh.request(&["run", "view", "123"]);
+    let mut requests = RunLogRequests::from_input(&input).unwrap();
+    for req in [&mut requests.run_log, &mut requests.run_view] {
+        (req.program, req.environment_mode) =
+            (probe.program.clone(), probe.environment_mode.clone());
+        req.timeout_ms = Some(budget_ms);
+    }
+    requests
+}
+
+/// Regression [ORB-29630]: a budgeted GitHub read whose `gh` ignores SIGTERM ends
+/// at its budget, not after the termination grace period. The run-view fallback
+/// (`fallback_jobs`) is the read under test.
+#[test]
+fn budgeted_run_view_fallback_ends_at_its_budget_when_gh_ignores_sigterm() {
+    let gh = FakeGh::new("{}", "empty-then-ignore-term");
+    let requests = budgeted_run_requests(&gh, json!({"run": "123", "repo": "acme/orbit"}), 1_000);
+    let started = Instant::now();
+    let read = read_run_log_guarded(
+        &orbit_common::Env::capture(),
+        &requests,
+        LogReadBounds::new(4096),
+        None,
+        &|req| Ok(req.clone()),
+    )
+    .expect("an unrecovered fallback is reported in the read");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(1_500),
+        "1000 ms budget; the read took {elapsed:?}"
+    );
+    let reason = read.fallback_error.expect("the run view read timed out");
+    assert!(
+        reason.contains("gh run view") && reason.contains("timed out"),
+        "{reason}"
+    );
+}
+
+/// Regression [ORB-29630]: the same bound holds for the metadata read that decides
+/// whether a run-scoped log may be cached (`read_api_json`).
+#[test]
+fn budgeted_run_metadata_read_ends_at_its_budget_when_gh_ignores_sigterm() {
+    let gh = FakeGh::new("{}", "log-then-ignore-term");
+    let cache = TempDir::new().unwrap();
+    let requests = budgeted_run_requests(&gh, json!({"run": "123", "repo": "acme/orbit"}), 1_000)
+        .with_test_log_cache(cache.path());
+    let started = Instant::now();
+    let read = read_run_log_guarded(
+        &orbit_common::Env::capture(),
+        &requests,
+        LogReadBounds::new(4096),
+        None,
+        &|req| Ok(req.clone()),
+    )
+    .expect("the run-scoped log is read once its metadata read is abandoned");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(1_500),
+        "1000 ms budget; the read took {elapsed:?}"
+    );
+    assert!(
+        gh.calls()
+            .iter()
+            .any(|call| call.starts_with("api --method GET repos/acme/orbit/actions/runs/123")),
+        "{:?}",
+        gh.calls()
+    );
+    assert!(read.log.text.contains("log line"), "{:?}", read.log.text);
 }

@@ -134,6 +134,22 @@ pub(crate) fn run_probe_process(
     Ok(run_supervised(env, req, &ProbeSandbox, true)?.result)
 }
 
+/// Run a process like [`run_process`], but a child the supervisor stops (at
+/// `timeout_ms`, at the capture limit or on an intercepted signal) has its
+/// process group killed at once rather than signalled and given the
+/// termination grace period.
+///
+/// For a budgeted read whose caller must return by its own deadline even when
+/// the child ignores the termination signal. A child that may need the grace
+/// period to clean up stays on [`run_process`].
+pub fn run_process_kill_at_once(
+    env: &orbit_common::Env,
+    req: &ExecRequest,
+    sandbox: &dyn Sandbox,
+) -> Result<ExecutionResult, OrbitError> {
+    Ok(run_supervised(env, req, sandbox, true)?.result)
+}
+
 fn run_supervised(
     env: &orbit_common::Env,
     req: &ExecRequest,

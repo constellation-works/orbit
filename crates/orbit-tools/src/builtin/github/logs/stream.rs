@@ -3,7 +3,7 @@ use super::super::throttle::check_read_result;
 use super::super::{LogSelection, StreamedLog, StreamedLogCollector};
 use super::selection::*;
 use orbit_common::OrbitError;
-use orbit_exec::{ExecRequest, NoSandbox, run_process, run_process_streaming_stdout};
+use orbit_exec::{ExecRequest, NoSandbox, run_process_kill_at_once, run_process_streaming_stdout};
 use serde::{Deserialize, de::DeserializeOwned};
 
 // Only completed responses can qualify for caching. Unknown statuses are misses.
@@ -250,6 +250,7 @@ pub(super) fn run_scoped_log(
 }
 
 /// One lightweight metadata read, or `None` when it cannot be made or parsed.
+/// The child is killed at its budget, even one that ignores SIGTERM.
 fn read_api_json<T: DeserializeOwned>(
     env: &orbit_common::Env,
     request: ExecRequest,
@@ -257,7 +258,7 @@ fn read_api_json<T: DeserializeOwned>(
 ) -> Option<T> {
     let request = guard(&request).ok()?;
     let deadline = crate::github_quota::gh_request_deadline(&request, std::time::Instant::now());
-    let result = run_process(env, &request, &NoSandbox).ok()?;
+    let result = run_process_kill_at_once(env, &request, &NoSandbox).ok()?;
     crate::github_quota::observe_gh_result_by_deadline(env, &request, &result, deadline);
     if !result.success {
         return None;

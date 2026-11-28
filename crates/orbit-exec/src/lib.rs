@@ -17,6 +17,8 @@
 //! # Key exports
 //! - [`run_process`] — primary entry point for spawning a subprocess
 //! - [`run_process_supervised`] — the same with structured supervisor stop metadata
+//! - [`run_process_kill_at_once`] — the same, but a child stopped at its budget
+//!   is killed at once rather than given the termination grace period
 //! - [`supervise_child`] — supervise a child spawned through a sandbox wrapper
 //! - [`spawn_supervised_cancellable`] — the same, with signals intercepted
 //!   before the spawn
@@ -118,8 +120,9 @@ pub use process::{InheritedFd, spawn_with_inherited_fds};
 pub use result::ExecutionResult;
 pub use runner::{
     EnvironmentMode, ExecRequest, StdinMode, SupervisedOutcome, run_process,
-    run_process_streaming_stdout, run_process_supervised, spawn_owned_supervised_cancellable,
-    spawn_supervised_cancellable, supervise_child, supervise_child_cancellable,
+    run_process_kill_at_once, run_process_streaming_stdout, run_process_supervised,
+    spawn_owned_supervised_cancellable, spawn_supervised_cancellable, supervise_child,
+    supervise_child_cancellable,
 };
 pub use sandbox::{NoSandbox, Sandbox};
 pub use supervision::{
