@@ -6,7 +6,7 @@ updated_date: 2026-11-28
 last_validated: 2026-11-28
 status: Accepted
 stage: building
-next: "Show pilot notes on the dashboard task detail [ORB-29589] and give claimed pilots the owner's captured instructions [ORB-29590]"
+next: "Give claimed pilots the owner's captured instructions [ORB-29590]"
 feature: pilot-notes
 doc_role: overview
 type: design

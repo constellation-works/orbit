@@ -111,6 +111,23 @@ function pilotSummary(comment) {
   return pilot && typeof pilot.summary === "string" && pilot.summary.trim() ? pilot.summary : null;
 }
 
+function pilotNotesForSummary(task, comment) {
+  const notes = task && Array.isArray(task.pilot_notes) ? task.pilot_notes : [];
+  const artifact = comment && comment.pilot && comment.pilot.assessment_artifact;
+  if (typeof artifact !== "string") return [];
+  return notes.filter((note) => note && typeof note.label === "string" &&
+    typeof note.text === "string" && typeof note.operation_id === "string" &&
+    artifact.endsWith(`/assessment-${note.operation_id}.json`));
+}
+
+function pilotNotesView(notes) {
+  if (!notes.length) return null;
+  return el("div", { class: "pilot-notes" }, notes.map((note) => el("div", { class: "pilot-note" }, [
+    el("div", { class: "pilot-note-label", text: note.label }),
+    el("p", { class: "pilot-note-text", text: note.text }),
+  ])));
+}
+
 // Resident records are persisted JSON. Only recognize the known shapes; malformed
 // or future records retain the ordinary comment renderer and original text.
 function residentComment(comment) {
@@ -350,7 +367,15 @@ function buildCommentCard(task, comment, index) {
     actions,
   ]);
 
-  const view = pilotLine ? el("p", { text: pilotLine }) : resident ? residentCommentView(resident, task) : taskFields.markdownView(message);
+  const notes = pilotLine ? pilotNotesForSummary(task, comment) : [];
+  let view;
+  if (pilotLine) {
+    view = el("div", {}, [el("p", { text: pilotLine }), pilotNotesView(notes)]);
+  } else if (resident) {
+    view = residentCommentView(resident, task);
+  } else {
+    view = taskFields.markdownView(message);
+  }
   view.classList.add("markdown-body", "comment-body");
   const headings = renderedCommentHeadings(view);
   const raw = el("pre", { class: "comment-raw", text: message });

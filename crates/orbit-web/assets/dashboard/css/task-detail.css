@@ -1674,6 +1674,23 @@ input.field-editor-input {
 .resident-comment-meta { color: var(--fg-dim); }
 .resident-comment-notes { white-space: pre-wrap; margin: var(--space-8) 0; }
 .resident-comment-label { color: var(--fg-dim); margin-top: var(--space-8); }
+.pilot-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-width: 0;
+  margin-top: var(--space-10);
+}
+.pilot-note {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-10);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.pilot-note-label { color: var(--fg-dim); font-size: var(--text-sm); }
+.pilot-note-text { min-width: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .resident-comment ul { margin: 0; padding-left: var(--space-20); }
 .comment-raw {
   font-family: var(--font-mono);
