@@ -680,6 +680,132 @@ fn body_json(response: Response) -> Value {
 }
 
 #[test]
+fn pilot_warnings_are_observational_in_task_displays() {
+    isolated(
+        "task_contracts::pilot_warnings_are_observational_in_task_displays",
+        || {
+            let fixture = Fixture::new();
+            let runtime = &fixture.runtime;
+            let leaf = seed_backlog_task(runtime, "Transitive prerequisite");
+            let add = |title: &str, status, dependency: &str| {
+                runtime
+                    .add_task(TaskAddParams {
+                        title: title.into(),
+                        status: Some(status),
+                        dependencies: vec![dependency.into()],
+                        ..Default::default()
+                    })
+                    .unwrap()
+            };
+            let middle = add("Direct prerequisite", TaskStatus::Backlog, &leaf.id);
+            let proposal = add("Assessed proposal", TaskStatus::Proposed, &middle.id);
+            let unpiloted = add("Unpiloted proposal", TaskStatus::Proposed, &middle.id);
+            let audit = json!({"assessment": {"blocked_by": [
+                format!("Wait for {} to land", leaf.id),
+                "Confirm the operator workflow"
+            ]}});
+            let content = serde_json::to_vec(&audit).unwrap();
+            let digest = orbit_common::security::release::sha256_hex(&content);
+            let path = "pilot/assessment.json";
+            runtime
+                .update_task_as_human(
+                    &proposal.id,
+                    TaskUpdateParams {
+                        comment: Some(format!(
+                            "operation_id={}\n{}",
+                            "a".repeat(64),
+                            json!({"assessment_artifact": path, "assessment_sha256": digest}),
+                        )),
+                        upsert_artifacts: vec![TaskArtifact {
+                            path: path.into(),
+                            media_type: "application/json".into(),
+                            content,
+                            created_by: None,
+                        }],
+                        ..Default::default()
+                    },
+                    "task-pilot".into(),
+                )
+                .unwrap();
+
+            let server = fixture.server(true);
+            // Warm the independent riskiness model before trapping task-store reads.
+            let list = "/tasks?status=proposed";
+            assert_eq!(request(&server, list).status(), StatusCode::OK);
+            let registry = fixture_store::maintenance::task_registry::TaskRegistryStore::open(
+                &fixture_store::maintenance::task_registry::task_registry_path(&fixture.global),
+            )
+            .unwrap();
+            let binding = registry.find_task_binding(&proposal.id).unwrap().unwrap();
+            let partition = binding.canonical_path.parent().unwrap();
+            let connection = rusqlite::Connection::open(fixture.global.join("orbit.db")).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO task_commit_journal \
+                 (journal_id, workspace_id, task_id, state, intent_json, created_at) \
+                 VALUES ('pilot-display', ?1, ?2, 'prepared', '{}', ?3)",
+                    rusqlite::params![
+                        runtime.workspace_id().unwrap(),
+                        leaf.id,
+                        chrono::Utc::now().to_rfc3339()
+                    ],
+                )
+                .unwrap();
+            let client = reqwest::blocking::Client::builder()
+                .no_proxy()
+                .timeout(std::time::Duration::from_secs(2))
+                .build()
+                .unwrap();
+            let get = |path: &str, sep: char| -> Value {
+                let response = client
+                    .get(format!(
+                        "{}/api{path}{sep}workspace=ws_http_fixture",
+                        server.origin
+                    ))
+                    .send()
+                    .unwrap_or_else(|error| panic!("{path} waited on the task writer: {error}"));
+                assert_eq!(response.status(), StatusCode::OK, "{path}");
+                body_json(response)
+            };
+            let expected = json!([{"kind": "blocked_by", "text": "Confirm the operator workflow"}]);
+            orbit_common::fs::io::with_exclusive_file_lock::<_, orbit_common::OrbitError, _>(
+                &partition.join("task-commit"),
+                "HTTP pilot warning observation",
+                || {
+                    let page = get(list, '&');
+                    let items = page["items"].as_array().unwrap();
+                    let row = |id: &str| items.iter().find(|row| row["id"] == id).unwrap();
+                    assert_eq!(row(&unpiloted.id)["pilot_warnings"], json!([]));
+                    assert_eq!(row(&proposal.id)["pilot_warnings"], expected);
+                    let detail = get(&format!("/tasks/{}", proposal.id), '?');
+                    assert_eq!(detail["pilot_warnings"], expected);
+                    assert_eq!(detail["escalation_triage"]["subject"], "pilot_warning");
+                    assert_eq!(detail["escalation_triage"]["available"], true);
+                    assert_eq!(detail["escalation_triage"]["reason"], "qualifies");
+                    let filtered = get("/tasks?pilot=warnings", '&');
+                    assert_eq!(filtered["total"], 1);
+                    assert_eq!(filtered["items"][0]["id"], proposal.id);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            let state = || {
+                connection
+                    .query_row(
+                        "SELECT state FROM task_commit_journal WHERE journal_id = 'pilot-display'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap()
+            };
+            assert_eq!(state(), "prepared");
+            runtime.get_task(&leaf.id).unwrap();
+            assert_eq!(state(), "aborted");
+        },
+    );
+}
+
+#[test]
 fn delivery_attention_survives_unrelated_run_history() {
     isolated(
         "task_contracts::delivery_attention_survives_unrelated_run_history",

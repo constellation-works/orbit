@@ -7,10 +7,12 @@
 //! honour the filer's `no-auto-approve` opt-out. Reading and validating those
 //! findings lives here once so the two modes cannot drift.
 
+use std::cell::Cell;
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
+use orbit_store::RegisteredTaskResolution;
 use orbit_types::task::{
     NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, Task, TaskComment, TaskStatus, TaskType,
     is_valid_orb_task_id,
@@ -122,10 +124,68 @@ impl crate::OrbitRuntime {
                     .unwrap_or_else(|_| task.dependencies());
                 task_pilot_warnings(task.status, &resolved, &dependencies, is_done)
             }
-            Err(_) => vec![DrainHoldFinding {
-                kind: PILOT_ASSESSMENT_UNAVAILABLE_KIND.into(),
-                text: "pilot assessment unavailable: its artifact is missing, unreadable, or does not match its receipt; re-pilot the task to rebuild it".into(),
-            }],
+            Err(_) => vec![pilot_assessment_unavailable()],
+        }
+    }
+
+    /// Advisory warning read for a settled task display. Unreadable evidence
+    /// belongs to this task's readout, so neighboring rows remain available.
+    pub(crate) fn observe_task_pilot_warning_findings(
+        &self,
+        task: &Task,
+        comments: &[TaskComment],
+    ) -> Vec<DrainHoldFinding> {
+        if task.status != TaskStatus::Proposed {
+            return Vec::new();
+        }
+        let Ok(comments) = self.observe_task_pilot_comments(&task.id, comments) else {
+            return vec![pilot_assessment_unavailable()];
+        };
+        match self.observe_held_pilot_warnings(task, &comments) {
+            Ok(held) => held.map(|held| held.findings).unwrap_or_default(),
+            Err(error) => {
+                tracing::warn!(task_id = %task.id, %error, "pilot prerequisites unreadable");
+                vec![DrainHoldFinding {
+                    kind: "pilot_prerequisites_unavailable".into(),
+                    text: "Pilot prerequisites could not be read.".into(),
+                }]
+            }
+        }
+    }
+
+    /// Holding warnings from resolved receipts and settled prerequisite
+    /// bundles. Return an evidence failure so Attention can degrade its source.
+    pub(crate) fn observe_held_pilot_warnings(
+        &self,
+        task: &Task,
+        comments: &[TaskComment],
+    ) -> Result<Option<HeldPilotWarnings>, OrbitError> {
+        let Some((operation_id, audit)) = latest_warning_audit(task.status, comments) else {
+            return Ok(None);
+        };
+        let dependencies = self.observe_pilot_dependency_closure(task)?;
+        let store = self.stores().tasks();
+        // The predicate asks about completion only when no graph edge
+        // enforces the prerequisite. Capture any failed read at that point.
+        let error = Cell::new(None);
+        let held = classify_warning_audit(operation_id, &audit, &dependencies, &|id| {
+            let observed = || {
+                if let Some(found) = store.observe_task(id)? {
+                    return Ok(found.status == TaskStatus::Done);
+                }
+                Ok(matches!(
+                    store.observe_registered_task(id)?,
+                    RegisteredTaskResolution::Resolved(found) if found.status == TaskStatus::Done
+                ))
+            };
+            observed().unwrap_or_else(|failure| {
+                error.set(Some(failure));
+                false
+            })
+        });
+        match error.into_inner() {
+            Some(error) => Err(error),
+            None => Ok(held),
         }
     }
 }
@@ -141,6 +201,15 @@ pub(crate) struct HeldPilotWarnings {
     pub(crate) pilot_run_id: Option<String>,
     /// Every holding finding, never empty.
     pub(crate) findings: Vec<DrainHoldFinding>,
+}
+
+fn pilot_assessment_unavailable() -> DrainHoldFinding {
+    DrainHoldFinding {
+        kind: PILOT_ASSESSMENT_UNAVAILABLE_KIND.into(),
+        text: "pilot assessment unavailable: its artifact is missing, unreadable, or does not \
+               match its receipt; re-pilot the task to rebuild it"
+            .into(),
+    }
 }
 
 /// A held proposal must have no warnings, including advisory findings.
@@ -486,14 +555,28 @@ pub(crate) fn held_pilot_warnings(
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
 ) -> Option<HeldPilotWarnings> {
+    let (operation_id, audit) = latest_warning_audit(status, comments)?;
+    classify_warning_audit(operation_id, &audit, dependencies, is_done)
+}
+
+fn latest_warning_audit(status: TaskStatus, comments: &[TaskComment]) -> Option<(&str, Value)> {
     if status != TaskStatus::Proposed {
         return None;
     }
     let (_, receipt) = super::pilot_receipts(comments).next()?;
     let audit = serde_json::from_str::<Value>(receipt.body).ok()?;
+    has_warning_findings(audit.get("assessment")?).then_some((receipt.operation_id, audit))
+}
+
+fn classify_warning_audit(
+    operation_id: &str,
+    audit: &Value,
+    dependencies: &[String],
+    is_done: &dyn Fn(&str) -> bool,
+) -> Option<HeldPilotWarnings> {
     let findings = warning_hold_findings(audit.get("assessment")?, dependencies, is_done);
     (!findings.is_empty()).then(|| HeldPilotWarnings {
-        operation_id: receipt.operation_id.to_string(),
+        operation_id: operation_id.to_string(),
         pilot_run_id: audit
             .get("pilot_run_id")
             .and_then(Value::as_str)

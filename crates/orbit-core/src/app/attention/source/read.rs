@@ -306,7 +306,7 @@ pub(in super::super) fn read_attention_sources(
             // history reads. A missing settled row degrades exactly as the
             // former `get_task` not-found did.
             let row = runtime
-                .get_listed_task_row(&metadata.id)?
+                .observe_listed_task_row(&metadata.id)?
                 .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, metadata.id.clone()))?;
             let crate::application::task::TaskRow {
                 task,
@@ -314,7 +314,7 @@ pub(in super::super) fn read_attention_sources(
                 history: row_history,
                 ..
             } = row;
-            let comments = runtime.resolve_task_pilot_comments(&metadata.id, &raw_comments)?;
+            let comments = runtime.observe_task_pilot_comments(&metadata.id, &raw_comments)?;
             let (history, requests) = if needs_decisions {
                 let requests = runtime
                     .task_decision_requests_in(&task, &row_history, &comments, now)?

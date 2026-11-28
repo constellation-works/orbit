@@ -188,7 +188,7 @@ pub(crate) fn task_recorded_crews(rt: &OrbitRuntime, task: &Task) -> Map<String,
 }
 
 fn piloted_hands(rt: &OrbitRuntime, row: &TaskRow) -> Vec<Hand> {
-    let comments = match rt.resolve_task_pilot_comments(&row.task.id, &row.comments) {
+    let comments = match rt.observe_task_pilot_comments(&row.task.id, &row.comments) {
         Ok(comments) => comments,
         Err(error) => {
             tracing::warn!(task_id = %row.task.id, %error, "pilot hands: assessment unreadable");

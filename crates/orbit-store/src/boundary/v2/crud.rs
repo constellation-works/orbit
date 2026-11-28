@@ -70,6 +70,54 @@ impl TaskV2Store {
         })
     }
 
+    pub(super) fn read_task_bundle(&self, id: &str) -> Result<Option<Task>, OrbitError> {
+        match self.bundle_store.read_bundle(id) {
+            Ok(bundle) => Ok(Some(super::task_from_bundle(bundle))),
+            Err(OrbitError::NotFound {
+                kind: NotFoundKind::Task,
+                ..
+            }) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(super) fn registered_task_with(
+        &self,
+        id: &str,
+        read_local: fn(&Self, &str) -> Result<Option<Task>, OrbitError>,
+    ) -> Result<RegisteredTaskResolution, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        let Some(binding) = self.registry.find_task_binding(id)? else {
+            let known = match orbit_types::task::task_id_prefix(id) {
+                Some(prefix) => self.registry.task_prefix_is_known(prefix)?,
+                None => false,
+            };
+            return Ok(if known {
+                RegisteredTaskResolution::Missing
+            } else {
+                RegisteredTaskResolution::ForeignAuthority
+            });
+        };
+        if binding.partition_id == self.workspace_id {
+            return match read_local(self, id)? {
+                Some(task) => Ok(RegisteredTaskResolution::Resolved(Box::new(task))),
+                None => {
+                    self.ensure_registered_bundle_absent(
+                        &binding,
+                        &self.bundle_store.bundle_path(id)?,
+                    )?;
+                    Ok(RegisteredTaskResolution::Missing)
+                }
+            };
+        }
+        Ok(match self.read_registered_owner_bundle(&binding)? {
+            Some(bundle) => {
+                RegisteredTaskResolution::Resolved(Box::new(super::task_from_bundle(bundle)))
+            }
+            None => RegisteredTaskResolution::Missing,
+        })
+    }
+
     fn create_task_locked(
         &self,
         params: TaskCreateParams,
@@ -326,14 +374,7 @@ impl TaskV2Store {
     pub(crate) fn get_task_bare(&self, id: &str) -> Result<Option<Task>, OrbitError> {
         orbit_types::task::validate_orb_task_id(id)?;
         self.ensure_recovered()?;
-        match self.bundle_store.read_bundle(id) {
-            Ok(bundle) => Ok(Some(super::task_from_bundle(bundle))),
-            Err(OrbitError::NotFound {
-                kind: NotFoundKind::Task,
-                ..
-            }) => Ok(None),
-            Err(err) => Err(err),
-        }
+        self.read_task_bundle(id)
     }
 
     /// Resolve `id` through the registry's ownership binding, so a dependency
@@ -350,36 +391,7 @@ impl TaskV2Store {
         &self,
         id: &str,
     ) -> Result<RegisteredTaskResolution, OrbitError> {
-        orbit_types::task::validate_orb_task_id(id)?;
-        let Some(binding) = self.registry.find_task_binding(id)? else {
-            let known = match orbit_types::task::task_id_prefix(id) {
-                Some(prefix) => self.registry.task_prefix_is_known(prefix)?,
-                None => false,
-            };
-            return Ok(if known {
-                RegisteredTaskResolution::Missing
-            } else {
-                RegisteredTaskResolution::ForeignAuthority
-            });
-        };
-        if binding.partition_id == self.workspace_id {
-            return match self.get_task_bare(id)? {
-                Some(task) => Ok(RegisteredTaskResolution::Resolved(Box::new(task))),
-                None => {
-                    self.ensure_registered_bundle_absent(
-                        &binding,
-                        &self.bundle_store.bundle_path(id)?,
-                    )?;
-                    Ok(RegisteredTaskResolution::Missing)
-                }
-            };
-        }
-        Ok(match self.read_registered_owner_bundle(&binding)? {
-            Some(bundle) => {
-                RegisteredTaskResolution::Resolved(Box::new(super::task_from_bundle(bundle)))
-            }
-            None => RegisteredTaskResolution::Missing,
-        })
+        self.registered_task_with(id, Self::get_task_bare)
     }
 
     /// Read `id`'s status history through its registered owner, with the

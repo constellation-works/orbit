@@ -113,7 +113,7 @@ impl TaskListProjection {
     }
 
     /// `runtime` is the one this projection was built from; it is read only
-    /// for pilot preparation and active triage/recovery bindings.
+    /// for pilot evidence, pilot preparation and active triage/recovery bindings.
     pub(super) fn row_to_json(
         &self,
         runtime: &OrbitRuntime,
@@ -138,10 +138,7 @@ impl TaskListProjection {
         }
         object.insert(
             "pilot_warnings".into(),
-            json!(
-                runtime.task_pilot_warning_findings(task, &row.comments, &|id: &str| runtime
-                    .warning_prerequisite_is_done(id),)
-            ),
+            json!(runtime.observe_task_pilot_warning_findings(task, &row.comments)),
         );
         self.os_readout
             .as_ref()

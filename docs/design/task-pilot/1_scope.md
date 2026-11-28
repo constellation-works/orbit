@@ -55,6 +55,12 @@ keep the compact message; readers that need inline audits use a resolved view.
 summary while retaining the raw receipt.
 Historical malformed inline records retain each reader's existing failure policy.
 
+The dashboard list, warning filter and detail (including triage eligibility)
+read the assessment and the local prerequisite closure from settled bundles.
+The same transitive dependency and completion exemptions apply as in promotion.
+Warning projections report unreadable prerequisite evidence on the affected
+task. Promotion and explicit triage submission use coordinated reads.
+
 ## A no-diff verdict tags the task
 
 [ORB-26836] A `verified_no_diff` assessment that says the task expects no repository diff adds

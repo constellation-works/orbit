@@ -68,6 +68,9 @@ Notes that bind implementations:
   versus an operator verdict), so a task can carry both.
 - **A plain `proposed` task is not an item.** Awaiting approval is a normal state of most
   proposed tasks; listing them would drown the rest. See [3_vision.md §1](../3_vision.md#1-open-questions).
+- **Pilot warning evidence is observational.** Attention reads pilot receipts and prerequisites
+  from settled bundles without recovering pending commits. If a prerequisite needed by the
+  warning classifier cannot be read, the source reports `pilot_warning` as `source_unavailable`.
 - **Runtime kinds respect the caller's read rights.** `run_*` and `claim_stale` read sources
   that require the Operator capability (`orbit.run` action `list`, `orbit.drain.claims`), with
   one workspace-scoped `degraded` entry per selected unreadable kind otherwise.

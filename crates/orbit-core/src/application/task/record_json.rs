@@ -42,6 +42,15 @@ pub fn task_record_json(
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Map<String, Value>, OrbitError> {
+    task_record_json_with_pilot(runtime, row, status_by_id, false)
+}
+
+fn task_record_json_with_pilot(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+    observational: bool,
+) -> Result<Map<String, Value>, OrbitError> {
     let task = &row.task;
     let mut object = task_base_json(task, status_by_id);
     if let Some(at) = orbit_types::task::task_started_at(&row.history) {
@@ -65,7 +74,18 @@ pub fn task_record_json(
     let resolvable_pilot_admission_hold = if task.status.is_terminal() {
         false
     } else {
-        match runtime.pilot_admission_hold_in(task, &row.comments, &|| Ok(row.history.clone())) {
+        match runtime.pilot_admission_hold_with_audit(
+            task,
+            &row.comments,
+            &|| Ok(row.history.clone()),
+            &|receipt| {
+                if observational {
+                    runtime.observe_task_pilot_audit(&task.id, receipt)
+                } else {
+                    runtime.task_pilot_audit(&task.id, receipt)
+                }
+            },
+        ) {
             Ok(hold) => hold.is_some_and(|hold| hold.is_resolvable()),
             Err(OrbitError::Execution(message))
                 if message.starts_with("decode ")
@@ -96,16 +116,14 @@ pub fn task_record_json(
         "resolvable_pilot_admission_hold".into(),
         serde_json::json!(resolvable_pilot_admission_hold),
     );
-    object.insert(
-        "pilot_warnings".into(),
-        serde_json::json!(
-            runtime.task_pilot_warning_findings(task, &row.comments, &|id: &str| task_is_done(
-                runtime,
-                Some(status_by_id),
-                id
-            ),)
-        ),
-    );
+    let warnings = if observational {
+        runtime.observe_task_pilot_warning_findings(task, &row.comments)
+    } else {
+        runtime.task_pilot_warning_findings(task, &row.comments, &|id| {
+            task_is_done(runtime, Some(status_by_id), id)
+        })
+    };
+    object.insert("pilot_warnings".into(), serde_json::json!(warnings));
     object.insert("comments".to_string(), comments_json(&row.comments)?);
     object.insert(
         "history".to_string(),
@@ -140,7 +158,26 @@ pub fn task_show_json(
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Map<String, Value>, OrbitError> {
-    let mut object = task_record_json(runtime, row, status_by_id)?;
+    let object = task_record_json(runtime, row, status_by_id)?;
+    with_task_show_extras(runtime, row, object)
+}
+
+/// The dashboard's show projection observes pilot evidence from settled
+/// bundles so a warning or admission-hold hint cannot wait on task commits.
+pub(super) fn observe_task_show_json(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    status_by_id: &BTreeMap<String, TaskStatus>,
+) -> Result<Map<String, Value>, OrbitError> {
+    let object = task_record_json_with_pilot(runtime, row, status_by_id, true)?;
+    with_task_show_extras(runtime, row, object)
+}
+
+fn with_task_show_extras(
+    runtime: &OrbitRuntime,
+    row: &TaskRow,
+    mut object: Map<String, Value>,
+) -> Result<Map<String, Value>, OrbitError> {
     object.insert(
         "experiments".into(),
         serde_json::to_value(

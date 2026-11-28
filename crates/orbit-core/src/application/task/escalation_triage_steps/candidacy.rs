@@ -8,6 +8,7 @@ use serde_json::Value;
 use super::super::helpers::{SYSTEM_ACTOR_LABEL, is_automation_actor};
 use super::super::pilot::{HeldPilotWarnings, held_pilot_warnings};
 use crate::OrbitRuntime;
+use crate::application::task::TaskRow;
 
 use super::PILOT_WARNING_TRIAGED_EVENT;
 
@@ -85,12 +86,17 @@ impl OrbitRuntime {
             &comments,
             &history,
             &dependencies,
-            &|id: &str| self.task_is_done(id),
+            &|id| self.warning_prerequisite_is_done(id),
         ))
     }
 
-    fn task_is_done(&self, id: &str) -> bool {
-        self.warning_prerequisite_is_done(id)
+    pub(crate) fn observe_pilot_warning_candidacy(
+        &self,
+        row: &TaskRow,
+    ) -> Result<PilotWarningCandidacy, OrbitError> {
+        let comments = self.observe_task_pilot_comments(&row.task.id, &row.comments)?;
+        let held = self.observe_held_pilot_warnings(&row.task, &comments)?;
+        Ok(classify_pilot_warning_candidacy(held, &row.history))
     }
 }
 
@@ -104,7 +110,17 @@ pub(crate) fn pilot_warning_candidacy(
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
 ) -> PilotWarningCandidacy {
-    let Some(held) = held_pilot_warnings(task.status, comments, dependencies, is_done) else {
+    classify_pilot_warning_candidacy(
+        held_pilot_warnings(task.status, comments, dependencies, is_done),
+        history,
+    )
+}
+
+fn classify_pilot_warning_candidacy(
+    held: Option<HeldPilotWarnings>,
+    history: &[TaskHistoryEntry],
+) -> PilotWarningCandidacy {
+    let Some(held) = held else {
         return PilotWarningCandidacy::NotHeld;
     };
     if let Some(at) = triaged_at(history, &held.operation_id) {

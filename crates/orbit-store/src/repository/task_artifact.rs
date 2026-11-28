@@ -36,6 +36,17 @@ impl TaskArtifactRepository {
             .in_boundary(|| self.store.get_task_artifact(id, path))
     }
 
+    /// One artifact payload from a settled bundle, without coordination or
+    /// recovery. Unreadable bundles still produce errors.
+    pub fn observe_task_artifact(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        self.store.observe_task_artifact(id, path)
+    }
+
     /// Read one artifact from a manifest entry the caller already holds.
     pub fn read_manifest_artifact(
         &self,
