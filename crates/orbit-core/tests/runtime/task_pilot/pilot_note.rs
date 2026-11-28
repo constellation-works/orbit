@@ -443,10 +443,14 @@ fn decisions(notes: Option<Value>) -> Value {
         })
         .map(|item| item["kind"].clone())
         .collect::<Vec<_>>();
-    let readiness = workspace
-        .runtime
-        .workspace_auto_readiness(&[], None, 50, &[])
-        .unwrap();
+    let readiness = orbit_core::unit::workspace_auto::workspace_auto_readiness(
+        &workspace.runtime,
+        &[],
+        None,
+        50,
+        &[],
+    )
+    .unwrap();
     let selected = workspace.action("list_backlog_tasks", json!({}));
 
     // The assessment is fresh, and an edit to the instruction a note
