@@ -1,6 +1,6 @@
 ## Validation and CI
 
-For tasks that deliver a diff, there is no required local gate. The required PR checks (Check / Clippy / Test and Test shard 1/3, 2/3 and 3/3) gate formatting, guardrails, lint, rustdoc, goldens and the whole test suite, so the targets below are focused tools, not blanket pre-handoff gates. Run the ones the change needs:
+For a diff, these local checks are required before handoff: `make ci-guards` (static repository guards, no build or network) and `cargo fmt --all -- --check`, plus `rustfmt --check --edition <crate edition>` on each changed test `.rs` file. For changed workspace crates, also run `make ci-lint-affected` (it exits without compiling when none changed); for `desktop/`, run strict Cargo Clippy. Run these even when pipeline final validation (`task.final_validation_commands`) names the same guard, and fix what they report: pipeline final validation does not replace them. There is no required local full-suite run. The required PR checks (Check / Clippy / Test and Test shard 1/3, 2/3 and 3/3) gate formatting, guardrails, lint, rustdoc, goldens and the whole test suite, so the targets below are focused tools, not blanket pre-handoff gates. Run the conditional ones the change needs (`make goldens`, `make docs-index`, `make check-ci-macos`) and the tests of the changed behavior:
 
 ```bash
 make ci-guards         # static repository guards; no build or network
