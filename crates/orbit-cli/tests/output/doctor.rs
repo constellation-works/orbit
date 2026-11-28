@@ -2198,6 +2198,7 @@ fn severity_order(text: &str) -> (bool, bool) {
     }
     (warn, ok_after)
 }
+
 /// ORB-16960: counts, severity order, `--problems` filters human rows, JSON stays full.
 #[test]
 fn doctor_prints_summary_count_orders_by_severity_and_filters_problems() {
