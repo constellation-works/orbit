@@ -161,6 +161,41 @@ impl OrbitRuntime {
         )
     }
 
+    pub(crate) fn live_task_delivery_with(
+        &self,
+        task: &Task,
+        observational: bool,
+    ) -> Option<String> {
+        self.live_task_run(task).or_else(|| {
+            match self.unsettled_task_claim_with(task, observational) {
+                Ok(claim) => claim.as_ref().map(unsettled_claim_reason),
+                Err(unreadable) => Some(unreadable),
+            }
+        })
+    }
+
+    /// The task's unsettled execution claim, if it has one, or why its claims
+    /// cannot be read.
+    pub(super) fn unsettled_task_claim_with(
+        &self,
+        task: &Task,
+        observational: bool,
+    ) -> Result<Option<ClaimInspection>, String> {
+        let claims = if observational && !self.stored().task().held_by_owner() {
+            self.stores()
+                .tasks()
+                .observe_task_execution_claims(&task.id)
+        } else {
+            self.stores()
+                .tasks()
+                .inspect_task_execution_claims(&task.id)
+        };
+        match claims {
+            Ok(claims) => Self::unsettled_task_claim_with_claims(task, Some(&claims)),
+            Err(_) => Self::unsettled_task_claim_with_claims(task, None),
+        }
+    }
+
     /// Close `task`'s open Orbit-authored PRs other than `keep`, commenting
     /// `comment` on each. Returns false when a forge error left the pass
     /// unfinished.
@@ -315,19 +350,6 @@ impl OrbitRuntime {
         self.live_task_delivery_with(task, false)
     }
 
-    pub(crate) fn live_task_delivery_with(
-        &self,
-        task: &Task,
-        observational: bool,
-    ) -> Option<String> {
-        self.live_task_run(task).or_else(|| {
-            match self.unsettled_task_claim_with(task, observational) {
-                Ok(claim) => claim.as_ref().map(unsettled_claim_reason),
-                Err(unreadable) => Some(unreadable),
-            }
-        })
-    }
-
     /// Why a run of `task` may still be delivering one of its pull requests,
     /// or `None` when none is live. The task's claims are not consulted.
     pub(super) fn live_task_run(&self, task: &Task) -> Option<String> {
@@ -367,28 +389,6 @@ impl OrbitRuntime {
             Err(_) => return Some("its task_pr_pipeline runs cannot be read".to_string()),
         }
         None
-    }
-
-    /// The task's unsettled execution claim, if it has one, or why its claims
-    /// cannot be read.
-    pub(super) fn unsettled_task_claim_with(
-        &self,
-        task: &Task,
-        observational: bool,
-    ) -> Result<Option<ClaimInspection>, String> {
-        let claims = if observational && !self.stored().task().held_by_owner() {
-            self.stores()
-                .tasks()
-                .observe_task_execution_claims(&task.id)
-        } else {
-            self.stores()
-                .tasks()
-                .inspect_task_execution_claims(&task.id)
-        };
-        match claims {
-            Ok(claims) => Self::unsettled_task_claim_with_claims(task, Some(&claims)),
-            Err(_) => Self::unsettled_task_claim_with_claims(task, None),
-        }
     }
 
     /// [`Self::unsettled_task_claim`] over an already-read claim ledger:

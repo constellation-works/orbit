@@ -1,4 +1,6 @@
 //! Authenticate the host commit, review, synchronization and publication chain.
+
+use super::proof::PublicationReads;
 use super::*;
 use orbit_types::plugin::is_sha1_commit_id;
 use orbit_types::workflow::{SuccessfulCheckpoint, pr_auto_fix_pushes};
@@ -39,11 +41,13 @@ impl OrbitRuntime {
         self.observe_publication_checkpoints_with(
             source,
             task,
-            false,
             true,
-            None,
-            history,
-            observational,
+            PublicationReads {
+                explicit: false,
+                held_retry_lineage: None,
+                history,
+                observational,
+            },
         )
     }
 
@@ -199,25 +203,29 @@ impl OrbitRuntime {
         self.observe_publication_checkpoints_with(
             source,
             task,
-            explicit,
             escalation_requeue,
-            held_retry_lineage,
-            None,
-            false,
+            PublicationReads {
+                explicit,
+                held_retry_lineage,
+                history: None,
+                observational: false,
+            },
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn observe_publication_checkpoints_with(
         &self,
         source: JobRun,
         task: Task,
-        explicit: bool,
         escalation_requeue: bool,
-        held_retry_lineage: Option<&[String]>,
-        history: Option<&[TaskHistoryEntry]>,
-        observational: bool,
+        reads: PublicationReads<'_>,
     ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
+        let PublicationReads {
+            explicit,
+            history,
+            observational,
+            ..
+        } = reads;
         let source_id = source.run_id.as_str();
         let task_id = task.id.as_str();
         let state = self
@@ -264,16 +272,7 @@ impl OrbitRuntime {
                 "stopped escalated publication requires original operator admission or authenticated failure-handoff evidence",
             ));
         }
-        let proof = self.authenticate_publication_chain_with(
-            &source,
-            &task,
-            &state,
-            job,
-            explicit,
-            held_retry_lineage,
-            history,
-            observational,
-        )?;
+        let proof = self.authenticate_publication_chain_with(&source, &task, &state, job, reads)?;
         let binding = self.bind_source_publication_with(
             source.clone(),
             task.clone(),

@@ -108,33 +108,6 @@ impl OrbitRuntime {
         Ok(Some(source.run_id))
     }
 
-    /// `run_id`, when a requeue of `task` would preserve its publication: a
-    /// local, unclaimed owner PR run that pushed or opened its pull request.
-    fn published_owner_requeue_source(
-        &self,
-        task: &Task,
-        run_id: &str,
-    ) -> Result<Option<JobRun>, OrbitError> {
-        if !self.task_run_is_local(task) {
-            return Ok(None);
-        }
-        let Some(source) = self.get_job_run_backend(run_id)? else {
-            return Ok(None);
-        };
-        let Some(state) = self.read_run_state(run_id)? else {
-            return Ok(None);
-        };
-        if source.job_id != workflow::TASK_PR_PIPELINE_JOB
-            || source.input.as_ref().is_some_and(|i| i["claimed"] == true)
-            || !["push", "pr_open"]
-                .iter()
-                .any(|key| state.pipeline.get(key).is_some_and(|v| !v.is_null()))
-        {
-            return Ok(None);
-        }
-        Ok(Some(source))
-    }
-
     /// Why a requeue of `task` must not preserve `run_id`'s publication: the
     /// run published, but is not the exact owner-local single-task execution
     /// the next run's candidate resume authenticates, so a successor would
@@ -596,5 +569,32 @@ impl OrbitRuntime {
             OwnerSourceIdentityRefusal::ExecutionClaim
         };
         Ok(Some(reason))
+    }
+
+    /// `run_id`, when a requeue of `task` would preserve its publication: a
+    /// local, unclaimed owner PR run that pushed or opened its pull request.
+    fn published_owner_requeue_source(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<Option<JobRun>, OrbitError> {
+        if !self.task_run_is_local(task) {
+            return Ok(None);
+        }
+        let Some(source) = self.get_job_run_backend(run_id)? else {
+            return Ok(None);
+        };
+        let Some(state) = self.read_run_state(run_id)? else {
+            return Ok(None);
+        };
+        if source.job_id != workflow::TASK_PR_PIPELINE_JOB
+            || source.input.as_ref().is_some_and(|i| i["claimed"] == true)
+            || !["push", "pr_open"]
+                .iter()
+                .any(|key| state.pipeline.get(key).is_some_and(|v| !v.is_null()))
+        {
+            return Ok(None);
+        }
+        Ok(Some(source))
     }
 }

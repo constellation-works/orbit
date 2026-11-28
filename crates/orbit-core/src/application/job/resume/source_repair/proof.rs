@@ -3,6 +3,16 @@ use super::observation::{authenticated_checkpoint, auto_fix_advanced_head};
 use super::*;
 use crate::application::task::NativePublicationIdentity;
 
+/// The flags a publication-chain read takes: the explicit operator path, the
+/// held retry lineage, preloaded history, and whether the read observes.
+#[derive(Clone, Copy)]
+pub(super) struct PublicationReads<'a> {
+    pub(super) explicit: bool,
+    pub(super) held_retry_lineage: Option<&'a [String]>,
+    pub(super) history: Option<&'a [TaskHistoryEntry]>,
+    pub(super) observational: bool,
+}
+
 /// Authenticated publication identity, independent of recovery admission.
 pub(crate) struct NativePublicationProof {
     pub(crate) branch: String,
@@ -207,25 +217,29 @@ impl OrbitRuntime {
             task,
             state,
             job,
-            explicit,
-            held_retry_lineage,
-            None,
-            false,
+            PublicationReads {
+                explicit,
+                held_retry_lineage,
+                history: None,
+                observational: false,
+            },
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn authenticate_publication_chain_with(
         &self,
         source: &JobRun,
         task: &Task,
         state: &PipelineState,
         job: &JobV2,
-        explicit: bool,
-        held_retry_lineage: Option<&[String]>,
-        history: Option<&[TaskHistoryEntry]>,
-        observational: bool,
+        reads: PublicationReads<'_>,
     ) -> Result<NativePublicationProof, OrbitError> {
+        let PublicationReads {
+            explicit,
+            held_retry_lineage,
+            history,
+            observational,
+        } = reads;
         let source_id = source.run_id.as_str();
         let owner_id = held_retry_lineage
             .and_then(|lineage| lineage.first())

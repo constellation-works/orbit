@@ -150,6 +150,26 @@ impl TaskCommitBoundary {
         )
     }
 
+    /// Observational counterpart of [`Self::kept_claim_candidate`] using the
+    /// task and history already loaded by the caller without entering the
+    /// task-commit boundary or reopening bundles.
+    pub fn observe_kept_claim_candidate(
+        &self,
+        task: &orbit_types::task::Task,
+        history: &[orbit_types::task::TaskHistoryEntry],
+        machine_id: &str,
+    ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
+        let rows = self
+            .store
+            .lifecycle_rows_for_claim_task(&self.workspace_id, &task.id)?;
+        self.candidate_offer_with(task, machine_id, &rows, &|recorded| {
+            Ok(history.iter().any(|entry| {
+                entry.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT
+                    && entry.at >= recorded.with_timezone(&chrono::Utc)
+            }))
+        })
+    }
+
     /// [ORB-15314] Copy the verdict and findings of the interrupted attempt's
     /// latest report, which the reviewer persisted on this task as it worked,
     /// onto the kept candidate, so the task's next run receives them. A
@@ -209,26 +229,6 @@ impl TaskCommitBoundary {
                     event.event_type == orbit_types::task::CANDIDATE_DISCARDED_EVENT
                         && event.at >= recorded
                 }))
-        })
-    }
-
-    /// Observational counterpart of [`Self::kept_claim_candidate`] using the
-    /// task and history already loaded by the caller without entering the
-    /// task-commit boundary or reopening bundles.
-    pub fn observe_kept_claim_candidate(
-        &self,
-        task: &orbit_types::task::Task,
-        history: &[orbit_types::task::TaskHistoryEntry],
-        machine_id: &str,
-    ) -> Result<Option<KeptClaimCandidate>, OrbitError> {
-        let rows = self
-            .store
-            .lifecycle_rows_for_claim_task(&self.workspace_id, &task.id)?;
-        self.candidate_offer_with(task, machine_id, &rows, &|recorded| {
-            Ok(history.iter().any(|entry| {
-                entry.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT
-                    && entry.at >= recorded.with_timezone(&chrono::Utc)
-            }))
         })
     }
 

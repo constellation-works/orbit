@@ -7,6 +7,14 @@ use orbit_types::task::{
 
 use crate::OrbitRuntime;
 
+/// Where a decision read takes artifact manifests from: the manifest it has
+/// already loaded, if any, and whether it observes those artifacts.
+#[derive(Clone, Copy)]
+struct ArtifactReads<'a> {
+    manifest: Option<&'a [ArtifactManifestFileV2]>,
+    observational: bool,
+}
+
 impl OrbitRuntime {
     /// Read effective human-decision requests, rechecking the current task,
     /// block episode and pilot admission hold without changing task records.
@@ -68,8 +76,10 @@ impl OrbitRuntime {
                 &row.history,
                 &row.comments,
                 observed_at,
-                Some(&row.artifacts),
-                false,
+                ArtifactReads {
+                    manifest: Some(&row.artifacts),
+                    observational: false,
+                },
                 &|receipt| {
                     self.task_pilot_audit_with_reader(id, receipt, &|path| match row
                         .artifacts
@@ -104,8 +114,10 @@ impl OrbitRuntime {
             history,
             comments,
             now,
-            None,
-            false,
+            ArtifactReads {
+                manifest: None,
+                observational: false,
+            },
             &|receipt| self.task_pilot_audit(&task.id, receipt),
         )
     }
@@ -127,25 +139,29 @@ impl OrbitRuntime {
             history,
             comments,
             now,
-            Some(artifacts),
-            true,
+            ArtifactReads {
+                manifest: Some(artifacts),
+                observational: true,
+            },
             &|receipt| self.observe_task_pilot_audit(&task.id, receipt),
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn task_decision_requests_with_audit(
         &self,
         task: &Task,
         history: &[TaskHistoryEntry],
         comments: &[TaskComment],
         now: chrono::DateTime<chrono::Utc>,
-        manifest: Option<&[ArtifactManifestFileV2]>,
-        observational: bool,
+        reads: ArtifactReads<'_>,
         audit: &dyn Fn(
             orbit_types::task::CommentReceipt<'_>,
         ) -> Result<serde_json::Value, OrbitError>,
     ) -> Result<Vec<DecisionRequest>, OrbitError> {
+        let ArtifactReads {
+            manifest,
+            observational,
+        } = reads;
         let pilot_operation = if task.status == TaskStatus::Backlog
             && self
                 .pilot_admission_hold_with_audit(task, comments, &|| Ok(history.to_vec()), audit)?
