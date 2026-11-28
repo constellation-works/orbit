@@ -1317,6 +1317,67 @@ fn stale_owner_base_attention_deduplicates_and_clears() {
 }
 
 #[test]
+fn stale_owner_base_attention_keeps_diverged_alert_when_checkout_is_gone() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (base, local, remote) = setup_diverged_owner_base(&repo);
+    let gone = root.path().join("moved-checkout");
+    let record = |message: String| {
+        record_setup_run(
+            &runtime,
+            SetupRun::at(
+                "task_local_pipeline",
+                json!({"base_branch": "agent-main", "base_sync": "local"}),
+                Utc::now() - Duration::minutes(1),
+                JobRunState::Held,
+                Some(message),
+            ),
+        );
+    };
+    record(diverged_hold_message(&gone, "agent-main", &local, &remote));
+    let operator = session(McpCapability::Operator);
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["detail"]["ahead"], 1, "{response}");
+    assert_eq!(items[0]["detail"]["behind"], 1, "{response}");
+    assert!(
+        items[0]["detail"]["tracked_changes"].is_null(),
+        "{response}"
+    );
+    assert_eq!(items[0]["detail"]["tracked_status"], "unavailable");
+    assert!(
+        items[0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("tracked status unavailable"),
+        "{response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert_eq!(degraded[0]["code"], "source_unavailable", "{response}");
+    assert_eq!(degraded[0]["subject"], "agent-main", "{response}");
+    assert!(
+        degraded[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("recorded checkout"),
+        "{response}"
+    );
+
+    // A behind-only hold whose cleanliness cannot be read stays degraded.
+    run_git(&repo, &["reset", "--hard", &base]);
+    let behind_only = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(
+        behind_only["items"].as_array().unwrap().is_empty(),
+        "{behind_only}"
+    );
+    let degraded = behind_only["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{behind_only}");
+    assert_eq!(degraded[0]["code"], "source_unavailable", "{behind_only}");
+}
+
+#[test]
 fn stale_owner_base_attention_bounds_commits_and_reads_trailers() {
     let (root, runtime) = attention_runtime();
     let repo = root.path().join("repo");
