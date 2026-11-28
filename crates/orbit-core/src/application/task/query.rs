@@ -20,6 +20,18 @@ impl OrbitRuntime {
         self.stored().task().get(id)
     }
 
+    /// Observational counterpart of [`Self::get_task`]: reads the task from its
+    /// settled bundle without entering the task-commit boundary.
+    pub(crate) fn observe_task(&self, id: &str) -> Result<Task, OrbitError> {
+        if self.stored().task().held_by_owner() {
+            return self.get_task(id);
+        }
+        self.stores()
+            .tasks()
+            .observe_task(id)?
+            .ok_or_else(|| OrbitError::not_found(orbit_common::NotFoundKind::Task, id.to_string()))
+    }
+
     /// Resolve a dependency target through this machine's registered owner.
     ///
     /// A dependency is the one task reference that legitimately crosses a
@@ -105,6 +117,22 @@ impl OrbitRuntime {
         path: &str,
     ) -> Result<Option<TaskArtifact>, OrbitError> {
         self.stored().task().artifact(id, path)
+    }
+
+    /// Observational counterpart of [`Self::get_task_artifact`]: reads an
+    /// artifact payload from its settled bundle without entering the
+    /// task-commit boundary.
+    pub(crate) fn observe_task_artifact(
+        &self,
+        id: &str,
+        path: &str,
+    ) -> Result<Option<TaskArtifact>, OrbitError> {
+        if self.stored().task().held_by_owner() {
+            return self.get_task_artifact(id, path);
+        }
+        self.stores()
+            .task_artifacts()
+            .observe_task_artifact(id, path)
     }
 
     /// Read one exact artifact through the same task/path authority and inline
@@ -439,6 +467,32 @@ impl OrbitRuntime {
     pub fn list_run_tasks(&self, run_id: &str) -> Result<Vec<Task>, OrbitError> {
         let scope = self.stored().task().run_task_scope(run_id)?;
         let mut tasks = self.list_tasks_filtered(None, None, None, Some(run_id), None, None)?;
+        scope.narrow(&mut tasks);
+        Ok(tasks)
+    }
+
+    /// Observational counterpart of [`Self::list_run_tasks`]: reads task
+    /// envelopes from the settled snapshot without entering the task-commit
+    /// boundary.
+    pub(crate) fn observe_run_tasks(&self, run_id: &str) -> Result<Vec<Task>, OrbitError> {
+        if self.stored().task().held_by_owner() {
+            return self.list_run_tasks(run_id);
+        }
+        if !self.stored().task().reads_visible() {
+            return Ok(Vec::new());
+        }
+        let scope = self.stored().task().run_task_scope(run_id)?;
+        let filter = super::listing::TaskListFilter {
+            job_run_id: Some(run_id.to_string()),
+            ..Default::default()
+        };
+        let page = self.stores().tasks().observe_task_rows(
+            &filter,
+            usize::MAX,
+            None,
+            super::listing::TaskListHydration::EnvelopeOnly,
+        )?;
+        let mut tasks: Vec<Task> = page.items.into_iter().map(|row| row.task).collect();
         scope.narrow(&mut tasks);
         Ok(tasks)
     }

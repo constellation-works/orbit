@@ -66,7 +66,12 @@ impl OrbitRuntime {
             .any(|entry| entry.event == orbit_types::task::DECISION_REQUESTED_EVENT)
         {
             let open = if observational {
-                self.observe_open_decisions_json_in(&row.task, &row.history, &row.comments)?
+                self.observe_open_decisions_json_in(
+                    &row.task,
+                    &row.history,
+                    &row.comments,
+                    &row.artifacts,
+                )?
             } else {
                 self.open_decisions_json_in(&row.task, &row.history, &row.comments)?
             };

@@ -35,6 +35,16 @@ impl TaskCommitBoundary {
         self.inspect_locked(|| self.task_claim_states_locked(task_id))
     }
 
+    /// Observational counterpart of [`Self::inspect_task_execution_claims`]:
+    /// reads one task's claims from the settled SQLite state without acquiring
+    /// the task-commit boundary lock or checking pending commit recovery.
+    pub fn observe_task_execution_claims(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<ClaimInspection>, OrbitError> {
+        self.task_claim_states_locked(task_id)
+    }
+
     /// [ORB-12575] The ordinary-participant counterpart of
     /// [`Self::inspect_execution_claims`]: the same claim states, read inside
     /// the boundary so an interrupted commit is replayed first exactly as every

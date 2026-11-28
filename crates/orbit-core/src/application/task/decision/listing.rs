@@ -3,7 +3,8 @@
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contract::TaskDecisionSnapshot;
 use orbit_types::task::{
-    DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskComment, TaskHistoryEntry,
+    ArtifactManifestFileV2, DecisionGate, DecisionRequest, DecisionRequestState, Task, TaskComment,
+    TaskHistoryEntry,
 };
 use serde_json::{Value, json};
 
@@ -138,14 +139,16 @@ impl OrbitRuntime {
     }
 
     /// Observational [`Self::open_decisions_json_in`]: resolves pilot audits
-    /// from settled bundles without entering the task-commit boundary.
+    /// and block-triage decisions from already-loaded records and settled
+    /// bundles without entering the task-commit boundary.
     pub(crate) fn observe_open_decisions_json_in(
         &self,
         task: &Task,
         history: &[TaskHistoryEntry],
         comments: &[TaskComment],
+        artifacts: &[ArtifactManifestFileV2],
     ) -> Result<Value, OrbitError> {
-        self.open_decisions_json_with(task, history, comments, true)
+        self.open_decisions_json_with(task, history, comments, Some(artifacts), true)
     }
 
     fn scan_decision_requests(
@@ -324,7 +327,7 @@ impl OrbitRuntime {
         history: &[TaskHistoryEntry],
         comments: &[TaskComment],
     ) -> Result<Value, OrbitError> {
-        self.open_decisions_json_with(task, history, comments, false)
+        self.open_decisions_json_with(task, history, comments, None, false)
     }
 
     fn open_decisions_json_with(
@@ -332,11 +335,18 @@ impl OrbitRuntime {
         task: &Task,
         history: &[TaskHistoryEntry],
         comments: &[TaskComment],
+        artifacts: Option<&[ArtifactManifestFileV2]>,
         observational: bool,
     ) -> Result<Value, OrbitError> {
         let now = chrono::Utc::now();
         let requests = if observational {
-            self.observe_task_decision_requests_in(task, history, comments, now)?
+            self.observe_task_decision_requests_in(
+                task,
+                history,
+                comments,
+                artifacts.unwrap_or_default(),
+                now,
+            )?
         } else {
             self.task_decision_requests_in(task, history, comments, now)?
         };

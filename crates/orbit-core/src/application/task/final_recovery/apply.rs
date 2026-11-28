@@ -356,16 +356,6 @@ impl OrbitRuntime {
         Ok(outcome)
     }
 
-    fn final_recovery_side_effect_task(&self, task_id: &str) -> Result<Task, OrbitError> {
-        #[cfg(test)]
-        if FAIL_SIDE_EFFECT_READ.with(|fail| fail.replace(false)) {
-            return Err(OrbitError::Execution(
-                "injected post-lock task read failure".to_string(),
-            ));
-        }
-        self.get_task(task_id)
-    }
-
     /// The revision `task` is at now, for a later [`Self::apply_final_recovery`]
     /// to compare against.
     pub fn final_recovery_revision(
@@ -404,9 +394,35 @@ impl OrbitRuntime {
         task_id: &str,
         run_id: &str,
     ) -> Result<Option<FinalRecoveryOutcome>, OrbitError> {
-        let history = self.get_task_history(task_id)?;
-        Ok(helpers::authoritative_recovery_outcome(&history, run_id)
+        self.recorded_final_recovery_with(task_id, run_id, None)
+    }
+
+    pub(crate) fn recorded_final_recovery_with(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        history: Option<&[TaskHistoryEntry]>,
+    ) -> Result<Option<FinalRecoveryOutcome>, OrbitError> {
+        let loaded;
+        let history = match history {
+            Some(history) => history,
+            None => {
+                loaded = self.get_task_history(task_id)?;
+                &loaded
+            }
+        };
+        Ok(helpers::authoritative_recovery_outcome(history, run_id)
             .map(|outcome| FinalRecoveryOutcome::from(outcome.clone())))
+    }
+
+    fn final_recovery_side_effect_task(&self, task_id: &str) -> Result<Task, OrbitError> {
+        #[cfg(test)]
+        if FAIL_SIDE_EFFECT_READ.with(|fail| fail.replace(false)) {
+            return Err(OrbitError::Execution(
+                "injected post-lock task read failure".to_string(),
+            ));
+        }
+        self.get_task(task_id)
     }
 
     fn plan(

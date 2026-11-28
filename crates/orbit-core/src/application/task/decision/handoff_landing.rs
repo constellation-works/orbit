@@ -24,11 +24,12 @@ const HANDOFF_DECISION_MERGE_STEP: &str = "decision.handoff_land";
 impl OrbitRuntime {
     /// Derive the answer without changing old stored requests. Eligibility is
     /// rechecked under the task lock when the human applies it.
-    pub(in crate::application::task) fn add_handoff_landing_answers(
+    pub(in crate::application::task) fn add_handoff_landing_answers_with(
         &self,
         task: &Task,
         requests: &mut [DecisionRequest],
         manifest: Option<&[ArtifactManifestFileV2]>,
+        observational: bool,
     ) -> Result<(), OrbitError> {
         for request in requests {
             if request.gate != DecisionGate::BlockTriage {
@@ -69,11 +70,20 @@ impl OrbitRuntime {
                 let Some(receipt) = self.handoff_receipt(task)? else {
                     continue;
                 };
-                if !self.handoff_landing_review_ready(
-                    task,
-                    Some(receipt.head_sha.as_str()),
-                    manifest,
-                )? {
+                let review_ready = if observational {
+                    self.observe_handoff_landing_review_ready(
+                        task,
+                        Some(receipt.head_sha.as_str()),
+                        manifest,
+                    )?
+                } else {
+                    self.handoff_landing_review_ready(
+                        task,
+                        Some(receipt.head_sha.as_str()),
+                        manifest,
+                    )?
+                };
+                if !review_ready {
                     continue;
                 }
             }
