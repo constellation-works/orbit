@@ -687,19 +687,18 @@ impl OrbitError {
                 kind: NotFoundKind::JobRun,
                 id,
                 guidance: None,
-            } => {
-                let default_guidance;
-                let guidance = if orbit_types::task::is_valid_orb_task_id(id) {
-                    let input = serde_json::json!({"id": id, "field": "delivery"});
-                    default_guidance = format!(
-                        "; see `orbit_run {{\"action\":\"list\"}}` for valid run IDs, or use `orbit_task_show {input}` for a task's delivery run"
-                    );
-                    &default_guidance
-                } else {
-                    "; see `orbit_run {\"action\":\"list\"}` for valid run IDs"
-                };
-                not_found_message(NotFoundKind::JobRun, id, Some(guidance))
-            }
+            } => not_found_message(
+                NotFoundKind::JobRun,
+                id,
+                Some("; ask an operator to check run history for valid run IDs"),
+            ),
+            Self::UnknownWorkspaceSelector(unknown) => format!(
+                "invalid input: {}",
+                unknown.message().replace(
+                    "run `orbit workspace list`",
+                    "call `orbit_workspace_list {}`"
+                )
+            ),
             Self::TaskDeliveryUnavailable(task_id) => {
                 let input = serde_json::json!({"id": task_id});
                 format!(
