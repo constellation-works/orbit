@@ -102,11 +102,16 @@ created_by, created_by_model, planned_by, implemented_by, status, terminal, prio
 complexity, type, pr_status, external_refs, relations,
 source_task_id, job_run_id, job_run_machine, crew, resolved_crew,
 crew_model, crew_unresolved, os_requirement, placement_wait, experiments,
-readiness, pilot_warnings, open_decisions, final_recovery, completion_hold,
+readiness, pilot_warnings, pilot_notes, open_decisions, final_recovery, completion_hold,
 orchestrator, orchestrator_model, orchestrator_model_source, origin,
 rule_fingerprint,
 created_at, updated_at, comments, history, artifacts
 ```
+
+`pilot_notes` lists the notes from the task's latest applied assessment. Each
+entry has the shape `{label, text, instruction_sha256, operation_id, at}`. It is
+`[]` when the latest assessment has no notes, or `null` when the task has no
+assessment.
 
 `final_recovery` is the task's last final-recovery decision (`run_id`,
 `decision`, `outcome`, `fault`, `fault_evidence`, `fault_judged_by`, `at`),
