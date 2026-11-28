@@ -814,15 +814,18 @@ spec:
       returns both sets: the granted creation selectors exactly as
       recorded plus a selector for each existing source you verified the
       change must modify or delete. When preparation established required
-      existing change targets in `partition.required_existing_selectors`,
-      apply refuses an assessment that omits any of them (you may narrow a
-      required `file:` target to `symbol:` selectors in that same file).
-      Otherwise a grant says nothing about existing files, so any existing
-      target you omit leaves the lock footprint. Before returning, compare
-      `context_files_after` with `partition.required_existing_selectors` and
-      with the sources your rationale says are deleted or edited, and add any
-      that are missing. Existing paths that are only read for evidence or need
-      an incidental line update may still be omitted. An ungranted missing
+      existing change targets in `partition.required_existing_selectors`, a
+      `selectors` assessment must keep them: apply refuses one that omits any
+      of them (you may narrow a required `file:` target to `symbol:` selectors
+      in that same file). A `verified_no_diff` or `host_operational`
+      assessment on a task without creation grants settles with an empty
+      `context_files_after` and does not retain them. Without that list, a
+      grant says nothing about existing files, so any existing target you omit
+      leaves the lock footprint. Before returning a `selectors` assessment,
+      compare `context_files_after` with `partition.required_existing_selectors`
+      and with the sources your rationale says are deleted or edited, and add
+      any that are missing. Existing paths that are only read for evidence or
+      need an incidental line update may still be omitted. An ungranted missing
       path stays an evidence gap.
     - Review-filed tasks (tagged `code-review`, `delivery-code-review`,
       `qa-full-sweep`, `qa-sweep` or `security-review`): keep the selectors the
@@ -851,7 +854,11 @@ spec:
       in `context_evidence_dropped`, including targets already satisfied at
       the pinned source. Those records explain the inspection; they do not
       replace already-landed or invalid-finding proof, or revoke creation
-      grants. No selectors are retained for this disposition. A
+      grants. No selectors are retained for this disposition, except that a
+      task holding creation grants settles this way only with already-landed
+      proof covering every target it keeps, grants included. Apply then keeps
+      the task's selectors and grants as `selectors` with operator
+      reconciliation required, and refuses an unproven one. A
       `no-diff-expected` task whose outputs are only tasks, comments or
       artifacts belongs here, for example a parity audit that files each gap as
       a task and attaches `surface-parity.json`. Apply tags such a task
