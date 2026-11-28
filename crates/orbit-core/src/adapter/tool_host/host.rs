@@ -2,7 +2,9 @@ use crate::app::resident;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
-use orbit_tools::{OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, ReservationOwnerContext};
+use orbit_tools::{
+    ActivityBinding, OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, ReservationOwnerContext,
+};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::{Value, json};
@@ -15,7 +17,10 @@ use crate::runtime::run_input::managed_run_context_run_id_from_env;
 
 /// Source of the run scope. Only the resident broker constructs the authenticated variant.
 pub(crate) enum ToolHostRun {
-    InProcess(Option<String>),
+    /// The managed activity the dispatching host attested for this call
+    /// ([`ToolContext::activity_binding`](orbit_tools::ToolContext)), or
+    /// `None` for a call no host bound to an activity.
+    InProcess(Option<ActivityBinding>),
     #[cfg(unix)]
     BrokeredResident(String),
 }
@@ -23,6 +28,9 @@ pub(crate) enum ToolHostRun {
 struct CoreOrbitToolHost {
     core: Core,
     task_scope: OrbitTaskScope,
+    /// The host-attested activity this call serves; never tool input or
+    /// process metadata the notice flow re-reads.
+    activity: Option<ActivityBinding>,
     brokered_resident: bool,
     /// The calling session's asserted grants, carried so a handler whose
     /// decision depends on *who is calling* can reach them [ORB-11354].
@@ -71,6 +79,7 @@ impl OrbitToolHost for CoreOrbitToolHost {
                 agent,
                 model,
                 reservation_owner,
+                activity: self.activity.as_ref(),
             },
             action,
             input,
@@ -179,6 +188,7 @@ impl OrbitToolHost for CoreOrbitToolHost {
                 agent: None,
                 model: Some(actor_label),
                 reservation_owner,
+                activity: self.activity.as_ref(),
             },
             action,
             input,
@@ -192,13 +202,17 @@ pub(crate) fn build_orbit_tool_host(
     run: ToolHostRun,
     session_context: ToolSessionContext,
 ) -> Arc<dyn OrbitToolHost> {
-    let (run_id, brokered_resident) = match run {
-        ToolHostRun::InProcess(run_id) => (
-            run_id.or_else(|| managed_run_context_run_id_from_env(core.runtime().env())),
+    let (run_id, activity, brokered_resident) = match run {
+        ToolHostRun::InProcess(activity) => (
+            activity
+                .as_ref()
+                .map(|binding| binding.job_run_id.clone())
+                .or_else(|| managed_run_context_run_id_from_env(core.runtime().env())),
+            activity,
             false,
         ),
         #[cfg(unix)]
-        ToolHostRun::BrokeredResident(run_id) => (Some(run_id), true),
+        ToolHostRun::BrokeredResident(run_id) => (Some(run_id), None, true),
     };
     let orbit_root = Some(core.runtime().data_root_path().to_path_buf());
     Arc::new(CoreOrbitToolHost {
@@ -208,6 +222,7 @@ pub(crate) fn build_orbit_tool_host(
             task_id,
             run_id,
         },
+        activity,
         brokered_resident,
         session_context,
     })
