@@ -2,7 +2,7 @@
 title: "Eval Harness — Design"
 owner: claude
 created_date: 2026-11-14
-updated_date: 2026-11-15
+updated_date: 2026-11-27
 last_validated: 2026-11-15
 status: Draft
 feature: eval-harness
@@ -253,7 +253,8 @@ A set is a directory in the plugin's state (`~/.orbit/state/plugins/eval/sets/<n
 One run per task and arm is not enough: the same crew on the same task does not always produce the same result. The unit of analysis is the task, and the statistics follow from that:
 
 - **Repeats: 3 per task and arm** by default. Each task's score for an arm is its pass fraction over the repeats. More than three adds little, because the spread between tasks is larger than the spread between repeats.
-- **Comparison: paired by task.** Every arm runs every task, so the difference between two arms is the mean of per-task differences, with a bootstrap interval that resamples tasks, not runs. This is the method the experiment readout uses for its intervals (percentile bootstrap, 2,000 resamples, fixed seed: `crates/orbit-core/src/app/experiment/readout/stats.rs`).
+- **Replay comparison: paired by task.** Every arm runs every task, so the difference between two arms is the mean of per-task differences, with a bootstrap interval that resamples tasks, not runs.
+- **Live experiment readout: independent arm resampling.** Its mean-difference intervals compute treatment-minus-control within each complexity stratum, weight the stratum differences by their share of tasks across both arms, then resample control and treatment tasks independently within each stratum. Per-line ratio differences also resample the two arms independently. Within an arm, each task's numerator and reviewable-line denominator stay together as a pair; that pairing is not between the same task across arms. Both readouts use percentile-bootstrap intervals with 2,000 resamples, but their comparison units differ (`crates/orbit-core/src/app/experiment/readout/stats.rs`).
 - **What 25 tasks can show.** A rough estimate, not a measurement: with 25 tasks and 3 repeats, a difference in pass rate between two arms has to be around 15 to 20 points before its interval excludes zero. A single arm's pass rate carries an interval of about ±19 points at 25 tasks. Smaller differences need more tasks, not more repeats.
 - **Cost of a replay.** 25 tasks × 3 repeats × n arms: 225 candidate runs for three arms. A first replay with one repeat measures the cost per run before the full one is paid for.
 
@@ -387,7 +388,7 @@ They answer different questions and are meant to be used in sequence: replay scr
 
 - *Records.* Cost, tokens, duration and tool calls come from the same invocation rows; price from the same table; landed size and the test-path classification from `landed_diff_stats`. The plugin reads them through read-only tools and adds no second accounting.
 - *Metric names.* The readout uses the experiment metric names where the meaning is the same (`cost_usd`, `total_tokens`, `lines_changed`: `METRIC_SPECS`, `crates/orbit-core/src/app/experiment/definition.rs`).
-- *Method.* Paired bootstrap intervals and "never call a winner inside the interval", as in the experiment readout. The code is not shared: a plugin is a separate executable and cannot link `orbit-core`. The plugin reimplements the bootstrap with the same resample count and a recorded seed.
+- *Method.* Replay uses paired-by-task bootstrap intervals: each resample draws tasks and compares the arms on the same task. The live experiment readout instead resamples control and treatment tasks independently within each complexity stratum for mean differences. Its per-line ratio differences also resample arms independently, keeping each task's numerator and reviewable-line denominator paired within its own arm. Both use percentile intervals and do not call a winner when the interval includes zero, but the resampling units differ. The code is not shared: a plugin is a separate executable and cannot link `orbit-core`. The plugin reimplements replay's paired-by-task bootstrap with the same resample count and a recorded seed.
 - *Treatments.* Experiments can overlay instructions, skills and tools as well as crews. Replay arms are crews only in the first version. Prompt and skill arms are the natural next step and should reuse the experiment overlay definition and its capture format, not a second one; §14 Q6.
 
 **What they must not share:** populations. Candidate tasks carry an explicit crew, which already excludes them from crew-bearing experiments, and replay candidates are in another workspace entirely.
