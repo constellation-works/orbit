@@ -70,8 +70,10 @@ spec:
   `</script` or `<!--`, or a style that contains `</style`, either of which would end its
   element early; a file listed twice; a symbolic link; a root or listed file outside the
   plugin root; a `kit` version Orbit does not know; a duplicate page id; and a page over the
-  size bound. The bound is 2 MiB (2,097,152 bytes) counted over `index.html` and the listed
-  files as read, and the refusal states it.
+  size, file-count or name-bytes bounds. The bounds are 2 MiB (2,097,152 bytes) counted over
+  `index.html` and the listed files as read, at most 2,048 listed files across `scripts` and
+  `styles`, and at most 512 KiB (524,288 bytes) across their listed names; the refusal states
+  the exceeded bound.
 - **Only listed files count.** A file in `root` the manifest does not list is never loaded,
   hashed or served, so it changes neither the digest nor the page's state.
 - **The bundle is covered by consent.** Install records a digest of each page's files beside
@@ -296,12 +298,14 @@ its own kit. A remote page gets the same frame as a local one and no more.
   instead, and writes the document with the code a local page uses: this dashboard's kit,
   policy and hashes. The remote's headers are ignored. A refusal from the remote, such as a
   404 for a disabled page, is relayed as any other response.
-- **The parts are not trusted.** Before writing, the forwarder applies the refusals a local
+- **The parts are not trusted.** Before writing, the forwarder caps the parts response body at
+  the worst-case serialized JSON size of a valid bundle and applies the refusals a local
   page's files get at load ([The manifest](#1-the-manifest)): `<script` or `<link` in the
   markup, `</script` or `<!--` in a script, `</style` in a style, a script name not ending in
-  `.js` or `.mjs`, a style name not ending in `.css`, the size bound, and a `kit` version this
-  dashboard does not know. A page that fails gets a `502` `page_refused` diagnostic naming the
-  host and the reason, under `sandbox; default-src 'none'`, in its place and no document.
+  `.js` or `.mjs`, a style name not ending in `.css`, the content-size, file-count and
+  name-bytes bounds, and a `kit` version this dashboard does not know. A page that fails gets
+  a `502` `page_refused` diagnostic naming the host and the reason, under `sandbox;
+  default-src 'none'`, in its place and no document.
 - **Every other forwarded response keeps the forwarder's policy.** The dashboard builds a
   remote page's frame and call URLs under `/api/on/<host>/…`.
 

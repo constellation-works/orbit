@@ -9,8 +9,8 @@
 
 use orbit_types::identity::lower_hex;
 use orbit_types::plugin::{
-    MAX_PAGE_BYTES, PAGE_INDEX_FILE, PAGE_MARKUP_REFUSED, PAGE_SCRIPT_REFUSED, PAGE_STYLE_REFUSED,
-    PluginWebPage, find_page_refused,
+    MAX_PAGE_BYTES, MAX_PAGE_FILES, MAX_PAGE_NAME_BYTES, PAGE_INDEX_FILE, PAGE_MARKUP_REFUSED,
+    PAGE_SCRIPT_REFUSED, PAGE_STYLE_REFUSED, PluginWebPage, find_page_refused,
 };
 
 use super::*;
@@ -18,6 +18,13 @@ use super::*;
 /// The most bytes one page may hold: `index.html` plus every listed script
 /// and style, as read from disk (2 MiB).
 pub const MAX_PLUGIN_PAGE_BYTES: u64 = MAX_PAGE_BYTES;
+
+/// The most files one page may list across `scripts` and `styles`.
+pub const MAX_PLUGIN_PAGE_FILES: usize = MAX_PAGE_FILES;
+
+/// The most bytes one page's listed `scripts` and `styles` file names may
+/// total (512 KiB).
+pub const MAX_PLUGIN_PAGE_NAME_BYTES: usize = MAX_PAGE_NAME_BYTES;
 
 /// Why one page cannot be written out. Every message names the page; the
 /// strict loader reports it as the refusal of the plugin, and the serving
@@ -100,6 +107,18 @@ pub enum PluginPageError {
         MAX_PLUGIN_PAGE_BYTES
     )]
     TooLarge { page: String, total: u64 },
+    #[error(
+        "page '{page}' lists {count} files across `scripts` and `styles`; a page may list at \
+         most {} files",
+        MAX_PLUGIN_PAGE_FILES
+    )]
+    TooManyFiles { page: String, count: usize },
+    #[error(
+        "page '{page}' lists {total} bytes of file names across `scripts` and `styles`; a \
+         page's listed file names may total at most {} bytes",
+        MAX_PLUGIN_PAGE_NAME_BYTES
+    )]
+    FileNamesTooLarge { page: String, total: usize },
 }
 
 /// One `spec.web.pages[]` entry as this load found it.
@@ -289,6 +308,26 @@ fn load_page_bundle(
             root: declared_root.to_string(),
             resolved: page_root.display().to_string(),
             plugin_root: root.display().to_string(),
+        });
+    }
+
+    let file_count = page.scripts.len().saturating_add(page.styles.len());
+    if file_count > MAX_PLUGIN_PAGE_FILES {
+        return Err(PluginPageError::TooManyFiles {
+            page: id.clone(),
+            count: file_count,
+        });
+    }
+    let name_bytes = page
+        .scripts
+        .iter()
+        .chain(&page.styles)
+        .map(|name| name.trim().len())
+        .fold(0usize, usize::saturating_add);
+    if name_bytes > MAX_PLUGIN_PAGE_NAME_BYTES {
+        return Err(PluginPageError::FileNamesTooLarge {
+            page: id.clone(),
+            total: name_bytes,
         });
     }
 

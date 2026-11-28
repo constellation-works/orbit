@@ -17,7 +17,10 @@ use std::time::{Duration, Instant};
 use chrono::{SecondsFormat, Utc};
 use orbit_common::process::ancestry::process_start_key;
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
+use orbit_core::adapter::command::{PluginAddOptions, PluginEnableOptions};
+use orbit_core::app::plugin;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_types::plugin::{MAX_PAGE_FILES, MAX_PAGE_NAME_BYTES};
 use orbit_types::task::TaskArtifact;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
@@ -1897,6 +1900,184 @@ fn a_remote_page_is_written_here_from_its_checked_parts() {
                 let message = payload["error"].as_str().unwrap();
                 assert!(message.contains(reason), "{id}: {message}");
                 assert!(message.contains("on host 'hostb'"), "{id}: {message}");
+            }
+        },
+    );
+}
+
+/// Install an active plugin page on `fixture` with 2,000 distinct 199-byte
+/// style paths of 1,000 bytes each (2,000,036 content bytes <= 2 MiB, while its
+/// serialized `/parts` JSON exceeds the former 3,058,348-byte cap).
+fn install_many_style_page(fixture: &Fixture, namespace: &str) {
+    let source = fixture.path(&format!("source-{namespace}/.orbit-plugin"));
+    let backend = source.join("bin/backend.sh");
+    fs::create_dir_all(backend.parent().unwrap()).unwrap();
+    fs::write(
+        &backend,
+        "#!/bin/sh\ncat >/dev/null\nprintf '{\"ok\":true,\"output\":{}}\\n'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&backend, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let page_root = source.join("web/overview");
+    let styles_dir = page_root.join("styles");
+    fs::create_dir_all(&styles_dir).unwrap();
+    fs::write(
+        page_root.join("index.html"),
+        "<main id=\"many\">Many files</main>",
+    )
+    .unwrap();
+
+    let style_body = format!("/* {} */\n", "a".repeat(993));
+    assert_eq!(style_body.len(), 1_000);
+    let mut style_names = Vec::with_capacity(2_000);
+    for index in 0..2_000 {
+        let name = format!("styles/{index:0188}.css");
+        assert_eq!(name.len(), 199);
+        fs::write(page_root.join(&name), &style_body).unwrap();
+        style_names.push(name);
+    }
+    let styles_yaml = style_names
+        .iter()
+        .map(|name| format!("          - {name}\n"))
+        .collect::<String>();
+    fs::write(
+        source.join("plugin.yaml"),
+        format!(
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  \
+             description: Many-file page fixture.\nspec:\n  backend:\n    type: exec\n    \
+             command: bin/backend.sh\n    sandbox: none\n  tools:\n    - name: status\n      \
+             description: Read status.\n      execution_kind: read_only\n      \
+             mcp_scope: workspace\n  web:\n    pages:\n      - id: overview\n        \
+             title: Overview\n        root: web/overview\n        styles:\n{styles_yaml}"
+        ),
+    )
+    .unwrap();
+    plugin::add_plugin(
+        &fixture.runtime,
+        source.to_str().unwrap(),
+        &PluginAddOptions::default(),
+    )
+    .unwrap();
+    plugin::enable_plugin(
+        &fixture.runtime,
+        namespace,
+        &PluginEnableOptions {
+            grants: vec!["unsandboxed".into()],
+            force: false,
+        },
+    )
+    .unwrap();
+}
+
+/// ORB-29869: an active locally valid page with 2,000 style files whose
+/// serialized parts JSON exceeds the former 3,058,348-byte allowance renders
+/// through a remote host, while untrusted parts responses remain bounded.
+#[test]
+fn a_valid_remote_page_with_many_files_exceeding_former_allowance_renders() {
+    isolated(
+        "host_forward::a_valid_remote_page_with_many_files_exceeding_former_allowance_renders",
+        || {
+            const FORMER_REMOTE_PARTS_LIMIT_BYTES: usize = 3_058_348;
+
+            let b = Fixture::host("hostb", "HB");
+            install_many_style_page(&b, "many");
+            let b_server = b.server(false);
+            let direct_parts =
+                b_server.get(&format!("/api/plugins/many/pages/overview/parts?{WS}"));
+            assert_eq!(direct_parts.status(), 200);
+            let direct_parts_bytes = direct_parts.bytes().unwrap();
+            assert!(
+                direct_parts_bytes.len() > FORMER_REMOTE_PARTS_LIMIT_BYTES,
+                "active valid bundle parts ({} bytes) must exceed former allowance ({FORMER_REMOTE_PARTS_LIMIT_BYTES})",
+                direct_parts_bytes.len()
+            );
+
+            let a = Fixture::new();
+            write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
+            let stub =
+                StubSsh::new(json!({"hostb-ssh": {"attach": port(&b_server), "spawn": null}}));
+            let a_server = a.server_with_path(false, stub.bin());
+            let response = get_frame(
+                &a_server,
+                &format!("/api/on/hostb/plugins/many/pages/overview/?{WS}"),
+            );
+            assert_eq!(response.status(), 200);
+            assert_eq!(
+                response.headers()["content-type"],
+                "text/html; charset=utf-8"
+            );
+            let body = response.text().unwrap();
+            assert!(body.contains("<main id=\"many\">Many files</main>"));
+            assert_eq!(body.matches("<style>").count(), 2_000);
+            drop(a_server);
+            drop(b_server);
+
+            // Untrusted remote responses exceeding file count, name bytes, or the
+            // transport cap remain refused with `page_refused`.
+            let identity =
+                json!({"hosts": [{"local": true, "machine_id": b.machine_id()}]}).to_string();
+            let too_many_files: Vec<(String, &[u8])> = (0..=MAX_PAGE_FILES)
+                .map(|index| (format!("s{index}.css"), b"".as_slice()))
+                .collect();
+            let too_many_refs: Vec<(&str, &[u8])> = too_many_files
+                .iter()
+                .map(|(name, bytes)| (name.as_str(), *bytes))
+                .collect();
+            let name_len = 2_625;
+            let name_count = MAX_PAGE_NAME_BYTES / name_len + 1;
+            let long_names: Vec<(String, &[u8])> = (0..name_count)
+                .map(|index| {
+                    (
+                        format!("styles/{index:0width$}.css", width = name_len - 11),
+                        b"".as_slice(),
+                    )
+                })
+                .collect();
+            let long_name_refs: Vec<(&str, &[u8])> = long_names
+                .iter()
+                .map(|(name, bytes)| (name.as_str(), *bytes))
+                .collect();
+            let cases = [
+                (
+                    "too-many-files",
+                    remote_parts(json!(null), b"<main/>", &[], &too_many_refs),
+                    format!("at most {MAX_PAGE_FILES} files"),
+                ),
+                (
+                    "names-too-large",
+                    remote_parts(json!(null), b"<main/>", &[], &long_name_refs),
+                    format!("at most {MAX_PAGE_NAME_BYTES} bytes"),
+                ),
+                (
+                    "over-transport-limit",
+                    " ".repeat(6 * 1024 * 1024),
+                    "could not be read whole within".to_string(),
+                ),
+            ];
+            let json_headers = "Content-Type: application/json\r\n".to_string();
+            let routes: Vec<(String, (u16, String, String))> = cases
+                .iter()
+                .map(|(id, payload, _)| {
+                    (
+                        format!("/api/plugins/remote/pages/{id}/parts"),
+                        (200, json_headers.clone(), payload.clone()),
+                    )
+                })
+                .collect();
+            let remote_port = serve_routes(identity, routes);
+            let stub = StubSsh::new(json!({"hostb-ssh": {"attach": remote_port, "spawn": null}}));
+            let a_server = a.server_with_path(false, stub.bin());
+            for (id, _, expected) in &cases {
+                let response = get_frame(
+                    &a_server,
+                    &format!("/api/on/hostb/plugins/remote/pages/{id}/?{WS}"),
+                );
+                assert_eq!(response.status(), 502, "{id}");
+                let payload = response.json::<Value>().unwrap();
+                assert_eq!(payload["code"], "page_refused", "{id}: {payload}");
+                let message = payload["error"].as_str().unwrap();
+                assert!(message.contains(expected), "{id}: {message}");
             }
         },
     );

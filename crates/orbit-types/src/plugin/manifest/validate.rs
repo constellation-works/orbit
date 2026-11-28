@@ -4,10 +4,11 @@ use super::super::namespace::{SEGMENT_RULE, is_valid_namespace, is_valid_verb};
 use super::super::template::validate_template;
 use super::super::version::{SemverRange, Version};
 use super::{
-    KNOWN_PAGE_KITS, LINK_URL_SCHEMES, MANIFEST_KIND, MANIFEST_SCHEMA_VERSION,
-    MAX_PANEL_REFRESH_MS, MAX_SECRET_NAME_LEN, MIN_PANEL_REFRESH_MS, PAGE_SCRIPT_EXTENSIONS,
-    PAGE_STYLE_EXTENSION, PluginExecutionKind, PluginManifest, PluginManifestError, PluginOrigin,
-    is_valid_secret_name, validate_plugin_cli_flags, validate_plugin_cli_positionals,
+    KNOWN_PAGE_KITS, LINK_URL_SCHEMES, MANIFEST_KIND, MANIFEST_SCHEMA_VERSION, MAX_PAGE_FILES,
+    MAX_PAGE_NAME_BYTES, MAX_PANEL_REFRESH_MS, MAX_SECRET_NAME_LEN, MIN_PANEL_REFRESH_MS,
+    PAGE_SCRIPT_EXTENSIONS, PAGE_STYLE_EXTENSION, PluginExecutionKind, PluginManifest,
+    PluginManifestError, PluginOrigin, is_valid_secret_name, validate_plugin_cli_flags,
+    validate_plugin_cli_positionals,
 };
 
 impl PluginManifest {
@@ -354,6 +355,17 @@ impl PluginManifest {
                     PluginManifestError::new(error.field, format!("page '{id}': {}", error.message))
                 },
             )?;
+            let file_count = page.scripts.len().saturating_add(page.styles.len());
+            if file_count > MAX_PAGE_FILES {
+                return Err(PluginManifestError::new(
+                    field,
+                    format!(
+                        "page '{id}' lists {file_count} files across `scripts` and `styles`; a \
+                         page may list at most {MAX_PAGE_FILES} files"
+                    ),
+                ));
+            }
+            let mut name_bytes: usize = 0;
             let mut listed = std::collections::BTreeSet::new();
             for (key, files) in [("scripts", &page.scripts), ("styles", &page.styles)] {
                 for (file_index, file) in files.iter().enumerate() {
@@ -365,6 +377,17 @@ impl PluginManifest {
                         )
                     })?;
                     let name = file.trim();
+                    name_bytes = name_bytes.saturating_add(name.len());
+                    if name_bytes > MAX_PAGE_NAME_BYTES {
+                        return Err(PluginManifestError::new(
+                            file_field,
+                            format!(
+                                "page '{id}' lists at least {name_bytes} bytes of file names \
+                                 across `scripts` and `styles`; a page's listed file names may \
+                                 total at most {MAX_PAGE_NAME_BYTES} bytes"
+                            ),
+                        ));
+                    }
                     let allowed = if key == "scripts" {
                         PAGE_SCRIPT_EXTENSIONS
                             .iter()
