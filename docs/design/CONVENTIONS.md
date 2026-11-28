@@ -263,7 +263,7 @@ Retired features are removed from this table along with their folder.
 | Path Leases | [docs/design/path-leases/](./path-leases/) | claude |
 | Policy & Sandboxing | [docs/design/policy-sandbox/](./policy-sandbox/) | claude |
 | Process Supervision | [docs/design/process-supervision/](./process-supervision/) | claude |
-| Project Learnings | [docs/design/project-learnings/](./project-learnings/) | claude |
+| Project Learnings (archived) | [docs/design/_archived/project-learnings/](./_archived/project-learnings/) | claude |
 | Remote Access | [docs/design/remote-access/](./remote-access/) | codex |
 | Resident Orchestrator | [docs/design/resident-orchestrator/](./resident-orchestrator/) | claude |
 | Review Gate | [docs/design/review-gate/](./review-gate/) | codex |

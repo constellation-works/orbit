@@ -80,14 +80,13 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [User Interface](./user-interface/1_overview.md) | Build compact viewports phase 1, the small shell [ORB-29233] | gemini |
 | [Workspace Agent Corpus](./workspace-agent-corpus/1_overview.md) | — | Orbit |
 
-### Parked (4)
+### Parked (3)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Conflict Budget](./conflict-budget/1_overview.md) | Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1 | claude |
 | [Crew Memory](./crew-memory/1_overview.md) | Parked after exp-5342a4d6's no-difference readout (2026-11-21); on pickup, run a variant experiment on the dormant machinery, such as the consolidation redesign in specs/consolidation.md | claude |
 | [Path Leases](./path-leases/1_overview.md) | Restore the config keys, CLI and MCP tools withdrawn in ORB-22808 before any host enables leases | claude |
-| [Project Learnings](./project-learnings/1_overview.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
 
 ### Archived
 
@@ -99,6 +98,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Explore Brief](./_archived/explore-brief/1_scope.md) |
 | [Finding Verification](./_archived/finding-verification/1_overview.md) |
 | [Hidden Acceptance](./_archived/hidden-acceptance/1_scope.md) |
+| [Project Learnings](./_archived/project-learnings/1_overview.md) |
 | [Ux Rules](./_archived/ux-rules/1_scope.md) |
 | [Visual Review](./_archived/visual-review/1_scope.md) |
 | [Web Terminal](./_archived/web-terminal/1_scope.md) |

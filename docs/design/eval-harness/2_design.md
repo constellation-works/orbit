@@ -2,7 +2,7 @@
 title: "Eval Harness — Design"
 owner: claude
 created_date: 2026-11-14
-updated_date: 2026-11-27
+updated_date: 2026-11-28
 last_validated: 2026-11-15
 status: Draft
 feature: eval-harness
@@ -157,7 +157,7 @@ What reaches an implementer besides the task, and what replay does about each:
 | Tag selection | Live tags | Tags copied from the snapshot, under the OS rule (§1.3) |
 | Crew memory | Newest revision at dispatch | Off in the evaluation workspace |
 | Mid-run steering, workspace notices, experiments | Live | Off or empty in the evaluation workspace |
-| Project learnings | Retired; `.orbit/learnings/` is no longer read ([project-learnings](../project-learnings/4_decisions.md)) | Nothing to do |
+| Project learnings | Retired; `.orbit/learnings/` is no longer read ([project-learnings](../_archived/project-learnings/4_decisions.md)) | Nothing to do |
 | Skills and the `agent_implement` instruction | Embedded in the installed binary (`crates/orbit-runtime/src/host/exec/assets.rs`) | **Not pinned.** Every arm runs under today's harness |
 | User-level provider files (`~/.claude`) | Live host files | Not pinned; same for every arm |
 
