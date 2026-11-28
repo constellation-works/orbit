@@ -1,6 +1,6 @@
 # Development reference
 
-Find guidance in [Validation and CI](validation-and-ci.md), [Hosted CI](hosted-ci.md), [Processes](processes.md), [QA](qa.md), [Testing](testing.md), [Browser checks](browser-checks.md), and [Toolchain](toolchain.md).
+Find guidance in [Operating model](operating-model.md), [Validation and CI](validation-and-ci.md), [Hosted CI](hosted-ci.md), [Processes](processes.md), [QA](qa.md), [Testing](testing.md), [Browser checks](browser-checks.md), and [Toolchain](toolchain.md).
 
 ## Run build provenance
 
