@@ -287,12 +287,17 @@ pub(super) fn read(
         return;
     }
     if !context.runtime.stored().task().reads_visible() {
-        candidates.degraded.push(workspace_degraded(
-            context.workspace,
-            KIND.as_str(),
-            "source_unavailable",
-            "Owner-base observation requires the workspace owner",
-        ));
+        // A replica is not authoritative for the owner base. The aggregator's
+        // candidate read asks the owner, so the replica stays silent; a direct
+        // read says where to look.
+        if !context.filter.candidate_read {
+            candidates.degraded.push(workspace_degraded(
+                context.workspace,
+                KIND.as_str(),
+                "source_unavailable",
+                "Owner-base observation requires the workspace owner",
+            ));
+        }
         return;
     }
     let start = Instant::now();
