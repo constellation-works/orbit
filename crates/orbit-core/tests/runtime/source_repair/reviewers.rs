@@ -1,4 +1,6 @@
 //! Public recovery of reviewer-modified sources and refusal of forged provenance.
+
+use super::published_owner::{checkpoint, next, requeue};
 use super::*;
 
 fn before_pr_reviewer_publication_preserves_the_pr() {
@@ -245,4 +247,112 @@ fn tampered_reviewer_publications_refuse_before_reservation() {
 crate::scenario_table!(
     reviewer_publication_tampering,
     tampered_reviewer_publications_refuse_before_reservation
+);
+
+/// Admit the next owner attempt as the task's automation does, then run its
+/// worktree setup. Returns the attempt's run id and setup output.
+fn owner_attempt(f: &Fixture) -> (String, Value) {
+    orbit_core::test_support::EngineHost::new(&f.runtime)
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let (run, setup) = next(f);
+    (run.run_id, setup)
+}
+
+/// The `candidate_resume` step of that attempt, resuming the published
+/// owner candidate it names as its predecessor.
+fn owner_resume(
+    f: &Fixture,
+    run_id: &str,
+    setup: &Value,
+) -> Result<Value, orbit_common::OrbitError> {
+    execute_deterministic_action(
+        &orbit_core::test_support::EngineHost::new(&f.runtime),
+        "candidate_resume",
+        &json!({}),
+        &json!({
+            "job_run_id": run_id,
+            "task_ids": [f.task],
+            "workspace_path": setup["workspace_path"],
+            "base_sha": setup["base_sha"],
+            "prior_job_run_id": setup["prior_job_run_id"],
+        }),
+        false,
+        &HashMap::new(),
+        None,
+    )
+}
+
+/// [ORB-29909] A pushed head that is not the reviewed head is an operator
+/// decision, not a failed run: the owner's resume holds the run with the
+/// source-repair decision and still refuses to resume the pushed head.
+fn unreviewed_pushed_head_holds_the_owner_resume() {
+    let mut f = Fixture::with_policy("before-pr");
+    f.publish_review(false);
+    // The owner's resume adopts only a requeued publication with a unique binding.
+    requeue(&mut f);
+    let job_path = f
+        ._root
+        .path()
+        .join("global/resources/jobs/task_pr_pipeline.yaml");
+    let job: Value = serde_yaml::from_str(&std::fs::read_to_string(&job_path).unwrap()).unwrap();
+    let push = job["spec"]["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|step| step["id"] == "push")
+        .unwrap() as u32;
+    let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    let implementation = state.pipeline["review_gate_settle"]["implementation_head_sha"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(implementation, f.head);
+    // The push checkpoint names the pre-review implementation, not the reviewed head.
+    let mut output = state.pipeline["push"].clone();
+    output["local_sha"] = json!(implementation);
+    checkpoint(&f, &f.source.run_id, push, "push", output);
+    let (run_id, setup) = owner_attempt(&f);
+    let error = owner_resume(&f, &run_id, &setup)
+        .expect_err("a pushed head that is not the reviewed head must not resume");
+    match error {
+        orbit_common::OrbitError::DeliveryRefused { refusal, message } => {
+            assert_eq!(
+                refusal,
+                orbit_types::workflow::DeliveryRefusal::SourceRepairDecision,
+                "{message}"
+            );
+            assert!(
+                message.contains("initial publication lacks authenticated review provenance"),
+                "{message}"
+            );
+        }
+        other => panic!("expected a held source-repair decision, got {other}"),
+    }
+    assert_eq!(git(&f.repo, &["rev-parse", &f.branch]), f.head);
+}
+
+/// [ORB-29909] A pushed head equal to the reviewed head still resumes at it.
+fn reviewed_pushed_head_resumes_at_the_reviewed_head() {
+    let mut f = Fixture::with_policy("before-pr");
+    f.publish_review(false);
+    requeue(&mut f);
+    let (run_id, setup) = owner_attempt(&f);
+    let resumed = owner_resume(&f, &run_id, &setup).unwrap();
+    assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
+    assert_eq!(resumed["implement"], false, "{resumed}");
+    assert_eq!(resumed["reused_branch"], f.branch, "{resumed}");
+    assert_eq!(resumed["reused_head_sha"], f.head, "{resumed}");
+}
+
+crate::scenario_table!(
+    reviewer_publication_provenance,
+    unreviewed_pushed_head_holds_the_owner_resume,
+    reviewed_pushed_head_resumes_at_the_reviewed_head
 );

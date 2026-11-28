@@ -223,7 +223,11 @@ pub(super) fn published_head<'a>(
         repo,
     )?;
     if field(push, "local_sha")? != initial {
-        return Err(refuse(
+        // The pushed head is not the reviewed one. The publication stays
+        // refused and waits for an operator to inspect explicit source repair
+        // or discard the candidate, so the run holds instead of failing
+        // [ORB-29909].
+        return Err(refuse_operator_decision(
             "initial publication lacks authenticated review provenance",
         ));
     }

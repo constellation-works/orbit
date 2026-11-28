@@ -892,7 +892,9 @@ pub(super) fn refuse(message: impl Into<String>) -> OrbitError {
 /// A refusal that waits on an operator decision (discard the candidate or
 /// select an explicit source). Reports exactly as the [`refuse`] text it
 /// carries; only [`hold_operator_source_repair_refusal`] classifies it.
-/// Integrity and authority refusals use [`refuse`] and stay failures.
+/// Integrity and authority refusals use [`refuse`] and stay failures, except
+/// a pushed head that is not the reviewed publication head, which is an
+/// operator decision in `published_head` [ORB-29909].
 pub(super) fn refuse_operator_decision(message: impl Into<String>) -> OrbitError {
     OrbitError::SourceRepairOperatorDecisionRefused {
         message: format!("source repair refused: {}", message.into()),
