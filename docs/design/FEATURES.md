@@ -56,7 +56,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Fleet Notices](./fleet-notices/1_overview.md) | — | claude |
 | [Granted Tools](./granted-tools/1_overview.md) | — | claude |
 | [Host Registry](./host-registry/1_overview.md) | — | codex |
-| [Human Decision Channel](./human-decision-channel/1_overview.md) | File the plugin-raised request slices (2_design.md §12, designed in ORB-22824); none filed | claude |
+| [Human Decision Channel](./human-decision-channel/1_overview.md) | Review updated distribution/plugin-request spec (2_design.md §12), then file slices | claude |
 | [Orbit MCP](./mcp-bridge/1_overview.md) | — | codex |
 | [MCP Session Context](./mcp-session-context/1_overview.md) | — | codex |
 | [Mid-Run Operator Steering](./mid-run-steering/1_overview.md) | — | codex |

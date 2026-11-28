@@ -3,15 +3,15 @@ title: Human Decision Channel — Overview
 owner: claude
 created_date: 2026-10-24
 updated_date: 2026-11-28
-last_validated: 2026-11-24
+last_validated: 2026-11-28
 status: Accepted
 stage: shipped
-next: "File the plugin-raised request slices (2_design.md §12, designed in ORB-22824); none filed"
+next: "Review updated distribution/plugin-request spec (2_design.md §12), then file slices"
 feature: human-decision-channel
 doc_role: overview
 type: design
-summary: "A core decision-request record and delegated-human channel, with email as a plugin transport, so held Orbit work can be decided by replying to an email"
-tags: [human-decision-channel, plugins, routines, blocked-recovery, task-pilot]
+summary: "A core decision-request record and delegated-human channel, with email as a plugin transport and a generic plugin_request gate for distributions and Orbit-plane plugins"
+tags: [human-decision-channel, plugins, distributions, routines, blocked-recovery, task-pilot]
 ---
 
 # Human Decision Channel — Overview
@@ -120,7 +120,8 @@ The mechanisms are in [2_design.md](./2_design.md); standing rules are kept in [
 - **Decision request.** The core record raised when work parks on a human decision: it names the task, the gate and the closed set of allowed answers.
 - **Delegated-human authority.** The channel path that records an authenticated reply as the human, with the channel's provenance attached, without reclassifying a plugin as human.
 - **Transport plugin.** The plugin that owns SMTP, IMAP and message formatting; core owns the request record, the authority and the apply step.
-- **Closed answer set.** The only answers a reply may carry: blocked propose/report choices, pilot-hold verdicts, proposed approve/reject by digest, and review approve.
+- **Plugin-raised request (`plugin_request`).** The generic gate ([2_design.md §12](./2_design.md#12-plugin-raised-decision-requests-with-an-apply-callback)) that lets a [distribution](../distributions/1_overview.md) or Orbit-plane plugin raise a closed human question and run an operator-allowlisted apply tool once answered, surfacing automatically through `orbit attention`, the dashboard and `decision-mail` without putting domain logic in core.
+- **Closed answer set.** The only answers a reply may carry: blocked propose/report choices, pilot-hold verdicts, proposed approve/reject by digest, review approve, and plugin-declared answers on a `plugin_request`.
 - **Stale guard.** The check that a reply is still about the same hold, so a reply for a superseded episode changes nothing.
 
 ## 3. At a Glance
