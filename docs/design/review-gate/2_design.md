@@ -1758,8 +1758,13 @@ observations. Completion uses its ordinary poll waits and original deadline,
 with a separate counter from base-modification retries, and requires the same
 strict merged evidence described below. It never resends the merge or enters
 repair while that merge is in flight. Reaching the observation ceiling leaves
-the task in review. `handoff_land` makes only one reconciliation read: it may
-complete if already merged, and otherwise fails without another merge request.
+the task in review. `handoff_land` takes the same three read-only observations,
+its ordinary poll waits and its original deadline, on a counter independent of
+base-modification retries. It completes only when a read reports the pinned
+head merged under landing's existing delivery evidence (merged state, pinned
+identity and a merge commit). It never resends the merge. Reaching the
+observation ceiling holds the run as `delivery_merge_in_progress` rather than
+failing it. A deadline that arrives first keeps the existing landing timeout.
 Other HTTP 405 refusals still fail on the first request.
 
 The exact `gh: Pull Request has merge conflicts (HTTP 405)` diagnostic, with an

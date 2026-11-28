@@ -370,6 +370,12 @@ struct ForgeState {
     head: String,
     merged: bool,
     merge_in_progress: Option<bool>,
+    /// When set, the Nth `pr.status` after the in-progress merge response
+    /// reports this pull request merged. `None` applies `merge_in_progress`
+    /// immediately, before that read.
+    in_progress_merged_on_read: Option<u32>,
+    in_progress_status_reads: u32,
+    saw_in_progress_merge: bool,
     merge_commit: Option<String>,
     jobs: HashMap<String, FakeJob>,
     job_times: HashMap<u64, (String, String)>,
@@ -578,6 +584,12 @@ impl_test_host! {
                 }
                 "ci.emission_evidence" => Ok(json!({"evidence":null})),
                 "pr.status" => {
+                    if s.saw_in_progress_merge {
+                        s.in_progress_status_reads = s.in_progress_status_reads.saturating_add(1);
+                        if s.in_progress_merged_on_read == Some(s.in_progress_status_reads) {
+                            s.merged = true;
+                        }
+                    }
                     let scripted =
                         (!s.merge_states.is_empty()).then(|| pop_keep_last(&mut s.merge_states));
                     let (status, conc) = match s.jobs.get(&s.head).map(|j| j.conclusion) {
@@ -836,7 +848,10 @@ impl_test_host! {
                 "pr.merge" => {
                     assert_eq!(input["reviewed_head_sha"], s.head.as_str());
                     if let Some(merged) = s.merge_in_progress {
-                        s.merged = merged;
+                        s.saw_in_progress_merge = true;
+                        if s.in_progress_merged_on_read.is_none() {
+                            s.merged = merged;
+                        }
                         let v = json!({
                             "merged":false,
                             "refusal":"merge_in_progress",
@@ -3379,26 +3394,86 @@ fn externally_merged_base_chain_lands_after_fetching_the_retained_pull_ref() {
 }
 
 fn handoff_merge_in_progress_contracts() {
-    for merged in [true, false] {
+    let input = json!({"max_wait_seconds": 30, "poll_interval_seconds": 5});
+
+    // The first observation already reports the same pinned head merged.
+    {
         let (_sb, forge, head, _) = forge_fixture(false, false);
         forge.job(&head, passed(1, 11));
-        forge.with_state(|s| s.merge_in_progress = Some(merged));
-        let (result, waits) = counted_land(&forge, json!({"max_wait_seconds": 30}));
-        if merged {
-            assert_landed(result, "merged");
-        } else {
-            let err = result.unwrap_err().to_string();
-            assert!(
-                err.contains("one re-read did not confirm it merged"),
-                "{err}"
-            );
-            assert!(forge.steps().contains(&STOP));
-        }
+        forge.with_state(|s| s.merge_in_progress = Some(true));
+        let (result, waits) = counted_land(&forge, input.clone());
+        let landed = result.expect("first read merged");
+        assert_eq!(landed["phase"], "landed");
+        assert_eq!(landed["evidence"]["delivery"]["head_sha"], head);
         assert!(
             waits.is_empty(),
-            "handoff does not enter completion's polling path"
+            "a merged first read does not poll: {waits:?}"
         );
         forge.assert_sent("pr.merge", 1, "no second mutation");
-        forge.assert_sent("pr.status", 2, "one reconciliation read");
+        forge.assert_sent("pr.status", 2, "poll plus one observation");
+        assert!(
+            forge
+                .steps()
+                .iter()
+                .any(|step| matches!(step, ResolveIntent { merged: true, .. })),
+            "merged evidence resolves the intent"
+        );
+    }
+
+    // A later read of the same pinned head completes the landing.
+    {
+        let (_sb, forge, head, _) = forge_fixture(false, false);
+        forge.job(&head, passed(1, 11));
+        forge.with_state(|s| {
+            s.merge_in_progress = Some(false);
+            s.in_progress_merged_on_read = Some(3);
+        });
+        let (result, waits) = counted_land(&forge, input.clone());
+        let landed = result.expect("third read merged");
+        assert_eq!(landed["phase"], "landed");
+        assert_eq!(landed["evidence"]["delivery"]["head_sha"], head);
+        assert_eq!(
+            waits,
+            vec![5, 5],
+            "two ordinary polls before the merged read: {waits:?}"
+        );
+        forge.assert_sent("pr.merge", 1, "no second mutation");
+        forge.assert_sent("pr.status", 4, "poll plus three observations");
+    }
+
+    // The first read is not merged, and later reads stay unmerged. The
+    // ceiling holds the run and does not send another merge.
+    {
+        let (_sb, forge, head, _) = forge_fixture(false, false);
+        forge.job(&head, passed(1, 11));
+        forge.with_state(|s| s.merge_in_progress = Some(false));
+        let (result, waits) = counted_land(&forge, input);
+        let err = result.expect_err("observation ceiling holds");
+        match err {
+            OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::MergeInProgress,
+                message,
+            } => {
+                assert!(message.contains("already in progress"), "{message}");
+                assert!(message.contains("read-only observations"), "{message}");
+                assert!(!message.contains("one re-read"), "{message}");
+            }
+            other => panic!("expected a merge-in-progress hold, got {other}"),
+        }
+        assert_eq!(
+            waits,
+            vec![5, 5],
+            "two polls between three reads: {waits:?}"
+        );
+        forge.assert_sent("pr.merge", 1, "no second mutation");
+        forge.assert_sent("pr.status", 4, "poll plus three observations");
+        assert!(forge.steps().contains(&STOP));
+        assert!(
+            forge
+                .steps()
+                .iter()
+                .any(|step| matches!(step, ResolveIntent { merged: false, .. })),
+            "the ceiling resolves the intent as unmerged before the hold"
+        );
     }
 }

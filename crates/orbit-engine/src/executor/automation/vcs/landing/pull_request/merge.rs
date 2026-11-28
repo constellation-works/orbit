@@ -13,7 +13,8 @@ use super::super::super::base::refresh::RefreshStep;
 use super::super::super::commit::squash_merge_fields;
 use super::super::super::operations;
 use super::super::super::pr::{
-    PrMergeState, PullRequestStatus, ReviewedMergeOutcome, draft_recovery, resolve_permitted_merge,
+    PrMergeState, PullRequestStatus, ReviewedMergeOutcome, classify_pr_state, draft_recovery,
+    resolve_permitted_merge,
 };
 use super::super::intent::reconcile_intent;
 use super::super::observe::observe_candidate;
@@ -43,6 +44,13 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
             diagnose,
         )
         .map_err(|error| self.stop_on(error))
+    }
+
+    fn in_progress_budget_spent(&self) -> Result<bool, OrbitError> {
+        if self.deadline_passed()? {
+            return Ok(true);
+        }
+        Ok(self.max_wait_seconds > 0 && self.waited_seconds >= self.max_wait_seconds)
     }
 
     /// Settles a merged pull request as this handoff's delivery.
@@ -219,6 +227,10 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
 
     /// Requests the merge under a durable intent, and re-reads after a
     /// refusal caused by a concurrent base change.
+    ///
+    /// An answer that a merge is already in progress never sends another
+    /// merge. It takes the same read-only observations completion allows and
+    /// holds when they do not show the pinned head merged.
     pub(super) fn request_merge(
         &mut self,
         process_env: &orbit_common::Env,
@@ -336,17 +348,7 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
             ReviewedMergeOutcome::Accepted { .. } => return Ok(Step::Continue),
             ReviewedMergeOutcome::BaseModified { diagnostic: text } => text,
             ReviewedMergeOutcome::InProgress { diagnostic } => {
-                if let Some(completed) = reconcile_intent(host, context, &intent_id, self.view)? {
-                    return Ok(Step::Done(completed));
-                }
-                self.intent = None;
-                return Err(self.stop(
-                    false,
-                    &format!(
-                        "pull request #{pr_number} merge is already in progress ({diagnostic}); \
-                         one re-read did not confirm it merged; retry landing after checking its status"
-                    ),
-                )?);
+                return self.observe_in_progress_merge(process_env, &diagnostic);
             }
             // This caller does not opt into completion's reconciliation or
             // its conflict read, so neither answer reaches it.
@@ -383,5 +385,110 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
         // Wait one normal poll, then re-read before asking again.
         self.wait_one_poll();
         Ok(Step::Continue)
+    }
+
+    /// Read-only observations while GitHub already has this merge in flight.
+    ///
+    /// The counter is the same ceiling completion uses, and it is independent
+    /// of base-modification retries. A read completes the landing only when it
+    /// reports the pinned head merged. The merge is never sent again. A
+    /// deadline that arrives first keeps the existing landing timeout.
+    fn observe_in_progress_merge(
+        &mut self,
+        process_env: &orbit_common::Env,
+        diagnostic: &str,
+    ) -> Result<Step, OrbitError> {
+        let attempts = operations::BASE_MODIFIED_MERGE_ATTEMPTS;
+        for reads in 1..=attempts {
+            if self.in_progress_budget_spent()? {
+                return self.stop_in_progress_at_deadline();
+            }
+            let status = self.read_status()?;
+            if let Some(done) = self.complete_explicit_merge(process_env, &status)? {
+                return Ok(done);
+            }
+            if reads < attempts {
+                self.wait_one_poll();
+                if self.in_progress_budget_spent()? {
+                    return self.stop_in_progress_at_deadline();
+                }
+            }
+        }
+        self.resolve_merge_intent(
+            false,
+            &json!({
+                "reconciled": "pull_request_open",
+                "pull_request": self.number,
+                "observations": attempts,
+            }),
+        )?;
+        let pr_number = self.pr_number.clone();
+        Err(self.hold(
+            false,
+            DeliveryRefusal::MergeInProgress,
+            &format!(
+                "pull request #{pr_number} merge is already in progress ({diagnostic}); \
+                 {attempts} read-only observations did not show the pinned head merged; \
+                 the landing holds and does not send another merge request"
+            ),
+        )?)
+    }
+
+    /// The wait budget ended before the observation ceiling. Resolve the open
+    /// intent so the existing timeout can record, and do not claim the
+    /// ceiling was reached.
+    fn stop_in_progress_at_deadline(&mut self) -> Result<Step, OrbitError> {
+        self.resolve_merge_intent(
+            false,
+            &json!({
+                "reconciled": "pull_request_open",
+                "pull_request": self.number,
+                "reason": "landing deadline",
+            }),
+        )?;
+        Err(self.timeout(&self.context.owed_hosted_checks)?)
+    }
+
+    /// Explicit merged evidence is landing's existing bar: a merged state and
+    /// a delivered pin for this head. Anything else keeps observing.
+    fn complete_explicit_merge(
+        &mut self,
+        process_env: &orbit_common::Env,
+        status: &PullRequestStatus,
+    ) -> Result<Option<Step>, OrbitError> {
+        if !matches!(classify_pr_state(status), PrMergeState::Merged) {
+            return Ok(None);
+        }
+        match self.pin.ensure_delivered(status, &self.pr_number) {
+            Ok(_) => Ok(Some(Step::Done(self.settle_merged(
+                process_env,
+                status,
+                None,
+            )?))),
+            Err(error) => {
+                self.resolve_merge_intent(
+                    true,
+                    &json!({
+                        "reconciled": "pull_request_merged",
+                        "pull_request": self.number,
+                        "delivery_error": error.to_string(),
+                    }),
+                )?;
+                Err(self.stop(false, &error.to_string())?)
+            }
+        }
+    }
+
+    fn resolve_merge_intent(&mut self, merged: bool, evidence: &Value) -> Result<(), OrbitError> {
+        let Some(intent_id) = self.intent.take() else {
+            return Ok(());
+        };
+        record(
+            self.host,
+            self.context,
+            HandoffLandingStep::ResolveIntent { intent_id, merged },
+            None,
+            evidence,
+        )
     }
 }

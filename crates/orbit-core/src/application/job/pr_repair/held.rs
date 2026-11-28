@@ -69,6 +69,10 @@ pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
         | DeliveryRefusal::TaskNotPromotable
         | DeliveryRefusal::LandingConflict
         | DeliveryRefusal::CompletionConflict
+        // The forge already has a merge in flight. Handing this back to
+        // completion would not be the owner landing, and the next step is to
+        // read the pull request, not to send another merge.
+        | DeliveryRefusal::MergeInProgress
         | DeliveryRefusal::BaseChaseExhausted
         | DeliveryRefusal::OriginUnavailable
         | DeliveryRefusal::DependencyNotDelivered

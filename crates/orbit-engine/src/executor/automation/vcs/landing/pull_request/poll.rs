@@ -143,6 +143,19 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
             && super::super::super::completion_deadline::now_ms()? >= self.deadline_ms)
     }
 
+    pub(super) fn read_status(&self) -> Result<PullRequestStatus, OrbitError> {
+        if self.max_wait_seconds == 0 {
+            read_pr_status(self.host, &self.workspace, &self.pr_number)
+        } else {
+            read_pr_status_before(
+                self.host,
+                &self.workspace,
+                &self.pr_number,
+                self.deadline_ms,
+            )
+        }
+    }
+
     fn note_elapsed(&mut self) -> Result<(), OrbitError> {
         self.waited_seconds = self.waited_seconds.max(
             super::super::super::completion_deadline::now_ms()?.saturating_sub(self.started_ms)
@@ -168,19 +181,6 @@ impl<'a, H: RunLifecycle + ReviewGate + HostEnvironment + RuntimeHostProcessEnvi
             return Err(self.timeout(&self.context.owed_hosted_checks)?);
         }
         Ok(())
-    }
-
-    fn read_status(&self) -> Result<PullRequestStatus, OrbitError> {
-        if self.max_wait_seconds == 0 {
-            read_pr_status(self.host, &self.workspace, &self.pr_number)
-        } else {
-            read_pr_status_before(
-                self.host,
-                &self.workspace,
-                &self.pr_number,
-                self.deadline_ms,
-            )
-        }
     }
 
     /// Records this observation in the diagnostic and classifies it.
