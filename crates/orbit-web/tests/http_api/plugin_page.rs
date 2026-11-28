@@ -130,7 +130,7 @@ fn install_with_files(
              bin/backend.sh\n    sandbox: none\n  tools:\n    - name: status\n      description: \
              Read status.\n      execution_kind: read_only\n      mcp_scope: workspace\n      \
              input_schema:\n        type: object\n        properties:\n          limit:\n            \
-             type: integer\n        additionalProperties: false\n    - name: other-read\n      \
+             type: integer\n          filter:\n            type: object\n            properties:\n              alpha:\n                type: integer\n              beta:\n                type: integer\n            additionalProperties: false\n        additionalProperties: false\n    - name: other-read\n      \
              description: Read something else.\n      execution_kind: read_only\n      \
              mcp_scope: workspace\n    - name: mutate\n      description: Change something.\n      \
              execution_kind: mutating\n      mcp_scope: workspace\n{spec}"
@@ -592,6 +592,63 @@ fn a_page_runs_only_its_declared_read_only_tools_within_its_bounds() {
             let output = json_ok(call(&server, "overview", json!({"tool": "status"})));
             assert_eq!(output["truncated"], true, "{}", output["diagnostic"]);
             assert!(output["output"].as_str().unwrap().len() <= 128 * 1024);
+        },
+    );
+}
+
+#[test]
+fn page_calls_share_json_with_reordered_object_keys() {
+    isolated(
+        "plugin_page::page_calls_share_json_with_reordered_object_keys",
+        || {
+            let fixture = Fixture::new();
+            let control = install(&fixture, "pages", PAGES);
+            let trace = fixture.path("page-call-trace.jsonl");
+            let server = fixture
+                .server_with_envs(false, &[("ORBIT_HTTP_PAGE_CALL_TRACE", trace.as_os_str())]);
+
+            hold(&control);
+            std::thread::scope(|scope| {
+                let first = scope.spawn(|| {
+                    json_ok(call(
+                        &server,
+                        "overview",
+                        json!({
+                            "tool": "status",
+                            "input": {"limit": 9, "filter": {"alpha": 1, "beta": 2}}
+                        }),
+                    ))
+                });
+                wait_until("the first call to run", || run_count(&control) == 1);
+                let second = scope.spawn(|| {
+                    json_ok(call(
+                        &server,
+                        "overview",
+                        json!({
+                            "tool": "status",
+                            "input": {"filter": {"beta": 2, "alpha": 1}, "limit": 9}
+                        }),
+                    ))
+                });
+                wait_until("the reordered call to share the first", || {
+                    shared_calls(&trace) == 1
+                });
+                release(&control);
+
+                let first_result = first.join().unwrap();
+                assert_eq!(first_result, second.join().unwrap());
+                let backend_request = first_result["output"]["request"].to_string();
+                assert!(
+                    backend_request
+                        .contains(r#""input":{"limit":9,"filter":{"alpha":1,"beta":2}}"#),
+                    "canonicalization changed the backend input order: {backend_request}"
+                );
+            });
+            assert_eq!(
+                run_count(&control),
+                1,
+                "reordered calls shared one execution"
+            );
         },
     );
 }

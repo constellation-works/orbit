@@ -118,12 +118,14 @@ impl PageServing {
         page: &str,
         call: PageCall,
     ) -> Result<CallResult, CallRefused> {
+        let mut canonical_input = call.input().clone();
+        canonical_input.sort_all_objects();
         let key = CallKey {
             runtime,
             namespace: namespace.to_string(),
             page: page.to_string(),
             tool: call.tool().to_string(),
-            input: serde_json::to_string(call.input()).unwrap_or_default(),
+            input: serde_json::to_string(&canonical_input).unwrap_or_default(),
         };
         let bound = (runtime, key.namespace.clone(), key.page.clone());
         let mut receiver = {
