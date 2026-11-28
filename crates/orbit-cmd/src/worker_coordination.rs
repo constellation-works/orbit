@@ -89,12 +89,11 @@ struct FederatedDrainOwner {
 
 impl FederatedDrainOwner {
     fn host(&self) -> Result<FederatedMcpHost, OrbitError> {
-        let env = orbit_core::app::host::composition_env();
         let identity = orbit_mcp::mcp_server_identity(
             &self.global_root,
             None,
             McpSessionAuthority::Agent,
-            &env,
+            &orbit_common::Env::default(),
         )?;
         let remotes = federated::load_destinations(&self.global_root)?;
         let destinations = federated::federated_membership(

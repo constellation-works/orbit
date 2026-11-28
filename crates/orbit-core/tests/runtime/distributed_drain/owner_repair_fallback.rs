@@ -465,6 +465,35 @@ fn a_registered_owner_binds_its_partition_instead_of_its_catalog_id() {
     owner_fallback(false, false, true);
 }
 
+crate::scenario_table!(
+    the_owner_drain_takes_a_repair_its_original_executor_never_pulls_scenarios,
+    the_owner_drain_takes_a_repair_its_original_executor_never_pulls,
+    the_owner_repairs_beside_an_implementing_leaf_and_waits_when_full,
+    repair_and_backlog_share_the_owner_ceiling_with_other_pulls,
+    a_registered_owner_binds_its_partition_instead_of_its_catalog_id,
+    a_repair_pull_routing_failure_fails_durably_and_leaves_the_claim_repair_pending
+);
+
+/// The owner's repair worker uses its own machine as the authenticated caller.
+struct RepairOwnerCoordinator(OrbitRuntime);
+
+impl OwnerCoordinator for RepairOwnerCoordinator {
+    fn call(
+        &self,
+        name: &str,
+        mut input: Value,
+        mut session: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        let binding = session.worker_invocation.clone().unwrap();
+        input["workspace"] = json!(binding.owner_workspace_id);
+        session.workspace = Some(binding.owner_workspace_id);
+        session.caller_machine_id = Some(binding.execution.machine_id);
+        session.transport = Some(McpTransport::SshMcp);
+        session.effective_capabilities = BTreeSet::from([McpCapability::Agent]);
+        self.0.execute_owner_coordination(name, input, session)
+    }
+}
+
 /// [ORB-29594] When a single-pass owner repair pull cannot route to its owner
 /// (such as the reproduced self-SSH failure), its durable run state fails
 /// visibly with `last_pass_error` and `DrainPassOutcome::Failed` instead of
@@ -661,33 +690,4 @@ fn a_repair_pull_routing_failure_fails_durably_and_leaves_the_claim_repair_pendi
         pair.owner_claim(&delivered.claim_id)["claim"]["phase"],
         "repair_pending"
     );
-}
-
-crate::scenario_table!(
-    the_owner_drain_takes_a_repair_its_original_executor_never_pulls_scenarios,
-    the_owner_drain_takes_a_repair_its_original_executor_never_pulls,
-    the_owner_repairs_beside_an_implementing_leaf_and_waits_when_full,
-    repair_and_backlog_share_the_owner_ceiling_with_other_pulls,
-    a_registered_owner_binds_its_partition_instead_of_its_catalog_id,
-    a_repair_pull_routing_failure_fails_durably_and_leaves_the_claim_repair_pending
-);
-
-/// The owner's repair worker uses its own machine as the authenticated caller.
-struct RepairOwnerCoordinator(OrbitRuntime);
-
-impl OwnerCoordinator for RepairOwnerCoordinator {
-    fn call(
-        &self,
-        name: &str,
-        mut input: Value,
-        mut session: ToolSessionContext,
-    ) -> Result<Value, OrbitError> {
-        let binding = session.worker_invocation.clone().unwrap();
-        input["workspace"] = json!(binding.owner_workspace_id);
-        session.workspace = Some(binding.owner_workspace_id);
-        session.caller_machine_id = Some(binding.execution.machine_id);
-        session.transport = Some(McpTransport::SshMcp);
-        session.effective_capabilities = BTreeSet::from([McpCapability::Agent]);
-        self.0.execute_owner_coordination(name, input, session)
-    }
 }
