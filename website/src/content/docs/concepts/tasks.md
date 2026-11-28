@@ -255,7 +255,13 @@ operator make it first.
 ## File reservations
 
 Orbit locks files for you: a task holds the files its context selectors cover
-while it is `in-progress` or `review`, and an overlapping task waits.
+while it is `in-progress` or `review`. An overlapping task waits for admission.
+An operator can start a named task past that wait with `orbit run ship <id>`.
+The task's history then records the lock holders it overrode, and once the task
+is `in-progress` its own locks hold back later overlapping work. The override
+clears only this local lock wait. It does not bypass the live execution-claim
+guard, so a task that a live run or claim is already executing is not shipped
+beside itself. See the [CLI reference](/reference/cli/#workflows).
 
 Reserve a surface yourself when work outside the pipeline needs the same
 protection, such as an editor session or a manual migration:
