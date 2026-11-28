@@ -55,14 +55,15 @@ is still tracked by [ORB-20363].
    (`APPLICATION_OPERATION_CEILINGS` in `crates/orbit-common/src/governance/authorization/catalog/application.rs`, formerly `APPLICATION_BUILTIN_OPERATIONS`).
    `orbit.task.update` admits only `id`, `status`, `comment` and `workspace`, with
    `status` limited to `backlog`, `done`, `rejected` or `archived`
-   (`application_authority.rs:270-296`). `office.proposal-accept` reads the task and its
-   `proposal.json` artifact, moves the task to `in-progress` with a `plan`, then to
+   (`APPLICATION_OPERATION_CEILINGS` and `APPLICATION_EXACT_TASK_STATUSES` in
+   `crates/orbit-common/src/governance/authorization/catalog/application.rs`).
+   `office.proposal-accept` reads the task and its `proposal.json` artifact, moves the task to `in-progress` with a `plan`, then to
    `review` and `done` with an `execution_summary`. Auto-task proposals also call
    `orbit.auto_task` action `add` and `orbit.auto_task` action `update`. Every one of those callbacks is
    refused before the plugin applies anything.
 3. **Routine control is refused at consent time.** `orbit.routine.control` and
    `orbit.auto_task` action `mint` fall to the "does not support application consent" arm
-   (`application_authority.rs:298-302`).
+   (`crates/orbit-runtime/src/host/application_consent/validation.rs`).
 
 The original app integration used `ORBIT_OPERATOR` to accept proposals. That standing
 operator grant to a login service is what ORB-20363 rules out; the scoped office profile
