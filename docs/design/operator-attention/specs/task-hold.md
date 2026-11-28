@@ -8,7 +8,7 @@ status: Draft
 feature: operator-attention
 tags: [operator-attention, spec]
 related_features: [operator-attention, standing-drain, distributed-drain]
-related_artifacts: [ORB-29623, ORB-29656, ORB-29657, ORB-29658]
+related_artifacts: [ORB-29623, ORB-29656, ORB-29657, ORB-29658, ORB-29662]
 last_updated: 2026-11-28
 ---
 
@@ -170,25 +170,36 @@ reader who wants only the unexplained holds asks for `--kind held_ready --severi
   per-workspace cap. They stay until each hold is released.
 - **The refusal breaks every writer of the tag.** A call that adds `no-drain` and worked
   before is refused after. The shipped skill text, `docs/CONFIG.md` and the dashboard's tag
-  control change in the same release. An adopter's own skills, briefs and scripts that add
-  the tag fail until they pass a `hold`.
+  control change in earlier phases, so they pass a hold before the refusal exists. An
+  adopter's own skills, briefs and scripts that add the tag have from phase 1 until the
+  refusal to do the same, and fail after it if they have not.
+- **Between the first phase and the refusal a hold is optional.** A tag added in that window
+  without one reads as held with no reason recorded, like a tag from before the change.
 - **A required reason can be a useless one.** Orbit checks that the two texts are present,
   not that they say anything.
 - **Not yet read from the code:** whether any configuration surface files tasks with
   configured tags that could include `no-drain` (auto-tasks, sweep filing), and how a host on
-  an older Orbit reads a task that carries the new field. The first build task settles both
-  before the refusal ships.
+  an older Orbit reads a task that carries the new field. The first build task settles the
+  second before the field is added, and the refusal's task settles the first.
 
 ## Phasing
 
-1. **The record and the refusal** ([ORB-29656]). The `hold` field, the `hold` input on add and update, the
-   CLI flags, the history events, the readouts in `orbit.task.show`, `orbit.task.list`,
-   `orbit task show` and readiness, the refusal, and the skill and config text. This is the
-   breaking change.
-2. **The kind** ([ORB-29657]). `held_ready`, its row in the item spec, its severity and `next`, and the
-   skill's attention reference.
-3. **The dashboard** ([ORB-29658]). The hold on a task's detail, and the two texts in the tag control.
-   Until this lands, adding `no-drain` in the dashboard is refused with the one-line error.
+The refusal ships last, on its own. An Orbit that predates the `hold` input rejects it as an
+unknown field, and an Orbit with the refusal rejects the tag without it. Shipped together they
+would leave a caller no write that works on both versions.
+
+1. **The record, with an optional input** ([ORB-29656]). The `hold` field, the `hold` input on
+   add and update, the CLI flags, the history events, the readouts in `orbit.task.show`,
+   `orbit.task.list`, `orbit task show` and readiness, and the skill and config text that
+   tells a writer to pass a hold. A tag added without a hold is still accepted and reads as
+   held with no reason recorded.
+2. **The kind** ([ORB-29657]). `held_ready`, its row in the item spec, its severity and
+   `next`, and the skill's attention reference.
+3. **The dashboard** ([ORB-29658]). The hold on a task's detail, and the two texts in the tag
+   control.
+4. **The refusal** ([ORB-29662]). Turned on once every host runs an Orbit that accepts the
+   input and the known writers of the tag pass a hold: the shipped skills from phase 1, the
+   dashboard from phase 3, and the adopter's own skills. This is the breaking change.
 
 ## Acceptance
 
@@ -213,8 +224,9 @@ reader who wants only the unexplained holds asks for `--kind held_ready --severi
 ## Task References
 
 - [ORB-29623] — designed the hold record, the refusal and the `held_ready` kind.
-- [ORB-29656] — builds the hold record, the `hold` input and the refusal.
+- [ORB-29656] — builds the hold record and the optional `hold` input.
 - [ORB-29657] — builds the `held_ready` kind.
 - [ORB-29658] — shows a hold on the dashboard and asks for it in the tag control.
+- [ORB-29662] — turns on the refusal of `no-drain` without a hold.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
