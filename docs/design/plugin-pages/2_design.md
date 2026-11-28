@@ -253,7 +253,10 @@ CSS. The manifest's `kit` number is the bridge version the page was written for.
 
 - **Plugins gets secondary tabs,** as Jobs has. **Installed** (`#plugins`, the default) is
   today's list. After it comes one tab per page of each plugin enabled in the selected
-  workspace, labelled with the page's title. The rail lists them as Plugins' views.
+  workspace, labelled with the page's title. The strip stays on one line. Pages that do not
+  fit at a readable width move under **More**, and the open page stays in the strip. A title
+  cut short shows its full text on hover, focus and touch. The rail lists every page as
+  Plugins' views.
 - **The dashboard draws a strip above the frame** with the plugin's name and version and a
   reload control. Everything below the strip is the plugin's.
 - **A page that cannot load says why.** A plugin that is disabled, inactive or refused at load
