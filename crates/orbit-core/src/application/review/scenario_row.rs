@@ -696,27 +696,3 @@ fn read_raw_quoted(source: &str, start: usize, hashes: usize) -> (&str, usize) {
     }
     (&source[start..], bytes.len())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::parse_file;
-
-    #[test]
-    fn incomplete_attributes_are_ignored_and_complete_modules_still_resolve() {
-        let incomplete = parse_file("tests/main.rs", "#[");
-        assert!(incomplete.plain_mods.is_empty());
-        assert!(incomplete.path_targets.is_empty());
-
-        let incomplete_path =
-            parse_file("tests/main.rs", "#[cfg_attr(any(), path = \"partial.rs\")");
-        assert!(incomplete_path.plain_mods.is_empty());
-        assert!(incomplete_path.path_targets.is_empty());
-
-        let complete = parse_file(
-            "tests/main.rs",
-            "mod plain; #[path = \"nested.rs\"] mod mounted;",
-        );
-        assert!(complete.plain_mods.contains("plain"));
-        assert_eq!(complete.path_targets, ["tests/nested.rs"]);
-    }
-}

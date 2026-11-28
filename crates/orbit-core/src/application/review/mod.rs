@@ -192,3 +192,6 @@ pub(crate) fn reset_review(
     // normal tool-dispatch audit additionally records caller/session provenance.
     Ok(serde_json::json!({"id": id, "ledger": ledger, "reset": true}))
 }
+
+#[cfg(test)]
+mod tests;
