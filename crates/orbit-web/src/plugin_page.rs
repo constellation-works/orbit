@@ -368,9 +368,11 @@ fn frame_policy(hashes: &[String]) -> String {
 /// itself, and CSP `navigate-to` is unimplemented across browsers. The external
 /// navigation boundary therefore depends on the dashboard host's
 /// `frame-src 'self'` policy framing the document. Direct top-level loads
-/// (`Sec-Fetch-Dest: document`, `Sec-Fetch-Site: none`), opaque-origin
-/// self-navigations (`Sec-Fetch-Site: cross-site`), non-navigation fetches, and
-/// unsupported browsers that omit Fetch Metadata fail closed.
+/// (`Sec-Fetch-Dest: document`, `Sec-Fetch-Site: none`), non-navigation fetches,
+/// and unsupported browsers that omit Fetch Metadata fail closed here. Cross-site
+/// requests, including opaque-origin self-navigations
+/// (`Sec-Fetch-Site: cross-site`), are refused earlier by the API origin guard,
+/// before this handler runs.
 pub(crate) fn require_dashboard_frame_navigation(headers: &HeaderMap) -> Result<(), &'static str> {
     if !single_header_eq(headers, "sec-fetch-site", "same-origin") {
         return Err(
