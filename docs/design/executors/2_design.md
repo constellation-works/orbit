@@ -32,9 +32,9 @@ unless an operator adds a sandbox.
 
 ## 2. Two resolution paths
 
-v2 dispatch consults no executor registry. Agent steps resolve their provider through
+v2 dispatch consults no executor registry ([ORB-10395]). Agent steps resolve their provider through
 `resolve_cli_executor`, and `local_shell` steps resolve their definition through
-`resolve_local_shell_executor`, both in
+`resolve_local_shell_executor` ([ORB-11294]), both in
 `crates/orbit-core/src/adapter/engine_host/actions/cli_executor.rs`. Each rejects the
 other kind, so a shell step can never acquire agent authority and an agent step can never
 be launched as a bare shell command. Why the shell route is a deterministic action rather
@@ -45,8 +45,8 @@ than a revived v1 executor is recorded in
 
 `ExecutorType::External` survives only so pre-existing definitions keep parsing; nothing
 spawns it. Dropping the variant is a separate release decision. The older `cli_command`
-value is no longer accepted for `executor_type`; a definition that still uses it changes
-it to `local_shell` before loading (see
+value is no longer accepted for `executor_type` ([ORB-25764]); a definition that still
+uses it changes it to `local_shell` before loading (see
 [specs/local-shell.md](./specs/local-shell.md#migrating-cli_command-definitions)).
 
 ## 4. Concerns & Honest Limitations
@@ -62,5 +62,6 @@ it to `local_shell` before loading (see
 
 - [ORB-10395] — retired the v1 executor stack and the External Executor Protocol.
 - [ORB-11294] — restored local shell execution as the `local_shell` deterministic action.
+- [ORB-25764] — retired the `cli_command` serde alias on `ExecutorType::LocalShell`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
