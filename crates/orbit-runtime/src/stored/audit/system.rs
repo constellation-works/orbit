@@ -46,10 +46,32 @@ pub struct SystemAuditEvent<'a> {
     pub attribution: AuditRunAttribution,
 }
 
+/// How a recorded command ended, for a row that stands for a process run
+/// rather than a state change.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AuditExecution {
+    /// The child's exit code, or `-1` when it produced none (timeout, spawn
+    /// or run failure).
+    pub(crate) exit_code: i32,
+    /// Measured wall-clock duration in milliseconds.
+    pub(crate) duration_ms: u64,
+}
+
 /// Record one system-authored audit event.
 pub fn record_system_audit_event(
     runtime: &RuntimeKernel,
     event: SystemAuditEvent<'_>,
+) -> Result<(), OrbitError> {
+    record_system_audit_event_with_execution(runtime, event, None)
+}
+
+/// Record one system-authored audit event, with the measured exit code and
+/// duration when the row stands for a process run. `None` records the
+/// status-derived exit code and a zero duration.
+pub(crate) fn record_system_audit_event_with_execution(
+    runtime: &RuntimeKernel,
+    event: SystemAuditEvent<'_>,
+    execution: Option<AuditExecution>,
 ) -> Result<(), OrbitError> {
     let SystemAuditEvent {
         execution_id_prefix,
@@ -88,12 +110,17 @@ pub fn record_system_audit_event(
             target_id: target_id.map(ToOwned::to_owned),
             role: role.to_string(),
             status,
-            exit_code: if status == AuditEventStatus::Denied {
-                1
-            } else {
-                0
-            },
-            duration_ms: 0,
+            exit_code: execution.map_or(
+                if status == AuditEventStatus::Denied {
+                    1
+                } else {
+                    0
+                },
+                |execution| execution.exit_code,
+            ),
+            duration_ms: execution.map_or(0, |execution| {
+                i64::try_from(execution.duration_ms).unwrap_or(i64::MAX)
+            }),
             working_directory: runtime.paths().repo_root.to_string_lossy().into_owned(),
             arguments_json: Some(durable_arguments_json(&arguments_json)),
             stdout_truncated: None,

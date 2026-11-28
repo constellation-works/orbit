@@ -8,7 +8,9 @@ use orbit_common::OrbitError;
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::Value;
 
-use super::system::{AuditRunAttribution, SystemAuditEvent, record_system_audit_event};
+use super::system::{
+    AuditExecution, AuditRunAttribution, SystemAuditEvent, record_system_audit_event_with_execution,
+};
 use crate::RuntimeKernel;
 
 /// One coordination-hold audit event, before it is widened into a
@@ -29,10 +31,27 @@ pub(crate) struct CoordinationAuditEvent<'a> {
     pub(crate) payload: Value,
 }
 
+/// How a command-execution row ended: the measured run and, for a failure, a
+/// one-line diagnostic (redacted when persisted).
+pub(crate) struct CoordinationAuditOutcome {
+    pub(crate) execution: AuditExecution,
+    pub(crate) error_message: Option<String>,
+}
+
 /// Record one coordination-hold event (file reservation or workspace claim).
 pub(crate) fn record_coordination_audit_event(
     runtime: &RuntimeKernel,
     event: CoordinationAuditEvent<'_>,
+) -> Result<(), OrbitError> {
+    record_coordination_audit_event_with_outcome(runtime, event, None)
+}
+
+/// Record one coordination event whose row stands for a process run, carrying
+/// its exit code, duration and failure message.
+pub(crate) fn record_coordination_audit_event_with_outcome(
+    runtime: &RuntimeKernel,
+    event: CoordinationAuditEvent<'_>,
+    outcome: Option<CoordinationAuditOutcome>,
 ) -> Result<(), OrbitError> {
     let CoordinationAuditEvent {
         command,
@@ -48,7 +67,11 @@ pub(crate) fn record_coordination_audit_event(
     let run_id = owner_run_id_from_payload(&payload);
     let arguments_json = serde_json::to_string(&payload)
         .map_err(|error| OrbitError::Execution(format!("serialize audit payload: {error}")))?;
-    record_system_audit_event(
+    let (execution, error_message) = match outcome {
+        Some(outcome) => (Some(outcome.execution), outcome.error_message),
+        None => (None, None),
+    };
+    record_system_audit_event_with_execution(
         runtime,
         SystemAuditEvent {
             execution_id_prefix: &execution_id_prefix,
@@ -60,11 +83,12 @@ pub(crate) fn record_coordination_audit_event(
             role: "admin",
             status,
             arguments_json,
-            error_message: None,
+            error_message,
             workspace_id,
             task_id,
             attribution: AuditRunAttribution::Environment { run_id },
         },
+        execution,
     )
 }
 
