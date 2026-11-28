@@ -187,6 +187,7 @@ pub(super) struct FakeCli {
     _tempdir: TempDir,
     path: PathBuf,
 }
+
 #[cfg(unix)]
 impl FakeCli {
     pub(super) fn cli_path(&self) -> &Path {

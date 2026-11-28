@@ -96,6 +96,7 @@ pub const AGENT_SUBPROCESS_BASELINE_VARS: &[&str] = &[
 /// Explicit active-task binding a task-bound CLI dispatch stamps beside
 /// `ORBIT_TASK_ID`.
 pub const ACTIVE_TASK_ENV: &str = "ORBIT_ACTIVE_TASK_ID";
+
 /// Spawner-neutral task name in the commit-telemetry contract a task-bound CLI
 /// dispatch stamps.
 pub const AGENT_TASK_ENV: &str = "AGENT_TASK";
