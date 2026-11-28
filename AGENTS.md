@@ -28,7 +28,7 @@ Reserve `main` for release merges and hotfixes. Target every task PR at the dev 
 
 ## Gates
 
-- Local full-suite checks are optional. Required PR checks (Check/Clippy/Test, Test shards 1–3) cover format, lint, goldens and the full suite. Fix failures in the PR. Don't run `make ci`, `ci-fast`, `ci-lint`, `goldens` or `ci-test-affected` as blanket gates. Run what the change needs: affected tests and `make goldens` when CLI help, MCP text or other golden surfaces change (`UPDATE=1` regenerates; review the diff). See [development reference](docs/development/validation-and-ci.md#validation-and-ci).
+- Local full-suite checks are optional. Required PR checks (Check/Clippy/Test, Test shards 1–3) cover format, lint, goldens and the full suite. Fix failures in the PR. Don't run `make ci`, `ci-fast`, `ci-lint`, `goldens` or `ci-test-affected` as blanket gates. Run what the change needs: affected tests and `make goldens` when CLI help, MCP text or other golden surfaces change (`UPDATE=1` regenerates; review the diff). See [dev docs](docs/development/validation-and-ci.md#validation-and-ci).
 - Anchor focused `cargo test -p <crate> …` on `-p orbit-cli` so they share one workspace feature set and reuse the cached build.
 - Pre-handoff checks, the `docs/INDEX.md` rule and `no-diff-expected`: [gate rules, Gates](docs/agents/gate-rules.md#gates). Light-delivery tags: [CONFIG.md](docs/CONFIG.md#light-delivery-skip-review-and-skip-validation).
 - Cargo gates sharing a target directory run sequentially; overlapping ones need separate `CARGO_TARGET_DIR`s; a rebuilt `target/debug/orbit` breaks generation-bound fixtures (F2026-10-118).
