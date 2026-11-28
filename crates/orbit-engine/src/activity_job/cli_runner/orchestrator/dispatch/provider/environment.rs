@@ -15,6 +15,7 @@ use orbit_common::env_vars;
 use orbit_common::process::build_budget::WAIT_DIRECTORY_ENV;
 use orbit_common::security::child_env::{
     ACTIVITY_MCP_TOOLSETS_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
+    TASK_IDENTITY_ENV_VARS,
 };
 use orbit_tools::ToolContext;
 use std::path::{Path, PathBuf};
@@ -26,15 +27,6 @@ use orbit_common::env_vars::CARGO_DENY_DB_PATH as CARGO_DENY_DB_PATH_ENV;
 
 /// Scratch subdirectory holding this run's cargo-deny advisory database.
 const CARGO_DENY_ADVISORY_DB_SUBDIR: &str = "cargo-deny-advisory-db";
-
-/// Task-identity names the envelope allowlist can forward from an outer
-/// process. This dispatch stamps them only when it has a task, so an inherited
-/// value must not survive into a taskless or bundled invocation [ORB-29734].
-const INHERITED_TASK_IDENTITY_ENV: &[&str] = &[
-    env_vars::ORBIT_TASK_ID,
-    "ORBIT_ACTIVE_TASK_ID",
-    "AGENT_TASK",
-];
 
 pub(super) struct ProviderEnvironmentInput<'a, H: ?Sized> {
     pub(super) context: CliDispatchContext<'a, H>,
@@ -325,10 +317,11 @@ pub(super) fn prepare_provider_environment<
     // The envelope allowlist forwards an outer run's activity and process
     // policy names; drop them, then stamp this activity's envelope.
     drop_inherited_policy_env(child_env);
-    // The allowlist forwards an outer process's task identity too. Only a
-    // task-bound invocation stamps one (above), so an inherited value would
-    // bind an unbound or bundled activity to a member task it does not own.
-    child_env.retain(|(key, _)| !INHERITED_TASK_IDENTITY_ENV.contains(&key.as_str()));
+    // Task identity is reserved. The allowlist forwards an outer process's
+    // value, and `pass` or a crew `env` mapping can name `AGENT_TASK`; only a
+    // task-bound invocation stamps one (above), so any other value would bind
+    // an unbound or bundled activity to a task it does not own [ORB-29734].
+    child_env.retain(|(key, _)| !TASK_IDENTITY_ENV_VARS.contains(&key.as_str()));
     // Provider-pinned entries replace any same-named value the allowlist
     // forwarded, so an outer process cannot re-enable what the provider
     // disables for headless runs. [ORB-13664]

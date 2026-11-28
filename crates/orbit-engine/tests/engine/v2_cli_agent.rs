@@ -44,6 +44,8 @@ mod stderr_failure;
 #[cfg(unix)]
 mod tag_instructions;
 #[cfg(unix)]
+mod task_identity;
+#[cfg(unix)]
 mod truncated_envelope;
 
 use orbit_engine::test_support::impl_test_host;

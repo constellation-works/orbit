@@ -19,7 +19,8 @@ use orbit_common::env_vars;
 use std::path::Path;
 
 use orbit_common::security::child_env::{
-    MCP_MANAGED_CONTEXT_ENV, MCP_MANAGED_RUN_ID_ENV, MCP_MANAGED_SESSION_ID_ENV,
+    ACTIVE_TASK_ENV, AGENT_TASK_ENV, MCP_MANAGED_CONTEXT_ENV, MCP_MANAGED_RUN_ID_ENV,
+    MCP_MANAGED_SESSION_ID_ENV,
 };
 
 #[derive(Debug, Default)]
@@ -84,7 +85,7 @@ pub(crate) fn provenance_env(config: ProvenanceEnv<'_>) -> Vec<(String, String)>
     if let Some(task_id) = config.orbit_task_id {
         vars.push((env_vars::ORBIT_TASK_ID.to_string(), task_id.to_string()));
         if config.orbit_active_task {
-            vars.push(("ORBIT_ACTIVE_TASK_ID".to_string(), task_id.to_string()));
+            vars.push((ACTIVE_TASK_ENV.to_string(), task_id.to_string()));
         }
     }
     if let Some(run_id) = config.agent_run_id {
@@ -94,7 +95,7 @@ pub(crate) fn provenance_env(config: ProvenanceEnv<'_>) -> Vec<(String, String)>
         vars.push(("AGENT_MODEL".to_string(), model.to_string()));
     }
     if let Some(task_id) = config.agent_task_id {
-        vars.push(("AGENT_TASK".to_string(), task_id.to_string()));
+        vars.push((AGENT_TASK_ENV.to_string(), task_id.to_string()));
     }
 
     vars
