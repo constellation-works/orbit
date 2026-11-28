@@ -153,8 +153,11 @@ Orbit process inherited.
 2. **The activity's `fsProfile`.** It is optional. When set, it names a policy
    profile that is resolved against the active policy and handed to sandbox
    compilation exactly as it is for a CLI agent. When omitted, the built-in
-   `unrestricted` profile applies. On macOS, Seatbelt applies the profile's
-   read and modify rules, including policy denies. On Linux, Bubblewrap
+   `unrestricted` profile applies. On macOS, Seatbelt permits reads broadly by
+   default; positive profile `read` entries do not restrict reads. It enforces
+   `denyRead` and negated (`!`) exclusions in the profile's `read` list, along
+   with default credential denies and any configured agent-sandbox masks.
+   Providers may re-allow credential paths they need. On Linux, Bubblewrap
    enforces modify rules but does not enforce profile read rules, including
    `denyRead`: host reads remain available except for fixed credential and
    runtime-directory masks and any explicit caller-provided masks. Do not rely
