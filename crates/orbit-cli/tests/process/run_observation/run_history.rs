@@ -427,6 +427,30 @@ fn history_filters_before_limit_and_shows_tasks_and_duration() {
             .assert()
             .failure();
     }
+    for states in ["bogus", "failed,bogus"] {
+        let output = fixture
+            .orbit()
+            .args(["run", "history", "--no-reconcile", "--state", states])
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(2), "{stderr}");
+        assert!(stderr.contains("invalid value 'bogus'"), "{stderr}");
+        for accepted in [
+            "pending",
+            "running",
+            "success",
+            "failed",
+            "timeout",
+            "skipped",
+            "retrying",
+            "cancelled",
+            "interrupted",
+            "held",
+        ] {
+            assert!(stderr.contains(accepted), "missing {accepted}: {stderr}");
+        }
+    }
     let output = fixture
         .orbit()
         .args(["run", "history", "--no-reconcile", "--format", "table"])
