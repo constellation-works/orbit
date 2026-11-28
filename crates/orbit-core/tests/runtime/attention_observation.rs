@@ -158,6 +158,131 @@ fn attention_does_not_recover_a_pending_task_commit() {
     assert!(runtime.inspect_execution_claims().is_ok());
 }
 
+fn pilot_warning_attention_preserves_a_commit_interrupted_during_traversal() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tracing_subscriber::layer::Context;
+    use tracing_subscriber::prelude::*;
+
+    struct InterruptOnPrerequisiteRead<F> {
+        interrupted: AtomicBool,
+        interrupt: F,
+    }
+
+    impl<S, F> tracing_subscriber::Layer<S> for InterruptOnPrerequisiteRead<F>
+    where
+        S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+        F: Fn() + Send + Sync + 'static,
+    {
+        fn on_enter(&self, id: &tracing::Id, context: Context<'_, S>) {
+            if context
+                .span(id)
+                .is_some_and(|span| span.name() == "task_bundle_canonical_read")
+                && !self.interrupted.swap(true, Ordering::Relaxed)
+            {
+                (self.interrupt)();
+            }
+        }
+    }
+
+    let (_root, runtime) = attention_runtime();
+    let prerequisite = add_named_task(&runtime, "Warning prerequisite", TaskStatus::Backlog);
+    let direct = runtime
+        .add_task(TaskAddParams {
+            title: "Direct prerequisite".into(),
+            status: Some(TaskStatus::Backlog),
+            dependencies: vec![prerequisite.clone()],
+            ..Default::default()
+        })
+        .unwrap();
+    let proposal = runtime
+        .add_task(TaskAddParams {
+            title: "Proposed warning subject".into(),
+            status: Some(TaskStatus::Proposed),
+            dependencies: vec![direct.id],
+            ..Default::default()
+        })
+        .unwrap();
+    runtime
+        .update_task_as_human(
+            &proposal.id,
+            TaskUpdateParams {
+                comment: Some(format!(
+                    "operation_id={}\n{}",
+                    "a".repeat(64),
+                    json!({"assessment": {"blocked_by": ["Confirm the operator workflow"]}}),
+                )),
+                ..Default::default()
+            },
+            "task-pilot".into(),
+        )
+        .unwrap();
+
+    use orbit_core::test_support::fixture_store::maintenance::task_registry::{
+        TaskRegistryStore, task_registry_path,
+    };
+    let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root())).unwrap();
+    let binding = registry.find_task_binding(&prerequisite).unwrap().unwrap();
+    let lease = binding
+        .canonical_path
+        .parent()
+        .unwrap()
+        .join(".task-commit-applying")
+        .join(&prerequisite);
+    std::fs::create_dir_all(lease.parent().unwrap()).unwrap();
+    let workspace_id = runtime.workspace_id().unwrap();
+    let database = runtime.global_root().join("orbit.db");
+    let journal = "attention-pilot-warning";
+    let interrupt = {
+        let lease = lease.clone();
+        let task_id = prerequisite.clone();
+        move || {
+            // The direct prerequisite is already being read. Interrupt the
+            // transitive prerequisite before the walk reaches it.
+            std::fs::File::create(&lease).unwrap();
+            rusqlite::Connection::open(&database)
+                .unwrap()
+                .execute(
+                    "INSERT INTO task_commit_journal \
+                     (journal_id, workspace_id, task_id, state, intent_json, created_at) \
+                     VALUES (?1, ?2, ?3, 'prepared', '{}', ?4)",
+                    rusqlite::params![journal, workspace_id, task_id, Utc::now().to_rfc3339()],
+                )
+                .unwrap();
+        }
+    };
+    let subscriber = tracing_subscriber::registry().with(InterruptOnPrerequisiteRead {
+        interrupted: AtomicBool::new(false),
+        interrupt,
+    });
+    let operator = session(McpCapability::Operator);
+    let query = || call(&runtime, json!({"kind": "pilot_warning"}), &operator);
+    let response = tracing::subscriber::with_default(subscriber, query);
+    assert_eq!(
+        journal_state(&runtime, journal).as_deref(),
+        Some("prepared"),
+        "{response}"
+    );
+    assert!(lease.exists());
+    assert_eq!(response["items"], json!([]));
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert_eq!(degraded[0]["kind"], "pilot_warning");
+    assert_eq!(degraded[0]["code"], "source_unavailable");
+    assert!(
+        degraded[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains(&prerequisite)
+    );
+
+    runtime.get_task(&proposal.id).unwrap();
+    assert_eq!(journal_state(&runtime, journal).as_deref(), Some("aborted"));
+    assert!(!lease.exists());
+    let response = query();
+    assert_eq!(response["degraded"], json!([]));
+    assert_eq!(response["items"][0]["refs"]["task_id"], proposal.id);
+}
+
 fn friction_attention_does_not_recover_a_pending_task_commit() {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
@@ -996,6 +1121,7 @@ fn follower_run_failed_settled_local_pull_is_not_a_held_claim() {
 crate::scenario_table!(
     attention_observation,
     attention_does_not_recover_a_pending_task_commit,
+    pilot_warning_attention_preserves_a_commit_interrupted_during_traversal,
     friction_attention_does_not_recover_a_pending_task_commit,
     delivery_hold_attention_next_is_workspace_qualified_with_tool,
     run_stuck_respects_declared_windows_and_progress,

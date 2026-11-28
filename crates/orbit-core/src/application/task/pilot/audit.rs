@@ -27,6 +27,20 @@ impl OrbitRuntime {
         })
     }
 
+    /// Resolve a pilot receipt for an observational caller, using the
+    /// settled artifact read for any referenced audit.
+    pub(crate) fn observe_task_pilot_audit(
+        &self,
+        task_id: &str,
+        receipt: CommentReceipt<'_>,
+    ) -> Result<Value, OrbitError> {
+        self.task_pilot_audit_with_reader(task_id, receipt, &|path| {
+            self.stores()
+                .task_artifacts()
+                .observe_task_artifact(task_id, path)
+        })
+    }
+
     /// Resolve a receipt using an aggregate's already loaded manifest.
     pub(crate) fn task_pilot_audit_with_reader(
         &self,
@@ -77,30 +91,6 @@ impl OrbitRuntime {
         })
     }
 
-    fn receipt_artifact(
-        &self,
-        task_id: &str,
-        path: &str,
-        manifest: Option<&[ArtifactManifestFileV2]>,
-    ) -> Result<TaskArtifact, OrbitError> {
-        let Some(files) = manifest else {
-            return self.get_task_artifact(task_id, path)?.ok_or_else(|| {
-                OrbitError::not_found(NotFoundKind::Artifact, format!("{task_id}/{path}"))
-            });
-        };
-        let canonical = orbit_types::task::canonical_artifact_path(path)
-            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-        let file = files
-            .iter()
-            .find(|file| file.path == canonical)
-            .ok_or_else(|| {
-                OrbitError::not_found(NotFoundKind::Artifact, format!("{task_id}/{path}"))
-            })?;
-        self.stores()
-            .task_artifacts()
-            .read_manifest_artifact(task_id, file)
-    }
-
     /// Resolve pilot audits for readers that also consume ordinary comments.
     /// Raw task/comment projections continue returning the compact messages.
     pub(crate) fn resolve_task_pilot_comments(
@@ -108,26 +98,19 @@ impl OrbitRuntime {
         task_id: &str,
         comments: &[TaskComment],
     ) -> Result<Vec<TaskComment>, OrbitError> {
-        let mut resolved = comments.to_vec();
-        for comment in &mut resolved {
-            if comment.by != super::PILOT_ACTOR {
-                continue;
-            }
-            let Some(receipt) = comment.receipt() else {
-                continue;
-            };
-            // Leave malformed inline receipts to each reader's existing
-            // failure policy. A declared artifact, however, must resolve.
-            if serde_json::from_str::<Value>(receipt.body)
-                .ok()
-                .is_some_and(|body| body.get("assessment_artifact").is_some())
-            {
-                let operation_id = receipt.operation_id.to_string();
-                comment.message = self.task_pilot_audit(task_id, receipt)?.to_string();
-                comment.operation_id = Some(operation_id);
-            }
-        }
-        Ok(resolved)
+        resolve_task_pilot_comments_with(comments, |receipt| {
+            self.task_pilot_audit(task_id, receipt)
+        })
+    }
+
+    pub(crate) fn observe_task_pilot_comments(
+        &self,
+        task_id: &str,
+        comments: &[TaskComment],
+    ) -> Result<Vec<TaskComment>, OrbitError> {
+        resolve_task_pilot_comments_with(comments, |receipt| {
+            self.observe_task_pilot_audit(task_id, receipt)
+        })
     }
 
     pub(crate) fn get_task_pilot_comments(
@@ -179,4 +162,54 @@ impl OrbitRuntime {
         })
         .to_string())
     }
+
+    fn receipt_artifact(
+        &self,
+        task_id: &str,
+        path: &str,
+        manifest: Option<&[ArtifactManifestFileV2]>,
+    ) -> Result<TaskArtifact, OrbitError> {
+        let Some(files) = manifest else {
+            return self.get_task_artifact(task_id, path)?.ok_or_else(|| {
+                OrbitError::not_found(NotFoundKind::Artifact, format!("{task_id}/{path}"))
+            });
+        };
+        let canonical = orbit_types::task::canonical_artifact_path(path)
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        let file = files
+            .iter()
+            .find(|file| file.path == canonical)
+            .ok_or_else(|| {
+                OrbitError::not_found(NotFoundKind::Artifact, format!("{task_id}/{path}"))
+            })?;
+        self.stores()
+            .task_artifacts()
+            .read_manifest_artifact(task_id, file)
+    }
+}
+
+fn resolve_task_pilot_comments_with(
+    comments: &[TaskComment],
+    audit: impl Fn(CommentReceipt<'_>) -> Result<Value, OrbitError>,
+) -> Result<Vec<TaskComment>, OrbitError> {
+    let mut resolved = comments.to_vec();
+    for comment in &mut resolved {
+        if comment.by != super::PILOT_ACTOR {
+            continue;
+        }
+        let Some(receipt) = comment.receipt() else {
+            continue;
+        };
+        // Leave malformed inline receipts to each reader's existing
+        // failure policy. A declared artifact, however, must resolve.
+        if serde_json::from_str::<Value>(receipt.body)
+            .ok()
+            .is_some_and(|body| body.get("assessment_artifact").is_some())
+        {
+            let operation_id = receipt.operation_id.to_string();
+            comment.message = audit(receipt)?.to_string();
+            comment.operation_id = Some(operation_id);
+        }
+    }
+    Ok(resolved)
 }

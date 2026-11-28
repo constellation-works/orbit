@@ -15,6 +15,23 @@ use super::*;
 use crate::contract::{TaskListFilter, TaskListHydration, TaskPage, TaskResidualFilter, TaskRow};
 
 impl TaskV2Store {
+    /// Read one prerequisite's canonical bundle without coordination or
+    /// recovery. An interrupted or damaged bundle is an error so callers can
+    /// distinguish unavailable prerequisite evidence from an absent task.
+    pub fn observe_task(&self, id: &str) -> Result<Option<Task>, OrbitError> {
+        orbit_types::task::validate_orb_task_id(id)?;
+        self.read_task_bundle(id)
+    }
+
+    /// Resolve a prerequisite through its registered owner without entering
+    /// the commit boundary of either partition.
+    pub fn observe_registered_task(
+        &self,
+        id: &str,
+    ) -> Result<RegisteredTaskResolution, OrbitError> {
+        self.registered_task_with(id, Self::observe_task)
+    }
+
     /// [`Self::task_envelopes_for_ids`] from the settled snapshot: one keyed
     /// envelope read per id, with no recovery. An id whose bundle is in
     /// flight or absent is left out.
