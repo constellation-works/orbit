@@ -1232,3 +1232,95 @@ fn stale_owner_base_attention_deduplicates_and_clears() {
     let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
     assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
 }
+
+#[test]
+fn stale_owner_base_attention_continues_after_unavailable_newer_base() {
+    use std::process::Command;
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-b", "agent-main"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "user.name", "Test"]);
+    std::fs::write(repo.join("tracked.txt"), "base").unwrap();
+    git(&["add", "tracked.txt"]);
+    git(&["commit", "-m", "base"]);
+    let base = git(&["rev-parse", "HEAD"]);
+    git(&["commit", "--allow-empty", "-m", "local delivery"]);
+    let local = git(&["rev-parse", "HEAD"]);
+    git(&["checkout", "--detach", &base]);
+    git(&["commit", "--allow-empty", "-m", "remote change"]);
+    let remote = git(&["rev-parse", "HEAD"]);
+    git(&["update-ref", "refs/remotes/origin/agent-main", &remote]);
+    git(&["checkout", "agent-main"]);
+
+    let jobs = runtime.stores().jobs();
+    let now = Utc::now() - Duration::minutes(1);
+    let record = |at, branch: &str| {
+        let run = jobs
+            .insert_job_run(
+                "task_local_pipeline",
+                1,
+                at,
+                Some(json!({"base_branch": branch})),
+                None,
+            )
+            .unwrap();
+        jobs.mark_job_run_running(&run.run_id, at, std::process::id())
+            .unwrap();
+        jobs.complete_job_run_step(
+            &run.run_id,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index: 0,
+                target_type: JobTargetType::Activity,
+                target_id: "worktree_setup".into(),
+                started_at: at,
+                finished_at: at,
+                duration_ms: Some(1),
+                exit_code: None,
+                agent_response_json: None,
+                state: JobRunState::Held,
+                error_code: Some("delivery_stale_branch".into()),
+                error_message: Some(format!(
+                    "worktree setup refusing stale base: owner checkout '{}' holds '{branch}' at {local}, and origin/{branch} is at {remote}; the checkout has diverged",
+                    repo.display()
+                )),
+            },
+        )
+        .unwrap();
+        jobs.finalize_job_run(&run.run_id, JobRunState::Held, at, None)
+            .unwrap();
+    };
+    record(now, "agent-main");
+    record(now + Duration::seconds(1), "missing-base");
+
+    let operator = session(McpCapability::Operator);
+    let response = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["detail"]["base"], "agent-main", "{response}");
+    assert_eq!(items[0]["detail"]["ahead"], 1, "{response}");
+    assert_eq!(items[0]["detail"]["behind"], 1, "{response}");
+
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert_eq!(degraded[0]["kind"], "delivery_stale_base", "{response}");
+    assert_eq!(degraded[0]["code"], "source_unavailable", "{response}");
+    assert_eq!(degraded[0]["subject"], "missing-base", "{response}");
+    let message = degraded[0]["message"].as_str().unwrap();
+    assert!(message.contains("missing-base"), "{response}");
+    assert!(message.contains("refs/heads/missing-base"), "{response}");
+}
