@@ -12,7 +12,11 @@ spec:
     targets are normalized from that pinned tree with the original and normalized
     values retained. Stale or malformed tasks are reported without writes while
     independently valid siblings still apply. Each accepted task mutation and
-    idempotency receipt commits atomically. Every other task
+    idempotency receipt commits atomically. When preparation recorded
+    `required_existing_selectors` for a task, apply verifies that every
+    required existing target (or a narrowed `symbol:` selector on its file) is
+    retained alongside any granted creation selectors, refusing omissions as
+    `invalid` with an actionable error. Every other task
     field, lifecycle state, dispatch state, and recommendation remains unchanged
     unless explicit promotion authority arrives with one authority record:
     a CI sweep's exact filing record (`ci_sweep_filing`) or an

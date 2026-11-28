@@ -120,6 +120,29 @@ pub(super) fn scope_with(
             )),
         ));
     }
+    let allows_finding_invalid = assessment
+        .get(super::super::FINDING_INVALID)
+        .is_some_and(|value| !value.is_null())
+        && context.source.is_some()
+        && current
+            .as_ref()
+            .is_some_and(crate::application::task::is_review_finding);
+    if !snapshot.required_existing_selectors.is_empty()
+        && disposition != "selectors"
+        && !allows_finding_invalid
+    {
+        return Err(task_outcome(
+            task_id,
+            "invalid",
+            Some(format!(
+                "task {task_id} has required existing change target(s) {} established by \
+                 preparation; a {disposition} assessment cannot drop them. Keep them (or narrowed \
+                 symbol: selectors on the same files) alongside any granted creation selectors in \
+                 context_files_after",
+                snapshot.required_existing_selectors.join(", ")
+            )),
+        ));
+    }
     // The pilot cannot revoke operator intent by omission: every granted
     // target it left out is kept, and reported.
     let mut after = selectors.values;
@@ -164,6 +187,23 @@ pub(super) fn scope_with(
             )
             .cloned()
             .collect();
+    }
+    if disposition == "selectors" && !snapshot.required_existing_selectors.is_empty() {
+        let missing_required =
+            missing_required_existing(&snapshot.required_existing_selectors, &after);
+        if !missing_required.is_empty() {
+            return Err(task_outcome(
+                task_id,
+                "invalid",
+                Some(format!(
+                    "task {task_id} omitted required existing change target(s) {} established by \
+                     preparation; return both these existing targets (or narrowed symbol: \
+                     selectors on the same files) and any granted creation selectors in \
+                     context_files_after",
+                    missing_required.join(", ")
+                )),
+            ));
+        }
     }
     let reauthorization = unauthorized_missing_targets(
         action,
@@ -258,4 +298,34 @@ fn landed_creation_scope(
     assessment["disposition"] = json!("selectors");
     assessment["context_files_after"] = json!(selectors.values);
     Ok(selectors.values)
+}
+
+fn missing_required_existing<'a>(required: &'a [String], after: &[String]) -> Vec<&'a str> {
+    required
+        .iter()
+        .filter(|target| {
+            !after
+                .iter()
+                .any(|candidate| selector_satisfies_required(candidate, target))
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+fn selector_satisfies_required(candidate: &str, required: &str) -> bool {
+    if candidate == required {
+        return true;
+    }
+    let narrowing_pair = (required.starts_with("file:") && candidate.starts_with("symbol:"))
+        || (required.starts_with("symbol:") && candidate.starts_with("file:"));
+    if !narrowing_pair {
+        return false;
+    }
+    matches!(
+        (
+            orbit_common::fs::selector::anchor_path(candidate),
+            orbit_common::fs::selector::anchor_path(required),
+        ),
+        (Ok(candidate_anchor), Ok(required_anchor)) if candidate_anchor == required_anchor
+    )
 }

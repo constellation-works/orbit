@@ -141,6 +141,10 @@ pub(super) const COMMENT_HYGIENE_BATCHES: &str = "comment_hygiene_batches";
 pub(super) const CONTEXT_CREATION_SELECTORS: &str = "context_creation_selectors";
 pub(super) const CONTEXT_CREATION_IDENTITY: &str = "context_creation_identity";
 
+/// Prepared-snapshot and partition field carrying the existing selectors
+/// trusted preparation explicitly established as required changes.
+pub(super) const REQUIRED_EXISTING_SELECTORS: &str = "required_existing_selectors";
+
 /// Assessment fields apply attaches: granted creation targets the pilot
 /// omitted and apply kept, and dropped missing selectors no grant covers,
 /// each naming the operator reauthorization path.

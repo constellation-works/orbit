@@ -279,7 +279,7 @@ fn validate_selector_at_source(
     }
 }
 
-pub(super) fn validate_selector_target_kind(
+pub(in super::super) fn validate_selector_target_kind(
     action: &str,
     task_id: &str,
     selector: &str,

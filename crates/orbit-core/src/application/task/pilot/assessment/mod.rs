@@ -13,4 +13,5 @@ pub(super) use recommendations::{
 pub(super) use review_evidence::{retained_review_evidence, review_filed, reviewed_evidence_drops};
 pub(super) use selectors::{
     SelectorCheck, ValidatedSelectors, unauthorized_missing_targets, validate_after_selectors,
+    validate_selector_target_kind,
 };
