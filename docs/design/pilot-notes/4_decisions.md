@@ -2,7 +2,7 @@
 title: Pilot Notes — Decisions
 owner: claude
 created_date: 2026-11-27
-updated_date: 2026-11-27
+updated_date: 2026-11-28
 last_validated: 2026-11-28
 status: Accepted
 feature: pilot-notes
@@ -71,8 +71,33 @@ the assessment is applied. A note is never repaired by a correction round.
 - Cost: a workspace can lose its notes without any task failing. Whoever relies on a note has
   to watch `doctor` or the audit event, and has to cope with a task that has none.
 
+## A claimed leaf does not pilot, so claimed pilots get no note capture
+
+**Recorded:** 2026-11-28 · [ORB-29590]
+
+### Context
+
+The approved design (§6) gave a claimed leaf's pilot a note capture in the claim receipt, the
+way tag instructions are captured. Tracing the claimed path found that no leaf runs a pilot:
+the leaf's jobs have no pilot step, and the pilot's claim is the owner's member attempt
+([design §6](./2_design.md#6-claimed-pilots)).
+
+### Decision
+
+Pilots run on the owner only. A claimed task's notes are the owner's notes, prepared from the
+owner's config and files. The claim receipt carries no note capture, and no leaf applies one.
+ORB-29590 closes without code.
+
+### Consequences
+
+- The notes need no receipt field and no leaf-side apply path, and a replica's mapping never
+  reaches a pilot prompt.
+- Cost: whether a leaf can reach an explicit pilot submission by another route is not traced
+  ([design §9](./2_design.md#9-concerns--honest-limitations)).
+
 ## Task References
 
 - [ORB-29567] — designed pilot notes; the operator approved both decisions with it.
+- [ORB-29590] — traced the claimed path and closed the claimed-pilot capture without code.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
