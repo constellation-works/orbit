@@ -10,14 +10,14 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::contracts::DEPENDABOT_TAG;
-use crate::application::sweep_filing::duplicate_tasks::{
+use crate::application::task::{SourceGit, TaskAddParams, TaskAutomationPort};
+use crate::unit::sweep_filing::duplicate_tasks::{
     DuplicateMatchKind, DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
     find_covering_task,
 };
-use crate::application::sweep_filing::{
+use crate::unit::sweep_filing::{
     bounded_u64, digest, display, seeded_file_selectors, truncate_chars,
 };
-use crate::application::task::{SourceGit, TaskAddParams, TaskAutomationPort};
 
 use super::code_groups;
 use super::code_groups::{

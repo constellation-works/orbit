@@ -7,7 +7,11 @@ use super::ci_failure::admission;
 use crate::OrbitRuntime;
 use crate::application::task::{CiSweepAdmission, CiSweepAdmissionRequest, TaskSweepFilingPort};
 
-impl TaskSweepFilingPort for OrbitRuntime {
+/// Adapter binding [`TaskSweepFilingPort`] to CI-sweep admission.
+#[expect(dead_code, reason = "admission decides from its request alone")]
+pub(crate) struct TaskPort<'a>(pub(crate) &'a OrbitRuntime);
+
+impl TaskSweepFilingPort for TaskPort<'_> {
     fn ci_sweep_admission(
         &self,
         request: CiSweepAdmissionRequest<'_>,

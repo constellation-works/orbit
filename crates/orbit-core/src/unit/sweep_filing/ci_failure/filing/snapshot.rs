@@ -10,9 +10,9 @@ use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::sweep_filing::bounded_u64;
-use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 use crate::application::task::TaskAddParams;
+use crate::unit::sweep_filing::bounded_u64;
+use crate::unit::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 
 use super::super::cancellation::{
     drop_inconclusive_log_errors, inconclusive_audit, split_inconclusive_cancellations,
@@ -30,7 +30,7 @@ use super::{
     DEFAULT_MAX_TASKS, MAX_MAX_TASKS, OUTCOME_CAPABILITY_UNAVAILABLE, OUTCOME_DEFERRED,
     OUTCOME_HINT_RATE_LIMITED, SUPPORTED_SCHEMA_VERSION,
 };
-use crate::application::sweep_filing::ci_failure::dependency_fold::{
+use crate::unit::sweep_filing::ci_failure::dependency_fold::{
     IncompleteWaiter, split_waiters_of_deferred_leaves,
 };
 

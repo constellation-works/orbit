@@ -15,10 +15,10 @@ use super::super::evidence::{
 use super::file_clusters::{DependencyFold, FiledClusters};
 use super::snapshot::{FilingSnapshot, empty_snapshot_detail};
 use super::{OUTCOME_CURRENT_FAILURES, OUTCOME_DEFERRED, OUTCOME_NO_CURRENT_FAILURE};
-use crate::application::sweep_filing::ci_failure::dependency_fold::{
+use crate::unit::sweep_filing::ci_failure::dependency_fold::{
     IncompleteWaiter, sibling_cluster_for,
 };
-use crate::application::sweep_filing::ci_failure::fields::value_string;
+use crate::unit::sweep_filing::ci_failure::fields::value_string;
 
 /// No cluster is complete enough to file.
 pub(super) fn empty_clusters_outcome(

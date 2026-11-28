@@ -15,9 +15,9 @@ use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use serde_json::{Value, json};
 
 use crate::application::contracts::CI_FAILURE_TAG;
-use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
-use crate::application::sweep_filing::{bounded_error, digest, is_open_ci_owner_status};
 use crate::application::task::TaskAddParams;
+use crate::unit::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
+use crate::unit::sweep_filing::{bounded_error, digest, is_open_ci_owner_status};
 
 use super::evidence::retryable_pipeline_error;
 use super::fields::{truncate_bytes, value_string};

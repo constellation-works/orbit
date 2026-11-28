@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
-use crate::application::sweep_filing::bounded_error;
+use crate::unit::sweep_filing::bounded_error;
 
 /// What one retention pass did. `observation_errors` are recorded and do not
 /// fail the sweep; `deferred_attribution` is only the receipts that were queued.

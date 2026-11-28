@@ -25,19 +25,22 @@ use crate::application::review::{ReviewCandidateSizePort, ReviewLandingDispatchP
 use crate::application::tag_instructions::TagInstructionExperimentPort;
 use crate::application::task::{
     TaskCodebasePort, TaskCorpusPort, TaskEvolutionPort, TaskExperimentPort, TaskNoticePort,
-    TaskResidentPort,
+    TaskResidentPort, TaskSweepFilingPort,
 };
 use crate::unit::landing;
 pub(crate) use crate::unit::landing::ReviewPort as ReviewLandingDispatch;
+pub(crate) use crate::unit::sweep_filing::TaskPort as TaskSweepFiling;
 
 const _: () = {
     const fn binds_task_evolution<T: TaskEvolutionPort>() {}
     const fn binds_task_notice<T: TaskNoticePort>() {}
     const fn binds_task_resident<T: TaskResidentPort>() {}
+    const fn binds_task_sweep_filing<T: TaskSweepFilingPort>() {}
 
     binds_task_evolution::<TaskEvolution<'_>>();
     binds_task_notice::<TaskNotice<'_>>();
     binds_task_resident::<TaskResident<'_>>();
+    binds_task_sweep_filing::<TaskSweepFiling<'_>>();
 };
 
 const _: () = {

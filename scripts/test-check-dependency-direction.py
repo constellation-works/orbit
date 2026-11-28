@@ -517,7 +517,7 @@ class RelativeImportTests(unittest.TestCase):
         # Each owner defines its own name, so a row's call is reported only when
         # the guard derives that owner's inherent names.
         owners = ("automation", "job", "review", "distributed", "pull_drain",
-                  "admission", "backlog_forecast", "sweep_filing", "workspace_auto")
+                  "admission", "backlog_forecast", "workspace_auto")
         self.check_rows(
             [("task/worker.rs",
               "impl OrbitRuntime {\n    pub(crate) fn drive_task(&self) {\n"
@@ -1203,9 +1203,18 @@ class RelativeImportTests(unittest.TestCase):
                 "    crate::app::codebase::landed_task_lines_changed(runtime);\n}\n",
         }, rejected=False, base=core_src)
 
-    def test_forecast_cannot_reach_sweep_filing(self):
-        self.check_import("backlog_forecast/probe.rs",
-                          "use crate::application::sweep_filing::Probe;", True)
+    def test_lower_modules_cannot_reach_sweep_filing(self):
+        modules = ("contracts", "task", "job", "review", "backlog_forecast")
+        self.check_rows([
+            row for module in modules for row in (
+                (f"{module}/probe.rs", "use crate::unit::sweep_filing::Probe;\n"),
+                (f"{module}/deep/probe.rs",
+                 "fn probe() { crate::unit::sweep_filing::step(); }\n"),
+                (f"{module}/probe.rs", "use crate::unit::{\n    sweep_filing::Probe,\n};\n"),
+                (f"{module}/probe.rs",
+                 "use super::super::super::unit::sweep_filing::Probe;\n"),
+            )
+        ], rejected=True)
 
     def test_qualified_self_inherent_calls_rejected(self):
         # [ORB-22159] `<OrbitRuntime>::name(` names the same inherent method as
@@ -1902,7 +1911,7 @@ class RelativeImportTests(unittest.TestCase):
     def test_commented_grouped_imports_rejected(self):
         for owner, modules in (
             ("job", ("distributed", "pull_drain", "review")),
-            ("task", ("job", "review", "distributed", "sweep_filing", "workspace_auto")),
+            ("task", ("job", "review", "distributed", "workspace_auto")),
         ):
             self.check_rows([
                 (f"{owner}/worker.rs", f"use {tree};\n")

@@ -12,8 +12,8 @@ use super::filing::CI_FAILURE_KEY_TAG_PREFIX;
 use super::log_signature::{compiler_cause, compiler_diagnostic_set, error_signature};
 use crate::OrbitRuntime;
 use crate::application::contracts::CI_FAILURE_TAG;
-use crate::application::sweep_filing::digest;
-use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
+use crate::unit::sweep_filing::digest;
+use crate::unit::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
 
 pub(super) struct TaskCiIdentity {
     pub(super) identity: CiFailureIdentity,

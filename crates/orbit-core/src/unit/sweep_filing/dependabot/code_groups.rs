@@ -39,7 +39,7 @@ use super::filing::{
     append_collection_bounds, field, line_suffix, priority_for_rank, repository_name,
     severity_rank,
 };
-use crate::application::sweep_filing::{digest, display, seeded_file_selectors, truncate_chars};
+use crate::unit::sweep_filing::{digest, display, seeded_file_selectors, truncate_chars};
 
 /// One leaf task has to stay executable, so a group is bounded both by how
 /// many alerts it carries and by how many distinct files it spans. A cause

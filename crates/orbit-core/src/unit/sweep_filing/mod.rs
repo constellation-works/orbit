@@ -5,10 +5,18 @@
 //! secret scanning alerts. `duplicate_tasks` decides whether an existing task
 //! already owns a finding. This module holds the helpers both sweeps share.
 
-pub(crate) mod ci_failure;
-pub(crate) mod dependabot;
+mod ci_failure;
+
+mod dependabot;
+
 mod duplicate_tasks;
+
 mod task_port;
+
+pub(crate) use ci_failure::filing::file_ci_failure_tasks;
+pub(crate) use dependabot::consolidate::consolidate_code_scanning_tasks;
+pub(crate) use dependabot::filing::file_dependabot_alert_tasks;
+pub(crate) use task_port::TaskPort;
 
 use std::collections::BTreeSet;
 use std::path::Path;

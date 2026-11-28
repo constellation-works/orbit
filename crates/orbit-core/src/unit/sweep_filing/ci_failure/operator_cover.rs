@@ -15,8 +15,8 @@ use super::identity::CiTaskIdentities;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
 use crate::application::contracts::CI_FAILURE_TAG;
-use crate::application::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
-use crate::application::sweep_filing::{full_revision, landed_task_commit};
+use crate::unit::sweep_filing::duplicate_tasks::DuplicateTaskLookup;
+use crate::unit::sweep_filing::{full_revision, landed_task_commit};
 
 /// Hours an archived or rejected CI sweep task suppresses re-filing.
 ///
