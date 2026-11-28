@@ -141,6 +141,9 @@ const ORBIT_ENVELOPE_VARS: &[&str] = &[
     env_vars::ORBIT_WORKTREE_ROOT,
     "ORBIT_SCRATCH_DIR",
     env_vars::ORBIT_BIN,
+    // A nested tool launched by an agent needs the same run-scoped broker;
+    // the broker authenticates the sandbox peer and enforces the run policy.
+    PLUGIN_BROKER_ENV,
     env_vars::ORBIT_STEP_INDEX,
     env_vars::ORBIT_TASK_ACTOR_KIND,
     env_vars::ORBIT_PROC_ALLOWED_PROGRAMS,
