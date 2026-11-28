@@ -17,9 +17,11 @@ use crate::parse_timestamp;
 thread_local! {
     /// Full step-table hydrations (`read_steps` / `read_steps_for_runs`) that
     /// select `agent_response_json`, on this thread.
-    pub(crate) static JOB_RUN_FULL_STEP_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub(crate) static JOB_RUN_FULL_STEP_READS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
     /// `JobRun` rows decoded by `row_to_job_run_with_input_keys` on this thread.
-    pub(crate) static JOB_RUN_ROWS_HYDRATED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub(crate) static JOB_RUN_ROWS_HYDRATED: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
 }
 
 pub(super) fn get_job_run_for_workspace_conn(

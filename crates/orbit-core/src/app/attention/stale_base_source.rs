@@ -17,9 +17,13 @@ use serde_json::json;
 use std::time::Instant;
 
 const KIND: AttentionKind = AttentionKind::DeliveryStaleBase;
+
 const STALE_BASE_HOLD_QUERY_LIMIT: usize = 128;
+
 const STALE_BASE_CLEAR_QUERY_LIMIT: usize = 64;
+
 const STALE_BASE_CLEAR_LOOKBACK_MINUTES: i64 = 5;
+
 const STALE_BASE_INPUT_KEYS: &[&str] = &["base_sync", "base_branch"];
 
 struct Hold<'a> {

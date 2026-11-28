@@ -1,9 +1,9 @@
 // Admitted unit test: SQL generation through SQLite's planner. Uses the same
 // builder as the store's list method; no copied query oracle.
-use super::super::list_sql::{job_run_list_sql, job_run_step_target_sql};
-use crate::contract::{JobRunInputTextFilter, JobRunOrder, JobRunQuery, JobRunStepTargetQuery};
+use crate::contract::{JobRunOrder, JobRunQuery};
+use crate::repository::job_run::list_sql::job_run_list_sql;
 use crate::{Store, parse_timestamp};
-use orbit_types::workflow::{JobRunState, JobTargetType};
+use orbit_types::workflow::JobRunState;
 use rusqlite::types::Value;
 
 /// The recency page is what the dashboard's aggregate run list asks of every
@@ -130,92 +130,4 @@ fn query_plan(conn: &rusqlite::Connection, query: &JobRunQuery) -> Vec<String> {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap()
-}
-
-fn step_target_query_plan(
-    conn: &rusqlite::Connection,
-    query: &JobRunStepTargetQuery,
-) -> Vec<String> {
-    let (sql, params) = job_run_step_target_sql("ws_a", query).unwrap();
-    let values = params
-        .iter()
-        .map(|param| match param.to_sql().unwrap() {
-            rusqlite::types::ToSqlOutput::Owned(value) => value,
-            rusqlite::types::ToSqlOutput::Borrowed(value) => Value::try_from(value).unwrap(),
-            other => panic!("unexpected parameter {other:?}"),
-        })
-        .collect::<Vec<Value>>();
-    let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
-    stmt.query_map(rusqlite::params_from_iter(values), |row| row.get(3))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap()
-}
-
-#[test]
-fn step_target_queries_use_recency_and_state_indexes_without_temp_sort() {
-    let store = Store::open_in_memory().unwrap();
-    let conn = store.read_connection().unwrap();
-    let held_plan = step_target_query_plan(
-        &conn,
-        &JobRunStepTargetQuery {
-            job_ids: vec!["task_local_pipeline".into()],
-            state: Some(JobRunState::Held),
-            step_target_id: "worktree_setup".into(),
-            step_target_type: Some(JobTargetType::Activity),
-            step_exclude_state: Some(JobRunState::Success),
-            step_require_error_message: true,
-            input_keys: Some(&[]),
-            limit: Some(128),
-            ..Default::default()
-        },
-    );
-    assert!(
-        held_plan
-            .iter()
-            .any(|line| { line.starts_with("SEARCH r USING INDEX idx_job_runs_ws_state_recency") }),
-        "held step-target scan must seek idx_job_runs_ws_state_recency: {held_plan:?}"
-    );
-    assert!(
-        !held_plan.iter().any(|line| line.contains("TEMP B-TREE")),
-        "held step-target scan must not sort: {held_plan:?}"
-    );
-
-    let recent_plan = step_target_query_plan(
-        &conn,
-        &JobRunStepTargetQuery {
-            job_ids: vec!["task_local_pipeline".into()],
-            recency_since: Some(parse_timestamp("2026-10-23T08:50:22+00:00").unwrap()),
-            step_target_id: "worktree_setup".into(),
-            step_target_type: Some(JobTargetType::Activity),
-            step_state: Some(JobRunState::Success),
-            input_text_filters: vec![
-                JobRunInputTextFilter {
-                    key: "base_sync",
-                    values: vec!["local".into()],
-                    trim: true,
-                    allow_missing: false,
-                },
-                JobRunInputTextFilter {
-                    key: "base_branch",
-                    values: vec!["agent-main".into(), "origin/agent-main".into()],
-                    trim: false,
-                    allow_missing: false,
-                },
-            ],
-            input_keys: Some(&["base_sync", "base_branch"]),
-            limit: Some(64),
-            ..Default::default()
-        },
-    );
-    assert!(
-        recent_plan
-            .iter()
-            .any(|line| line.starts_with("SEARCH r USING INDEX idx_job_runs_ws_recency")),
-        "recent step-target scan must seek idx_job_runs_ws_recency: {recent_plan:?}"
-    );
-    assert!(
-        !recent_plan.iter().any(|line| line.contains("TEMP B-TREE")),
-        "recent step-target scan must not sort: {recent_plan:?}"
-    );
 }

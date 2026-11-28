@@ -18,14 +18,11 @@
 
 mod input_keys;
 mod list_sql;
-pub(crate) mod rows;
+mod rows;
 mod runs;
 mod state;
 mod task_runs;
 mod write;
-
-#[cfg(test)]
-mod tests;
 
 use std::marker::PhantomData;
 
@@ -63,3 +60,16 @@ impl<'a, 'tx> JobRunRepository<'a, Tx<'tx>> {
         }
     }
 }
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn job_run_full_step_reads() -> u64 {
+    rows::JOB_RUN_FULL_STEP_READS.with(std::cell::Cell::get)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn job_run_rows_hydrated() -> u64 {
+    rows::JOB_RUN_ROWS_HYDRATED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+mod tests;
