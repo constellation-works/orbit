@@ -12,7 +12,8 @@ use orbit_config::TagInstructionSetting;
 use orbit_store::contract::AdmissionShipContract;
 use orbit_types::workflow::{
     CapturedTagInstructions, ExperimentActivityOverlay, MAX_TAG_INSTRUCTION_PROMPT_BYTES,
-    TAG_INSTRUCTIONS_SCHEMA_VERSION, TagInstruction, TagInstructionError, TagInstructionRefusal,
+    PilotNoteAuditRecord, PilotNotesResolution, TAG_INSTRUCTIONS_SCHEMA_VERSION,
+    TASK_PILOT_ACTIVITY, TagInstruction, TagInstructionError, TagInstructionRefusal,
     TagInstructionRole, TagInstructionSource, select_tag_instructions,
 };
 use serde_json::Value;
@@ -60,6 +61,102 @@ pub(crate) trait TagInstructionExperimentPort {
 }
 
 impl OrbitRuntime {
+    /// Resolve all mapped `[workflow.pilot_notes.<label>]` files for
+    /// `activity_name` at the source revision `input` names.
+    ///
+    /// Returns `None` for any activity other than `task_pilot` or when no
+    /// pilot notes are configured, keeping prompts byte-identical and emitting
+    /// no audit event. Never fails the pilot.
+    pub(crate) fn pilot_notes_for_activity(
+        &self,
+        activity_name: &str,
+        input: &Value,
+    ) -> Option<PilotNotesResolution> {
+        if activity_name != TASK_PILOT_ACTIVITY {
+            return None;
+        }
+        let settings = self.pilot_note_settings();
+        if settings.is_empty() {
+            return None;
+        }
+        let requested_revision = input
+            .get("source_revision")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                input
+                    .get("inspection_revision")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+            });
+        let revision = match requested_revision {
+            Some(rev) => match commit_at(&self.paths().repo_root, rev) {
+                Ok(commit) => commit,
+                Err(reason) => {
+                    let records = settings
+                        .entries()
+                        .map(|(label, path)| {
+                            PilotNoteAuditRecord::disabled(
+                                label,
+                                path,
+                                Some(rev.to_string()),
+                                reason.clone(),
+                            )
+                        })
+                        .collect();
+                    return Some(PilotNotesResolution {
+                        applied: Vec::new(),
+                        records,
+                    });
+                }
+            },
+            None => {
+                let records = settings
+                    .entries()
+                    .map(|(label, path)| {
+                        PilotNoteAuditRecord::disabled(
+                            label,
+                            path,
+                            None,
+                            "no source revision is available for this pilot run".to_string(),
+                        )
+                    })
+                    .collect();
+                return Some(PilotNotesResolution {
+                    applied: Vec::new(),
+                    records,
+                });
+            }
+        };
+
+        let mut applied = Vec::new();
+        let mut records = Vec::new();
+        for (label, path) in settings.entries() {
+            match crate::application::pilot_note::resolve_pilot_note_at(
+                &self.paths().repo_root,
+                &revision,
+                label,
+                path,
+            ) {
+                Ok(note) => {
+                    records.push(note.audit_record());
+                    applied.push(note);
+                }
+                Err(reason) => {
+                    records.push(PilotNoteAuditRecord::disabled(
+                        label,
+                        path,
+                        Some(revision.clone()),
+                        reason,
+                    ));
+                }
+            }
+        }
+        Some(PilotNotesResolution { applied, records })
+    }
+
     /// The tag instructions `activity_name` of `run_id` receives for the task
     /// `input` names, in application order. A claimed leaf answers from its
     /// receipt's capture; every other run resolves this host's mapping, with

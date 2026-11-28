@@ -2,7 +2,7 @@
 
 use crate::app::experiment;
 use orbit_engine::DispatchError;
-use orbit_types::workflow::{ExperimentActivityOverlay, PilotNotesResolution, TagInstruction};
+use orbit_types::workflow::{ExperimentActivityOverlay, TagInstruction};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -53,14 +53,6 @@ pub(super) fn tag_instructions_for_activity(
             }
         },
     )
-}
-
-pub(super) fn pilot_notes_for_activity(
-    runtime: &OrbitRuntime,
-    activity_name: &str,
-    input: &Value,
-) -> Option<PilotNotesResolution> {
-    OrbitRuntime::pilot_notes_for_activity(runtime, activity_name, input)
 }
 
 pub(super) fn experiment_overlays_for_activity(

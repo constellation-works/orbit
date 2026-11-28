@@ -131,7 +131,7 @@ impl Dispatch for EngineHost<'_> {
         activity_name: &str,
         input: &Value,
     ) -> Option<PilotNotesResolution> {
-        agent::pilot_notes_for_activity(self.runtime, activity_name, input)
+        OrbitRuntime::pilot_notes_for_activity(self.runtime, activity_name, input)
     }
 
     fn notices_for_agent_input(
