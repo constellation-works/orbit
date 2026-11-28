@@ -77,6 +77,17 @@ pub mod test_support {
     pub fn listing_bundle_reads() -> u64 {
         crate::boundary::v2_bundle::LISTING_BUNDLE_READS.with(std::cell::Cell::get)
     }
+
+    /// Full job-run step hydrations (`read_steps` / `read_steps_for_runs`) on
+    /// this thread.
+    pub fn job_run_full_step_reads() -> u64 {
+        crate::repository::job_run::rows::JOB_RUN_FULL_STEP_READS.with(std::cell::Cell::get)
+    }
+
+    /// `JobRun` rows decoded on this thread.
+    pub fn job_run_rows_hydrated() -> u64 {
+        crate::repository::job_run::rows::JOB_RUN_ROWS_HYDRATED.with(std::cell::Cell::get)
+    }
 }
 
 pub use boundary::TaskV2Store;

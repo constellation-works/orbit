@@ -13,6 +13,15 @@ use super::input_keys::parse_input_keys;
 use super::list_sql::JOB_RUN_COLUMNS;
 use crate::parse_timestamp;
 
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    /// Full step-table hydrations (`read_steps` / `read_steps_for_runs`) that
+    /// select `agent_response_json`, on this thread.
+    pub(crate) static JOB_RUN_FULL_STEP_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// `JobRun` rows decoded by `row_to_job_run_with_input_keys` on this thread.
+    pub(crate) static JOB_RUN_ROWS_HYDRATED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 pub(super) fn get_job_run_for_workspace_conn(
     conn: &rusqlite::Connection,
     workspace_id: &str,
@@ -42,6 +51,8 @@ pub(super) fn row_to_job_run_with_input_keys(
     row: &rusqlite::Row<'_>,
     input_keys: Option<&[&str]>,
 ) -> rusqlite::Result<JobRun> {
+    #[cfg(any(test, feature = "test-support"))]
+    JOB_RUN_ROWS_HYDRATED.with(|count| count.set(count.get() + 1));
     let attempt: i64 = row.get(2)?;
     let state_raw: String = row.get(3)?;
     let scheduled_raw: String = row.get(4)?;
@@ -87,6 +98,11 @@ pub(super) fn read_steps_for_runs(
     run_ids: &[String],
 ) -> Result<HashMap<String, Vec<JobRunStep>>, OrbitError> {
     let mut grouped: HashMap<String, Vec<JobRunStep>> = HashMap::new();
+    if run_ids.is_empty() {
+        return Ok(grouped);
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    JOB_RUN_FULL_STEP_READS.with(|count| count.set(count.get() + 1));
     for chunk in run_ids.chunks(STEP_RUN_ID_CHUNK) {
         let placeholders = (0..chunk.len())
             .map(|index| format!("?{}", index + 2))
@@ -129,6 +145,8 @@ fn read_steps(
     workspace_id: &str,
     run_id: &str,
 ) -> Result<Vec<JobRunStep>, OrbitError> {
+    #[cfg(any(test, feature = "test-support"))]
+    JOB_RUN_FULL_STEP_READS.with(|count| count.set(count.get() + 1));
     let mut stmt = conn
         .prepare(
             "SELECT step_index, target_type, target_id, state, started_at, finished_at, \
@@ -148,8 +166,12 @@ fn row_to_job_run_step(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRunStep> 
 }
 
 /// Decode a step whose columns start at `offset` (0 for the per-run read,
-/// 1 when a leading `run_id` column is selected alongside).
-fn row_to_job_run_step_at(row: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<JobRunStep> {
+/// 1 when a leading `run_id` column is selected alongside, 18 when joined
+/// after [`JOB_RUN_COLUMNS`]).
+pub(super) fn row_to_job_run_step_at(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<JobRunStep> {
     let step_index: i64 = row.get(offset)?;
     let target_type_raw: String = row.get(offset + 1)?;
     let state_raw: String = row.get(offset + 3)?;

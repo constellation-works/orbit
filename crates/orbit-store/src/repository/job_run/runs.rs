@@ -1,6 +1,6 @@
 //! Run and step rows: reads on any access, writes on a [`Tx`] only.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
@@ -11,14 +11,17 @@ use orbit_types::workflow::{
 use rusqlite::OptionalExtension;
 
 use super::JobRunRepository;
-use super::list_sql::{JOB_RUN_COLUMNS, job_run_filter_sql, job_run_list_sql, latest_job_runs_sql};
+use super::list_sql::{
+    JOB_RUN_COLUMNS, job_run_filter_sql, job_run_list_sql, job_run_step_target_sql,
+    latest_job_runs_sql,
+};
 use super::rows::{
     get_job_run_for_workspace_conn, optional_json, parse_job_run_state, read_steps_for_runs,
-    row_to_job_run, row_to_job_run_with_input_keys,
+    row_to_job_run, row_to_job_run_step_at, row_to_job_run_with_input_keys,
 };
 use super::write::{next_run_id_conn, upsert_job_run_for_workspace_conn};
 use super::{LATEST_JOB_ID_CHUNK, STEP_RUN_ID_CHUNK};
-use crate::contract::{JOB_RUN_TASK_INPUT_KEYS, JobRunQuery};
+use crate::contract::{JOB_RUN_TASK_INPUT_KEYS, JobRunQuery, JobRunStepTargetQuery};
 use crate::store::Tx;
 
 /// The window read behind [`JobRunRepository::list_keyed_window`]: one job's
@@ -177,6 +180,43 @@ impl<Access> JobRunRepository<'_, Access> {
             for run in &mut runs {
                 run.steps = steps_by_run.remove(&run.run_id).unwrap_or_default();
             }
+        }
+        Ok(runs)
+    }
+
+    /// Bounded runs matching `query`, hydrating only matching steps for
+    /// `query.step_target_id` without decoding `agent_response_json`.
+    pub fn list_with_step_target(
+        &self,
+        workspace_id: &str,
+        query: &JobRunStepTargetQuery,
+    ) -> Result<Vec<JobRun>, OrbitError> {
+        let (sql, params) = job_run_step_target_sql(workspace_id, query)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = self.conn.prepare(&sql).map_err(sqlite_store_error)?;
+        let rows = stmt
+            .query_map(param_refs.as_slice(), |row| {
+                Ok((
+                    row_to_job_run_with_input_keys(row, query.input_keys)?,
+                    row_to_job_run_step_at(row, 18)?,
+                ))
+            })
+            .map_err(sqlite_store_error)?;
+        let mut runs: Vec<JobRun> = Vec::new();
+        let mut index_by_run_id: HashMap<String, usize> = HashMap::new();
+        for row in rows {
+            let (mut run, step) = row.map_err(sqlite_store_error)?;
+            if let Some(&index) = index_by_run_id.get(&run.run_id) {
+                runs[index].steps.push(step);
+            } else {
+                index_by_run_id.insert(run.run_id.clone(), runs.len());
+                run.steps.push(step);
+                runs.push(run);
+            }
+        }
+        for run in &mut runs {
+            run.steps.sort_by_key(|step| step.step_index);
         }
         Ok(runs)
     }

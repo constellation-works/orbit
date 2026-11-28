@@ -18,7 +18,7 @@
 
 mod input_keys;
 mod list_sql;
-mod rows;
+pub(crate) mod rows;
 mod runs;
 mod state;
 mod task_runs;

@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_store::Store;
-use orbit_store::contract::{DrainIntentRecord, JobRunQuery};
+use orbit_store::contract::{DrainIntentRecord, JobRunQuery, JobRunStepTargetQuery};
 use orbit_types::task::ExecutionLocation;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 
@@ -107,6 +107,18 @@ impl JobRuns {
 
     pub fn list_job_runs_filtered(&self, query: &JobRunQuery) -> Result<Vec<JobRun>, OrbitError> {
         self.store.read()?.job_run().list(&self.workspace_id, query)
+    }
+
+    /// Bounded runs matching `query`, hydrating only matching steps for
+    /// `query.step_target_id` without decoding `agent_response_json`.
+    pub fn list_job_runs_with_step_target(
+        &self,
+        query: &JobRunStepTargetQuery,
+    ) -> Result<Vec<JobRun>, OrbitError> {
+        self.store
+            .read()?
+            .job_run()
+            .list_with_step_target(&self.workspace_id, query)
     }
 
     /// Up to `per_task_limit` recent runs of `job_id` for each requested

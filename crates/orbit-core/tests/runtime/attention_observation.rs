@@ -8,7 +8,8 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::OrbitRuntime;
 use orbit_store::contract::{
     AdmissionRunContext, ClaimInspection, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
-    ExecutionLocation, JobRunStepParams, LocalPullAdmission, LocalPullPhase, PullDestination,
+    ExecutionLocation, JobRunOrder, JobRunQuery, JobRunStepParams, LocalPullAdmission,
+    LocalPullPhase, PullDestination,
 };
 use orbit_types::task::TaskStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
@@ -1502,5 +1503,235 @@ fn stale_owner_base_attention_ignores_later_remote_sync_runs() {
     assert!(
         cleared_by_claimed["items"].as_array().unwrap().is_empty(),
         "{cleared_by_claimed}"
+    );
+}
+
+#[test]
+fn stale_owner_base_attention_bounds_queries_across_historical_runs() {
+    let (root, runtime) = attention_runtime();
+    let repo = root.path().join("repo");
+    let (_, local, remote) = setup_diverged_owner_base(&repo);
+    let now = Utc::now() - Duration::minutes(10);
+    let operator = session(McpCapability::Operator);
+    let jobs = runtime.stores().jobs();
+
+    // Seed 240 unrelated historical delivery runs across all four leaf jobs
+    // (successes, failures, and non-stale-base holds like baseline_red) with
+    // unprojected input fields and malformed agent_response_json payloads on
+    // both worktree_setup and implement steps.
+    let db = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    let ws_id = runtime.workspace_id().unwrap();
+    let history_at = (now - Duration::hours(2)).to_rfc3339();
+    for index in 0..240 {
+        let job_id = match index % 4 {
+            0 => "task_pr_pipeline",
+            1 => "task_local_pipeline",
+            2 => "task_claimed_pr_pipeline",
+            _ => "task_claimed_local_pipeline",
+        };
+        let state = match index % 6 {
+            0 => "held",
+            1 => "failed",
+            _ => "success",
+        };
+        let run_id = format!("hist-run-{index}");
+        let input = json!({
+            "base_branch": "agent-main",
+            "base_sync": if index % 4 == 1 { "local" } else { "remote" },
+            "task_ids": ["ORB-99999", "ORB-99998"],
+            "huge_unprojected_blob": "x".repeat(512),
+        });
+        db.execute(
+            "INSERT INTO job_runs(
+                run_id, workspace_id, job_id, attempt, state, scheduled_at,
+                started_at, finished_at, duration_ms, created_at, input_json
+             ) VALUES (?1, ?2, ?3, 1, ?4, ?5, ?5, ?5, 1, ?5, ?6)",
+            rusqlite::params![run_id, ws_id, job_id, state, history_at, input.to_string()],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO job_run_steps(
+                workspace_id, run_id, step_index, target_type, target_id, state,
+                started_at, finished_at, duration_ms, agent_response_json
+             ) VALUES (?1, ?2, 0, 'activity', 'worktree_setup', 'success', ?3, ?3, 1, '{malformed')",
+            rusqlite::params![ws_id, run_id, history_at],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO job_run_steps(
+                workspace_id, run_id, step_index, target_type, target_id, state,
+                started_at, finished_at, duration_ms, error_code, error_message, agent_response_json
+             ) VALUES (?1, ?2, 1, 'activity', 'implement', ?3, ?4, ?4, 1, ?5, ?6, '{malformed')",
+            rusqlite::params![
+                ws_id,
+                run_id,
+                state,
+                history_at,
+                if state == "held" {
+                    Some("baseline_red")
+                } else {
+                    None
+                },
+                if state == "held" {
+                    Some("baseline is red")
+                } else {
+                    None
+                },
+            ],
+        )
+        .unwrap();
+    }
+
+    // With no stale-base holds, default attention read does zero full step
+    // hydrations and hydrates zero run rows.
+    let full_steps_before = orbit_core::test_support::job_run_full_step_reads();
+    let rows_before = orbit_core::test_support::job_run_rows_hydrated();
+    let empty = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(empty["items"].as_array().unwrap().is_empty(), "{empty}");
+    assert!(empty["degraded"].as_array().unwrap().is_empty(), "{empty}");
+    assert_eq!(
+        orbit_core::test_support::job_run_full_step_reads() - full_steps_before,
+        0
+    );
+    assert_eq!(
+        orbit_core::test_support::job_run_rows_hydrated() - rows_before,
+        0
+    );
+
+    // Record an active stale-base hold plus an extra implement step with
+    // malformed agent_response_json, then record newer remote-sync runs and
+    // another branch's local run.
+    let hold_message = diverged_hold_message(&repo, "agent-main", &local, &remote);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({
+                "base_branch": "agent-main",
+                "base_sync": "local",
+                "extra_payload": "ignored"
+            }),
+            now,
+            JobRunState::Held,
+            Some(hold_message),
+        ),
+    );
+    let held_run_id = jobs
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some("task_local_pipeline".into()),
+            state: Some(JobRunState::Held),
+            order_by: JobRunOrder::Recency,
+            limit: Some(1),
+            include_steps: false,
+            ..Default::default()
+        })
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .run_id;
+    db.execute(
+        "INSERT INTO job_run_steps(
+            workspace_id, run_id, step_index, target_type, target_id, state,
+            started_at, finished_at, duration_ms, agent_response_json
+         ) VALUES (?1, ?2, 1, 'activity', 'implement', 'failed', ?3, ?3, 1, '{malformed')",
+        rusqlite::params![ws_id, held_run_id, now.to_rfc3339()],
+    )
+    .unwrap();
+
+    for (offset, (job_id, input)) in [
+        (
+            "task_pr_pipeline",
+            json!({"base_branch": "agent-main", "base_sync": "remote"}),
+        ),
+        (
+            "task_local_pipeline",
+            json!({"base_branch": "other-branch", "base_sync": "local"}),
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        record_setup_run(
+            &runtime,
+            SetupRun::at(
+                job_id,
+                input,
+                now + Duration::seconds((offset + 1) as i64),
+                JobRunState::Success,
+                None,
+            ),
+        );
+    }
+
+    let full_steps_before = orbit_core::test_support::job_run_full_step_reads();
+    let rows_before = orbit_core::test_support::job_run_rows_hydrated();
+    let held = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert_eq!(held["items"].as_array().unwrap().len(), 1, "{held}");
+    assert_eq!(held["items"][0]["detail"]["base"], "agent-main", "{held}");
+    assert_eq!(held["items"][0]["detail"]["ahead"], 1, "{held}");
+    assert_eq!(held["items"][0]["detail"]["behind"], 1, "{held}");
+    assert_eq!(
+        orbit_core::test_support::job_run_full_step_reads() - full_steps_before,
+        0
+    );
+    assert_eq!(
+        orbit_core::test_support::job_run_rows_hydrated() - rows_before,
+        1,
+        "only the matching held run should be hydrated"
+    );
+
+    // Clearing via a later local-sync worktree_setup success (even with a
+    // malformed implement step payload) clears the hold with bounded reads.
+    let clear_at = now + Duration::seconds(10);
+    record_setup_run(
+        &runtime,
+        SetupRun::at(
+            "task_local_pipeline",
+            json!({
+                "base_branch": "agent-main",
+                "base_sync": "local",
+                "extra_payload": "ignored"
+            }),
+            clear_at,
+            JobRunState::Success,
+            None,
+        ),
+    );
+    let clear_run_id = jobs
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some("task_local_pipeline".into()),
+            state: Some(JobRunState::Success),
+            order_by: JobRunOrder::Recency,
+            limit: Some(1),
+            include_steps: false,
+            ..Default::default()
+        })
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap()
+        .run_id;
+    db.execute(
+        "INSERT INTO job_run_steps(
+            workspace_id, run_id, step_index, target_type, target_id, state,
+            started_at, finished_at, duration_ms, agent_response_json
+         ) VALUES (?1, ?2, 1, 'activity', 'implement', 'success', ?3, ?3, 1, '{malformed')",
+        rusqlite::params![ws_id, clear_run_id, clear_at.to_rfc3339()],
+    )
+    .unwrap();
+
+    let full_steps_before = orbit_core::test_support::job_run_full_step_reads();
+    let rows_before = orbit_core::test_support::job_run_rows_hydrated();
+    let cleared = call(&runtime, json!({"kind": "delivery_stale_base"}), &operator);
+    assert!(cleared["items"].as_array().unwrap().is_empty(), "{cleared}");
+    assert_eq!(
+        orbit_core::test_support::job_run_full_step_reads() - full_steps_before,
+        0
+    );
+    assert_eq!(
+        orbit_core::test_support::job_run_rows_hydrated() - rows_before,
+        2,
+        "only the held run and clearing run should be hydrated"
     );
 }

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use orbit_types::workflow::JobRunState;
+use orbit_types::workflow::{JobRunState, JobTargetType};
 
 #[derive(Debug, Clone)]
 pub struct JobRunQuery {
@@ -78,4 +78,48 @@ pub enum JobRunOrder {
     /// by: `finished_at`, else `started_at`, else `created_at`, each DESC
     /// with `run_id ASC` as the deterministic tiebreak.
     Recency,
+}
+
+/// Top-level string predicate on `job_runs.input_json` for a bounded
+/// step-targeted run query.
+#[derive(Debug, Clone)]
+pub struct JobRunInputTextFilter {
+    /// Top-level JSON object key name (ASCII identifier characters only).
+    pub key: &'static str,
+    /// Allowed string values for the key.
+    pub values: Vec<String>,
+    /// Whether `TRIM(...)` is applied before comparing the JSON string value.
+    pub trim: bool,
+    /// Whether an absent or JSON-`null` key also matches.
+    pub allow_missing: bool,
+}
+
+/// Bounded run query filtered by one recorded step target (`job_run_steps`),
+/// hydrating only matching steps without `agent_response_json`.
+#[derive(Debug, Clone, Default)]
+pub struct JobRunStepTargetQuery {
+    /// Allowed `job_id` values. Empty matches every job.
+    pub job_ids: Vec<String>,
+    /// Optional run-level `state` filter.
+    pub state: Option<JobRunState>,
+    /// Inclusive lower bound on run recency (`finished_at`, else `started_at`,
+    /// else `created_at`).
+    pub recency_since: Option<DateTime<Utc>>,
+    /// Exact `target_id` on `job_run_steps` to select and hydrate.
+    pub step_target_id: String,
+    /// Optional `target_type` on `job_run_steps`.
+    pub step_target_type: Option<JobTargetType>,
+    /// Optional exact `state` required on the matching step.
+    pub step_state: Option<JobRunState>,
+    /// Optional `state` excluded on the matching step (`step.state <> ?`).
+    pub step_exclude_state: Option<JobRunState>,
+    /// Require the matching step to carry a non-null `error_message`.
+    pub step_require_error_message: bool,
+    /// Optional top-level string filters on `job_runs.input_json`.
+    pub input_text_filters: Vec<JobRunInputTextFilter>,
+    /// Top-level `input_json` keys to hydrate (`Some(&[])` skips `input_json`).
+    pub input_keys: Option<&'static [&'static str]>,
+    /// Maximum matching step-run rows to return, ordered by run recency
+    /// descending then `run_id` ascending.
+    pub limit: Option<usize>,
 }
