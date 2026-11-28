@@ -6,8 +6,10 @@ feature-board generation or --check fail or change their output, while a
 Git-visible feature with a missing overview or a missing/invalid stage
 still fails with a targeted error. A Git query that fails must stop
 generation and --check with a Git diagnostic and leave the generated
-files untouched. Exercises the public generator script rather than its
-shell internals.
+files untouched. A different tracked path that contains a newline must
+not make that ignored notes directory, or an ignored overview, look
+visible. Exercises the public generator script rather than its shell
+internals.
 """
 import subprocess
 import sys
@@ -60,6 +62,36 @@ def run_generator(repo, *args):
         ["bash", str(GENERATOR), *args, str(repo)],
         capture_output=True, text=True, check=False,
     )
+
+
+def stage_newline_decoy(repo, suffix):
+    """Stage one file whose Git path contains a newline, then `suffix`.
+
+    `suffix` is the second record a newline-splitting reader would invent.
+    The newline sits inside a single path component, so Git stores one path.
+    """
+    relative = "docs/assets/archive\n" + suffix
+    path = repo
+    for part in relative.split("/")[:-1]:
+        path = path / part
+    path.mkdir(parents=True, exist_ok=True)
+    (path / relative.split("/")[-1]).write_text("decoy\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "--", relative],
+        cwd=repo, check=True, capture_output=True, text=True,
+    )
+    listed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    records = [record for record in listed.stdout.split(b"\0") if record]
+    encoded = relative.encode("utf-8")
+    if records.count(encoded) != 1:
+        raise AssertionError(
+            "fixture must stage one Git path that contains a newline, "
+            f"got {records!r}"
+        )
+    return relative
 
 
 def commit_all(repo):
@@ -122,6 +154,129 @@ class GenerateDocIndexesFixture(unittest.TestCase):
             self.assertEqual(rerun.returncode, 0, rerun.stdout + rerun.stderr)
             self.assertEqual(board.read_bytes(), with_notes_board)
             self.assertEqual(index.read_bytes(), with_notes_index)
+
+    def test_newline_in_other_path_ignores_local_notes(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="doc-indexes-newline-notes-", dir=scratch
+        ) as directory:
+            repo = make_repo(directory)
+            notes = repo / "docs/design/local-notes"
+            notes.mkdir()
+            (notes / "notes.md").write_text(
+                "# Scratch notes\n\nLocal only.\n", encoding="utf-8"
+            )
+            (repo / ".gitignore").write_text(
+                "docs/design/local-notes/\n", encoding="utf-8"
+            )
+            ignored = subprocess.run(
+                ["git", "check-ignore", "-q",
+                 "docs/design/local-notes/notes.md"],
+                cwd=repo, check=False,
+            )
+            self.assertEqual(
+                ignored.returncode, 0,
+                "fixture must actually ignore the notes file",
+            )
+
+            baseline = run_generator(repo)
+            self.assertEqual(
+                baseline.returncode, 0, baseline.stdout + baseline.stderr
+            )
+            board = repo / "docs/design/FEATURES.md"
+            index = repo / "docs/INDEX.md"
+            self.assertIn("Valid Feature", board.read_text(encoding="utf-8"))
+            self.assertNotIn("local-notes", board.read_text(encoding="utf-8"))
+            before_board = board.read_bytes()
+            before_index = index.read_bytes()
+
+            stage_newline_decoy(
+                repo, "docs/design/local-notes/record.txt"
+            )
+            still_ignored = subprocess.run(
+                ["git", "check-ignore", "-q",
+                 "docs/design/local-notes/notes.md"],
+                cwd=repo, check=False,
+            )
+            self.assertEqual(still_ignored.returncode, 0)
+
+            for args in (("--check",), ()):
+                with self.subTest(mode=args or ("write",)):
+                    result = run_generator(repo, *args)
+                    self.assertEqual(
+                        result.returncode, 0, result.stdout + result.stderr
+                    )
+                    self.assertNotIn("1_overview.md", result.stderr)
+                    self.assertEqual(board.read_bytes(), before_board)
+                    self.assertEqual(index.read_bytes(), before_index)
+                    self.assertNotIn(
+                        "local-notes", board.read_text(encoding="utf-8")
+                    )
+
+    def test_newline_in_other_path_ignores_overview(self):
+        scratch = ROOT / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix="doc-indexes-newline-overview-", dir=scratch
+        ) as directory:
+            repo = make_repo(directory)
+            visible = repo / "docs/design/visible"
+            visible.mkdir()
+            (visible / "2_design.md").write_text(
+                "# Visible design\n", encoding="utf-8"
+            )
+            (visible / "1_overview.md").write_text(
+                "---\nnext: Ship it.\nowner: Fixture\n---\n\n# No Stage\n",
+                encoding="utf-8",
+            )
+            (repo / ".gitignore").write_text(
+                "docs/design/visible/1_overview.md\n", encoding="utf-8"
+            )
+            subprocess.run(
+                ["git", "add", "--", "docs/design/visible/2_design.md"],
+                cwd=repo, check=True, capture_output=True, text=True,
+            )
+            ignored = subprocess.run(
+                ["git", "check-ignore", "-q",
+                 "docs/design/visible/1_overview.md"],
+                cwd=repo, check=False,
+            )
+            self.assertEqual(
+                ignored.returncode, 0,
+                "fixture must actually ignore the overview",
+            )
+
+            baseline = run_generator(repo)
+            self.assertEqual(
+                baseline.returncode, 0, baseline.stdout + baseline.stderr
+            )
+            board = repo / "docs/design/FEATURES.md"
+            index = repo / "docs/INDEX.md"
+            self.assertNotIn("No Stage", board.read_text(encoding="utf-8"))
+            before_board = board.read_bytes()
+            before_index = index.read_bytes()
+
+            stage_newline_decoy(repo, "docs/design/visible/1_overview.md")
+            still_ignored = subprocess.run(
+                ["git", "check-ignore", "-q",
+                 "docs/design/visible/1_overview.md"],
+                cwd=repo, check=False,
+            )
+            self.assertEqual(still_ignored.returncode, 0)
+
+            for args in (("--check",), ()):
+                with self.subTest(mode=args or ("write",)):
+                    result = run_generator(repo, *args)
+                    self.assertEqual(
+                        result.returncode, 0, result.stdout + result.stderr
+                    )
+                    self.assertNotIn("needs stage", result.stderr)
+                    self.assertEqual(board.read_bytes(), before_board)
+                    self.assertEqual(index.read_bytes(), before_index)
+                    self.assertNotIn(
+                        "No Stage", board.read_text(encoding="utf-8")
+                    )
 
     def test_visible_missing_overview_fails(self):
         scratch = ROOT / ".orbit/tmp"

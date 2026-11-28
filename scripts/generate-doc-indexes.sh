@@ -116,22 +116,37 @@ markdown_escape() {
   printf '%s' "$value"
 }
 
+# Escape a Git path so it is one record in the newline-delimited snapshot.
+# Double a backslash first, then encode a real newline as backslash + n, so
+# the two stay distinct and a newline inside a path cannot split the record.
+escape_visible_path() {
+  local value="$1"
+
+  value="${value//\\/\\\\}"
+  value="${value//$'\n'/$'\\n'}"
+  printf '%s' "$value"
+}
+
 # Both helpers test the snapshot read in the main flow below, so no Git call runs inside
-# a conditional where a failed query would look like "not visible".
+# a conditional where a failed query would look like "not visible". The queried path is
+# escaped the same way as the snapshot, so the match is one whole Git path.
 is_versioned() {
   local file="$1"
   local relative="${file#"$repo_root/"}"
 
+  relative="$(escape_visible_path "$relative")"
   [[ "$git_visible_lines" == *$'\n'"$relative"$'\n'* ]]
 }
 
 # A directory counts as a feature candidate only when Git sees at least one
 # file inside it (tracked, or untracked but not ignored). Local-only
 # directories such as Git-ignored notes never reach the strict entry-doc rule.
+# The prefix is matched at the start of a record, not inside another path.
 dir_is_versioned() {
   local directory="$1"
   local relative="${directory#"$repo_root/"}"
 
+  relative="$(escape_visible_path "$relative")"
   [[ "$git_visible_lines" == *$'\n'"$relative/"* ]]
 }
 
@@ -530,13 +545,24 @@ check_docs_root || exit 1
 # here, outside any conditional, so a failed query stops the run before anything renders
 # or is written. Inside an `if !` test Bash ignores errexit, so a query there would read
 # as "not visible" and drop rows without a word. Names are NUL-separated so Git does not
-# quote non-ASCII or special characters; tr makes them lines for whole-line matches, and
-# pipefail (set at the top) keeps a failed git query as the pipeline's status.
-git_visible_lines="$(git -C "$repo_root" ls-files -z --cached --others --exclude-standard -- docs | tr '\0' '\n')" || {
+# quote non-ASCII or special characters. A shell variable cannot hold NUL, and a path may
+# itself contain a newline, so each record is escaped onto its own line before the matches
+# above. The listing is a file, not a pipe, so the status here is git's own.
+git_visible_file="$(mktemp "${TMPDIR:-/tmp}/orbit-doc-indexes-visible.XXXXXX")"
+git -C "$repo_root" ls-files -z --cached --others --exclude-standard -- docs >"$git_visible_file" || {
+  rm -f "$git_visible_file"
   echo "error: git ls-files failed under $repo_root, so the doc indexes cannot tell which files Git sees" >&2
   exit 1
 }
-git_visible_lines=$'\n'"$git_visible_lines"$'\n'
+git_visible_lines=""
+while IFS= read -r -d '' visible_path || [[ -n "$visible_path" ]]; do
+  if [[ -z "$visible_path" ]]; then
+    continue
+  fi
+  git_visible_lines+="$(escape_visible_path "$visible_path")"$'\n'
+done <"$git_visible_file"
+rm -f "$git_visible_file"
+git_visible_lines=$'\n'"$git_visible_lines"
 
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/orbit-doc-indexes.XXXXXX")"
 trap 'rm -rf "$tmp_dir"' EXIT
