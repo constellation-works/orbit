@@ -89,7 +89,7 @@ fn finding() -> Value {
 
 /// Stand in for the agent sandbox's mask: the Linux sentinel over the plugin
 /// secret store.
-fn mask(fixture: &Fixture) {
+pub(super) fn mask(fixture: &Fixture) {
     let sentinel = crate::runtime::plugin::paths::plugin_secret_store_dir(&fixture.global_root)
         .join(crate::runtime::plugin::sandbox_mask::PLUGIN_MASK_SENTINEL_FILE);
     std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
@@ -107,6 +107,39 @@ fn route_unavailable(error: &OrbitError) -> bool {
     matches!(error, OrbitError::RemoteTool { code, payload, .. }
         if code.as_str() == OWNER_ROUTE_UNAVAILABLE_ERROR_CODE
             && payload["code"] == OWNER_ROUTE_UNAVAILABLE_ERROR_CODE)
+}
+
+#[test]
+fn recovery_spawned_tool_inherits_the_claimed_owner_broker() {
+    let fixture = Fixture::new();
+    mask(&fixture);
+    let broker = fixture.serve("step_failure_recovery");
+    let parent =
+        orbit_common::Env::from_vars([("ORBIT_PLUGIN_BROKER", broker.socket_path().as_os_str())]);
+    let child = orbit_common::Env::from_vars(
+        orbit_common::security::child_env::allowlisted_child_env(&parent, &[], &[]),
+    );
+    let input = json!({"action": "add", "body": "validation failed", "during_task": TASK});
+    let route = crate::adapter::command::dispatch::claimed::owner::bridge_claimed_owner_call(
+        &child,
+        &fixture.global_root,
+        ClaimedOwnerCall {
+            binding: Some(&fixture.binding),
+            process_machine_id: Some(FOLLOWER),
+            name: "orbit.friction",
+            input: &input,
+            cwd: &fixture.worktree,
+            workspace_root: &fixture.worktree,
+            entry_point: ToolEntryPoint::Cli,
+        },
+    );
+    match route {
+        Some(ClaimedOwnerRoute::Forwarded(Ok(_))) => {}
+        other => panic!("recovery friction must reach the owner: {other:?}"),
+    }
+    let calls = fixture.owner.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, FRICTION);
 }
 
 #[test]
@@ -251,6 +284,16 @@ fn the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner()
             json!({"body": "b", "model": "codex", "during_task": "TSO-2"}),
         ),
         (
+            "friction naming another task",
+            FRICTION,
+            json!({"body": "b", "model": "codex", "task_id": "TSO-2"}),
+        ),
+        (
+            "friction with an internal field",
+            FRICTION,
+            json!({"body": "b", "model": "codex", "_worker_read": "tasks"}),
+        ),
+        (
             "another task's artifact put",
             PUT,
             json!({"id": "TSO-2", "path": "notes.md", "source_path": report}),
@@ -339,6 +382,26 @@ fn the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner()
             .to_string()
             .contains("the run's task is not the claimed task")
     );
+    assert!(fixture.owner.calls.lock().unwrap().is_empty());
+
+    // A broker running on another execution machine cannot use this binding.
+    let foreign = fixture
+        .runtime
+        .clone()
+        .with_automation_machine_identity(Some("other-machine".into()));
+    let denied = RunDispatch::new(foreign, fixture.run("step_failure_recovery")).call(
+        BrokerRequest {
+            tool: FRICTION.into(),
+            input: json!({"body": "b", "during_task": TASK}),
+            cwd: fixture.worktree.clone(),
+            workspace: None,
+            entry_point: EntryPoint::Cli,
+            dry_run: false,
+        },
+        std::process::id(),
+        Arc::new(AtomicBool::new(false)),
+    );
+    assert!(denied.is_err(), "foreign machine must be refused");
     assert!(fixture.owner.calls.lock().unwrap().is_empty());
 }
 

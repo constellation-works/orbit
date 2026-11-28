@@ -210,6 +210,8 @@ task lives on its owner, another machine reached over SSH, and every agent sandb
 `~/.ssh` (policy-sandbox [2_design.md](../../policy-sandbox/2_design.md) §7.1), so the worker's own
 SSH route can only fail host-key verification. With `ORBIT_PLUGIN_BROKER` set, the nested
 `orbit` of a worker whose claim names a remote owner sends exactly these calls to the broker.
+The agent subprocess environment carries the broker locator into nested `proc.spawn` commands;
+the listener still authenticates the sandbox peer and applies the run's tool policy.
 The broker carries them only for the run bound to the claim, whose task is the claimed task,
 and takes the task, claim and owner from those records, never from the request. Each call is
 scoped to the claim. Search, task listing, task show and artifact get read the claimed
