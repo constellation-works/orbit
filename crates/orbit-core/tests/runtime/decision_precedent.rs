@@ -1197,6 +1197,49 @@ fn unclosed_final_rule_fence_stays_parseable_after_edits() {
     }
 }
 
+fn consolidate_cursor_day_still_picks_up_answers_recorded_later_that_day() {
+    // A run saves the UTC date it runs on as the cursor. The cursor is
+    // inclusive, so an answer recorded later on that UTC day must still be
+    // proposed by the next run that reads from the cursor.
+    let fx = Fixture::new();
+    let digest = corpus_content_digest(b"pub fn price() {}\n");
+    fx.write_rules_committed(&rule_doc("1", "current", FUTURE, false, &digest));
+    let cursor = chrono::Utc::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let task = fx.task("Answered on the cursor day");
+    let open = fx
+        .raise(raise_input(
+            &task,
+            "Which price do we ship?",
+            Some("pricing/sign-off"),
+        ))
+        .unwrap();
+    fx.operator()
+        .answer_decision_request_as_human(
+            open["id"].as_str().unwrap(),
+            "2",
+            Some("Ship a different price.".into()),
+            "human:operator".into(),
+            Some("cli".into()),
+        )
+        .unwrap();
+
+    let picked = fx
+        .runtime
+        .consolidate_decision_precedent(Some(&cursor))
+        .unwrap();
+    assert!(picked["count"].as_u64().unwrap() >= 1, "{picked}");
+
+    let skipped = fx
+        .runtime
+        .consolidate_decision_precedent(Some("2999-12-31"))
+        .unwrap();
+    assert_eq!(skipped["count"], 0, "{skipped}");
+}
+
 crate::scenario_table!(
     mutable_scenarios,
     an_operator_approved_auto_rule_answers_and_can_be_reversed,
@@ -1206,4 +1249,5 @@ crate::scenario_table!(
     bare_rule_id_in_two_files_does_not_auto_answer,
     rule_edits_preserve_unparsed_content_and_crlf,
     unclosed_final_rule_fence_stays_parseable_after_edits,
+    consolidate_cursor_day_still_picks_up_answers_recorded_later_that_day,
 );
