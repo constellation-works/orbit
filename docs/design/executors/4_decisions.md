@@ -29,7 +29,7 @@ exception.
 **Recorded:** 2026-09-05 · [ORB-11294]
 **Paths:** `crates/orbit-engine/src/executor/automation/shell.rs`, `crates/orbit-core/assets/executors/local-shell.yaml`, [specs/local-shell.md](./specs/local-shell.md)
 
-> **Clarified — [ORB-29832].** The `fsProfile` that the Consequences below ask operators to add is optional. A `sandbox:` on the executor definition selects the OS backend, which wraps every activity that uses it. An activity's `fsProfile` selects a named policy profile; without one, the built-in `unrestricted` profile applies with the policy's denies. The current contract is in [specs/local-shell.md](./specs/local-shell.md#filesystem-authority). The recorded decision text below is unchanged.
+> **Clarified — [ORB-29832].** The `fsProfile` that the Consequences below ask operators to add is optional. A `sandbox:` on the executor definition selects the OS backend, which wraps every activity that uses it. An activity's `fsProfile` selects a named policy profile; without one, the built-in `unrestricted` profile applies. macOS Seatbelt applies read and modify rules, including policy denies; Linux Bubblewrap enforces modify rules but not profile read rules, including `denyRead`, so host reads stay available except for fixed credential and runtime-directory masks and explicit caller masks. Do not rely on Linux `denyRead` to protect secrets. The current contract is in [specs/local-shell.md](./specs/local-shell.md#filesystem-authority). The recorded decision text below is unchanged.
 
 **Context.** [ORB-10395] deleted the v1 executor stack, including the
 `cli_command` implementation, but `assets/executors/local-shell.yaml` kept
